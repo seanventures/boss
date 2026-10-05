@@ -6206,6 +6206,24 @@ def list_meeting_rooms(project_id: str, limit: int = 25):
     landed in."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    return {"project_id": project_id, "items": _meeting_room_items(project_id, limit)}
+
+
+@app.get("/v1/meeting-rooms/{meeting_id}")
+def get_meeting_room(meeting_id: str, project_id: str):
+    """One meeting record, shaped exactly like a /v1/meeting-rooms item — what a workflow's
+    panel step and a deep link open, however long ago the meeting was held (the list is the
+    newest 25). Accepts a run id (mrun_) or a legacy meeting id (mtg_)."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    items = _meeting_room_items(project_id, 1, only_id=meeting_id)
+    if not items:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    return items[0]
+
+
+def _meeting_room_items(project_id: str, limit: int, only_id: str | None = None) -> list[dict]:
+    """The meeting-room records for a project, newest first — or the one named `only_id`."""
 
     def _iso(v):
         return v.isoformat() if hasattr(v, "isoformat") else v
@@ -6214,6 +6232,7 @@ def list_meeting_rooms(project_id: str, limit: int = 25):
         resolve_roles, load_role_map, FACILITATOR_TITLE, meeting_subject, display_title,
         prd_state_of,
     )
+    from .services.meeting_gist import room_gists
 
     def _pr_for_task(connection, tid):
         if not tid:
@@ -6246,8 +6265,9 @@ def list_meeting_rooms(project_id: str, limit: int = 25):
         runs = connection.execute(
             text("""SELECT id, task_id, status, phase, directive, url, role_keys, state, usage, created_at, updated_at,
                            title, decision_id
-                    FROM meeting_runs WHERE project_id = :p ORDER BY updated_at DESC LIMIT :limit"""),
-            {"p": project_id, "limit": max(1, min(limit, 100))},
+                    FROM meeting_runs WHERE project_id = :p AND (CAST(:only AS text) IS NULL OR id = :only)
+                    ORDER BY updated_at DESC LIMIT :limit"""),
+            {"p": project_id, "limit": max(1, min(limit, 100)), "only": only_id},
         ).mappings().all()
         for r in runs:
 
@@ -6282,9 +6302,15 @@ def list_meeting_rooms(project_id: str, limit: int = 25):
                 "model": usage.get("model"), "cost_usd_micros": usage.get("cost_usd_micros"),
                 "research_summary": {"sitemap": research.get("sitemap", []), "pages_studied": len(research.get("pages", []))},
                 "round1": state.get("round1") or {}, "round2": state.get("round2") or {},
+                # Each turn's headline and key points: the seat's own when it wrote one, else
+                # cut deterministically from the reply (meeting_gist).
+                **room_gists(state.get("round1"), state.get("round2"), state.get("synthesis"),
+                             state.get("round1_gists"), state.get("round2_gists")),
                 "synthesis": state.get("synthesis"), "prd_markdown": state.get("prd_markdown"),
                 "pull_request_url": pr_url, "pull_request_number": pr_num,
             })
+        if only_id and items:
+            return items
 
         # 2) Legacy meetings table (pre-durable) — only those not covered by a run.
         rows = connection.execute(
@@ -6292,11 +6318,11 @@ def list_meeting_rooms(project_id: str, limit: int = 25):
                 """
                 SELECT id, title, purpose, status, participants, minutes_artifact_id,
                        completed_at, created_at
-                FROM meetings WHERE project_id = :p
+                FROM meetings WHERE project_id = :p AND (CAST(:only AS text) IS NULL OR id = :only)
                 ORDER BY created_at DESC LIMIT :limit
                 """
             ),
-            {"p": project_id, "limit": max(1, min(limit, 100))},
+            {"p": project_id, "limit": max(1, min(limit, 100)), "only": only_id},
         ).mappings().all()
 
         for m in rows:
@@ -6315,7 +6341,7 @@ def list_meeting_rooms(project_id: str, limit: int = 25):
                             content = json.loads(content)
                         except Exception:
                             content = {}
-            if task_id and task_id in covered_tasks:
+            if task_id and task_id in covered_tasks and not only_id:
                 continue  # a durable run already represents this meeting
             pr_url = None
             pr_num = None
@@ -6368,13 +6394,16 @@ def list_meeting_rooms(project_id: str, limit: int = 25):
                     "research_summary": content.get("research_summary") or {},
                     "round1": content.get("round1_perspectives") or {},
                     "round2": content.get("round2_debate") or {},
+                    **room_gists(content.get("round1_perspectives"), content.get("round2_debate"),
+                                 content.get("synthesis"), content.get("round1_gists"),
+                                 content.get("round2_gists")),
                     "synthesis": content.get("synthesis"),
                     "prd_markdown": content.get("prd_markdown"),
                     "pull_request_url": pr_url,
                     "pull_request_number": pr_num,
                 }
             )
-        return {"project_id": project_id, "items": items}
+        return items
 
 
 @app.post("/v1/meetings/step")
@@ -11309,6 +11338,7 @@ def start_discovery_endpoint(payload: open_bodies.DiscoveryStartBody):
     run_id = start_discovery(
         project_id=project_id, title=title, seed=seed,
         context=(payload.get("context") or "").strip(), settings=settings, actor=actor,
+        deep=payload.get("deep") is True,
     )
     return {"status": "running", "run_id": run_id}
 

@@ -44,9 +44,13 @@ describe("the page consumes it on every navigation", () => {
     expect(UI).toContain("}, [initialDiscoveryId]);");
   });
 
-  it("and going back still clears it", () => {
-    // The effect keys on the prop, so Back — which changes state and not the URL — is not
-    // immediately undone by it.
-    expect(UI).toContain("onBack={() => setSelected(null)}");
+  it("and going back still clears it — in the URL too, so Back and a refresh agree", () => {
+    expect(UI).toContain("onBack={() => open(null)}");
+    expect(UI).toContain("pushParams({ run: id, discovery: null });");
+  });
+
+  it("a dossier older than the list still opens: it is read by id, not found in the feed", () => {
+    expect(UI).toContain("<DiscoveryDetail id={selected}");
+    expect(UI).toContain("fetchDiscoveryDetail(id)");
   });
 });

@@ -147,11 +147,12 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
               expect='[data-testid="activity-level-error"][aria-pressed="true"]'),
     ),
     "discovery": (
-        NothingToPress("On Community this lists saved Discovery dossiers, each opening its "
-                       "dossier; a new project has none, and starting research is not offered."),
+        Press("dossier-filter-promising", "app/discoveries-ui.tsx",
+              expect='[data-testid="dossier-filter-promising"][aria-pressed="true"]'),
     ),
     "meetings": (
-        Press("meeting-new", "app/meeting-room-ui.tsx", expect=_tid("meeting-new-form")),
+        # The convene form is always on screen now (the Panels hero); Manage seats opens.
+        Press("meeting-manage-seats", "app/meeting-room-ui.tsx", expect=_tid("meeting-manage")),
     ),
     "agent": (
         Press("agent-suggest-*", "app/agent-ui.tsx", write=True, then=("agent-send",),

@@ -37,6 +37,9 @@ import { CaptainCanRunIt } from "./workflows/captain-can-run-it";
 import { Library, type Schedule } from "./workflows/library";
 import { get, post } from "./workflows/delivery-api";
 import { NewProjectComposer } from "./workflows/new-project-composer";
+import { DossierCompact } from "./discoveries-ui";
+import { MeetingCompact } from "./meeting-room-ui";
+import { readComposerPrefill } from "../lib/research-panels";
 // The Runs composer moved to app/workflows/; its helpers are re-exported so imports hold.
 export {
   blockingReason, briefFrom, composerFields, criteriaFrom, linksFrom, repositoryHint,
@@ -804,6 +807,28 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         window.history.replaceState(null, "",
           `${window.location.pathname}?${next}${window.location.hash}`);
         setEditing(null);
+      } catch { /* non-browser — the composer is on screen either way */ }
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
+
+  // PREFILLED FROM WHERE IT CAME. A dossier outcome's or a panel's "Build it" carries its brief
+  // (lib/research-panels composerHref): the composer opens on the product path with it written
+  // in, and the brief is consumed like `new=1`, so a later navigation cannot re-deliver it.
+  useEffect(() => {
+    const read = () => {
+      const pre = readComposerPrefill(window.location.search);
+      if (!pre) return;
+      setStartWith("standard_product_delivery");
+      setStartExample(pre);
+      setTabState("runs");
+      setComposerOpen(true);
+      try {
+        const next = new URLSearchParams(window.location.search);
+        for (const key of ["compose", "brief", "title", "new"]) next.delete(key);
+        window.history.replaceState(null, "", `${window.location.pathname}?${next}${window.location.hash}`);
       } catch { /* non-browser — the composer is on screen either way */ }
     };
     read();
@@ -2663,6 +2688,29 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
   );
 }
 
+/**
+ * THE STEP'S OWN WORK, IN THE STEP. A research step's dossier and a panel step's meeting are
+ * what an operator clicked the step to see; they used to be a link to another area ("open the
+ * research", "open the panel"). The step panel now shows them inline — the verdict or outcome
+ * first, live progress while the step runs — with the full view one press away.
+ */
+export function stepWorkOf(step: Pick<RunStep, "capability" | "output">):
+  { kind: "discovery" | "meeting"; id: string } | null {
+  const out = (step.output ?? {}) as Record<string, unknown>;
+  const awaited = (out.await as { kind?: string; id?: string } | undefined) ?? {};
+  const str = (k: string) => (typeof out[k] === "string" ? (out[k] as string) : "");
+  const cap = String(step.capability ?? out.capability ?? "");
+  if (cap === "research" || awaited.kind === "discovery") {
+    const id = str("discovery_id") || (awaited.kind === "discovery" ? awaited.id ?? "" : "");
+    return id ? { kind: "discovery", id } : null;
+  }
+  if (["meeting", "prd_panel", "panel"].includes(cap) || awaited.kind === "meeting") {
+    const id = str("meeting_run_id") || (awaited.kind === "meeting" ? awaited.id ?? "" : "");
+    return id ? { kind: "meeting", id } : null;
+  }
+  return null;
+}
+
 function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry, onSkip,
                      actions, actor = "", act = null, approval: gateAnswer = null, planned,
                      onSetTarget, onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
@@ -2814,7 +2862,11 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   const previewHref = links.find((l) => l.label === "open the preview")?.href ?? null;
   // ONE WAY IN. The preview block renders "Open preview" as a button; leaving the link of the
   // same name in the row below it puts the identical href on screen twice, four words apart.
-  const visibleLinks = links.filter((l) => l.label !== "open the preview");
+  const work = stepWorkOf(step);
+  // The dossier or panel is on the step itself (below), with its own "Open full view".
+  const visibleLinks = links.filter((l) => l.label !== "open the preview"
+    && !(work?.kind === "discovery" && l.label === "open the research")
+    && !(work?.kind === "meeting" && l.label === "open the panel"));
   // Asked for on THIS build and not yet serving. The URL is the finish line; a POST returning
   // is not — which is why the old busy flag cleared a second after the click.
   // A FRESH ONE IS ON ITS WAY UNTIL A DIFFERENT LINK ARRIVES. This used to require "no link
@@ -2986,6 +3038,14 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
             {String(step.output.note)}
           </p>
         )
+      ) : null}
+
+      {work?.kind === "discovery" ? (
+        <div className="dw-step-work" data-testid="dw-step-dossier"><DossierCompact discoveryId={work.id} /></div>
+      ) : work?.kind === "meeting" ? (
+        <div className="dw-step-work" data-testid="dw-step-meeting">
+          <MeetingCompact meetingId={work.id} projectId={projectId} />
+        </div>
       ) : null}
 
       {/* WHERE THE THING IS. The point of a deploy is an address somebody can open, and the

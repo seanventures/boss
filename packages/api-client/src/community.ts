@@ -1627,6 +1627,12 @@ export type Meeting = {
   research_summary?: { sitemap?: string[]; pages_studied?: number };
   round1: Record<string, string>;
   round2: Record<string, string>;
+  /** Each seat's headline and up to three key points, per round — the seat's own, or cut from
+   *  its reply when it wrote none (engine meeting_gist). Keyed like `round1`/`round2`. */
+  round1_gists?: Record<string, MeetingTurnGist>;
+  round2_gists?: Record<string, MeetingTurnGist>;
+  /** The facilitator's synthesis as a headline and up to five points. */
+  synthesis_gist?: MeetingTurnGist | null;
   synthesis?: string | null;
   prd_markdown?: string | null;
   pull_request_url?: string | null;
@@ -1636,6 +1642,9 @@ export type Meeting = {
   /** The same, in the operator's words. Rendered as given; the console does not re-derive it. */
   prd_label?: string | null;
 };
+
+/** A panel turn in brief: plain text, never markdown. */
+export type MeetingTurnGist = { headline: string; points: string[] };
 
 export type MeetingsResponse = {
   project_id: string;
@@ -5738,6 +5747,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { project_id: projectId },
       });
     },
+    getMeetingRoom(meetingId: string, projectId: string) {
+      return request<Meeting>("GET", `/v1/meeting-rooms/${encodeURIComponent(meetingId)}`, {
+        query: { project_id: projectId },
+      });
+    },
     getMeetingRoles(projectId: string) {
       return request<MeetingRolesResponse>("GET", "/v1/meeting-roles", {
         query: { project_id: projectId },
@@ -5849,7 +5863,8 @@ export function createBossApiClient(config: BossApiClientConfig) {
     getDiscovery(runId: string) {
       return request<DiscoveryRun>("GET", `/v1/discoveries/${encodeURIComponent(runId)}`);
     },
-    startDiscovery(payload: { project_id: string; seed: string; title?: string; context?: string }) {
+    startDiscovery(payload: { project_id: string; seed: string; title?: string; context?: string;
+                              deep?: boolean }) {
       return request<{ status: string; run_id: string }>("POST", "/v1/discoveries", { body: payload });
     },
     promoteDiscoveryOutcome(runId: string, outcomeIndex: number) {

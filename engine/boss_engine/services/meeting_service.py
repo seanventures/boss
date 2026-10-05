@@ -35,6 +35,7 @@ from .mcp_registry import (
     list_mcp_servers,
 )
 from .openai_adapter import estimate_cost_usd_micros
+from .meeting_gist import GIST_INSTRUCTION, with_gists
 
 # ---- what a meeting is ABOUT, for titles ------------------------------------
 #: The panel brief `request_meeting` puts in front of the operator's request, and the research
@@ -1027,8 +1028,11 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
         base = _make_base(run["directive"], run["constraints"], state.get("research") or {}, run["url"])
         r1, add_cost, model = _ask_panel(adapter, personas,
             lambda p: base + f"\nAs the {p['title']}, give your initial perspective on building this. "
-                             "List your top priorities, requirements, and concerns from your lens.")
-        state["round1"] = r1
+                             "List your top priorities, requirements, and concerns from your lens."
+                             + GIST_INSTRUCTION)
+        # EACH TURN CARRIES ITS GIST: the seat's own headline and key points, taken off the
+        # reply and stored beside it, so the meeting room never cuts a card out of markdown.
+        state["round1"], state["round1_gists"] = with_gists(r1)
         next_phase = "round2"
     elif phase == "round2":
         base = _make_base(run["directive"], run["constraints"], state.get("research") or {}, run["url"])
@@ -1036,8 +1040,9 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
         r2, add_cost, model = _ask_panel(adapter, personas,
             lambda p: base + f"\nHere is what the whole panel said in round 1:\n\n{r1_blob}\n\n"
                              f"As the {p['title']}, respond: where do you AGREE, where do you DISAGREE or see "
-                             "risk in your colleagues' points, and what is your refined position? Be specific.")
-        state["round2"] = r2
+                             "risk in your colleagues' points, and what is your refined position? Be specific."
+                             + GIST_INSTRUCTION)
+        state["round2"], state["round2_gists"] = with_gists(r2)
         next_phase = "synthesis"
     elif phase == "synthesis":
         base = _make_base(run["directive"], run["constraints"], state.get("research") or {}, run["url"])
@@ -1105,6 +1110,8 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
         "research_summary": {"sitemap": research.get("sitemap", []), "pages_studied": len(research.get("pages", []))},
         "round1_perspectives": state.get("round1") or {},
         "round2_debate": state.get("round2") or {},
+        "round1_gists": state.get("round1_gists") or {},
+        "round2_gists": state.get("round2_gists") or {},
         "synthesis": state.get("synthesis"),
         "prd_markdown": state.get("prd_markdown"),
         "cost_usd_micros": (run["usage"] or {}).get("cost_usd_micros", 0),
