@@ -7,7 +7,7 @@
  */
 import React, { useState } from "react";
 
-import { governWrite, money, readGovern, rightsFor, type Allocation, type EnvelopesView } from "../../lib/govern";
+import { governWrite, money, readGovern, readNumber, rightsFor, type Allocation, type EnvelopesView } from "../../lib/govern";
 import { usePolledRead } from "../../lib/log-stream";
 import { showToast } from "../client-forms";
 import { consoleHref } from "../url-intent";
@@ -91,10 +91,14 @@ export function EnvelopesTab({ projectId, actor, paused }: { projectId: string; 
   const request = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) { setResult({ text: "Name it first" }); return; }
+    const t = readNumber(tier, { min: 0, max: 3, whole: true });
+    if (t.value === null) { setResult({ text: `Tier: ${t.error}` }); return; }
+    const a = readNumber(amount, { min: 0.01, cents: true, money: true });
+    if (a.value === null) { setResult({ text: `Amount: ${a.error}` }); return; }
     setBusy("initiative");
     const r = await governWrite("initiative", {
-      project_id: projectId, actor, title: title.trim(), tier: Number(tier),
-      amount_usd_micros: Number(amount) * 1_000_000,
+      project_id: projectId, actor, title: title.trim(), tier: t.value,
+      amount_usd_micros: Math.round(a.value * 1_000_000),
     });
     setBusy("");
     if (!r.ok) {
@@ -126,12 +130,12 @@ export function EnvelopesTab({ projectId, actor, paused }: { projectId: string; 
       </section>
       <section className="gv-card" aria-labelledby="gv-init-h">
         <h3 id="gv-init-h" className="gv-sec-head">INITIATIVES</h3>
-        <form className="gv-init" data-testid="gv-initiative-form" onSubmit={(e) => void request(e)}>
+        <form className="gv-init" noValidate data-testid="gv-initiative-form" onSubmit={(e) => void request(e)}>
           <label>Initiative<input className="gv-input" value={title} placeholder="New GPU cluster"
                                  onChange={(e) => setTitle(e.target.value)} data-testid="gv-init-title" /></label>
-          <label>Tier<input className="gv-input" type="number" min={0} max={3} value={tier}
+          <label>Tier<input className="gv-input" type="number" min={0} max={3} step="any" value={tier}
                            onChange={(e) => setTier(e.target.value)} data-testid="gv-init-tier" /></label>
-          <label>Amount ($)<input className="gv-input" type="number" min={0} value={amount}
+          <label>Amount ($)<input className="gv-input" type="number" min={0} step="any" value={amount}
                                  onChange={(e) => setAmount(e.target.value)} data-testid="gv-init-amount" /></label>
           <button type="submit" className="ag-btn ag-btn-primary" disabled={busy === "initiative"} data-testid="gv-init-request">Request</button>
         </form>
