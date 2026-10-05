@@ -89,7 +89,7 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
     const r = await rollbackDeploy(projectId, row.ref, actor);
     setBusy(null);
     if (!r.ok) { setError(r.error); return; }
-    const sha = typeof (r.data as { sha7?: unknown }).sha7 === "string" ? (r.data as { sha7: string }).sha7 : "";
+    const sha = typeof (r.data as { sha7?: unknown }).sha7 === "string" ? (r.data as { sha7: string }).sha7 : row.rollbackToSha7 ?? "";
     showToast("success", sha ? `Rolling back to ${sha}` : "Rolling back");
     afterWrite(onChanged);
   };

@@ -90,7 +90,10 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
     : undefined;
   const rollback = async () => {
     const data = await run("rollback", () => rollbackDeploy(projectId, row.ref, actor),
-      (x) => (typeof x.sha7 === "string" ? `Rolling back to ${x.sha7}` : "Rolling back"));
+      (x) => {
+        const sha = typeof x.sha7 === "string" ? x.sha7 : row.rollbackToSha7;
+        return sha ? `Rolling back to ${sha}` : "Rolling back";
+      });
     if (data && typeof data.ref === "string") onOpen?.(data.ref);
   };
   // REDEPLOY THE SAME THING. A delivery deploy has its own redeploy route (a new run of the
@@ -247,7 +250,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
         {row.can.rollback ? (
           <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-rollback-to"
                   title="Redeploy the last commit that went live here" onClick={() => void rollback()}>
-            {busy === "rollback" ? "Rolling back…" : "Roll back"}
+            {busy === "rollback" ? "Rolling back…" : row.rollbackToSha7 ? `Roll back to ${row.rollbackToSha7}` : "Roll back"}
           </button>
         ) : null}
         {row.can.redeploy ? (

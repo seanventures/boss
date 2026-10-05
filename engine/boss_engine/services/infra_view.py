@@ -336,6 +336,10 @@ class DeployRow(TypedDict, total=False):
     finished_at: Optional[str]
     duration_ms: Optional[int]
     can: dict[str, bool]              # approve, reject, rollback, redeploy
+    # ADDED by stream S3 (additive, optional): the commit `Roll back` would redeploy — the last
+    # one that went live on this target before this deploy — so the drawer can say
+    # `Roll back to <sha7>` (§5.1). None when can.rollback is false.
+    rollback_to_sha7: Optional[str]
     decision_id: Optional[str]
     run_id: Optional[str]             # the build that made it → Build ↗
 

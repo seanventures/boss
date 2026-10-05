@@ -232,6 +232,7 @@ export function deployRow(ref: string): W {
       account: null, sha7: "e1f2a3b", ref_name: "main", trigger: "manual", rollback_of_sha7: null, approver: { actor: "you" },
       state: "failed", word: "Failed", tone: "red", steps: steps(["done", "done", "done", "failed", "pending", "pending"]),
       started_at: at(-61), finished_at: at(-60), duration_ms: 41_000, can: { ...noCan, rollback: true, redeploy: true },
+      rollback_to_sha7: "4c5d6e7",
       decision_id: "dec_failed", run_id: null,
     },
     "stack:sd_ok": {

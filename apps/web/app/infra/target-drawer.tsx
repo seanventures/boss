@@ -16,7 +16,6 @@ import React, { useState } from "react";
 import { deployHref, buildHref, useTargetDetail, type DeployRow, type Rack, type TargetDetail } from "../../lib/infra-view";
 import { PulseStrip } from "../observability/pulse-strip";
 import { navigate } from "../agents/live-util";
-import { RunFace } from "../agents/run-face";
 import { showToast } from "../client-forms";
 import {
   afterWrite, bindSecret, deployTarget, listRefs, moveTarget, preflightTarget, retireTarget, setTargetToggles,
@@ -24,6 +23,7 @@ import {
 } from "./infra-actions";
 import { ago, copyText, dur, ErrorLine, localTime, Menu, useNow } from "./infra-util";
 import { confirmed, Drawer, DrawerSection, Empty, Skeleton, Sheet, StateWord, TypedConfirm } from "./kit";
+import { Approver, StepDots, triggerWord } from "./deploy-row";
 import { useSecrets } from "./secrets-sheet";
 
 const CELL_S = 45 * 60;
@@ -35,7 +35,8 @@ export function uptimeLine(t: Pick<TargetDetail, "health" | "uptime24h">): strin
   return `${t.health.word} · ${pct >= 99.95 && pct < 100 ? "99.9" : pct.toFixed(1)}% · 24h`;
 }
 
-/** One compact deploy row (RECENT DEPLOYS): state, sha, trigger, approver, age; opens the drawer. */
+/** One compact deploy row (RECENT DEPLOYS): the rail's pieces — state, sha, trigger, approver,
+ *  step dots, duration, age — in the drawer's width; opens the deploy drawer. */
 function RecentRow({ d, now, onOpen }: { d: DeployRow; now: number | null; onOpen: (ref: string) => void }) {
   return (
     <li>
@@ -43,9 +44,10 @@ function RecentRow({ d, now, onOpen }: { d: DeployRow; now: number | null; onOpe
               title={[d.refName, d.startedAt ? localTime(d.startedAt) : null].filter(Boolean).join(" · ") || undefined}>
         <StateWord w={{ word: d.word, tone: d.tone }} />
         <span className="inf-mono" data-copy="data">{d.sha7 ?? "—"}</span>
-        <span className="inf-muted">{d.trigger === "rollback" && d.rollbackOfSha7 ? `↩ ${d.rollbackOfSha7}` : d.trigger}</span>
-        {d.approver?.roleKey ? <RunFace roleKey={d.approver.roleKey} size={20} /> : d.approver?.actor ? <span className="inf-muted">{d.approver.actor === "you" ? "You" : d.approver.actor}</span> : null}
+        <span className="inf-muted">{triggerWord(d)}</span>
+        <Approver approver={d.approver} />
         <span className="ag-spacer" />
+        <StepDots steps={d.steps} />
         {d.durationMs !== null ? <span className="inf-num inf-faint">{dur(d.durationMs)}</span> : null}
         <span className="inf-num inf-faint">{d.startedAt && now !== null ? ago(d.startedAt, now) : ""}</span>
       </button>
