@@ -195,7 +195,8 @@ export function MenuPop({ label, onClose, children, testid }: {
     return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once per open
   useEffect(() => {
-    ref.current?.querySelector<HTMLElement>("[role='menuitem']:not(:disabled)")?.focus();
+    // preventScroll: the page must not jump to the menu (it is fixed under its button).
+    ref.current?.querySelector<HTMLElement>("[role='menuitem']:not(:disabled)")?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.stopImmediatePropagation(); onClose(); }
     };
@@ -204,7 +205,8 @@ export function MenuPop({ label, onClose, children, testid }: {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
   const menu = (
-    <div className="org-menu" role="menu" aria-label={label} ref={ref} data-testid={testid} style={pos ?? undefined}>
+    <div className="org-menu" role="menu" aria-label={label} ref={ref} data-testid={testid}
+         style={pos ?? { position: "fixed", top: 0, left: 0, visibility: "hidden" }}>
       {children}
     </div>
   );
