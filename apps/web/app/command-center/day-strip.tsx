@@ -10,7 +10,7 @@
  * which an SVG <a> cannot give a mouse user. Positions are percentages of the window, so the
  * strip needs no measuring and the server's first paint is the client's.
  */
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import { stripWindow } from "../../lib/command-center-graphics";
 import type { Day, DayRow, MotionMode } from "../../lib/command-center-view";
@@ -33,6 +33,8 @@ export type DayStripProps = {
   orgId?: string | null;
   /** `Start work ↗` on the empty strip: focus the composer. */
   onStartWork: () => void;
+  /** The window shown, as the section head should say it (`Last 45m`, `Last 24h`). */
+  onWindow?: (label: string) => void;
 };
 
 const LIVE = new Set(["running", "waiting_you", "blocked"]);
@@ -73,7 +75,10 @@ export function barWords(row: DayRow, nowMs: number): string {
   return [word, took].filter(Boolean).join(" · ");
 }
 
-export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion, hoverRunId, onHover, orgId, onStartWork }: DayStripProps) {
+/** A bar is never narrower than this on screen: a run bunched at `now` stays a readable bar. */
+export const BAR_MIN_PX = 10;
+
+export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion, hoverRunId, onHover, orgId, onStartWork, onWindow }: DayStripProps) {
   const now = nowMs ?? Date.parse(generatedAt);
   const full = now - windowHours * 3_600_000;
   const rows = day.rows.filter((r) => {
@@ -85,7 +90,13 @@ export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion
   // THE WINDOW FITS THE WORK: zoomed to the runs on the strip by default, so a busy last hour is
   // not a pile of slivers at the right edge; `24h` (12h on a phone) shows the whole day.
   const [zoom, setZoom] = useState<"fit" | "full">("fit");
-  const { since, ticks } = stripWindow(shown, now, windowHours, zoom, windowHours === 12 ? 3 : 6);
+  const { since, ticks, label } = stripWindow(shown, now, windowHours, zoom, windowHours === 12 ? 3 : 6);
+  // The head says the window it shows (re-test 1), once per change, not on every clock tick.
+  const said = useRef("");
+  useEffect(() => {
+    const words = rows.length ? label : `Last ${windowHours}h`;
+    if (words !== said.current) { said.current = words; onWindow?.(words); }
+  });
   const pct = (ms: number) => ((Math.min(Math.max(ms, since), now) - since) / Math.max(1, now - since)) * 100;
 
   // What changed since the last poll: new ticks fade in, a cap that just ended pulses once.
@@ -132,8 +143,9 @@ export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion
           const live = LIVE.has(r.state) && !r.finishedAt;
           const left = pct(start);
           const right = pct(end);
-          const width = Math.max(0.8, right - left);
-          const clipped = Number.isFinite(start) && start < since;
+          const width = Math.max(0, right - left);
+          // From the left edge as a REAL bar when it began before the window; the ‹ is only a cue.
+          const clipped = Number.isFinite(start) && start < since && width > 4;
           const tip = barTip(r, now);
           const before = prev?.get(r.runId);
           const capNew = animate && before !== undefined && LIVE.has(before.state) && !LIVE.has(r.state);
@@ -154,7 +166,10 @@ export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion
                 <a className="cc-day-bar" href={linkTo(runPatch(r.runId), orgId)} data-testid={`cc-day-bar-${r.runId}`}
                    data-run-id={r.runId} data-state={r.state} data-cap={cap} data-hover={hoverRunId === r.runId || undefined}
                    title={tip} aria-label={tip}
-                   style={{ left: `${left}%`, width: `${width}%` }}
+                   // RIGHT-ANCHORED: the bar ends where the run ended (or at now), and a short
+                   // one grows leftward to a readable minimum, so it never pokes past now.
+                   data-share={width.toFixed(3)} data-end={(100 - right).toFixed(3)}
+                   style={{ right: `${100 - right}%`, width: `max(${width}%, ${BAR_MIN_PX}px)` }}
                    onMouseEnter={() => onHover(r.runId)} onFocus={() => onHover(r.runId)} onBlur={() => onHover(null)}
                    onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(runPatch(r.runId)); } }}>
                   {clipped ? <span className="cc-day-clip" aria-hidden>‹</span> : null}

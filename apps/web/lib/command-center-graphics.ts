@@ -163,29 +163,37 @@ export function placeNames(items: NameItem[], stage: { width: number; height: nu
 
 /** A team label on the ring, fitted to the stage at any size: it shrinks (to 55%), then slides
  *  inward, and only past that is it shortened with `…` — never cut by the panel's edge. */
+/** Short names for the shipped teams, used only when the full name does not fit (re-test 9).
+ *  Quality, Media and Cost are short already. The full name is always the arc's <title>. */
+export const TEAM_ABBREV: Readonly<Record<string, string>> = {
+  architecture: "Arch.", engineering: "Eng.", operations: "Ops", leadership: "Lead.", thinkers: "Think.",
+};
+
+/** The smallest a team label is ever drawn: readable, never the 55% it once shrank to. */
+export const LABEL_MIN_SCALE = 0.85;
+
 export function fitArcLabel(label: string, x: number, y: number, anchor: "start" | "end" | "middle",
                             stage: { width: number; height: number }, charW = 9.6):
     { x: number; y: number; scale: number; text: string; width: number } {
   const margin = 6;
-  const full = label.length * charW;
   const room = anchor === "start" ? stage.width - margin - x : anchor === "end" ? x - margin
     : Math.min(x - margin, stage.width - margin - x) * 2;
-  let scale = Math.max(0.55, Math.min(1, room / Math.max(1, full)));
+  // Full name, shrunk no further than LABEL_MIN_SCALE; else its short name at full size; else
+  // the short name slid inward. Never an ellipsis, never unreadably small.
   let text = label;
-  let width = full * scale;
-  if (width > room) {
-    const roomFor = Math.max(3, Math.floor(room / (charW * scale)) - 1);
-    if (roomFor < label.length) text = `${label.slice(0, roomFor)}…`;
-    width = text.length * charW * scale;
+  let scale = Math.max(LABEL_MIN_SCALE, Math.min(1, room / Math.max(1, label.length * charW)));
+  if (label.length * charW * scale > room) {
+    const short = TEAM_ABBREV[label.trim().toLowerCase()];
+    if (short) { text = short; scale = 1; }
   }
-  // Slide in when the label still runs past an edge (a long label at a narrow stage).
+  const width = text.length * charW * scale;
+  // Slide in when the label still runs past an edge (a narrow stage).
   let nx = x;
   if (anchor === "start") nx = Math.min(x, stage.width - margin - width);
   else if (anchor === "end") nx = Math.max(x, margin + width);
   else nx = Math.min(Math.max(x, margin + width / 2), stage.width - margin - width / 2);
   const ny = Math.min(Math.max(y, 10), stage.height - 8);
-  scale = round(scale);
-  return { x: round(nx), y: round(ny), scale, text, width: round(width) };
+  return { x: round(nx), y: round(ny), scale: round(scale), text, width: round(width) };
 }
 
 /** Cumulative series for Today (§4.9): `today` stops at now (hour index + fraction), `yesterday`
@@ -283,15 +291,26 @@ export function liveMissions(missions: Mission[]): Mission[] {
 }
 
 /** Each agent's kind (see FloorKind). Same input, same output; tested without a browser. */
+/** Hop states that mean "this is where the run is now" (MissionRow's currentHopIndex). */
+const LANE_LIVE = new Set(["working", "thinking", "speaking", "needs_you", "stuck"]);
+
 export function floorKinds(view: Pick<CommandCenterView, "agents" | "missions" | "attention">, nowMs: number):
     Map<string, FloorKind> {
   const waiting = new Set<string>();
   const onRun = new Set<string>();
   const stoppedOn = new Set<string>();
+  const onStep = new Set<string>();
   for (const m of liveMissions(view.missions)) {
     const hops = m.hops.filter((h): h is Extract<typeof h, { kind: "hop" }> => h.kind === "hop" && !!h.roleKey);
     // A STOPPED run is not running (the RUNNING rule): its last agent is stuck, the rest rest.
     if (m.state === "stopped") { if (hops.length) stoppedOn.add(hops[hops.length - 1].roleKey as string); continue; }
+    // ONE SOURCE FOR "WORKING" (re-test 10): a lane says "Working · step 2 of 5" from the run's
+    // own rows while presence can still say idle (between one act closing and the next opening).
+    // The agent on a running run's current hop is working, on the Floor as on the lane.
+    if (m.state === "running" && hops.length) {
+      const cur = [...hops].reverse().find((h) => LANE_LIVE.has(h.state)) ?? hops[hops.length - 1];
+      onStep.add(cur.roleKey as string);
+    }
     for (const h of hops) onRun.add(h.roleKey as string);
     if (m.state === "waiting_you" && hops.length) waiting.add(hops[hops.length - 1].roleKey as string);
   }
@@ -302,7 +321,7 @@ export function floorKinds(view: Pick<CommandCenterView, "agents" | "missions" |
   for (const a of view.agents) {
     const since = Date.parse(a.since ?? "");
     let k: FloorKind;
-    if (WORKING.has(a.state)) k = "working";
+    if (WORKING.has(a.state) || onStep.has(a.roleKey)) k = "working";
     else if (a.state === "needs_you" || waiting.has(a.roleKey)) k = "waiting";
     else if (a.state === "stuck" || stuck.has(a.roleKey)) k = "stuck";
     else if (onRun.has(a.roleKey)) k = "on_run";
@@ -354,28 +373,46 @@ export function chainsOf(missions: Mission[], known: Set<string>): Chain[] {
  *  least an hour, snapped to a nice tick; `full` is the whole `hours`. Older runs on the strip
  *  clip at the left edge (`‹`). Returns `since` in ms and up to `maxTicks` ticks. */
 export function stripWindow(rows: (Pick<DayRow, "startedAt"> & { finishedAt?: string | null })[], nowMs: number, hours: number,
-                            mode: "fit" | "full", maxTicks = 6): { since: number; ticks: number[] } {
+                            mode: "fit" | "full", maxTicks = 6): { since: number; ticks: number[]; label: string } {
   const full = nowMs - hours * 3_600_000;
   let since = full;
   if (mode === "fit") {
-    const live = rows.filter((r) => !r.finishedAt);
-    const latest = [...rows].filter((r) => r.finishedAt)
-      .sort((a, b) => Date.parse(b.finishedAt as string) - Date.parse(a.finishedAt as string)).slice(0, 3);
-    const base = live.length ? live : latest;
-    const starts = base.map((r) => Date.parse(r.startedAt)).filter(Number.isFinite).map((t) => Math.max(t, full));
+    // FIT FRAMES EVERY RUN THE STRIP LISTS (re-test 1): from the earliest listed start, so no
+    // listed run is a stub at the left edge, with 5% padding and never under half an hour.
+    const starts = rows.map((r) => Date.parse(r.startedAt)).filter(Number.isFinite).map((t) => Math.max(t, full));
     const first = starts.length ? Math.min(...starts) : full;
-    const span = Math.max(3_600_000, (nowMs - first) * 1.1);
+    const span = Math.max(STRIP_MIN_SPAN, (nowMs - first) * 1.05);
     since = Math.max(full, nowMs - span);
   }
   const span = nowMs - since;
   const steps = [5, 10, 15, 30, 60, 120, 180, 240, 360].map((m) => m * 60_000);
   const step = steps.find((s) => span / s <= maxTicks) ?? 360 * 60_000;
-  const snapped = mode === "fit" ? Math.max(full, Math.floor(since / step) * step) : since;
   const ticks: number[] = [];
-  for (let t = Math.ceil(snapped / step) * step; t <= nowMs; t += step) ticks.push(t);
-  // A tick this close to now would print over the `now` label (seen on a phone).
-  const room = (nowMs - snapped) * 0.14;
-  return { since: snapped, ticks: ticks.filter((t) => nowMs - t >= room).slice(-maxTicks) };
+  for (let t = Math.ceil(since / step) * step; t <= nowMs; t += step) ticks.push(t);
+  // A tick this close to now would print over the `now` label (seen on a phone); one at the
+  // left edge would sit under the lane labels.
+  const room = span * 0.14;
+  return { since, label: stripLabel(span, hours),
+           ticks: ticks.filter((t) => nowMs - t >= room && t - since >= span * 0.04).slice(-maxTicks) };
+}
+
+/** Fit never frames less than this: half an hour, so a run that just started is not the whole track. */
+export const STRIP_MIN_SPAN = 30 * 60_000;
+
+/** The strip's heading for a window of `spanMs` (re-test 1: it said 24H while showing 40 minutes):
+ *  `Last 24h` / `Last 12h` for the whole window, whole hours from 2h (`Last 6h`), else minutes
+ *  rounded to 5 (`Last 45m`). */
+export function stripLabel(spanMs: number, hours: number): string {
+  const mins = spanMs / 60_000;
+  if (mins >= hours * 60 - 1) return `Last ${hours}h`;
+  if (mins >= 120) return `Last ${Math.min(hours, Math.round(mins / 60))}h`;
+  return `Last ${Math.max(5, Math.round(mins / 5) * 5)}m`;
+}
+
+/** The heading the strip shows for these rows (the page's section head uses it). */
+export function stripHeading(rows: (Pick<DayRow, "startedAt"> & { finishedAt?: string | null })[], nowMs: number,
+                             zoom: "fit" | "full", windowHours: number): string {
+  return stripWindow(rows, nowMs, windowHours, zoom).label;
 }
 
 /** An idle agent is a dot, not a face (spec §4.7): these kinds draw as faces. */
