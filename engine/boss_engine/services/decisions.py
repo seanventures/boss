@@ -933,6 +933,16 @@ class DecisionService:
         task_id = row.get("task_id")
         if not is_prd_publish or not task_id:
             return
+        # WHICH APP THIS PANEL SPECCED A FEATURE FOR, if any — structured first, the old text
+        # marker only for rows written before it was structured (see extend_run_of_prd).
+        extend_run_id = extend_run_of_prd(connection, row, recommendation)
+        if extend_run_id:
+            # The operator chose "convene a panel, then build this onto that app" in one act.
+            # `auto_code_task_after_prd` exists to stop a whole multi-feature PRD being dumped
+            # into one code task by default; it is not a reason to drop an explicit request to
+            # build onto a named app, so this path does not consult it.
+            self._build_prd_onto_app(connection, row, actor, recommendation, extend_run_id)
+            return
         # Publishing the PRD IS the deliverable. Auto-dumping a whole multi-feature PRD (or a
         # discovery task's write-up) into a single governed code task mis-routes research/spec work
         # into codegen — the pipeline then authors a sprawling, unfocused codebase that fails the
@@ -972,8 +982,19 @@ class DecisionService:
                 {"decision_id": row["id"], "task_id": task_id},
             )
             return
-        owner = getattr(self.settings, "target_github_owner", None)
-        repo = getattr(self.settings, "target_github_repo", None)
+        # WHERE IT IS BUILT is the project's connected repository, resolved the way
+        # create_code_task resolves it — the environment's single repo only when the project
+        # has none registered. Reading the env alone meant a project with a connected repo and
+        # no BOSS_TARGET_GITHUB_* set approved its PRD and nothing was ever built.
+        from .repo_registry import RepositoryResolutionError, resolve_repository_target
+
+        resolution_error = ""
+        try:
+            target = resolve_repository_target(connection, self.settings, row["project_id"])
+            owner, repo = target.get("owner"), target.get("repo")
+        except RepositoryResolutionError as error:
+            owner = repo = None
+            resolution_error = str(error)
         if not owner or not repo:
             emit_event(
                 connection,
@@ -982,7 +1003,8 @@ class DecisionService:
                 actor,
                 "task",
                 task_id,
-                {"decision_id": row["id"], "reason": "no_target_repo_configured"},
+                {"decision_id": row["id"], "reason": "no_target_repo_configured",
+                 **({"detail": resolution_error[:400]} if resolution_error else {})},
             )
             return
         raw_title = str(args.get("title") or "Code task")
@@ -1038,24 +1060,6 @@ class DecisionService:
             # describe one of them.
             **({"discovery_run_id": discovery_run_id} if discovery_run_id else {}),
         }
-
-        # SPEC A FEATURE FOR AN APP THAT ALREADY EXISTS.
-        #
-        # Both build paths below start a NEW app: they seed a scaffold on a new branch. So a
-        # panel could only ever produce a replacement, and "convene the panel, then add this
-        # feature to the app I already have" had nowhere to land — the operator's choice was a
-        # thought-through rebuild or an unspecced change, with nothing in between.
-        #
-        # The marker is an explicit contract between the console and this handler, not a guess
-        # at intent: the card appends it when convening a panel about an existing app, and it
-        # is stripped from the directive before the PRD is used. A panel-written PRD then
-        # becomes the instruction for a follow-up on the app's OWN branch, which is exactly what
-        # "Request a change" does — with a spec in front of it.
-        extend_run_id = None
-        extend_match = re.search(r"\[boss:extend_run=(crun_[a-z0-9]+)\]", directive or "")
-        if extend_match:
-            extend_run_id = extend_match.group(1)
-            directive = re.sub(r"\s*\[boss:extend_run=crun_[a-z0-9]+\]\s*", " ", directive).strip()
 
         # Turn the approved PRD into a build. Never dump a whole multi-feature PRD into ONE giant
         # governed task (mis-routes -> sprawling code -> gate fail). Two proven paths:
@@ -1133,28 +1137,6 @@ class DecisionService:
                 )
 
                 engine = get_engine()
-                if extend_run_id:
-                    # The PRD is the instruction, and the app's own branch is the base — the
-                    # follow-up path that already knows how to continue an app rather than
-                    # restart it. Nothing new is invented: this is "Request a change" with a
-                    # panel's spec instead of a sentence typed into a box.
-                    from .code_task_service import start_followup_task
-
-                    with engine.begin() as connection:
-                        start_followup_task(
-                            connection,
-                            parent_run_id=extend_run_id,
-                            instructions=(
-                                "A panel specced this FEATURE for the app that already exists on "
-                                "this branch. Extend it — do not re-scaffold, do not rebuild.\n\n"
-                                + directive
-                            ),
-                            jobs=jobs,
-                            # The workflow run this panel sat in governs the change, as it
-                            # does a fresh build below — not the run that built the app.
-                            workflow_run_id=(origin_ctx or {}).get("workflow_run_id"),
-                        )
-                    return
                 if _looks_like_web_app(directive):
                     start_web_app_build(
                         engine, settings, jobs,
@@ -1180,6 +1162,90 @@ class DecisionService:
             {"decision_id": row["id"], "task_id": task_id, "title": title,
              "mode": "decomposed_build"},
         )
+
+    def _build_prd_onto_app(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        actor: str,
+        recommendation: dict[str, Any],
+        extend_run_id: str,
+    ) -> None:
+        """An approved PRD for a FEATURE of an app that exists: that app's next build.
+
+        The follow-up path already knows how to continue an app — its branch, its repository
+        (inherited from the app's own run, never the environment's single repo), its lineage
+        and app id — so the PRD is handed to it as the instruction. It makes no model call,
+        so it runs on the approval's own transaction rather than a thread: the build exists
+        the moment the approval does, or the approval says why it does not.
+        """
+        from .code_task_service import (
+            is_simulated_run, load_code_task_run, start_followup_task, title_for_change,
+        )
+
+        project_id = row["project_id"]
+        task_id = row.get("task_id")
+        args = recommendation.get("args") or {}
+        raw_title = str(args.get("title") or "")
+        feature = raw_title[5:].strip() if raw_title.startswith("PRD: ") else raw_title
+        prd = strip_extend_marker(str(args.get("markdown") or "")) or feature
+
+        def _not_started(reason: str, **extra: Any) -> None:
+            emit_event(connection, project_id, "code_task.not_started", actor, "task", task_id,
+                       {"decision_id": row["id"], "reason": reason,
+                        "extends_run_id": extend_run_id, **extra})
+
+        already = connection.execute(text(
+            "SELECT id FROM code_task_runs WHERE project_id = :p "
+            "AND finalize_ctx->'origin'->>'decision_id' = :d "
+            "AND status NOT IN ('failed', 'cancelled') LIMIT 1"
+        ), {"p": project_id, "d": row["id"]}).scalar()
+        if already:
+            emit_event(connection, project_id, "code_task.already_started", actor,
+                       "code_task_run", already, {"decision_id": row["id"], "task_id": task_id})
+            return
+        parent = load_code_task_run(connection, extend_run_id)
+        if not parent or str(parent.get("project_id")) != str(project_id):
+            _not_started("extended_app_not_in_project")
+            return
+        if is_simulated_run(parent):
+            _not_started("extended_app_is_simulated")
+            return
+        meeting = connection.execute(text(
+            "SELECT id, directive FROM meeting_runs WHERE task_id = :t ORDER BY created_at DESC LIMIT 1"
+        ), {"t": task_id}).mappings().first()
+        meeting_run_id = meeting["id"] if meeting else None
+        # NAMED FOR THE FEATURE, not the panel's framing: the PRD's title is the panel's directive
+        # ("Add a feature to "X" — an existing, working application…"), which made the build
+        # "X: Add a feature to "X" — …". The operator's own ask is the "What is wanted:" line.
+        feature = feature_asked(str((meeting or {}).get("directive") or "")) or feature_asked(feature) or feature
+        origin = {"kind": "meeting", "task_id": task_id, "meeting_run_id": meeting_run_id,
+                  "decision_id": row["id"], "title": feature}
+        # A panel convened inside a workflow is governed by that run; one convened from the
+        # composer is not, and the change is filed under no run rather than an old one.
+        governing = connection.execute(text(
+            "SELECT workflow_run_id FROM workflow_step_runs WHERE decision_id = :d "
+            "ORDER BY created_at DESC LIMIT 1"), {"d": row["id"]}).scalar()
+        try:
+            started = start_followup_task(
+                connection,
+                parent_run_id=extend_run_id,
+                instructions=(
+                    "A panel specced this FEATURE for the app that already exists on this "
+                    "branch. Extend it — do not re-scaffold, do not rebuild.\n\n" + prd),
+                jobs=self.jobs,
+                title=title_for_change(parent, feature),
+                actor=actor,
+                workflow_run_id=str(governing) if governing else None,
+                finalize_extra={"origin": origin},
+            )
+        except ValueError as error:
+            _not_started("followup_refused", detail=str(error)[:400])
+            return
+        emit_event(connection, project_id, "code_task.started_from_prd", actor, "task", task_id,
+                   {"decision_id": row["id"], "task_id": task_id, "title": feature,
+                    "mode": "extend_app", "extends_run_id": extend_run_id,
+                    "run_id": started["run_id"]})
 
     def _boss_own_verdict(
         self, connection: Connection, row: dict[str, Any], recommendation: dict[str, Any]
@@ -1938,3 +2004,59 @@ class DecisionService:
         if not match:
             return None
         return int(match.group(1))
+
+
+#: The console's old way of naming the app a panel specced a feature for, inside the directive.
+#: Read only for rows written before the convene endpoint carried it as data.
+_EXTEND_MARKER = re.compile(r"\[boss:extend_run=(crun_[a-z0-9]+)\]")
+
+
+def feature_asked(text_: str) -> str:
+    """The operator's ask inside a spec-first panel's directive ("What is wanted: …"), or ""."""
+    found = re.search(r"What is wanted:\s*(.+)", text_ or "")
+    return found.group(1).strip() if found else ""
+
+
+def strip_extend_marker(text_value: str) -> str:
+    """`text_value` without the old marker, so it never reaches a PRD or a build brief."""
+    return re.sub(r"\s*\[boss:extend_run=crun_[a-z0-9]+\]\s*", " ", text_value or "").strip()
+
+
+def extend_run_of_prd(connection: Connection, row: dict[str, Any],
+                      recommendation: dict[str, Any]) -> Optional[str]:
+    """The app build (crun_…) a PRD decision's panel specced a feature for, or None.
+
+    STRUCTURED FIRST: POST /v1/meetings/prd validates `constraints.extends_run_id`, stores it
+    on the meeting run, and the panel's PRD decision carries it as `extends_run_id`. The old
+    `[boss:extend_run=...]` text marker was searched for in the PRD markdown, where the panel
+    never writes it — so every "spec it first" approval built a new app or nothing. It is
+    still honoured from the meeting's directive or the task, for rows made before.
+    """
+    found = str(recommendation.get("extends_run_id") or "").strip()
+    if found:
+        return found
+    task_id = row.get("task_id")
+    texts: list[str] = [str((recommendation.get("args") or {}).get("markdown") or "")]
+    if task_id:
+        meeting = connection.execute(text(
+            "SELECT constraints, directive FROM meeting_runs WHERE task_id = :t "
+            "ORDER BY created_at DESC LIMIT 1"), {"t": task_id}).mappings().first()
+        if meeting:
+            constraints = meeting["constraints"]
+            if isinstance(constraints, str):
+                try:
+                    constraints = json.loads(constraints)
+                except ValueError:
+                    constraints = {}
+            found = str((constraints or {}).get("extends_run_id") or "").strip()
+            if found:
+                return found
+            texts.append(str(meeting["directive"] or ""))
+        description = connection.execute(text("SELECT description FROM tasks WHERE id = :t"),
+                                         {"t": task_id}).scalar()
+        texts.append(str(description or ""))
+    for candidate in texts:
+        match = _EXTEND_MARKER.search(candidate)
+        if match:
+            return match.group(1)
+    return None

@@ -635,11 +635,21 @@ def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends
                 raise CapabilityWaitError(said, wait_seconds=60, kind="app_busy")
             return {"ok": False, "error": said}
         agent = _building_agent(c, pid, actor)
+        instructions = args.get("instructions") or ""
+        preview_id = str(args.get("preview_id") or "").strip()
+        if preview_id:
+            if _preview_in_project(c, preview_id, pid) is None:
+                return {"ok": False, "error": f"no preview {preview_id} in this project"}
+            # Said the way the quick change's feedback says it (its anchor), so the builder
+            # knows WHICH running app the operator was looking at when they asked.
+            instructions = (f"{instructions}\n\nThe operator asked for this while looking at "
+                            f"the running preview {preview_id} "
+                            f"(anchor: /v1/previews/{preview_id}/web/).").strip()
         try:
             started = cts.start_followup_task(
                 c,
                 parent_run_id=extends,
-                instructions=args.get("instructions") or "",
+                instructions=instructions,
                 jobs=ctx.jobs,
                 title=_titled_for_the_app(c, cts, extends, args.get("title")),
                 acceptance_criteria=cts.with_existing_tests_criterion(
@@ -768,6 +778,12 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "repository, and is recorded as the app's next build; its "
                                    "existing tests must still pass. `repository` and "
                                    "`base_branch` are ignored — the app decides both.",
+                },
+                "preview_id": {
+                    "type": "string",
+                    "description": "with extends_run_id: the running preview (prev_...) the "
+                                   "operator was looking at when they asked for this. The "
+                                   "builder is told which one.",
                 },
                 "risk_tier": {"type": "integer", "minimum": 0, "maximum": 3},
                 "profile": {

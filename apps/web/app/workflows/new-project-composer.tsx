@@ -31,7 +31,7 @@ import { IDEAS, IdeaCover } from "../ask-boss-hero";
 import { consoleHref } from "../url-intent";
 import { apiWrite } from "../../lib/api-write";
 import { callAction } from "../../lib/call-action";
-import { confirmCodeTaskFeedbackAction, conveneMeetingAction, submitCodeTaskFeedbackAction,
+import { confirmCodeTaskFeedbackAction, conveneFeaturePanelAction, submitCodeTaskFeedbackAction,
          type FeedbackActionResult } from "../actions";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
@@ -45,7 +45,8 @@ import { ReadinessPanel, WIZARD_COLLECTS, unaccepted, useWorkflowReadiness, type
 import { get, post } from "./delivery-api";
 import {
   KEEPS_WORKING, QUICK, SPEC, appLine, appMatches, approvalsWord, checksWithKind, costKey,
-  costRange, counts, defaultPath, featureInput, findApp, matchIdea, monogram, pathCards, readyWord,
+  costRange, counts, defaultPath, featureInput, findApp, landsAs, matchIdea, monogram, normalizeChannel,
+  pathCards, readyWord, workingWord, type Asks,
   quickChange, rememberMode, rememberedMode, routeTimeline, timelineOf, toggleKind,
   youApproveWord, type ComposeMode, type CostHistory, type TimelineStep,
 } from "./compose-plan";
@@ -238,6 +239,22 @@ function useCosts(projectId: string): Record<string, CostHistory> {
   return costs;
 }
 
+/** Every time the operator will be asked, per path (GET /v1/delivery-workflows/asks): the one
+ *  source the cards, the timeline and the footer count from. Null on an API without it; the
+ *  plan then reads the catalogue's gates and still lists each build's merge question. */
+function useAsks(projectId: string): Asks | null {
+  const [asks, setAsks] = useState<Asks | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const r = await get<Asks>("asks", projectId);
+      if (alive && r && !("error" in r)) setAsks(r);
+    })();
+    return () => { alive = false; };
+  }, [projectId]);
+  return asks;
+}
+
 /** The apps this project has built (GET /v1/factory/apps), for "Which app?". */
 function useApps(projectId: string, wanted: boolean): { apps: AppRow[]; loaded: boolean } {
   const [apps, setApps] = useState<AppRow[]>([]);
@@ -301,7 +318,13 @@ function FullEditor({ label, value, onChange, onClose }: {
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
-    box.current?.focus();
+    const el = box.current;
+    if (el) {
+      el.focus();
+      // The caret goes where the operator stopped typing: at the end, not before the first word.
+      el.setSelectionRange(el.value.length, el.value.length);
+      el.scrollTop = el.scrollHeight;
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); onClose(); }
     };
@@ -415,12 +438,13 @@ function Timeline({ steps }: { steps: TimelineStep[] }) {
   return (
     <ol className="np-timeline" data-testid="np-timeline">
       {steps.map((s) => {
-        if (!s.keep) n += 1;
+        if (!s.keep && !s.merge && !s.ask) n += 1;
         const gate = s.who.kind === "you";
         return (
-          <li key={s.id} className={gate ? "np-gate" : s.keep ? "np-keep" : undefined}
+          <li key={s.id} className={[gate ? "np-gate" : "", s.keep ? "np-keep" : "", s.merge ? "np-merge" : ""]
+                .filter(Boolean).join(" ") || undefined}
               data-testid={`np-step-${s.id}`} data-who={s.who.kind}>
-            <span className="np-dot" aria-hidden>{s.keep ? "✓" : n}</span>
+            <span className="np-dot" aria-hidden>{s.keep ? "✓" : s.merge ? "PR" : s.ask ? "✎" : n}</span>
             <span className="np-st"><b>{s.name}</b>{s.line ? <span>{s.line}</span> : null}</span>
             <WhoCell step={s} />
           </li>
@@ -545,6 +569,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const [planOpen, setPlanOpen] = useState(false);
   const [full, setFull] = useState<"brief" | "gain" | null>(null);
   const costs = useCosts(projectId);
+  const asks = useAsks(projectId);
   const set = <K extends keyof NewProjectDraft>(key: K, value: NewProjectDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
   const setInput = (name: string, value: string) =>
@@ -584,23 +609,28 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
 
   // CAN IT RUN HERE. Asked as soon as the path is known, so what is missing is on screen
   // before Start rather than in a run that fails at its last step.
-  const asked = useWorkflowReadiness(projectId, flowKey, suppliedInputs(allFields, draft.inputs));
+  // A BARE ADDRESS IS AN EMAIL CHANNEL. "Who to tell" said team@example.com and the readiness
+  // check read it as no channel at all; normalised once, read by the check and by Start alike.
+  const inputsNow = draft.inputs.notify_channel
+    ? { ...draft.inputs, notify_channel: normalizeChannel(draft.inputs.notify_channel) } : draft.inputs;
+  const asked = useWorkflowReadiness(projectId, flowKey, suppliedInputs(allFields, inputsNow));
   const readiness = asked ?? refusal;
   const notReady = unaccepted(readiness, startAnyway);
 
   const needsRepository = !adding && needsARepository({ workflowKey: draft.workflowKey, readiness,
                                                         entry, schema });
   const declaredInputs = composerFields(schema, brief, needsRepository);
-  const inputsToSend = suppliedInputs(declaredInputs, draft.inputs);
+  const inputsToSend = suppliedInputs(declaredInputs, inputsNow);
   const stillBlank = missingRequired(declaredInputs, inputsToSend);
   const malformed = invalidInputs(declaredInputs, inputsToSend);
 
   // THE PLAN: the chosen path's real steps, who does each, and where you approve.
   const appName = app?.app ?? "";
   const timeline: TimelineStep[] = adding && addPath.startsWith("@")
-    ? routeTimeline(addPath, appName)
+    ? routeTimeline(addPath, appName, asks?.routes?.[addPath] ?? null)
     : timelineOf({ steps: chosen?.steps ?? [], gates: entry?.gates ?? null,
-                   automatic: entry?.automatic_approvals ?? null, mode, app: appName });
+                   automatic: entry?.automatic_approvals ?? null, mode, app: appName,
+                   asks: asks?.workflows?.[flowKey] ?? null });
   const total = counts(timeline);
   const deploysOnlyWithYou = !timeline.some((s) => s.id === "deploy" && s.who.kind !== "you");
   const cost = costRange(costs[costKey(adding ? addPath : draft.workflowKey)]);
@@ -720,12 +750,19 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     const form = new FormData();
     form.set("project_id", projectId);
     form.set("actor", actor);
-    form.set("meeting_type", "prd_panel");
     form.set("directive", specFirstDirective("feature", appName, app?.repo ?? "", baseRun, what));
-    const r = await callAction(conveneMeetingAction)(form);
-    if (r && r.ok === false) { setError(r.error ?? "The panel could not be convened."); return; }
+    // STRUCTURED, NOT A MARKER: the app travels as constraints.extends_run_id, which the PRD's
+    // approval reads to build onto the app (the text marker stays for old panels only).
+    form.set("extends_run_id", baseRun);
+    const r = await callAction(conveneFeaturePanelAction)(form);
+    if (!r || r.ok === false) { setError(r?.error ?? "The panel could not be convened."); return; }
     notifyChanged("meetings");
     showToast("success", "Panel convened");
+    // Land on the panel just convened: that is where the spec is written and approved.
+    if (typeof window !== "undefined") {
+      window.location.assign(consoleHref(window.location.search, r.meeting_run_id
+        ? { area: "meetings", meeting: r.meeting_run_id } : { area: "meetings" }));
+    }
     onStarted(null);
   };
 
@@ -735,6 +772,8 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     if (addPath === SPEC) { await convene(); return; }
     const input = { ...featureInput({ app: appName, runId: baseRun, gain, kinds, checks: addChecks,
                                       links: addLinks }),
+                    // The preview the operator was looking at, as the quick change anchors to it.
+                    ...(previewId ? { preview_id: previewId } : {}),
                     ...typedInputs(declaredInputs, inputsToSend) };
     const started = await startRun(addPath, input);
     if (started.ok) onStarted(started.id);
@@ -804,13 +843,17 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const current = adding ? addPath : draft.workflowKey;
   const onCard = cards.some((c) => c.key === current);
   const cardFacts = (key: string): { sub: string; gates: string } => {
-    if (key === QUICK) return { sub: "Agent scopes it", gates: approvalsWord(1) };
-    if (key === SPEC) return { sub: "Panel → build", gates: approvalsWord(1) };
+    // Counted from the same timeline the plan draws, from the same asks: one source.
+    if (key === QUICK || key === SPEC) {
+      return { sub: key === QUICK ? "Agent scopes it" : "Panel → build",
+               gates: approvalsWord(counts(routeTimeline(key, "", asks?.routes?.[key] ?? null)).approvals) };
+    }
     const w = workflows.find((x) => x.workflow_key === key);
     const e = catalogue.find((c) => c.key === key);
     const steps = timelineOf({ steps: w?.steps ?? [], gates: e?.gates ?? null,
-                               automatic: e?.automatic_approvals ?? null, mode });
-    const n = w?.step_count ?? e?.step_count ?? steps.filter((s) => !s.keep).length;
+                               automatic: e?.automatic_approvals ?? null, mode,
+                               asks: asks?.workflows?.[key] ?? null });
+    const n = w?.step_count ?? e?.step_count ?? counts(steps).steps;
     return { sub: `${n} steps`, gates: approvalsWord(counts(steps).approvals) };
   };
 
@@ -1041,7 +1084,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const livesIn = adding ? (
     <div className="np-fact" data-testid="np-lands">
       <small>Lands as</small>
-      <b>{app?.prNumber ? `A new PR on top of #${app.prNumber}` : app ? "A new PR on its branch" : "—"}</b>
+      <b title="From the app's PR: an open one is updated on its branch; a merged one means a new PR">{landsAs(app)}</b>
     </div>
   ) : needsRepository ? (
     <div className="np-fact" data-testid="np-lives">
@@ -1125,11 +1168,18 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                   <span>{[app.repo, app.prNumber ? `PR #${app.prNumber} branch` : null,
                           `${app.builds.length} build${app.builds.length === 1 ? "" : "s"} so far`]
                     .filter(Boolean).join(" · ")}</span>
-                  {/^(PR open|Merged|Deployed|Done)/.test(builtBuild(app.builds)?.word ?? app.word) ? (
-                    <span className="np-keep">● Working today — the change is added, nothing is rebuilt</span>
-                  ) : (
-                    <span className="np-dim">Its newest build: {app.word}</span>
-                  )}
+                  {(() => {
+                    // "Working today" only when a live preview or a healthy deploy shows it.
+                    const w = workingWord(app);
+                    return w.working ? <span className="np-keep">● {w.text}</span>
+                      : <span className="np-dim">{w.text}</span>;
+                  })()}
+                  {previewId ? (
+                    <span className="np-anchor" data-testid="np-preview-anchor"
+                          title="The change is anchored to the preview you were looking at">
+                      ◉ Anchored to its running preview
+                    </span>
+                  ) : null}
                 </span>
               </div>
             ) : (
@@ -1157,6 +1207,30 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
               })}
             </div>
           )}
+          {adding ? (
+            <>
+              {/* ANY INSTALLED WORKFLOW CAN RUN ONTO THE APP — Security Hardening, UX Certification,
+                  Fast Fix — with the same extends_run_id the cards send. */}
+              <button type="button" className="np-more" aria-expanded={allPaths} data-testid="np-all-paths"
+                      onClick={() => setAllPaths((v) => !v)}>
+                {onCard ? `All ${workflows.length} workflows` : pathName(addPath)} {allPaths ? "⌃" : "⌄"}
+              </button>
+              {allPaths ? (
+                <div className="np-choices" role="radiogroup" aria-label="Workflow" data-testid="np-all-list">
+                  {workflows.map((w) => (
+                    <button type="button" role="radio" className="np-choice" key={w.id}
+                            aria-checked={addPath === w.workflow_key}
+                            data-testid={`np-add-workflow-${w.workflow_key}`}
+                            title={String(catalogue.find((c) => c.key === w.workflow_key)?.description
+                              || w.description || "")}
+                            onClick={() => { setAddPath(w.workflow_key); setProposal(null); }}>
+                      {w.name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : null}
           {!adding ? (
             <>
               <button type="button" className="np-more" aria-expanded={allPaths} data-testid="np-all-paths"
@@ -1244,17 +1318,22 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           <HelpTip label="Cost" text="Starting spends model budget. It stops and asks before it deploys anything." />
         </span>
         <span className="np-spacer" />
-        {blocked && !(adding && proposal?.proposal) ? (
-          <span className="np-blocked" data-testid="np-blocked" role="status">{blocked}</span>
-        ) : null}
-        {onCancel ? (
-          <button type="button" className="np-btn" data-testid="np-cancel" onClick={onCancel}>Cancel</button>
-        ) : null}
-        <button type="button" className="np-btn np-primary" data-testid="dw-new-start"
-                disabled={busy || (!!blocked && !(adding && proposal?.proposal))}
-                onClick={() => void primary()}>
-          {startLabel}<span className="np-kbd" aria-hidden>⌘↵</span>
-        </button>
+        {/* THE PAIR STAYS TOGETHER: the reason wraps above it, never between Cancel and Start. */}
+        <span className="np-go">
+          {blocked && !(adding && proposal?.proposal) ? (
+            <span className="np-blocked" data-testid="np-blocked" role="status">{blocked}</span>
+          ) : null}
+          <span className="np-actions">
+            {onCancel ? (
+              <button type="button" className="np-btn" data-testid="np-cancel" onClick={onCancel}>Cancel</button>
+            ) : null}
+            <button type="button" className="np-btn np-primary" data-testid="dw-new-start"
+                    disabled={busy || (!!blocked && !(adding && proposal?.proposal))}
+                    onClick={() => void primary()}>
+              {startLabel}<span className="np-kbd" aria-hidden>⌘↵</span>
+            </button>
+          </span>
+        </span>
       </footer>
       {error ? <p className="dw-new-error" role="alert" data-testid="dw-new-error" data-user-text>{error}</p> : null}
       {full ? (

@@ -2200,6 +2200,10 @@ def _perform_capability(
         extends = str((context.get("input") or {}).get("extends_run_id") or "").strip()
         if extends:
             inputs = {**inputs, "extends_run_id": extends}
+            # The preview the operator was looking at (validated by the start endpoint).
+            preview = str((context.get("input") or {}).get("preview_id") or "").strip()
+            if preview:
+                inputs = {**inputs, "preview_id": preview}
 
     # WHAT THE PANEL IS BEING CONVENED FOR.
     #

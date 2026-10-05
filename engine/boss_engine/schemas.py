@@ -916,6 +916,10 @@ class MeetingProposeResponse(BaseModel):
     status: str
     task_id: str
     job_id: str
+    #: The convened panel (mrun_…), so the console can land on it: ?area=meetings&meeting=<id>.
+    meeting_run_id: Optional[str] = None
+    #: The app build (crun_…) the panel is specifying a feature for, when it is one.
+    extends_run_id: Optional[str] = None
 
 
 class BudgetReserveRequest(BaseModel):

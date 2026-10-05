@@ -546,15 +546,22 @@ class JobLeaseService:
             SELECT id, project_id, task_id, work_item_id, tracker_binding_id,
                    allocation_id, kind, payload, data_boundary, priority_score,
                    workload_class, resource_units, attempt, max_attempts, status,
-                   last_error
+                   last_error, priority
             FROM jobs
             WHERE kind IN :capabilities
-              AND run_after <= :now_utc
               AND (
-                status IN ('queued', 'failed_retryable')
-                -- reclaim leased OR running jobs whose lease expired: a worker that
-                -- crashed mid-job leaves it 'running', and it must be recoverable.
-                OR (status IN ('leased', 'running') AND lease_expires_at <= :now_utc)
+                (run_after <= :now_utc
+                 AND (
+                   status IN ('queued', 'failed_retryable')
+                   -- reclaim leased OR running jobs whose lease expired: a worker that
+                   -- crashed mid-job leaves it 'running', and it must be recoverable.
+                   OR (status IN ('leased', 'running') AND lease_expires_at <= :now_utc)
+                 ))
+                -- A PERSON'S BUILD WAITING FOR ROOM IS ASKED AGAIN ON EVERY POLL. Deferring
+                -- it for 20s (host_capacity) made the next free slot go to whichever deferred
+                -- job's timer ran out first — usually an autonomous pass queued earlier.
+                OR (status = 'queued' AND priority < :background
+                    AND last_error->>'code' = 'host_capacity')
               )
             ORDER BY
               CASE status
@@ -575,6 +582,7 @@ class JobLeaseService:
             {
                 "capabilities": capabilities,
                 "now_utc": current_time,
+                "background": JOB_PRIORITY_BACKGROUND,
             },
         ).mappings().all()
         if not candidates:
@@ -594,6 +602,13 @@ class JobLeaseService:
             if candidate["status"] not in {"leased", "running"}:
                 from . import admission
                 if admission.profile_for_job(candidate["kind"]) is not None:
+                    # AUTONOMOUS WORK YIELDS. A build the system chose to do (a Metatron
+                    # pass, a captain swarm, a shepherd retry — BACKGROUND or lower at
+                    # creation) does not take a heavy slot while a person's build is
+                    # waiting for one: seven of thirteen builds were a captain's quality
+                    # pass while the operator's build sat queued behind them.
+                    if self._autonomous_must_yield(connection, candidate, capabilities):
+                        continue
                     try:
                         if admission_cap is None:
                             admission_cap = admission.sample()
@@ -916,8 +931,9 @@ class JobLeaseService:
     ) -> dict[str, Any]:
         current_time = now_utc()
         lease_expires_at = current_time + timedelta(seconds=lease_ttl_seconds)
-        row = self._load_leased_job_for_update(connection, worker_id, job_id, lease_token)
-        if row["lease_expires_at"] <= current_time:
+        row = self._load_leased_job_for_update(connection, worker_id, job_id, lease_token,
+                                               allow_expired=handing_back)
+        if row["lease_expires_at"] <= current_time and not handing_back:
             raise LeaseNotFoundError("Lease has expired.")
         if handing_back:
             # A DEPLOY IS NOT THE JOB'S FAILURE. The stopping worker shortens its lease so the job
@@ -987,7 +1003,8 @@ class JobLeaseService:
         lease_token: str,
         result: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        row = self._load_leased_job_for_update(connection, worker_id, job_id, lease_token)
+        row = self._load_leased_job_for_update(connection, worker_id, job_id, lease_token,
+                                               allow_expired=True)
         project_id = row["project_id"]
         result = result or {}
         proof = self._validate_completion_proof(row, worker_id, result)
@@ -1157,7 +1174,8 @@ class JobLeaseService:
         retryable: bool,
         retry_delay_seconds: int,
     ) -> dict[str, Any]:
-        row = self._load_leased_job_for_update(connection, worker_id, job_id, lease_token)
+        row = self._load_leased_job_for_update(connection, worker_id, job_id, lease_token,
+                                               allow_expired=True)
         project_id = row["project_id"]
         current_time = now_utc()
 
@@ -1414,6 +1432,8 @@ class JobLeaseService:
         worker_id: str,
         job_id: str,
         lease_token: str,
+        *,
+        allow_expired: bool = False,
     ):
         row = connection.execute(
             text(
@@ -1437,7 +1457,13 @@ class JobLeaseService:
             raise LeaseNotFoundError("Lease token is invalid.")
         if row["status"] not in ("leased", "running"):
             raise LeaseNotFoundError("Job is not actively leased.")
-        if row["lease_expires_at"] <= now_utc():
+        # AN EXPIRED LEASE NOBODY TOOK IS STILL OURS TO SETTLE. Owner and token still match and
+        # the job is still leased/running, so no other worker has reclaimed it (a reclaim
+        # rewrites both, under this same row lock). Refusing the completion here (409) threw
+        # away finished work: the job sat until the reclaimer re-ran it from the top. Settling
+        # (complete, fail, hand back) accepts it; anything that does new work under the lease
+        # (heartbeat, require_active_lease) still refuses.
+        if row["lease_expires_at"] <= now_utc() and not allow_expired:
             raise LeaseNotFoundError("Lease has expired.")
         return row
 
@@ -2067,6 +2093,63 @@ class JobLeaseService:
                 "run_after": run_after.isoformat(),
             },
         )
+
+    def _autonomous_must_yield(self, connection: Connection, candidate,
+                               capabilities: list[str]) -> bool:
+        """True when `candidate` is autonomous heavy work and a person's heavy work is waiting.
+
+        "A person's work" is read from the job's priority, set when it was created from who
+        started it (code_task_service.code_task_job_priority): anything above BACKGROUND. Only
+        work that is due — or held only for room on this machine — counts, so a person's job
+        parked for an hour on its budget does not starve the queue behind it.
+        """
+        from .workload_profiles import HEAVY_JOB_KINDS
+
+        if int(candidate.get("priority") or JOB_PRIORITY_REQUESTED) < JOB_PRIORITY_BACKGROUND:
+            return False
+        heavy = sorted(k for k in capabilities if k in HEAVY_JOB_KINDS)
+        if not heavy:
+            return False
+        waiting = connection.execute(
+            text(
+                """
+                SELECT id FROM jobs
+                WHERE kind = ANY(:heavy)
+                  AND status IN ('queued', 'failed_retryable')
+                  AND priority < :background
+                  AND (run_after <= now() + interval '60 seconds'
+                       OR last_error->>'code' = 'host_capacity')
+                ORDER BY priority ASC, created_at ASC
+                LIMIT 1
+                """
+            ),
+            {"heavy": heavy, "background": JOB_PRIORITY_BACKGROUND},
+        ).scalar()
+        if not waiting:
+            return False
+        previous = candidate.get("last_error") or {}
+        if isinstance(previous, str):
+            try:
+                previous = json.loads(previous)
+            except ValueError:
+                previous = {}
+        if (previous or {}).get("code") != "yielded_to_operator":
+            connection.execute(
+                text(
+                    "UPDATE jobs SET last_error = CAST(:e AS JSONB), updated_at = now() "
+                    "WHERE id = :id"
+                ),
+                {"id": candidate["id"], "e": json.dumps({
+                    "code": "yielded_to_operator", "deferred_reason": "yielded_to_operator",
+                    "message": "Queued: an operator's build goes first; this automatic work "
+                               "runs when no one is waiting.",
+                    "waiting_for": waiting,
+                })},
+            )
+            emit_event(connection, candidate["project_id"], "job.yielded_to_operator",
+                       "admission", "job", candidate["id"],
+                       {"kind": candidate["kind"], "waiting_for": waiting})
+        return True
 
     def _defer_for_host_capacity(self, connection: Connection, candidate, verdict) -> None:
         """Leave the job queued with WHY in the operator's words; the event once per wait,

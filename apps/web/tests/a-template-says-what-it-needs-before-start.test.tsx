@@ -93,7 +93,8 @@ describe("Start is blocked by what is missing, and says start-anyway out loud", 
 
   it("Start is blocked by everything", () => {
     // One screen: every declared field, the brief and the readiness checklist gate one Start.
-    expect(UI).toContain('data-testid="dw-new-start"\n                disabled={busy || (!!blocked');
+    const start = UI.slice(UI.indexOf('data-testid="dw-new-start"'));
+    expect(start.slice(0, 160)).toContain("disabled={busy || (!!blocked");
   });
 
   it("a refused start draws the same checklist instead of [object Object]", () => {
