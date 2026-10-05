@@ -6,6 +6,7 @@
 import type { ActivityLogItem } from "../../lib/activity-log";
 import { dayLabel } from "../../lib/log-time";
 import type { LogToken } from "../../lib/log-url";
+import { nameOf } from "../agents/run-face";
 import { consoleHref } from "../url-intent";
 
 export const ROW_H = 32;
@@ -93,6 +94,7 @@ export function tokenText(t: LogToken, labels: Record<string, string>, names: { 
       case "run": case "wfr": return labels[t.value] || names.run || t.value;
       case "step": return (wfr && labels[`${wfr}/${t.value}`]) || names.step || t.value;
       case "act": return labels[t.value] || t.value;
+      case "agent": return nameOf(t.value).name;
       default: return t.value;
     }
   })();

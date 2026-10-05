@@ -62,7 +62,7 @@
 .gv-row[data-advisory] .gv-name { color: var(--ink-soft); }
 .gv-value { display: flex; flex-direction: column; min-width: 0; }
 .gv-value-main { font-size: 1rem; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gv-row[data-advisory] .gv-value-main { font-size: 0.86rem; font-weight: 600; color: var(--ink-soft); }
+.gv-row[data-advisory] .gv-value-main { font-size: 0.86rem; font-weight: 600; color: var(--ink-soft); white-space: normal; }
 .gv-value[data-pulsed] .gv-value-main { animation: gv-pulse 200ms ease-out 1; }
 @keyframes gv-pulse { from { color: var(--accent-text); } to { color: var(--ink); } }
 .gv-value-note { font-size: 0.74rem; color: var(--amber); }
@@ -152,6 +152,7 @@
   .gv-name { grid-column: 1; } .gv-value { grid-column: 2; text-align: right; }
   .gv-source, .gv-enforced { grid-column: auto; }
   .gv-act { grid-column: 2; grid-row: 2; }
+  .gv-row[data-advisory] .gv-value { grid-column: 1 / -1; text-align: left; }
   .gv-meter-other { grid-template-columns: 1fr auto; }
   .gv-meter-other .gv-bar { grid-column: 1 / -1; }
   .gv-alloc-line { grid-template-columns: 1fr auto; }

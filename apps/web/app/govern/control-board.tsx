@@ -112,6 +112,9 @@ export function ControlBoard({ view, projectId, actor, unreachable, focus, onSav
   const [pulsed, setPulsed] = useState<string | null>(null);
   const controls = useMemo(() => Object.fromEntries((view?.controls ?? []).map((c) => [c.key, c])), [view]);
   const focusRef = useRef<HTMLLIElement | null>(null);
+  // The URL (who you are, org=) is read after mount so the server's links match the client's.
+  const [search, setSearch] = useState("");
+  useEffect(() => { setSearch(window.location.search); }, []);
   useEffect(() => { focusRef.current?.scrollIntoView?.({ block: "center" }); }, [focus, view === null]);
 
   const saved = (key: string, word: string) => {
@@ -166,17 +169,13 @@ export function ControlBoard({ view, projectId, actor, unreachable, focus, onSav
       <section className="gv-sec gv-elsewhere" aria-label="Elsewhere">
         <h3 className="gv-sec-head">ELSEWHERE</h3>
         <span className="gv-links">
-          <a className="ag-link" href={hrefTo({ area: "decisions" })} title="Which actions need a person">Approval rules ↗</a>
-          <a className="ag-link" href={hrefTo({ area: "org" })} title="Who may change what">Access ↗</a>
-          <a className="ag-link" href={hrefTo({ area: "pipeline" })} title="Which models each step may use">Model tiers ↗</a>
+          <a className="ag-link" href={consoleHref(search, { area: "decisions" })} title="Which actions need a person">Approval rules ↗</a>
+          <a className="ag-link" href={consoleHref(search, { area: "org" })} title="Who may change what">Access ↗</a>
+          <a className="ag-link" href={consoleHref(search, { area: "pipeline" })} title="Which models each step may use">Model tiers ↗</a>
         </span>
       </section>
     </div>
   );
-}
-
-function hrefTo(params: Record<string, string>): string {
-  return consoleHref(typeof window === "undefined" ? "" : window.location.search, params);
 }
 
 function ControlRow({ keyName, control: c, projectId, actor, disabled, editing, menuOpen, focused, pulsed,
@@ -444,7 +443,7 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
           <span className="gv-name">Per step</span>
           <span className="gv-value">
             <span className="gv-value-main gv-steps" data-user-text
-                  title={steps.map((p) => `${stageWord(p.stage)} ${k(p.max_total_tokens_per_call)}`).join(" · ")}>
+                  title="Tokens per model call, by step. Edit to change one.">
               {steps.some((p) => p.max_total_tokens_per_call)
                 ? steps.filter((p) => p.max_total_tokens_per_call).slice(0, 3).map((p, i) => (
                   <React.Fragment key={p.stage}>{i ? " · " : ""}<span>{stageWord(p.stage)} {k(p.max_total_tokens_per_call)}</span></React.Fragment>))
