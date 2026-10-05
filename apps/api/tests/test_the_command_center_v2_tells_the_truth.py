@@ -22,11 +22,15 @@ NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
 
 @pytest.fixture(autouse=True)
-def _fresh_memo():
+def _fresh_memo(engine):
     ccv._PULSE_MEMO.clear()
     ccv._DELIVERY_MEMO.clear()
     yield
     ccv._PULSE_MEMO.clear()
+    # The suite's reset does not clear Shepherd's questions; an open one is a card on every
+    # later test's Command Center.
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM shepherd_escalations WHERE project_id = :p"), {"p": PID})
 
 
 def _view(client) -> dict:
@@ -276,3 +280,78 @@ def test_old_stuck_build_questions_are_one_row_and_clean_up_clears_them(engine, 
 
 def test_clean_up_needs_a_project(client):
     assert client.post("/v1/command-center/clean-up", json={"actor": "ceo"}).status_code == 422
+
+
+# ── re-test (independent tester, cc/v2 @99926e41) ───────────────────────────────────────────
+
+
+def test_the_cleanup_row_counts_every_old_question_and_clean_up_clears_them_all(engine, client,
+                                                                              monkeypatch):
+    """The cards read a page of ten; the row said 10 when there were more. It counts every old
+    open question, and Clean up pages through all of them."""
+    from boss_engine.services import system_doctor
+
+    monkeypatch.setattr(system_doctor, "CLEAN_UP_PAGE", 5)
+    with engine.begin() as c:
+        old = [_question(c, ref=_build(c, title=f"Old build {i}", status="failed"),
+                         age=timedelta(days=30 + i)) for i in range(14)]
+    group = _view(client)["cleanup"]
+    assert group["count"] == 14 and group["title"].startswith("14 old builds stuck since ")
+    body = client.post("/v1/command-center/clean-up", json={"project_id": PID, "actor": "ceo"}).json()
+    assert body["closed"] == 14
+    with engine.begin() as c:
+        assert c.execute(text("SELECT count(*) FROM shepherd_escalations WHERE id = ANY(:i) "
+                              "AND status = 'open'"), {"i": old}).scalar() == 0
+    assert _view(client)["cleanup"] is None
+
+
+def test_a_finding_never_shows_a_raw_id_or_unknown(engine, client):
+    import re
+
+    with engine.begin() as c:
+        b = _build(c, title="Build a lead triage inbox", status="failed")
+        mine = []
+        for q in ("unknown — how should this proceed?",
+                  f"{b}: stuck in `coding` with no state change for 4000 minutes. Let it continue, "
+                  "or cancel it?"):
+            eid = seed.uid("shesc")
+            c.execute(text("INSERT INTO shepherd_escalations (id, project_id, task_ref, question, "
+                           "options, created_at) VALUES (:i, :p, :r, :q, '[]'::jsonb, :at)"),
+                      {"i": eid, "p": PID, "r": b, "q": q, "at": NOW - timedelta(hours=1)})
+            mine.append(f"shepherd:{eid}")
+    cards = [a for a in _view(client)["attention"] if a["id"] in mine]
+    assert len(cards) == 2
+    for a in cards:
+        words = f"{a['title']} {a['detail']}"
+        assert not re.search(r"\b(crun|wfr|drun|shesc)_[0-9a-z]{6,}", words), words
+        assert "unknown" not in words.lower(), words
+        assert "Lead Triage Inbox" in words, words
+    assert any("stuck coding for 2 days" in a["title"] for a in cards)
+
+
+def test_the_latest_feed_says_what_the_team_made(engine, client):
+    """A PR opened, a dossier, a panel's PRD are moves too — not only code-task steps."""
+    with engine.begin() as c:
+        aid = seed.uid("act")
+        c.execute(text(
+            "INSERT INTO agent_acts (act_id, project_id, role_key, kind, status, root_act_id, "
+            "handed_by_kind, how, accountable, label, artifacts, started_at, ended_at) VALUES "
+            "(:i, :p, 'pm', 'step', 'complete', :i, 'boss', 'started', 'ceo', "
+            "'Meeting · Lead triage inbox', CAST(:a AS jsonb), :s, :e)"),
+            {"i": aid, "p": PID, "a": json.dumps([{"kind": "minutes", "ref": "PRD v1"}]),
+             "s": NOW - timedelta(hours=3), "e": NOW - timedelta(hours=2)})
+        aid = seed.uid("act")
+        c.execute(text(
+            "INSERT INTO agent_acts (act_id, project_id, role_key, kind, status, root_act_id, "
+            "handed_by_kind, how, accountable, label, artifacts, started_at, ended_at) VALUES "
+            "(:i, :p, 'software_engineer', 'stage', 'complete', :i, 'boss', 'started', 'ceo', "
+            "'Build · Changelog composer', CAST(:a AS jsonb), :s, :e)"),
+            {"i": aid, "p": PID, "a": json.dumps([{"kind": "pr", "ref": "#42",
+                                                   "url": "https://github.com/a/b/pull/42"}]),
+             "s": NOW - timedelta(hours=2), "e": NOW - timedelta(hours=1)})
+    latest = _view(client)["pulse"]["latest"]
+    said = [(e["verb"], e["subject"]) for e in latest]
+    assert ("opened PR #42 for", "Changelog composer") in said
+    assert ("wrote the PRD for", "Lead triage inbox") in said
+    pr = next(e for e in latest if e["verb"].startswith("opened PR"))
+    assert pr["kind"] == "made" and pr["url"] == "https://github.com/a/b/pull/42"

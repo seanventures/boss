@@ -148,6 +148,19 @@ export function NeedsCard({ view, lead, olderStopped, needsYou, projectId, actor
         <h2 id="cc2-needs-you-h">Needs you</h2>
         {needsYou ? <span className="cc-n amber" data-testid="cc2-kpi-needs-you"
                           title="Decisions waiting. Same as Approvals and the top bar.">{needsYou}</span> : null}
+        {/* THE ROWS AGREE WITH THE NUMBER (independent test): the number is decisions — the
+            one needs-you rule — and anything else listed is said apart. */}
+        {view && all.length > (needsYou ?? 0) ? (
+          <span className="cc-n-more" data-testid="cc-needs-more"
+                title="Also listed: stopped work, setup and system findings. Not decisions.">
+            {needsYou ? `+${all.length - (needsYou ?? 0)} more` : `${all.length} to look at`}
+          </span>
+        ) : null}
+        {view && view.counts.stopped > 0 ? (
+          <span className="cc-chip red" data-testid="cc-stopped-chip" title="Failed steps or builds waiting for you">
+            {view.counts.stopped} stopped
+          </span>
+        ) : null}
         <span className="cc-spacer" />
         <Go className="cc-link" patch={{ area: "decisions", decision_filter: "needs_action", role: null, view: null }}
             orgId={orgId} testId="cc-approvals-link">Approvals ↗</Go>
@@ -336,9 +349,9 @@ export function FlightCard({ view, projectId, actor, orgId, now, onRefresh, onSt
       {recent.length || (view?.today.runsFinished ?? 0) > 0 ? (
         <ul className="cc-done" aria-label="Finished lately" data-testid="cc-done">
           {view && view.today.runsFinished > 0 ? (
-            <li className="cc-done-n" data-testid="cc-kpi-done-today"
-                title={`Runs that finished today. Failed: ${view.today.runsFailed}.`}>
+            <li className="cc-done-n" data-testid="cc-kpi-done-today" title="Runs that finished today">
               {view.today.runsFinished} done today
+              {view.today.runsFailed > 0 ? <em className="cc-failed"> · {view.today.runsFailed} failed</em> : null}
             </li>
           ) : null}
           {recent.slice(0, 3).map((r) => {
@@ -376,8 +389,9 @@ function usd(micros: number): string {
 export function todaySpend(view: CommandCenterView | null): string {
   if (!view) return "";
   const t = view.today;
-  if (t.moneyMicros === 0 && t.includedMicros > 0) return `Today: Included · ${usd(t.includedMicros)} API value`;
-  return `Today: ${usd(t.moneyMicros)}`;
+  if (t.moneyMicros === 0 && t.includedMicros > 0) return `Today: included · ${usd(t.includedMicros)} API value`;
+  return t.includedMicros > 0 ? `Today: ${usd(t.moneyMicros)} · ${usd(t.includedMicros)} included`
+    : `Today: ${usd(t.moneyMicros)}`;
 }
 
 export function HealthCard({ view, reachable, orgId }: {
@@ -397,7 +411,7 @@ export function HealthCard({ view, reachable, orgId }: {
         <Go className="cc-link" patch={{ area: "infra", role: null, view: null }} orgId={orgId} testId="cc-infra-link">Infra ↗</Go>
       </header>
       <Go className="cc-gauge" patch={{ area: "budget", role: null, view: null }} orgId={orgId} testId="cc-budget-link"
-          title={[todaySpend(view), b?.resetsAtLabel ? `Resets ${b.resetsAtLabel}` : "", "Opens Budget"].filter(Boolean).join(". ")}>
+          title={[b?.resetsAtLabel ? `Resets ${b.resetsAtLabel}` : "", "Opens Budget"].filter(Boolean).join(". ")}>
         <span className="cc-ring" data-tone={tone} style={{ ["--p" as string]: `${cap > 0 ? Math.max(1.5, pct) : 0}` }} aria-hidden />
         <span className="cc-gauge-text">
           {view ? (
@@ -406,6 +420,9 @@ export function HealthCard({ view, reachable, orgId }: {
           <span>{PERIOD_WORD[b?.period ?? "month"] ?? "This period"} · subscription calls free</span>
         </span>
       </Go>
+      {/* Today's money, when the ring is not already today's (a day-period budget). */}
+      {view && (b?.period !== "day" || view.today.includedMicros > 0)
+        ? <div className="cc-today-spend" data-testid="cc-today-spend">{todaySpend(view)}</div> : null}
       <ul className="cc-systems" data-testid="cc-systems" aria-label="Systems">
         {systems.map((s) => {
           const t = reachable ? s.tone : "grey";

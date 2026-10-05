@@ -16,7 +16,7 @@
  * there is one way a team gets set rather than two that can disagree.
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "./agent-avatar";
 import { AgentChip } from "./agent-chip";
@@ -35,6 +35,16 @@ export function DefaultAgentPicker({ projectId, actor, faces = false }: {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const wrap = useRef<HTMLDivElement>(null);
+  // A POPOVER CLOSES LIKE ONE (independent test): Escape, or a press anywhere outside it.
+  useEffect(() => {
+    if (!open) return undefined;
+    const outside = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
+  }, [open]);
 
   const load = useCallback(async () => {
     try {
@@ -80,7 +90,7 @@ export function DefaultAgentPicker({ projectId, actor, faces = false }: {
   const available = roles.filter((r) => !current.includes(r.role_key));
 
   return (
-    <div className="askboss-wf askboss-agents" data-testid="askboss-default-agents">
+    <div className="askboss-wf askboss-agents" data-testid="askboss-default-agents" ref={wrap}>
       <button type="button" className="askboss-wf-label askboss-agents-toggle"
               onClick={() => setOpen((o) => !o)} aria-expanded={open}
               data-testid="askboss-agents-toggle"

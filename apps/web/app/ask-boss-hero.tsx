@@ -885,6 +885,13 @@ export function ideaFor(idea: Idea): string {
 
 /** Opens the composer's Ideas — the gallery when `grid` — from elsewhere on the page (the
  *  Command Center's "All 16 ↗"). The composer owns the gallery; nothing else draws a copy. */
+/** A run named by what was asked for: its first line, cut at a word, never an id. */
+export function namedRun(text: string): string {
+  const line = (text.trim().split("\n")[0] ?? "").replace(/^(build|make|create)\s+(an?|the)\s+/i, "");
+  const cut = line.length > 48 ? `${line.slice(0, 48).replace(/\s+\S*$/, "")}…` : line;
+  return (cut.charAt(0).toUpperCase() + cut.slice(1)).replace(/[.!?]$/, "") || "This";
+}
+
 export const OPEN_IDEAS_EVENT = "askboss:open-ideas";
 export function openIdeas(grid = true): void {
   try { window.dispatchEvent(new CustomEvent(OPEN_IDEAS_EVENT, { detail: { grid } })); } catch { /* none */ }
@@ -1356,7 +1363,8 @@ export function AskBossHero({
       setInput("");
       setReply(
         `**Started.** Taking you to the workflow…\n\n` +
-        (runId ? `Run \`${runId}\`.` : ""),
+        // NAMED, NEVER AN ID (independent test): the run as the operator called it, linked.
+        (runId ? `[${namedRun(directive)} run ↗](${linkTo({ area: "delivery_workflows", wfr: runId }, orgId)})` : ""),
       );
       // GO WHERE THE WORK IS. Telling somebody to "open Workflow" after they pressed Build is
       // asking them to do the navigation the press already implied — and they had no way to
@@ -1368,7 +1376,7 @@ export function AskBossHero({
       window.dispatchEvent(new PopStateEvent("popstate"));
       window.dispatchEvent(new CustomEvent("boss:navigate"));
     });
-  }, [busy, projectId, actor]);
+  }, [busy, projectId, actor, orgId]);
 
   /**
    * Put a brief in the composer. Deliberately does NOT build.
@@ -1453,12 +1461,12 @@ export function AskBossHero({
       if (!r.ok) { setError(r.error ?? "Could not start the research run."); return; }
       setInput("");
       setReply(
-        `**Researching.** Discovery run \`${r.data?.run_id ?? ""}\` is gathering sources.\n\n` +
+        `**Researching.** ${r.data?.run_id ? `[${namedRun(seed)} research ↗](${linkTo({ area: "discovery" }, orgId)})` : "The research"} is gathering sources.\n\n` +
         `It produces a cited dossier and candidate outcomes — watch it under **Discovery**. ` +
         `When something looks worth building, bring it back here and press Build.`,
       );
     });
-  }, [busy, projectId, actor, researchAvailable]);
+  }, [busy, projectId, actor, researchAvailable, orgId]);
 
   // A SLOW DRIFT THE OPERATOR CAN OVERRIDE.
   //

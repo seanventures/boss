@@ -4,7 +4,9 @@
    `.cc[data-motion="full"]` (Live, visible, reachable, host fine, no reduced-motion ask). */
 
 .cc {
-  --cc-dim: var(--faint);
+  /* Secondary text at WCAG AA (≥ 4.5:1) on every card and the hero (independent test). */
+  --cc-dim: #A3B3CF;
+  container: cc / inline-size;
   --cc-line: #18233D;
   display: flex; flex-direction: column; gap: 26px;
   max-width: 1240px; margin: 0 auto; padding: 4px 0 48px;
@@ -12,6 +14,11 @@
 }
 .cc > * { min-width: 0; }
 .ov-cc > .cc { width: 100%; min-width: 0; }
+/* Nothing inside the hero sets its width (a fresh install's inline Ideas strip once made it
+   3185px wide): every column and the composer shrink to the column. */
+.cc-hero-l, .cc-hero-r, .cc-compose, .cc-compose > *, .cc .askboss, .cc .askboss-inner,
+.cc .askboss-form, .cc .askboss-box { min-width: 0; max-width: 100%; }
+.cc .askboss-idea-strip { max-width: 100%; }
 .ov-cc { min-width: 0; }
 .cc[data-stale="true"] .cc-hero, .cc[data-stale="true"] .cc-now { opacity: .72; }
 .cc-spacer { flex: 1 1 auto; }
@@ -236,7 +243,7 @@
 
 /* ── Your team ── */
 .cc-hero-r { position: relative; z-index: 1; padding: 30px 30px 26px 10px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.cc-hero-r-h { display: flex; justify-content: space-between; align-items: baseline; padding-left: 6px; }
+.cc-hero-r-h { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; align-items: baseline; padding-left: 6px; }
 .cc-hero-r-h b { font: 600 15px var(--display); }
 .cc-teams { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; flex: 1; }
 .cc-tile {
@@ -246,15 +253,28 @@
   display: flex; flex-direction: column; justify-content: space-between; gap: 8px; min-height: 112px; min-width: 0;
   transition: transform .25s, border-color .25s;
 }
+.cc-tile { position: relative; }
 .cc-tile:hover, .cc-tile:focus-within { transform: translateY(-2px); border-color: color-mix(in srgb, var(--hue, #5B8CFF) 60%, #1C2740); }
 .cc-tile-faces { display: flex; flex-wrap: wrap; gap: 4px; }
 .cc-face { width: 34px; height: 34px; border-radius: 50%; display: inline-grid; place-items: center; filter: saturate(.9); }
 .cc-face-in { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; }
 .cc-face .ag-avatar { pointer-events: none; }
 .cc-face:hover .cc-face-in, .cc-face:focus-visible .cc-face-in { box-shadow: 0 0 0 2px color-mix(in srgb, var(--hue, #5B8CFF) 80%, #fff); }
-.cc[data-motion="full"] .cc-face { animation: cc-bob 6s ease-in-out infinite; }
-.cc[data-motion="full"] .cc-face:nth-child(2n) { animation-delay: -2s; }
-.cc[data-motion="full"] .cc-face:nth-child(3n) { animation-delay: -4s; }
+/* MOTION ONLY ON A REAL STATE (operator rule): a working or waiting face bobs; idle is still. */
+.cc[data-motion="full"] .cc-face[data-live="true"] { animation: cc-bob 6s ease-in-out infinite; }
+.cc[data-motion="full"] .cc-face-wrap:nth-child(2n) .cc-face { animation-delay: -2s; }
+.cc[data-motion="full"] .cc-face-wrap:nth-child(3n) .cc-face { animation-delay: -4s; }
+.cc-face { border: 0; padding: 0; background: none; cursor: pointer; }
+.cc-face-wrap { position: relative; display: inline-flex; }
+.cc-facecard {
+  position: absolute; z-index: 40; top: calc(100% + 6px); left: -8px; width: 240px;
+  display: grid; gap: 6px; padding: 12px; border-radius: 12px; text-align: left;
+  border: 1px solid var(--border-strong); background: #101A30; box-shadow: var(--shadow-lg);
+  font-size: 12.5px; color: var(--muted);
+}
+.cc-facecard b { font: 600 13.5px var(--sans); color: var(--ink); }
+.cc-facecard-line { color: var(--ink-soft); line-height: 1.4; }
+.cc-facecard-acts { display: flex; gap: 6px; }
 @keyframes cc-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
 .cc-face-in[data-waiting="true"] { box-shadow: 0 0 0 2px var(--amber), 0 0 16px rgba(245, 181, 68, .55); }
 .cc-face-in[data-working="true"] { box-shadow: 0 0 0 2px var(--green), 0 0 18px rgba(52, 211, 153, .6); }
@@ -475,13 +495,14 @@
 .cc-mono span { font: 700 34px var(--display); color: rgba(255, 255, 255, .88); letter-spacing: .04em; text-shadow: 0 4px 20px rgba(0, 0, 0, .4); }
 .cc-app-state {
   position: absolute; z-index: 2; left: 10px; bottom: 10px; font-size: 11.5px; font-weight: 700; padding: 3px 9px;
-  border-radius: 999px; backdrop-filter: blur(6px); background: rgba(80, 95, 130, .8); color: #E3E9F5;
+  border-radius: 999px; backdrop-filter: blur(6px); background: rgba(9, 14, 28, .78); color: #E3E9F5;
+  border: 1px solid rgba(255, 255, 255, .18);
 }
-.cc-app-state[data-state="pr"] { background: rgba(47, 111, 224, .35); color: #D6E4FF; }
+.cc-app-state[data-state="pr"] { background: rgba(9, 14, 28, .78); color: #D6E4FF; border: 1px solid rgba(141, 180, 255, .45); }
 .cc-app-state[data-state="needs"] { background: rgba(245, 181, 68, .9); color: #2A1A00; }
 .cc-app-state[data-state="failed"] { background: rgba(242, 100, 122, .85); color: #fff; }
-.cc-app-state[data-state="building"] { background: rgba(46, 197, 197, .3); color: #D7FBF7; }
-.cc-app-state[data-state="done"] { background: rgba(52, 211, 153, .3); color: #DCFCE9; }
+.cc-app-state[data-state="building"] { color: #9FF3EC; }
+.cc-app-state[data-state="done"] { color: #A7F3D0; }
 .cc-app-body { padding: 11px 13px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .cc-app-body b { font-size: 14.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
 .cc-app-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--cc-dim); }
@@ -504,11 +525,30 @@
 .cc-heat i.l2, .cc-heat-legend i.l2 { background: rgba(46, 197, 197, .5); border-color: transparent; }
 .cc-heat i.l3, .cc-heat-legend i.l3 { background: rgba(46, 197, 197, .75); border-color: transparent; }
 .cc-heat i.l4, .cc-heat-legend i.l4 { background: #5EEAD4; border-color: transparent; box-shadow: 0 0 8px rgba(94, 234, 212, .6); }
-.cc-heat-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; font-size: 12.5px; color: var(--cc-dim); margin-bottom: 6px; }
+.cc-heat-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; font-size: 12.5px; color: var(--cc-dim); margin-bottom: 6px; }
 .cc-heat-foot b { color: var(--ink); font-weight: 700; margin-right: 4px; }
 .cc-heat-foot b.cc-busy { margin: 0 0 0 4px; }
-.cc-week { color: var(--muted); border-bottom: 1px dotted var(--faint); cursor: help; }
-.cc-heat-legend { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.cc-week { font-size: 12.5px; color: var(--cc-dim); margin-top: -2px; }
+.cc-week summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 4px; min-height: 28px; }
+.cc-week summary::-webkit-details-marker { display: none; }
+.cc-week summary::after { content: "⌄"; margin-left: 4px; }
+.cc-week[open] summary::after { content: "⌃"; }
+.cc-week b { color: var(--ink); }
+.cc-week p { margin: 4px 0 0; color: var(--ink-soft); line-height: 1.5; display: flex; flex-wrap: wrap; gap: 2px 14px; }
+.cc-failed { color: var(--red) !important; font-style: normal; }
+.cc-n-more { font: 600 12px var(--sans); color: var(--cc-dim); white-space: nowrap; }
+.cc-chip.red { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); background: var(--red-soft); }
+.cc-today-spend { font-size: 12.5px; color: var(--ink-soft); padding-left: 78px; margin-top: -6px; }
+.cc-first {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px 16px; padding: 16px 18px;
+  border: 1px solid rgba(46, 197, 197, .35); border-radius: 16px;
+  background: linear-gradient(120deg, rgba(46, 197, 197, .08), rgba(47, 111, 224, .08));
+}
+.cc-first b { font: 600 15px var(--display); color: var(--ink); display: block; }
+.cc-first span:not(.cc-radar):not(.cc-spacer) { font-size: 13px; color: var(--cc-dim); }
+.cc-gallery-h { font: 600 24px var(--display); color: var(--ink); margin: 0 0 18px; }
+.cc-gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+.cc-heat-legend { margin-left: auto; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 .cc-heat-legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
 .cc-top-h { font: 500 10.5px var(--mono); letter-spacing: .18em; color: var(--cc-dim); text-transform: uppercase; border-top: 1px solid var(--cc-line); padding-top: 12px; }
 .cc-tops { display: flex; flex-direction: column; gap: 7px; }
@@ -533,23 +573,23 @@
 
 /* ═════════════ WIDTHS ═════════════ */
 
-@media (max-width: 1180px) {
+@container cc (max-width: 1000px) {
   .cc-now { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .cc-now > .cc-health { grid-column: 1 / -1; }
   .cc-rail-track { grid-auto-columns: calc((100% - 2 * 14px) / 3.3); }
 }
-@media (max-width: 1080px) {
+@container cc (max-width: 940px) {
   .cc-hero { grid-template-columns: minmax(0, 1fr); }
   .cc-hero-r { padding: 0 30px 26px; }
   .cc-pulse { grid-template-columns: minmax(0, 1fr); }
 }
-@media (max-width: 760px) {
+@container cc (max-width: 700px) {
   .cc-now { grid-template-columns: minmax(0, 1fr); }
   .cc-rail-track { grid-auto-columns: calc((100% - 14px) / 1.7); }
 }
 
 /* Phone: the hero stacks, rails swipe, targets ≥ 44px, nothing scrolls sideways. */
-@media (max-width: 639px) {
+@container cc (max-width: 620px) {
   .cc { gap: 18px; padding: 0 0 32px; }
   .cc-hero { border-radius: 18px; min-height: 0; }
   .cc-hero-l { padding: 22px 16px 18px; gap: 14px; }
@@ -572,17 +612,21 @@
   .cc-proof b { font-size: 22px; }
   .cc-teams { gap: 8px; }
   .cc-tile { padding: 10px 8px 8px; min-height: 96px; }
-  .cc-face, .cc-face-in { width: 28px; height: 28px; }
+  .cc-face-in { width: 28px; height: 28px; }
   .cc-face .ag-avatar { --ag-size: 26px !important; width: 26px; height: 26px; }
-  .cc-tile-name { font-size: 11.5px; position: static; }
-  /* On a phone the whole tile is the target (≥ 44px): the name's link covers it. */
-  .cc-tile-name::after { content: ""; position: absolute; inset: 0; border-radius: 14px; }
-  .cc-face { pointer-events: none; }
+  .cc-tile-name { font-size: 11.5px; min-height: 44px; align-items: flex-end; margin: -6px -8px -8px; padding: 0 8px 8px; }
+  /* Faces are tap targets of 44px (the face itself stays small). */
+  .cc-face { width: 44px; height: 44px; }
+  .cc-tile-faces { gap: 0; }
   .cc-card { padding: 14px; }
   .cc-btn.sm, .cc-btn, .cc-more, .cc-link, .cc-f, .cc-help-btn, .cc-inline-link { min-height: 44px; }
   .cc-help-btn { min-width: 44px; }
   .cc-link, .cc-more { display: inline-flex; align-items: center; }
   .cc-sys a, .cc-done a, .cc-link-quiet { min-height: 44px; display: inline-flex; align-items: center; }
+  .cc-systems { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 10px; }
+  .cc-today-spend { padding-left: 0; margin-top: 0; }
+  .cc-help-rows .ag-link { min-height: 44px; }
+  .cc-facecard { position: fixed; left: 16px; right: 16px; top: auto; bottom: 16px; width: auto; z-index: 90; }
   .cc-rail-track { grid-auto-columns: 78%; }
   .cc-rail-btn { display: none; }
   .cc-rail::after { width: 40px; }
@@ -598,4 +642,26 @@
 
 @media (prefers-reduced-motion: reduce) {
   .cc *, .cc *::before, .cc *::after { animation: none !important; transition: none !important; }
+}
+
+/* A NARROW COLUMN (the dock open beside a 1024px window leaves ~220px): the team goes to two
+   columns, then one; rows put their button under their words. Nothing collapses to slivers. */
+@container cc (max-width: 420px) {
+  .cc-teams { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cc-stall { flex-wrap: wrap; }
+  .cc-stall > .cc-btn { margin-left: 42px; }
+  .cc-need-row { flex-wrap: wrap; }
+  .cc-need-row > .cc-btn { margin-left: 48px; }
+  .cc-week summary { min-height: 44px; }
+  .cc-proof { grid-template-columns: 1fr 1fr; }
+  .cc-top-row { grid-template-columns: 30px minmax(0, 1fr) 32px; }
+  .cc-top-row .cc-bar { display: none; }
+}
+@container cc (max-width: 200px) {
+  .cc-teams { grid-template-columns: minmax(0, 1fr); }
+}
+@container cc (max-width: 260px) {
+  .cc-hero-l { padding: 18px 12px; }
+  .cc-headline { font-size: 24px; }
+  .cc-rail-track { grid-auto-columns: 92%; }
 }

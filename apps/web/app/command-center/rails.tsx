@@ -13,8 +13,9 @@
  *   builders' faces, builds and cost underneath. A card opens that app's build in the Factory.
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
-import { IDEAS, IdeaCover, ideaFor, openIdeas, openTemplate, type Idea } from "../ask-boss-hero";
+import { IDEAS, IdeaCover, ideaFor, openTemplate, type Idea } from "../ask-boss-hero";
 import { shelfOrder, shelfState, shelfWord, type CcApp, type ShelfState } from "../../lib/command-center-apps";
 import { AgentAvatar } from "../agent-avatar";
 import { nameOf } from "../agents/run-face";
@@ -22,7 +23,11 @@ import { addFeaturePatch } from "../../lib/compose-links";
 import { Go, dollars } from "./hero";
 
 /** One scrolling row. The › button scrolls a card's width; it hides at the end. */
-export function Rail({ label, children, testId }: { label: string; children: React.ReactNode; testId: string }) {
+export function Rail({ label, children, testId, resetKey }: {
+  label: string; children: React.ReactNode; testId: string;
+  /** When this changes (a filter), the row goes back to its start. */
+  resetKey?: string;
+}) {
   const track = useRef<HTMLDivElement>(null);
   const [end, setEnd] = useState(false);
   const [start, setStart] = useState(true);
@@ -40,6 +45,10 @@ export function Rail({ label, children, testId }: { label: string; children: Rea
     window.addEventListener("resize", read);
     return () => { t.removeEventListener("scroll", read); window.removeEventListener("resize", read); };
   }, [read, children]);
+  useEffect(() => {
+    const t = track.current;
+    if (t) { t.scrollLeft = 0; read(); }
+  }, [resetKey, read]);
   const nudge = (dir: 1 | -1) => {
     const t = track.current;
     if (!t) return;
@@ -63,7 +72,77 @@ export function Rail({ label, children, testId }: { label: string; children: Rea
   );
 }
 
+function TemplateCard({ idea, scope }: { idea: Idea; scope: string }) {
+  return (
+    <button type="button" className="cc-tpl" data-testid="cc-tpl"
+            title={`${idea.title} — open the brief. Nothing builds until you press Build.`}
+            onClick={() => openTemplate(idea.title)}>
+      <span className="cc-tpl-art" aria-hidden><IdeaCover idea={idea} scope={scope} /></span>
+      <span className="cc-tpl-body" data-user-text>
+        <span className="cc-tpl-tag">{idea.tag}</span>
+        <b>{idea.title}</b>
+        <span className="cc-tpl-who">For {ideaFor(idea)}</span>
+      </span>
+    </button>
+  );
+}
+
+const GALLERY_PARAM = "templates";
+
+/** ALL THE TEMPLATES ON THEIR OWN PAGE (independent test: "All 16" opened a cramped popover
+ *  under the top bar). A page with a URL (`?templates=all`), Back and Escape close it, and a
+ *  card opens that template's own page on top. */
+function Gallery({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !document.querySelector(".tpl-page:not(.cc-gallery)")) onClose();
+    };
+    window.addEventListener("keydown", escape);
+    const before = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { window.removeEventListener("keydown", escape); document.body.style.overflow = before; };
+  }, [onClose]);
+  return createPortal(
+    <div className="tpl-page cc-gallery" role="dialog" aria-modal="true" aria-label="Templates" data-testid="cc-gallery">
+      <header className="tpl-page-head">
+        <button type="button" className="tpl-back" onClick={onClose} data-testid="cc-gallery-back">← Back</button>
+        <span className="tpl-crumb">Templates · {IDEAS.length}</span>
+      </header>
+      <div className="tpl-page-inner">
+        <h1 className="cc-gallery-h">Start from a template</h1>
+        <div className="cc-gallery-grid">
+          {IDEAS.map((idea) => <TemplateCard key={idea.title} idea={idea} scope="gal" />)}
+        </div>
+      </div>
+    </div>, document.body);
+}
+
 export function TemplatesShelf() {
+  const [all, setAll] = useState(false);
+  useEffect(() => {
+    const sync = () => {
+      try { setAll(new URL(window.location.href).searchParams.get(GALLERY_PARAM) === "all"); } catch { /* none */ }
+    };
+    sync();
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, []);
+  const open = () => {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set(GALLERY_PARAM, "all");
+      window.history.pushState(null, "", url.toString());
+    } catch { /* none */ }
+    setAll(true);
+  };
+  const close = useCallback(() => {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete(GALLERY_PARAM);
+      window.history.replaceState(null, "", url.toString());
+    } catch { /* none */ }
+    setAll(false);
+  }, []);
   return (
     <section className="cc-shelf" aria-labelledby="cc-tpl-h" data-testid="cc-templates">
       <div className="cc-sec-h">
@@ -71,22 +150,12 @@ export function TemplatesShelf() {
         <span className="cc-sub">Each one is a full brief your team can build today</span>
         <span className="cc-spacer" />
         <button type="button" className="cc-link" data-testid="cc-templates-all"
-                title="All the templates at once" onClick={() => openIdeas(true)}>All {IDEAS.length} ↗</button>
+                title="All the templates on one page" onClick={open}>All {IDEAS.length} ↗</button>
       </div>
       <Rail label="Templates" testId="cc-tpl-rail">
-        {IDEAS.map((idea: Idea) => (
-          <button key={idea.title} type="button" className="cc-tpl" data-testid="cc-tpl"
-                  title={`${idea.title} — open the brief. Nothing builds until you press Build.`}
-                  onClick={() => openTemplate(idea.title)}>
-            <span className="cc-tpl-art" aria-hidden><IdeaCover idea={idea} scope="cc" /></span>
-            <span className="cc-tpl-body" data-user-text>
-              <span className="cc-tpl-tag">{idea.tag}</span>
-              <b>{idea.title}</b>
-              <span className="cc-tpl-who">For {ideaFor(idea)}</span>
-            </span>
-          </button>
-        ))}
+        {IDEAS.map((idea: Idea) => <TemplateCard key={idea.title} idea={idea} scope="cc" />)}
       </Rail>
+      {all ? <Gallery onClose={close} /> : null}
     </section>
   );
 }
@@ -142,7 +211,7 @@ export function AppsShelf({ apps, orgId }: { apps: CcApp[] | null; orgId?: strin
         <Go className="cc-link" patch={{ area: "code_tasks", view: "apps", build: null, role: null }} orgId={orgId}
             testId="cc-factory-link">Factory ↗</Go>
       </div>
-      <Rail label="Apps" testId="cc-apps-rail">
+      <Rail label="Apps" testId="cc-apps-rail" resetKey={filter}>
         {list.map((a) => {
           const state: ShelfState = shelfState(a);
           const idea = templateFor(a.app);

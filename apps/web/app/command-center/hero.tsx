@@ -9,7 +9,9 @@
  * Every number links to where it is counted: apps and PRs to the Factory, agents to Agent
  * Studio, spend to Budget. The faces are AgentAvatar, the same face on every surface.
  */
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
+
+import { openTalk } from "../../lib/converse-doors";
 
 import type { BoardAgent, TeamSummary } from "../../lib/agents-live-board";
 import type { CcApp } from "../../lib/command-center-apps";
@@ -44,14 +46,36 @@ export function dollars(usd: number): string {
   return v >= 10 ? `$${Math.round(v).toLocaleString("en-US")}` : `$${v.toFixed(2)}`;
 }
 
-/** The eyebrow's systems word: what the Systems dots say, in two or three words. */
+/** A system dot as a sentence ("Disk nearly full", "Queue stuck"), never `HOST: DISK`. */
+export function systemSentence(d: SystemDot): string {
+  const key = `${d.key}:${d.state}`.toLowerCase();
+  const said: Record<string, string> = {
+    "host:disk": "Disk nearly full", "host:slow": "Host is slow", "host:struggling": "Host struggling",
+    "models:slow": "Models are slow", "models:failing": "Models failing",
+    "repo:expiring": "Repo token expiring", "repo:failing": "Repo failing",
+    "budget:near cap": "Budget near its cap", "budget:over cap": "Budget over its cap",
+    "queue:slow": "Queue is slow", "queue:stuck": "Queue stuck",
+    "previews:slow": "A preview is slow to start", "previews:failed": "A preview failed",
+    "deploys:deploying": "Deploying now", "deploys:failed": "A deploy failed",
+  };
+  return said[key] ?? `${d.word} ${d.state.toLowerCase()}`;
+}
+
+/** The eyebrow's systems words: what the Systems dots say, as a sentence. */
 export function systemsWord(systems: SystemDot[], reachable: boolean): { text: string; tone: "green" | "amber" | "red" | "grey" } {
   if (!reachable) return { text: "Can't reach BOSS", tone: "grey" };
   const red = systems.filter((s) => s.tone === "red");
   const amber = systems.filter((s) => s.tone === "amber");
-  if (red.length) return { text: red.length === 1 ? `${red[0].word} needs a look` : `${red.length} systems need a look`, tone: "red" };
-  if (amber.length) return { text: amber.length === 1 ? `${amber[0].word}: ${amber[0].state}` : `${amber.length} systems slow`, tone: "amber" };
+  if (red.length) return { text: red.length === 1 ? systemSentence(red[0]) : `${red.length} systems need a look`, tone: "red" };
+  if (amber.length) return { text: amber.length === 1 ? systemSentence(amber[0]) : `${amber.length} systems need a look`, tone: "amber" };
   return { text: "All systems OK", tone: "green" };
+}
+
+/** "Juno · Product Manager", or just the name when the agent has no callsign (never twice). */
+export function whoLine(roleKey: string, name?: string): string {
+  const who = nameOf(roleKey);
+  const role = name || who.role;
+  return who.name && role && who.name.toLowerCase() !== role.toLowerCase() ? `${who.name} · ${role}` : (who.name || role);
 }
 
 export type ProofNumbers = { apps: number; prs: number; agents: number; teams: number; spent: number } | null;
@@ -91,16 +115,20 @@ export function proofOf(apps: CcApp[] | null, agents: number, teams: number): Pr
 }
 
 /** The team, as nine tiles of faces. */
-export function TeamGrid({ teams, agents, waiting, orgId, still }: {
+export function TeamGrid({ teams, agents, waiting, working: live, orgId, still }: {
   teams: TeamSummary[]; agents: BoardAgent[];
   /** Agents an open item waits on you for (an approval they raised, a plan they drafted). */
   waiting: Set<string>;
+  /** Agents on a live run's current step (the same source as In flight) or with open work. */
+  working: Set<string>;
   orgId?: string | null;
   /** Motion off: faces hold still. */
   still: boolean;
 }) {
   const byKey = new Map(agents.map((a) => [a.roleKey, a]));
-  const working = agents.filter((a) => a.state === "working" || a.state === "in_panel").length;
+  const [open, setOpen] = useState<string | null>(null);
+  const isWorkingAgent = (a: BoardAgent) => a.state === "working" || a.state === "in_panel" || live.has(a.roleKey);
+  const working = agents.filter((a) => isWorkingAgent(a) && !waiting.has(a.roleKey)).length;
   const waitingN = agents.filter((a) => waiting.has(a.roleKey)).length;
   const ready = Math.max(0, agents.length - working - waitingN);
   const shown = teams.filter((t) => t.members.length > 0);
@@ -123,21 +151,28 @@ export function TeamGrid({ teams, agents, waiting, orgId, still }: {
                  style={{ ["--hue" as string]: TEAM_HUE[t.key] ?? "#5B8CFF" }}>
               <span className="cc-tile-faces">
                 {members.slice(0, 8).map((a) => {
-                  const who = nameOf(a.roleKey);
-                  const isWorking = a.state === "working" || a.state === "in_panel";
+                  const isWorking = isWorkingAgent(a);
                   const isWaiting = waiting.has(a.roleKey);
                   const word = isWaiting ? "waiting on you" : isWorking ? "working" : a.state === "stuck" ? "stuck" : "ready";
-                  // A face is a door to that agent (its passport, where Talk is).
+                  const label = `${whoLine(a.roleKey, a.name)} · ${word}`;
+                  // A FACE OPENS ITS AGENT'S LIVE LINE (parity d): what it is doing, Talk, and
+                  // its page — the old Floor card, on tap or hover.
                   return (
-                    <Go key={a.roleKey} className="cc-face" patch={{ area: "workforce", role: a.roleKey, view: null }}
-                        orgId={orgId} title={`${who.name} · ${a.name} · ${word}`} ariaLabel={`${who.name}, ${a.name}, ${word}`}
-                        testId="cc-face">
-                      <span className="cc-face-in" data-working={isWorking ? "true" : undefined}
-                            data-waiting={isWaiting ? "true" : undefined}>
-                        <AgentAvatar agent={a.roleKey} size={32} aiBadge={false}
-                                     state={still ? "idle" : isWorking ? "working" : "idle"} />
-                      </span>
-                    </Go>
+                    <span key={a.roleKey} className="cc-face-wrap">
+                      <button type="button" className="cc-face" title={label} aria-label={label}
+                              aria-expanded={open === a.roleKey} data-testid="cc-face"
+                              data-live={isWorking || isWaiting ? "true" : undefined}
+                              onClick={() => setOpen((o) => (o === a.roleKey ? null : a.roleKey))}>
+                        <span className="cc-face-in" data-working={isWorking && !isWaiting ? "true" : undefined}
+                              data-waiting={isWaiting ? "true" : undefined}>
+                          <AgentAvatar agent={a.roleKey} size={32} aiBadge={false}
+                                       state={still ? "idle" : isWorking ? "working" : "idle"} />
+                        </span>
+                      </button>
+                      {open === a.roleKey ? (
+                        <FaceCard agent={a} word={word} orgId={orgId} onClose={() => setOpen(null)} />
+                      ) : null}
+                    </span>
                   );
                 })}
                 {members.length > 8 ? <span className="cc-face-more">+{members.length - 8}</span> : null}
@@ -155,6 +190,37 @@ export function TeamGrid({ teams, agents, waiting, orgId, still }: {
         <span title="Agents with something waiting on you"><i className="a" />{waitingN} waiting on you</span>
         <span title="Agents free to take work"><i className="n" />{ready} ready</span>
       </div>
+    </div>
+  );
+}
+
+/** The agent behind a face: who, what it is doing now, Talk, and its page. */
+function FaceCard({ agent, word, orgId, onClose }: {
+  agent: BoardAgent; word: string; orgId?: string | null; onClose: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const outside = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (box.current?.contains(t) || t?.closest?.(".cc-face")) return;
+      onClose();
+    };
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
+  }, [onClose]);
+  return (
+    <div className="cc-facecard" role="dialog" aria-label={whoLine(agent.roleKey, agent.name)} ref={box}
+         data-testid="cc-facecard">
+      <b>{whoLine(agent.roleKey, agent.name)}</b>
+      <span className="cc-facecard-line">{agent.line && agent.line !== "No work yet" ? agent.line : word === "ready" ? "Ready for work" : word}</span>
+      <span className="cc-facecard-acts">
+        <button type="button" className="cc-btn sm primary" data-testid="cc-face-talk"
+                onClick={() => { onClose(); openTalk(agent.roleKey); }}>Talk</button>
+        <Go className="cc-btn sm" patch={{ area: "workforce", role: agent.roleKey, view: null }} orgId={orgId}
+            testId="cc-face-open">Open ↗</Go>
+      </span>
     </div>
   );
 }

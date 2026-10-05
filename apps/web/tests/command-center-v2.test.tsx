@@ -75,7 +75,8 @@ describe("the hero", () => {
     expect(text(".cc-headline")).toBe("What should your team build next?");
     expect(text(".cc-headline em")).toBe("build next?");
     expect(text('[data-testid="cc-status"]')).toMatch(/^All systems OK/);
-    expect(text('[data-testid="cc-status"]')).toMatch(/last work \d+[mhd] ago/);
+    // Something runs in this view: the eyebrow says so instead of a last-work age.
+    expect(text('[data-testid="cc-last-work"]')).toBe("working now");
     // The server's sentence is still said, beside the systems word (never re-derived).
     expect(text('[data-testid="cc-status-text"]')).toBe("1 stopped");
     expect($('[data-testid="cc-status"]')?.getAttribute("data-key")).toBe("stopped");
@@ -84,7 +85,7 @@ describe("the hero", () => {
   it("a red system says so in the eyebrow", async () => {
     const w = view();
     await mount(page(V({ ...w, systems: (w.systems as Wire[]).map((s) => s.key === "host" ? { ...s, tone: "red", state: "Struggling" } : s) })));
-    expect(text('[data-testid="cc-status"]')).toMatch(/^Host needs a look/);
+    expect(text('[data-testid="cc-status"]')).toMatch(/^Host struggling/);
     expect($('[data-testid="cc-status"]')?.getAttribute("data-tone")).toBe("red");
   });
 
@@ -115,8 +116,11 @@ describe("the hero", () => {
     expect($('[data-testid="cc-tile-engineering"] .cc-face-in[data-working="true"]')).not.toBeNull();
     expect(text('[data-testid="cc-team-foot"]')).toBe("2 working1 waiting on you4 ready");
     expect($('[data-testid="cc-tile-quality"] .cc-tile-name')?.getAttribute("href")).toContain("area=workforce");
-    // A face opens that agent (its passport, where Talk is).
-    expect($('[data-testid="cc-tile-quality"] [data-testid="cc-face"]')?.getAttribute("href")).toContain("role=qa");
+    // A face opens its agent's live line, with Talk and its page.
+    await click($('[data-testid="cc-tile-quality"] [data-testid="cc-face"]'));
+    expect(tid("cc-facecard")?.textContent).toContain("Now: Testing");
+    expect(tid("cc-face-talk")).not.toBeNull();
+    expect(tid("cc-face-open")?.getAttribute("href")).toContain("role=qa");
     expect(tid("cc-open-map")?.getAttribute("href")).toContain("view=organization");
   });
 });
@@ -285,11 +289,13 @@ describe("the shelves", () => {
     expect(tid("askboss-sheet")).not.toBeNull();
   });
 
-  it("All 16 opens the composer's gallery", async () => {
+  it("All 16 opens the templates on their own page; Back closes it", async () => {
     await mount(page(V(view())));
     await click(tid("cc-templates-all"));
-    expect(tid("askboss-ideas")).not.toBeNull();
-    expect(tid("askboss-grid-toggle")?.getAttribute("aria-pressed")).toBe("true");
+    expect(window.location.search).toContain("templates=all");
+    expect($$('[data-testid="cc-gallery"] [data-testid="cc-tpl"]').length).toBe(16);
+    await click(tid("cc-gallery-back"));
+    expect(tid("cc-gallery")).toBeNull();
   });
 
   it("apps: needs-you first, the Factory's state as a chip, template art or a monogram, faces, builds and cost", async () => {
@@ -303,6 +309,26 @@ describe("the shelves", () => {
     expect(cards[0].querySelector(".cc-mono")).toBeNull();       // Interview scorecard: its cover
     expect(cards[0].textContent).toContain("2 builds · $3.58");
     expect(cards[0].getAttribute("href")).toContain("build=crun_a");
+  });
+
+  it("an app whose latest attempt waits on its plan says so, and opens that attempt", async () => {
+    const w = apps() as { apps: Wire[] };
+    w.apps[1] = { ...w.apps[1], state: "needs_plan", word: "Needs you · plan",
+                  attempts: [{ run_id: "crun_b2", state: "needs_plan" }, { run_id: "crun_b", state: "pr_open" }] };
+    stubFetch(w);
+    await mount(page(V(view())));
+    const card = $$('[data-testid="cc-app"]').find((c) => c.textContent?.includes("Feature-Flag"))!;
+    expect(card.querySelector(".cc-app-state")?.textContent).toBe("Plan waiting on you");
+    expect(card.getAttribute("href")).toContain("build=crun_b2");
+    expect(text('[data-testid="cc-apps-f-needs"]')).toBe("Needs you 2");
+  });
+
+  it("changing the filter takes the row back to its start", async () => {
+    await mount(page(V(view())));
+    const track = tid("cc-apps-rail")!;
+    track.scrollLeft = 300;
+    await click(tid("cc-apps-f-pr"));
+    expect(tid("cc-apps-rail")!.scrollLeft).toBe(0);
   });
 
   it("each app card has its own Add a feature door, into the composer with the app chosen", async () => {
@@ -346,6 +372,51 @@ describe("the pulse", () => {
     await mount(page(V(freshView())));
     expect(tid("cc-pulse-empty")).not.toBeNull();
     expect(tid("cc-heat")).toBeNull();
+  });
+});
+
+describe("re-test (independent tester)", () => {
+  it("a fresh install leads with one line and the templates; no empty pulse", async () => {
+    stubFetch({ project_id: "p1", etag: "e", apps: [] });
+    await mount(page(V(freshView())));
+    expect(tid("cc-first-build")?.textContent).toContain("Your team hasn't built anything yet");
+    expect(tid("cc-pulse")).toBeNull();
+    expect(tid("cc-templates")).not.toBeNull();
+    expect(tid("askboss-ideas")).toBeNull();   // never inline in the composer any more
+  });
+
+  it("the Needs you number is decisions; other rows are said apart", async () => {
+    await mount(page(V(view({ attention: [gate(), failed()] }))));
+    expect(text('[data-testid="cc2-kpi-needs-you"]')).toBe("1");
+    expect(text('[data-testid="cc-needs-more"]')).toBe("+1 more");
+    expect(text('[data-testid="cc-stopped-chip"]')).toBe("1 stopped");
+  });
+
+  it("today's money is on the card, done today says its failures, this week opens by touch", async () => {
+    await mount(page(V(view())));
+    expect(text('[data-testid="cc-today-spend"]')).toBe("Today: $4.12 · $3.80 included");
+    expect(text('[data-testid="cc-kpi-done-today"]')).toBe("4 done today · 1 failed");
+    expect($('[data-testid="cc-week"]')?.tagName).toBe("DETAILS");
+    expect(text('[data-testid="cc-week"] summary')).toBe("This week: 38 finished · 4 failed");
+  });
+
+  it("a face glows while its run's step is working, even before presence says so", async () => {
+    const w = view({ missions: [mission({ hops: [{ act_id: "a", role_key: "staff_engineer", state: "working", label: "Build", edge_label: "x" }] })] });
+    await mount(page(V(w)));
+    expect($('[data-testid="cc-tile-engineering"] .cc-face-in[data-working="true"]')).not.toBeNull();
+    expect($$('[data-testid="cc-tile-engineering"] .cc-face[data-live="true"]').length).toBe(2);
+    expect($('[data-testid="cc-tile-leadership"] .cc-face[data-live="true"]')).toBeNull();
+  });
+
+  it("a system that needs a look is a sentence, never `HOST: DISK`", async () => {
+    const w = view();
+    await mount(page(V({ ...w, systems: (w.systems as Wire[]).map((s) => s.key === "host" ? { ...s, tone: "amber", state: "Disk" } : s) })));
+    expect(text('[data-testid="cc-status"]')).toMatch(/^Disk nearly full/);
+  });
+
+  it("an agent without a callsign is named once in its tooltip", async () => {
+    const { whoLine } = await import("../app/command-center/hero");
+    expect(whoLine("helm_x_unknown", "Helm x unknown")).toBe("Helm x unknown");
   });
 });
 
@@ -405,4 +476,21 @@ describe("the words on the page", () => {
       const APPROVED = ["Each one is a full brief your team can build today", "Start a , or pick a template below."];
       expect(overBudget(root).filter((t) => !APPROVED.includes(t))).toEqual([]);
     });
+});
+
+describe("the composer's replies name what started, never an id", () => {
+  it("a run is called by what was asked for, as a link", async () => {
+    const { namedRun } = await import("../app/ask-boss-hero");
+    expect(namedRun("Build a lead-triage inbox that scores inbound and drafts replies")).toMatch(/^Lead-triage inbox that scores inbound.*…$/);
+    expect(namedRun("Make the changelog composer.")).toBe("Changelog composer");
+  });
+
+  it("no reply in the hero writes a raw run id", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(__dirname, "../app/ask-boss-hero.tsx"), "utf8");
+    expect(src).not.toMatch(/Run \\`\$\{runId\}\\`/);
+    expect(src).not.toMatch(/Discovery run \\`\$\{/);
+    expect(src).toContain("namedRun(directive)} run ↗");
+  });
 });

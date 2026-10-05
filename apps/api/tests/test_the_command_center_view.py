@@ -217,11 +217,11 @@ def _count_statements(fn):
 
 #: Statements the view may add to the live board it composes (§6.4). Measured at the seeded
 #: scale: the board is 34 statements on main (the spec's "≤ 22 total" predates that), the view's
-#: own reads — host 1, budget 10 (status_for_project, unchanged), finished 1, hours 2, pulse ≤ 5,
-#: delivery (memoised)
+#: own reads — host 1, budget 10 (status_for_project, unchanged), finished 1, hours 2, pulse ≤ 6
+#: (its artifacts read added for the latest feed), the old-question count 1, delivery (memoised)
 #: (memoised) — plus one SAVEPOINT pair per secondary read, so a failing read degrades to its
 #: empty form instead of blanking the landing page. Never one per run, agent or act.
-VIEW_OVER_BOARD = 30
+VIEW_OVER_BOARD = 34
 
 
 def test_view_issues_a_bounded_number_of_queries(engine, client):

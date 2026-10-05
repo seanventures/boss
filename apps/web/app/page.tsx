@@ -1149,8 +1149,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             initialApps={commandCenterApps}
             composer={
               <AskBossHero projectId={activeProjectId} actor={activeActorId}
-                orgId={activeOrgId} deploymentAvailable={false} layout="hero"
-                ideasInline={commandCenter.everRan === false} />
+                orgId={activeOrgId} deploymentAvailable={false} layout="hero" />
             }
             help={<OnboardingHelpCard />} />
         </section>

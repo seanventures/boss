@@ -413,11 +413,23 @@ def pulse(connection: Any, project_id: str, tz: str, now: datetime) -> dict[str,
                  "FROM workflow_runs r JOIN workflow_definitions d "
                  "ON d.id = r.workflow_definition_id WHERE r.id = ANY(:ids)"),
             {"ids": run_ids}).mappings()}
-    latest: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    # WHAT THE TEAM MADE, beside what it did (independent test, parity e): a pull request
+    # opened, a research dossier, a panel's minutes or PRD — the artifacts acts carry — are
+    # moves too, and the feed said only code-task steps.
+    made = [dict(r) for r in connection.execute(
+        text(
+            """
+            SELECT role_key, artifacts, label, ended_at, code_task_run_id, workflow_run_id,
+                   meeting_run_id
+            FROM agent_acts
+            WHERE project_id = :p AND ended_at >= :since AND role_key IS NOT NULL
+              AND jsonb_typeof(artifacts) = 'array' AND jsonb_array_length(artifacts) > 0
+            ORDER BY ended_at DESC
+            LIMIT :lim
+            """
+        ), {**base, "lim": PULSE_SCAN}).mappings()]
+    candidates: list[tuple[str, dict[str, Any]]] = []
     for a in recent:
-        if len(latest) >= PULSE_LATEST:
-            break
         verdict = None
         if a["code_task_run_id"]:
             run = builds.get(str(a["code_task_run_id"]))
@@ -438,13 +450,37 @@ def pulse(connection: Any, project_id: str, tz: str, now: datetime) -> dict[str,
                 continue
             subject = run_name(run)
             verb, kind, rid = "worked on", "run", str(run["id"])
-        key = subject.strip().lower()
+        candidates.append((str(_iso(a["ended_at"])), {
+            "role_key": str(a["role_key"]), "verb": verb, "subject": subject,
+            "verdict": verdict, "at": _iso(a["ended_at"]), "run_id": rid, "kind": kind,
+            "url": None}))
+    for m in made:
+        for art in (m["artifacts"] if isinstance(m["artifacts"], list) else []):
+            if not isinstance(art, dict):
+                continue
+            words = made_words(str(art.get("kind") or ""), str(art.get("ref") or ""),
+                               str(art.get("url") or ""), str(m["label"] or ""))
+            if not words:
+                continue
+            verb, subject = words
+            url = str(art.get("url") or "")
+            candidates.append((str(_iso(m["ended_at"])), {
+                "role_key": str(m["role_key"]), "verb": verb, "subject": subject,
+                "verdict": None, "at": _iso(m["ended_at"]),
+                "run_id": str(m["workflow_run_id"] or m["code_task_run_id"] or "") or None,
+                "kind": "made", "url": url if url.startswith("http") else None}))
+            break
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    latest: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for _at, item in candidates:
+        if len(latest) >= PULSE_LATEST:
+            break
+        key = str(item["subject"]).strip().lower()
         if not key or key in seen:
             continue
         seen.add(key)
-        latest.append({"role_key": str(a["role_key"]), "verb": verb, "subject": subject,
-                       "verdict": verdict, "at": _iso(a["ended_at"]), "run_id": rid,
-                       "kind": kind})
+        latest.append(item)
     return {
         "weeks": PULSE_WEEKS,
         "start": first.isoformat(),
@@ -455,6 +491,26 @@ def pulse(connection: Any, project_id: str, tz: str, now: datetime) -> dict[str,
         "latest": latest,
         "last_act_at": _iso(recent[0]["ended_at"]) if recent else None,
     }
+
+
+_PR_NUM = __import__("re").compile(r"(?:#|/pull/)(\d+)")
+
+
+def made_words(kind: str, ref: str, url: str, label: str) -> Optional[tuple[str, str]]:
+    """An artifact as a move in the feed: (verb, subject). The subject is the act's own label
+    after its kind ("Build · Ship it #182" → "Ship it #182"). None for kinds the feed skips."""
+    subject = label.split("·", 1)[1].strip() if "·" in label else label.strip()
+    if not subject:
+        return None
+    if kind == "pr":
+        n = _PR_NUM.search(ref) or _PR_NUM.search(url)
+        return (f"opened PR #{n.group(1)} for" if n else "opened a PR for"), subject
+    if kind == "report":
+        return "wrote a research dossier on", subject
+    if kind == "minutes":
+        return ("wrote the PRD for" if "prd" in (ref + " " + label).lower()
+                else "wrote the minutes for"), subject
+    return None
 
 
 def pulse_memo(connection: Any, project_id: str, tz: str, now: datetime) -> dict[str, Any]:
@@ -483,7 +539,8 @@ def empty_pulse(now: datetime, tz: str) -> dict[str, Any]:
 # ── old system findings: one row, one Clean up ───────────────────────────────────────────────
 
 
-def group_old_findings(attention: list[Mapping[str, Any]], now: datetime
+def group_old_findings(attention: list[Mapping[str, Any]], now: datetime,
+                       total: Optional[tuple[int, Optional[datetime]]] = None,
                        ) -> tuple[list[Mapping[str, Any]], Optional[dict[str, Any]]]:
     """ELEVEN CARDS OF HISTORY WERE ONE FACT. Shepherd's questions about builds stuck weeks ago
     ("stuck in `coding` … 53894 minutes. Let it continue, or cancel it?") filled Needs you on
@@ -500,10 +557,15 @@ def group_old_findings(attention: list[Mapping[str, Any]], now: datetime
             old.append(a)
         else:
             keep.append(a)
-    if not old:
-        return keep, None
-    since = min(_aware(datetime.fromisoformat(str(a["at"]))) for a in old)
+    # THE TRUE COUNT (independent test): the cards are a bounded page of Shepherd's questions,
+    # so the row counts every old open question in the table when the caller read it.
     n = len(old)
+    since = min((_aware(datetime.fromisoformat(str(a["at"]))) for a in old), default=None)
+    if total is not None and total[0] > n:
+        n = total[0]
+        since = _aware(total[1]) or since
+    if not n or since is None:
+        return keep, None
     return keep, {
         "count": n,
         "since": since.isoformat(),
@@ -512,6 +574,16 @@ def group_old_findings(attention: list[Mapping[str, Any]], now: datetime
                  f"{since.strftime('%b')} {since.day}",
         "detail": "Shepherd can clear them safely",
     }
+
+
+def old_questions(connection: Any, project_id: str, now: datetime) -> tuple[int, Optional[datetime]]:
+    """How many of the project's open Shepherd questions are older than OLD_FINDING, and the
+    oldest — every row, not the page the cards read."""
+    row = connection.execute(
+        text("SELECT count(*) AS n, min(created_at) AS since FROM shepherd_escalations "
+             "WHERE project_id = :p AND status = 'open' AND created_at < :cut"),
+        {"p": project_id, "cut": now - OLD_FINDING}).mappings().one()
+    return int(row["n"] or 0), row["since"]
 
 
 # ── read 5: systems ──────────────────────────────────────────────────────────────────────────
@@ -952,7 +1024,9 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
                  if m["state"] not in ("done", "stopped", "stalled", "waiting_you",
                                        "waiting_person"))
     runs_24h = int(today.get("runs_finished") or 0) + int(today.get("runs_failed") or 0) + moving
-    attention, cleanup = group_old_findings(board["attention"], now)
+    old_total = _quiet(connection, "old questions", old_questions, connection, project_id, now,
+                       default=None)
+    attention, cleanup = group_old_findings(board["attention"], now, old_total)
     view: dict[str, Any] = {
         "project_id": project_id,
         "etag": "",
