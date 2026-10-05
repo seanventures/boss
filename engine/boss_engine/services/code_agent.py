@@ -233,6 +233,7 @@ from .sandbox import (
     CommandResult, DiffSummary, EphemeralSandbox, _shared_tool_caches,
 )
 from .agent_env import agent_environment
+from . import owned_process
 
 # --------------------------------------------------------------------------- #
 # Which agent subprocesses are OURS, and what seat each one occupies.
@@ -835,7 +836,11 @@ class ClaudeCodeAgent:
                 # Yields CPU/IO to the control plane it shares a container with. See
                 # services/scheduling.py: this is scheduling WEIGHT under contention, not a
                 # change to what runs — with nothing else competing it is exactly as fast.
-                child = subprocess.Popen(
+                # OWNED: its own session, a token every descendant inherits, and the build it
+                # belongs to (owned_process.owner_scope). `child.kill()` below — idle, timeout —
+                # and the leader's own exit now end the whole tree, not one pid: the dev server
+                # an agent left running with `npm run dev &` dies with it.
+                child = owned_process.popen(
                     low_priority(cmd),
                     stdin=(subprocess.PIPE if stdin_prompt else subprocess.DEVNULL),
                     stdout=subprocess.PIPE,

@@ -29,6 +29,7 @@ from typing import Optional
 from sqlalchemy import text
 
 from ..config import Settings
+from . import owned_process
 from ..db import begin
 from .code_task_service import load_code_task_run
 from .core import emit_event, make_id
@@ -1296,7 +1297,7 @@ def _detect_verification(workdir: Path) -> Optional[str]:
 def _descendant_pids(pid: int) -> list[int]:
     pids = [pid]
     try:
-        out = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True, timeout=5).stdout
+        out = owned_process.run(["pgrep", "-P", str(pid)], capture_output=True, text=True, timeout=5).stdout
         for child in out.split():
             pids.extend(_descendant_pids(int(child)))
     except Exception:
@@ -1566,7 +1567,9 @@ def app_environment(workdir: Path, port: int) -> dict[str, str]:
     return env
 
 
-def launch_app(workdir: Path, command: list[str], log_path: str) -> tuple[subprocess.Popen, int]:
+def launch_app(workdir: Path, command: list[str], log_path: str, *,
+               owner: Optional["owned_process.Owner"] = None,
+               expires_at=None) -> tuple[subprocess.Popen, int]:
     """Start ONE app the way a preview does: PORT/HOST injected, output to log_path, low
     priority, its own process group. Returns (process, the PORT it was given).
 
@@ -1578,9 +1581,13 @@ def launch_app(workdir: Path, command: list[str], log_path: str) -> tuple[subpro
     env = app_environment(workdir, port_hint)
     logf = open(log_path, "w")
     try:
-        proc = subprocess.Popen(_low_priority(command), cwd=str(workdir), env=env, stdout=logf,
-                                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                start_new_session=True)
+        # OWNED (owned_process): the serve proof belongs to the build that runs it (the
+        # enclosing owner scope) and dies with it; a preview passes its own `owner`, so it
+        # outlives the build that started it and ends when the preview does.
+        proc = owned_process.popen(_low_priority(command), cwd=str(workdir), env=env, stdout=logf,
+                                   stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                   owner=owner, expires_at=expires_at,
+                                   resource="process_group")
     finally:
         logf.close()
     return proc, port_hint
@@ -1626,6 +1633,8 @@ def _proof_tree(workdir: Path) -> Path:
     (npm's .bin entries and workspace links are relative, so they resolve inside the copy).
     """
     proof = Path(tempfile.mkdtemp(prefix="boss-serve-proof-"))
+    from .resource_ledger import claim_dir
+    claim_dir(proof)
     shutil.copytree(workdir, proof, dirs_exist_ok=True, symlinks=True,
                     ignore=shutil.ignore_patterns(".git", "__pycache__", ".npm-cache"))
     return proof
@@ -1829,6 +1838,8 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
     finally:
         if tree is not None:
             shutil.rmtree(tree, ignore_errors=True)
+            from .resource_ledger import release_dir
+            release_dir(tree, "serve_proof_done")
 
 
 class PreviewNotReady(Exception):
@@ -1980,7 +1991,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         from .repo_host import clone_url_for  # BOSS-267: host-aware clone
         clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
                                   owner, repo, token or "")
-        clone = subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
+        clone = owned_process.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
                                capture_output=True, text=True, timeout=120)
         if clone.returncode != 0:
             return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
@@ -1990,7 +2001,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         tests: execute the suite one-shot, capture output, and return the result so the user sees
         it work, instead of a misleading 'add a preview command' error."""
         try:
-            proc = subprocess.run(["sh", "-lc", cmd_str], cwd=str(workdir),
+            proc = owned_process.run(["sh", "-lc", cmd_str], cwd=str(workdir),
                                   capture_output=True, text=True, timeout=300)
             output = (proc.stdout or "") + (proc.stderr or "")
             exit_code = proc.returncode
@@ -2042,7 +2053,10 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             "target, or a Python entrypoint/tests)"
         )
 
-    proc, port_hint = launch_app(workdir, command, log_path)
+    proc, port_hint = launch_app(
+        workdir, command, log_path,
+        owner=owned_process.Owner("preview", preview_id, project_id),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes))
 
     # Web builds do `npm install` + `vite build` before the static server binds — well past the
     # default 20s window — so give discovery generous headroom (it returns as soon as the port
@@ -2224,7 +2238,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     from .repo_host import clone_url_for  # BOSS-267: host-aware clone
     clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
                               owner, repo, token or "")
-    clone = subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
+    clone = owned_process.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
                            capture_output=True, text=True, timeout=120)
     if clone.returncode != 0:
         return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
@@ -2235,7 +2249,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     except RuntimeError as exc:
         return _fail(str(exc))
 
-    build = subprocess.run(["docker", "build", "-t", tag, str(workdir)],
+    build = owned_process.run(["docker", "build", "-t", tag, str(workdir)],
                            capture_output=True, text=True, timeout=600)
     if build.returncode != 0:
         return _fail(f"docker build failed: {(build.stderr or build.stdout or '')[-400:]}")
@@ -2244,7 +2258,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     docker_argv = ["docker", "run", "-d", "--name", tag, "-p", f"{host_port}:{container_port}",
                    "-e", f"PORT={container_port}", "-e", "HOST=0.0.0.0", tag]
     docker_command = " ".join(docker_argv)
-    run_cmd = subprocess.run(docker_argv, capture_output=True, text=True, timeout=60)
+    run_cmd = owned_process.run(docker_argv, capture_output=True, text=True, timeout=60)
     if run_cmd.returncode != 0:
         return _fail(f"docker run failed: {(run_cmd.stderr or '')[-300:]}", command=docker_command)
     container_id = run_cmd.stdout.strip()[:12]
@@ -2257,8 +2271,8 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
             break
         time.sleep(1.0)
     if not ok:
-        logs = subprocess.run(["docker", "logs", "--tail", "20", tag], capture_output=True, text=True).stdout
-        subprocess.run(["docker", "rm", "-f", tag], capture_output=True)
+        logs = owned_process.run(["docker", "logs", "--tail", "20", tag], capture_output=True, text=True).stdout
+        owned_process.run(["docker", "rm", "-f", tag], capture_output=True)
         return _fail(f"container did not serve HTTP. logs: {logs[-300:]}", command=docker_command)
 
     expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
@@ -2361,7 +2375,7 @@ def _process_alive(pid: Optional[int]) -> bool:
 def _docker_alive(container_id: Optional[str]) -> bool:
     if not container_id or shutil.which("docker") is None:
         return False
-    result = subprocess.run(
+    result = owned_process.run(
         ["docker", "inspect", "-f", "{{.State.Running}}", container_id],
         capture_output=True, text=True, timeout=5,
     )
@@ -2399,7 +2413,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         from .repo_host import clone_url_for  # BOSS-267: host-aware clone
         clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
                                   owner, repo, token or "")
-        clone = subprocess.run(
+        clone = owned_process.run(
             ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
             capture_output=True, text=True, timeout=120)
         if clone.returncode != 0:
@@ -2410,7 +2424,9 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             return
         # The one launcher, so a respawned preview gets the same filtered environment as the
         # first start (app_environment) instead of the worker's own.
-        proc, port_hint = launch_app(workdir, command, log_path)
+        proc, port_hint = launch_app(
+            workdir, command, log_path,
+            owner=owned_process.Owner("preview", preview_id, row.get("project_id")))
         port = _discover_working_port(log_path, port_hint, timeout=180.0)
         if port is None:
             _kill(proc.pid)
@@ -2506,7 +2522,7 @@ def preview_log_snapshot(engine, preview_id: str, *, tail_chars: int = 12000) ->
         except OSError:
             content = ""
     elif row["mode"] == "docker" and row["container_id"] and shutil.which("docker"):
-        result = subprocess.run(
+        result = owned_process.run(
             ["docker", "logs", "--tail", "200", row["container_id"]],
             capture_output=True, text=True, timeout=10,
         )
@@ -2535,19 +2551,23 @@ def stream_preview_logs(engine, preview_id: str):
 
 def _docker_rm(container_id: Optional[str]) -> None:
     if container_id:
-        subprocess.run(["docker", "rm", "-f", container_id], capture_output=True)
+        owned_process.run(["docker", "rm", "-f", container_id], capture_output=True)
 
 
 def _kill(pid: Optional[int]) -> None:
+    """End a preview's process TREE. The one this process started is ended through its owner
+    (group + token, verified); a pid read back from a row after a restart falls back to its
+    group, never to a bare pid that may since belong to something else."""
     if not pid:
         return
+    for proc in owned_process.live():
+        if proc.pid == int(pid):
+            proc.end(reason="preview_stopped", grace=2.0)
+            return
     try:
-        os.killpg(os.getpgid(pid), 9)
-    except Exception:
-        try:
-            os.kill(pid, 9)
-        except Exception:
-            pass
+        owned_process.terminate_tree(int(pid), None, grace=2.0)
+    except Exception:  # noqa: BLE001 — best effort; the reaper's orphan sweep is the backstop
+        pass
 
 
 def _inject_shim(html: bytes, prefix: str) -> bytes:

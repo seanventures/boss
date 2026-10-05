@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional, Tuple
 
 from ..config import Settings
+from . import owned_process
 from .included_spend import BILLING_METERED, BILLING_SUBSCRIPTION
 from .scheduling import low_priority
 
@@ -539,7 +540,7 @@ class ClaudeCliAdapter(CliChatBrain):
         try:
             # Mostly network wait, but it is still a node process in the API's container and
             # nothing here is latency-critical. See services/scheduling.py.
-            proc = subprocess.run(
+            proc = owned_process.run(
                 low_priority(cmd),
                 input=(prompt if via_stdin else None),
                 stdin=(None if via_stdin else subprocess.DEVNULL),
@@ -624,7 +625,7 @@ class ClaudeCliAdapter(CliChatBrain):
         timeout, own_timeout = self._timeouts()
         cmd, via_stdin = self._command(prompt, system_prompt, output=self._STREAM_OUTPUT)
         try:
-            proc = subprocess.Popen(
+            proc = owned_process.popen(
                 low_priority(cmd),
                 stdin=(subprocess.PIPE if via_stdin else subprocess.DEVNULL),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,

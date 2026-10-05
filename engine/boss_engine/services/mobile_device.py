@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import text
 
 from .core import emit_event, make_id
+from . import owned_process
 from .scheduling import low_priority
 from .skill_executors import SkillExecutorConfigurationError, SkillExecutorContext
 
@@ -76,7 +77,7 @@ class LocalMobileDeviceAdapter:
         # local tool processes from starving its API and worker, including the file-output path.
         try:
             if output is None:
-                completed = subprocess.run(
+                completed = owned_process.run(
                     low_priority(argv), capture_output=True, timeout=timeout,
                     env=_host_environment(), check=False,
                 )
@@ -84,7 +85,7 @@ class LocalMobileDeviceAdapter:
             else:
                 with output.open("wb") as destination:
                     os.chmod(output, 0o600)
-                    completed = subprocess.run(
+                    completed = owned_process.run(
                         low_priority(argv), stdout=destination, stderr=subprocess.PIPE,
                         timeout=timeout, env=_host_environment(), check=False,
                     )
