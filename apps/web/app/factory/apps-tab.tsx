@@ -305,6 +305,7 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
                 <span className="fx-c-crew" role="cell"><Crew roleKeys={a.builders} /></span>
                 <span className="fx-c-state fx-row-now" role="cell">
                   <span className="fx-word">{state.word}</span>
+                  {state.where ? <span className="fx-state-where" title="The station it is at">{` · ${state.where}`}</span> : null}
                   {lastFailed ? <span className="fx-muted" title="The newest build of this app failed; the one that works opens">{" · last failed"}</span> : null}
                   {alsoBuilding ? <span className="fx-muted" title="A newer build of this app is on the line">{" · building"}</span> : null}
                 </span>

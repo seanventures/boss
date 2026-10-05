@@ -245,3 +245,19 @@ def test_apps_number_each_build_and_say_its_pr(client, engine):
     assert row["attempts"][0]["pr_state"] == "merged" and row["attempts"][1]["pr_state"] is None
     assert row["brief"] == "Numbered Ledger"
     assert row["included"] is False
+
+
+def test_a_pr_whose_question_moved_to_a_newer_attempt_is_still_open(client, engine):
+    """A retry reuses the PR and its question supersedes the earlier attempt's (withdrawn):
+    the PR did not close — the earlier build still says `open`."""
+    dec = f"dec_{uuid.uuid4().hex[:12]}"
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO decisions (id, project_id, question, recommendation, status) "
+                       "VALUES (:i, :p, 'Approve code change (PR #43)', CAST(:r AS JSONB), "
+                       "'withdrawn')"), {"i": dec, "p": fx.PROJECT,
+                                         "r": '{"action": "review_pull_request"}'})
+    run = fx.new_run(engine, status="completed", phase="done", pr=43, decision_id=dec,
+                     title="Withdrawn Question App")
+    body = client.get("/v1/factory/apps", params={"project_id": fx.PROJECT}).json()
+    row = next(r for r in body["apps"] if run in r["run_ids"])
+    assert row["pr_state"] == "open"
