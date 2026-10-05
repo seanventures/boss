@@ -5,7 +5,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { OnboardingHelpCard } from "../app/onboarding-help-card";
+import { OnboardingHelpCard, OnboardingHelpRows } from "../app/onboarding-help-card";
 
 describe("console capabilities help card", () => {
   const html = renderToStaticMarkup(<OnboardingHelpCard />);
@@ -83,3 +83,21 @@ describe("console capabilities help card", () => {
     );
   });
 });
+
+describe("the inline form, before the first run (command-center spec §9 row 47)", () => {
+  const rows = renderToStaticMarkup(<OnboardingHelpRows onMore={() => {}} />);
+
+  it("is three short rows, each with its old sentence as the tooltip, and the way to the rest", () => {
+    expect(rows).toContain('data-testid="console-capabilities-card"');
+    for (const name of ["Build", "Talk to BOSS", "Approvals"]) expect(rows).toContain(`<b>${name}</b>`);
+    expect((rows.match(/<li title="/g) ?? []).length).toBe(3);
+    expect(rows).toContain("Getting started ↗");
+  });
+
+  it("names only areas an operator can find in the rail", () => {
+    for (const offNav of [/Discovery/, /Meetings/, /CI\/CD/, /Budget area/, /Agents page/]) {
+      expect(rows).not.toMatch(offNav);
+    }
+  });
+});
+
