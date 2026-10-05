@@ -168,7 +168,10 @@ describe("BOSS mission-control design system", () => {
     const cc = readFileSync(resolve(__dirname, "../app/command-center-ui.tsx"), "utf8");
     expect(cc).toContain("useCommandCenterView(");
     const lib = readFileSync(resolve(__dirname, "../lib/command-center-view.ts"), "utf8");
-    expect(lib).toContain("/v1/command-center/view?project_id=");
+    expect(lib).toContain("usePolled(");
+    // The url lives with the server's first paint, so the server never imports the poll.
+    const server = readFileSync(resolve(__dirname, "../lib/command-center-view-server.ts"), "utf8");
+    expect(server).toContain("/v1/command-center/view?project_id=");
     expect(lib).toContain("VIEW_POLL_MS");
     const poll = readFileSync(resolve(__dirname, "../lib/factory-floor.ts"), "utf8");
     expect(poll).toContain("onChanged(");

@@ -215,6 +215,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
 
   // TODAY'S TAB: remembered per viewer; a budget that stopped work shows Spend once a session.
   const [tab, setTab] = useState<TodayTab>("work");
+  const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const kept = readStore("local", TAB_KEY);
     if (kept === "spend" || kept === "work") setTab(kept);
@@ -222,6 +223,9 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const chooseTab = useCallback((t: TodayTab) => { setTab(t); writeStore("local", TAB_KEY, t); }, []);
   useEffect(() => {
     if (view?.status.key !== "budget_stopped" || readStore("session", SPEND_ONCE_KEY)) return;
+    // Only an instance on screen may spend the once: Next streams a second, hidden copy of the
+    // shell, and it used to take the flag first, so the page you see never switched.
+    if (!rootRef.current || rootRef.current.getClientRects().length === 0) return;
     writeStore("session", SPEND_ONCE_KEY, "1");
     setTab("spend");
   }, [view?.status.key]);
@@ -279,7 +283,10 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const room = Math.max(0, CARDS_SHOWN - stopped.length);
   const hiddenDecisions = Math.max(0, decisions.length - room);
   const cards = [...stopped, ...(moreCards ? decisions : decisions.slice(0, room))];
-  const lanesAll = sortMissions((view?.missions ?? []).filter((m) => m.state !== "done"));
+  // RUNNING is what is moving: the same rule as the RUNNING number (the live board's
+  // counts.running — neither done nor stopped). A stopped run is a card at the top of Needs you
+  // and a red cap on the strip, not a lane that says it is running.
+  const lanesAll = sortMissions((view?.missions ?? []).filter((m) => m.state !== "done" && m.state !== "stopped"));
   const lanes = moreRows ? lanesAll : lanesAll.slice(0, ROWS_SHOWN);
 
   // THE RING BUDGET (agents-home §5.2): at most eight faces move; with any motion off, none.
@@ -473,7 +480,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   );
 
   return (
-    <div className="cc" data-testid="command-center" data-reachable={reachable ? "true" : "false"}
+    <div className="cc" ref={rootRef} data-testid="command-center" data-reachable={reachable ? "true" : "false"}
          data-stale={reachable ? undefined : "true"} data-motion={motion} data-band={band}
          data-layout={phone ? "phone" : width < 1280 ? "stacked" : width < 1440 ? "split" : "wide"}>
       {/* The only banner this page has: the host's own words, above the state (§4.11). */}

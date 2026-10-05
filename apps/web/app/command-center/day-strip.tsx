@@ -127,6 +127,13 @@ export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion
                   {cap === "live" ? "▶" : null}
                 </span>
               </a>
+              {/* A short bar is still named: beside it, on whichever side has room. */}
+              {width < NAME_INSIDE * 100 && right <= 72 ? (
+                <span className="cc-day-name-out" data-user-text aria-hidden style={{ left: `calc(${right}% + 10px)` }}>{r.name}</span>
+              ) : width < NAME_INSIDE * 100 && left >= 28 ? (
+                <span className="cc-day-name-out" data-side="left" data-user-text aria-hidden
+                      style={{ right: `calc(${100 - left}% + 8px)` }}>{r.name}</span>
+              ) : null}
             </div>
           );
         })}

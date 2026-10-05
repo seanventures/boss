@@ -139,8 +139,9 @@
 .cc-included path { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 1 4; stroke-linecap: round; }
 .cc-included text { font: 600 11px/1 var(--sans); fill: var(--muted); }
 .cc-today-stroke { fill: none; stroke: var(--accent-text); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.cc-today-clip { transition: transform 300ms ease-out; transform-box: view-box; }
-.cc-today-dot { transition: transform 300ms ease-out; }
+.cc-today-clip { transform-box: view-box; }
+.cc-today-chart[data-extending] .cc-today-clip,
+.cc-today-chart[data-extending] .cc-today-dot { transition: transform 300ms ease-out; }
 .cc-today-dot circle { fill: var(--accent-text); stroke: var(--surface); stroke-width: 2; }
 .cc-today-now { font: 700 12px/1 var(--display); fill: var(--ink); }
 .cc-yday-label { font: 500 11px/1 var(--sans); fill: var(--faint); }
@@ -168,6 +169,11 @@
 .cc-day { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .cc-day-rows { position: relative; display: flex; flex-direction: column; gap: 4px; padding-right: 28px; }
 .cc-day-row { position: relative; height: 24px; }
+.cc-day-name-out {
+  position: absolute; top: 50%; transform: translateY(-50%); max-width: 26%; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-size: 0.74rem; color: var(--muted); pointer-events: none;
+}
+.cc-day-name-out[data-side="left"] { text-align: right; }
 .cc-day-bar {
   position: absolute; top: 3px; height: 18px; border-radius: 4px; min-width: 6px;
   background: color-mix(in srgb, var(--accent) 22%, transparent); border: 1px solid var(--accent-line);

@@ -35,9 +35,11 @@ export function tokenWords(n: number): string {
 }
 
 /** The line's tooltip: the rest of the old delivery strip, with honest labels. */
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
 export function weekTip(w: Week): string {
-  return `${w.builds} builds (${w.buildsPassed} passed) · ${w.prsOpened} PRs · ${w.jobs} jobs · `
-    + `${tokenWords(w.tokens)} tokens · ${w.modelHours} model hours`;
+  return `${count(w.builds, "build", "builds")} (${w.buildsPassed} passed) · ${count(w.prsOpened, "PR", "PRs")} · `
+    + `${count(w.jobs, "job", "jobs")} · ${tokenWords(w.tokens)} tokens · ${count(w.modelHours, "model hour", "model hours")}`;
 }
 
 export function WeekBars({ week }: WeekBarsProps) {
@@ -76,11 +78,11 @@ export function WeekBars({ week }: WeekBarsProps) {
       )}
       {/* The tooltip's parts, each with its own word explained, for a screen reader. */}
       <ul className="ag-sr wf-sr" data-testid="cc-week-more">
-        <li title="Code tasks: an agent edits code and opens a PR">{`${week.builds} builds (${week.buildsPassed} passed)`}</li>
-        <li>{`${week.prsOpened} PRs`}</li>
-        <li>{`${week.jobs} jobs`}</li>
+        <li title="Code tasks: an agent edits code and opens a PR">{`${count(week.builds, "build", "builds")} (${week.buildsPassed} passed)`}</li>
+        <li>{count(week.prsOpened, "PR", "PRs")}</li>
+        <li>{count(week.jobs, "job", "jobs")}</li>
         <li>{`${tokenWords(week.tokens)} tokens`}</li>
-        <li title="Time models spent answering">{`${week.modelHours} model hours`}</li>
+        <li title="Time models spent answering">{count(week.modelHours, "model hour", "model hours")}</li>
       </ul>
       <table className="ag-sr wf-sr">
         <caption>Runs by day</caption>

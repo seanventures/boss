@@ -86,14 +86,19 @@ export function TodayChart({ view, tab, onTab, motion, nowMs, tz, compact = fals
   // Extend on a poll: the last segment unclips from where it was (transform only, 300ms).
   const prev = useRef<{ x: number; total: number; tab: TodayTab } | null>(null);
   const [from, setFrom] = useState<number | null>(null);
+  // The transition exists only while a real increase plays: a resize or a clock tick moves the
+  // dot without motion (motion carries state, §5.2).
+  const [extending, setExtending] = useState(false);
   const nowPx = x(s.nowX);
   useIsoLayoutEffect(() => {
     const p = prev.current;
     prev.current = { x: nowPx, total: s.main.todayTotal, tab };
     if (!p || p.tab !== tab || motion !== "full" || s.main.todayTotal <= p.total || nowPx <= PAD.l) return;
     setFrom(Math.max(0, Math.min(1, (p.x - PAD.l) / (nowPx - PAD.l))));
+    setExtending(true);
     const r = requestAnimationFrame(() => requestAnimationFrame(() => setFrom(null)));
-    return () => cancelAnimationFrame(r);
+    const done = window.setTimeout(() => setExtending(false), 400);
+    return () => { cancelAnimationFrame(r); window.clearTimeout(done); };
   }, [s.main.todayTotal, tab]); // eslint-disable-line react-hooks/exhaustive-deps -- a real increase only
 
   // Crosshair: hover or ←/→, hour by hour.
@@ -113,7 +118,7 @@ export function TodayChart({ view, tab, onTab, motion, nowMs, tz, compact = fals
   const clipId = `cc-today-clip-${tab}`;
 
   return (
-    <div className="cc-today-chart" data-tab={tab} data-motion={motion}>
+    <div className="cc-today-chart" data-tab={tab} data-motion={motion} data-extending={extending ? "true" : undefined}>
       <div className="cc-today-tabs" role="group" aria-label="Chart">
         <button type="button" className="cc-seg" aria-pressed={tab === "work"} data-testid="cc-today-tab-work"
                 title="Agent work finished, by hour" onClick={() => onTab("work")}>Work</button>
