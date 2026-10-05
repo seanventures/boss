@@ -44,7 +44,7 @@ export function StageLine({ stage, vertical, testId = "inf-stage-line" }: { stag
         const at = i + 1;
         const state = at < stage.index ? "done" : at === stage.index ? "current" : "todo";
         return (
-          <li key={s.key} className="inf-stage" data-state={state} aria-current={state === "current" ? "step" : undefined}
+          <li key={s.key} className="inf-stage" data-state={state} title={s.label} aria-current={state === "current" ? "step" : undefined}
               data-new={advanced && at === stage.index ? "1" : undefined} data-anim={advanced && at === stage.index ? "" : undefined}>
             <span className="inf-stage-mark" aria-hidden>{state === "done" ? "✓" : at}</span>
             <span className="inf-stage-label">{s.label}</span>
