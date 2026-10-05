@@ -115,11 +115,30 @@ const SENTENCES: [string, string, string][] = [
 ];
 
 describe("the status line", () => {
+  // THE SERVER'S SENTENCE, CALMLY (design pass): a severity is a chip beside a summary of what
+  // is moving ("2 running · 1 needs you" — the fixture's counts), never a red headline; a count
+  // state IS that summary; a quiet/first-build state is the headline itself.
+  const SEVERE = new Set(["stopped", "budget_stopped", "host_critical", "host_slow", "budget_high", "setup"]);
   it.each(SENTENCES)("%s draws the server's sentence `%s` with a %s dot", async (key, words, tone) => {
     await mount(page(V(view({ status: { key, text: words, tone, tip: "why" } }))));
-    expect(text(".cc-status-text")).toBe(words);
-    expect($(".cc-status-text")?.getAttribute("title")).toBe("why");
+    if (SEVERE.has(key)) {
+      expect(text(".cc-status-text")).toBe("2 running · 1 needs you");
+      expect(text('[data-testid="cc-status-chip"]')).toBe(words);
+      expect($('[data-testid="cc-status-chip"]')?.getAttribute("title")).toBe("why");
+    } else if (key === "needs_you" || key === "running") {
+      expect(text(".cc-status-text")).toBe("2 running · 1 needs you");
+    } else {
+      expect(text(".cc-status-text")).toBe(words);
+      expect($(".cc-status-text")?.getAttribute("title")).toBe("why");
+    }
     expect($(".cc-status .cc-dot")?.getAttribute("data-tone")).toBe(tone);
+  });
+
+  it("a severity with nothing moving is the headline itself, not a chip beside nothing", async () => {
+    await mount(page(V(view({ status: { key: "host_critical", text: "Host struggling", tone: "red", tip: "x" },
+                             counts: { agents: 7, working: 0, needs_you: 0, stopped: 0, setup: 0, running: 0, expired_answerable: 0 } }))));
+    expect(text(".cc-status-text")).toBe("Host struggling");
+    expect($('[data-testid="cc-status-chip"]')).toBeNull();
   });
 
   it("NEED YOU is counts.needs_you, amber when it is not zero, and links to the cards", async () => {
@@ -209,7 +228,7 @@ describe("when nothing may move", () => {
     expect(viewCalls()).toHaveLength(0);
     expect(text('[data-testid="cc-paused"]')).toBe("Paused");
     // The sentence is unchanged; the chip says Paused.
-    expect(text(".cc-status-text")).toBe("1 stopped");
+    expect(text('[data-testid="cc-status-chip"]')).toBe("1 stopped");
     expect($('[data-testid="stub-floor"]')?.getAttribute("data-motion")).toBe("none");
     expect($('[data-testid="stub-strip"]')?.getAttribute("data-motion")).toBe("none");
     expect(document.querySelectorAll("[data-comet]")).toHaveLength(0);
@@ -242,7 +261,8 @@ describe("when nothing may move", () => {
               detail: "Docker has 0.2 GB free.", action: "Quit other apps, then restart Docker." },
     }))));
     expect(text('[data-testid="host-advice"]')).toContain("This computer is out of memory");
-    expect(text('[data-testid="host-advice"]')).toContain("Quit other apps, then restart Docker.");
+    // The fix is the server's words too, one hover away (design pass: a system card, not prose).
+    expect($('[data-testid="cc-host-fix"]')?.getAttribute("title")).toBe("Quit other apps, then restart Docker.");
     const floor = $('[data-testid="stub-floor"]')!;
     expect(floor.getAttribute("data-motion")).toBe("none");
     expect(floor.getAttribute("data-why")).toBe("Motion paused while the host struggles");
@@ -421,5 +441,19 @@ describe("before the first run", () => {
     expect($('[data-testid="help-card"]')).toBeNull();
     await click($('[data-testid="cc-help"]'));
     expect($('[data-testid="help-card"]')).not.toBeNull();
+  });
+});
+
+describe("the host card", () => {
+  it("keeps the server's words, with a command behind a copy button, not on the page", async () => {
+    const { commandIn } = await import("../app/command-center/host-card");
+    expect(commandIn("Free disk space — `docker system prune` reclaims old images")).toBe("docker system prune");
+    expect(commandIn("Quit other apps.")).toBeNull();
+    await mount(page(V(view({ host: { show: true, severity: "warning", headline: "This server's disk is nearly full",
+      detail: "Right now: disk 86% full.", action: "Free disk space — `docker system prune` reclaims old images." } }))));
+    const card = $('[data-testid="host-advice"]')!;
+    expect(card.textContent).toContain("This server's disk is nearly full");
+    expect(card.textContent).not.toContain("docker system prune");
+    expect($('[data-testid="cc-host-copy"]')?.getAttribute("title")).toBe("Copy: docker system prune");
   });
 });

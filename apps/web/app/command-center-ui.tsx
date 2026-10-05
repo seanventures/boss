@@ -26,7 +26,8 @@ import { StatusLine } from "./command-center/status-line";
 import { SystemsRow } from "./command-center/systems-row";
 import { TodayChart, type TodayTab } from "./command-center/today-chart";
 import { WeekBars } from "./command-center/week-bars";
-import { HostAdviceBanner, useHostAdvice } from "./host-advice";
+import { useHostAdvice } from "./host-advice";
+import { HostCard } from "./command-center/host-card";
 import { OnboardingHelpRows } from "./onboarding-help-card";
 
 /**
@@ -484,7 +485,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
          data-stale={reachable ? undefined : "true"} data-motion={motion} data-band={band}
          data-layout={phone ? "phone" : width < 1280 ? "stacked" : width < 1440 ? "split" : "wide"}>
       {/* The only banner this page has: the host's own words, above the state (§4.11). */}
-      <HostAdviceBanner advice={host} />
+      <HostCard advice={host} />
       {statusSec}
       {phone ? (
         <>{needsSec}{composeSec}{workSec}{floorSec}{todaySec}{systemsSec}{weekSec}</>

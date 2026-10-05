@@ -85,7 +85,6 @@
   margin: 0; font-family: var(--display); font-size: 1.45rem; font-weight: 700; letter-spacing: -0.01em;
   color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.cc-status[data-tone="red"] .cc-status-text { color: var(--red); }
 .cc-status[data-tone="grey"] .cc-status-text { color: var(--muted); }
 
 .cc-help { position: relative; }
@@ -271,3 +270,31 @@
 @media (prefers-reduced-motion: reduce) {
   .cc *, .cc *::before, .cc *::after { animation: none !important; transition: none !important; }
 }
+
+/* The severity chip beside the calm headline (the server's first matching rule). */
+.cc-sev { font-size: 0.82rem; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); }
+.cc-sev[data-tone="red"] { color: var(--red); background: var(--red-soft); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
+.cc-sev[data-tone="amber"] { color: var(--amber); background: var(--amber-soft); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
+
+/* NEEDS YOU sits in a 5-of-12 column: a row card's buttons go under its words, so the title
+   gets the whole width and wraps to two lines instead of ellipsing after two words. */
+.cc-cards .ag-att[data-density="row"] { grid-template-columns: minmax(0, 1fr); }
+.cc-cards .ag-att[data-density="row"] > .ag-att-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; }
+.cc-cards .ag-att-title {
+  white-space: normal; overflow: hidden; text-overflow: clip;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+}
+
+/* The host, as one calm system line (design pass): headline, measurement, fix on hover/copy. */
+.cc-host {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 12px;
+  border-radius: var(--r); border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border));
+  background: color-mix(in srgb, var(--amber) 7%, var(--surface)); font-size: 0.86rem;
+}
+.cc-host[data-severity="critical"] { border-color: color-mix(in srgb, var(--red) 40%, var(--border)); background: color-mix(in srgb, var(--red) 7%, var(--surface)); }
+.cc-host-icon { color: var(--amber); flex: none; }
+.cc-host[data-severity="critical"] .cc-host-icon { color: var(--red); }
+.cc-host-head { color: var(--ink); font-weight: 650; }
+.cc-host-detail { color: var(--muted); }
+.cc-host-fix { color: var(--accent-text); cursor: help; border-bottom: 1px dotted currentColor; }
+.cc-host-copy { display: inline-flex; align-items: center; gap: 6px; }
