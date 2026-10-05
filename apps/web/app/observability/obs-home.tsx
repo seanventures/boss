@@ -16,6 +16,7 @@
 import React, { useCallback, useRef, useState } from "react";
 
 import { useConsoleLive } from "../../lib/console-live";
+import { useBand } from "../agents/live-util";
 import { usePolled } from "../../lib/factory-floor";
 import {
   OBS_TABS, WINDOWS, parseSystem, readObsUrl, systemUrl, usePulse, usd,
@@ -53,7 +54,10 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
     writeUrl({ tab: null, ...patch }, mode);
     reread();
   }, [reread]);
-  const pulse = usePulse(projectId, url.win);
+  // Narrow layouts ask the server for fewer, wider cells (§5.3); the web never re-buckets.
+  const band = useBand();
+  const cells = band === "phone" ? 24 : band === "narrow" ? 48 : undefined;
+  const pulse = usePulse(projectId, url.win, cells);
   const onSystem = useRef(url.view === "system");
   onSystem.current = url.view === "system";
   const system = usePolled(projectId ? systemUrl(projectId) : null, parseSystem,
