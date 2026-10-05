@@ -26,6 +26,7 @@ import tempfile
 from typing import Any, Optional
 
 from ..config import Settings
+from . import owned_process
 from ..ports import sql
 from .core import emit_event, make_id
 from .secret_backends import (
@@ -142,7 +143,7 @@ def generate_keypair(connection, settings: Settings, *, project_id: str, name: s
         if algorithm == "rsa":
             args[2:2] = ["-b", "4096"]
         try:
-            out = subprocess.run(args, capture_output=True, text=True, timeout=60)
+            out = owned_process.run(args, capture_output=True, text=True, timeout=60)
         except FileNotFoundError as exc:
             # A MISSING BINARY IS A DEPLOYMENT DEFECT, NOT A SERVER ERROR.
             #

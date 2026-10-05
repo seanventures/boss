@@ -114,10 +114,13 @@ export function bornFromFor(key: string): BornFrom {
 
 type Birth = { identity: AgentIdentity; agentId: string; roleKey: string };
 
-export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans = [], initialName = "" }: {
+export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans = [], initialName = "",
+                                   initialTeam = "yours" }: {
   projectId: string;
   /** Registering an agent that already does work: its name, so the key it gets is its own. */
   initialName?: string;
+  /** Organization's `Make agent` for a missing role: the team whose empty seat it fills. */
+  initialTeam?: string;
   actor: string;
   onClose: () => void;
   onCreated: (roleKey: string) => void;
@@ -139,7 +142,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
   const [servers, setServers] = useState<Record<string, string>>({});
   const [reportsTo, setReportsTo] = useState("");
   // WHICH TEAM it sits in on Live, Organization and Directory (agents-home spec §4.6).
-  const [team, setTeam] = useState("yours");
+  const [team, setTeam] = useState(initialTeam);
   const [skillFilter, setSkillFilter] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advanced, setAdvanced] = useState<Advanced>(initialAdvanced);

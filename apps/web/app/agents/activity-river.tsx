@@ -41,6 +41,8 @@ export type ActivityRiverProps = {
   runLabel?: string;
   /** OPTIONAL (S3): who is reading, so the work card names a person "you" only for them. */
   viewer?: string;
+  /** A link's window (`&days=`; Organization's edges): 1 or 7, the river's own windows. */
+  initialDays?: 1 | 7;
 };
 
 export const RIVER_POLL_MS = 8000;
@@ -128,10 +130,11 @@ function isHandoff(item: ActivityItem): boolean {
   return item.kind === "handoff" || HANDOFF_HOWS.has(item.how) || item.from?.kind === "agent";
 }
 
-export function ActivityRiver({ projectId, roleKey, runId, onClearRun, paused, runLabel, viewer = "" }: ActivityRiverProps) {
+export function ActivityRiver({ projectId, roleKey, runId, onClearRun, paused, runLabel, viewer = "",
+                               initialDays = 1 }: ActivityRiverProps) {
   useIdentityVersion();
   const [filter, setFilter] = useState<ActivityFilter>("all");
-  const [days, setDays] = useState<1 | 7>(1);
+  const [days, setDays] = useState<1 | 7>(initialDays);
   const query = useMemo(() => ({ projectId, filter, days, role: roleKey || null, run: runId || null }),
                         [projectId, filter, days, roleKey, runId]);
   // THE SHARED STREAM ENGINE (lib/log-stream), the same loop as the Activity log's: cursor

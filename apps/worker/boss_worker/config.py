@@ -35,6 +35,11 @@ class WorkerSettings(BaseSettings):
         default=None, validation_alias=AliasChoices("BOSS_GITHUB_TOKEN", "GITHUB_TOKEN")
     )
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
+    # HOW MANY JOBS THIS WORKER LEASES AT ONCE (stability spec §4b.2). One loop could only ever
+    # run one build. `auto` asks the control plane's admission for "Builds at once" (derived
+    # from this machine's memory and cores); every lease is still admitted against free
+    # memory, so an extra slot that finds no room simply waits. A number pins it.
+    worker_slots: str = Field(default="auto", alias="BOSS_WORKER_SLOTS")
 
 
 @lru_cache(maxsize=1)

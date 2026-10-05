@@ -200,7 +200,7 @@ def test_a_signed_out_turn_is_refused_before_any_agent_process(
 ) -> None:
     monkeypatch.setattr(cli_harness, "detect", lambda *_: {
         "ready": False, "next_step": "grok login --device-auth"})
-    monkeypatch.setattr(cli_harness.subprocess, "run",
+    monkeypatch.setattr(cli_harness.owned_process, "run",
                         lambda *_a, **_k: pytest.fail("signed-out Grok was invoked"))
     agent = cli_harness.GenericCliCodeAgent(SimpleNamespace(), SPEC)
 
@@ -213,7 +213,7 @@ def test_a_failed_grok_process_stops_the_stage(
 ) -> None:
     monkeypatch.setattr(cli_harness, "detect", lambda *_a: {"ready": True})
     monkeypatch.setattr(cli_harness.shutil, "which", lambda _: "/usr/local/bin/grok")
-    monkeypatch.setattr(cli_harness.subprocess, "run", lambda *_a, **_kw: SimpleNamespace(
+    monkeypatch.setattr(cli_harness.owned_process, "run", lambda *_a, **_kw: SimpleNamespace(
         returncode=1, stdout="", stderr="session expired"))
     monkeypatch.setattr("boss_engine.services.llm_telemetry.record_llm_call",
                         lambda **_kw: None)

@@ -24,7 +24,7 @@ import subprocess
 import pytest
 
 from boss_engine.config import Settings
-from boss_engine.services import cli_harness, model_failures, secret_backends
+from boss_engine.services import cli_harness, model_failures, owned_process, secret_backends
 from boss_engine.services.secret_backends import (
     SecretNotFound,
     SecretStoreUnreachable,
@@ -212,7 +212,7 @@ def test_the_chat_cli_confirms_a_login_refusal(monkeypatch):
         subprocess.CompletedProcess([], 1, '{"result": "Not logged in · Please run /login"}', ""),
         subprocess.CompletedProcess([], 0, '{"result": "hi", "usage": {}}', ""),
     ]
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: replies.pop(0))
+    monkeypatch.setattr(owned_process, "run", lambda *a, **k: replies.pop(0))
     assert ClaudeCliAdapter(Settings())._invoke("hello")["result"] == "hi"
     assert replies == []
 
@@ -240,7 +240,7 @@ def test_the_coding_and_research_agent_confirms_a_login_refusal(monkeypatch, tmp
                   '"result": "Not logged in · Please run /login"}'),
         _Child(0, '{"subtype": "success", "result": "found it", "usage": {}}'),
     ]
-    monkeypatch.setattr(code_agent.subprocess, "Popen", lambda *a, **k: children.pop(0))
+    monkeypatch.setattr(code_agent.owned_process, "popen", lambda *a, **k: children.pop(0))
     monkeypatch.setattr(code_agent, "_drain", lambda child, **k: child.communicate())
     monkeypatch.setattr(code_agent, "capture_enabled", lambda: False)
     agent = code_agent.ClaudeCodeAgent(Settings())

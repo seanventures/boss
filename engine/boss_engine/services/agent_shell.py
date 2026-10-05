@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 from .agent_env import agent_environment
+from . import owned_process
 
 WORKSPACE_ROOT = Path(os.getenv("BOSS_AGENT_WORKSPACE_ROOT", "/tmp/boss-agent-ws"))
 COMMAND_TIMEOUT_SECONDS = int(os.getenv("BOSS_AGENT_SHELL_TIMEOUT", "90"))
@@ -109,7 +110,7 @@ def ensure_workspace(
     if (path / ".git").is_dir():
         return path, None
     path.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
+    result = owned_process.run(
         ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(path)],
         capture_output=True, text=True, timeout=180,
     )
@@ -117,7 +118,7 @@ def ensure_workspace(
         detail = (result.stderr or "").strip()[-300:]
         # Never echo the clone URL back: it contains the token.
         return None, f"could not check out {owner}/{repo}@{branch}: {_scrub(detail)}"
-    subprocess.run(
+    owned_process.run(
         ["git", "-C", str(path), "remote", "set-url", "origin",
          f"https://github.com/{owner}/{repo}.git"],
         capture_output=True, text=True, timeout=30,
@@ -169,7 +170,7 @@ def run_in_workspace(workspace: Path, command: str, cwd: Optional[str] = None) -
     env = _shell_environment(workspace)
 
     try:
-        proc = subprocess.run(
+        proc = owned_process.run(
             ["sh", "-lc", command],
             cwd=str(target), env=env, capture_output=True, text=True,
             timeout=COMMAND_TIMEOUT_SECONDS,

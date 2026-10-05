@@ -59,6 +59,11 @@ Commands:
   uninstall [--purge] Stop BOSS and keep data. --purge also deletes data after a backup and
                       a typed confirmation, then removes the boss command the installer
                       put on PATH for this install. Also: --yes, --dry-run, --backup-dir PATH
+  prune [--dedicated] Free disk BOSS used: stopped previews, unused preview images, old BOSS
+                      image tags; build cache too above 75% disk on a BOSS-only host
+                      (--dedicated). Runs after every upgrade and update. Also: --dry-run
+  host-sample         macOS: post this Mac's swap and biggest memory users to BOSS's system
+                      doctor, which cannot see past Docker Desktop's VM
   version             Installed release and commit
 
 Environment: BOSS_INSTALL_DIR selects another install.
@@ -218,6 +223,55 @@ cmd_upgrade() {
     esac
   done
   bash "$INSTALL_DIR/scripts/install/upgrade.sh" "${args[@]}"
+  post_deploy_prune
+}
+
+# EVERY DEPLOY LEAVES ~1.3 GB BEHIND (build cache, the previous images). Best effort: a prune
+# that fails must never fail the update that preceded it.
+post_deploy_prune() {
+  [[ -x "$INSTALL_DIR/scripts/install/prune.sh" ]] || return 0
+  BOSS_DEDICATED_HOST="$(env_value BOSS_DEDICATED_HOST)" \
+    bash "$INSTALL_DIR/scripts/install/prune.sh" || printf 'boss: prune skipped\n' >&2
+}
+
+# THE MAC UNDER DOCKER DESKTOP, which BOSS cannot see from inside its VM (stability spec §4c):
+# swap and the biggest memory users, posted to the system doctor so its card can say "most of
+# it is not BOSS" with numbers. macOS only; nothing is posted elsewhere. Run it on a schedule
+# (e.g. every 5 min from launchd) to keep the reading fresh; it expires after 10 minutes.
+cmd_host_sample() {
+  need_install
+  [[ "$(uname -s)" == Darwin ]] || die "host-sample reads macOS memory; on Linux BOSS measures the machine itself."
+  local key url body
+  key="$(env_value BOSS_API_KEY)"; [[ -n "$key" ]] || die "no BOSS_API_KEY in $ENV_FILE"
+  url="$(api_url)"
+  body="$(python3 - <<'PY'
+import json, re, subprocess
+swap = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True).stdout
+def mb(name):
+    m = re.search(name + r" = ([0-9.]+)M", swap)
+    return float(m.group(1)) if m else 0.0
+rows = subprocess.run(["ps", "-axo", "rss=,comm="], capture_output=True, text=True).stdout
+apps = {}
+for line in rows.splitlines():
+    parts = line.strip().split(None, 1)
+    if len(parts) != 2 or not parts[0].isdigit():
+        continue
+    name = parts[1].split("/Contents/")[0].rsplit("/", 1)[-1].replace(".app", "")
+    name = "Docker" if "com.docker" in parts[1] or "Docker" in name else name
+    apps[name] = apps.get(name, 0) + int(parts[0]) / 1024
+top = sorted(({"name": k[:40], "mb": round(v)} for k, v in apps.items()), key=lambda r: -r["mb"])[:6]
+print(json.dumps({"swap_used_mb": mb("used"), "swap_total_mb": mb("total"), "top": top}))
+PY
+)"
+  curl -fsS -m 10 -X POST "$url/v1/self/host-sample" -H "Authorization: Bearer $key" \
+    -H 'Content-Type: application/json' --data "$body" >/dev/null &&
+    printf 'boss: host sample posted (%s)\n' "$(printf '%s' "$body" | head -c 80)…"
+}
+
+cmd_prune() {
+  need_install
+  BOSS_DEDICATED_HOST="$(env_value BOSS_DEDICATED_HOST)" \
+    bash "$INSTALL_DIR/scripts/install/prune.sh" "$@"
 }
 
 cmd_update() {
@@ -231,6 +285,7 @@ cmd_update() {
   done
   # The installer reads the remembered release from .boss-release, so this cannot move to main.
   bash "$INSTALL_DIR/install.sh" --dir "$INSTALL_DIR" --yes "$@"
+  post_deploy_prune
 }
 
 
@@ -1076,6 +1131,8 @@ case "$COMMAND" in
   upgrade) cmd_upgrade "$@" ;;
   update) cmd_update "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
+  prune) cmd_prune "$@" ;;
+  host-sample) cmd_host_sample "$@" ;;
   version|--version) cmd_version ;;
   *) printf 'boss: unknown command %s\n\n' "$COMMAND" >&2; usage >&2; exit 2 ;;
 esac

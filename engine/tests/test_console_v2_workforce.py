@@ -174,11 +174,13 @@ def test_per_agent_spend_is_absent_rather_than_invented():
     assert a["calls"] is None
 
 
-def test_the_payload_says_why_spend_is_missing():
-    """A screen cannot quietly render a zero in its place if the payload states the reason."""
+def test_the_payload_says_spend_is_attributed():
+    """Every call is attributed once (llm_telemetry.attribute_llm_calls): the payload no longer
+    says BOSS cannot tell whose a call is — that sentence went stale when acts started signing
+    calls (org-view spec §6.2)."""
     out = workforce(FakeConn(roles=[role("coder")]), "p")
-    assert out["spend_attributed"] is False
-    assert "does not record which agent" in out["spend_note"]
+    assert out["spend_attributed"] is True
+    assert "spend_note" not in out
 
 
 def test_no_query_joins_calls_to_steps_by_time():

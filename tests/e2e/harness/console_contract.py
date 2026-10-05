@@ -67,9 +67,19 @@ def _tid(name: str) -> str:
 
 PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
     "overview": (
-        Press("askboss-examples", "app/ask-boss-hero.tsx", opens=True,
+        # `Ideas` is a button now (command-center spec §4.6), not a <details>: pressed, not opened.
+        Press("askboss-examples", "app/ask-boss-hero.tsx",
               expect=_tid("askboss-default-workflow"),
               why="the ask box's worked examples; asking itself starts real work"),
+        # The bridge's own presses (command-center spec §10.3).
+        Press("cc-today-tab-spend", "app/command-center/today-chart.tsx", expect=_tid("cc-today"),
+              expect_source="app/command-center-ui.tsx",
+              why="Today switches from work to money spent, by hour"),
+        Press("cc-floor-list-toggle", "app/command-center/floor.tsx", expect=_tid("cc-floor-list"),
+              why="the Floor as a list, for anyone who prefers it to the map"),
+        Press("cc-dot-budget", "app/command-center/systems-row.tsx",
+              why="a Systems dot opens the area that fixes it (Budget)"),
+        Journey("command_center_fits"),
     ),
     "code_tasks": (
         Press("fx-new-build", "app/code-tasks-ui.tsx", expect=_tid("fx-new-menu"),
@@ -99,7 +109,14 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
         Press("agents-view-directory", "app/workforce-ui.tsx", expect=_tid("roster-grid"),
               expect_source="app/agents/roster-zones.tsx"),
         Press("agents-view-org", "app/workforce-ui.tsx", expect=_tid("ag-zones"),
-              expect_source="app/agents/team-zones.tsx"),
+              expect_source="app/agents/org-teams.tsx"),
+        # Organization (org-view spec §7.3): Teams · Flow · Lines and the window chips.
+        Press("ag-org-flow", "app/agents/org-view.tsx", expect=_tid("ag-flow"),
+              expect_source="app/agents/org-flow.tsx"),
+        Press("ag-org-lines", "app/agents/org-view.tsx",
+              expect=f'{_tid("org-tree")}, {_tid("org-empty")}', expect_source="app/workforce-ui.tsx"),
+        Press("ag-org-days-30", "app/agents/org-view.tsx", expect=_tid("ag-orgteams"),
+              expect_source="app/agents/org-teams.tsx"),
         Press("agents-view-activity", "app/workforce-ui.tsx", expect=_tid("ag-river"),
               expect_source="app/agents/activity-river.tsx"),
         Journey("agent_with_skill"),

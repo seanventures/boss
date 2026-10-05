@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .core import emit_event, make_id
+from . import owned_process
 from .receipts import ReceiptService
 
 # Per-scanner stdout/stderr capture cap (~32KB head+tail).
@@ -576,7 +577,7 @@ def _run_subprocess(
         if key.startswith(("AWS_", "ARM_", "GOOGLE_", "AZURE_", "SNYK_")):
             env.pop(key, None)
     try:
-        proc = subprocess.run(  # noqa: S603 — fixed argv from catalog, no shell
+        proc = owned_process.run(  # noqa: S603 — fixed argv from catalog, no shell
             argv,
             cwd=str(cwd),
             env=env,

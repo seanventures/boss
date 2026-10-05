@@ -157,9 +157,11 @@ def _read_psi(path: Path) -> dict[str, float]:
             continue
         for field in parts[1:]:
             key, _, value = field.partition("=")
-            if key == "avg10":
+            # avg60 too (stability spec §4e): admission and the doctor judge a minute, not ten
+            # seconds of one npm install.
+            if key in ("avg10", "avg60", "total"):
                 try:
-                    out[f"{parts[0]}_avg10"] = float(value)
+                    out[f"{parts[0]}_{key}"] = float(value)
                 except ValueError:
                     pass
     return out
@@ -234,6 +236,8 @@ def memory_snapshot() -> dict[str, Any]:
     if psi:
         out["psi_some_avg10"] = psi.get("some_avg10")
         out["psi_full_avg10"] = psi.get("full_avg10")
+        out["psi_some_avg60"] = psi.get("some_avg60")
+        out["psi_full_avg60"] = psi.get("full_avg60")
 
     host = _read_keyed(PROC / "meminfo")
     if host:
@@ -245,6 +249,21 @@ def memory_snapshot() -> dict[str, Any]:
     # The `host_*` keys above are named for what they are on a server. On Docker Desktop they
     # describe a VM, so the reading has to say which it is or it will be read as the machine.
     out["host_is_the_machine"] = measures_the_real_machine()
+    return out
+
+
+def vmstat_snapshot() -> dict[str, int]:
+    """The kernel's own counters (cumulative): OOM kills and pages swapped out. The doctor
+    differences them between ticks — any new kill, a swap-out rate (spec §4c Signals)."""
+    raw = _read_text(PROC / "vmstat") or ""
+    out: dict[str, int] = {}
+    for line in raw.splitlines():
+        name, _, value = line.partition(" ")
+        if name in ("oom_kill", "pswpout", "pswpin", "pgmajfault"):
+            try:
+                out[name] = int(value.strip())
+            except ValueError:
+                pass
     return out
 
 
@@ -451,6 +470,11 @@ def delivery_metrics(connection, project_id: str, *, days: int = _METRIC_WINDOW_
     runs_failed = scalar(
         f"SELECT count(*) FROM code_task_runs "
         f"WHERE project_id = :p AND status IN ('failed','error') AND {since}")
+    # Finished and passed — not "total minus failed", which would count a running build as a
+    # pass. The Command Center's week tooltip says `9 builds (7 passed)` from this.
+    runs_succeeded = scalar(
+        f"SELECT count(*) FROM code_task_runs "
+        f"WHERE project_id = :p AND status IN ('completed','succeeded','passed') AND {since}")
     jobs_ran = scalar(f"SELECT count(*) FROM jobs WHERE project_id = :p AND {since}")
     # WHAT IS HAPPENING RIGHT NOW, from the work itself.
     #
@@ -484,6 +508,7 @@ def delivery_metrics(connection, project_id: str, *, days: int = _METRIC_WINDOW_
         ),
         "runs_total": int(runs_total),
         "runs_failed": int(runs_failed),
+        "runs_succeeded": int(runs_succeeded),
         "run_success_rate": (
             round(100.0 * (runs_total - runs_failed) / runs_total, 1) if runs_total else None
         ),
