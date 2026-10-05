@@ -16,6 +16,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CatalogueEntry, Installed } from "../app/delivery-workflows-ui";
+import type { Ask } from "../app/workflows/compose-plan";
 
 const proposed: FormData[] = [];
 const confirmed: FormData[] = [];
@@ -32,7 +33,7 @@ vi.mock("../app/actions", async (original) => ({
     confirmed.push(form);
     return { run_id: "crun_change", path: "inline", workflow_run_id: "wfr_change" };
   },
-  conveneMeetingAction: async (form: FormData) => { convened.push(form); return { ok: true }; },
+  conveneFeaturePanelAction: async (form: FormData) => { convened.push(form); return { ok: true, meeting_run_id: "mrun_panel" }; },
 }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -80,17 +81,20 @@ const CATALOGUE: CatalogueEntry[] = Object.entries(STEPS).map(([key, steps]) => 
 const APPS = { apps: [
   { key: "crun_lead2", app: "Lead-Triage Inbox", run_id: "crun_lead2", builders: ["pm", "engineering_captain", "qa"],
     state: "pr_open", word: "PR open", builds: 2, run_ids: ["crun_lead2", "crun_lead1"], pr_number: 186, pr_state: "open",
+    preview: { status: "running", url: "/v1/previews/prev_9/web/" },
     repo: "acme/sandbox", brief: "Lead triage", attempts: [
       { run_id: "crun_lead2", attempt: 1, word: "Failed", order: 2 },
       { run_id: "crun_lead1", attempt: 1, word: "PR open", order: 1, pr_number: 186, pr_state: "open" }] },
   { key: "crun_cal", app: "Change Calendar", run_id: "crun_cal", builders: ["pm"], state: "pr_open", word: "PR open",
-    builds: 1, run_ids: ["crun_cal"], pr_number: 184, repo: "acme/sandbox", attempts: [
+    builds: 1, run_ids: ["crun_cal"], pr_number: 184, pr_state: "merged", repo: "acme/sandbox", attempts: [
       { run_id: "crun_cal", attempt: 1, word: "PR open", order: 1, pr_number: 184 }] },
 ] };
 
 type Posted = Record<string, unknown> & { input?: Record<string, unknown> };
 let posts: Posted[] = [];
 let costs: Record<string, unknown> = {};
+/** GET /v1/delivery-workflows/asks, or null for an API without it. */
+let asks: Record<string, unknown> | null = null;
 
 function stubApi() {
   posts = [];
@@ -109,6 +113,7 @@ function stubApi() {
     if (view === "repositories") return json({ repositories: [{ id: "r1", full_name: "acme/sandbox", default_branch: "main" }],
                                                 suggested: "acme/sandbox", suggested_source: "registry_primary" });
     if (view === "costs") return json({ costs });
+    if (view === "asks") return asks ? json(asks) : json({ error: "no" }, 404);
     if (view === "readiness") {
       const need = (k: string, label: string) => ({ key: k, label, fix: "", area: null, ok: true, detail: "",
                                                      needed_by: [], first_step_label: "", after_a_person: false });
@@ -124,6 +129,7 @@ const started: Array<string | null> = [];
 beforeEach(() => {
   proposed.length = 0; confirmed.length = 0; convened.length = 0; started.length = 0;
   costs = {};
+  asks = null;
   try { window.localStorage.clear(); } catch { /* none */ }
 });
 afterEach(() => {
@@ -188,23 +194,24 @@ describe("the plan's rules", () => {
     const w = WORKFLOWS.find((x) => x.workflow_key === "standard_product_delivery")!;
     const c = CATALOGUE.find((x) => x.key === "standard_product_delivery")!;
     const t = plan.timelineOf({ steps: w.steps!, gates: c.gates, automatic: c.automatic_approvals, mode: "new" });
-    expect(t.map((s) => s.name)).toEqual(["Research", "Panel", "Spec sign-off", "Build", "Preview", "Launch check",
-                                          "Report", "Deploy", "Watch", "Notify"]);
+    expect(t.map((s) => s.name)).toEqual(["Research", "Panel", "Spec sign-off", "Build", "Merge", "Preview",
+                                          "Launch check", "Report", "Deploy", "Watch", "Notify"]);
     expect(t.find((s) => s.id === "build")!.who).toEqual({ kind: "agent", role: "engineering_captain" });
     expect(t.find((s) => s.id === "report")!.who).toEqual({ kind: "boss" });
     expect(t.find((s) => s.id === "deploy")!.who).toEqual({ kind: "you" });
     // The PRD approval is the panel's own decision, not one of yours.
     expect(t.find((s) => s.id === "spec_review")!.who.kind).not.toBe("you");
-    expect(plan.counts(t)).toEqual({ steps: 10, approvals: 1 });
+    // Every build asks to merge: that is one of your approvals, not a step of the workflow.
+    expect(plan.counts(t)).toEqual({ steps: 10, approvals: 2 });
   });
 
   it("says a change as a change, and keeps what works after the build", () => {
     const w = WORKFLOWS.find((x) => x.workflow_key === "minor_feature")!;
     const t = plan.timelineOf({ steps: w.steps!, gates: ["deploy"], mode: "add", app: "Lead-Triage Inbox" });
-    expect(t.map((s) => s.name)).toEqual(["Scope the change", "Build on its branch", "Keep what works", "Preview",
-                                          "Report", "Deploy", "Notify"]);
+    expect(t.map((s) => s.name)).toEqual(["Scope the change", "Build on its branch", "Keep what works", "Merge",
+                                          "Preview", "Report", "Deploy", "Notify"]);
     expect(t[1].line).toBe("Adds to Lead-Triage Inbox — no re-scaffold");
-    expect(plan.counts(t)).toEqual({ steps: 6, approvals: 1 });
+    expect(plan.counts(t)).toEqual({ steps: 6, approvals: 2 });
     for (const route of [plan.QUICK, plan.SPEC]) {
       expect(plan.routeTimeline(route, "X").some((s) => s.keep)).toBe(true);
     }
@@ -216,6 +223,8 @@ describe("the plan's rules", () => {
     expect(plan.costRange(null)).toBeNull();
     expect(plan.costRange({ runs: 0, low_usd: 0, high_usd: 0 })).toBeNull();
     expect(plan.costKey(plan.QUICK)).toBe("@change");
+    // Spec it first is priced from its own history (panel + build), not from Small's.
+    expect(plan.costKey(plan.SPEC)).toBe("@spec");
   });
 
   it("finds an app's cover by its template, else a monogram; and the app a link names by any build", () => {
@@ -245,6 +254,56 @@ describe("the plan's rules", () => {
   });
 });
 
+describe("the plan counts every time you are asked, from the server's one answer", () => {
+  const w = WORKFLOWS.find((x) => x.workflow_key === "minor_feature")!;
+  it("who answers the spec and the merge comes from /asks, and the count follows it", () => {
+    const yours: Ask[] = [{ step_id: "build", kind: "merge", who: "you" }, { step_id: "deploy", kind: "gate", who: "you" }];
+    const t = plan.timelineOf({ steps: w.steps!, mode: "add", app: "X", asks: yours });
+    expect(t.filter((s) => s.who.kind === "you").map((s) => s.name)).toEqual(["Merge", "Deploy"]);
+    const std = WORKFLOWS.find((x) => x.workflow_key === "standard_product_delivery")!;
+    const specYours: Ask[] = [{ step_id: "spec_review", kind: "spec", who: "you" },
+                                   { step_id: "build", kind: "merge", who: "you" }, { step_id: "deploy", kind: "gate", who: "you" }];
+    const s2 = plan.timelineOf({ steps: std.steps!, mode: "new", asks: specYours });
+    expect(s2.find((x) => x.id === "spec_review")).toMatchObject({ name: "Approve the spec", who: { kind: "you" } });
+    expect(plan.counts(s2).approvals).toBe(3);
+    const auto = plan.timelineOf({ steps: std.steps!, mode: "new",
+                                   asks: specYours.map((a) => a.kind === "spec" ? { ...a, who: "boss" as const } : a) });
+    expect(plan.counts(auto).approvals).toBe(2);
+    expect(plan.routeTimeline(plan.SPEC, "X", [{ step_id: "spec_review", kind: "spec", who: "boss" },
+                                               { step_id: "build", kind: "merge", who: "you" }])
+      .filter((s) => s.who.kind === "you").map((s) => s.name)).toEqual(["Merge"]);
+  });
+
+  it("a spec approval on the panel's own step is drawn as its own question when it is yours", () => {
+    const asksYou: Ask[] = [{ step_id: "meeting", kind: "spec", who: "you" }, { step_id: "build", kind: "merge", who: "you" },
+                            { step_id: "deploy", kind: "gate", who: "you" }];
+    const t = plan.timelineOf({ steps: w.steps!, mode: "add", app: "X", asks: asksYou });
+    expect(t.map((x) => x.id)).toEqual(["meeting", "spec-meeting", "build", "keep", "merge-build", "preview", "report", "deploy", "notify"]);
+    expect(t[0].who).toEqual({ kind: "agent", role: "pm" });
+    expect(plan.counts(t)).toEqual({ steps: 6, approvals: 3 });
+  });
+
+  it("Lands as says what the build really does to the app's PR", () => {
+    expect(plan.landsAs({ prNumber: 186, prState: "open" })).toBe("Updates PR #186");
+    expect(plan.landsAs({ prNumber: 186, prState: "merged" })).toBe("A new PR");
+    expect(plan.landsAs({})).toBe("A PR on its branch");
+  });
+
+  it("Working today only when a live preview or a healthy deploy shows it", () => {
+    expect(plan.workingWord({ preview: null, deploys: [], prNumber: 5, prState: "open", word: "PR open" }))
+      .toEqual({ working: false, text: "PR #5 open" });
+    expect(plan.workingWord({ preview: { status: "running" }, deploys: [], word: "PR open" }).working).toBe(true);
+    expect(plan.workingWord({ preview: null, deploys: [{ ok: true }], word: "Deployed" }).working).toBe(true);
+    expect(plan.workingWord({ preview: null, deploys: [{ ok: false }], prNumber: 5, word: "x" }).working).toBe(false);
+  });
+
+  it("a bare address in Who to tell is an email channel", () => {
+    expect(plan.normalizeChannel(" team@example.com ")).toBe("email:team@example.com");
+    expect(plan.normalizeChannel("email:team@example.com")).toBe("email:team@example.com");
+    expect(plan.normalizeChannel("mattermost:ops")).toBe("mattermost:ops");
+  });
+});
+
 describe("the links into it", () => {
   it("?compose=add&app= opens add mode on that app, and is consumed", () => {
     const i = readComposeIntent("?org=o1&area=delivery_workflows&compose=add&app=crun_lead1&preview=prev_1");
@@ -271,7 +330,9 @@ describe("a new app", () => {
     expect($('[data-testid="np-mode-new"]')?.getAttribute("aria-checked")).toBe("true");
     expect($('[data-testid="np-path-standard_product_delivery"]')?.getAttribute("aria-checked")).toBe("true");
     expect($('[data-testid="np-path-standard_product_delivery"]')?.textContent).toContain("Recommended");
-    expect(steps().map((s) => s.id)).toEqual(STEPS.standard_product_delivery.map(([id]) => id));
+    expect(steps().map((s) => s.id).filter((id) => !id!.startsWith("merge-")))
+      .toEqual(STEPS.standard_product_delivery.map(([id]) => id));
+    expect(steps().find((s) => s.id === "merge-build")?.who).toBe("you");
     expect(steps().find((s) => s.id === "deploy")?.who).toBe("you");
     expect(steps().find((s) => s.id === "report")?.who).toBe("boss");
     expect(steps().find((s) => s.id === "build")?.who).toBe("agent");
@@ -281,13 +342,13 @@ describe("a new app", () => {
     expect($('[data-testid="np-ready"]')?.textContent).toContain("Models ready");
     // No history: no price is guessed.
     expect($('[data-testid="np-cost"]')?.textContent).not.toContain("cost");
-    expect($('[data-testid="np-cost"]')?.textContent).toContain("10 steps · you approve once · nothing deploys without you");
+    expect($('[data-testid="np-cost"]')?.textContent).toContain("10 steps · you approve 2 times · nothing deploys without you");
   });
 
   it("switching path redraws the plan; All workflows offers the rest", async () => {
     await mount();
     await click($('[data-testid="np-path-fast_fix"]'));
-    expect(steps().map((s) => s.id)).toEqual(["build", "report", "deploy", "notify"]);
+    expect(steps().map((s) => s.id)).toEqual(["build", "merge-build", "report", "deploy", "notify"]);
     await click($('[data-testid="np-all-paths"]'));
     expect($('[data-testid="dw-new-workflow-default"]')).not.toBeNull();
     await click($('[data-testid="dw-new-workflow-major_feature"]'));
@@ -346,11 +407,13 @@ describe("adding a feature to an app that exists", () => {
     const on = $('[data-testid="np-builds-on"]')!.textContent!;
     expect(on).toContain("Lead-Triage Inbox");
     expect(on).toContain("acme/sandbox · PR #186 branch · 2 builds so far");
+    // It has a live preview: it is working today. Its PR is open, so the build updates it.
     expect(on).toContain("Working today — the change is added, nothing is rebuilt");
-    expect($('[data-testid="np-lands"]')?.textContent).toContain("A new PR on top of #186");
+    expect($('[data-testid="np-lands"]')?.textContent).toContain("Updates PR #186");
+    expect($('[data-testid="np-lands"] button, [data-testid="np-lands"] a')).toBeNull();
     expect($('[data-testid="np-team"]')?.textContent).toContain("The crew that built it");
     expect($('[data-testid="np-path-minor_feature"]')?.getAttribute("aria-checked")).toBe("true");
-    expect(steps().map((s) => s.id)).toEqual(["meeting", "build", "keep", "preview", "report", "deploy", "notify"]);
+    expect(steps().map((s) => s.id)).toEqual(["meeting", "build", "keep", "merge-build", "preview", "report", "deploy", "notify"]);
     // The first check is the one every change keeps.
     expect(($('[data-testid="np-check-0"]') as HTMLTextAreaElement).value).toBe(plan.KEEPS_WORKING);
   });
@@ -376,7 +439,11 @@ describe("adding a feature to an app that exists", () => {
   it("Quick change: the agent's proposal shows inline, and only Start runs it", async () => {
     await mount({ mode: "add", appKey: "crun_cal", previewId: "prev_7" });
     await click($('[data-testid="np-path-quick"]'));
-    expect(steps().map((s) => s.id)).toEqual(["scope", "confirm", "build", "keep", "preview"]);
+    expect(steps().map((s) => s.id)).toEqual(["scope", "confirm", "build", "keep", "merge-build", "preview"]);
+    // No live preview, merged PR: not claimed to be working; a new PR.
+    expect($('[data-testid="np-builds-on"]')?.textContent).toContain("PR #184 merged");
+    expect($('[data-testid="np-lands"]')?.textContent).toContain("A new PR");
+    expect($('[data-testid="np-preview-anchor"]')).not.toBeNull();
     await type($('[data-testid="np-gain"]'), "Show the week view by default.");
     await click($('[data-testid="dw-new-start"]'));
     expect(proposed).toHaveLength(1);
@@ -397,8 +464,11 @@ describe("adding a feature to an app that exists", () => {
     await type($('[data-testid="np-gain"]'), "Recurring changes that repeat weekly.");
     await click($('[data-testid="dw-new-start"]'));
     expect(convened).toHaveLength(1);
-    expect(String(convened[0].get("directive"))).toContain("[boss:extend_run=crun_cal]");
+    // Structured: the app travels as extends_run_id, not only as text in the directive.
+    expect(convened[0].get("extends_run_id")).toBe("crun_cal");
     expect(String(convened[0].get("directive"))).toContain("Recurring changes that repeat weekly.");
+    // And it lands on the panel it convened.
+    expect(window.location.href).toContain("meeting=mrun_panel");
   });
 
   it("finds an app by name, and says what is missing before Start", async () => {
@@ -408,5 +478,48 @@ describe("adding a feature to an app that exists", () => {
     expect($$('[data-testid^="np-app-crun_"]').map((e) => e.dataset.testid)).toEqual(["np-app-crun_cal"]);
     await click($('[data-testid="np-app-crun_cal"]'));
     expect($('[data-testid="np-blocked"]')?.textContent).toBe("Say what it should gain, in a sentence.");
+  });
+});
+
+describe("the walk's findings, as checks", () => {
+  it("any installed workflow runs onto the app from All N workflows, with extends_run_id and the preview", async () => {
+    await mount({ mode: "add", appKey: "crun_lead2", previewId: "prev_9" });
+    await click($('[data-testid="np-all-paths"]'));
+    await click($('[data-testid="np-add-workflow-fast_fix"]'));
+    expect(steps().map((s) => s.id)).toEqual(["build", "keep", "merge-build", "report", "deploy", "notify"]);
+    await type($('[data-testid="np-gain"]'), "Fix the date format on the snooze list.");
+    await click($('[data-testid="dw-new-start"]'));
+    expect(posts[0]).toMatchObject({ workflow_key: "fast_fix" });
+    expect(posts[0].input).toMatchObject({ extends_run_id: "crun_lead1", preview_id: "prev_9" });
+  });
+
+  it("the cards, the plan and the footer count from /asks when the server answers", async () => {
+    asks = { prd_auto_approve: false, workflows: {
+      standard_product_delivery: [{ step_id: "spec_review", kind: "spec", who: "you" },
+                                  { step_id: "build", kind: "merge", who: "you" },
+                                  { step_id: "deploy", kind: "gate", who: "you" }],
+      minor_feature: [{ step_id: "build", kind: "merge", who: "you" }, { step_id: "deploy", kind: "gate", who: "you" }] },
+      routes: {} };
+    await mount();
+    expect($('[data-testid="np-path-standard_product_delivery"]')?.textContent).toContain("3 approvals");
+    expect(steps().find((s) => s.id === "spec_review")?.who).toBe("you");
+    expect($('[data-testid="np-cost"]')?.textContent).toContain("you approve 3 times");
+  });
+
+  it("Cancel and Start stay together; the reason sits above them", async () => {
+    await mount({ mode: "add" });
+    const go = $('.np-go')!;
+    expect(go.querySelector('[data-testid="np-blocked"]')).not.toBeNull();
+    const pair = go.querySelector('.np-actions')!;
+    expect([...pair.children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(["np-cancel", "dw-new-start"]);
+  });
+
+  it("the full-screen editor opens with the caret at the end", async () => {
+    await mount();
+    await type($('[data-testid="dw-new-directive"]'), "A shift-swap board.");
+    await click($('[data-testid="dw-new-directive-full"]'));
+    const big = document.querySelector('[data-testid="np-fullscreen-text"]') as HTMLTextAreaElement;
+    expect(big.selectionStart).toBe(big.value.length);
+    await key(big, { key: "Escape" });
   });
 });

@@ -224,10 +224,15 @@ def _call(engine, run_id, usd, *, included=False):
             "m": int(usd * 1_000_000), "i": included})
 
 
-def _workflow_run(client, engine, title):
+def _workflow_run(client, engine, title, *, status="completed"):
+    """A run of Minor Feature; finished, because only a finished run is the price of one."""
     started = _start(client, {"title": title, "directive": title})
     assert started.status_code == 200, started.text
-    return started.json()["run"]["id"]
+    run_id = started.json()["run"]["id"]
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE workflow_runs SET status = :s WHERE id = :r"),
+                           {"s": status, "r": run_id})
+    return run_id
 
 
 def test_costs_are_a_range_from_this_projects_own_runs(client, engine):

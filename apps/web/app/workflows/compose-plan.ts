@@ -59,7 +59,18 @@ export type Who = { kind: "agent"; role: string } | { kind: "boss" } | { kind: "
 
 export type TimelineStep = { id: string; name: string; line: string; who: Who;
                              /** The regression check every change to an app passes. */
-                             keep?: boolean };
+                             keep?: boolean;
+                             /** The merge approval a build raises: an ask, not a step of the workflow. */
+                             merge?: boolean;
+                             /** Another question asked between steps (a spec approval on a
+                             *  workflow with no spec_review step). Counted, not numbered. */
+                             ask?: boolean };
+
+/** One time the operator will be asked, as GET /v1/delivery-workflows/asks lists it — the one
+ *  source the cards, the timeline and the footer count from. */
+export type Ask = { step_id: string; label?: string; kind: "gate" | "spec" | "merge"; who: "you" | "boss" };
+export type Asks = { prd_auto_approve?: boolean; workflows?: Record<string, Ask[]>;
+                     routes?: Record<string, Ask[]> };
 
 /** Plain names and one-line descriptions, by step id. The mockup's words. */
 const WORDS: Record<string, [string, string]> = {
@@ -95,6 +106,16 @@ export const KEEP_STEP: TimelineStep = {
   who: { kind: "agent", role: "qa" }, keep: true,
 };
 
+/** The merge question every build raises ("approve to merge"). */
+export function mergeStep(who: "you" | "boss" = "you", after = "build"): TimelineStep {
+  return who === "you"
+    ? { id: `merge-${after}`, name: "Merge", line: "You approve the PR before it lands", who: { kind: "you" }, merge: true }
+    : { id: `merge-${after}`, name: "Merge", line: "Merged automatically when checks pass", who: { kind: "boss" }, merge: true };
+}
+
+/** Build-like steps: each raises its own merge question. */
+const BUILDS = new Set(["build", "retry_build"]);
+
 /** Whether a step stops for a person: the catalogue's own gate list when it has one (the PRD
  *  approval is answered by the panel and is not one), else the step's effective approval. */
 export function stopsForYou(step: InstalledStep, gates?: readonly string[] | null,
@@ -112,39 +133,58 @@ function whoDoes(step: InstalledStep): Who {
 /** A workflow's steps as the timeline draws them. In add mode the change is said as a change,
  *  and "Keep what works" follows the build: the app's existing tests gate the PR. */
 export function timelineOf(o: { steps: readonly InstalledStep[]; gates?: readonly string[] | null;
-                                automatic?: readonly string[] | null; mode: ComposeMode; app?: string }
+                                automatic?: readonly string[] | null; mode: ComposeMode; app?: string;
+                                asks?: readonly Ask[] | null }
 ): TimelineStep[] {
   const words = o.mode === "add" ? { ...WORDS, ...addWords(o.app ?? "") } : WORDS;
   const out: TimelineStep[] = [];
   for (const s of o.steps) {
-    const gate = stopsForYou(s, o.gates, o.automatic);
+    // THE SERVER'S ANSWER when it gave one: who is asked at this step (a gate, or the spec
+    // approval, which is the panel's or yours by the project's setting). Else the catalogue's.
+    const ask = o.asks?.find((a) => a.step_id === s.id && a.kind !== "merge");
+    // A spec approval on the panel's own step (no spec_review step): the panel still runs it,
+    // and the approval is drawn as its own question after it.
+    const specAfter = ask?.kind === "spec" && s.id !== "spec_review" ? ask : undefined;
+    const gate = o.asks ? (ask?.who === "you" && !specAfter) : stopsForYou(s, o.gates, o.automatic);
     // A PRD approval the panel answers is not yours: said as what it is, not "Approve the spec".
     const [name, line] = (!gate && words[`${s.id}@auto`]) || words[s.id] || [s.label || s.id, ""];
     out.push({ id: s.id, name: s.label && !words[s.id] ? s.label : name, line,
                who: gate ? { kind: "you" } : whoDoes(s) });
+    if (specAfter?.who === "you") {
+      out.push({ id: `spec-${s.id}`, name: "Approve the spec", line: "You read the spec before any code",
+                 who: { kind: "you" }, ask: true });
+    }
     if (o.mode === "add" && s.id === "build") out.push(KEEP_STEP);
+    // EVERY BUILD ASKS TO MERGE. Listed where it is asked, so the count is every question.
+    const merge = o.asks ? o.asks.find((a) => a.kind === "merge" && a.step_id === s.id)
+      : BUILDS.has(s.id) ? { who: "you" as const } : undefined;
+    if (merge) out.push(mergeStep(merge.who, s.id));
   }
   return out;
 }
 
 /** The two change routes that are not workflows, drawn the same way. */
-export function routeTimeline(key: string, app: string): TimelineStep[] {
+export function routeTimeline(key: string, app: string, asks?: readonly Ask[] | null): TimelineStep[] {
   const build: TimelineStep = { id: "build", name: "Build on its branch",
                                 line: `Adds to ${app || "the app"} — no re-scaffold`,
                                 who: { kind: "agent", role: "engineering_captain" } };
+  const merge = mergeStep(asks?.find((a) => a.kind === "merge")?.who ?? "you");
   if (key === QUICK) {
     return [
       { id: "scope", name: "Scope it", line: "An agent proposes the change", who: { kind: "agent", role: "pm" } },
       { id: "confirm", name: "Confirm it", line: "Nothing runs until you say so", who: { kind: "you" } },
-      build, KEEP_STEP,
+      build, KEEP_STEP, merge,
       { id: "preview", name: "Preview", line: "The app with the change, running", who: { kind: "agent", role: "qa" } },
     ];
   }
+  const spec = asks?.find((a) => a.kind === "spec");
+  const yours = spec ? spec.who === "you" : true;
   return [
     { id: "meeting", name: "Spec the feature", line: "A panel writes the spec for this feature",
       who: { kind: "agent", role: "pm" } },
-    { id: "spec_review", name: "Approve the spec", line: "You read it before any code", who: { kind: "you" } },
-    build, KEEP_STEP,
+    yours ? { id: "spec_review", name: "Approve the spec", line: "You read it before any code", who: { kind: "you" } }
+      : { id: "spec_review", name: "Spec sign-off", line: "The panel's decision approves it", who: { kind: "boss" } },
+    build, KEEP_STEP, merge,
     { id: "preview", name: "Preview", line: "The app with the feature, running", who: { kind: "agent", role: "qa" } },
   ];
 }
@@ -152,7 +192,7 @@ export function routeTimeline(key: string, app: string): TimelineStep[] {
 /** "N steps · you approve K times", counted from what the timeline draws (Keep what works is
  *  part of the build, not a step of its own). */
 export function counts(steps: readonly TimelineStep[]): { steps: number; approvals: number } {
-  return { steps: steps.filter((s) => !s.keep).length,
+  return { steps: steps.filter((s) => !s.keep && !s.merge && !s.ask).length,
            approvals: steps.filter((s) => s.who.kind === "you").length };
 }
 
@@ -182,7 +222,7 @@ export function costRange(c: CostHistory | null | undefined): string | null {
 
 /** The history a path's cost line reads: a workflow's own, or quick changes' (`@change`). */
 export function costKey(path: string): string {
-  return path === QUICK ? "@change" : path === SPEC ? "minor_feature" : path;
+  return path === QUICK ? "@change" : path === SPEC ? "@spec" : path;
 }
 
 // ── Apps ──────────────────────────────────────────────────────────────────────────────────
@@ -313,4 +353,29 @@ export function readyWord(key: string, label: string, missing: boolean): string 
   if (key.startsWith("role:")) return missing ? "No approver" : "Approver set";
   if (key.startsWith("channel:")) return missing ? "No channel" : "Channel ready";
   return label;
+}
+
+/** "Lands as", from the app's real state: an open PR is updated by the build (it pushes to that
+ *  PR's branch); a merged or closed one means a new PR; no PR yet, a PR on its branch. */
+export function landsAs(a: { prNumber?: number; prState?: string } | null): string {
+  if (!a) return "—";
+  if (a.prNumber && (a.prState ?? "open") === "open") return `Updates PR #${a.prNumber}`;
+  if (a.prNumber) return "A new PR";
+  return "A PR on its branch";
+}
+
+/** "Working today" only when something shows it working: a live preview or a healthy latest
+ *  deploy. Otherwise the PR is all that is known. */
+export function workingWord(a: { preview: { status: string } | null; deploys: { ok: boolean }[];
+                                 prNumber?: number; prState?: string; word: string }): { working: boolean; text: string } {
+  const live = a.preview?.status === "running" || a.preview?.status === "verified" || a.deploys[0]?.ok === true;
+  if (live) return { working: true, text: "Working today — the change is added, nothing is rebuilt" };
+  if (a.prNumber) return { working: false, text: `PR #${a.prNumber} ${a.prState ?? "open"}` };
+  return { working: false, text: `Its newest build: ${a.word}` };
+}
+
+/** A notify channel as BOSS reads it: a bare address is an email channel. */
+export function normalizeChannel(value: string): string {
+  const v = value.trim();
+  return /^[^\s:@]+@[^\s@]+\.[^\s@]+$/.test(v) ? `email:${v}` : v;
 }

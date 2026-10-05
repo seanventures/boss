@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from ..config import Settings
 from ..db import begin
-from .code_task_service import load_code_task_run, retry_code_task
+from .code_task_service import load_code_task_run, retry_code_task, title_for_change
 from .core import emit_event, make_id
 
 
@@ -81,6 +81,14 @@ def _structured_fix_note(
     return "\n".join(f"{label}: {value}" for label, value in fields)
 
 
+def _observed(fix_note: str) -> str:
+    """The operator's words out of a structured fix note, for proposals made before `change`."""
+    for line in str(fix_note or "").splitlines():
+        if line.startswith("Observed behavior:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
 def submit_feedback(
     engine, run_id: str, *, message: str, expected: str = "", anchor: str = "",
     severity: str = "normal", selected_element: str = "", screenshot_url: str = "",
@@ -138,6 +146,8 @@ def submit_feedback(
         proposal = {
             "source_run_id": run_id, "classification": classification,
             "fix_note": fix_note,
+            # What the operator asked for, in their words: the new attempt is named for it.
+            "change": message,
             "profile": "strict" if classification == "full_rerun" else "balanced",
             "repair_retries": 2 if classification == "full_rerun" else 1,
             # THE PATH THE OPERATOR CHOSE FOR THIS CHANGE. Carried on the proposal because the
@@ -182,11 +192,18 @@ def confirm_feedback(
             "UPDATE feedback_threads SET status='dispatching',updated_at=now() WHERE id=:id"
         ), {"id": thread_id})
     try:
+        # A CHANGE IS NAMED FOR WHAT IT CHANGES — "<App>: <first line of the change>" — not
+        # "<previous title> · retry 1", which read as a failed build being run again. Lineage
+        # (root, parent, app id) is the retry's as before.
+        with begin(engine) as connection:
+            source = load_code_task_run(connection, proposal["source_run_id"])
+        change = str(proposal.get("change") or "").strip() or _observed(proposal["fix_note"])
         result = retry_code_task(
             engine, settings, jobs, proposal["source_run_id"],
             fix_note=proposal["fix_note"], profile=proposal["profile"],
             repair_retries=int(proposal["repair_retries"]),
             workflow_version_id=str(proposal.get("workflow_version_id") or ""),
+            title=title_for_change(source, change) if change else None,
         )
     except Exception:
         with begin(engine) as connection:

@@ -26,7 +26,7 @@ import json
 import re
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from ..config import Settings
 from ..ports import get_engine_ports, sql
@@ -767,10 +767,13 @@ def start_code_task(
         return run_id
     # Work an operator asked for runs at REQUESTED. Work the system decided to do on its own
     # — a shepherd retry — must not queue ahead of a person, so the caller passes BACKGROUND.
+    # A caller that says nothing is a person (JOB_PRIORITY_REQUESTED) unless what it recorded
+    # says the system started it — a captain pass, a swarm build — or continues such work
+    # (work_provenance): those are BACKGROUND whoever forgot to say so.
+    from .work_provenance import code_task_job_priority
     jobs.create_job(connection, project_id=project_id, task_id=task_id,
                     kind="code.task",
-                    priority=(job_priority if job_priority is not None
-                              else JOB_PRIORITY_REQUESTED),
+                    priority=code_task_job_priority(connection, run_finalize, job_priority),
                     payload={"run_id": run_id})
     emit_event(connection, project_id, "code_task.started", "boss", "code_task_run", run_id,
                {"task_id": task_id, "title": title, "repo": f"{owner}/{repo}"})
@@ -887,6 +890,27 @@ def with_existing_tests_criterion(criteria: Optional[list]) -> list[str]:
     return out
 
 
+def title_for_change(parent: Optional[dict], change: Any) -> str:
+    """"<App>: <first line of the change>" — a change named for itself, in its app's name.
+
+    The Factory names an app from its newest build's title, so a change titled only for itself
+    would rename the app on screen; one titled "<previous title> · retry 1" said nothing about
+    what changed and read as a failed build being run again.
+    """
+    first = next((line.strip() for line in str(change or "").splitlines() if line.strip()), "")
+    first = first[:100].rstrip()
+    app = ""
+    if parent:
+        from .factory_view import app_name
+
+        app = app_name(parent)
+    if not app or app == "Untitled app":
+        return first or "Change"
+    if first.lower().startswith(app.lower()):
+        return first
+    return f"{app}: {first or 'a change'}"
+
+
 def start_followup_task(
     connection, *, parent_run_id: str, instructions: str, jobs,
     title: Optional[str] = None, acceptance_criteria: Optional[list] = None,
@@ -995,11 +1019,14 @@ def start_followup_task(
             "Do not rebuild the app, restructure it, or restyle it. Change what is asked for "
             "and leave the rest as it is -- someone is already using this.\n\n"
             f"REQUESTED CHANGE:\n{instructions}"),
-        acceptance_criteria=acceptance_criteria or [
+        # A CHANGE TO AN APP SOMEONE USES keeps its existing tests passing, whoever wrote the
+        # rest of the criteria — enforced here, where every follow-up path converges (a workflow
+        # build step, an approved panel's PRD, extend_code_task), so no caller can drop it.
+        acceptance_criteria=with_existing_tests_criterion(acceptance_criteria or [
             "The requested change works in the running app.",
             "Existing behaviour and appearance are unchanged except where the change requires it.",
             "Existing tests still pass.",
-        ],
+        ]),
         test_commands=test_commands or spec.get("test_commands") or [],
         owner=spec.get("owner"), repo=spec.get("repo"),
         # THE point of this function: start from the app's own branch, not from base.
@@ -1348,6 +1375,7 @@ def retry_code_task(
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
     allow_test_retirement: bool = False, job_priority: Optional[int] = None,
     attempt_ceiling: Optional[int] = None, workflow_version_id: str = "",
+    title: Optional[str] = None,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -1486,8 +1514,10 @@ def retry_code_task(
     base_instr = base_instr.split(_DEPLOYABILITY_NOTE)[0]
     augmented = f"{base_instr}\n\n=== ITERATION FEEDBACK (attempt {attempt}) ===\n{feedback_block}"
 
-    base_title = (prev.get("title") or "Code task").split(" · retry")[0]
-    title = f"{base_title} · retry {attempt - 1}"
+    if not str(title or "").strip():
+        base_title = (prev.get("title") or "Code task").split(" · retry")[0]
+        title = f"{base_title} · retry {attempt - 1}"
+    title = str(title)[:160]
 
     history = list(fctx_prev.get("feedback_history") or [])
     history.append({
@@ -1500,7 +1530,12 @@ def retry_code_task(
         new_id = start_code_task(
             c, project_id=prev["project_id"], task_id=prev.get("task_id"), title=title,
             instructions=augmented,
-            acceptance_criteria=spec.get("acceptance_criteria") or [],
+            # AN OPERATOR'S CHANGE TO A WORKING APP (a quick change: the note says what to
+            # change) is held to the app's existing tests, as every other change path is —
+            # enforced here so no client can drop it. A blind retry keeps its own criteria.
+            acceptance_criteria=(with_existing_tests_criterion(spec.get("acceptance_criteria"))
+                                 if str(fix_note or "").strip()
+                                 else spec.get("acceptance_criteria") or []),
             test_commands=spec.get("test_commands") or [],
             owner=spec.get("owner") or settings.target_github_owner,
             repo=spec.get("repo") or settings.target_github_repo,

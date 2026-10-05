@@ -835,6 +835,52 @@ def directive_subject(directive: str) -> str:
     return " ".join(text_in.split())
 
 
+class ExtendTargetError(ValueError):
+    """`constraints.extends_run_id` names no app this panel can spec a feature for."""
+
+    def __init__(self, message: str, status: int):
+        super().__init__(message)
+        self.status = status
+
+
+def prepare_extend_panel(connection, project_id: str, directive: str,
+                         constraints: Optional[dict]) -> tuple[dict, str, Optional[str]]:
+    """A panel convened to spec a FEATURE for an app that exists: (constraints, directive,
+    extends_run_id).
+
+    `constraints.extends_run_id` is the structured contract — validated here (a real build in
+    this project, not a simulated fixture), kept on the meeting run, and carried to the PRD
+    decision so approving it builds onto that app. The directive is framed the way a workflow's
+    panel is (`_existing_app_note`), so the panel writes a PRD for the feature and not a new
+    product. The console's old `[boss:extend_run=…]` text marker is accepted as the same thing
+    and taken out of the directive, so it never reaches the panel or the PRD.
+    """
+    from .code_task_service import is_simulated_run, load_code_task_run
+    from .decisions import _EXTEND_MARKER, strip_extend_marker
+    from .workflow_capability_runner import _existing_app_note
+
+    constraints = dict(constraints or {})
+    run_id = str(constraints.get("extends_run_id") or "").strip()
+    marker = _EXTEND_MARKER.search(directive or "")
+    if not run_id and marker:
+        run_id = marker.group(1)
+    directive = strip_extend_marker(directive) if marker else directive
+    constraints.pop("extends_run_id", None)
+    if not run_id:
+        return constraints, directive, None
+    parent = load_code_task_run(connection, run_id)
+    if not parent or str(parent.get("project_id")) != str(project_id):
+        raise ExtendTargetError("that app is not in this project", 404)
+    if is_simulated_run(parent):
+        raise ExtendTargetError(
+            "that build is a simulated fixture — there is no code to build onto", 422)
+    constraints["extends_run_id"] = run_id
+    note = _existing_app_note(connection, project_id, run_id)
+    framed = (f"{PANEL_PURPOSE_MARKER}\n{note}\n{PANEL_ASK_MARKER}\n\n{directive}"
+              if note else directive)
+    return constraints, framed, run_id
+
+
 def convene_prd_meeting_core(
     connection, *, settings: Settings, budget, intake, jobs,
     project_id: str, directive: str, url: str = "",
@@ -1127,7 +1173,12 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
         {"action": "execute_agent_tool", "tool": "publish_document", "start_code_task": True,
          "args": {"title": "PRD: " + meeting_title(run.get("title"), run["directive"]), "markdown": state.get("prd_markdown") or "",
                   "subtitle": f"Drafted by a BOSS agent panel · source {run['url']}", "repo_subdir": "docs/prd"},
-         "task_id": task_id}, {}, "meeting_prd_ready_to_publish", risk_tier=2)
+         "task_id": task_id,
+         # A panel convened for a FEATURE OF AN APP THAT EXISTS: approving its PRD builds onto
+         # that app (decisions._build_prd_onto_app). Carried as data, never as text in the PRD.
+         **({"extends_run_id": str((run.get("constraints") or {})["extends_run_id"])}
+            if (run.get("constraints") or {}).get("extends_run_id") else {})},
+        {}, "meeting_prd_ready_to_publish", risk_tier=2)
 
     # Resolve the gate the panel has already satisfied.
     #

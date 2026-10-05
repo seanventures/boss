@@ -6064,9 +6064,19 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
         require_project_actor(
             connection, payload.project_id, payload.actor, "workflow_execute"
         )
-        from .services.meeting_service import meeting_subject
+        from .services.meeting_service import (
+            ExtendTargetError, meeting_subject, prepare_extend_panel,
+        )
+        # A FEATURE FOR AN APP THAT EXISTS (`constraints.extends_run_id`): validated, framed for
+        # the panel, and carried to its PRD decision so approving it builds onto that app.
+        try:
+            constraints, panel_directive, extends_run_id = prepare_extend_panel(
+                connection, payload.project_id, payload.directive, payload.constraints)
+        except ExtendTargetError as error:
+            raise HTTPException(status_code=error.status, detail=str(error)) from error
+        from boss_engine.services.decisions import strip_extend_marker
         # The meeting's name is its subject, not the directive verbatim (see meeting_subject).
-        meeting_title = meeting_subject(payload.directive)
+        meeting_title = meeting_subject(strip_extend_marker(payload.directive))
         # Attach to an existing task if one was supplied, else create one.
         if payload.task_id:
             exists = connection.execute(
@@ -6088,9 +6098,9 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
                                              payload.directive),
                 priority="p1",
                 risk_tier=2,
-                inputs={"directive": payload.directive, "url": payload.url, "constraints": payload.constraints},
+                inputs={"directive": payload.directive, "url": payload.url, "constraints": constraints},
                 required_artifacts=["meeting_minutes"],
-                data_boundary=str(payload.constraints.get("data_boundary") or "internal"),
+                data_boundary=str(constraints.get("data_boundary") or "internal"),
             )
             task_id = task["task_id"]
         reservation = budget.reserve(
@@ -6104,8 +6114,8 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
         run_id = start_meeting_run(
             connection,
             project_id=payload.project_id, task_id=task_id,
-            directive=payload.directive, url=payload.url,
-            constraints=payload.constraints, role_keys=payload.roles,
+            directive=panel_directive, url=payload.url,
+            constraints=constraints, role_keys=payload.roles,
             # Who convened it: the person its seats are accountable to (agent_acts).
             finalize_ctx={"reservation_id": reservation_id, "origin": {"actor": payload.actor}},
             title=meeting_title,
@@ -6114,7 +6124,10 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
             connection, project_id=payload.project_id, task_id=task_id,
             kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE, payload={"run_id": run_id},
         )
-        return MeetingProposeResponse(status="accepted", task_id=task_id, job_id=job["id"])
+        # The panel's own id, so the console lands on it (?area=meetings&meeting=<id>): the
+        # meeting run is created right here, before the first phase is queued.
+        return MeetingProposeResponse(status="accepted", task_id=task_id, job_id=job["id"],
+                                      meeting_run_id=run_id, extends_run_id=extends_run_id)
 
 
 @app.get("/v1/meeting-roles")
@@ -23332,7 +23345,10 @@ def list_delivery_catalogue() -> dict:
     """
     from boss_engine.services.workflow_catalogue import WORK_CLASSES, catalogue_summary
 
-    return {"items": catalogue_summary(), "work_classes": list(WORK_CLASSES)}
+    from boss_engine.services.workflow_capabilities import prd_auto_approved
+
+    return {"items": catalogue_summary(prd_auto_approve=prd_auto_approved(settings)),
+            "work_classes": list(WORK_CLASSES)}
 
 
 @app.post("/v1/delivery-workflows/catalogue/install")
@@ -23525,6 +23541,17 @@ def get_delivery_workflow_costs(project_id: str) -> dict:
 
     with begin(engine) as connection:
         return workflow_costs(connection, project_id)
+
+
+@app.get("/v1/delivery-workflows/asks")
+def get_delivery_workflow_asks(project_id: str) -> dict:
+    """Every time the operator will be asked, per workflow and per route (@quick, @spec), in
+    run order: {step_id, label, kind: gate|spec|merge, who: you|boss}. The console shows this
+    rather than its own copy of the rules (services/workflow_asks.py)."""
+    from boss_engine.services.workflow_asks import project_asks
+
+    with begin(engine) as connection:
+        return project_asks(connection, settings, project_id)
 
 
 @app.get("/v1/delivery-workflows/runs")
@@ -24844,6 +24871,19 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
         run_input["extends_run_id"] = extends_run_id
         extends = {"run_id": extends_run_id, "app": app_name(parent),
                    "branch": work_branch_for(parent)}
+    # WHICH RUNNING PREVIEW the operator was looking at when they asked for the change: the
+    # build is told, as the quick change's feedback is (anchor /v1/previews/<id>/web/). Only
+    # alongside extends_run_id, and only a preview of this project.
+    preview_id = str(run_input.pop("preview_id", None) or "").strip()
+    if preview_id and extends_run_id:
+        with begin(engine) as connection:
+            seen = connection.execute(
+                text("SELECT id FROM app_previews WHERE id = :i AND project_id = :p"),
+                {"i": preview_id, "p": project_id}).scalar()
+        if not seen:
+            raise HTTPException(status_code=404, detail="that preview is not in this project")
+        run_input["preview_id"] = preview_id
+        extends["preview_id"] = preview_id
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
         _authorize_delivery_target_input(connection, project_id, actor, run_input)

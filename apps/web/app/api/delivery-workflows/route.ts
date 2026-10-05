@@ -33,6 +33,8 @@ const VIEWS: Record<string, (project: string) => string> = {
   // What each workflow has cost before, from its real runs: New project's "Builds like this
   // cost $a–$b". No history, no line.
   costs: (p) => `/v1/delivery-workflows/costs?project_id=${encodeURIComponent(p)}`,
+  // Every time the operator will be asked, per path — what New project's plan counts from.
+  asks: (p) => `/v1/delivery-workflows/asks?project_id=${encodeURIComponent(p)}`,
 };
 
 /** `view=spec&key=…[&version=n]` — the steps a workflow currently has (or had at version n),
