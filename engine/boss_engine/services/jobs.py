@@ -530,6 +530,11 @@ class JobLeaseService:
     ) -> Optional[dict[str, Any]]:
         if not capabilities:
             return None
+        # A DRAINING API LEASES NOTHING (stability spec §4a.5): it is about to stop, and work
+        # leased now would be interrupted seconds later.
+        from . import owned_process
+        if owned_process.draining():
+            return None
 
         lease_token = f"lease_{uuid4().hex}"
         lease_token_hash = self._hash_token(lease_token)

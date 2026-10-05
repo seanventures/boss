@@ -4962,6 +4962,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # (owned_process.terminate_owner, from the API's stop watch), so the stage in flight
         # fails with "agent exited -15" — which must read as the cancel it is, not a failure.
         from . import owned_process as _owned
+        if _owned.draining() and not _owned.was_cancelled(run_id):
+            # A DEPLOY IS NOT A FAILURE (stability spec §4a.5). The API is draining: its
+            # processes were ended on purpose. The job goes back to the queue without spending
+            # an attempt and the run is marked interrupted_by_deploy, so the next API resumes
+            # it instead of the operator finding a failed build they did not cause.
+            from .drain import hand_back_interrupted
+            handed = hand_back_interrupted(engine, jobs, run_id, project_id, fencing_token)
+            if handed is not None:
+                return handed
         if _owned.was_cancelled(run_id) or isinstance(exc, _owned.OwnerCancelled):
             return _honour_cancel(CodeTaskCancelled(f"stopped while running: {exc}"[:300]))
         _finish_vms(success=False)  # retain stage VMs for root-causing via the console

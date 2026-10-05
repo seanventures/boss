@@ -37,6 +37,15 @@ def start_all(engine: Any, settings: Any) -> dict[str, bool]:
         _log.warning("stop watch not started", exc_info=True)
         started["stop_watch"] = False
     try:
+        # A deploy drains instead of killing builds mid-turn (drain.py). Needs the main thread,
+        # which the API's lifespan runs on.
+        from .drain import install_sigterm_drain
+
+        started["drain_on_sigterm"] = install_sigterm_drain(engine, settings)
+    except Exception:  # noqa: BLE001
+        _log.warning("drain-on-SIGTERM not installed", exc_info=True)
+        started["drain_on_sigterm"] = False
+    try:
         from . import resource_reaper
 
         resource_reaper.start(engine, settings)

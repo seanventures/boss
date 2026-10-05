@@ -2676,8 +2676,11 @@ def preview_labels(engine, preview_id: str) -> list[str]:
 
 
 def container_limits(kind: str) -> list[str]:
-    """The resource envelope a workload container runs in (filled in by workload limits)."""
-    return []
+    """The resource envelope a preview container runs in (workload_profiles): a memory cap,
+    a reservation, CPUs, a pids bound, and the OOM killer's first pick — so one preview can
+    never take the machine the control plane runs on."""
+    from .workload_profiles import container_args
+    return container_args(kind)
 
 
 def _kill(pid: Optional[int]) -> None:

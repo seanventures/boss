@@ -129,8 +129,16 @@ class ContainerCommandRunner:
         # build launch in this module is in `run()` below, and it IS niced. Excluding this
         # file from that guard would weaken a rule that exists because an unniced build took
         # /v1/code-tasks from 0.37s to 47.1s.
+        from .workload_profiles import workload_oom_score_adj
         create_argv = [
             self.binary, "run", "--detach", "--rm",
+            # An init reaps what the build orphans; the labels let the reaper find this
+            # container if the control plane dies before `stop()` (stability spec §4a).
+            "--init",
+            "--label", "boss.owner=sandbox", "--label", f"boss.task_id={self.task_id}",
+            *(["--label", f"boss.install_id={os.environ['BOSS_INSTALL_ID']}"]
+              if os.environ.get("BOSS_INSTALL_ID") else []),
+            "--oom-score-adj", str(workload_oom_score_adj()),
             "--name", f"boss-sbx-{self.task_id}-{int(time.time())}",
             # NO NETWORK. The agent's model calls happen in the control plane; a build that
             # needs to fetch dependencies is an explicit opt-in, not a default.
