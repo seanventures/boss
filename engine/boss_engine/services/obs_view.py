@@ -171,6 +171,9 @@ class System(TypedDict, total=False):
     stalls: dict[str, Any]   # {strip:[n×96], rows:[≤8 {at, word, subject, did, shadow, run_id}], total}
     findings: list[dict[str, Any]]   # AttentionItem wire, kind system_health (system_doctor)
     actions: list[dict[str, Any]]    # ≤ 8 newest doctor actions {at, action, target, outcome, automatic, improved}
+    #: The host advice line (run_retrospective.host_advice; the HostAdviceBanner Workflows and
+    #: Factory show), when there is one: {title ≤ 6 words, tip ≤ 14 words, href|None}.
+    advice: Optional[dict[str, Any]]
     partial: list[str]
     etag: str
 
