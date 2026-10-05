@@ -85,7 +85,7 @@ function Skeleton() {
   );
 }
 
-function OutcomeChip({ o, now, orgId }: { o: Outcome; now: number | null; orgId?: string | null }) {
+export function OutcomeChip({ o, now, orgId }: { o: Outcome; now: number | null; orgId?: string | null }) {
   useIdentityVersion();
   const by = o.roleKey ? nameOf(o.roleKey).name : "";
   const tip = [o.label, by ? `by ${by}` : ""].filter(Boolean).join(" · ");

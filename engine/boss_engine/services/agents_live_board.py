@@ -971,10 +971,16 @@ def etag_of(board: Mapping[str, Any]) -> str:
     return f'"lb-{digest.hexdigest()[:24]}"'
 
 
-def build(connection: Any, settings: Any, project_id: str, *,
-          viewer: Optional[str] = None, now: Optional[datetime] = None) -> LiveBoard:
-    """The whole Live tab in one read (spec §6.2). Composition only; see the module doc."""
-    from . import command_center
+def compose(connection: Any, settings: Any, project_id: str, *,
+            viewer: Optional[str] = None, now: Optional[datetime] = None,
+            with_builds: bool = True) -> tuple[LiveBoard, dict[str, Any], dict[str, Any]]:
+    """The board, and the Command Center's own `assemble` output and read it was built from.
+
+    Extracted from `build` with no change of behaviour (command-center spec §6.1): the Command
+    Center view composes this board rather than restating it, and needs `cc` (recent runs, the
+    expired-answerable count) and `read` (the run rows) without assembling them twice. The
+    Command Center draws no builds, so it passes `with_builds=False` and skips
+    factory_view.building_rows; `counts.building` is then 0 and `builds` empty."""
     from . import command_center
 
     now = now or datetime.now(timezone.utc)
@@ -985,17 +991,18 @@ def build(connection: Any, settings: Any, project_id: str, *,
     # THE BUILDS ON THE FLOOR ARE THE BUILDS HERE (factory spec §10, decision 2): the same rows
     # factory_view draws, so Agents › Live and the Factory say the same builds and counts.
     builds: list[dict[str, Any]] = []
-    try:
-        from . import factory_view
+    if with_builds:
+        try:
+            from . import factory_view
 
-        with connection.begin_nested():
-            builds = [dict(b) for b in factory_view.building_rows(
-                connection, project_id, attention, viewer=viewer, now=now)]
-    except Exception:  # noqa: BLE001 — the builds are never worth a blank Live tab
-        import logging
+            with connection.begin_nested():
+                builds = [dict(b) for b in factory_view.building_rows(
+                    connection, project_id, attention, viewer=viewer, now=now)]
+        except Exception:  # noqa: BLE001 — the builds are never worth a blank Live tab
+            import logging
 
-        logging.getLogger("boss.agents_live_board").warning(
-            "could not read the building builds", exc_info=True)
+            logging.getLogger("boss.agents_live_board").warning(
+                "could not read the building builds", exc_info=True)
     teams, agents = force(connection, project_id, attention)
     board: LiveBoard = {
         "project_id": project_id,
@@ -1021,6 +1028,14 @@ def build(connection: Any, settings: Any, project_id: str, *,
         "agents": agents,
     }
     board["etag"] = etag_of(board)
+    return board, cc, read
+
+
+def build(connection: Any, settings: Any, project_id: str, *,
+          viewer: Optional[str] = None, now: Optional[datetime] = None) -> LiveBoard:
+    """The whole Live tab in one read (spec §6.2). Composition only; see the module doc."""
+    board, _cc, _read = compose(connection, settings, project_id, viewer=viewer, now=now,
+                                with_builds=True)
     return board
 
 
