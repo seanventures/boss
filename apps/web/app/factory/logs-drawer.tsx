@@ -9,7 +9,7 @@ import React, { useEffect, useId, useRef, useState } from "react";
 
 import { LiveDeployment } from "../deploy-ui";
 import { fetchBuildLog, type LogLine } from "./cockpit-actions";
-import { clockOf, whoName } from "./cockpit-util";
+import { areaHref, clockOf, whoName } from "./cockpit-util";
 
 export type LogTab = "build" | "preview" | "deploy";
 
@@ -90,7 +90,7 @@ export function LogsDrawer({ projectId, runId, previewId, previewStatus, deployI
         ) : null}
         <span className="fx-spacer" />
         {tab !== "deploy" ? <button type="button" className="ag-link" onClick={copy} data-testid="fx-logs-copy">Copy</button> : null}
-        <a className="ag-link" href={`?area=activity&run=${encodeURIComponent(runId)}`}>Open full log ↗</a>
+        <a className="ag-link" href={areaHref({ area: "activity", run: runId })}>Open full log ↗</a>
         <button type="button" className="ag-link" onClick={onClose} aria-label="Close logs">×</button>
       </header>
       <div className="fx-logs-body">

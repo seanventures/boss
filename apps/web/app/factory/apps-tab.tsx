@@ -21,6 +21,7 @@ import { ago, useNow } from "../agents/live-util";
 import { groupRunsIntoApps } from "../app-grouping";
 import { appIdentity } from "../app-identity";
 import { previewWebHref } from "../../lib/browser-links";
+import { money } from "./cockpit-util";
 
 /** One build of an app. `row` is the full Floor row when the server sends one (walk D21): then
  *  the attempt is drawn as a compact BuildRow with its stations, else as a line of words. */
@@ -31,7 +32,17 @@ export type AppRow = {
   deploys: { env: string; ok: boolean; word?: string }[];
   builds: AppBuild[];
   rank: number;
+  /** The app's PR (its newest attempt that opened one), its metered spend, its repo. */
+  prNumber?: number; prUrl?: string; costUsd?: number; repo?: string;
 };
+
+const BUILT = new Set(["pr_open", "merged", "deployed", "done_no_pr"]);
+
+/** The build an app opens on: its newest that BUILT something (the old card's pickBuiltRun) —
+ *  not a failed follow-up that happens to be newer than the working app. */
+export function builtBuild(builds: AppBuild[]): AppBuild | undefined {
+  return builds.find((b) => (b.row ? BUILT.has(b.row.state) : /^(PR open|Merged|Deployed|Done)/.test(b.word))) ?? builds[0];
+}
 
 /** The fallback's words for a run's status: only what the run row says. */
 function runWord(r: CodeTaskRun): string {
@@ -87,23 +98,29 @@ export function parseApps(w: unknown): AppRow[] {
                  ...(full ? { row: parseBuildRow(y) } : {}) };
       }),
       rank: rankOf(word),
+      prNumber: typeof o.pr_number === "number" ? o.pr_number : undefined, prUrl: opt(o.pr_url),
+      costUsd: num(o.cost_usd), repo: opt(o.repo),
     };
   });
 }
 
-/** `/v1/factory/apps` once per open, or null when no server answers it (then the fallback). */
+/** `/v1/factory/apps` on open and every 15s while the tab is visible (the old list refreshed
+ *  itself while anything ran), or null when no server answers it (then the fallback). */
 function useServerApps(projectId: string): AppRow[] | null {
   const [apps, setApps] = useState<AppRow[] | null>(null);
   useEffect(() => {
     let stop = false;
-    void (async () => {
+    const load = async () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       try {
         const r = await fetch(`/v1/factory/apps?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" });
         if (!r.ok || stop) return;
         setApps(parseApps(await r.json()));
       } catch { /* the fallback stands */ }
-    })();
-    return () => { stop = true; };
+    };
+    void load();
+    const id = window.setInterval(() => void load(), 15_000);
+    return () => { stop = true; window.clearInterval(id); };
   }, [projectId]);
   return apps;
 }
@@ -140,7 +157,13 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
       <ul className="fx-rows" aria-label="Apps">
         {apps.map((a) => {
           const expanded = open === a.key;
-          const newest = a.builds[0]?.runId ?? a.key;
+          const built = builtBuild(a.builds);
+          const newest = built?.runId ?? a.key;
+          const lastFailed = a.builds[0] && built && a.builds[0] !== built
+            && (a.builds[0].row?.state === "failed" || a.builds[0].word.startsWith("Failed"));
+          // Shipped AND building (the old card's "shipped · building"): a newer build is on the line.
+          const alsoBuilding = a.builds[0] && built && a.builds[0] !== built
+            && ["building", "queued", "quiet", "budget_wait"].includes(a.builds[0].row?.state ?? "");
           return (
             <li key={a.key} className="fx-app" data-testid={`fx-app-${a.key}`}>
               <div className="fx-row fx-app-row">
@@ -154,7 +177,11 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
                 <span className="fx-app-faces">
                   {a.builders.length ? <AgFaceStack roleKeys={a.builders} size={20} max={4} /> : null}
                 </span>
-                <span className="fx-row-now"><span className="fx-word">{a.word}</span></span>
+                <span className="fx-row-now">
+                  <span className="fx-word">{built && built !== a.builds[0] ? built.word : a.word}</span>
+                  {lastFailed ? <span className="fx-muted" title="The newest build of this app failed; the one that works opens">{" · last failed"}</span> : null}
+                  {alsoBuilding ? <span className="fx-muted" title="A newer build of this app is on the line">{" · building"}</span> : null}
+                </span>
                 <span className="fx-app-preview">
                   {a.preview?.url && a.preview.status === "running" ? (
                     <a className="ag-link" href={a.preview.url} target="_blank" rel="noreferrer">Preview ↗</a>
@@ -163,8 +190,15 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
                 <span className="fx-app-deploys">
                   {a.deploys.map((d) => <span key={d.env} title={d.ok ? "Deployed" : "Not deployed"}>{d.word ?? `${d.env} ${d.ok ? "✓" : "—"}`}</span>)}
                 </span>
+                <span className="fx-app-pr">
+                  {a.prNumber ? (
+                    <a className="ag-link" href={a.prUrl} target="_blank" rel="noreferrer" title={a.repo ?? undefined}
+                       data-testid={`fx-app-pr-${a.key}`}>PR #{a.prNumber}</a>
+                  ) : null}
+                  {a.costUsd ? <span className="fx-muted" title="Metered spend over every build of this app"> · {money(a.costUsd)}</span> : null}
+                </span>
                 <span className="fx-app-count" title="Builds of this app">{a.builds.length} build{a.builds.length === 1 ? "" : "s"}</span>
-                <button type="button" className="ag-icon-btn fx-row-go" aria-label={`Open ${a.app}`} title="Open the newest build"
+                <button type="button" className="ag-icon-btn fx-row-go" aria-label={`Open ${a.app}`} title="Open its newest working build"
                         onClick={(e) => onOpen(newest, e.currentTarget.closest("li"))}>↗</button>
               </div>
               {expanded ? (
