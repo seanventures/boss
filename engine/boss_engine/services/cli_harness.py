@@ -39,6 +39,8 @@ import time
 import tomllib
 from typing import Optional
 
+from . import owned_process
+
 _log = logging.getLogger(__name__)
 
 #: Scope under which BOSS's own API stores a subscription credential. One constant so the
@@ -653,7 +655,7 @@ def _run_probe(binary: str, args: tuple[str, ...], timeout: int = 20,
                 env[name] = os.environ[name]
         for name in exclude_env:
             env.pop(name, None)
-        proc = subprocess.run([binary, *args], capture_output=True, text=True, timeout=timeout,
+        proc = owned_process.run([binary, *args], capture_output=True, text=True, timeout=timeout,
                               env=env)
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout}s"
@@ -777,7 +779,7 @@ def _claude_catalog(spec: CliHarnessSpec, binary: str) -> tuple[str, ...]:
                           "request": {"subtype": "initialize"}})
     import queue
 
-    proc = subprocess.Popen(
+    proc = owned_process.popen(
         [binary, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
          "--verbose"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
@@ -1208,7 +1210,7 @@ class GenericCliCodeAgent:
             return {"authorised": False,
                     "reason": f"no {self.spec.token_env} available to this install"}
         try:
-            proc = subprocess.run(
+            proc = owned_process.run(
                 [self._resolve_binary(), *self.spec.token_login_args],
                 input=token, capture_output=True, text=True, timeout=60,
                 env=self._env(),
@@ -1423,7 +1425,7 @@ class GenericCliCodeAgent:
         timeout = self.spec.review_timeout if read_only else self.spec.timeout
         started = time.monotonic()
         try:
-            proc = subprocess.run(
+            proc = owned_process.run(
                 low_priority(argv),
                 cwd=str(cwd),
                 input=(prompt if self.spec.prompt_via == "stdin" else None),
@@ -1452,7 +1454,7 @@ class GenericCliCodeAgent:
                 _log.info("%s credential was revoked; restored and retrying once",
                           self.spec.name)
                 try:
-                    proc = subprocess.run(
+                    proc = owned_process.run(
                         low_priority(argv), cwd=str(cwd),
                         input=(prompt if self.spec.prompt_via == "stdin" else None),
                         capture_output=True, text=True, timeout=timeout,

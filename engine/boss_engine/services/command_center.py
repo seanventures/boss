@@ -201,7 +201,8 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
              now: datetime,
              stopped: Optional[Mapping[str, list]] = None,
              notes: Optional[Mapping[str, str]] = None,
-             builds: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+             builds: Optional[Mapping[str, Any]] = None,
+             system: Optional[list[Mapping[str, Any]]] = None) -> dict[str, Any]:
     """Shape the read rows into the three answers. Pure: no I/O, `now` is passed in.
 
     `stopped` is `{run_id: workflow_run_actions.stopped_for_operator(run, steps)}` from
@@ -420,6 +421,12 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
             "at": None,
         })
 
+    # THE MACHINE ITSELF (stability spec §4d): a system-doctor finding that needs a person's
+    # choice, or a Shepherd question — the same card, its options as the answers. Automatic
+    # fixes never become a card.
+    for item in system or []:
+        needs_you.append(dict(item))
+
     # WHAT STOPS WORK FIRST. A gate holds a run that is otherwise ready; a failed step has
     # already stopped one; setup gaps stop the next one; a refusal is a notice.
     # A STOPPED RUN FIRST (agents-home D12): it has already stopped, and its card was hidden
@@ -427,6 +434,9 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
     def rank(item: Mapping[str, Any]) -> tuple[int, int, str]:
         if item["kind"] in ("failed_step", "gate_override", "budget_refused"):
             # A build stopped at its checks or its budget has stopped too (factory spec §6.5).
+            first = 0
+        elif item["kind"] == "system_health" and item.get("severity") == "critical":
+            # A machine about to stop every build outranks any one of them.
             first = 0
         elif item["kind"] == "approval" and item.get("decision_kind") != "refusal":
             first = 1
@@ -567,9 +577,16 @@ def read(connection, settings, project_id: str,
         text("SELECT id, resolution_note FROM decisions WHERE id = ANY(:ids)"),
         {"ids": refused_ids},
     ).mappings()} if refused_ids else {}
+    system: list[dict[str, Any]] = []
+    try:
+        with connection.begin_nested():
+            from .system_doctor import card_items
+            system = card_items(connection, project_id)
+    except Exception:  # noqa: BLE001 - a host probe must never blank the landing page
+        system = []
     return {"project_id": project_id, "runs": runs, "steps": steps, "decisions": decisions,
             "readiness": readiness, "names": names, "now": now, "stopped": stopped,
-            "notes": notes, "builds": builds}
+            "notes": notes, "builds": builds, "system": system}
 
 
 def _output_of(step: Mapping[str, Any]) -> dict[str, Any]:

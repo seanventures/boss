@@ -1458,6 +1458,12 @@ async def lifespan(_: FastAPI):
         start_local_supervisor()
     except Exception as exc:  # noqa: BLE001 — never block startup on supervision
         print(f"[lifespan] local supervisor not started: {exc}")
+    try:
+        # Ownership ledger, Stop-kills watch, reaper and system doctor (stability spec §4).
+        from boss_engine.services.system_threads import start_all as _start_system_threads
+        print(f"[lifespan] system threads: {_start_system_threads(engine, settings)}")
+    except Exception as exc:  # noqa: BLE001 — never block startup on host care
+        print(f"[lifespan] system threads not started: {exc}")
     _warm_read_paths()
     yield
 
@@ -7623,8 +7629,8 @@ def record_host_stall_endpoint(payload: open_bodies.HostStallBody) -> dict:
     hosting Docker was thrashing 21.4 GB of 22.5 GB swap. Every memory and disk reading BOSS
     already had said "healthy" — they see the Docker VM, and the VM was fine.
 
-    So the worker times its own poll loop, and a cycle that comes round minutes late is
-    reported here. Stored as an event so any run overlapping it can be asked the only question
+    So the worker times its own idle wait — never the time it spends running a job — and a
+    wait that comes round minutes late is reported here. Stored as an event so any run overlapping it can be asked the only question
     that matters: how much of this was the machine, and how much was us.
     """
     payload = payload.payload()
@@ -7632,8 +7638,12 @@ def record_host_stall_endpoint(payload: open_bodies.HostStallBody) -> dict:
     if stalled <= 0:
         return {"recorded": False, "reason": "not a stall"}
     with begin(engine) as connection:
+        # `source` marks a stall measured over the worker's IDLE WAIT only. Rows without one
+        # were written by the old poll clock, which counted every job's duration as a host
+        # stall (stability spec C5); readers ignore them.
         emit_event(connection, settings.default_project_id, "host.stalled", "boss",
-                   "host", "self", {"stalled_seconds": round(stalled, 2)})
+                   "host", "self", {"stalled_seconds": round(stalled, 2),
+                                    "source": "worker.idle_wait"})
     return {"recorded": True, "stalled_seconds": round(stalled, 2)}
 
 
@@ -27981,6 +27991,46 @@ def agents_live_board_endpoint(project_id: str, request: Request, response: Resp
     return board
 
 
+@app.get("/v1/agents/org-board")
+def agents_org_board_endpoint(project_id: str, request: Request, response: Response,
+                              days: int = 7, fresh: bool = False,
+                              viewer: Optional[str] = None):
+    """Agents › Organization in one read (org-view spec §6.1): each team's work, waits, spend
+    and gaps, who hands work to whom, and the plan against the work. `days` is 1, 7 or 30.
+    ETag'd and cached 15s per (project, days); a write's refresh asks with `fresh=1`.
+    Composition only — see agents_org_board."""
+    from boss_engine.services import agents_org_board
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            board = agents_org_board.build(connection, settings, project_id, days=days,
+                                           fresh=fresh)
+        except agents_org_board.OrgBoardError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+    return _etagged(request, response, jsonable_encoder(board))
+
+
+@app.get("/v1/agents/org-board/handoffs")
+def agents_org_board_handoffs(project_id: str, days: int = 7, source: str = "",
+                              target: str = "", limit: int = 10):
+    """The newest handoffs along one Organization edge (the Edge panel): `source` and `target`
+    are comma lists of role keys (`person` for work a person handed directly)."""
+    from boss_engine.services import agents_org_board
+
+    project_id = _acts_reader(project_id)
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+        try:
+            return agents_org_board.handoffs(
+                connection, project_id, days=days, limit=limit,
+                sources=[s.strip() for s in source.split(",")],
+                targets=[t.strip() for t in target.split(",")])
+        except agents_org_board.OrgBoardError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 # --- the Factory (factory spec §6.2-§6.5) ---------------------------------------------------
 # The Floor, a build's cockpit, the Apps tab, and the build actions that were MCP-only. Every
 # word a build shows comes from factory_view, the one derivation the MCP tools read too.
@@ -28353,6 +28403,9 @@ class ConversationCreateBody(open_bodies.ProjectBody):
     preset: str | None = None
     title: str | None = None
     context: dict[str, Any] | None = None
+    # A talk: reopen the operator's open talk with that agent about the same thing instead of
+    # starting an empty one (agent_converse._resumable_talk).
+    resume: bool | None = None
 
 
 class ConversationTurnBody(open_bodies.ProjectBody):
@@ -28422,7 +28475,8 @@ def create_conversation_endpoint(payload: ConversationCreateBody) -> dict:
                 connection, project_id=str(payload.project_id), actor=actor,
                 kind=str(payload.kind or ""), seats=list(payload.seats or []),
                 lead_role_key=payload.lead_role_key, preset=payload.preset,
-                title=str(payload.title or ""), context=payload.context)
+                title=str(payload.title or ""), context=payload.context,
+                resume=bool(payload.resume))
         except _converse.ConverseError as error:
             raise _converse_refused(error) from error
 

@@ -35,11 +35,12 @@ describe("Agent work", () => {
     expect(out).toContain("Has done work 1");
   });
 
-  it("the spend note names the screens the rail has", () => {
+  it("spend is attributed, so no note says it cannot be (org-view spec §6.2)", () => {
     const engine = readFileSync(
       "../../engine/boss_engine/services/console_v2_workforce.py", "utf8");
     expect(engine).not.toContain("Projects screen");
-    expect(engine).toContain("on its card in Factory, and the total is in Govern");
+    expect(engine).not.toContain("does not record which agent an LLM call belongs to");
+    expect(engine).toContain('"spend_attributed": True');
   });
 });
 

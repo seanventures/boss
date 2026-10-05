@@ -192,7 +192,7 @@ def test_the_checkout_keeps_no_token_in_its_remote(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(agent_shell, "WORKSPACE_ROOT", tmp_path / "ws")
-    monkeypatch.setattr(agent_shell.subprocess, "run", fake_run)
+    monkeypatch.setattr(agent_shell.owned_process, "run", fake_run)
     path, problem = ensure_workspace(
         "boss-agent", owner="example-user", repo="boss-sandbox", branch="boss/code/crun_1",
         clone_url="https://x:ghp_secret@github.com/example-user/boss-sandbox.git",
@@ -206,7 +206,7 @@ def test_the_checkout_keeps_no_token_in_its_remote(tmp_path, monkeypatch):
 def test_a_failed_checkout_never_echoes_the_clone_url(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_shell, "WORKSPACE_ROOT", tmp_path / "ws")
     monkeypatch.setattr(
-        agent_shell.subprocess, "run",
+        agent_shell.owned_process, "run",
         lambda cmd, **kw: subprocess.CompletedProcess(
             cmd, 128, "", "fatal: could not read from https://x:ghp_secret@github.com/a/b"),
     )

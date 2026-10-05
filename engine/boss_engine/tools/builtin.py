@@ -4680,6 +4680,56 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                         investigation_id=str(args.get("investigation_id") or ""))
 
 
+def _register_system_health_tools(reg: ToolRegistry) -> None:
+    """The machine BOSS runs on, as the system doctor sees it (stability spec §4e): the same
+    gauges, findings and options the console's system-health card shows, so a client agent is
+    told the same thing an operator is — and can make the same choice on their instruction."""
+
+    @reg.tool(
+        "system_health",
+        "How the machine BOSS runs on is doing: memory, memory pressure, swap, disk, load — "
+        "each with its scope (this server / the Docker Desktop VM, not the Mac under it) — the "
+        "degradation level, \"Builds at once\" and what is queued for room, the system "
+        "doctor's open findings with the options each offers, and what BOSS fixed on its own. "
+        "Read this before blaming a slow or failed build on BOSS.",
+        _obj({"project_id": {"type": "string"}}),
+        kind="read",
+    )
+    def system_health(ctx, *, project_id, actor, args):
+        from ..services import admission, system_doctor
+
+        cap = admission.sample()
+        with ctx.begin() as c:
+            state = admission.snapshot(c, cap=cap)
+            findings = system_doctor.open_findings(c)
+            actions = system_doctor.recent_actions(c, limit=20)
+        return _json_safe({"scope": cap.scope, "level": state.get("level"),
+                           "gauges": {k: v for k, v in cap.__dict__.items() if k != "notes"},
+                           "admission": state, "findings": findings,
+                           "recent_actions": actions})
+
+    @reg.tool(
+        "system_doctor_act",
+        "Choose one of a system-health finding's options (by its key, as system_health lists "
+        "them) — e.g. queue new builds, hold updates while builds run, free BOSS's disk. "
+        "Options that stop a build only on the operator's explicit instruction.",
+        _obj({"finding_id": {"type": "string"}, "option": {"type": "string"}},
+             ["finding_id", "option"]),
+        kind="write",
+        # Some options pause or cancel a build: never pressed on a guess.
+        reversibility="destroys_work",
+    )
+    def system_doctor_act(ctx, *, project_id, actor, args):
+        from ..services import system_doctor
+
+        try:
+            return _json_safe(system_doctor.act(ctx.engine, ctx.settings,
+                                                str(args["finding_id"]), str(args["option"]),
+                                                actor=actor or "agent"))
+        except (LookupError, system_doctor.ActRefused) as exc:
+            return {"ok": False, "error": str(exc)}
+
+
 def _register_diagnosis_tools(reg: ToolRegistry) -> None:
     """The investigation, performed in code rather than chosen by the model each time.
 
@@ -6701,6 +6751,7 @@ def build_default_registry() -> ToolRegistry:
     _register_port_tools(reg)
     _register_run_turn_tools(reg)
     _register_diagnosis_tools(reg)
+    _register_system_health_tools(reg)
     _register_debug_session_tools(reg)
     _register_write_tools(reg)
     _register_operations_tools(reg)
@@ -6877,6 +6928,10 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "decide",
     "waive_gates",
     "send_feedback",
+    # The machine: a system-health card's option, chosen on the operator's instruction
+    # (stability spec §4e). The same options the console offers; stopping a build is one only
+    # when they say so.
+    "system_doctor_act",
 })
 
 #: REGISTERED, AND DELIBERATELY NOT REACHABLE FROM CHAT.

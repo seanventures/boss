@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from . import owned_process
 from . import decision_actions
 from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .github_adapter import GitHubAdapter
@@ -858,7 +859,7 @@ def _tool_inspect_app(connection, project_id, settings, args) -> dict:
     workdir = Path(tempfile.mkdtemp(prefix="boss-inspect-"))
     try:
         token = repo_token(settings, owner, repo)
-        clone = subprocess.run(
+        clone = owned_process.run(
             ["git", "clone", "--depth", "1", "--branch", branch,
              f"https://x-access-token:{token}@github.com/{owner}/{repo}.git", str(workdir / "r")],
             capture_output=True, text=True, timeout=300)

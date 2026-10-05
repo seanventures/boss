@@ -183,6 +183,8 @@ _EXPECTED_TOOLS: set[str] = {
     "start_workflow",
     "steer_code_task",
     "stop_preview",
+    # The machine (stability spec §4e): the system doctor's gauges/findings, and a choice.
+    "system_health", "system_doctor_act",
     "waive_gates",
     "watch_code_task",
 }
@@ -201,11 +203,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 112, (
+    assert len(reg.names()) == 114, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 63  # + my_recent_work (Agent World)
-    assert len(write) == 49
+    assert len(read) == 64  # + my_recent_work (Agent World), + system_health (stability)
+    assert len(write) == 50  # + system_doctor_act (stability)
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -473,6 +475,7 @@ def test_the_tools_that_are_never_pressed_by_the_model():
         "decide",             # approves a gate; an agent that approves its own gates is ungated
         "delete_workflow",    # removes a path a person authored
         "run_on_host",        # arbitrary command on a live machine
+        "system_doctor_act",  # may pause or cancel a build to free the machine
         "waive_gates",        # removes a check somebody put there
         "write_db",           # arbitrary mutation of any table
     ]

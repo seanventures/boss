@@ -41,7 +41,8 @@ class TestTheRunnerCannotBlockForever:
         # code_only: the comment above the fix NAMES subprocess.run as the thing that broke,
         # so a plain source grep matches the explanation and passes whatever the code does.
         body = code_only(sandbox.EphemeralSandbox.run)
-        assert "subprocess.Popen(" in body
+        # The owned spawn (owned_process.popen): a Popen whose exit and kill end the tree.
+        assert "owned_process.popen(" in body
         assert "subprocess.run(" not in body
 
     def test_the_command_gets_its_own_process_group(self):
@@ -59,8 +60,12 @@ class TestTheRunnerCannotBlockForever:
         """The exact line that hung. A second unbounded communicate() is the bug, not the
         first one."""
         body = inspect.getsource(sandbox.EphemeralSandbox.run)
-        assert "proc.communicate(timeout=_DRAIN_SECONDS)" in body
-        assert sandbox._DRAIN_SECONDS <= 30
+        # owned_process.communicate ends the read when the leader exits and bounds the drain
+        # after a kill (owned_process._DRAIN_SECONDS); see test_owned_resources_are_reaped.
+        from boss_engine.services import owned_process
+        assert "owned_process.communicate(proc, timeout=limit)" in body
+        assert "t.join(timeout=_DRAIN_SECONDS)" in inspect.getsource(owned_process.communicate)
+        assert owned_process._DRAIN_SECONDS <= 30
 
     def test_and_giving_up_on_the_pipe_still_reports_the_timeout(self):
         """Losing the tail of stdout is a far smaller harm than a stage that never ends — but

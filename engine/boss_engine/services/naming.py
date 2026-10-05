@@ -81,6 +81,18 @@ LABELS = [
 ]
 
 
+def _cut_at_word(name: str, limit: int) -> str:
+    """A name never ends mid-word ("Feature-Flag Expiry Tracke", "(paramg/bo"): cut at the
+    last space within `limit`, dropping a dangling opener, else keep the whole first word."""
+    name = name.strip()
+    if len(name) <= limit:
+        return name
+    head = name[:limit + 1]
+    cut = head.rfind(" ")
+    out = (head[:cut] if cut > 0 else name.split(" ")[0]).rstrip(" -–—,:;(/[")
+    return out
+
+
 def project_name(text: str) -> tuple[str, str, str]:
     """(name, blurb, label). The name is what a person would call it out loud."""
     t = _norm(text)
@@ -140,7 +152,7 @@ def project_name(text: str) -> tuple[str, str, str]:
     # product name — least of all `stable_app_id`, which would hash it into shared identity.
     if BOILERPLATE.match(_unadorn(name)):
         name = ""
-    return name[:42] or "Untitled app", blurb[:70], label
+    return _cut_at_word(name, 42) or "Untitled app", blurb[:70], label
 
 
 def identity_key(name: str) -> str:

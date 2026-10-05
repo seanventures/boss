@@ -1,55 +1,40 @@
 "use client";
 
 /**
- * Teams as soft zones (agents-home spec §4.6): Live › Agent force (`compact`) and
- * Organization › Zones (`full`) — one component at two densities, so the two teach the same
- * spatial memory.
+ * Teams as soft zones (agents-home spec §4.6): Live › Agent force. Organization › Teams
+ * (org-teams.tsx) draws the same teams, in the same order and hues, as scorecards, and reuses
+ * the pieces exported here (Badges, Face, nextInGrid, teamHue), so the two teach one spatial
+ * memory (org-view spec §4.2).
  *
  * TEAMS COME FROM ONE PLACE: the board's `teams` (agent_identity.team_of on the server). Faces
  * are in their REAL state from presence; idle faces are still. A team is a soft tint of its hue
  * from the avatar kit's palette, never a new colour.
  *
- * NO SPAGHETTI. Full density draws edges for ONE thing at a time: the selected agent's observed
- * handoffs over 7 days, or one focused run's chain (`?run=`). A live handoff sends a dot only
- * along an edge that is already drawn; otherwise the receiving face's ring just changes state.
- * Under 640px the map becomes a drill-down list: team rows, then their members.
+ * Organization's old full-density map (Zones) and its drill-down list are retired: Teams and
+ * Flow keep every behaviour they had (org-view spec §5).
  */
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Bell, ChatCircleDots, DotsThree, Gear, X } from "@phosphor-icons/react";
+import React, { useEffect, useMemo, useState } from "react";
+import { Bell, ChatCircleDots, Gear } from "@phosphor-icons/react";
 
 import type { AvatarState } from "../../lib/agent-world-types";
 import {
   TEAM_LABELS, TEAM_ORDER, type BoardAgent, type LiveBoard, type TeamSummary,
 } from "../../lib/agents-live-board";
-import {
-  STATE_WORD, askAgent, getLineage, getRunChain, handedByRole, identityOf, isLive, openAgent, toast,
-} from "../../lib/agent-world";
-import type { LiveMap } from "../../lib/agents-live";
-import { updateAgent } from "../../lib/agents";
+import { askAgent, identityOf, isLive, openAgent } from "../../lib/agent-world";
 import { PALETTE_BY_ID } from "../../lib/avatar-kit/palettes";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AgFace, AgFaceStack } from "./agent-face";
-import { curvePath } from "./team-swarm";
 
 export type TeamZonesProps = {
   projectId: string;
   board: LiveBoard;
-  density: "compact" | "full";
+  density: "compact";
   /** The header's `Find an agent` text: non-matching faces dim to 30%. */
   search?: string;
-  /** Organization mission focus (`?run=`): that run's agents ring, others dim. */
-  focusRunId?: string | null;
-  onClearFocus?: () => void;
   /** A team focused from Live's `Open map ↗` (`?focus=<team>`). */
   focusTeam?: string | null;
   /** Compact only: `Open map ↗`, optionally with a team to focus. */
   onOpenMap?: (teamKey?: string) => void;
-  /** OPTIONAL (S3): presence with act ids, so a live handoff can send its dot on a drawn edge. */
-  live?: LiveMap;
-  /** OPTIONAL (S3): the signed-in actor. `⋯ → Move to…` is offered only when it is given. */
-  actor?: string;
-  /** OPTIONAL (S3): called after `Move to…` saved, so the shell can refresh the board. */
-  onChanged?: () => void;
   /** OPTIONAL (S3): most faces that may animate at once (spec §5.2 budget). Default 8. */
   animateMax?: number;
 };
@@ -114,14 +99,14 @@ export function zoneTeams(board: LiveBoard, moved: Record<string, string> = {}):
   return [...teams.values()].sort((a, b) => rank(a.key) - rank(b.key) || a.label.localeCompare(b.label));
 }
 
-function matches(search: string, m: ZoneMember): boolean {
+export function matches(search: string, m: Pick<ZoneMember, "roleKey" | "name">): boolean {
   const q = search.trim().toLowerCase();
   if (!q) return true;
   const who = identityOf(m.roleKey);
   return `${m.name} ${who.name} ${m.roleKey}`.toLowerCase().includes(q);
 }
 
-function reducedMotion(): boolean {
+export function reducedMotion(): boolean {
   return typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 }
 
@@ -178,7 +163,7 @@ export function nextInGrid(rects: { left: number; top: number; width: number; he
 }
 
 /** `2 working` · `1 needs you`: words, never colour alone. */
-function Badges({ team }: { team: Pick<TeamSummary, "working" | "needsYou"> }) {
+export function Badges({ team }: { team: Pick<TeamSummary, "working" | "needsYou"> }) {
   return (
     <>
       {team.needsYou ? (
@@ -192,7 +177,7 @@ function Badges({ team }: { team: Pick<TeamSummary, "working" | "needsYou"> }) {
 }
 
 /** A face that may move only if it is live and inside the budget; everything else is still. */
-function Face({ m, size, still, dim }: { m: ZoneMember; size: 24 | 32 | 48; still: boolean; dim?: string }) {
+export function Face({ m, size, still, dim }: { m: ZoneMember; size: 24 | 32 | 48; still: boolean; dim?: string }) {
   return (
     <span className="ag-team-face" data-still={still || undefined} data-dim={dim} data-state={m.state}>
       <AgFace roleKey={m.roleKey} size={size} state={m.state} decorative aiBadge={false} />
@@ -204,12 +189,8 @@ function Face({ m, size, still, dim }: { m: ZoneMember; size: 24 | 32 | 48; stil
 
 export function TeamZones(props: TeamZonesProps): React.ReactElement | null {
   const v = useIdentityVersion(); // names and faces are resolved at render: repaint when identities load
-  const [moved, setMoved] = useState<Record<string, string>>({});
-  const teams = useMemo(() => zoneTeams(props.board, moved), [props.board, moved, v]); // eslint-disable-line react-hooks/exhaustive-deps -- `v` versions the store zoneTeams reads
-  const narrow = useNarrow();
-  if (props.density === "compact") return <CompactZones {...props} teams={teams} />;
-  if (narrow) return <ZoneList teams={teams} search={props.search ?? ""} />;
-  return <FullZones {...props} teams={teams} onMoved={(k, t) => setMoved((m) => ({ ...m, [k]: t }))} />;
+  const teams = useMemo(() => zoneTeams(props.board), [props.board, v]); // eslint-disable-line react-hooks/exhaustive-deps -- `v` versions the store zoneTeams reads
+  return <CompactZones {...props} teams={teams} />;
 }
 
 // ── Compact: Live › Agent force ─────────────────────────────────────────────────────────────
@@ -290,352 +271,6 @@ function CompactTeam({ team, shown, stills, search, focused, onOpenMap }: {
           ) : null}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-// ── Narrow: the drill-down list ─────────────────────────────────────────────────────────────
-
-function ZoneList({ teams, search }: { teams: ZoneTeam[]; search: string }) {
-  useIdentityVersion(); // names are resolved at render
-  const [open, setOpen] = useState<string | null>(null);
-  return (
-    <div className="ag-zones ag-zones-list" data-testid="ag-zones" data-layout="list">
-      {teams.map((t) => {
-        const label = TEAM_LABELS[t.key]?.label ?? t.label;
-        return (
-          <div key={t.key} className="ag-zones-lrow" data-team={t.key}
-               style={{ ["--team-hue" as string]: teamHue(t.key) }}>
-            <button type="button" className="ag-zones-lhead" aria-expanded={open === t.key}
-                    data-testid={`ag-zones-team-${t.key}`} onClick={() => setOpen(open === t.key ? null : t.key)}>
-              <span className="ag-team-label" title={t.tip}>{label}</span>
-              <span className="ag-team-count">{t.people.length}</span>
-              <Badges team={t} />
-            </button>
-            {open === t.key ? (
-              <ul className="ag-zones-lmembers">
-                {t.people.filter((m) => matches(search, m)).map((m) => (
-                  <li key={m.roleKey}>
-                    <button type="button" className="ag-zones-lmember" onClick={() => openAgent(m.roleKey)}
-                            data-testid={`ag-zones-member-${m.roleKey}`}>
-                      <Face m={m} size={24} still />
-                      <span data-user-text>{m.name}</span>
-                      <span className="ag-zones-lstate"> · {STATE_WORD[m.state]}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Full: Organization › Zones ──────────────────────────────────────────────────────────────
-
-type Edge = { from: string; to: string; acts: number; label: string; order?: number };
-
-/** Where each zone sits: Leadership a band on top; Architecture, Engineering, Quality; then
- *  Operations, Cost, Media, Thinkers; Yours (and operator teams) last. Never force-directed. */
-/** The fixed map (spec §4.6): Leadership a band, then three, then four, then everyone else. */
-const MAP_ROW: Record<string, "band" | "mid" | "low"> = {
-  leadership: "band", architecture: "mid", engineering: "mid", quality: "mid",
-  operations: "low", cost: "low", media: "low", thinkers: "low",
-};
-export function mapRowOf(key: string): "band" | "mid" | "low" | "rest" {
-  return MAP_ROW[key] ?? "rest";
-}
-
-/** A run's agents in the order they took the work, from the board's lane or the run's chain. */
-async function runPath(board: LiveBoard, runId: string, projectId: string): Promise<{ roles: string[]; subject: string }> {
-  const m = board.missions.find((x) => x.runId === runId);
-  const fromHops = (m?.hops ?? []).flatMap((h) => (h.kind === "hop" && h.roleKey ? [h.roleKey] : h.kind === "loop" ? [h.a, h.b] : []));
-  let roles = fromHops;
-  if (!roles.length) {
-    const chain = await getRunChain(runId, projectId);
-    roles = chain.ok ? chain.data.acts.filter((a) => a.roleKey).sort((a, b) => a.startedAt.localeCompare(b.startedAt))
-      .map((a) => a.roleKey!) : [];
-  }
-  const path = roles.filter((r, i) => r !== roles[i - 1]);
-  return { roles: path, subject: m?.subject || m?.workflowName || "This run" };
-}
-
-function FullZones({ projectId, board, teams, search = "", focusRunId, onClearFocus, focusTeam, live, actor,
-                     onChanged, onMoved }: TeamZonesProps & { teams: ZoneTeam[]; onMoved: (roleKey: string, team: string) => void }) {
-  useIdentityVersion(); // names are resolved at render
-  const host = useRef<HTMLDivElement>(null);
-  const faces = useRef(new Map<string, HTMLElement>());
-  const [selected, setSelected] = useState<string | null>(null);
-  const [edges, setEdges] = useState<Edge[]>([]);
-  const [path, setPath] = useState<{ roles: string[]; subject: string } | null>(null);
-  const [litCount, setLitCount] = useState(0);
-  const [points, setPoints] = useState<Map<string, { x: number; y: number }>>(new Map());
-  const [size, setSize] = useState({ w: 0, h: 0 });
-  const [travels, setTravels] = useState<{ key: string; from: string; to: string }[]>([]);
-  const [flash, setFlash] = useState<Set<string>>(new Set());
-  const [active, setActive] = useState(0);
-  const [menu, setMenu] = useState(false);
-  const order = useMemo(() => teams.flatMap((t) => t.people.map((m) => m.roleKey)), [teams]);
-  const people = useMemo(() => new Map(teams.flatMap((t) => t.people.map((m) => [m.roleKey, m] as const))), [teams]);
-
-  // ONE AGENT'S EDGES: its observed handoffs, 7 days, to faces on this map.
-  useEffect(() => {
-    if (!selected) { setEdges([]); return undefined; }
-    let alive = true;
-    void getLineage(projectId, selected, { days: 7, mode: "observed" }).then((r) => {
-      if (!alive || !r.ok) return;
-      const agentOf = (id: string) => (id.startsWith("agent:") ? id.slice(6) : "");
-      setEdges(r.data.edges.map((e) => ({ from: agentOf(e.from), to: agentOf(e.to), acts: e.acts, label: e.label }))
-        .filter((e) => e.from && e.to && e.from !== e.to));
-    });
-    return () => { alive = false; };
-  }, [projectId, selected]);
-
-  // ONE RUN'S PATH: its hops light in order, 400ms each and 4s at most; all at once when still.
-  useEffect(() => {
-    if (!focusRunId) { setPath(null); setLitCount(0); return undefined; }
-    let alive = true;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    void runPath(board, focusRunId, projectId).then((p) => {
-      if (!alive) return;
-      setPath(p);
-      if (reducedMotion() || p.roles.length <= 1) { setLitCount(p.roles.length); return; }
-      const step = Math.min(400, 4000 / p.roles.length);
-      setLitCount(1);
-      for (let i = 2; i <= p.roles.length; i += 1) timers.push(setTimeout(() => { if (alive) setLitCount(i); }, step * (i - 1)));
-    });
-    return () => { alive = false; timers.forEach(clearTimeout); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the run, not every board poll
-  }, [focusRunId, projectId]);
-
-  const focusEdges: Edge[] = useMemo(() => {
-    if (!path) return [];
-    return path.roles.slice(1, Math.max(1, litCount)).map((to, i) => ({ from: path.roles[i], to, acts: 1, label: "", order: i }));
-  }, [path, litCount]);
-  const drawn = selected ? edges : focusEdges;
-  const drawnKeys = useMemo(() => new Set(drawn.map((e) => `${e.from}>${e.to}`)), [drawn]);
-
-  // Measure faces after layout, so the curves meet them.
-  const measure = useCallback(() => {
-    const box = host.current?.getBoundingClientRect();
-    if (!box) return;
-    const next = new Map<string, { x: number; y: number }>();
-    for (const [k, el] of faces.current) {
-      const r = el.getBoundingClientRect();
-      next.set(k, { x: r.left - box.left + r.width / 2, y: r.top - box.top + r.height / 2 });
-    }
-    setPoints(next);
-    setSize({ w: box.width, h: box.height });
-  }, []);
-  useLayoutEffect(() => { measure(); }, [measure, teams, selected, path]);
-  useEffect(() => {
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [measure]);
-
-  // A LIVE HANDOFF on a drawn edge sends one dot; anywhere else the ring just changes.
-  const prev = useRef<LiveMap>(new Map());
-  const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
-  useEffect(() => {
-    if (!live) return;
-    for (const [roleKey, p] of live) {
-      if (!isLive(p) || isLive(prev.current.get(roleKey)) || !p.actId) continue;
-      void handedByRole(projectId, p.actId).then((from) => {
-        const key = `${from}>${roleKey}`;
-        if (!mounted.current || !from || !drawnKeys.has(key)) return;
-        if (reducedMotion()) {
-          setFlash((s) => new Set(s).add(key));
-          setTimeout(() => setFlash((s) => { const n = new Set(s); n.delete(key); return n; }), 1000);
-          return;
-        }
-        const t = { key: `${key}:${Date.now()}`, from, to: roleKey };
-        setTravels((x) => [...x, t]);
-        setTimeout(() => setTravels((x) => x.filter((y) => y.key !== t.key)), 700);
-      });
-    }
-    prev.current = live;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new presence answer is the trigger
-  }, [live]);
-
-  // Esc clears the selection, then the run focus.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (menu) setMenu(false);
-      else if (selected) setSelected(null);
-      else if (focusRunId) onClearFocus?.();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [selected, focusRunId, onClearFocus, menu]);
-
-  useEffect(() => {
-    if (!focusTeam) return;
-    host.current?.querySelector(`[data-team="${focusTeam}"]`)?.scrollIntoView?.({ block: "nearest" });
-  }, [focusTeam]);
-
-  const onPath = new Set(path?.roles.slice(0, litCount) ?? []);
-  const connected = new Set(edges.flatMap((e) => [e.from, e.to]));
-  const dimOf = (m: ZoneMember): string | undefined => {
-    if (!matches(search, m)) return "search";
-    if (selected && m.roleKey !== selected && !connected.has(m.roleKey)) return "other";
-    if (path && !path.roles.includes(m.roleKey)) return "other";
-    return undefined;
-  };
-
-  // Roving tabindex: arrows move, Enter selects, Shift+Enter opens the Passport.
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    const at = order.indexOf((e.target as HTMLElement).dataset?.role ?? "");
-    if (at < 0) return;
-    let next = at;
-    if (["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
-      const rects = order.map((k) => {
-        const r = faces.current.get(k)?.getBoundingClientRect();
-        return r ? { left: r.left, top: r.top, width: r.width || 1, height: r.height || 1 }
-          : { left: 0, top: 0, width: 1, height: 1 };
-      });
-      next = nextInGrid(rects, at, e.key);
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (e.shiftKey) openAgent(order[at]);
-      else setSelected((s) => (s === order[at] ? null : order[at]));
-      return;
-    } else return;
-    e.preventDefault();
-    setActive(next);
-    faces.current.get(order[next])?.focus();
-  };
-
-  const move = async (roleKey: string, team: string) => {
-    setMenu(false);
-    if (!actor) return;
-    const r = await updateAgent(projectId, actor, roleKey, { team });
-    if (!r.ok) { toast("error", r.error); return; }
-    onMoved(roleKey, team);
-    toast("success", `Moved to ${TEAM_LABELS[team]?.label ?? team}`);
-    onChanged?.();
-  };
-
-  const sel = selected ? people.get(selected) : undefined;
-  return (
-    <div className="ag-zones" data-testid="ag-zones" data-layout="map" data-selected={selected || undefined}
-         data-focus-run={focusRunId || undefined}>
-      {path || sel ? (
-        <div className="ag-zones-bar">
-          {path ? (
-            <button type="button" className="ag-chip ag-zones-focus" data-testid="ag-zones-focus"
-                    title="Clear the run focus" onClick={() => onClearFocus?.()}>
-              <span data-user-text>{path.subject}</span> <X size={11} weight="bold" aria-hidden />
-            </button>
-          ) : null}
-          {sel ? (
-            <span className="ag-zones-sel" data-testid="ag-zones-selected">
-              <span data-user-text>{sel.name}</span>
-              {actor ? (
-                <span className="ag-zones-menu-wrap">
-                  <button type="button" className="ag-icon-btn" aria-label="More" aria-haspopup="menu" aria-expanded={menu}
-                          data-testid="ag-zones-more" onClick={() => setMenu((v) => !v)}>
-                    <DotsThree size={16} weight="bold" aria-hidden />
-                  </button>
-                  {menu ? (
-                    <span className="ag-zones-menu" role="menu" aria-label="Move to…">
-                      <span className="ag-zones-menu-head">Move to…</span>
-                      {TEAM_ORDER.map((k) => (
-                        <button key={k} type="button" role="menuitem" data-testid={`ag-zones-move-${k}`}
-                                disabled={teams.find((t) => t.key === k)?.members.includes(sel.roleKey)}
-                                title={TEAM_LABELS[k]?.tip} onClick={() => void move(sel.roleKey, k)}>
-                          {TEAM_LABELS[k]?.label ?? k}
-                        </button>
-                      ))}
-                    </span>
-                  ) : null}
-                </span>
-              ) : null}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-      <div className="ag-zones-map" ref={host} onKeyDown={onKeyDown} role="group" aria-label="Team map">
-        <svg className="ag-zones-edges" width={size.w} height={size.h} aria-hidden>
-          {drawn.map((e) => {
-            const a = points.get(e.from);
-            const b = points.get(e.to);
-            if (!a || !b) return null;
-            const key = `${e.from}>${e.to}`;
-            return (
-              <path key={key} d={curvePath(a, b)} className="ag-zones-edge" data-edge={key}
-                    data-new={e.order !== undefined || undefined} data-lit={flash.has(key) || undefined}
-                    style={{ strokeWidth: Math.min(1 + Math.log2(1 + e.acts), 5) }}>
-                {e.label ? <title>{e.label}</title> : null}
-              </path>
-            );
-          })}
-          {travels.map((t) => {
-            const a = points.get(t.from);
-            const b = points.get(t.to);
-            if (!a || !b) return null;
-            return (
-              <circle key={t.key} r={5} className="ag-swarm-dot" data-edge={`${t.from}>${t.to}`}>
-                <animateMotion dur="0.6s" fill="freeze" path={curvePath(a, b)} />
-              </circle>
-            );
-          })}
-        </svg>
-        {teams.map((t) => {
-          const label = TEAM_LABELS[t.key]?.label ?? t.label;
-          return (
-            <section key={t.key} className="ag-zones-zone" data-team={t.key}
-                     data-row={mapRowOf(t.key)} data-focus={focusTeam === t.key || undefined}
-                     aria-label={`${label} ${t.people.length}`} style={{ ["--team-hue" as string]: teamHue(t.key) }}>
-              <header className="ag-zones-head">
-                <span className="ag-team-label" title={t.tip}>{label}</span>
-                <span className="ag-team-count">{t.people.length}</span>
-                <Badges team={t} />
-              </header>
-              <div className="ag-zones-faces">
-                {t.people.map((m) => {
-                  const idx = order.indexOf(m.roleKey);
-                  const lit = onPath.has(m.roleKey);
-                  return (
-                    <button key={m.roleKey} type="button" className="ag-zones-agent"
-                            ref={(el) => { if (el) faces.current.set(m.roleKey, el); else faces.current.delete(m.roleKey); }}
-                            data-role={m.roleKey} data-testid={`ag-zones-agent-${m.roleKey}`}
-                            data-dim={dimOf(m)} data-selected={selected === m.roleKey || undefined}
-                            data-lit={lit || undefined}
-                            tabIndex={idx === active ? 0 : -1}
-                            aria-pressed={selected === m.roleKey}
-                            aria-label={`${m.name}, ${STATE_WORD[m.state]}${m.line ? `: ${m.line}` : ""}`}
-                            title={m.line || undefined}
-                            onFocus={() => setActive(idx)}
-                            onClick={(e) => {
-                              if (e.shiftKey) { openAgent(m.roleKey); return; }
-                              setSelected((s) => (s === m.roleKey ? null : m.roleKey));
-                            }}>
-                      <Face m={m} size={48} still={!m.live} />
-                      <span className="ag-zones-name" data-user-text>{m.name}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          );
-        })}
-      </div>
-      {/* The structured equivalent of the map, for a screen reader (spec §7). */}
-      <table className="ag-sr" tabIndex={0} aria-label="Teams" data-testid="ag-zones-table">
-        <thead><tr><th>Team</th><th>Agent</th><th>State</th><th>Now</th></tr></thead>
-        <tbody>
-          {teams.flatMap((t) => t.people.map((m) => (
-            <tr key={`${t.key}:${m.roleKey}`}>
-              <td>{TEAM_LABELS[t.key]?.label ?? t.label}</td><td data-user-text>{m.name}</td>
-              <td>{STATE_WORD[m.state]}</td><td data-user-text>{m.line}</td>
-            </tr>
-          )))}
-        </tbody>
-      </table>
     </div>
   );
 }
