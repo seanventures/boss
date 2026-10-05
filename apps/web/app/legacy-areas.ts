@@ -152,6 +152,15 @@ export function resolveLegacyArea(params: URLSearchParams): URLSearchParams | nu
     return next;
   }
 
+  // `area=workflows` is the name the compose links use (lib/compose-links.ts on the Command
+  // Center: "Add a feature" on an app card). It is the Workflows area; everything else the link
+  // carries — `compose`, `app`, `preview` — is the composer's to read.
+  if (area === "workflows") {
+    const next = copyWithout(params, []);
+    next.set("area", "delivery_workflows");
+    return next;
+  }
+
   if (area === "delivery_workflows") {
     const tab = params.get("tab") ?? "";
     const becomes = OLD_WORKFLOW_TABS[tab];

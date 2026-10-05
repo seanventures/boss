@@ -21,6 +21,7 @@
 .fx-head-1, .fx-head-2 { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
 .fx-back { flex: none; }
 .fx-ck-app { margin: 0; font-size: 1.25rem; font-weight: 650; max-width: 40ch; outline: none; }
+.fx-add-feature { text-decoration: none; white-space: nowrap; color: var(--accent-text); font-weight: 600; }
 .fx-state { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-soft); flex-wrap: wrap; }
 .fx-state-word { font-weight: 600; color: var(--ink); }
 .fx-state[data-state="failed"] .fx-state-word, .fx-state[data-state="needs_waiver"] .fx-state-word,

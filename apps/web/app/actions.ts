@@ -2342,6 +2342,29 @@ export async function conveneMeetingAction(formData: FormData): Promise<ActionRe
   });
 }); }
 
+/** Spec it first: a PRD panel for a feature of an app that exists. The app travels as
+ *  `constraints.extends_run_id` (validated by the API), so the approved PRD builds onto that
+ *  app's branch; the answer names the panel so the console can land on it. */
+export async function conveneFeaturePanelAction(
+  formData: FormData,
+): Promise<{ ok: boolean; meeting_run_id?: string | null; task_id?: string; error?: string }> {
+  const projectId = getProjectId(formData);
+  const directive = String(formData.get("directive") ?? "").trim();
+  const extendsRunId = String(formData.get("extends_run_id") ?? "").trim();
+  if (!directive || !extendsRunId) return { ok: false, error: "Describe the feature and pick the app." };
+  try {
+    const r = await client.conveneMeeting({
+      project_id: projectId, directive, actor: getActor(formData),
+      constraints: { meeting_type: "prd_panel", extends_run_id: extendsRunId },
+    });
+    revalidatePath("/");
+    const said = r as { task_id?: string; meeting_run_id?: string | null } | undefined;
+    return { ok: true, meeting_run_id: said?.meeting_run_id ?? null, task_id: said?.task_id };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export async function runSimulatedMeetingAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
   const meetingId = String(formData.get("meeting_id") ?? "").trim();

@@ -892,10 +892,16 @@ def example_for(workflow_key: str) -> Optional[dict[str, Any]]:
     return dict(brief["example"]) if brief else None
 
 
-def catalogue_summary() -> list[dict[str, Any]]:
+def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str, Any]]:
     """What a customer sees when choosing. Includes what the workflow will need from their
-    project, so "you have not connected a repository" is said at the point of choosing."""
-    from .workflow_capabilities import CAPABILITIES, stops_for_a_person
+    project, so "you have not connected a repository" is said at the point of choosing.
+
+    `gates` / `automatic_approvals` follow the PRD auto-approve setting (prd_auto_approved),
+    the same rule GET /v1/delivery-workflows/asks and the runtime use."""
+    from .workflow_capabilities import CAPABILITIES, prd_auto_approved, stops_for_a_person
+
+    if prd_auto_approve is None:
+        prd_auto_approve = prd_auto_approved()
     from .workflow_readiness import need_for, needs_of
 
     out = []
@@ -924,7 +930,8 @@ def catalogue_summary() -> list[dict[str, Any]]:
 
         gates = [s["id"] for s in manual
                  if _capability(s) not in CAPABILITIES
-                 or stops_for_a_person(_capability(s), (s.get("approval") or {}).get("mode"))]
+                 or stops_for_a_person(_capability(s), (s.get("approval") or {}).get("mode"),
+                                       prd_auto_approve=prd_auto_approve)]
         automatic = [s["id"] for s in manual if s["id"] not in gates]
         needs = needs_of(spec)
         out.append({

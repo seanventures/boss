@@ -119,8 +119,10 @@ describe("a required input left blank", () => {
 
   it("disables the start buttons, not just the message", () => {
     expect(UI).not.toContain("disabled={busy || !!blockingReason(0, draft)}");
-    const starts = UI.match(/disabled=\{busy \|\| !!blocked\}/g) ?? [];
-    expect(starts.length).toBeGreaterThanOrEqual(2);
+    // One Start on one screen; only a quick change's proposal (already scoped and shown,
+    // waiting on your confirmation) is pressable while the form reads blocked.
+    const start = UI.slice(UI.indexOf('data-testid="dw-new-start"'));
+    expect(start.slice(0, 200)).toContain("disabled={busy || (!!blocked && !(adding && proposal?.proposal))}");
   });
 
   it("blockingReason really does return an empty string, which is why ?? was wrong", () => {
@@ -136,6 +138,6 @@ describe("a required input left blank", () => {
 describe("what gets sent is the declared fields", () => {
   it("is what gets sent, and what the review shows", () => {
     expect(UI_SRC).toContain("const typed = typedInputs(o.fields, o.supplied);");
-    expect(UI_SRC).toContain('data-testid="dw-review-inputs"');
+    expect(UI_SRC).toContain('data-testid="dw-workflow-inputs"');
   });
 });

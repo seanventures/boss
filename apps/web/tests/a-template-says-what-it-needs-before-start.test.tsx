@@ -86,16 +86,15 @@ describe("the start form shows what is missing, with the fix", () => {
 
 describe("Start is blocked by what is missing, and says start-anyway out loud", () => {
   it("the composer asks before Start and blocks on what was not accepted", () => {
-    expect(UI).toContain("useWorkflowReadiness(projectId, draft.workflowKey,");
+    expect(UI).toContain("useWorkflowReadiness(projectId, flowKey,");
     expect(UI).toContain("notReady.length");
     expect(UI).toContain("start_anyway: startAnyway");
   });
 
-  it("Next is blocked only by its own step's fields; Start by everything", () => {
-    // Every declared field (Deprecation / Sunset's "Who to tell" too) is drawn on the start-form
-    // step, so its Next waits for them there; no later step can block an earlier Next.
-    expect(UI).toContain('data-testid="dw-wiz-next"\n                    disabled={!!stepBlocked}');
-    expect(UI).toContain('data-testid="dw-new-start"\n                  disabled={busy || !!blocked}');
+  it("Start is blocked by everything", () => {
+    // One screen: every declared field, the brief and the readiness checklist gate one Start.
+    const start = UI.slice(UI.indexOf('data-testid="dw-new-start"'));
+    expect(start.slice(0, 160)).toContain("disabled={busy || (!!blocked");
   });
 
   it("a refused start draws the same checklist instead of [object Object]", () => {
