@@ -38,8 +38,10 @@ describe("the Run group order", () => {
       "delivery_workflows",  // Workflows
       "workforce",           // Agents
       "decisions",           // Approvals
-      "delivery",            // Infra
+      "infra",               // Infra (was `delivery`; infra-observability spec §4.1)
     ]);
+    // Observability follows Infra: where it runs, then whether it is alive.
+    expect(runOrder()[5]).toBe("observability");
     expect(runOrder()).not.toContain("org_chart");
     expect(runOrder()).not.toContain("studio");
   });
@@ -67,7 +69,8 @@ describe("the Run group order", () => {
 describe("the renamed areas", () => {
   it.each([
     ["workforce", "Agent Studio"],
-    ["delivery", "Infra"],
+    ["infra", "Infra"],
+    ["observability", "Observability"],
     ["delivery_workflows", "Workflows"],
     ["code_tasks", "Factory"],
   ])("%s is labelled %s", (id, label) => {
@@ -76,9 +79,18 @@ describe("the renamed areas", () => {
 
   it("keeps the area IDS untouched", () => {
     // Labels are copy; ids are routes, localStorage keys and deep links.
-    for (const id of ["workforce", "delivery", "delivery_workflows", "code_tasks"]) {
+    for (const id of ["workforce", "delivery_workflows", "code_tasks"]) {
       expect(SHELL).toContain(`id: "${id}"`);
     }
+  });
+
+  it("says what the Infra and Observability ids are, and redirects the old ones", () => {
+    // The one deliberate id change: the rail's Infra was `delivery`, its Observability was
+    // `monitoring`, and `?area=infra` was System Configuration (infra-observability spec §4.1).
+    // Every old link lands on its tab through app/legacy-areas.ts.
+    expect(SHELL).not.toContain('id: "delivery"');
+    expect(SHELL).not.toContain('id: "monitoring"');
+    expect(SHELL).not.toContain("System Configuration");
   });
 });
 
