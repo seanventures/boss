@@ -14,7 +14,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DotsThree } from "@phosphor-icons/react";
 
 import {
-  effectiveOf, governWrite, money, rightsFor, type CapPreview as CapPreviewData, type Control, type Envelope,
+  effectiveOf, governWrite, money, readNumber, rightsFor, type CapPreview as CapPreviewData, type Control, type Envelope,
   type GovernView, type TokenPolicy, type WriteResult,
 } from "../../lib/govern";
 import { logHref } from "../../lib/log-url";
@@ -272,6 +272,10 @@ function ControlRow({ keyName, control: c, projectId, actor, disabled, editing, 
   );
 }
 
+function FieldError({ error }: { error: string | null }) {
+  return error ? <span className="gv-field-error" role="alert" data-testid="gv-field-error">{error}</span> : null;
+}
+
 function Buttons({ busy, onCancel, label = "Save" }: { busy: boolean; onCancel: () => void; label?: string }) {
   return (
     <span className="gv-edit-buttons">
@@ -286,20 +290,20 @@ function NumberEditor({ control, busy, onSave, onCancel }: {
 }) {
   const start = control.value_stored ?? control.value_effective;
   const [text, setText] = useState(String(start ?? ""));
-  const n = Number(text);
-  const valid = text.trim() !== "" && Number.isInteger(n);
-  const effective = valid ? effectiveOf(control, n) : null;
+  const { value: n, error } = readNumber(text, { min: control.bounds?.min, max: control.bounds?.max, whole: true });
+  const effective = n !== null ? effectiveOf(control, n) : null;
   return (
-    <form className="gv-edit-form" onSubmit={(e) => { e.preventDefault(); if (valid) onSave(n); }}
+    <form className="gv-edit-form" noValidate onSubmit={(e) => { e.preventDefault(); if (n !== null) onSave(n); }}
           onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onCancel(); } }}>
       <input className="gv-input" type="number" inputMode="numeric" autoFocus aria-label={control.name}
-             min={control.bounds?.min ?? undefined} max={control.bounds?.max ?? undefined} step={1}
+             min={control.bounds?.min ?? undefined} max={control.bounds?.max ?? undefined} step="any"
+             aria-invalid={error ? true : undefined}
              value={text} onChange={(e) => setText(e.target.value)} data-testid="gv-input" />
       {control.bounds ? <span className="gv-bounds">{control.bounds.min}–{control.bounds.max}</span> : null}
-      {valid && effective !== null ? (
+      {n !== null && effective !== null ? (
         <span className="gv-preview-line" data-testid="gv-will-use">BOSS will use {effective}</span>
-      ) : null}
-      <Buttons busy={busy || !valid} onCancel={onCancel} />
+      ) : <FieldError error={error} />}
+      <Buttons busy={busy || n === null} onCancel={onCancel} />
     </form>
   );
 }
@@ -309,7 +313,7 @@ function SwitchEditor({ control, busy, onSave, onCancel }: {
 }) {
   const [on, setOn] = useState(Boolean(control.value_effective));
   return (
-    <form className="gv-edit-form" onSubmit={(e) => { e.preventDefault(); onSave(on); }}
+    <form className="gv-edit-form" noValidate onSubmit={(e) => { e.preventDefault(); onSave(on); }}
           onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onCancel(); } }}>
       <button type="button" role="switch" aria-checked={on} className="gv-switch" data-testid="gv-switch"
               onClick={() => setOn(!on)}>{on ? "On" : "Off"}</button>
@@ -323,9 +327,8 @@ function MonthlyCapEditor({ control, projectId, busy, onSave, onCancel }: {
   control: Control; projectId: string; busy: boolean; onSave: (usd: number) => void; onCancel: () => void;
 }) {
   const [text, setText] = useState(String(Number(control.value_effective ?? 0) / 1_000_000));
-  const dollars = Number(text);
-  const valid = Number.isFinite(dollars) && dollars >= 0.01 && dollars <= 1_000_000;
-  const asked = useDebounced(valid ? dollars : null, 300);
+  const { value: dollars, error } = readNumber(text, { min: 0.01, max: 1_000_000, cents: true, money: true });
+  const asked = useDebounced(dollars, 300);
   const [preview, setPreview] = useState<CapPreviewData | null>(null);
   useEffect(() => {
     if (asked === null) { setPreview(null); return; }
@@ -336,12 +339,13 @@ function MonthlyCapEditor({ control, projectId, busy, onSave, onCancel }: {
     return () => { alive = false; };
   }, [asked, projectId]);
   return (
-    <form className="gv-edit-form gv-edit-wide" onSubmit={(e) => { e.preventDefault(); if (valid) onSave(dollars); }}
+    <form className="gv-edit-form gv-edit-wide" noValidate onSubmit={(e) => { e.preventDefault(); if (dollars !== null) onSave(dollars); }}
           onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onCancel(); } }}>
       <label className="gv-money-input">$<input className="gv-input" type="number" inputMode="decimal" autoFocus
-             aria-label="Monthly cap" min={0.01} max={1_000_000} step={1} value={text} data-testid="gv-input"
-             onChange={(e) => setText(e.target.value)} /></label>
-      <Buttons busy={busy || !valid} onCancel={onCancel} />
+             aria-label="Monthly cap" min={0.01} max={1_000_000} step="any" value={text} data-testid="gv-input"
+             aria-invalid={error ? true : undefined} onChange={(e) => setText(e.target.value)} /></label>
+      <Buttons busy={busy || dollars === null} onCancel={onCancel} />
+      <FieldError error={error} />
       {preview ? <CapPreview preview={preview} /> : null}
     </form>
   );
@@ -362,7 +366,7 @@ function PaceEditor({ control, projectId, busy, onApply, onCancel }: {
   }, [asked, projectId]);
   const env = preview?.envelope;
   return (
-    <form className="gv-edit-form gv-edit-wide" onSubmit={(e) => { e.preventDefault(); onApply(value); }}
+    <form className="gv-edit-form gv-edit-wide" noValidate onSubmit={(e) => { e.preventDefault(); onApply(value); }}
           onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onCancel(); } }}>
       <span className="gv-slider">
         <span className="gv-slider-end">Careful</span>
@@ -406,9 +410,9 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
     return p?.source === "stored" && p.updated_at ? p.updated_at : "unset";
   };
   const save = async () => {
-    const n = Number(cap);
     if (!stage) { setFailure({ text: "Pick a stage" }); return; }
-    if (!Number.isFinite(n) || n < 1000) { setFailure({ text: "At least 1,000 tokens" }); return; }
+    const { value: n, error } = readNumber(cap, { min: 1000, whole: true });
+    if (n === null) { setFailure({ text: error === "Enter a number" ? "Enter tokens per call" : `${error} tokens` }); return; }
     setBusy(true);
     setFailure(null);
     const r = await governWrite("token_cap", { project_id: projectId, actor, stage, max_total_tokens_per_call: Math.trunc(n) },
@@ -458,7 +462,7 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
                     onClick={() => setEditing((e) => !e)}>Edit</button>
           </span>
           {editing ? (
-            <form className="gv-edit gv-edit-form" data-testid="gv-token-form"
+            <form className="gv-edit gv-edit-form" noValidate data-testid="gv-token-form"
                   onSubmit={(e) => { e.preventDefault(); void save(); }}
                   onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setEditing(false); } }}>
               <select className="gv-input" aria-label="Stage" value={stage} onChange={(e) => setStage(e.target.value)}
@@ -467,7 +471,7 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
                 <option value="*">project default (*)</option>
                 {steps.map((p) => <option key={p.stage} value={p.stage}>{p.stage}</option>)}
               </select>
-              <input className="gv-input" type="number" min={1000} step={1000} placeholder="e.g. 48000"
+              <input className="gv-input" type="number" min={1000} step="any" placeholder="e.g. 48000"
                      aria-label="Max tokens per call" value={cap} onChange={(e) => setCap(e.target.value)}
                      data-testid="gv-token-cap" />
               <span className="gv-edit-buttons">

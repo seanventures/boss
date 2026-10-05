@@ -83,6 +83,8 @@
 .gv-input:focus { outline: none; border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
 .gv-money-input { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
 .gv-bounds { font-size: 0.76rem; color: var(--faint); }
+.gv-field-error { flex-basis: 100%; font-size: 0.8rem; color: var(--red); }
+.gv-input[aria-invalid="true"] { border-color: var(--red); }
 .gv-preview-line { font-size: 0.8rem; color: var(--accent-text); }
 .gv-edit-buttons { display: inline-flex; gap: 6px; }
 .gv-fail { display: inline-flex; align-items: center; gap: 10px; font-size: 0.8rem; color: var(--red); }

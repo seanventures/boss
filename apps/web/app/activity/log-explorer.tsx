@@ -311,11 +311,12 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
         </span>
       </header>
       {custom ? (
-        <form className="lx-custom" data-testid="lx-custom"
+        <form className="lx-custom" data-testid="lx-custom" noValidate
               onSubmit={(e) => {
                 e.preventDefault();
-                const from = custom.from ? new Date(custom.from).toISOString() : null;
-                const to = custom.to ? new Date(custom.to).toISOString() : null;
+                const iso = (v: string) => { const d = v ? new Date(v) : null; return d && !Number.isNaN(d.getTime()) ? d.toISOString() : null; };
+                const from = iso(custom.from);
+                const to = iso(custom.to);
                 if (from) apply({ ...state, from, to, range: null });
                 setCustom(null);
               }}>

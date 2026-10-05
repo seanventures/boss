@@ -144,12 +144,34 @@ export async function governWrite(op: string, body: Record<string, unknown>, ifM
   }
 }
 
-/** Money as the board says it: `$3.12`, `$200`, `$5.25/min`. */
+/** Money as the board says it: `$3.12`, `$200`, `$150.01`, `$5.25/min`. Cents are dropped
+ *  only when they are zero — `$150.01` never reads as `$150` (Setup says the cents too). */
 export function money(micros: number | null | undefined, opts: { perMin?: boolean } = {}): string {
-  const usd = Number(micros ?? 0) / 1_000_000;
-  const text = usd >= 1000 ? `$${Math.round(usd).toLocaleString()}` : usd >= 100 ? `$${usd.toFixed(0)}`
-    : usd > 0 && usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`;
+  const cents = Math.round(Number(micros ?? 0) / 10_000);
+  const usd = cents / 100;
+  const text = Number(micros ?? 0) > 0 && cents === 0 ? "<$0.01"
+    : usd >= 100 && cents % 100 === 0 ? `$${usd.toLocaleString("en-US")}`
+    : `$${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   return opts.perMin ? `${text}/min` : text;
+}
+
+/**
+ * A typed number, checked the way the board says it (every Govern field: forms are
+ * `noValidate`, so the browser can never swallow a Save — the reason is shown inline instead).
+ */
+export function readNumber(text: string, rule: { min?: number | null; max?: number | null; whole?: boolean;
+                                                  cents?: boolean; money?: boolean }): { value: number | null; error: string | null } {
+  const raw = text.trim();
+  if (raw === "") return { value: null, error: "Enter a number" };
+  const n = Number(raw);
+  const fmt = (x: number) => (rule.money ? `$${x.toLocaleString("en-US")}` : x.toLocaleString("en-US"));
+  const range = rule.min != null && rule.max != null ? `${fmt(rule.min)}–${fmt(rule.max)}`
+    : rule.min != null ? `at least ${fmt(rule.min)}` : rule.max != null ? `at most ${fmt(rule.max)}` : "";
+  if (!Number.isFinite(n)) return { value: null, error: "Enter a number" };
+  if (rule.whole && !Number.isInteger(n)) return { value: null, error: `Whole numbers${range ? `, ${range}` : ""}` };
+  if (rule.cents && Math.abs(n * 100 - Math.round(n * 100)) > 1e-6) return { value: null, error: "Cents at most" };
+  if ((rule.min != null && n < rule.min) || (rule.max != null && n > rule.max)) return { value: null, error: range.replace(/^./, (c) => c.toUpperCase()) };
+  return { value: n, error: null };
 }
 
 /** What a stored value will run as, by the engine's rule (served with the control). */
