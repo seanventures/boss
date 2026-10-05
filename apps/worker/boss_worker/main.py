@@ -488,6 +488,28 @@ def _prune_activity_log(client: ControlPlaneClient) -> None:
         LOGGER.debug("activity_retention_failed", exc_info=True)
 
 
+def idle_wait(seconds: float, *, stopping=lambda: _STOPPING, sleep=time.sleep,
+              clock=time.monotonic) -> tuple[float, float]:
+    """Sleep `seconds` in one-second steps, stopping early when asked. Returns
+    (planned, actual): how long the steps that ran were meant to take, and how long they did."""
+    planned = 0.0
+    started = clock()
+    for _ in range(max(1, int(seconds))):
+        if stopping():
+            break
+        sleep(1)
+        planned += 1.0
+    return planned, clock() - started
+
+
+def observe_idle_wait(tracker: StallTracker, seconds: float, **kw) -> float:
+    """The stall clock: lateness of the idle wait, never time spent working (C5)."""
+    planned, actual = idle_wait(seconds, **kw)
+    if planned <= 0:
+        return 0.0
+    return tracker.observe(planned, actual, at=time.time(), source="worker.idle_wait")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="BOSS worker shell")
     parser.add_argument(
@@ -541,25 +563,17 @@ def main() -> None:
         threading.Thread(target=_run_background_sweeps, args=(settings,),
                          name="boss-worker-sweeps", daemon=True).start()
 
-        # WAS BOSS ABLE TO RUN? This loop has a known cadence, which makes it the one clock
-        # that can answer that from inside a container. A cycle that should come round every
-        # poll interval and comes round fourteen minutes later was starved — and on 2026-09-20
-        # that is exactly what happened, twice, while every memory and disk reading said
-        # "healthy" because they see the Docker VM rather than the machine under it. An 85
-        # minute build looked like a BOSS regression and was 62% host stall.
+        # WAS BOSS ABLE TO RUN? Measured over the IDLE WAIT ONLY (stability spec C5).
+        #
+        # This used to time the whole loop — `now - last_cycle - poll_interval` — and a cycle
+        # blocks for an entire job (a code task is one HTTP call with a two-hour timeout). So
+        # every job's duration was reported as the HOST stalling: on boss-1, 35 `host.stalled`
+        # events in 3.7 days, each one a build finishing (3553 s ↔ a code task that ran
+        # 01:19→02:28), on a box with 13 GB free, zero swap and 2 s of memory pressure in total.
+        # Host advice and retrospectives then blamed an idle machine. Only the sleep has a
+        # known length; only its lateness is the host's.
         _stalls = StallTracker()
-        _last_cycle = time.monotonic()
         while not _STOPPING:
-            _now = time.monotonic()
-            _late = _stalls.observe(float(settings.poll_interval_seconds), _now - _last_cycle,
-                                    at=time.time(), source="worker.poll")
-            if _late:
-                LOGGER.warning(
-                    "host_stall worker_id=%s stalled_seconds=%.0f — BOSS was not scheduled; "
-                    "this time is the machine's, not the pipeline's",
-                    settings.worker_id, _late)
-                _report_host_stall(client, _late)
-            _last_cycle = _now
             try:
                 ran_job = run_worker_cycle(client, settings)
             except Exception:
@@ -590,10 +604,13 @@ def main() -> None:
                 # call for no benefit.
                 # Interruptible sleep: an idle worker that is asked to stop should not hold the
                 # deploy open for a full poll interval doing nothing.
-                for _ in range(max(1, int(settings.poll_interval_seconds))):
-                    if _STOPPING:
-                        break
-                    time.sleep(1)
+                late = observe_idle_wait(_stalls, float(settings.poll_interval_seconds))
+                if late:
+                    LOGGER.warning(
+                        "host_stall worker_id=%s stalled_seconds=%.0f — BOSS was not scheduled; "
+                        "this time is the machine's, not the pipeline's",
+                        settings.worker_id, late)
+                    _report_host_stall(client, late)
         LOGGER.info("worker_stopped worker_id=%s", settings.worker_id)
     finally:
         client.close()
