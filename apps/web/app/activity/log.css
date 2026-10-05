@@ -243,3 +243,5 @@
   .lx-bar-stack { transition: none; }
 }
 body[data-console-paused] .lx-row[data-fresh], body[data-console-paused] .lx-bar-stack { animation: none; transition: none; }
+/* The phone sheet's host (log-drawer.tsx portals it to <body>): no layout of its own. */
+.lx-sheet-host { display: contents; }

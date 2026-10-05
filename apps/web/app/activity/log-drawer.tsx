@@ -7,6 +7,7 @@
  * clip truth, the redacted data with Copy, and `Copy link` (the permalink, `row=`).
  */
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Copy, LinkSimple, Minus, Plus, X } from "@phosphor-icons/react";
 
 import type { ActivityLogItem } from "../../lib/activity-log";
@@ -114,8 +115,9 @@ export function LogDrawer({ item, labels, gone, projectId, viewer, onClose, onFi
     if (r.ok) setAct(r.data);
   };
 
-  return (
-    <aside ref={box} className="lx-drawer" role="dialog" aria-modal="false" aria-label="Line" tabIndex={-1}
+  const sheet = useSheet();
+  const drawer = (
+    <aside ref={box} className="lx-drawer" role="dialog" aria-modal={sheet || undefined} aria-label="Line" tabIndex={-1}
            data-testid="lx-drawer"
            onKeyDown={(e) => {
              if (e.key === "Escape") { e.preventDefault(); onClose(); }
@@ -210,6 +212,26 @@ export function LogDrawer({ item, labels, gone, projectId, viewer, onClose, onFi
       )}
     </aside>
   );
+  // ON A PHONE THE DRAWER IS A FULL-SCREEN SHEET (D11). The console's panel stack carries a
+  // transform, which traps `position: fixed` inside it (it drew 13px in and taller than the
+  // screen); the sheet is portalled to <body>, inside an `.lx` so the Log's styles still apply.
+  return sheet && typeof document !== "undefined"
+    ? createPortal(<div className="lx lx-sheet-host">{drawer}</div>, document.body)
+    : drawer;
+}
+
+/** Below 720px (the Log's phone breakpoint) the drawer is a sheet over the whole console. */
+function useSheet(): boolean {
+  const [sheet, setSheet] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
+    const q = window.matchMedia("(max-width: 719px)");
+    const on = () => setSheet(q.matches);
+    on();
+    q.addEventListener?.("change", on);
+    return () => q.removeEventListener?.("change", on);
+  }, []);
+  return sheet;
 }
 
 function AroundLines({ context, labels, anchor }: { context: LogContext; labels: Record<string, string>; anchor: string }) {
