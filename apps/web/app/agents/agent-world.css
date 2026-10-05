@@ -1128,6 +1128,11 @@
 .ag-mission-next .ag-avatar { filter: grayscale(1); }
 .ag-mission-kn { flex: none; margin-left: 8px; font-size: 0.76rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ag-mission-now { font-size: 0.8rem; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* THE STATE WORD NEVER TRUNCATES ("Waiti…" at 1024, independent test D7): the row's state is
+   its first part and keeps its width; only the step and the time after it may ellipse. */
+.ag-mission-now { display: flex; align-items: baseline; min-width: 0; }
+.ag-mission-now > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ag-mission-now > span:first-child { flex: none; overflow: visible; }
 .ag-mission-you { color: var(--amber); font-weight: 650; }
 .ag-mission-failed { color: var(--red); font-weight: 650; }
 .ag-mission-blocked { color: var(--amber); }

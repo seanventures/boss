@@ -107,6 +107,12 @@ export type RecentRun = {
   finishedAt: string | null; error: string | null;
 };
 
+/** The budget refuses new work at the door (its own cap_refusal): drawn as the first card. */
+export type BudgetRefusal = {
+  period: string; capUsdMicros: number; actualUsdMicros: number; resetsAtLabel: string;
+  title: string; detail: string;
+};
+
 export type CommandCenterView = {
   projectId: string; etag: string; generatedAt: string; tz: string;
   status: ViewStatus;
@@ -124,6 +130,7 @@ export type CommandCenterView = {
   budget: ViewBudget;
   host: HostAdvice;
   systems: SystemDot[];
+  budgetRefusal: BudgetRefusal | null;
 };
 
 /** What the page holds: the last good view (or none) and whether the API answered last time. */
@@ -244,6 +251,13 @@ export function parseCommandCenterView(w: unknown): CommandCenterView {
             ...(typeof h.action === "string" ? { action: h.action } : {}),
             ...(typeof h.cause === "string" ? { cause: h.cause } : {}) },
     systems: arr(o.systems).map(parseSystem),
+    budgetRefusal: (() => {
+      const r = obj(o.budget_refusal);
+      return o.budget_refusal ? {
+        period: str(r.period), capUsdMicros: num(r.cap_usd_micros), actualUsdMicros: num(r.actual_usd_micros),
+        resetsAtLabel: str(r.resets_at_label), title: str(r.title), detail: str(r.detail),
+      } : null;
+    })(),
   };
 }
 

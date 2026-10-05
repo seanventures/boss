@@ -210,11 +210,13 @@ const ROWS: Row[] = [
       expect(txt("#cc2-needs-you-h")).toBe("NEEDS YOU");
       expect(txt("#cc2-needs-you .cc-head-link")).toBe("All in Approvals ↗");
     } },
-  { row: 37, today: "Stopped work first, shared AttentionCard row", now: "Same component, same order; decide_inline honoured", status: "Kept + Changed",
+  { row: 37, today: "Stopped work first, shared AttentionCard row",
+    now: "Same component; today's decisions first, then today's stopped, older stopped as one line (independent test: week-old failures sat above today's gates); decide_inline honoured",
+    status: "Changed",
     dom: async () => {
       await show();
       const ids = $$("#cc2-needs-you [data-att-card]").map((c) => c.getAttribute("data-att-id"));
-      expect(ids[0]).toBe("run:wfr_ship:build");
+      expect(ids).toContain("run:wfr_ship:build");
       // The fixture's gate allows inline: it is approved in place here, as on Live.
       expect($('#cc2-needs-you [data-att-id="dec_gate"] [data-testid="ag-att-approve"]')).not.toBeNull();
     } },

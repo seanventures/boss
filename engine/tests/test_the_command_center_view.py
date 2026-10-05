@@ -132,7 +132,9 @@ def test_systems_tones_come_from_their_sources():
     assert dots(probe={**PROBE, "oldest_queued": NOW - timedelta(minutes=7)})["queue"]["tip"] \
         == "Oldest job waiting 7m"
     assert dots(probe={**PROBE, "oldest_queued": NOW - timedelta(minutes=7)})["queue"]["tone"] == "amber"
-    assert dots(basics=basics(models=[]))["models"]["tone"] == "red"
+    assert (dots(basics=basics(models=[]))["models"]["tone"],
+            dots(basics=basics(models=[]))["models"]["state"]) == ("grey", "Not set up")
+    assert dots(basics=basics(models=[model(state="key_rejected", tip="Key rejected")]))["models"]["tone"] == "red"
     assert dots(basics=basics(models=[model(state="rate_limited", tip="Rate limited until 16:10")])
                 )["models"]["tone"] == "amber"
     assert dots(probe={**PROBE, "failed_hour": 3})["models"]["tone"] == "amber"
@@ -239,3 +241,18 @@ def test_only_a_critical_host_outranks_ready_for_first_build():
     assert status(host=WARNING, runs_24h=0, ever=False)["key"] == "first_build"
     assert status(host=CRITICAL, runs_24h=0, ever=False)["key"] == "host_critical"
     assert status(host=WARNING)["key"] == "host_slow"
+
+
+def test_the_sentence_never_says_running_for_runs_waiting_on_you():
+    got = status(counts=counts(running=4, moving=0))
+    assert got["key"] != "running"
+    assert status(counts=counts(running=4, moving=1))["text"] == "1 running"
+
+
+def test_not_set_up_is_one_look_on_every_dot():
+    """Independent test D13: a dot that is not set up is grey and says `Not set up`, whichever."""
+    got = ccv.systems(probe={**PROBE, "previews": [], "targets": 0, "deploy": None},
+                      basics=basics(models=[], repos=[]), budget=GREEN_BUDGET, host={"show": False}, now=NOW)
+    unset = [d for d in got if d["state"] == "Not set up"]
+    assert {d["key"] for d in unset} == {"models", "repo", "previews", "deploys"}
+    assert {d["tone"] for d in unset} == {"grey"}

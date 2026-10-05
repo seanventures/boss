@@ -18,6 +18,7 @@ import { ProjectStrip } from "./project-strip";
 import { PresencePill } from "./agents/presence-pill";
 import { openPlan } from "../lib/converse-doors";
 import { setConsoleLive } from "../lib/console-live";
+import { PAINTED_EVENT } from "../lib/area-painted";
 import { useAttention } from "../lib/agents-live";
 import { useTitleCount } from "../lib/tab-title";
 import { ConverseHost } from "./agents/converse-host";
@@ -433,7 +434,12 @@ export default function ConsoleShell({
     const ticking = window.setInterval(
       () => setSettledFor((n) => n + 1), 1000);
 
-    void Promise.all([floor, arrived]).then(() => {
+    // AN AREA THAT KNOWS IT HAS PAINTED SAYS SO (independent test D11). The heuristics above
+    // are for areas that cannot tell; one that can (the Command Center, once its view is on
+    // screen) dispatches PAINTED_EVENT, and the bar ends then — not 1.2s + 700ms of quiet later
+    // on a page whose clocks keep the DOM busy.
+    const painted = new Promise<void>((r) => window.addEventListener(PAINTED_EVENT, () => r(), { once: true }));
+    void Promise.race([Promise.all([floor, arrived]), Promise.all([painted, documentDone])]).then(() => {
       window.clearTimeout(ceiling);
       window.clearInterval(ticking);
       finish();

@@ -527,12 +527,15 @@ def systems(*, probe: Mapping[str, Any], basics: Optional[Mapping[str, Any]],
     if basics is None:
         out.append({"key": "models", "tone": "grey", "word": "Models", "state": "Unknown",
                     "tip": "Could not read Repo and models", "href": "?area=setup&focus=models"})
+    elif not models:
+        # "NOT SET UP" LOOKS THE SAME ON EVERY DOT (independent test D13): grey and hollow. The
+        # setup line in Needs you and the sentence ("Finish setup") carry that it blocks work.
+        out.append({"key": "models", "tone": "grey", "word": "Models", "state": "Not set up",
+                    "tip": "No model connected yet", "href": "?area=setup&focus=models"})
     elif not working:
-        broken = next((m for m in models), None)
-        tip = (f"{broken['label']}: {broken['pill']['tip']}" if broken
-               else "No model connected yet")
-        out.append({"key": "models", "tone": "red", "word": "Models",
-                    "state": "Not set up" if not models else "Failing", "tip": _clip(tip),
+        broken = models[0]
+        out.append({"key": "models", "tone": "red", "word": "Models", "state": "Failing",
+                    "tip": _clip(f"{broken['label']}: {broken['pill']['tip']}"),
                     "href": "?area=setup&focus=models"})
     elif limited or failed_hour:
         tip = (f"{limited[0]['label']}: {limited[0]['pill']['tip']}" if limited
@@ -713,7 +716,9 @@ def status(*, counts: Mapping[str, Any], attention: list[Mapping[str, Any]],
                              f"{_money(int(budget.get('cap_usd_micros') or 0))} "
                              f"{words.get(period, 'this ' + period)}. "
                              f"Resets {budget.get('resets_at_label') or 'soon'}.")}
-    running = int(counts.get("running") or 0)
+    # NEVER "RUNNING" FOR A RUN THAT WAITS ON YOU (independent test D3): the sentence counts the
+    # runs actually moving; one parked at your gate is in the needs-you rule above.
+    running = int(counts.get("moving", counts.get("running")) or 0)
     if running:
         return {"key": "running", "text": f"{running} running", "tone": "accent",
                 "tip": "Workflow runs in progress"}
@@ -891,13 +896,16 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
                    now=now)
 
     counts = {**board["counts"], "expired_answerable": int(cc["counts"].get("expired_answerable") or 0)}
+    moving = sum(1 for m in board["missions"]
+                 if m["state"] not in ("done", "stopped", "waiting_you", "waiting_person"))
     runs_24h = len(day["rows"]) + int(day["more"])
     view: dict[str, Any] = {
         "project_id": project_id,
         "etag": "",
         "generated_at": now.isoformat(),
         "tz": zone,
-        "status": status(counts=counts, attention=board["attention"], budget=budget_full,
+        "status": status(counts={**counts, "moving": moving}, attention=board["attention"],
+                         budget=budget_full,
                          host=host, runs_24h=runs_24h, ever=ever,
                          last_work_at=today["last_work_at"], now=now, refusal=refusal),
         "counts": counts,

@@ -1153,6 +1153,30 @@ def setup_deep_links(page, ctx: Context, goto: Callable[[str], None]) -> str:
 
 
 # In order: each later journey uses what the earlier ones made (the skill, the server, the agent).
+def command_center_fits(page, ctx: Context, goto: Callable[[str], None]) -> str:
+    """CC-D1: the landing page never scrolls sideways, at 1440, 1280, 1024 and 390 px, in a real
+    browser layout (the Systems row once pushed Deploys outside its card at 1280 and 1024)."""
+    goto("overview")
+    _visible(page, "cc-systems")
+    seen = []
+    for width, height in ((1440, 900), (1280, 800), (1024, 768), (390, 844)):
+        page.set_viewport_size({"width": width, "height": height})
+        page.wait_for_timeout(600)
+        over = page.evaluate(
+            "() => document.documentElement.scrollWidth - window.innerWidth")
+        outside = page.evaluate(
+            """() => [...document.querySelectorAll('[data-testid^="cc-dot-"]')].filter((d) => {
+                 const card = d.closest('.cc-sec').getBoundingClientRect();
+                 const r = d.getBoundingClientRect();
+                 return r.right > card.right + 0.5 || r.left < card.left - 0.5;
+               }).map((d) => d.getAttribute('data-testid'))""")
+        if over > 0 or outside:
+            raise JourneyFailed(f"at {width}px the page scrolls {over}px sideways; outside: {outside}")
+        seen.append(f"{width}px ok")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    return "; ".join(seen)
+
+
 JOURNEYS: tuple[tuple[str, str, Callable[..., str]], ...] = (
     ("R1", "skill_create", skill_create),
     ("R1", "mcp_register", mcp_register),
@@ -1166,6 +1190,7 @@ JOURNEYS: tuple[tuple[str, str, Callable[..., str]], ...] = (
     ("SU", "setup_first_run", setup_first_run),
     ("SU", "setup_replace_token", setup_replace_token),
     ("SU", "setup_deep_links", setup_deep_links),
+    ("CC", "command_center_fits", command_center_fits),
 )
 
 

@@ -17,6 +17,7 @@ import {
 import { decisionsHref, runHref } from "../lib/command-center";
 import { useConsoleLive } from "../lib/console-live";
 import { AttentionCard } from "./agents/attention-card";
+import type { AttentionItem } from "../lib/agents-live-board";
 import { CARDS_SHOWN, OutcomeChip, ROWS_SHOWN, sortMissions, splitAttention } from "./agents/live-board";
 import { RING_BUDGET, ago, linkTo, navigate, plainClick, reducedMotion, useBand, useNow } from "./agents/live-util";
 import { MissionRow, rowAnimates } from "./agents/mission-row";
@@ -25,9 +26,10 @@ import { DayStrip, Floor, TodayChart, WeekBars } from "./command-center/lazy";
 import { StatusLine } from "./command-center/status-line";
 import { SystemsRow } from "./command-center/systems-row";
 import type { TodayTab } from "./command-center/today-chart";
-import { useHostAdvice } from "./host-advice";
-import { HostCard } from "./command-center/host-card";
+import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { OnboardingHelpRows } from "./onboarding-help-card";
+import { useRoving } from "../lib/use-roving";
+import { announcePainted } from "../lib/area-painted";
 
 /**
  * THE COMMAND CENTER: THE BRIDGE (command-center spec §4).
@@ -149,6 +151,22 @@ function RunChip({ r, now, orgId }: { r: RecentRun; now: number | null; orgId?: 
   );
 }
 
+/** Needs you's order (improvement 1, D5). Pure: the refusal at the door as a card, and the
+ *  stopped work split at the viewer's midnight (`today.hours[24].start`, the server's). */
+export function needsOrder(view: CommandCenterView | null, stopped: AttentionItem[]):
+    { refusalCard: AttentionItem[]; todayStopped: AttentionItem[]; olderStopped: AttentionItem[] } {
+  const r = view?.budgetRefusal;
+  const already = stopped.some((a) => a.kind === "budget_refused");
+  const refusalCard: AttentionItem[] = r && !already ? [{
+    id: "budget:refusal", kind: "budget_refused", title: r.title, detail: r.detail,
+    roleKey: null, actions: [], answers: [], decideInline: false,
+    fix: { area: "budget", label: "Raise budget" },
+  }] : [];
+  const midnight = Date.parse(view?.today.hours[24]?.start ?? "");
+  const today = (a: AttentionItem) => !Number.isFinite(midnight) || !a.at || Date.parse(a.at) >= midnight;
+  return { refusalCard, todayStopped: stopped.filter(today), olderStopped: stopped.filter((a) => !today(a)) };
+}
+
 export type CommandCenterProps = {
   projectId: string;
   orgId?: string;
@@ -216,6 +234,14 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   // TODAY'S TAB: remembered per viewer; a budget that stopped work shows Spend once a session.
   const [tab, setTab] = useState<TodayTab>("work");
   const rootRef = useRef<HTMLDivElement>(null);
+  // THE LOADING BAR ENDS WHEN THIS IS ON SCREEN (D11): once, when the instance you see has a
+  // view to show (not the hidden streamed copy, which has no box).
+  const announced = useRef(false);
+  useEffect(() => {
+    if (announced.current || !view || !rootRef.current || rootRef.current.getClientRects().length === 0) return;
+    announced.current = true;
+    announcePainted("overview");
+  }, [view]);
   useEffect(() => {
     const kept = readStore("local", TAB_KEY);
     if (kept === "spend" || kept === "work") setTab(kept);
@@ -234,6 +260,12 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const [hoverRunId, setHoverRunId] = useState<string | null>(null);
   const [moreCards, setMoreCards] = useState(false);
   const [moreRows, setMoreRows] = useState(false);
+  const [openWaits, setOpenWaits] = useState(false);
+  // One tab stop per list (D15): Tab past Needs you and RUNNING in two presses, not eighty.
+  const cardsRef = useRef<HTMLDivElement>(null);
+  const lanesRef = useRef<HTMLDivElement>(null);
+  useRoving(cardsRef, "[data-att-card]");
+  useRoving(lanesRef, ".cc-lane");
   const [focus, setFocus] = useState<{ id: string; n: number } | null>(null);
   const [gone, setGone] = useState<Set<string>>(new Set());
   const firstIds = useRef<Set<string> | null>(null);
@@ -254,7 +286,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
     const item = attention.find((a) => a.id === id);
     if (!item) return;
     const parts = splitAttention(attention);
-    if (item.kind === "approval" && parts.decisions.indexOf(item) >= Math.max(0, CARDS_SHOWN - parts.stopped.length)) setMoreCards(true);
+    if (item.kind === "approval" && parts.decisions.indexOf(item) >= CARDS_SHOWN - (view?.budgetRefusal ? 1 : 0)) setMoreCards(true);
     setFocus((f) => ({ id, n: (f?.n ?? 0) + 1 }));
   }, [attention]);
 
@@ -267,27 +299,26 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
     box?.focus();
   }, []);
 
-  function onCardsKey(e: React.KeyboardEvent<HTMLElement>) {
-    const key = e.key.toLowerCase();
-    if ((key !== "j" && key !== "k") || e.metaKey || e.ctrlKey || e.altKey) return;
-    if ((e.target as HTMLElement).closest("input, textarea, select")) return;
-    const all = [...e.currentTarget.querySelectorAll<HTMLElement>("[data-att-card]")];
-    if (!all.length) return;
-    const at = all.findIndex((el) => el.contains(document.activeElement));
-    const next = key === "j" ? Math.min(all.length - 1, at + 1) : Math.max(0, at - 1);
-    e.preventDefault();
-    all[next]?.focus();
-  }
+
 
   const { stopped, decisions, setup } = splitAttention(attention);
-  const room = Math.max(0, CARDS_SHOWN - stopped.length);
-  const hiddenDecisions = Math.max(0, decisions.length - room);
-  const cards = [...stopped, ...(moreCards ? decisions : decisions.slice(0, room))];
+  // TODAY'S WORK FIRST (independent test, improvement 1): what you can decide now, then what
+  // stopped today; stopped work from before today is one line, not a wall of week-old cards.
+  // A budget that refuses at the door is the first card (its own rule, view.budgetRefusal).
+  const { refusalCard, todayStopped, olderStopped } = needsOrder(view, stopped);
+  const lead = [...refusalCard, ...decisions, ...todayStopped];
+  const hiddenDecisions = Math.max(0, lead.length - CARDS_SHOWN);
+  const cards = moreCards ? lead : lead.slice(0, CARDS_SHOWN);
   // RUNNING is what is moving: the same rule as the RUNNING number (the live board's
   // counts.running — neither done nor stopped). A stopped run is a card at the top of Needs you
   // and a red cap on the strip, not a lane that says it is running.
   const lanesAll = sortMissions((view?.missions ?? []).filter((m) => m.state !== "done" && m.state !== "stopped"));
-  const lanes = moreRows ? lanesAll : lanesAll.slice(0, ROWS_SHOWN);
+  // IDENTICAL WAITS ARE ONE LINE (improvement 7): runs parked at your gate say the same thing;
+  // two or more fold into `n wait on you`, which opens to the lanes.
+  const waitingLanes = lanesAll.filter((m) => m.state === "waiting_you");
+  const foldWaits = waitingLanes.length >= 2 && !openWaits;
+  const laneList = foldWaits ? lanesAll.filter((m) => m.state !== "waiting_you") : lanesAll;
+  const lanes = moreRows ? laneList : laneList.slice(0, ROWS_SHOWN);
 
   // THE RING BUDGET (agents-home §5.2): at most eight faces move; with any motion off, none.
   let budget = motion === "full" ? RING_BUDGET : 0;
@@ -339,7 +370,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   );
   const needsSec = (
     <section className="cc-sec cc-sec-needs" id="cc2-needs-you" aria-labelledby="cc2-needs-you-h"
-             onKeyDown={onCardsKey}>
+             data-quiet={view && lead.length === 0 && !olderStopped.length ? "true" : undefined}>
       <Head id="cc2-needs-you-h" label="NEEDS YOU" count={view?.counts.needsYou}
             extra={stopped.length ? <span className="cc-chip red" data-testid="cc-stopped-chip">{stopped.length} stopped</span> : undefined}>
         <HeadLink patch={{ area: "decisions", decision_filter: "needs_action", role: null, view: null }} orgId={orgId}>
@@ -349,13 +380,13 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       {/* Can't reach BOSS: the cards stay (the last thing BOSS said) but nothing can be
           pressed — a decision sent into the void is worse than one not sent. */}
       <fieldset className="cc-needs-body" disabled={!reachable} title={reachable ? undefined : "Can't reach BOSS"}>
-        {!view ? null : stopped.length + decisions.length === 0 ? (
+        {!view ? null : lead.length === 0 ? (
           <div className="cc-quiet" data-testid="cc2-needs-you-empty">
             <CheckCircle size={14} weight="bold" aria-hidden />
             <span title="Gates, failed steps and setup gaps appear here.">Nothing needs you</span>
           </div>
         ) : (
-          <div className="cc-cards ag-att-rows">
+          <div className="cc-cards ag-att-rows" ref={cardsRef}>
             {cards.map((a) => (
               <AttentionCard key={a.id} item={a} projectId={projectId} actor={actor} density="row"
                              enter={!firstIds.current?.has(a.id)} still={stillCard.get(a.id)}
@@ -371,6 +402,14 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
             ) : null}
           </div>
         )}
+        {olderStopped.length ? (
+          <a className="cc-expired ag-link" data-testid="cc-stopped-earlier"
+             href={linkTo({ area: "delivery_workflows", role: null, view: null }, orgId)}
+             title="Failed steps from before today. Retry or skip them in Workflow."
+             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate({ area: "delivery_workflows", role: null, view: null }); } }}>
+            {olderStopped.length} stopped earlier ↗
+          </a>
+        ) : null}
         {setup.length ? (
           <ul className="ag-live-setup" data-testid="cc2-setup">
             {setup.map((a) => {
@@ -427,7 +466,17 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
           </div>
         ) : (
           <>
-            <div className="cc-lanes">
+            <div className="cc-lanes" ref={lanesRef}>
+              {waitingLanes.length >= 2 ? (
+                <button type="button" className="cc-waits" data-testid="cc-lanes-waits" aria-expanded={openWaits}
+                        title={waitingLanes.map((m) => m.subject || m.workflowName).join(" · ")}
+                        onClick={() => setOpenWaits((v) => !v)}>
+                  <span className="cc-waits-word">Waiting on you</span>
+                  <span className="cc-waits-n">{`${waitingLanes.length} runs`}</span>
+                  <span className="cc-spacer" />
+                  <span aria-hidden>{openWaits ? "▴" : "▾"}</span>
+                </button>
+              ) : null}
               {lanes.map((m) => (
                 <div key={m.runId} className="cc-lane" data-run-id={m.runId}
                      data-hover={hoverRunId === m.runId ? "true" : undefined}
@@ -439,10 +488,10 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
                 </div>
               ))}
             </div>
-            {lanesAll.length > ROWS_SHOWN ? (
+            {laneList.length > ROWS_SHOWN ? (
               <button type="button" className="ag-zone-more" aria-expanded={moreRows} data-testid="cc-lanes-more"
                       onClick={() => setMoreRows((v) => !v)}>
-                {moreRows ? "Show fewer" : `+${lanesAll.length - ROWS_SHOWN} more running`}
+                {moreRows ? "Show fewer" : `+${laneList.length - ROWS_SHOWN} more running`}
               </button>
             ) : null}
           </>
@@ -484,7 +533,9 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
          data-stale={reachable ? undefined : "true"} data-motion={motion} data-band={band}
          data-layout={phone ? "phone" : width < 1280 ? "stacked" : width < 1440 ? "split" : "wide"}>
       {/* The only banner this page has: the host's own words, above the state (§4.11). */}
-      <HostCard advice={host} />
+      {/* ONLY A CRITICAL HOST GETS THE BANNER (independent test D12): a warning (a disk 85% full)
+          is the Host dot's own word with the reason in its tooltip, not the page's first line. */}
+      {host.show && host.severity === "critical" ? <HostAdviceBanner advice={host} /> : null}
       {statusSec}
       {phone ? (
         <>{needsSec}{composeSec}{workSec}{floorSec}{todaySec}{systemsSec}{weekSec}</>
