@@ -25,6 +25,7 @@ export function useSecrets(projectId: string): { secrets: SecretRow[]; error: st
   const [secrets, setSecrets] = useState<SecretRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const reload = useCallback(() => {
+    if (!projectId) return;
     void listSecrets(projectId).then((r) => {
       if (r.ok) { setSecrets(r.data.secrets ?? []); setError(null); } else setError(r.error);
     });
