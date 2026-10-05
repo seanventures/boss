@@ -164,6 +164,9 @@ EXAMPLES = {
     "discovery": SubjectRef("discovery", "drun_1"),
     "deployment": SubjectRef("deployment", "deptgt_1"),
     "decision": SubjectRef("decision", "dec_1"),
+    # Infra's Ask BOSS: the fleet is the project's (its machines and targets are read in
+    # test_the_fleet_is_a_subject.py against the real schema).
+    "fleet": SubjectRef("fleet", "boss-dogfood"),
 }
 
 
