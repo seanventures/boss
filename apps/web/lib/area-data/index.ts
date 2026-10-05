@@ -11,12 +11,6 @@ export {
   type AssuranceAreaData,
 } from "./assurance";
 export {
-  loadBudgetAreaData,
-  shouldLoadBudgetArea,
-  BUDGET_AREA_IDS,
-  type BudgetAreaData,
-} from "./budget";
-export {
   loadInfraAreaData,
   shouldLoadInfraArea,
   INFRA_AREA_IDS,

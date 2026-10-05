@@ -14,6 +14,7 @@
  * word, `k of n`, each station's word, each output's word. Elapsed ticks here from `started_at`;
  * there is no percent and no ETA anywhere.
  */
+import { logHref } from "../../lib/log-url";
 import { DotsThree, SpinnerGap } from "@phosphor-icons/react";
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -378,7 +379,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                     try { window.sessionStorage.setItem(`boss.agent.suggests.${c.run.id}`, JSON.stringify(askSuggestions(c))); } catch { /* private mode */ }
                     openDockAbout({ subject: { kind: "code_task", id: c.run.id }, question: "", role: null, history: "push" });
                   }}>Ask BOSS</button>
-                  <a role="menuitem" href={areaHref({ area: "activity", run: c.run.id })}>Activity log ↗</a>
+                  <a role="menuitem" href={logHref({ run: c.run.id })}>Activity log ↗</a>
                   <button type="button" role="menuitem" onClick={copyLink}>Copy link</button>
                 </span>
               ) : null}

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from boss_engine.db import begin
 
@@ -219,14 +219,22 @@ def build_setup_router(
         return fresh_view(body.project_id)
 
     @router.put("/v1/setup/budget", response_model=SetupView, response_model_by_alias=True)
-    def put_budget(body: BudgetBody) -> dict[str, Any]:
-        """The monthly cap — the same setting Govern edits."""
-        actor = actor_for(body.actor)
+    def put_budget(body: BudgetBody, request: Request) -> dict[str, Any]:
+        """The monthly cap — the same setting Govern edits, through this same write. Govern
+        sends `via: govern` and an `If-Match`; a stale edit is refused with 412."""
+        from boss_engine.services.budget import policy_version
+
+        from ..govern_guard import govern_actor, require_fresh
+
+        # The monthly cap is a Govern write wherever it is made: the signed-in actor wins.
+        actor = govern_actor(body.actor, principal())
         with begin(engine) as connection:
             require_actor(connection, body.project_id, actor, "budget_manage")
+            require_fresh(request, *policy_version(connection, body.project_id))
             try:
                 setup_actions.set_budget(connection, get_settings(), body.project_id,
-                                         body.monthly_cap_usd, actor=actor)
+                                         body.monthly_cap_usd, actor=actor,
+                                         via=body.via or "repo_and_models")
             except setup_actions.SetupActionError as error:
                 fail(error)
         return fresh_view(body.project_id)

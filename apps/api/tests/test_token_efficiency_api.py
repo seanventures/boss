@@ -350,7 +350,9 @@ def test_saving_one_cap_keeps_every_other_limit_on_the_stage(client):
     write was a replace, saving a cap on '*' wiped the $50/day and 5M tokens/day defaults and the
     budget-pressure alerts stopped (review of milestone/console-b, 2026-10-02). A save is a merge:
     on '*' and on a stage that only had defaults, every limit the payload did not name is kept."""
-    pid = f"proj_te_merge_{uuid4().hex[:10]}"
+    # A real project with its own member: writing token guides needs `budget_manage` now
+    # (activity-govern §10 Q3), so a project nobody belongs to cannot be written.
+    pid = "boss-dogfood"
     before = {
         p["stage"]: p
         for p in client.get(
@@ -372,6 +374,7 @@ def test_saving_one_cap_keeps_every_other_limit_on_the_stage(client):
             "/v1/token-efficiency/policies",
             json={
                 "project_id": pid,
+                "actor": "ceo",
                 "policies": [{"stage": stage, "max_total_tokens_per_call": 20_000}],
             },
         )
