@@ -19,7 +19,7 @@ import { DotsThree, DownloadSimple, Funnel } from "@phosphor-icons/react";
 
 import type { ActivityLogItem } from "../../lib/activity-log";
 import { useConsoleLive } from "../../lib/console-live";
-import { exportHref, fetchFacets, fetchHistogram, fetchLogPage, fetchRow } from "../../lib/log-api";
+import { exportHref, fetchFacets, fetchHistogram, fetchKinds, fetchLogPage, fetchRow } from "../../lib/log-api";
 import { useLogStream, usePolledRead } from "../../lib/log-stream";
 import {
   RANGES, SCOPE_KEYS, VIEWS, apiParams, readLogParams, toggleToken, viewOf, writeLogParams,
@@ -121,6 +121,10 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
   const [queryError, setQueryError] = useState("");
   const [toTop, setToTop] = useState(0);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const findKinds = useCallback(async (prefix: string, signal: AbortSignal) => {
+    const got = await fetchKinds(projectId, params, prefix, { signal });
+    return got.ok && got.data ? got.data : [];
+  }, [projectId, params]);
   const holding = holdingScroll || !!state.row;
   const stream = useLogStream<ActivityLogItem>({
     key: `${projectId}|${queryKey}`,
@@ -340,6 +344,7 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
         </form>
       ) : null}
       <QueryBar tokens={state.tokens} q={state.q} labels={labels} names={state.names} facets={facets.data}
+                findKinds={findKinds}
                 error={queryError || (state.badRange ? `That range isn't a date. Showing the last ${state.range ?? "24h"}.` : "")}
                 onTokens={(tokens, scope) => setTokens(tokens, scope)}
                 onQuery={(q) => apply({ ...state, q, row: null })}

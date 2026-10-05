@@ -1453,6 +1453,27 @@ class ActivityLogService:
             "window": query.window(),
         }
 
+    @staticmethod
+    def kinds(connection: Connection, project_id: str, *, prefix: str = "", limit: int = 20,
+              **params: Any) -> dict[str, Any]:
+        """`kind:` completion BY PREFIX over the whole window (kind:deploy → deploy.production),
+        counted in SQL, most common first. The facets read keeps only the top 40 kinds; a kind
+        past them was unreachable by typing. The current filter applies, except any kind."""
+        query = ActivityLogService.prepare(connection, project_id, **params)
+        query = LogQuery(**{**query.__dict__, "kinds": []})
+        want = _text(prefix).lower()
+        branches = _branches(query, "{kind} AS kd", sources=list(SOURCES))
+        found: list[dict[str, Any]] = []
+        if branches:
+            sql = (f"SELECT kd, count(*) AS n FROM ({' UNION ALL '.join(branches)}) u "
+                   "WHERE coalesce(kd, '') <> '' AND lower(kd) LIKE :prefix ESCAPE '\\' "
+                   "GROUP BY kd ORDER BY 2 DESC, 1 LIMIT :limit")
+            escaped = want.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            p = {**_params(query), "prefix": f"{escaped}%", "limit": max(1, min(int(limit), 50))}
+            found = [{"kind": _text(r["kd"]), "n": int(r["n"] or 0)} for r in _fetch_rows(connection, sql, p)]
+        return {"project_id": query.project_id, "prefix": want, "kinds": found,
+                "window": query.window()}
+
     # ── one row, and the rows around it ────────────────────────────────────────────────────
 
     @staticmethod

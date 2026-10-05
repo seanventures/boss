@@ -420,7 +420,14 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
   const def = guides?.default ?? null;
   const steps: TokenPolicy[] = guides?.per_step ?? [];
   const stageWord = (s: string) => s.replace(/_/g, " ");
-  const k = (n: number | null | undefined) => (n ? (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0)}M` : `${Math.round(n / 1000)}k`) : "—");
+  // Exact whenever rounding would change it: a saved 48,500 never reads as 49k.
+  const k = (n: number | null | undefined) => (!n ? "—"
+    : n % 1_000_000 === 0 ? `${n / 1_000_000}M` : n % 1000 === 0 ? `${n / 1000}k` : n.toLocaleString("en-US"));
+  const [allSteps, setAllSteps] = useState(false);
+  // What was SET comes first (it is what someone changed), then the defaults.
+  const capped = steps.filter((p) => p.max_total_tokens_per_call)
+    .sort((a, b) => Number(b.source === "stored") - Number(a.source === "stored"));
+  const shownSteps = allSteps ? capped : capped.slice(0, 3);
   const versionOf = (s: string) => {
     const p = s === "*" ? def : steps.find((x) => x.stage === s);
     return p?.source === "stored" && p.updated_at ? p.updated_at : "unset";
@@ -464,11 +471,16 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
           <span className="gv-value">
             <span className="gv-value-main gv-steps" data-user-text
                   title="Tokens per model call, by step. Edit to change one.">
-              {steps.some((p) => p.max_total_tokens_per_call)
-                ? steps.filter((p) => p.max_total_tokens_per_call).slice(0, 3).map((p, i) => (
-                  <React.Fragment key={p.stage}>{i ? " · " : ""}<span>{stageWord(p.stage)} {k(p.max_total_tokens_per_call)}</span></React.Fragment>))
+              {capped.length
+                ? shownSteps.map((p, i) => (
+                  <React.Fragment key={p.stage}>{i ? " · " : ""}<span data-testid={`gv-step-${p.stage}`}
+                    data-set={p.source === "stored" || undefined}>{stageWord(p.stage)} {k(p.max_total_tokens_per_call)}</span></React.Fragment>))
                 : "—"}
             </span>
+            {capped.length > 3 ? (
+              <button type="button" className="ag-link gv-steps-more" data-testid="gv-steps-more" aria-expanded={allSteps}
+                      onClick={() => setAllSteps((a) => !a)}>{allSteps ? "Fewer" : `+${capped.length - 3} more`}</button>
+            ) : null}
           </span>
           <span className="gv-source">{steps.some((p) => p.source === "stored") ? "Set here" : "Default"}</span>
           <span className="gv-enforced" data-advisory title="Shapes alerts and tips. Doesn't stop model calls.">Advisory</span>

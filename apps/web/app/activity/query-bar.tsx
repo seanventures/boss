@@ -18,14 +18,21 @@ import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 type Suggestion = { token: LogToken; label: string; count?: number };
 
-function suggestions(key: LogTokenKey, negate: boolean, typed: string, facets: ActivityFacets | null): Suggestion[] {
+function suggestions(key: LogTokenKey, negate: boolean, typed: string, facets: ActivityFacets | null,
+                     found: { prefix: string; kinds: { kind: string; n: number }[] } | null = null): Suggestion[] {
   const all: Suggestion[] = (() => {
     switch (key) {
       case "level": return LEVELS.map((l) => ({ token: { key, value: l.key }, label: l.label, count: facets?.levels[l.key] }));
       case "src": return STREAMS.map((s) => ({ token: { key, value: s.key }, label: s.label, count: facets?.sources[s.key] }));
       case "agent": return (facets?.agents ?? []).map((a) => ({ token: { key, value: a.roleKey }, label: nameOf(a.roleKey).name, count: a.n }));
       case "status": return STATUSES.map((s) => ({ token: { key, value: s.key }, label: s.label, count: facets?.statuses[s.key] }));
-      case "kind": return (facets?.kinds ?? []).map((k) => ({ token: { key, value: k.kind }, label: k.kind, count: k.n }));
+      case "kind": {
+        // The server's prefix answer first (any kind in the window), then the facets' top kinds.
+        const fromServer = found && typed.toLowerCase().startsWith(found.prefix) ? found.kinds : [];
+        const seen = new Set<string>();
+        return [...fromServer, ...(facets?.kinds ?? [])].filter((k) => !seen.has(k.kind) && seen.add(k.kind))
+          .map((k) => ({ token: { key, value: k.kind }, label: k.kind, count: k.n }));
+      }
       case "svc": return Object.entries(facets?.services ?? {}).map(([k, n]) => ({ token: { key, value: k }, label: SERVICE_LABEL[k] ?? k, count: n }));
       case "run": return (facets?.runs ?? []).map((r) => ({
         token: { key: r.id.startsWith("crun_") ? "run" : "wfr", value: r.id } as LogToken, label: r.label || r.id, count: r.n }));
@@ -39,7 +46,7 @@ function suggestions(key: LogTokenKey, negate: boolean, typed: string, facets: A
     .slice(0, 12);
 }
 
-export function QueryBar({ tokens, q, labels, names, facets, error, onTokens, onQuery, onAdd }: {
+export function QueryBar({ tokens, q, labels, names, facets, error, onTokens, onQuery, onAdd, findKinds }: {
   tokens: LogToken[];
   q: string;
   labels: Record<string, string>;
@@ -50,6 +57,8 @@ export function QueryBar({ tokens, q, labels, names, facets, error, onTokens, on
   onTokens: (tokens: LogToken[], scopeChange: boolean) => void;
   onQuery: (q: string) => void;
   onAdd: (token: LogToken) => void;
+  /** `kind:` completion by prefix from the server (beyond the facets' top kinds). */
+  findKinds?: (prefix: string, signal: AbortSignal) => Promise<{ kind: string; n: number }[]>;
 }) {
   const identities = useIdentityVersion(); // names land when the install's agents load
   const [text, setText] = useState(q);
@@ -82,10 +91,22 @@ export function QueryBar({ tokens, q, labels, names, facets, error, onTokens, on
   }, [text, q, onQuery]);
 
   const typing = text.match(/^(-?)([a-z]+):(.*)$/i);
+  // kind:<prefix> asks the server after a short pause; a stale answer is dropped.
+  const [found, setFound] = useState<{ prefix: string; kinds: { kind: string; n: number }[] } | null>(null);
+  const kindPrefix = typing && typing[2].toLowerCase() === "kind" && focused ? typing[3].trim().toLowerCase() : null;
+  useEffect(() => {
+    if (kindPrefix === null || !kindPrefix || !findKinds) return undefined;
+    const ctl = new AbortController();
+    const t = setTimeout(() => {
+      void findKinds(kindPrefix, ctl.signal).then((kinds) => { if (!ctl.signal.aborted) setFound({ prefix: kindPrefix, kinds }); })
+        .catch(() => {});
+    }, 200);
+    return () => { clearTimeout(t); ctl.abort(); };
+  }, [kindPrefix, findKinds]);
   const menu = useMemo(() => {
     const m = text.match(/^(-?)([a-z]+):(.*)$/i);
-    return m && focused ? suggestions(m[2].toLowerCase() as LogTokenKey, m[1] === "-", m[3], facets) : [];
-  }, [text, focused, facets, identities]);
+    return m && focused ? suggestions(m[2].toLowerCase() as LogTokenKey, m[1] === "-", m[3], facets, found) : [];
+  }, [text, focused, facets, identities, found]);
 
   const commit = (raw: string): boolean => {
     const parsed = parseToken(raw);

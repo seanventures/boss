@@ -89,3 +89,26 @@ def test_kinds_are_counted_for_autocomplete_and_ignore_their_own_selection(clien
     narrowed = client.get("/v1/activity/facets", params={**base, "kind": picked}).json()
     assert narrowed["kinds"] == every  # picking a kind never hides the others
     assert narrowed["total"] == every[-1]["n"]
+
+
+def test_kind_completion_by_prefix_reaches_past_the_top_kinds(client, engine, log):
+    """`kind:deploy` completes from the server over the whole window, not from the facets'
+    top 40: a rare kind is offered too. `_` and `%` in the prefix are literal."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    with engine.begin() as c:
+        for i in range(45):  # 45 distinct common kinds push a rare one out of the top 40
+            for _ in range(3):
+                seed.event(c, event_type=f"noise.k{i:02d}", at=now)
+        seed.event(c, event_type="deploy.production", at=now)
+        seed.event(c, event_type="deployXstaging", at=now)
+    facets = client.get("/v1/activity/facets", params={"project_id": PROJECT, "range": "24h"}).json()
+    assert "deploy.production" not in {k["kind"] for k in facets["kinds"]}
+    got = client.get("/v1/activity/kinds", params={"project_id": PROJECT, "range": "24h",
+                                                   "prefix": "deploy."}).json()
+    assert [k["kind"] for k in got["kinds"]] == ["deploy.production"]
+    assert client.get("/v1/activity/kinds", params={"project_id": PROJECT, "range": "24h",
+                                                    "prefix": "DEPLOY"}).json()["kinds"]
+    under = client.get("/v1/activity/kinds", params={"project_id": PROJECT, "range": "24h",
+                                                     "prefix": "deploy_"}).json()
+    assert under["kinds"] == []  # `_` is a character here, not a wildcard

@@ -198,15 +198,27 @@ const WORD: Record<string, string> = { claude: "Claude", gpt: "GPT", gemini: "Ge
   opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable", mini: "mini", turbo: "Turbo", pro: "Pro",
   flash: "Flash", mistral: "Mistral", deepseek: "DeepSeek", qwen: "Qwen", grok: "Grok" };
 
+const PROVIDER: Record<string, string> = {
+  openai: "OpenAI", anthropic: "Anthropic", claude: "Anthropic", google: "Google", gemini: "Google Gemini",
+  vertex: "Vertex AI", azure: "Azure OpenAI", azure_openai: "Azure OpenAI", bedrock: "AWS Bedrock",
+  mistral: "Mistral", groq: "Groq", deepseek: "DeepSeek", openrouter: "OpenRouter", ollama: "Ollama",
+  together: "Together AI", fireworks: "Fireworks", xai: "xAI", cohere: "Cohere", custom: "Custom model",
+  claude_code: "Claude Code", codex: "Codex",
+};
+
 /** A model id as people say it: `claude-sonnet-4-5-20250929` → `Claude Sonnet 4.5`,
- *  `gpt-4o` → `GPT-4o`. Anything that isn't a model id reads as words (`repo_scan` → `Repo scan`). */
+ *  `gpt-4o` → `GPT-4o`; a Setup source id (`setup-openai`, `setup-openai-2`) → `OpenAI`
+ *  (`OpenAI 2`). Anything else reads as words (`repo_scan` → `Repo scan`). */
 export function modelName(id: string): string {
   const raw = String(id ?? "").trim();
   if (!raw) return "Unknown";
-  if (!MODEL_FAMILY.test(raw)) {
-    const words = raw.replace(/[_:]+/g, " ").replace(/\s+/g, " ").trim();
-    return words.charAt(0).toUpperCase() + words.slice(1);
+  const setup = raw.match(/^setup[-_:]([a-z][a-z0-9_]*?)(?:[-_](\d+))?$/i);
+  if (setup) {
+    const name = PROVIDER[setup[1].toLowerCase()] ?? humanWords(setup[1]);
+    return setup[2] ? `${name} ${setup[2]}` : name;
   }
+  if (PROVIDER[raw.toLowerCase()]) return PROVIDER[raw.toLowerCase()];
+  if (!MODEL_FAMILY.test(raw)) return humanWords(raw);
   const parts = raw.replace(/[-@](\d{8}|latest)$/i, "").split(/[-_/]/).filter(Boolean);
   if (/^gpt$/i.test(parts[0]) && parts.length > 1) return `GPT-${parts.slice(1).join("-")}`;
   const out: string[] = [];
@@ -216,6 +228,11 @@ export function modelName(id: string): string {
     else out.push(WORD[part.toLowerCase()] ?? part);
   }
   return out.join(" ");
+}
+
+function humanWords(raw: string): string {
+  const words = raw.replace(/[_:]+/g, " ").replace(/\s+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 /** A tooltip within the copy budget: at most 14 words. */
