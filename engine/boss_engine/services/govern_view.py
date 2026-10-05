@@ -361,17 +361,22 @@ def cap_preview(connection: Connection, project_id: str, *, period: str, cap_usd
     series = daily_spend(connection, project_id, days=days, now=now)
     spent_days = sum(1 for d in series if d["money_usd_micros"] > 0)
     stopped = []
-    running, month = 0, None
-    for day in series:
-        if period == "day":
-            if day["money_usd_micros"] > cap_usd_micros:
+    if period == "day":
+        stopped = [d["day"] for d in series if d["money_usd_micros"] > cap_usd_micros]
+    else:
+        # A month cap counts from the 1st, as the governor does: the window's first month
+        # starts with the money spent before the window opened (D6 — it restarted at zero).
+        first = datetime.fromisoformat(series[0]["day"]).date()
+        lead = (first - first.replace(day=1)).days
+        history = daily_spend(connection, project_id, days=days + lead, now=now) if lead else series
+        in_window = {d["day"] for d in series}
+        running, month = 0, None
+        for day in history:
+            if day["day"][:7] != month:
+                month, running = day["day"][:7], 0
+            running += day["money_usd_micros"]
+            if day["day"] in in_window and running > cap_usd_micros:
                 stopped.append(day["day"])
-            continue
-        if day["day"][:7] != month:
-            month, running = day["day"][:7], 0
-        running += day["money_usd_micros"]
-        if running > cap_usd_micros:
-            stopped.append(day["day"])
     return {"period": period, "cap_usd_micros": int(cap_usd_micros),
             "days_considered": len(series), "days_with_spend": spent_days,
             "days_stopped": len(stopped), "stopped_days": stopped,

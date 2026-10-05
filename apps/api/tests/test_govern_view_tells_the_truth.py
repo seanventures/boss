@@ -187,3 +187,19 @@ def test_a_cap_preview_replays_real_spend(client, engine, clean):
     thin = client.post("/v1/budget/cap/preview",
                        json={"project_id": PROJECT, "period": "month", "cap_usd": 1}).json()
     assert thin["not_enough_history"] is True
+
+
+def test_a_month_cap_preview_counts_from_the_first(engine, clean):
+    """D6: the replay's first month starts with what was spent before the window opened, as
+    the governor counts it — not from zero at the window's first day."""
+    now = datetime(2026, 10, 20, 15, tzinfo=timezone.utc)  # window: 2026-09-21 .. today
+    with engine.begin() as c:
+        _receipt(c, 100_000_000, datetime(2026, 9, 5, 12, tzinfo=timezone.utc))   # before it
+        _receipt(c, 10_000_000, datetime(2026, 9, 25, 12, tzinfo=timezone.utc))
+        _receipt(c, 10_000_000, datetime(2026, 10, 3, 12, tzinfo=timezone.utc))
+        preview = govern_view.cap_preview(c, PROJECT, period="month", cap_usd_micros=50_000_000,
+                                          now=now)
+    # September was over $50 from the 5th: every September day in the window is stopped
+    # (21st-30th = 10 days); October restarts at the 1st and stays under.
+    assert preview["stopped_days"] == [f"2026-09-{d}" for d in range(21, 31)]
+    assert preview["days_considered"] == 30
