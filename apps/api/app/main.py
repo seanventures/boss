@@ -1469,6 +1469,14 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="BOSS Control Plane", version="0.2.1", lifespan=lifespan)
+# COMPRESSED JSON (infra-observability spec §6.8; operator decision 2026-10-04). The console's
+# view endpoints are polled and some are large by nature: the Pulse at 50 apps × 96 cells is
+# ~63 KB of JSON and ~1.2 KB gzipped. Starlette's GZip skips `text/event-stream` (preview logs,
+# talks, MCP streams), so SSE is never buffered; bodies under 1 KB are sent as they are.
+# Added first, so it is the INNERMOST layer: auth and idempotency see the request unchanged.
+from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
+
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 
 @app.exception_handler(RequestValidationError)
