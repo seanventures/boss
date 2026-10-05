@@ -431,29 +431,6 @@ export async function runChaosAction(formData: FormData): Promise<ActionResult> 
   });
 }); }
 
-export async function reconcileCommitmentsAction(formData: FormData): Promise<ActionResult> { return act(async () => {
-  await postJson(`/v1/finops/reconcile-commitments`, {
-    project_id: getProjectId(formData),
-    actor: "system",
-  });
-}); }
-
-export async function requestInitiativeBudgetAction(
-  _prev: ActionResult | null,
-  formData: FormData,
-): Promise<ActionResult> {
-  const title = String(formData.get("title") ?? "").trim();
-  if (!title) return { ok: false, error: "Title is required." };
-  const res = await postJsonReturn(`/v1/finops/initiative-budget`, {
-    project_id: getProjectId(formData),
-    title,
-    tier: Number(formData.get("tier") ?? 2),
-    amount_usd_micros: Number(formData.get("amount_usd") ?? 0) * 1_000_000,
-    actor: "system",
-  });
-  revalidatePath("/");
-  return res;
-}
 
 export async function dispatchPlanAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);
@@ -467,16 +444,6 @@ export async function dispatchPlanAction(formData: FormData): Promise<ActionResu
   revalidatePath("/");
 }); }
 
-export async function setBudgetIntensityAction(formData: FormData): Promise<ActionResult> { return act(async () => {
-  const projectId = getProjectId(formData);
-  const intensity = Number(formData.get("intensity") ?? 50);
-  await apiFetch(`${API_URL}/v1/budget/set_intensity`, {
-    method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ scope_id: projectId, intensity, actor: getActor(formData) }),
-  });
-  revalidatePath("/");
-}); }
 
 export async function createPipelineProfileAction(formData: FormData): Promise<ActionResult> { return act(async () => {
   const projectId = getProjectId(formData);

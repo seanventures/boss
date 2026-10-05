@@ -89,7 +89,8 @@ describe("Activity: the river", () => {
     expect(row.querySelector(".ag-river-text")!.textContent).toBe("Forge coding Build · Ship it #182");
     const time = row.querySelector("time")!;
     expect(time.textContent).toMatch(/^\d\d:\d\d$/);
-    expect(time.getAttribute("title")).toBe(a1.started_at);
+    // One clock for every log (lib/log-time): local on screen, the UTC instant in the tooltip.
+    expect(time.getAttribute("title")).toBe(new Date(a1.started_at).toISOString().replace(".000Z", "Z"));
     expect(row.querySelector(".ag-river-status")!.textContent).toBe("Done");
     expect(row.querySelector(".ag-river-took")!.textContent).toBe("2m");
     expect(dayLabel("2026-09-29T10:00:00", new Date("2026-10-04T10:00:00"))).toBe("Tue 29 Sep");
@@ -124,9 +125,27 @@ describe("Activity: the river", () => {
     expect(list.textContent).toContain("run_tests · failed · 1200ms");
     expect(list.textContent).not.toContain("SECRET");
     const log = $('[data-testid="ag-river-log-a_parent"]')!;
-    expect(log.textContent).toBe("Open in Activity log ↗");
-    expect(log.getAttribute("href")).toContain("area=activity");
-    expect(log.getAttribute("href")).toContain("workflow_run_id=wfr_1");
+    // THE BROKEN LINK, FIXED AS A CLASS. This sent `workflow_run_id=`, which the Log never
+    // read, so it landed on the whole project. It is built by logHref() now, scoped to the work.
+    expect(log.textContent).toBe("All lines ↗");
+    const href = new URLSearchParams(log.getAttribute("href")!.split("?")[1]);
+    expect(href.get("area")).toBe("activity");
+    expect(href.get("act")).toBe("a_parent");
+    expect(href.get("workflow_run_id")).toBeNull();
+    expect(href.get("run_name")).toBeTruthy(); // the chip reads a name before the server answers
+  });
+
+  it("every row reaches its lines; work that wrote none falls back to its run, by name (D7)", async () => {
+    pages = [{ items: [item("quiet"), item("busy", { cost_usd: 0.02 }), item("loose", { links: {} })], next: null }];
+    await render(<ActivityRiver projectId="p1" />);
+    const hrefOf = (id: string) => new URLSearchParams($(`[data-testid="ag-river-log-${id}"]`)!.getAttribute("href")!.split("?")[1]);
+    // Nothing of its own (no tool calls, no model calls): the run's lines, named.
+    expect([hrefOf("quiet").get("wfr"), hrefOf("quiet").get("act")]).toEqual(["wfr_1", null]);
+    expect(hrefOf("quiet").get("run_name")).toBeTruthy();
+    // It called a model: its own lines.
+    expect([hrefOf("busy").get("act"), hrefOf("busy").get("wfr")]).toEqual(["busy", null]);
+    // No run to fall back to: still its own scope, never the whole project.
+    expect(hrefOf("loose").get("act")).toBe("loose");
   });
 
   it("new work waits behind `n new ↑` and does not shift the rows", async () => {

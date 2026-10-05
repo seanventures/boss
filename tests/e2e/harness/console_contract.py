@@ -143,8 +143,9 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
               expect_source="app/agent-ui.tsx"),
     ),
     "activity": (
-        Press("activity-level-error", "app/activity-log-ui.tsx",
-              expect='[data-testid="activity-level-error"][aria-pressed="true"]'),
+        # The Log's Errors view is a token in the query bar; the chip says it is chosen.
+        Press("lx-view-errors", "app/activity/log-explorer.tsx",
+              expect='[data-testid="lx-view-errors"][aria-pressed="true"]'),
     ),
     "discovery": (
         Press("dossier-filter-promising", "app/discoveries-ui.tsx",
@@ -201,8 +202,10 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
         Journey("setup_deep_links"),
     ),
     "budget": (
-        Press("budget-intensity-apply", "app/budget-intensity-ui.tsx", write=True,
-              expect=_tid("budget-intensity-current")),
+        # Pace: ⋯ → Edit → Apply writes the same set_intensity the old slider did; the editor
+        # closes and the row shows the value it now runs at.
+        Press("gv-more-pace", "app/govern/control-board.tsx", write=True,
+              then=("gv-edit-pace", "gv-pace-apply"), expect=_tid("gv-value-pace")),
     ),
     "pipeline": (
         Press("chunk-plan", "app/phase3-ui.tsx", fill=(("chunk-title", "E2E chunk plan"),),

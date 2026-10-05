@@ -5,6 +5,7 @@
  * Deploy. Build is this run's activity log, oldest first, filterable by agent; Preview is the
  * existing startup stream (same-origin SSE); Deploy is the deployment's live step list.
  */
+import { logHref } from "../../lib/log-url";
 import React, { useEffect, useId, useRef, useState } from "react";
 
 import { LiveDeployment } from "../deploy-ui";
@@ -90,7 +91,7 @@ export function LogsDrawer({ projectId, runId, previewId, previewStatus, deployI
         ) : null}
         <span className="fx-spacer" />
         {tab !== "deploy" ? <button type="button" className="ag-link" onClick={copy} data-testid="fx-logs-copy">Copy</button> : null}
-        <a className="ag-link" href={areaHref({ area: "activity", run: runId })}>Open full log ↗</a>
+        <a className="ag-link" href={logHref({ run: runId })}>Open full log ↗</a>
         <button type="button" className="ag-link" onClick={onClose} aria-label="Close logs">×</button>
       </header>
       <div className="fx-logs-body">
