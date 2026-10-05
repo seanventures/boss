@@ -22,7 +22,7 @@ import { buildHref } from "../../lib/infra-view";
 import { AttentionCard } from "../agents/attention-card";
 import { ago, plainClick, useNow } from "../agents/live-util";
 import type { ObsTabProps } from "./obs-home";
-import { goInfra } from "./obs-util";
+import { leaveTo } from "./obs-util";
 import { Empty, Skeleton, TableToggle, ZoneHead } from "../infra/kit";
 
 // ── a gauge ─────────────────────────────────────────────────────────────────────────────────
@@ -132,7 +132,7 @@ function Stalls({ s, now }: { s: System; now: number | null }) {
               <span className="ag-spacer" />
               {r.runId ? (
                 <a className="inf-link" href={buildHref(r.runId)} title="Open the build that made this"
-                   onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra(buildHref(r.runId!)); } }}>Build ↗</a>
+                   onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(buildHref(r.runId!)); } }}>Build ↗</a>
               ) : null}
             </li>
           ))}
@@ -199,7 +199,7 @@ export function SystemTab({ projectId, actor, orgId, system }: ObsTabProps) {
 
       <section className="obs-zone" aria-labelledby="obs-work-head" data-testid="obs-work">
         <ZoneHead id="obs-work-head" label="WORK">
-          <a className="inf-link" href="?area=overview" onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra("?area=overview"); } }}>Command Center ↗</a>
+          <a className="inf-link" href="?area=overview" onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo("?area=overview"); } }}>Command Center ↗</a>
         </ZoneHead>
         <span className="obs-line obs-work inf-num">
           <span><span className="inf-muted">Queue</span> {s.work.queue}</span>
@@ -252,13 +252,13 @@ export function SystemTab({ projectId, actor, orgId, system }: ObsTabProps) {
           <span className="obs-advice" data-testid="obs-system-advice" title={s.advice.tip}>
             <span className="obs-strong" data-copy="data">{s.advice.title}</span>
             {s.advice.href ? (
-              <a className="inf-link" href={s.advice.href} onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra(s.advice!.href!); } }}>Open</a>
+              <a className="inf-link" href={s.advice.href} onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(s.advice!.href!); } }}>Open</a>
             ) : null}
           </span>
         ) : null}
         <span className="ag-spacer" />
-        {sandboxes ? <a className="inf-link" href="?area=sandboxes" onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra("?area=sandboxes"); } }}>Sandboxes ↗</a> : null}
-        {shepherd ? <a className="inf-link" href="?area=shepherd" onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra("?area=shepherd"); } }}>Shepherd ↗</a> : null}
+        {sandboxes ? <a className="inf-link" href="?area=sandboxes" onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo("?area=sandboxes"); } }}>Sandboxes ↗</a> : null}
+        {shepherd ? <a className="inf-link" href="?area=shepherd" onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo("?area=shepherd"); } }}>Shepherd ↗</a> : null}
       </div>
     </div>
   );

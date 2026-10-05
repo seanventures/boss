@@ -25,7 +25,7 @@ import { RunFace } from "../agents/run-face";
 import { plainClick } from "../agents/live-util";
 import type { ObsTabProps } from "./obs-home";
 import { GroupDrawer, groupLabel, readModelParam, spendWord } from "./group-drawer";
-import { goInfra } from "./obs-util";
+import { leaveTo } from "./obs-util";
 import { Routing } from "./routing";
 import { Spark } from "./spark";
 import { TokenStream, slotOf } from "./token-stream";
@@ -155,7 +155,7 @@ function FailedCalls({ m, since }: { m: Models; since: string | null }) {
     <section className="obs-zone" aria-labelledby="obs-failed-head" data-testid="obs-failed">
       <ZoneHead id="obs-failed-head" label="FAILED CALLS" count={m.totals.failed}>
         <a className="inf-link" href={logsHref("llm_call", null, since)} data-testid="obs-failed-logs"
-           onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra(logsHref("llm_call", null, since)); } }}>Logs ↗</a>
+           onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(logsHref("llm_call", null, since)); } }}>Logs ↗</a>
       </ZoneHead>
       {m.failed.length === 0 ? <Empty>No failed calls</Empty> : (
         <ul className="obs-list">
@@ -172,7 +172,7 @@ function FailedCalls({ m, since }: { m: Models; since: string | null }) {
               <span className="ag-spacer" />
               {f.runId ? (
                 <a className="inf-link" href={buildHref(f.runId)} title="Open the build that made this"
-                   onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra(buildHref(f.runId!)); } }}>Build ↗</a>
+                   onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(buildHref(f.runId!)); } }}>Build ↗</a>
               ) : null}
             </li>
           ))}

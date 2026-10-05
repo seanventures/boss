@@ -23,7 +23,7 @@ import { notifyChanged } from "../changed";
 import { ago, plainClick, useNow } from "../agents/live-util";
 import type { ObsTabProps } from "./obs-home";
 import { AddToolsSheet } from "./add-tools-sheet";
-import { goInfra } from "./obs-util";
+import { leaveTo } from "./obs-util";
 import { obsRead, obsWrite } from "./obs-write";
 import { Empty, Skeleton, StateWord, ZoneHead } from "../infra/kit";
 
@@ -74,7 +74,7 @@ function Stack({ s, projectId, actor, refresh }: { s: Sources; projectId: string
         </span>
         {st.host ? (
           <a className="inf-link" href={hostHref(st.host.id)} data-copy="data" title={`${st.host.name} in Infra`}
-             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra(hostHref(st.host!.id)); } }}>{st.host.name} ↗</a>
+             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(hostHref(st.host!.id)); } }}>{st.host.name} ↗</a>
         ) : null}
         {st.checkedAt && !unknown ? <span className="inf-faint inf-num" title={new Date(st.checkedAt).toLocaleString()}>checked {ago(st.checkedAt, now)}</span> : null}
         {unknown ? (
@@ -86,7 +86,7 @@ function Stack({ s, projectId, actor, refresh }: { s: Sources; projectId: string
           <span className="obs-line" data-testid="obs-stack-needs-machine">
             <span className="inf-muted" title="The stack needs a machine to run on">Needs a machine</span>
             <a className="inf-link" href="?area=infra&view=fleet" data-testid="obs-stack-add-host"
-               onClick={(e) => { if (plainClick(e)) { e.preventDefault(); goInfra("?area=infra&view=fleet"); } }}>Add host ↗</a>
+               onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo("?area=infra&view=fleet"); } }}>Add host ↗</a>
           </span>
         ) : null}
       </div>
