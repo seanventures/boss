@@ -91,6 +91,9 @@ function PreviewRowView({ row, projectId, actor, now, onLog, onChanged, live }: 
           <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-preview-restart"
                   title="Start it again with the same build" onClick={() => void act("restart")}>
             {busy === "restart" ? "Restarting…" : "Restart"}</button>
+        ) : row.restartWhy ? (
+          <button type="button" className="ag-btn" disabled data-testid="inf-preview-restart"
+                  title={row.restartWhy} aria-description={row.restartWhy}>Restart</button>
         ) : null}
         {row.can.stop ? (
           <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-preview-stop"

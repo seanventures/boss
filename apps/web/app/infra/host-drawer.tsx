@@ -47,8 +47,19 @@ function useBusy(): [Busy, <T>(key: string, fn: () => Promise<T>) => Promise<T |
   return [busy, run];
 }
 
-const fact = (v: unknown): string => (v === null || v === undefined || v === "" ? "—"
-  : Array.isArray(v) ? (v.length ? v.join(", ") : "—") : String(v));
+/** A fact in words. A label set is an object, and String() of it printed "[object Object]"
+ *  in the host drawer: it reads `role ci · region fsn1` now, and an empty one is "—". */
+export const fact = (v: unknown): string => {
+  if (v === null || v === undefined || v === "") return "—";
+  if (Array.isArray(v)) return v.length ? v.map(fact).join(", ") : "—";
+  if (typeof v === "object") {
+    const pairs = Object.entries(v as Record<string, unknown>)
+      .filter(([, x]) => x !== null && x !== undefined && x !== "")
+      .map(([k, x]) => (x === true ? k : `${k} ${fact(x)}`));
+    return pairs.length ? pairs.join(" · ") : "—";
+  }
+  return String(v);
+};
 
 // ── SETUP ───────────────────────────────────────────────────────────────────────────────────
 

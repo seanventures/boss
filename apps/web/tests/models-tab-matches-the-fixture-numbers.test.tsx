@@ -133,6 +133,9 @@ describe("the Models numbers", () => {
   it("FAILED CALLS and ROUTING read the view; a routing filter asks the route log", async () => {
     const rec = await openObs("?view=models");
     expect($$("[data-testid='obs-failed-row']")).toHaveLength(2);
+    // Two of the 27 failed calls are listed: the head says so, and links to all of them.
+    expect($("[data-testid='obs-failed-logs']")?.textContent?.trim()).toBe("2 of 27 · All ↗");
+    expect($("[data-testid='obs-failed-head-count']")).toBeNull();
     expect($$("[data-testid='obs-route-row']")).toHaveLength(8);
     const sel = $("[data-testid='obs-route-outcome']") as HTMLSelectElement;
     sel.value = "denied";

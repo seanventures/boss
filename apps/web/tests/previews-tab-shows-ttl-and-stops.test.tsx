@@ -97,6 +97,19 @@ describe("the previews tab", () => {
     }
   });
 
+  it("Restart is disabled, with the reason, when the preview's build no longer exists", async () => {
+    await open([{ match: /^\/v1\/infra\/previews$/, etag: true, reply: () => {
+      const f = previewsFixture() as { failed_24h: Record<string, unknown>[] };
+      f.failed_24h[0] = { ...f.failed_24h[0], can: { ...(f.failed_24h[0].can as object), restart: false },
+                          restart_why: "Its build no longer exists, so it cannot start again" };
+      return f;
+    } }]);
+    const btn = rowOf("pv_fail")!.querySelector<HTMLButtonElement>('[data-testid="inf-preview-restart"]')!;
+    expect(btn).not.toBeNull();
+    expect(btn.disabled).toBe(true);
+    expect(btn.title).toBe("Its build no longer exists, so it cannot start again");
+  });
+
   it("says Nothing running when no preview is live, and keeps FAILED", async () => {
     await open([{ match: /^\/v1\/infra\/previews$/, etag: true, reply: () => ({
       ...previewsFixture(), counts: { live: 0, failed_24h: 1, ended_24h: 1 }, live: [] }) }]);

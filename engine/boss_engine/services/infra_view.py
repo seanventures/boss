@@ -408,6 +408,7 @@ class PreviewRow(TypedDict, total=False):
     expires_at: Optional[str]
     last_seen_at: Optional[str]
     can: dict[str, bool]               # open, log, stop, restart
+    restart_why: Optional[str]         # why Restart cannot run (its build is gone), in words
 
 
 class PreviewList(TypedDict, total=False):
@@ -1949,6 +1950,13 @@ def preview_rows(connection: Any, settings: Any, project_id: str) -> PreviewList
                      "ORDER BY created_at DESC LIMIT 200", {"p": project_id, "s": since})
 
     raw = _guard(connection, partial, "previews", read, [])
+    # A preview restarts FROM ITS BUILD. When that run is gone (deleted, or a retired lineage),
+    # Restart answered 404 "code task run not found"; it is offered only where it can work, and
+    # says why where it cannot.
+    run_ids = sorted({str(p["run_id"]) for p in raw if p.get("run_id")})
+    builds = set(_guard(connection, partial, "builds", lambda: [r["id"] for r in _rows(
+        connection, "SELECT id FROM code_task_runs WHERE id = ANY(:i)", {"i": run_ids})]
+        if run_ids else [], [])) if run_ids else set()
     this = _guard(connection, partial, "this computer", lambda: _this_computer(
         connection, project_id, _rows(connection, "SELECT id, name, address, status FROM "
                                       "deployment_hosts WHERE project_id = :p",
@@ -1969,7 +1977,9 @@ def preview_rows(connection: Any, settings: Any, project_id: str) -> PreviewList
             "created_at": _iso(p.get("created_at")), "expires_at": _iso(p.get("expires_at")),
             "last_seen_at": _iso(p.get("last_seen_at")),
             "can": {"open": status == "running" and bool(p.get("url")), "log": True,
-                    "stop": is_live, "restart": bool(p.get("run_id"))},
+                    "stop": is_live, "restart": bool(p.get("run_id")) and p["run_id"] in builds},
+            "restart_why": (None if not p.get("run_id") or p["run_id"] in builds
+                            else "Its build no longer exists, so it cannot start again"),
         }
         if is_live:
             live.append(row)
@@ -2222,16 +2232,39 @@ def _cloud_resources(connection: Any, project_id: str, filters: dict[str, str]) 
                 "SELECT r.*, a.account_label FROM external_resources r "
                 "LEFT JOIN provider_accounts a ON a.id = r.provider_account_id "
                 f"WHERE {' AND '.join(where)} ORDER BY r.last_seen_at DESC LIMIT 200", params)
+    # AN APP ON ONE OF OUR HOSTS IS SAID LIKE ONE. A governed host deploy records its app as a
+    # resource with provider `ssh_host` and type `ssh_host.app`, which the drawer printed as its
+    # provider and "region", and its health was the word written at deploy time ("Up") while
+    # Observability, reading the probes, said Down. It is placed on its host by name now, and its
+    # health is the same verdict Observability shows (health_states over the target's probes).
+    host_apps: dict[str, str] = {}
+    for r in ext:
+        ext_id = str(r.get("external_id") or "")
+        if r["provider"] == "ssh_host" and ext_id.split(":", 1)[0] in ("app", "stack"):
+            host_apps[r["id"]] = ext_id.split(":")[1]
+    placed = {t["id"]: t for t in _rows(
+        connection, "SELECT t.id, h.name AS host_name FROM deployment_targets t "
+                    "LEFT JOIN deployment_hosts h ON h.id = t.host_id WHERE t.id = ANY(:i)",
+        {"i": sorted(set(host_apps.values()))})} if host_apps else {}
+    probed = health_states(connection, sorted(placed)) if placed else {}
     rows = []
     for r in ext:
         meta = _json(r["metadata"]) or {}
+        target_id = host_apps.get(r["id"])
+        on_host = target_id is not None
         rows.append({
             "id": r["id"], "kind": "Resource", "name": r["name"], "provider": r["provider"],
+            "provider_name": "SSH host" if on_host else None,
             "account": ({"id": r["provider_account_id"], "name": r["account_label"]}
                         if r["provider_account_id"] else None),
-            "region": meta.get("region"), "service": r["resource_type"],
+            "region": ((placed.get(target_id) or {}).get("host_name") or "Unplaced") if on_host
+            else meta.get("region"),
+            "service": ("App on a host" if on_host and str(r["resource_type"]).endswith(".app")
+                        else "Stack on a host" if on_host else r["resource_type"]),
             "env": r["environment"], "owner": r["owner_role"],
-            "health": _w("resource", r["health_status"]),
+            "health": ({"word": probed[target_id]["word"], "tone": probed[target_id]["tone"]}
+                       if on_host and target_id in probed
+                       else _w("resource", r["health_status"])),
             **_money("cost_month", r["actual_monthly_usd_micros"]
                      if r["actual_monthly_usd_micros"] is not None
                      else r["estimated_monthly_usd_micros"]),

@@ -8,11 +8,19 @@
  */
 import React, { act, useCallback } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { vi } from "vitest";
 
 import { readInfraUrl, useFleet } from "../../lib/infra-view";
 import { mockInfraFetch, type Route, type Variant } from "./infra-fixtures";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// A COLD MOUNT IN A BUSY RUN IS SLOW, NOT WRONG. The first test of a file pays for importing the
+// Infra modules; in a combined run (the whole web suite on one laptop) that alone passed vitest's
+// 5 s default, the mount was abandoned mid-flight, and every later test in the file found no
+// racks ("Cannot read properties of null"). Generous here, and every mount waits for the data
+// it asked for instead of a fixed number of ticks.
+vi.setConfig({ testTimeout: 30_000 });
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -23,6 +31,16 @@ export const ACTOR = "ceo";
 
 export async function settle(rounds = 12): Promise<void> {
   for (let i = 0; i < rounds; i += 1) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+}
+
+/** Wait until `ready()` holds, by a deadline rather than a count of ticks. */
+export async function until(ready: () => boolean, what: string, ms = 10_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!ready()) {
+    if (Date.now() > deadline) throw new Error(`${what} never appeared: ${document.body.textContent?.slice(0, 300)}`);
+    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+  }
+  await settle(2);
 }
 
 /** Point the console URL at `?area=infra&<search>`. */
@@ -72,6 +90,8 @@ export async function mountFleet(search: string, opts: { variant?: Variant; rout
     );
   }
   await mountNode(<Harness />);
+  // The fleet has answered and been drawn: its skeleton is gone.
+  await until(() => !document.querySelector('[data-testid="infra-fleet-loading"]'), "the fleet");
   return mock;
 }
 

@@ -157,6 +157,12 @@ def seed(engine, project_id: str = "boss-dogfood", *, samples: bool = True) -> d
                i=pid_, p=project_id, r=f"run_{pid_}", port=port,
                u=f"http://127.0.0.1:{port}/" if status == "running" else None, s=status, fk=fk,
                ago=ago, exp=exp)
+        # The builds the live and failed previews ran (pv_ended's build is gone: its Restart is
+        # not offered).
+        for run in ("run_pv_live", "run_pv_fail"):
+            _x(c, "INSERT INTO code_task_runs (id, project_id, title, status, phase, spec) VALUES "
+                  "(:i, :p, 'Search', 'completed', 'done', '{}'::jsonb) ON CONFLICT (id) DO NOTHING",
+               i=run, p=project_id)
         # This computer.
         _x(c, "INSERT INTO hardware_places (id, project_id, kind, name, status, agent_state, "
               "is_default, hostname, arch, os_name, created_by) VALUES ('hp_local', :p, 'local', "
@@ -197,6 +203,7 @@ def clear(c, project_id: str) -> None:
         "DELETE FROM deployment_hosts WHERE project_id = :p",
         "DELETE FROM secret_refs WHERE project_id = :p AND scope_type = 'deployment_host'",
         "DELETE FROM app_previews WHERE project_id = :p",
+        "DELETE FROM code_task_runs WHERE id IN ('run_pv_live', 'run_pv_fail') AND project_id = :p",
         "DELETE FROM decisions WHERE id IN ('dec_sd_ok', 'dec_sd_failed', 'dec_sd_wait')",
         "DELETE FROM events WHERE project_id = :p AND event_type LIKE 'observability.stack%'",
     ):

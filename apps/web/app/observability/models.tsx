@@ -153,11 +153,19 @@ function GroupTable({ m, group, selected, onSelect, slots }: {
 
 function FailedCalls({ m, since }: { m: Models; since: string | null }) {
   const lt = useLocalTime();
+  // THE COUNT SAYS WHAT IS LISTED. The head said "6" over five rows (the list is the newest few):
+  // when fewer are shown than failed, it says "5 of 6 · All ↗" and the link is the way to the rest.
+  const shown = m.failed.length;
+  const total = Math.max(m.totals.failed, shown);
+  const some = shown > 0 && shown < total;
   return (
     <section className="obs-zone" aria-labelledby="obs-failed-head" data-testid="obs-failed">
-      <ZoneHead id="obs-failed-head" label="FAILED CALLS" count={m.totals.failed}>
+      <ZoneHead id="obs-failed-head" label="FAILED CALLS" count={some ? undefined : total}>
         <a className="inf-link" href={logsHref("llm_call", null, since)} data-testid="obs-failed-logs"
-           onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(logsHref("llm_call", null, since)); } }}>Logs ↗</a>
+           title={some ? `The newest ${shown} of ${total} failed calls are listed; the log has every one` : undefined}
+           onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(logsHref("llm_call", null, since)); } }}>
+          {some ? `${shown} of ${total} · All ↗` : "Logs ↗"}
+        </a>
       </ZoneHead>
       {m.failed.length === 0 ? <Empty>No failed calls</Empty> : (
         <ul className="obs-list">

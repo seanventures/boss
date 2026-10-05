@@ -23,15 +23,18 @@
   display: grid; align-items: center; gap: 10px; min-height: 56px; padding: 6px 12px; min-width: 0;
   /* Every column a fixed track (no `auto`): each row is its own grid, so an auto track sized
      by one row's Approve/Reject pushed that row's columns out of line with the rest. */
-  grid-template-columns: minmax(96px, 120px) minmax(110px, 1.2fr) 64px minmax(64px, 0.8fr) 72px 24px 96px 56px 36px 172px 20px;
+  grid-template-columns: minmax(96px, 120px) minmax(150px, 1.6fr) 64px minmax(64px, 0.7fr) 72px 24px 96px 56px 36px 172px 20px;
   border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
 }
 .inf-dep-row:hover { border-color: var(--accent-line); }
 .inf-dep-row[data-tone="amber"] { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); }
 .inf-dep-row[data-tone="red"] { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+/* The app · env WRAPS, never ellipsizes: at 1440 "Lead-Triage Inbox · staging" was cut to
+   "Lead-Triage Inbox · sta…" in a 1.2fr track, and the env is the half that says where it went. */
 .inf-dep-name {
-  display: inline-flex; align-items: baseline; min-width: 0; overflow: hidden; padding: 0; border: 0; background: none;
-  color: var(--ink); font: inherit; font-weight: 650; font-size: 0.86rem; text-align: left; cursor: pointer; white-space: nowrap; text-overflow: ellipsis;
+  display: inline-flex; flex-wrap: wrap; align-items: baseline; min-width: 0; padding: 0; border: 0; background: none;
+  color: var(--ink); font: inherit; font-weight: 650; font-size: 0.86rem; line-height: 1.25; text-align: left; cursor: pointer;
+  white-space: normal; overflow-wrap: anywhere;
 }
 .inf-dep-name:hover { text-decoration: underline; }
 .inf-dep-name:focus-visible, .inf-dep-go:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: 4px; }

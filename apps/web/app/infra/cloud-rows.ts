@@ -90,7 +90,8 @@ export function parseCatalog(w: unknown): CatalogEntry[] {
 // ── Resources ───────────────────────────────────────────────────────────────────────────────
 
 export type CloudResource = {
-  id: string; kind: "Resource" | "Droplet"; name: string; provider: string; account: { id: string; name: string } | null;
+  id: string; kind: "Resource" | "Droplet"; name: string; provider: string; providerName: string;
+  account: { id: string; name: string } | null;
   region: string | null; service: string | null; env: string | null; owner: string | null; health: Word;
   costMonth: string; lastSeenAt: string | null; ttl: string | null; expiresAt: string | null; externalId: string | null;
   links: { build: string | null; deploy: string | null; budget: string | null; receipt: string | null };
@@ -101,7 +102,10 @@ export function parseResource(w: unknown): CloudResource {
   const l = obj(o.links);
   const d = o.droplet ? obj(o.droplet) : null;
   return {
-    id: str(o.id), kind: str(o.kind) === "Droplet" ? "Droplet" : "Resource", name: str(o.name), provider: str(o.provider),
+    // `provider_name` says a provider in words (an app on one of our hosts reads "SSH host",
+    // not `ssh_host`); filters still key on `provider`.
+    id: str(o.id), kind: str(o.kind) === "Droplet" ? "Droplet" : "Resource", name: str(o.name),
+    provider: str(o.provider), providerName: str(o.provider_name, str(o.provider)),
     account: ref(o.account), region: optStr(o.region), service: optStr(o.service), env: optStr(o.env), owner: optStr(o.owner),
     health: parseWord(o.health, "No signal"), costMonth: money(o.cost_month_usd), lastSeenAt: optStr(o.last_seen_at),
     ttl: optStr(o.ttl), expiresAt: optStr(o.expires_at), externalId: optStr(o.external_id),
