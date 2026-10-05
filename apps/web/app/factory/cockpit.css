@@ -69,7 +69,7 @@
 .fx-face-wait { width: 24px; height: 24px; align-items: center; justify-content: center; border-radius: 50%; border: 1.5px dashed var(--amber); color: var(--amber); }
 .fx-stations-v { display: none; list-style: none; margin: 0; padding: 0; }
 
-/* body: Story 60 / Outputs 40 */
+/* body: Story 60 / Outputs 40 — the grid itself is with the widths, at the end */
 .fx-sec-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .fx-sec-title { margin: 0; font-size: 11px; letter-spacing: 0.08em; font-weight: 650; color: var(--muted); }
 .fx-chip {
@@ -183,14 +183,24 @@ span.fx-row-face { cursor: default; }
   .fx-now { transition: none; }
 }
 
-/* 1024-1279: Outputs 380px */
-@media (max-width: 1279px) {
+/* THE TWO COLUMNS (factory spec §4.5): Story | Outputs from 1200px, Outputs sticky under the
+   Line. Walk fixes on 2026-10-04 dropped the base `.fx-body { display: grid }`, which left the
+   width rules below setting columns on a block box, so Outputs fell under the Story at every
+   width. The grid is declared here, once, with its widths; tests/the-cockpit-has-two-columns
+   checks the computed layout at 1440, 1280, 1200, 1199 and 390. */
+@media (min-width: 1200px) {
+  .fx-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 20px; align-items: start; }
+}
+/* 1200-1279: Outputs 380px */
+@media (min-width: 1200px) and (max-width: 1279px) {
   .fx-body { grid-template-columns: minmax(0, 1fr) 380px; }
 }
-/* 640-1023: Outputs above Story, as a 2-column grid of collapsed rows; the Line scrolls in its box */
+/* <1200: one column, Story then Outputs, nothing sticky beside it */
+@media (max-width: 1199px) {
+  .fx-outputs { position: static; }
+}
+/* 640-1023: Outputs as a 2-column grid of collapsed rows; the Line scrolls in its box */
 @media (max-width: 1023px) {
-  .fx-body { grid-template-columns: minmax(0, 1fr); }
-  .fx-outputs { order: -1; position: static; }
   .fx-out-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .fx-out + .fx-out { border-top: 0; }
   .fx-out[data-open] { grid-column: 1 / -1; }
