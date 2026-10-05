@@ -3717,6 +3717,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _lanes = _effective_setting(
                     _sc, project_id, settings, "code_agent_max_concurrency")
             max_workers = min(len(checks), max(int(_lanes or 3), 6))
+            # UNDER MEMORY PRESSURE THE PANEL SITS ONE SEAT AT A TIME (stability spec §4b.3,
+            # L1+): each seat is a ~300 MB CLI, and six at once is what tips a small machine
+            # into swap. Slower, and it finishes.
+            try:
+                from .admission import current_level, L1 as _L1
+                with _transaction(engine) as _lc:
+                    if current_level(_lc) >= _L1:
+                        max_workers = 1
+            except Exception:  # noqa: BLE001 — an unread level never changes the panel
+                pass
             panel_parallel = max_workers > 1
             # Safe defaults so a check that times out / errors DEGRADES instead of crashing or
             # auto-passing: security 'not_run' still BLOCKS (security_clean requires 'clean');

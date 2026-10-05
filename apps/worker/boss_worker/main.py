@@ -488,6 +488,47 @@ def _prune_activity_log(client: ControlPlaneClient) -> None:
         LOGGER.debug("activity_retention_failed", exc_info=True)
 
 
+#: Never more lease threads than this, whatever admission measures: the control plane runs
+#: every build in its own process and is the thing being protected.
+MAX_WORKER_SLOTS = 4
+
+
+def worker_slots(client, settings) -> int:
+    """`BOSS_WORKER_SLOTS`: a number, or `auto` — the control plane's "Builds at once"."""
+    raw = str(getattr(settings, "worker_slots", "1") or "1").strip().lower()
+    if raw != "auto":
+        try:
+            return max(1, min(MAX_WORKER_SLOTS, int(raw)))
+        except ValueError:
+            return 1
+    try:
+        response = client._client.get("/v1/system/health", timeout=10.0)
+        response.raise_for_status()
+        value = int(((response.json() or {}).get("admission") or {})
+                    .get("builds_at_once", {}).get("value") or 1)
+    except Exception:  # noqa: BLE001 — an older API, or none yet: one slot, as before
+        return 1
+    return max(1, min(MAX_WORKER_SLOTS, value))
+
+
+def _extra_lease_loop(settings, index: int) -> None:
+    """A second (third, …) lease loop: its own client and worker id, jobs only — the ticks and
+    sweeps stay on the main loop."""
+    slot_settings = settings.model_copy(update={"worker_id": f"{settings.worker_id}-s{index}"})
+    client = ControlPlaneClient(slot_settings.control_plane_url, api_key=slot_settings.api_key)
+    try:
+        while not _STOPPING:
+            try:
+                ran = run_worker_cycle(client, slot_settings)
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("worker_slot_cycle_failed worker_id=%s", slot_settings.worker_id)
+                ran = False
+            if not ran:
+                idle_wait(float(slot_settings.poll_interval_seconds))
+    finally:
+        client.close()
+
+
 def idle_wait(seconds: float, *, stopping=lambda: _STOPPING, sleep=time.sleep,
               clock=time.monotonic) -> tuple[float, float]:
     """Sleep `seconds` in one-second steps, stopping early when asked. Returns
@@ -563,6 +604,15 @@ def main() -> None:
         threading.Thread(target=_run_background_sweeps, args=(settings,),
                          name="boss-worker-sweeps", daemon=True).start()
 
+        # MORE THAN ONE BUILD AT A TIME, when the machine has room (stability spec §4b.2).
+        extra_slots = [
+            threading.Thread(target=_extra_lease_loop, args=(settings, i),
+                             name=f"boss-worker-slot-{i}", daemon=True)
+            for i in range(1, worker_slots(client, settings))
+        ]
+        for t in extra_slots:
+            t.start()
+
         # WAS BOSS ABLE TO RUN? Measured over the IDLE WAIT ONLY (stability spec C5).
         #
         # This used to time the whole loop — `now - last_cycle - poll_interval` — and a cycle
@@ -611,6 +661,10 @@ def main() -> None:
                         "this time is the machine's, not the pipeline's",
                         settings.worker_id, late)
                     _report_host_stall(client, late)
+        # The extra slots hand their jobs back on stop like the main loop; give them the same
+        # grace before the process exits under them.
+        for t in extra_slots:
+            t.join(timeout=50)
         LOGGER.info("worker_stopped worker_id=%s", settings.worker_id)
     finally:
         client.close()

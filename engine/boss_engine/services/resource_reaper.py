@@ -337,7 +337,15 @@ def tick(engine: Any, settings: Any = None) -> dict[str, Any]:
     if engine is not None:
         from . import preview_service
 
-        report["previews"] = _safe(lambda: preview_service.reap_previews(engine, settings))
+        def _reap_previews() -> Any:
+            # Under pressure (L1+) an unwatched preview goes after 5 minutes, not 20.
+            from .admission import L1, current_level
+            with engine.begin() as c:
+                level = current_level(c)
+            return preview_service.reap_previews(
+                engine, settings, idle_minutes=5 if level >= L1 else None)
+
+        report["previews"] = _safe(_reap_previews)
         report["preview_workdirs"] = _safe(
             lambda: preview_service.sweep_preview_workdirs(engine))
     report["dirs"] = _safe(lambda: reap_dirs())
