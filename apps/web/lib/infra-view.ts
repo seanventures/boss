@@ -219,6 +219,8 @@ export type DeployRow = {
   steps: { s: StepState; t: string }[];
   startedAt: string | null; finishedAt: string | null; durationMs: number | null;
   can: { approve: boolean; reject: boolean; rollback: boolean; redeploy: boolean };
+  /** Additive (S3): the commit `Roll back` redeploys, for `Roll back to <sha7>`; null if none. */
+  rollbackToSha7: string | null;
   decisionId: string | null; runId: string | null;
 };
 const STEP_STATES = new Set(["done", "running", "failed", "pending", "skipped"]);
@@ -237,6 +239,7 @@ export function parseDeployRow(w: unknown): DeployRow {
     steps: arr(o.steps).slice(0, 24).map((s) => { const x = obj(s); return { s: (STEP_STATES.has(str(x.s)) ? str(x.s) : "pending") as StepState, t: str(x.t) }; }),
     startedAt: optStr(o.started_at), finishedAt: optStr(o.finished_at), durationMs: optNum(o.duration_ms),
     can: { approve: !!can.approve, reject: !!can.reject, rollback: !!can.rollback, redeploy: !!can.redeploy },
+    rollbackToSha7: optStr(o.rollback_to_sha7),
     decisionId: optStr(o.decision_id), runId: optStr(o.run_id),
   };
 }

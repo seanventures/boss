@@ -10,7 +10,7 @@
  * Infra and Observability view. A control that cannot work here is not drawn: outward SSH off
  * hides every action that reaches a machine; a read-only viewer sees no write at all.
  */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Polled } from "../../lib/factory-floor";
 import type { Fleet, Rack, Resident, StageAction } from "../../lib/infra-view";
@@ -22,7 +22,7 @@ import { HostDrawer } from "./host-drawer";
 import { afterWrite, generateHostKey, provisionHost, verifyHost } from "./infra-actions";
 import type { InfraTabProps } from "./infra-home";
 import { ErrorLine, Menu, useNow } from "./infra-util";
-import { Empty, Skeleton, ZoneHead } from "./kit";
+import { Empty, LiveRegion, Skeleton, useAnnouncer, ZoneHead } from "./kit";
 import { RackView, UnplacedRack } from "./rack";
 import { SecretsSheet } from "./secrets-sheet";
 import { TargetDrawer } from "./target-drawer";
@@ -58,6 +58,23 @@ export function FleetTab({ projectId, actor, url, go, query, fleet }: InfraTabPr
   const f = fleet.data;
   const pre = f?.preconditions;
   const canWrite = pre?.canWrite ?? false;
+
+  // §7: a polite announcement when an app's or a machine's state word changes between polls
+  // (`invoice prod is down`), at most one per 10 s; counts are never announced.
+  const [said, say] = useAnnouncer();
+  const words = useRef<Map<string, string> | null>(null);
+  useEffect(() => {
+    if (!f) return;
+    const next = new Map<string, string>();
+    for (const r of f.racks) {
+      next.set(`h:${r.id}`, `${r.name} is ${r.state.word.toLowerCase()}`);
+      for (const x of r.residents) if (x.kind === "target") next.set(`t:${x.id}`, `${x.name} ${x.env ?? ""} is ${x.health.word.toLowerCase()}`.replace("  ", " "));
+    }
+    const prev = words.current;
+    words.current = next;
+    if (!prev) return;
+    for (const [k, line] of next) if (prev.has(k) && prev.get(k) !== line) { say(line); break; }
+  }, [f, say]);
 
   const visible = useMemo(() => {
     const all = (f?.racks ?? []).filter((r) => showRetired || r.state.tone !== "none");
@@ -111,6 +128,7 @@ export function FleetTab({ projectId, actor, url, go, query, fleet }: InfraTabPr
              title="Merge-triggered sandbox deploys are off (BOSS_ENABLE_SANDBOX_DEPLOY=false)">Sandbox deploys off</div>
       ) : null}
       <ErrorLine error={error} testId="inf-fleet-error" />
+      <LiveRegion text={said} />
 
       <section className="inf-zone" aria-labelledby="inf-machines">
         <ZoneHead id="inf-machines" label="MACHINES" count={shown}>

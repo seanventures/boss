@@ -59,13 +59,13 @@ function StepBox({ k, index, current, children }: { k: StageKey; index: number; 
   const state = at < index ? "done" : at === index ? "current" : "todo";
   const label = STAGES[at - 1]?.label ?? k;
   return (
-    <details className="inf-step" data-state={state} open={k === current} data-testid={`inf-step-${k}`}>
+    <details className="inf-setup-step" data-state={state} open={k === current} data-testid={`inf-step-${k}`}>
       <summary>
         <span className="inf-stage-mark" aria-hidden>{state === "done" ? "✓" : at}</span>
         <span>{label}</span>
-        {state === "current" ? <span className="inf-step-now">now</span> : null}
+        {state === "current" ? <span className="inf-setup-step-now">now</span> : null}
       </summary>
-      <div className="inf-step-body">{children}</div>
+      <div className="inf-setup-step-body">{children}</div>
     </details>
   );
 }
