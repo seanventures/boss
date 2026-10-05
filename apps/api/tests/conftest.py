@@ -91,6 +91,8 @@ def clean_tables(engine):
             # recorded by one test must not stop the next test's seed from granting.
             "role_mcp_servers",
             "seed_exclusions",
+            # The plan's reporting lines: one test's plan leaked into the next test's tree.
+            "org_assignments",
             "metatron_watch_ticks",
             "metatron_memories",
             "metatron_goals",

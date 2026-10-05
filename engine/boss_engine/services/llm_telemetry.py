@@ -95,6 +95,59 @@ def role_for_stage(stage: Optional[str]) -> Optional[str]:
     return STAGE_ROLES.get((stage or "").strip().lower())
 
 
+def attribute_llm_calls(connection, project_id: str, hours: float) -> list[dict]:
+    """WHO SPENT EACH CALL, decided once (org-view spec §6.1): every llm_calls row in the
+    window, grouped, with the agent it belongs to.
+
+    In order: the act the call was made under (`act_id` → that act's role); else the role the
+    call recorded (`llm_calls.role`); else its stage's owner (STAGE_ROLES); else NOBODY —
+    `role: None`, shown as "not tied to an agent", never folded into a neighbour.
+
+    A call on a subscription (`included_in_subscription`) is counted as a call and never as
+    money: `metered_micros` is the sum over the others only. Organization and the Directory
+    (console_v2_workforce._llm_work) both read this, so they cannot disagree on an agent's $.
+
+    Each row: {role, stage, model, included, calls, turns, tokens, micros, metered_micros,
+    retries, ok_calls, last_at}."""
+    rows = connection.execute(
+        text(
+            """
+            SELECT a.role_key AS act_role, c.role AS call_role, c.stage, c.model,
+                   COALESCE(c.included_in_subscription, false) AS included,
+                   count(*)                          AS calls,
+                   COALESCE(sum(c.turns), 0)         AS turns,
+                   COALESCE(sum(c.total_tokens), 0)  AS tokens,
+                   COALESCE(sum(c.cost_usd_micros), 0) AS micros,
+                   COALESCE(sum(c.retries), 0)       AS retries,
+                   count(*) FILTER (WHERE c.ok)      AS ok_calls,
+                   max(c.created_at)                 AS last_at
+            FROM llm_calls c
+            LEFT JOIN agent_acts a ON a.act_id = c.act_id
+            WHERE c.project_id = :p
+              AND c.created_at > now() - make_interval(secs => :s)
+            GROUP BY 1, 2, 3, 4, 5
+            """
+        ),
+        {"p": project_id, "s": float(hours) * 3600.0},
+    ).mappings().all()
+    out: list[dict] = []
+    for r in rows:
+        role = (canonical_role(r.get("act_role")) or canonical_role(r.get("call_role"))
+                or canonical_role(role_for_stage(r.get("stage"))))
+        micros = int(r.get("micros") or 0)
+        included = bool(r.get("included"))
+        out.append({
+            "role": role, "stage": str(r.get("stage") or "").strip().lower() or None,
+            "model": r.get("model"), "included": included,
+            "calls": int(r.get("calls") or 0), "turns": int(r.get("turns") or 0),
+            "tokens": int(r.get("tokens") or 0), "micros": micros,
+            "metered_micros": 0 if included else micros,
+            "retries": int(r.get("retries") or 0), "ok_calls": int(r.get("ok_calls") or 0),
+            "last_at": r.get("last_at"),
+        })
+    return out
+
+
 def _signed_by(c, ctx: dict, stage: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """WHICH ACT THIS CALL IS PART OF, and so which agent spent it.
 
