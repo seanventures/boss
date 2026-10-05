@@ -47,6 +47,7 @@
 .inf-dot[data-tone="none"] { display: none; }
 .inf-dot[data-ring="1"] { animation: inf-ring 600ms ease-out 1; }
 .inf-state { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 0.82rem; color: var(--ink); white-space: nowrap; }
+.inf-state-word { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .inf-state[data-tone="red"] .inf-state-word { color: var(--red); }
 .inf-state[data-tone="amber"] .inf-state-word { color: var(--amber); }
 .inf-state[data-tone="grey"] .inf-state-word, .inf-state[data-tone="hollow"] .inf-state-word { color: var(--muted); }

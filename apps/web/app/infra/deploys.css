@@ -101,7 +101,7 @@
 /* Previews: one row each; the TTL bar is an SVG whose fill width is the time left. */
 .inf-pv-row {
   display: grid; align-items: center; gap: 10px; min-height: 52px; padding: 6px 12px; min-width: 0;
-  grid-template-columns: minmax(110px, 190px) minmax(120px, 1.4fr) 64px 48px minmax(56px, 0.6fr) 84px minmax(110px, 150px) auto;
+  grid-template-columns: minmax(110px, 230px) minmax(120px, 1.4fr) 64px 48px minmax(56px, 0.6fr) 84px minmax(110px, 150px) auto;
   border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
 }
 .inf-pv-row[data-tone="red"] { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }

@@ -6,6 +6,7 @@
  * the partial-data line, a section head, the right drawer, the sheet, the typed confirm, and the
  * URL writer. Tokens only (`inf-` classes in infra.css); no inline style, no hex.
  */
+import { useSearchParams } from "next/navigation";
 import React, { useEffect, useId, useRef, useState } from "react";
 
 import type { AttentionItem } from "../../lib/agents-live-board";
@@ -27,9 +28,17 @@ export function writeUrl(patch: Record<string, string | null>, mode: "push" | "r
   } catch { /* not a browser */ }
 }
 
-/** Re-read the URL on mount and on every back/forward. */
+/** Re-read the URL on mount and on every back/forward.
+ *
+ *  THE FIRST RENDER READS WHAT THE SERVER READ. Reading `window.location` in the initial state
+ *  made the server paint Fleet (it has no window) and the client hydrate Previews: React 19 does
+ *  not patch a mismatched attribute, so the Fleet tab stayed selected over the Previews panel.
+ *  The router's search params are the same on both sides; `window` is the fallback only where
+ *  there is no router (tests). */
 export function useUrlState<T>(read: (search: string) => T): [T, () => void] {
-  const [state, setState] = useState<T>(() => read(typeof window === "undefined" ? "" : window.location.search));
+  const params = useSearchParams();
+  const [state, setState] = useState<T>(() => read(params ? `?${params.toString()}`
+    : typeof window === "undefined" ? "" : window.location.search));
   const reader = useRef(read);
   reader.current = read;
   useEffect(() => {
@@ -51,7 +60,7 @@ export function Dot({ tone, label, ring }: { tone: Tone; label?: string; ring?: 
 /** Dot + word. The word is the server's (`infra_view.word()`). `changed` rings the dot once. */
 export function StateWord({ w, testId, changed }: { w: Word; testId?: string; changed?: boolean }) {
   return (
-    <span className="inf-state" data-tone={w.tone} data-testid={testId}>
+    <span className="inf-state" data-tone={w.tone} data-testid={testId} title={w.word}>
       <Dot tone={w.tone} ring={changed} />
       <span className="inf-state-word">{w.word}</span>
     </span>
