@@ -335,6 +335,8 @@ describe("needs you", () => {
 
   it("nothing waiting: three words, with the rest in the tooltip", async () => {
     await mount(page(V(quietView())));
+    // And no empty column beside the Floor (re-test 8): NOW is marked quiet for the layout.
+    expect($(".cc-now")?.getAttribute("data-quiet")).toBe("true");
     expect(text('[data-testid="cc2-needs-you-empty"]')).toBe("Nothing needs you");
     expect($('[data-testid="cc2-needs-you-empty"] [title]')?.getAttribute("title"))
       .toBe("Gates, failed steps and setup gaps appear here.");
@@ -515,7 +517,8 @@ describe("the layout (D1, D4)", () => {
   it("the Systems row wraps inside its card at every width, and heads never wrap", () => {
     const css = readFileSync(resolve(__dirname, "../app/command-center/bridge.css"), "utf8");
     expect(css).not.toMatch(/\.cc-systems \{[^}]*nowrap/);
-    expect(css).toMatch(/\.cc-systems \{ display: grid; grid-template-columns: repeat\(auto-fit/);
+    expect(css).toMatch(/\.cc-systems \{\s*display: grid; grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/);
+    expect(css).toMatch(/@media \(min-width: 1280px\) \{ \.cc-systems \{ grid-template-columns: repeat\(7/);
     expect(css).not.toMatch(/\.cc-sys a \{[^}]*overflow: hidden/);
     expect(css).toMatch(/\.cc-head-label, \.cc-head-link, \.cc-head \.cc-chip \{ white-space: nowrap/);
     expect(css).not.toMatch(/\.cc-status-text \{[^}]*text-overflow: ellipsis/);
@@ -526,5 +529,17 @@ describe("the loading bar (D11)", () => {
   it("the shell ends it when an area says it has painted, and the Command Center says so", () => {
     expect(codeOnly("app/ConsoleShell.tsx")).toContain("Promise.all([painted, documentDone])");
     expect(codeOnly("app/command-center-ui.tsx")).toContain('announcePainted("overview")');
+  });
+});
+
+describe("the host banner's commands (re-test 4)", () => {
+  it("draws a `command` as code with Copy, never as literal backticks", async () => {
+    await mount(page(V(view({ host: { show: true, severity: "critical", cause: "disk",
+      headline: "This server's disk is full", detail: "Right now: disk 97% full.",
+      action: "Free disk space — `docker system prune` reclaims old images." } }))));
+    const banner = $('[data-testid="host-advice"]')!;
+    expect(banner.textContent).not.toContain("`");
+    expect(banner.querySelector("code")?.textContent).toBe("docker system prune");
+    expect($('[data-testid="host-advice-copy"]')?.getAttribute("title")).toBe("Copy: docker system prune");
   });
 });

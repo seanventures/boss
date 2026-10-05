@@ -1172,7 +1172,29 @@ def command_center_fits(page, ctx: Context, goto: Callable[[str], None]) -> str:
                }).map((d) => d.getAttribute('data-testid'))""")
         if over > 0 or outside:
             raise JourneyFailed(f"at {width}px the page scrolls {over}px sideways; outside: {outside}")
+        # The shell's top bar: no item drawn over its neighbour (re-test 2, at 1024).
+        crowded = page.evaluate(
+            """() => { const bar = document.querySelector('.bx-topbar'); if (!bar) return [];
+                 const items = [...bar.children].filter((e) => e.getClientRects().length
+                   && getComputedStyle(e).position !== 'absolute' && !e.classList.contains('bx-topbar-spacer'));
+                 const out = [];
+                 for (let i = 1; i < items.length; i++) {
+                   const a = items[i - 1].getBoundingClientRect(), b = items[i].getBoundingClientRect();
+                   if (a.right > b.left + 0.5 && a.top < b.bottom && b.top < a.bottom) out.push(items[i - 1].className + ' / ' + items[i].className);
+                 }
+                 return out; }""")
+        if crowded and width >= 640:
+            raise JourneyFailed(f"at {width}px the top bar's items overlap: {crowded}")
         seen.append(f"{width}px ok")
+    # At 768px tall the sidebar's last item is reachable, never behind the account block.
+    page.set_viewport_size({"width": 1280, "height": 768})
+    page.wait_for_timeout(400)
+    hidden = page.evaluate(
+        """() => { const nav = document.querySelector('.bx-nav'), foot = document.querySelector('.bx-sidebar-foot');
+             if (!nav || !foot || !nav.getClientRects().length) return false;
+             return nav.getBoundingClientRect().bottom > foot.getBoundingClientRect().top + 0.5; }""")
+    if hidden:
+        raise JourneyFailed("at 768px tall the sidebar's nav runs under its account block")
     page.set_viewport_size({"width": 1440, "height": 900})
     return "; ".join(seen)
 
