@@ -2335,8 +2335,10 @@ export async function conveneMeetingAction(formData: FormData): Promise<ActionRe
   if (!directive) {
     return missingInput("directive");
   }
-  if (meetingType === "standup") {
-    await apiFetch(`${API_URL}/v1/meetings/standup`, {
+  if (meetingType === "standup" || meetingType === "go_no_go") {
+    // Both are no-spend fixtures today: minutes, a Decision and optional dissent, no model.
+    const path = meetingType === "standup" ? "/v1/meetings/standup" : "/v1/meetings/go-no-go";
+    await apiFetch(`${API_URL}${path}`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
@@ -2985,6 +2987,8 @@ export async function startDiscoveryAction(
       seed,
       title: String(formData.get("title") ?? "").trim() || undefined,
       context: String(formData.get("context") ?? "").trim() || undefined,
+      // The hero's Deep toggle: the multi-source scout sweep on the first pass.
+      ...(formData.get("deep") === "on" || formData.get("deep") === "true" ? { deep: true } : {}),
     });
     revalidatePath("/");
     return { runId: res.run_id };
@@ -2994,16 +2998,17 @@ export async function startDiscoveryAction(
 }
 
 export async function promoteOutcomeAction(
-  _prev: { taskId?: string; error?: string } | null,
+  _prev: { taskId?: string; meetingRunId?: string; error?: string } | null,
   formData: FormData,
-): Promise<{ taskId?: string; error?: string }> {
+): Promise<{ taskId?: string; meetingRunId?: string; error?: string }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   const idx = Number(formData.get("outcome_index") ?? "0");
   if (!runId) return { error: "missing run_id" };
   try {
     const res = await client.promoteDiscoveryOutcome(runId, idx);
     revalidatePath("/");
-    return { taskId: res.task_id };
+    // The panel it convened, so "Convene a panel" lands IN that meeting room.
+    return { taskId: res.task_id, meetingRunId: res.meeting_run_id || undefined };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   }

@@ -199,8 +199,8 @@ const AREAS: AreaDef[] = [
   // was not itself a destination. Monitoring IS the observability screen, so it takes the name.
   { id: "monitoring", label: "Observability", sub: "Deploy health, metrics, traces, and dashboards", group: "Run", icon: ICONS.monitoring },
   { id: "activity", label: "Activity log", sub: "Every log line — agents, models, tasks, infra", group: "Run", icon: ICONS.activity },
-  { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
-  { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
+  { id: "discovery", label: "Research", sub: "Cited dossiers — a verdict, outcomes and the evidence", group: "Run", icon: ICONS.discovery },
+  { id: "meetings", label: "Panels", sub: "Agents debate it — a decision or a PRD", group: "Run", icon: ICONS.meetings },
   // ONE ENTRY, NOT TWO. "Metatron" was an always-on captain whose session table does not exist
   // in this database — a page over state that was never created — and the operator never used
   // it. Its idea (a captain with the whole factory in view) is what the BOSS Agent area now IS.
