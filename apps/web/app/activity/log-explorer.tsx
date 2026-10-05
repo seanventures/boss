@@ -237,7 +237,11 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
 
   const empty = (() => {
     if (!items || items.length) return null;
-    if (stepToken) return <span>Nothing logged for this step yet</span>;
+    if (stepToken) {
+      const wfr = state.tokens.find((t) => t.key === "wfr")?.value;
+      const done = wfr ? labels[`${wfr}/${stepToken.value}@state`] === "finished" : false;
+      return <span>{done ? "Nothing logged for this step" : "Nothing logged for this step yet"}</span>;
+    }
     if (filtered) {
       return (<><span>Nothing matches</span>
         <button type="button" className="ag-btn" data-testid="lx-clear-filters"
@@ -326,7 +330,7 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
         </form>
       ) : null}
       <QueryBar tokens={state.tokens} q={state.q} labels={labels} names={state.names} facets={facets.data}
-                error={queryError}
+                error={queryError || (state.badRange ? `That range isn't a date. Showing the last ${state.range ?? "24h"}.` : "")}
                 onTokens={(tokens, scope) => setTokens(tokens, scope)}
                 onQuery={(q) => apply({ ...state, q, row: null })}
                 onAdd={(token) => setTokens(addToken(state.tokens, token), SCOPE_KEYS.has(token.key))} />

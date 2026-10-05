@@ -131,26 +131,28 @@ def _knob_control(connection: Connection, settings: Any, project_id: str, key: s
     stored = chosen.get(key)
     raw = stored if stored not in (None, "") else default
     note: Optional[dict[str, Any]] = None
+    is_set = stored not in (None, "")
     if key == "code_agent_max_concurrency":
         effective = ps.effective_review_lanes(raw)
-        if int(raw or ps.REVIEW_LANES_FALLBACK) < ps.REVIEW_LANES_FLOOR:
+        # The note explains a value someone SET; the default is just the default (D14c: after
+        # Use default it read "set 1 · min 6" from the deployment's 1).
+        if is_set and int(raw or ps.REVIEW_LANES_FALLBACK) < ps.REVIEW_LANES_FLOOR:
             note = {"kind": "floor", "stored": raw, "floor": ps.REVIEW_LANES_FLOOR}
     elif key == "code_review_inrun_max_rounds":
         effective = ps.effective_review_rounds(raw)
-        if raw is not None and int(raw or 0) == 0:
+        if is_set and int(raw or 0) == 0:
             note = {"kind": "reads_as", "stored": 0, "reads_as": effective}
     elif key == "captain_leads_projects":
         effective = 1 if int(raw or 0) else 0
     else:
         effective = int(raw) if raw not in (None, "") else None
+    if not is_set:
+        note = {"kind": "default"}
     version, _who = ps.version_of(connection, project_id, key)
     word, effect = ENFORCED[key]
     return {
         "key": key,
-        "name": {"code_agent_max_concurrency": "Review lanes",
-                 "code_agent_max_turns": "Turn budget",
-                 "code_review_inrun_max_rounds": "Review rounds",
-                 "captain_leads_projects": "Captain leads"}[key],
+        "name": ps.GOVERN_NAMES[key],
         "section": "agents",
         "value_effective": effective,
         "value_stored": stored,

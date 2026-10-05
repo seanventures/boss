@@ -372,6 +372,13 @@ def _level_for(severity: str, status_value: str) -> str:
     return "info"
 
 
+_REDACTED_FIELDS = frozenset({"body", "data"})
+
+
+def _is_item(value: Mapping[str, Any]) -> bool:
+    return "_sql_matched" in value
+
+
 def scrub(value: Any) -> Any:
     """Every string a log read returns, credentials masked — titles, ids, labels, data, body.
 
@@ -381,7 +388,10 @@ def scrub(value: Any) -> Any:
     if isinstance(value, str):
         return redact_secrets(value)
     if isinstance(value, Mapping):
-        return {k: scrub(v) for k, v in value.items()}
+        # `body` and `data` were already through the full redactor (credentials + PII) when
+        # the item was built; every other field passes here.
+        return {k: (v if k in _REDACTED_FIELDS and _is_item(value) else scrub(v))
+                for k, v in value.items()}
     if isinstance(value, list):
         return [scrub(v) for v in value]
     return value
@@ -1024,6 +1034,10 @@ def _key_of(item: Mapping[str, Any]) -> tuple[str, str]:
 
 # ── Labels: names, never raw ids ─────────────────────────────────────────────────────────────
 
+_STEP_FINISHED = {"succeeded", "failed", "skipped", "cancelled", "canceled", "completed", "done",
+                  "error", "timed_out"}
+
+
 def _labels(connection: Connection, project_id: str,
             items: list[Mapping[str, Any]]) -> dict[str, str]:
     """The names of the runs, steps and work items on a page, one batched read per kind.
@@ -1046,7 +1060,12 @@ def _labels(connection: Connection, project_id: str,
         from .command_center import run_name, step_label
 
         for row in _fetch_rows(connection, """
-                SELECT r.id, r.input, d.workflow_key, d.name AS workflow_name, v.spec
+                SELECT r.id, r.input, d.workflow_key, d.name AS workflow_name, v.spec,
+                       (SELECT jsonb_object_agg(x.step_id, x.status) FROM (
+                            SELECT DISTINCT ON (step_id) step_id, status
+                            FROM workflow_step_runs
+                            WHERE workflow_run_id = r.id AND project_id = r.project_id
+                            ORDER BY step_id, created_at DESC, iteration DESC) x) AS step_states
                 FROM workflow_runs r
                 JOIN workflow_definitions d ON d.id = r.workflow_definition_id
                 LEFT JOIN workflow_versions v ON v.id = r.workflow_version_id
@@ -1057,6 +1076,11 @@ def _labels(connection: Connection, project_id: str,
                 labels[_text(row["id"])] = run_name(run)
             except Exception:  # noqa: BLE001 — a label is never worth failing a read
                 pass
+            # `<wfr>/<step>@state`: whether the step has finished, so an empty step reads
+            # "Nothing logged" when it is done and "…yet" only while it can still log.
+            for step_id, status in _as_mapping(row.get("step_states")).items():
+                labels[f"{_text(row['id'])}/{_text(step_id)}@state"] = (
+                    "finished" if _text(status).lower() in _STEP_FINISHED else "open")
             spec = _as_mapping(row.get("spec"))
             for step in spec.get("steps") or []:
                 if isinstance(step, Mapping) and _text(step.get("id")):

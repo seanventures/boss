@@ -57,6 +57,7 @@ export function governView(over: Json = {}): Json {
                                               note: { kind: "floor", stored: 3, floor: 6 },
                                               rule: { kind: "floor", floor: 6, fallback: 3 }, version: "2026-10-04T10:00:00+00:00" }),
       control("code_agent_max_turns", { name: "Turn budget", value_effective: 90, default: 90, bounds: { min: 10, max: 200, step: 1 },
+                                        note: { kind: "default" },
                                         evidence: { word: "Hit 1× · 7d", count_7d: 1, log: { kind: "code_task.implement_continued" } } }),
       control("code_review_inrun_max_rounds", { name: "Review rounds", value_effective: 2, value_stored: 0, source: "set",
                                                 bounds: { min: 0, max: 5, step: 1 },

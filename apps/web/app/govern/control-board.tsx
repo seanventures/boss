@@ -72,6 +72,7 @@ export function valueText(c: Control): string {
 export function noteText(c: Control): { text: string; tip: string } | null {
   if (c.note?.kind === "floor") return { text: `set ${c.note.stored} · min ${c.note.floor}`, tip: `Values under ${c.note.floor} behave like ${c.note.floor} today` };
   if (c.note?.kind === "reads_as") return { text: `set 0 · reads as ${c.note.reads_as}`, tip: `0 is read as ${c.note.reads_as} today` };
+  if (c.note?.kind === "default") return { text: "(default)", tip: "BOSS's default. Edit to set your own." };
   return null;
 }
 

@@ -25,7 +25,7 @@ export type Control = {
   enforced: Enforced;
   evidence: Evidence;
   advisory: boolean;
-  note: { kind: "floor"; stored: number; floor: number } | { kind: "reads_as"; stored: number; reads_as: number } | null;
+  note: { kind: "floor"; stored: number; floor: number } | { kind: "reads_as"; stored: number; reads_as: number } | { kind: "default" } | null;
   rule?: { kind: "floor"; floor: number; fallback: number } | { kind: "zero_reads_as"; value: number } | null;
   version: string;
 };

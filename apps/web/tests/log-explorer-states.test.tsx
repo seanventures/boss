@@ -99,6 +99,13 @@ describe("the Log says what it has, exactly", () => {
     expect($("[data-testid=lx-tail]")!.getAttribute("title")).toBe("Console is paused. Nothing updates.");
   });
 
+  it("a finished step with no lines says so without \"yet\" (D16)", async () => {
+    log.page.labels = { "wfr_1/plan@state": "finished" };
+    at("?area=activity&wfr=wfr_1&step=plan&step_name=Plan+it");
+    await mount(<LogExplorer projectId="p1" actor="ceo" />);
+    expect(text("[data-testid=lx-empty]")).toBe("Nothing logged for this step");
+  });
+
   it("a step's log is two tokens with names, Whole run, and its own empty words", async () => {
     at("?area=activity&wfr=wfr_1&step=plan&step_name=Plan+it&run_name=Lead+Triage+Inbox");
     await mount(<LogExplorer projectId="p1" actor="ceo" />);
@@ -111,6 +118,25 @@ describe("the Log says what it has, exactly", () => {
     await click($("[data-testid=lx-whole-run]"));
     expect(new URLSearchParams(window.location.search).has("step")).toBe(false);
     expect($("[data-testid=lx-token-wfr]")).not.toBeNull();
+  });
+
+  it("a from= that isn't a date is one state: dropped, said once, and the log reads (D14a)", async () => {
+    log.page.items = rows(3);
+    at("?area=activity&from=yesterday-ish&to=nope");
+    await mount(<LogExplorer projectId="p1" actor="ceo" />);
+    expect(text("[data-testid=lx-query-error]")).toBe("That range isn't a date. Showing the last 24h.");
+    expect($("[data-testid=lx-unreachable]")).toBeNull();
+    expect($$("[data-testid=lx-row]").length).toBeGreaterThan(0);
+    expect(log.asked.filter((u) => u.includes("yesterday-ish") || u.includes("since=nope"))).toEqual([]);
+  });
+
+  it("the gone-row route answers 200, so the browser logs no failed resource (D14b)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ detail: "This line is gone." }, { status: 404 })));
+    const { GET } = await import("../app/api/activity/row/[id]/route");
+    const got = await GET(new Request("http://console.test/api/activity/row/evt_pruned?project_id=p1"),
+                          { params: Promise.resolve({ id: "evt_pruned" }) });
+    expect(got.status).toBe(200);
+    expect(await got.json()).toEqual({ item: null, gone: true, labels: {} });
   });
 
   it("a deep link to a line that is gone says so", async () => {

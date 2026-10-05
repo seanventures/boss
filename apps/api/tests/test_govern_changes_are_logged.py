@@ -35,7 +35,7 @@ def fresh(engine):
                            "('settings.changed', 'token_policy.changed', 'budget.refused', "
                            "'budget.intensity_set', 'budget.monthly_cap_set')"), {"p": PROJECT})
             c.execute(text("DELETE FROM project_settings WHERE project_id = :p "
-                           "AND key = 'code_agent_max_turns'"), {"p": PROJECT})
+                           "AND key IN ('code_agent_max_turns', 'code_agent_max_concurrency')"), {"p": PROJECT})
             c.execute(text("DELETE FROM cost_receipts WHERE project_id = :p"), {"p": PROJECT})
             c.execute(text("DELETE FROM budget_reservations WHERE project_id = :p"),
                       {"p": PROJECT})
@@ -54,8 +54,14 @@ def test_settings_set_and_clear_are_recorded_with_from_to_and_actor(client, engi
                       ).status_code == 200
     changes = _events(engine, "settings.changed")
     assert [(e["data"]["from"], e["data"]["to"]) for e in changes] == [(None, 37), (37, None)]
-    assert changes[0]["actor"] == "ceo" and changes[0]["data"]["label"] == "Turn budget per agent"
+    assert changes[0]["actor"] == "ceo" and changes[0]["data"]["label"] == "Turn budget"  # Govern's name
     assert changes[1]["data"]["source_after"] == "default"
+    # D14e: the change line says the board's name.
+    client.put("/v1/settings/code_agent_max_concurrency", json={
+        "key": "code_agent_max_concurrency", "project_id": PROJECT, "actor": "ceo", "value": 8})
+    lanes = [e for e in _events(engine, "settings.changed")
+             if e["data"]["key"] == "code_agent_max_concurrency"]
+    assert lanes[-1]["data"]["label"] == "Review lanes"
 
 
 def test_token_policy_pace_and_monthly_cap_are_recorded(client, engine, fresh):
