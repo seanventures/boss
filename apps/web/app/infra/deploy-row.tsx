@@ -109,6 +109,14 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
       <span className="inf-num inf-muted inf-dep-dur">{dur(row.durationMs) || "—"}</span>
       <span className="inf-num inf-faint inf-dep-age" title={when ? localTime(when) : undefined}>{age || "now"}</span>
       <span className="inf-dep-act">
+        {row.failedAfter ? (
+          // LIVE IS WHAT IS RUNNING; a newer attempt that failed is said beside it.
+          <button type="button" className="inf-link inf-failed-after" data-testid="inf-deploy-failed-after"
+                  title={`A newer deploy failed${now !== null ? ` ${ago(row.failedAfter.at, now)} ago` : ""}. Open it.`}
+                  onClick={() => onOpen(row.failedAfter!.ref)}>
+            Last attempt failed{now !== null ? ` · ${ago(row.failedAfter.at, now)} ago` : ""}
+          </button>
+        ) : null}
         {actions && row.can.approve ? (
           <button type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-deploy-row-approve"
                   onClick={() => void decide("approve")}>{busy === "approve" ? "Approving…" : "Approve"}</button>

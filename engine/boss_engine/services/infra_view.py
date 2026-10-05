@@ -187,11 +187,19 @@ ResidentKind = Literal["target", "preview", "monitoring"]
 StripCell = list  # [int, int]
 
 
+class FailedAfter(TypedDict):
+    at: str               # when the newer attempt failed
+    ref: str              # "<kind>:<id>" → its deploy drawer
+
+
 class LastDeploy(TypedDict, total=False):
     sha7: str
     at: str
     word: str
     ref: str              # "<kind>:<id>" → deploy drawer
+    # LIVE IS WHAT IS RUNNING; A NEWER FAILURE IS SAID BESIDE IT (operator decision 2026-10-04).
+    # The newest attempt on the target after this live deploy, when it failed; None otherwise.
+    failed_after: Optional[FailedAfter]
 
 
 class Resident(TypedDict, total=False):
@@ -345,6 +353,8 @@ class DeployRow(TypedDict, total=False):
     # one that went live on this target before this deploy — so the drawer can say
     # `Roll back to <sha7>` (§5.1). None when can.rollback is false.
     rollback_to_sha7: Optional[str]
+    # On the Live row of a target: a newer attempt that failed (`Last attempt failed · 2h ago`).
+    failed_after: Optional[FailedAfter]
     decision_id: Optional[str]
     run_id: Optional[str]             # the build that made it → Build ↗
 
@@ -785,6 +795,33 @@ def health_states(connection: Any, target_ids: list[str], *,
     return out
 
 
+def failed_after(connection: Any, live: dict[str, tuple[str, Any]]) -> dict[str, FailedAfter]:
+    """target_id → the newest attempt that FAILED after the target's live deploy (`live` maps
+    target → (live ref, live at)). Only when that failure is also the target's newest attempt
+    of any outcome: a failure followed by a newer success is history, not news."""
+    if not live:
+        return {}
+    ids = list(live)
+    out: dict[str, FailedAfter] = {}
+    for r in connection.execute(text(
+            "SELECT DISTINCT ON (t) t, kind, id, status, at FROM ("
+            "  SELECT target_id AS t, 'stack' AS kind, id, status, "
+            "         COALESCE(finished_at, updated_at, created_at) AS at "
+            "  FROM stack_deployments WHERE target_id = ANY(:ids) "
+            "    AND status IN ('healthy', 'failed') "
+            "  UNION ALL "
+            "  SELECT deployment_target_id, CASE WHEN trigger IS NULL THEN 'registry' ELSE 'delivery' END, "
+            "         id, status, COALESCE(finished_at, started_at, created_at) "
+            "  FROM deployment_runs WHERE deployment_target_id = ANY(:ids) "
+            "    AND status IN ('succeeded', 'deployed', 'failed')) x "
+            "ORDER BY t, at DESC"), {"ids": ids}).mappings():
+        live_ref, live_at = live.get(r["t"], (None, None))
+        if (r["status"] == "failed" and f"{r['kind']}:{r['id']}" != live_ref
+                and live_at is not None and r["at"] is not None and r["at"] > live_at):
+            out[r["t"]] = {"at": _iso(r["at"]), "ref": f"{r['kind']}:{r['id']}"}
+    return out
+
+
 def last_deploys(connection: Any, target_ids: list[str]) -> dict[str, LastDeploy]:
     """target_id → the newest successful deploy (stack healthy, or run succeeded)."""
     if not target_ids:
@@ -804,7 +841,11 @@ def last_deploys(connection: Any, target_ids: list[str]) -> dict[str, LastDeploy
             "ORDER BY target_id, at DESC"), {"ids": list(target_ids)}).mappings():
         out[r["target_id"]] = {"sha7": sha7(r["sha"]) or (str(r["sha"] or "")[:12] or None),
                                "at": _iso(r["at"]), "word": "Live",
-                               "ref": f"{r['kind']}:{r['id']}"}
+                               "ref": f"{r['kind']}:{r['id']}", "failed_after": None,
+                               "_at": r["at"]}  # type: ignore[typeddict-unknown-key]
+    newer = failed_after(connection, {t: (d["ref"], d.pop("_at")) for t, d in out.items()})  # type: ignore[misc]
+    for t, f in newer.items():
+        out[t]["failed_after"] = f
     return out
 
 
@@ -1287,7 +1328,10 @@ def _deploy_can_to(r: dict[str, Any], *, can_write: bool, is_community: bool,
             stack_hist.get(r["target_id"]) or [])
         can["rollback"] = bool(option["rollback_available"])
         to = sha7(option.get("rollback_commit")) if can["rollback"] else None
-    elif r["kind"] == "delivery" and not is_community:
+    # NOT HIDDEN BY EDITION (operator decision 2026-10-04): Redeploy and Rollback will go through
+    # the governed deploy path (plan → change → approval → apply) in every edition; until it
+    # answers, the route's own guard refuses and the drawer says why.
+    elif r["kind"] == "delivery":
         hist = run_hist.get(r["target_id"]) or []
         source = delivery_rollback_source(r["id"], hist)
         can["rollback"] = source is not None
@@ -1319,6 +1363,10 @@ def _shape_rows(connection: Any, settings: Any, project_id: str, raw: list[dict[
                 "UNION ALL SELECT id, commit_ref FROM deployment_runs WHERE id = ANY(:i)"),
                 {"i": rb_ids}).mappings():
             rb_sha[x["id"]] = x["sha"]
+    # A Live row says when a newer attempt on its target failed (operator decision 2026-10-04).
+    live_at = {r["target_id"]: (r["ref"], r.get("finished_at") or r.get("started_at"))
+               for r in raw if r["ref"] in live_refs and r.get("target_id")}
+    newer_failed = failed_after(connection, live_at) if live_at else {}
     out: list[DeployRow] = []
     for r in raw:
         status = str(r["status"] or "")
@@ -1348,6 +1396,7 @@ def _shape_rows(connection: Any, settings: Any, project_id: str, raw: list[dict[
             "duration_ms": int(r["duration_ms"]) if r.get("duration_ms") is not None else None,
             "can": can,
             "rollback_to_sha7": rollback_to,
+            "failed_after": (newer_failed.get(r["target_id"]) if r["ref"] in live_refs else None),
             "decision_id": r.get("decision_id"), "run_id": r.get("run_id"),
         }
         out.append(_fit(row))  # type: ignore[arg-type]

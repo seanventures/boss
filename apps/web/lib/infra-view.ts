@@ -61,7 +61,14 @@ export type StripCell = { ok: number; n: number };
 export const parseStrip = (v: unknown): StripCell[] =>
   arr(v).map((c) => { const a = arr(c); return { ok: num(a[0]), n: num(a[1]) }; });
 
-export type LastDeploy = { sha7: string | null; at: string | null; word: string; ref: string | null };
+/** A newer attempt that failed after the live deploy (operator decision 2026-10-04): Live is what
+ *  is running, and this is said beside it — `Last attempt failed · 2h ago`. */
+export type FailedAfter = { at: string; ref: string };
+const parseFailedAfter = (v: unknown): FailedAfter | null => {
+  const o = obj(v);
+  return o.at && o.ref ? { at: str(o.at), ref: str(o.ref) } : null;
+};
+export type LastDeploy = { sha7: string | null; at: string | null; word: string; ref: string | null; failedAfter: FailedAfter | null };
 export type ResidentKind = "target" | "preview" | "monitoring";
 export type Resident = {
   kind: ResidentKind;
@@ -82,7 +89,8 @@ export function parseResident(w: unknown): Resident {
   return {
     kind, id: str(o.id), name: str(o.name), env: optStr(o.env), health: parseWord(o.health, "No signal"),
     strip: parseStrip(o.strip),
-    lastDeploy: ld ? { sha7: optStr(ld.sha7), at: optStr(ld.at), word: str(ld.word), ref: optStr(ld.ref) } : null,
+    lastDeploy: ld ? { sha7: optStr(ld.sha7), at: optStr(ld.at), word: str(ld.word), ref: optStr(ld.ref),
+                       failedAfter: parseFailedAfter(ld.failed_after) } : null,
     expiresAt: optStr(o.expires_at), url: optStr(o.url), port: optNum(o.port),
   };
 }
@@ -222,6 +230,8 @@ export type DeployRow = {
   /** Additive (S3): the commit `Roll back` redeploys, for `Roll back to <sha7>`; null if none. */
   rollbackToSha7: string | null;
   decisionId: string | null; runId: string | null;
+  /** On a Live row: a newer attempt on the same target that failed. */
+  failedAfter: FailedAfter | null;
 };
 const STEP_STATES = new Set(["done", "running", "failed", "pending", "skipped"]);
 const TRIGGERS = new Set(["manual", "merge", "workflow", "rollback", "redeploy"]);
@@ -240,7 +250,7 @@ export function parseDeployRow(w: unknown): DeployRow {
     startedAt: optStr(o.started_at), finishedAt: optStr(o.finished_at), durationMs: optNum(o.duration_ms),
     can: { approve: !!can.approve, reject: !!can.reject, rollback: !!can.rollback, redeploy: !!can.redeploy },
     rollbackToSha7: optStr(o.rollback_to_sha7),
-    decisionId: optStr(o.decision_id), runId: optStr(o.run_id),
+    decisionId: optStr(o.decision_id), runId: optStr(o.run_id), failedAfter: parseFailedAfter(o.failed_after),
   };
 }
 export type DeployList = {

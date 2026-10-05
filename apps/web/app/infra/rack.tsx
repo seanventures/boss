@@ -75,6 +75,12 @@ export function ResidentTile({ r, now, windowEnd, onOpen }: {
     line3 = r.lastDeploy?.sha7
       ? <span className="inf-tile-l3" title={`Deployed ${r.lastDeploy.sha7} · ${localTime(r.lastDeploy.at)} · ${r.lastDeploy.word}`}>
           <span className="inf-mono" data-copy="data">{r.lastDeploy.sha7}</span>{r.lastDeploy.at && now ? ` · ${ago(r.lastDeploy.at, now)}` : ""}
+          {r.lastDeploy.failedAfter ? (
+            <span className="inf-failed-after" data-testid="inf-tile-failed-after"
+                  title={`Last attempt failed${now ? ` · ${ago(r.lastDeploy.failedAfter.at, now)} ago` : ""}`}>
+              {" · ✗ "}{now ? ago(r.lastDeploy.failedAfter.at, now) : ""}<span className="ag-sr"> last attempt failed</span>
+            </span>
+          ) : null}
         </span>
       : <span className="inf-tile-l3 inf-muted" title="This target has no deploy yet">Never deployed</span>;
   } else if (r.kind === "preview") {

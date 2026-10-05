@@ -4,8 +4,9 @@
   stack     the target's latest APPLIED deployment, finished healthy or failed, with an earlier
             healthy commit different from its own (stack_deploy.rollback_option, unchanged);
   delivery  the target's newest delivery run when it failed, with an earlier succeeded run
-            (rolled back by redeploying that run); paused in Community like every delivery
-            deploy;
+            (rolled back by redeploying that run). Offered in every edition (operator decision
+            2026-10-04: it will go through the governed deploy path); in Community the route's
+            own guard still refuses the ungoverned redeploy, and says so;
   registry  never here (a registry run rolls back through its rollout).
 """
 from __future__ import annotations
@@ -56,11 +57,13 @@ def test_only_a_failed_newest_with_a_good_one_before(client, engine, world, monk
     assert to["stack:sd_ok"] is None and to["delivery:dr_live"] is None
 
 
-def test_community_keeps_delivery_rollback_paused(client, world, monkeypatch):
+def test_community_offers_rollback_and_the_route_guard_refuses_it(client, world, monkeypatch):
     monkeypatch.setattr(api_main.settings, "boss_edition", "community")
     can = _can(client)
-    assert can["delivery:dr_down_fail"] is False
+    assert can["delivery:dr_down_fail"] is True, "not hidden by edition"
     assert can["stack:sd_failed"] is True
+    r = client.post("/v1/infra/deploys/delivery:dr_down_fail/rollback", json={"project_id": HOME, "actor": "ceo"})
+    assert r.status_code == 409 and "Community" in r.text
 
 
 def test_the_route_refuses_what_can_does_not_offer(client, world, monkeypatch):
@@ -108,8 +111,9 @@ def test_the_failed_deploy_card_rolls_back_through_the_same_rule(client, world, 
     cards = {i["id"]: i for i in fleet["attention"]}
     stack_card = cards["infra:deploy_failed:t_stack"]
     assert [a["key"] for a in stack_card["answers"]] == ["rollback", "open"]
-    # Community: the delivery card offers only Open (its rollback is paused).
-    assert [a["key"] for a in cards["infra:deploy_failed:t_down"]["answers"]] == ["open"]
+    # The delivery card offers Roll back too (not hidden by edition); in Community the press is
+    # refused by the route's guard, below.
+    assert [a["key"] for a in cards["infra:deploy_failed:t_down"]["answers"]] == ["rollback", "open"]
     r = client.post("/v1/infra/attention/act", json={
         "project_id": HOME, "actor": "ceo", "id": "infra:deploy_failed:t_stack",
         "option": "rollback"})

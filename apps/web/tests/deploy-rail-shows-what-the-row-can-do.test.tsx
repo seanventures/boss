@@ -98,4 +98,18 @@ describe("the deploy rail", () => {
     expect(f.gets(/^\/v1\/infra\/deploys$/).some((c) => c.url.includes("cursor=cur_2"))).toBe(true);
     expect(byTestId("inf-deploys-older")).toBeNull();
   });
+
+  it("says a newer failed attempt beside the Live deploy, and opens it (decision 2026-10-04)", async () => {
+    const live = { ...deployRow("stack:sd_live"), failed_after: { at: new Date(Date.now() - 2 * 3600_000).toISOString(), ref: "stack:sd_failed" } };
+    const rows = (deploysFixture().rows as Record<string, unknown>[]).map((r) => (r.ref === "stack:sd_live" ? live : r));
+    await open([{ match: /^\/v1\/infra\/deploys$/, reply: () => ({ ...deploysFixture(), rows }) }]);
+    const row = rowOf("stack:sd_live");
+    expect(row.textContent).toContain("Live");
+    const note = row.querySelector<HTMLButtonElement>("[data-testid='inf-deploy-failed-after']")!;
+    expect(note.textContent).toBe("Last attempt failed · 2h ago");
+    // Only the Live row says it.
+    expect(document.querySelectorAll("[data-testid='inf-deploy-failed-after']")).toHaveLength(1);
+    await press(note);
+    expect(new URLSearchParams(window.location.search).get("deploy")).toBe("stack:sd_failed");
+  });
 });
