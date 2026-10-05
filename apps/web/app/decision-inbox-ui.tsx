@@ -92,6 +92,18 @@ export function formatRecommendation(decision: DecisionFeedItem): string {
   if (action === "review_deployment") {
     return `Approve deploying${title ? ` “${title}”` : " this change"} to its target environment.`;
   }
+  if (action === "deploy_host") {
+    // A governed host deployment (governed_host_deploy.py): where, which commit, the rollback.
+    const commit = str("commit_ref");
+    const rollback = Array.isArray(r["rollback"]) ? String((r["rollback"] as unknown[])[0] ?? "") : "";
+    return [
+      `Deploy ${str("app_name") || "this app"} to ${str("host") || "its host"}`
+        + `${str("environment") ? ` · ${str("environment")}` : ""}`
+        + `${commit ? ` at ${commit.slice(0, 12)}` : ""}.`,
+      rollback,
+      "Your own host: no provider cost.",
+    ].filter(Boolean).join(" ");
+  }
   if (action) return action.replaceAll("_", " ");
   // A WORKFLOW GATE, WHICH CARRIES NO `action`. It rendered as the bare words "review
   // required" — which names the obligation and nothing about the thing being reviewed.
@@ -117,6 +129,7 @@ function decisionRuleLabel(decision: DecisionFeedItem): string {
     review_plan_draft: "Plan ready for review",
     review_pull_request: "Pull request review",
     review_deployment: "Deployment review",
+    deploy_host: "Host deployment",
     review_infra_provisioning: "Infrastructure provisioning review",
     "role.autonomy_change": "Role autonomy change",
   };
@@ -272,6 +285,7 @@ function approvalEffectLabel(recommendation: Record<string, unknown>): string {
     case "resume_code_task": return "Approving resumes the paused project.";
     case "review_pull_request": return "Approving authorizes the pull-request merge.";
     case "review_deployment": return "Approving authorizes the deployment.";
+    case "deploy_host": return "Approving deploys it now: BOSS builds, ships and health-checks it, and rolls back if the check fails.";
     case "review_infra_provisioning": return "Approving authorizes infrastructure provisioning.";
     case "execute_agent_tool": return "Approving runs the deferred agent tool now.";
     case "resume_agent_run": return "Approving resumes the paused agent run.";
@@ -292,7 +306,7 @@ function decisionImpact(decision: DecisionFeedItem): { label: string; tone: stri
     typeof decision.recommendation.action === "string" ? decision.recommendation.action : "";
   if (action === "resume_code_task" || action === "review_plan_draft") return { label: "plan", tone: "amber" };
   if (action === "review_pull_request" || action.startsWith("github.")) return { label: "merge", tone: "blue" };
-  if (action === "review_deployment") return { label: "deploy", tone: "teal" };
+  if (action === "review_deployment" || action === "deploy_host") return { label: "deploy", tone: "teal" };
   if (action === "review_infra_provisioning") return { label: "infra", tone: "amber" };
   if (action === "role.autonomy_change") return { label: "access", tone: "red" };
   if (action.startsWith("self_improvement")) return { label: "rollout", tone: "teal" };

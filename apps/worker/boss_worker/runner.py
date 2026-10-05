@@ -367,6 +367,9 @@ def capabilities() -> list[str]:
         # this job's lease. Declared here or the worker never leases it and the deploy sits
         # `running` at step one.
         "deployment.stack_apply",
+        # An approved host deployment (services/governed_host_deploy.py): the API applies its
+        # ChangeSet through the SSH connector under this job's lease.
+        "deployment.host_apply",
         "docs.update",
         "agent.resume",
         "software_factory.propose_pr",
@@ -821,6 +824,13 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         # has already handed the job back to the queue without spending an attempt, so there
         # is nothing to complete or fail here (see the job_deferred check after execution).
         return result
+    if job.kind == "deployment.host_apply":
+        # One app to a verified host through the SSH connector; the API owns the apply and the
+        # lease fences it. A busy target hands the job back without spending an attempt.
+        return client.run_host_deploy({
+            "deployment_run_id": job.payload["deployment_run_id"], "job_id": job.id,
+            "worker_id": client.worker_id, "lease_token": job.lease_token,
+        })
     if job.kind == "investigation.run":
         # A long one by design: a real debugging session reads the code, the database and the
         # host, and forms more than one hypothesis. The API endpoint owns the timeout.

@@ -106,7 +106,8 @@ def test_community_ssh_plan_records_blocked_decision_before_build(
         json={"target_id": target_id, "actor": "ceo", "ref": "main"},
     )
     assert denied.status_code == 409, denied.text
-    assert "Community host deployment" in denied.text
+    # A host deployment is planned only for an app on a verified host; this one is on none.
+    assert "not attached to a deployment host" in denied.text
     with engine.begin() as connection:
         run = connection.execute(
             text("SELECT id, status, decision_id, changeset_id, failure_reason "
@@ -116,7 +117,7 @@ def test_community_ssh_plan_records_blocked_decision_before_build(
     assert run["status"] == "failed"
     assert run["decision_id"]
     assert run["changeset_id"] is None
-    assert "Community host deployment" in run["failure_reason"]
+    assert "not attached to a deployment host" in run["failure_reason"]
     replay = delivery_pipeline.execute_deployment(
         engine, api_main.settings, run["id"], actor="ceo"
     )

@@ -733,18 +733,28 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
                ssh_port: int = 22, app_port: int = 8080, name: Optional[str] = None,
                ref: Optional[str] = None, key_material: Optional[str] = None,
                source: Optional[dict] = None,
-               app_entry: Optional[str] = None) -> dict:
+               app_entry: Optional[str] = None,
+               governance: Optional[dict] = None) -> dict:
     """Actuate the deploy plan on a real host: build dist -> transfer -> nginx -> health-gate.
     On transfer/docker/health failure after staging, ROLL BACK to the previous build (Phase 3).
-    Gated behind the outward-action flag + an SSH key; NEVER touches a host otherwise."""
-    if str(getattr(settings, "boss_edition", "community")).strip().lower() in {"community", "oss", "local"}:
-        raise PermissionError(
-            "Community SSH deployment is disabled until it uses an approved Resource Plane "
-            "ChangeSet, budget reservation, and ResourceReceipt. Deploy through a stack target "
-            "(boss.deploy.yaml, POST /v1/deployments/stack/plan), which does."
-        )
-    if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
-        raise PermissionError("BOSS_SSH_HOST_DEPLOY_ALLOWED is false — the outward deploy gate is off")
+    Gated behind the outward-action flag + an SSH key; NEVER touches a host otherwise.
+
+    `governance` proves this is the apply of an approved Resource Plane ChangeSet
+    (services/governed_host_deploy.py). With it, the write carries its own approval, reservation
+    and receipt, so it needs only outward SSH; without it Community refuses outright."""
+    from .governed_host_deploy import check_governed, ungoverned_refusal
+
+    if governance is not None:
+        check_governed(engine, governance)
+        from .deployment_fleet import outward_ssh_allowed
+
+        if not outward_ssh_allowed(settings):
+            raise PermissionError("outward SSH is disabled (BOSS_SSH_OUTWARD_ALLOWED is false)")
+    else:
+        if str(getattr(settings, "boss_edition", "community")).strip().lower() in {"community", "oss", "local"}:
+            raise PermissionError(ungoverned_refusal("Community SSH deployment"))
+        if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
+            raise PermissionError("BOSS_SSH_HOST_DEPLOY_ALLOWED is false — the outward deploy gate is off")
     _validate_ssh_target(host, user)
 
     # A deployment does NOT require a code task run. A run supplies three things — owner/repo,
@@ -878,7 +888,10 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
             emit_event(c, project_id, "deploy.succeeded", "boss", "code_task_run", run_id,
                        {"app": app, "host": host, "url": url, "health": code})
         return {"status": "deployed", "app": app, "host": host, "url": url, "health": code,
-                "deployed_sha": deployed_sha}
+                "deployed_sha": deployed_sha,
+                # What the connector's rollback() restores if a later health check fails: the
+                # previous build staged above as dist.prev, served the same way.
+                "rollback_point": {"remote": remote, "mode": mode, "entry": entry}}
     except Exception:
         # Best-effort restore if we mutated the host and then crashed before an explicit rollback.
         if needs_rollback and not rolled_back:

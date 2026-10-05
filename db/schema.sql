@@ -2012,6 +2012,13 @@ ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS steps JSONB NOT NULL DEFAUL
 -- Total wall-clock, so "how long did it take" does not require subtracting timestamps in every
 -- reader that asks.
 ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS duration_ms INTEGER;
+-- A governed host deployment (services/governed_host_deploy.py): its budget reservation, the
+-- worker job that applies it, and the apply's owner token and start. A host is written only by
+-- the request holding apply_token, after the ChangeSet's receipt is committed.
+ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS reservation_id TEXT;
+ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS job_id TEXT;
+ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS apply_token TEXT;
+ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS apply_started_at TIMESTAMPTZ;
 
 -- Health of what BOSS has DEPLOYED, sampled over time.
 --

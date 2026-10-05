@@ -877,6 +877,12 @@ class DecisionService:
             from .stack_deploy import on_decision_approved
 
             on_decision_approved(connection, self.settings, row, actor)
+        elif action == "deploy_host":
+            # A host deployment held for approval: a person's approval approves its ChangeSet
+            # and queues the apply as a durable worker job (services/governed_host_deploy.py).
+            from .governed_host_deploy import on_decision_approved as approve_host
+
+            approve_host(connection, self.settings, row, actor)
 
     def _handle_rejected_follow_on(
         self, connection: Connection, row: dict[str, Any], *, actor: str
@@ -890,6 +896,10 @@ class DecisionService:
             from .stack_deploy import on_decision_not_approved
 
             on_decision_not_approved(connection, self.settings, row, actor, "rejected")
+        elif (row["recommendation"] or {}).get("action") == "deploy_host":
+            from .governed_host_deploy import on_decision_not_approved as refuse_host
+
+            refuse_host(connection, self.settings, row, actor, "rejected")
 
     def _handle_non_approved_follow_on(
         self,

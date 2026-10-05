@@ -173,6 +173,14 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_host_deploy(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Ask the API to apply one leased host deployment — the host key lives there."""
+        response = self._client.post(
+            f"/v1/delivery/deployments/{payload['deployment_run_id']}/apply",
+            json={key: payload[key] for key in ("job_id", "worker_id", "lease_token")})
+        response.raise_for_status()
+        return response.json()
+
     def run_code_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/code-tasks/step", json=payload)
         # Operator/host 422 (claims frozen, missing sandbox task) is fail-closed:

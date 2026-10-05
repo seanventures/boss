@@ -8853,13 +8853,13 @@ def delivery_deploy_endpoint(payload: ManualDeployBody):
         return {"deployment_run_id": run_id, "status": "planned", "trigger": "manual",
                 "changeset_id": planned.get("changeset_id")}
 
-    # Provider-backed runs now stop at the reviewable ChangeSet. Its existing
-    # apply endpoint owns approval, reservation, provider receipts, and settlement.
-    # A direct connector launch here would bypass all four.
+    # Every deployment stops at its reviewable ChangeSet. A provider ChangeSet's apply endpoint
+    # owns approval, reservation, receipts and settlement; a host deployment's decision does
+    # (services/governed_host_deploy.py). A direct connector launch here would bypass all four.
     if planned.get("changeset_id"):
         return {"deployment_run_id": run_id, "status": "planned",
                 "trigger": "manual", "changeset_id": planned["changeset_id"],
-                "next_action": "approve_and_apply_changeset"}
+                **_planned_next_action(planned)}
     raise HTTPException(status_code=409, detail="Deployment has no governed ChangeSet.")
 
 
@@ -9496,6 +9496,31 @@ def execute_stack_deployment_endpoint(deployment_id: str,
                              lease_token=payload.lease_token)
 
 
+@app.post("/v1/delivery/deployments/{deployment_run_id}/apply")
+def apply_host_deployment_endpoint(deployment_run_id: str,
+                                   payload: open_bodies.StackDeployExecuteBody):
+    """The worker hands its leased `deployment.host_apply` job here. Fenced by the lease; the
+    apply runs inside the approved ChangeSet (services/governed_host_deploy.py)."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.governed_host_deploy import execute_host_job
+
+    return execute_host_job(engine, settings, deployment_run_id=deployment_run_id,
+                            job_id=payload.job_id, worker_id=payload.worker_id,
+                            lease_token=payload.lease_token)
+
+
+def _planned_next_action(planned: dict) -> dict:
+    """What the console does next with a plan. A governed host deployment waits on ONE
+    decision in Approvals; a provider ChangeSet goes through ChangeSet review."""
+    review = (planned.get("release_packet") or {}).get("plan_review") \
+        or planned.get("plan_review")
+    if review and planned.get("decision_id"):
+        return {"next_action": "approve_decision", "decision_id": planned["decision_id"],
+                "plan_review": review}
+    return {"next_action": "approve_and_apply_changeset"}
+
+
 @app.post("/v1/deployment-targets/{target_id}/auto-deploy")
 def set_auto_deploy_endpoint(target_id: str, payload: AutoDeployBody):
     """Turn deploy-on-merge on/off, or pause it.
@@ -9565,6 +9590,8 @@ def list_deployment_runs_endpoint(project_id: str, limit: int = 10):
             text("SELECT d.id, d.status, d.environment, d.commit_ref, d.trigger, "
                  "       d.started_at, d.finished_at, d.duration_ms, d.failure_reason, "
                  "       d.app_name, t.app_name AS target_app, t.domains, "
+                 "       d.decision_id, d.changeset_id, "
+                 "       (d.release_packet->>'governed') IS NOT NULL AS governed, "
                  "       jsonb_array_length(COALESCE(d.steps,'[]'::jsonb)) AS step_count "
                  "FROM deployment_runs d LEFT JOIN deployment_targets t "
                  "  ON t.id = d.deployment_target_id "
@@ -9578,6 +9605,9 @@ def list_deployment_runs_endpoint(project_id: str, limit: int = 10):
         "finished_at": r["finished_at"].isoformat() if r["finished_at"] else None,
         "failure_reason": r["failure_reason"], "step_count": r["step_count"],
         "url": (r["domains"] or [None])[0],
+        # A governed host deployment links to its one decision in Approvals.
+        "decision_id": r["decision_id"] if r["governed"] else None,
+        "changeset_id": r["changeset_id"],
     } for r in rows]}
 
 
@@ -9615,6 +9645,8 @@ def get_deployment_run_endpoint(deployment_run_id: str):
     upcoming = (
         [s for s in planned_steps() if s["step"] not in seen] if running else []
     )
+    packet = row["release_packet"] or {}
+    governed = bool(packet.get("governed"))
 
     return {
         "deployment_run_id": row["id"], "status": row["status"],
@@ -9628,6 +9660,14 @@ def get_deployment_run_endpoint(deployment_run_id: str):
         "health": row["health_check_results"],
         "steps": done + upcoming,
         "running": running,
+        # A governed host deployment: its decision, ChangeSet and the plan that was approved.
+        # `approved` is queued for the worker, so the console keeps watching it.
+        "governed": governed,
+        "decision_id": row["decision_id"] if governed else None,
+        "changeset_id": row["changeset_id"],
+        "plan_review": packet.get("plan_review") if governed else None,
+        "rollback_plan": row["rollback_plan"] or [],
+        "waiting": row["status"] in {"awaiting_approval", "approved"},
     }
 
 
@@ -9684,7 +9724,7 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
                             or "Deployment policy blocked this run.")
     if not result.get("changeset_id"):
         raise HTTPException(status_code=409, detail="Deployment has no governed ChangeSet.")
-    return {**result, "next_action": "approve_and_apply_changeset"}
+    return {**result, **_planned_next_action(result)}
 
 
 @app.post("/v1/deployments/{deployment_run_id}/promote")
@@ -10115,10 +10155,10 @@ def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     if mode != "ssh":
         raise HTTPException(status_code=422, detail="mode must be 'dry_run' or 'ssh'")
     if str(settings.boss_edition).strip().lower() in {"community", "oss", "local"}:
-        raise HTTPException(status_code=409, detail=(
-            "Community SSH deployment is disabled until it uses an approved Resource Plane "
-            "ChangeSet, budget reservation, and ResourceReceipt."
-        ))
+        from boss_engine.services.governed_host_deploy import ungoverned_refusal
+
+        raise HTTPException(status_code=409,
+                            detail=ungoverned_refusal("Community SSH deployment"))
 
     # mode == 'ssh' — actuate on a real host (Phase 2/3). Requires an explicit host, the SSH key,
     # and the outward gate; otherwise return the plan + the reason it's held (never touch a host).

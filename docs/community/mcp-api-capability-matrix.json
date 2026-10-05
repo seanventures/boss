@@ -4,10 +4,10 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 990,
+  "operation_count": 991,
   "counts": {
     "api_policy_gated": 857,
-    "excluded": 69,
+    "excluded": 70,
     "human_confirmation_gated": 64
   },
   "operations": [
@@ -5410,6 +5410,24 @@
       "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/delivery/deployments/{deployment_run_id}/apply",
+      "alias": "post_v1_delivery_deployments_deployment_run_id_apply_307aee0e",
+      "domain": "delivery",
+      "summary": "Apply Host Deployment Endpoint",
+      "mcp_status": "excluded",
+      "reason": "host_deploy_worker_lease_protocol",
+      "input_schema_quality": "typed_json_body",
+      "mounted_input_schema_quality": "typed_json_body",
+      "request_body_type_enforcement": "pydantic_fields",
+      "curated_input_fields": false,
+      "typed_input_schema": false,
+      "runtime_validated_input_schema": false,
+      "domain_scoped_direct_tool": false,
+      "requires_explicit_bound_api_credential": false,
+      "read_only_available": false
     },
     {
       "method": "POST",

@@ -60,15 +60,31 @@ describe("v2 deployment planning controls", () => {
     expect(button.disabled).toBe(true);
   });
 
-  it("shows direct-host 409 detail instead of a success message", async () => {
+  it("shows a host plan waiting for approval, with the Approvals link", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      error: "Community host deployment is disabled until a policy-guarded ChangeSet exists.",
+      status: "planned", deployment_run_id: "dr_host", changeset_id: "chg_host",
+      next_action: "approve_decision", decision_id: "dec_host",
+      plan_review: { app_name: "Demo", host: "staging-host", environment: "staging" },
+    }), { status: 200 })));
+    await act(async () => renderControls());
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="v2-deploy"]')!.click());
+
+    const note = host.querySelector('[data-testid="v2-controls-plan"]')!;
+    expect(note.textContent).toContain("Demo to staging-host · staging");
+    expect(note.textContent).toContain("Nothing has deployed");
+    expect(note.querySelector('a[href*="area=decisions"]')).not.toBeNull();
+  });
+
+  it("shows a 409 refusal instead of a success message", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      error: "Demo is not attached to a deployment host. Attach the app to a verified host "
+        + "in Infra, then plan again.",
     }), { status: 409 })));
     await act(async () => renderControls());
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="v2-deploy"]')!.click());
 
     expect(host.querySelector('[role="alert"]')?.textContent)
-      .toContain("Community host deployment is disabled");
+      .toContain("not attached to a deployment host");
     expect(host.querySelector('[data-testid="v2-controls-plan"]')).toBeNull();
   });
 });
