@@ -53,6 +53,8 @@ def test_summary_is_five_non_verbose_rows_errors_first_with_counts(client, step_
     assert len(levels) == 5 and "verbose" not in levels
     assert levels[:2] == ["error", "error"]
     assert body["counts"] == {"error": 2, "warn": 2}
+    # The step's model calls, for the panel's "Done by … · $0.00 · model" line.
+    assert body["calls"] == {"count": 1, "cost_usd": 0.001, "model": "claude-sonnet"}
 
 
 def test_a_step_without_its_run_is_refused(client):

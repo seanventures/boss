@@ -1232,18 +1232,35 @@ class ActivityLogService:
         branches = _branches(query, _ROW_COLUMNS + ", {level} AS lvl")
         rows: list[dict[str, Any]] = []
         if branches:
+            # ONE statement: the rows, the error/warn counts, and the step's model calls (how
+            # many, their money — a subscription call is not money — and the newest model).
             rows = _fetch_rows(connection, f"""
-                SELECT *, count(*) FILTER (WHERE lvl = 'error') OVER () AS n_error,
-                          count(*) FILTER (WHERE lvl = 'warn') OVER () AS n_warn
-                FROM ({' UNION ALL '.join(branches)}) u
-                ORDER BY CASE lvl WHEN 'error' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END,
-                         ts DESC, id COLLATE "C" DESC
+                WITH u AS ({' UNION ALL '.join(branches)}),
+                     s AS (
+                       SELECT count(*) FILTER (WHERE lvl = 'error') AS n_error,
+                              count(*) FILTER (WHERE lvl = 'warn') AS n_warn,
+                              count(*) FILTER (WHERE src = 'llm_call') AS n_calls,
+                              coalesce(sum(CASE WHEN src = 'llm_call'
+                                    AND NOT coalesce((raw->>'included_in_subscription')::boolean, false)
+                                    THEN (raw->>'cost_usd_micros')::bigint ELSE 0 END), 0) AS money,
+                              (SELECT raw->>'model' FROM u WHERE src = 'llm_call'
+                                 AND coalesce(raw->>'model', '') <> ''
+                                 ORDER BY ts DESC LIMIT 1) AS model
+                       FROM u)
+                SELECT u.*, s.* FROM s LEFT JOIN u ON true
+                ORDER BY CASE u.lvl WHEN 'error' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END,
+                         u.ts DESC, u.id COLLATE "C" DESC
                 LIMIT {int(limit)}""", _params(query))
+        stats = rows[0] if rows else {}
+        rows = [r for r in rows if r.get("id")]
         items = [_build(row) for row in rows]
         return {
             "items": items, "limit": limit, "offset": 0, "next_cursor": None,
-            "counts": {"error": int(rows[0]["n_error"]) if rows else 0,
-                       "warn": int(rows[0]["n_warn"]) if rows else 0},
+            "counts": {"error": int(stats.get("n_error") or 0),
+                       "warn": int(stats.get("n_warn") or 0)},
+            "calls": {"count": int(stats.get("n_calls") or 0),
+                      "cost_usd": round(int(stats.get("money") or 0) / 1_000_000, 4),
+                      "model": _text(stats.get("model"))},
             "window": query.window(),
             "labels": _labels(connection, query.project_id, items + _scope_probe(query)),
         }
