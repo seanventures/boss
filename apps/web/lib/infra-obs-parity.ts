@@ -51,7 +51,7 @@ export const PARITY: ParityRow[] = [
   { id: "P-I-07", today: "#hardware-manager anchor", home: "host=this", fate: "Kept", check: { kind: "code", file: "app/infra/infra-home.tsx", pattern: "#hardware-manager", must: true, why: "the old anchor opens This computer" } },
   { id: "P-I-08", today: "Infra h2 sentences", home: "Empty state / header counts", fate: "Removed", check: { kind: "removed", surface: "infra", url: "?view=fleet", absent: "Nothing deploys yet", why: "copy budget" } },
   { id: "P-I-09", today: "SandboxDeployFlagNotice", home: "Header line Sandbox deploys off", fate: "Kept", check: fleet("inf-sandbox-off") },
-  { id: "P-I-10", today: "SSH-outward + host-write blockers", home: "SSH out is off line", fate: "Kept", check: { ...fleet("inf-ssh-off"), variant: "blocked" } },
+  { id: "P-I-10", today: "SSH-outward + host-write blockers", home: "SSH out is off line", fate: "Kept", check: { kind: "testid", surface: "infra", url: "?view=fleet", testid: "inf-ssh-off", variant: "blocked" } },
   { id: "P-I-11", today: "Host StageBar", home: "Stage line on rack + SETUP", fate: "Kept", check: fleet("inf-stage-line") },
   { id: "P-I-12", today: "I have a key that works → Adopt key", home: "Use my key → Adopt key", fate: "Kept", check: host("h_setup", "inf-stage-adopt") },
   { id: "P-I-13", today: "Generate a key for me", home: "Generate key", fate: "Kept", check: host("h_setup", "inf-stage-generate") },
