@@ -418,6 +418,11 @@ describe("today's tab", () => {
     const red = () => V(view({ status: { key: "budget_stopped", text: "Budget stopped work", tone: "red", tip: "Over the month cap. Raise it in Budget." } }));
     await mount(page(red()));
     expect($('[data-testid="stub-today"]')?.getAttribute("data-tab")).toBe("spend");
+    // The page can be remounted after the switch (seen on a production build): the new
+    // instance shows what the operator was shown, not Work again.
+    unmount();
+    await mount(page(red()));
+    expect($('[data-testid="stub-today"]')?.getAttribute("data-tab")).toBe("spend");
     await click($('[data-testid="stub-tab-work"]'));
     unmount();
     await mount(page(red()));
@@ -511,6 +516,7 @@ describe("the layout (D1, D4)", () => {
     const css = readFileSync(resolve(__dirname, "../app/command-center/bridge.css"), "utf8");
     expect(css).not.toMatch(/\.cc-systems \{[^}]*nowrap/);
     expect(css).toMatch(/\.cc-systems \{ display: grid; grid-template-columns: repeat\(auto-fit/);
+    expect(css).not.toMatch(/\.cc-sys a \{[^}]*overflow: hidden/);
     expect(css).toMatch(/\.cc-head-label, \.cc-head-link, \.cc-head \.cc-chip \{ white-space: nowrap/);
     expect(css).not.toMatch(/\.cc-status-text \{[^}]*text-overflow: ellipsis/);
   });
