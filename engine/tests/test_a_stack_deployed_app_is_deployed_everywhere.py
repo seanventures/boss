@@ -116,3 +116,19 @@ def test_the_stack_probe_says_unreachable_without_ssh():
     sample_ = deployment_health.probe(
         {"target_kind": "stack", "public_url": "http://127.0.0.1:1/"}, get_settings())
     assert sample_["ok"] is False and sample_["error"]
+
+
+def test_a_system_card_is_drawn_once(seeded, monkeypatch):
+    """The Pulse's NEEDS YOU carries infra's observability items and the system doctor's cards;
+    the same finding reached twice is one card, and infra_view never raises a system card."""
+    from boss_engine.services import infra_view, system_doctor
+
+    eng, pid = seeded
+    card = {"id": "system:sf_x", "kind": "system_health", "finding_id": "sf_x", "title": "Disk nearly full"}
+    monkeypatch.setattr(system_doctor, "card_items", lambda c, p: [card, dict(card)])
+    with eng.connect() as c:
+        infra_kinds = {i.get("kind") for i in infra_view.attention(c, get_settings(), pid)}
+        pulse = obs_view.pulse(c, get_settings(), pid, win="24h")
+    assert "system_health" not in infra_kinds
+    ids = [a["id"] for a in pulse["attention"]]
+    assert ids.count("system:sf_x") == 1 and len(ids) == len(set(ids))

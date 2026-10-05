@@ -523,7 +523,17 @@ def _attention(connection: Any, settings: Any, project_id: str,
     except Exception:  # noqa: BLE001
         log.exception("obs_view: system findings failed")
         partial.append("findings")
-    return items
+    # ONE CARD PER THING. The system doctor owns the machine's cards; infra_view never raises
+    # one, and an id that arrives twice (two readers of one finding) is drawn once.
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for item in items:
+        key = str(item.get("id") or "")
+        if key and key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
 
 def _spend_24h(connection: Any, project_id: str) -> tuple[int, bool]:
