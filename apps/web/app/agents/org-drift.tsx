@@ -15,8 +15,10 @@ import React, { useState } from "react";
 import type { OrgDrift, OrgUnplannedPair } from "../../lib/agents-org-board";
 import { nameOf } from "./org-shared";
 
-export function PlanVsWork({ drift, busy, onPlan }: {
+export function PlanVsWork({ drift, busy, onPlan, declared = {} }: {
   drift: OrgDrift; busy: boolean; onPlan: (child: string, parent: string) => void;
+  /** The plan as it stands: `Plan it` says which line it replaces before it saves (walk D14). */
+  declared?: Record<string, { reports_to?: string | null } | undefined>;
 }) {
   if (!drift.plannedUnused.length && !drift.unplannedPairs.length) return null;
   return (
@@ -41,7 +43,8 @@ export function PlanVsWork({ drift, busy, onPlan }: {
         <div className="org-drift-group" data-testid="org-drift-unplanned">
           <span className="org-drift-label">Works together, not planned: {drift.unplannedPairs.length}</span>
           <ul className="org-drift-list">
-            {drift.unplannedPairs.map((p) => <PairRow key={`${p.a}|${p.b}`} pair={p} busy={busy} onPlan={onPlan} />)}
+            {drift.unplannedPairs.map((p) => <PairRow key={`${p.a}|${p.b}`} pair={p} busy={busy} onPlan={onPlan}
+                                                       declared={declared} />)}
           </ul>
         </div>
       ) : null}
@@ -49,10 +52,12 @@ export function PlanVsWork({ drift, busy, onPlan }: {
   );
 }
 
-function PairRow({ pair, busy, onPlan }: { pair: OrgUnplannedPair; busy: boolean;
-                                            onPlan: (child: string, parent: string) => void }) {
+function PairRow({ pair, busy, onPlan, declared }: { pair: OrgUnplannedPair; busy: boolean;
+                                                      onPlan: (child: string, parent: string) => void;
+                                                      declared: Record<string, { reports_to?: string | null } | undefined> }) {
   const [parent, setParent] = useState(pair.parent);
   const child = parent === pair.a ? pair.b : pair.a;
+  const current = declared[child]?.reports_to;
   return (
     <li data-testid={`org-drift-pair-${pair.a}-${pair.b}`}>
       <span data-user-text>{nameOf(pair.a)}</span> ↔ <span data-user-text>{nameOf(pair.b)}</span>
@@ -65,6 +70,12 @@ function PairRow({ pair, busy, onPlan }: { pair: OrgUnplannedPair; busy: boolean
           {[pair.a, pair.b].map((k) => <option key={k} value={k}>{nameOf(k)} leads</option>)}
         </select>
       </label>
+      {current && current !== parent ? (
+        <span className="org-drift-replaces" data-testid={`org-drift-replaces-${pair.a}-${pair.b}`}
+              title="Saving moves this line in the plan">
+          Replaces <span data-user-text>{nameOf(child)}</span> → <span data-user-text>{nameOf(current)}</span>
+        </span>
+      ) : null}
       <button type="button" className="org-node-act" disabled={busy} data-testid={`org-drift-plan-${pair.a}-${pair.b}`}
               title={`${nameOf(child)} reports to ${nameOf(parent)}`} onClick={() => onPlan(child, parent)}>
         Plan it

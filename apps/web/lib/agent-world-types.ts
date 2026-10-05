@@ -55,7 +55,7 @@ export type Passport = {
   agentId: string; roleKey: string; displayName: string; persona: Persona;
   born: { at: string; by: string; from: Record<string, unknown> };
   sponsor?: string; lifecycle: Lifecycle; version: number; fingerprint: string; reportsTo?: string;
-  vitals: { trust: number; runs: number; cleanRate: number; cost7d: number; panels: number; apps: number };
+  vitals: { trust: number; runs: number; cleanRate: number; cost7d: number; planCalls7d: number; panels: number; apps: number };
   presence: Presence; identity: { mode: "local"; tokens: false };
 };
 export type Chain = {

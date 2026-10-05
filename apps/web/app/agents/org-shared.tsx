@@ -6,6 +6,7 @@
  * panels say a thing the same way.
  */
 import React, { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { X } from "@phosphor-icons/react";
 
 import type { AvatarState } from "../../lib/agent-world-types";
@@ -75,6 +76,11 @@ export function reviewHref(attentionId: string): string {
   return consoleHref({ ...RESET, area: "workforce", focus: attentionId });
 }
 
+/** The Kit, opened on one ability: where an ability that must be set up first is set up. */
+export function kitHref(ability: string): string {
+  return consoleHref({ ...RESET, area: "skills", tab: null, ability });
+}
+
 export function workflowHref(workflowKey: string, stepId: string): string {
   return consoleHref({ ...RESET, area: "delivery_workflows", wf: workflowKey, step: stepId || null, wfr: null });
 }
@@ -94,6 +100,11 @@ export function OpenItemLink({ item, testid }: { item: OrgOpenItem; testid?: str
 /**
  * A right drawer (a bottom sheet under 720px). Focus moves in on open, Tab stays inside, and
  * focus returns to whatever opened it. Esc is the shell's (one order for the whole view).
+ *
+ * PORTALLED TO <body> (walk D1). The console's panel stack has a transform, which makes it the
+ * containing block for `position: fixed`: the sheet sat 800px down a phone and the drawer
+ * scrolled away on a desktop. In <body>, fixed means the screen — the Kit's overlays do the same
+ * (app/skills/overlay.tsx).
  */
 export function Drawer({ label, testid, onClose, children }: {
   label: string; testid: string; onClose: () => void; children: React.ReactNode;
@@ -114,7 +125,7 @@ export function Drawer({ label, testid, onClose, children }: {
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   };
-  return (
+  const drawer = (
     <div className="org-drawer" role="dialog" aria-modal="false" aria-label={label} data-testid={testid}
          ref={ref} onKeyDown={onKeyDown}>
       <button type="button" className="ag-icon-btn org-drawer-close" aria-label="Close" title="Close"
@@ -122,6 +133,7 @@ export function Drawer({ label, testid, onClose, children }: {
       {children}
     </div>
   );
+  return typeof document === "undefined" ? drawer : createPortal(drawer, document.body);
 }
 
 /** A small menu under a button. Esc closes it before anything else (it stops the key here). */

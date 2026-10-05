@@ -26,6 +26,13 @@ export function teamOfRole(board: OrgBoard, roleKey: string): string {
     ?? board.teams.find((t) => t.members.includes(roleKey))?.key ?? "yours";
 }
 
+/** Activity, filtered the way Activity can be (walk D9): the receiving agent when the edge has
+ *  one, and the window — Activity reads 24h or 7d, so 30d opens on 7d. */
+export function activityHref(targets: string[], days: OrgDays): string {
+  return consoleHref({ area: "workforce", view: "activity", layout: null, isolate: null, run: null, focus: null,
+                       role: null, agent: targets.length === 1 ? targets[0] : null, days: days >= 7 ? "7" : "1" });
+}
+
 export function edgeSummary(e: Pick<OrgEdge, "handoffs" | "failed" | "waiting" | "stale">): string {
   return [`${e.handoffs} ${e.handoffs === 1 ? "handoff" : "handoffs"}`, e.failed ? `${e.failed} failed` : "",
           e.waiting ? `${e.waiting} waiting` : "", e.stale ? `${e.stale} stale` : ""].filter(Boolean).join(" · ");
@@ -97,9 +104,10 @@ export function OrgEdgePanel({ projectId, board, focus, days, onClose }: {
         ))}
       </ul>
       <footer className="ag-org-edge-foot">
-        <a className="ag-link" href={consoleHref({ area: "workforce", view: "activity", layout: null, days: null,
-                                                   isolate: null, run: null, focus: null, role: null })}
-           title="Everything agents did, newest first">All in Activity ↗</a>
+        <a className="ag-link" data-testid="ag-org-edge-activity" href={activityHref(targets, days)}
+           title={targets.length === 1 ? `${nameOf(targets[0])}'s work in Activity` : "Everything agents did, newest first"}>
+          All in Activity ↗
+        </a>
       </footer>
     </Drawer>
   );

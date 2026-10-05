@@ -64,7 +64,8 @@ const click = async (sel: string) => { await act(async () => { $(sel)!.click(); 
 const body = (c: { init?: RequestInit }) => JSON.parse(String(c.init?.body ?? "{}"));
 
 const GAPS = { teams: { engineering: { gaps: {
-  abilities: [{ ability: "tests_ci", label: "Run tests", roles: ["software_engineer", "backend_engineer"] }],
+  abilities: [{ ability: "tests_ci", label: "Run tests", roles: ["software_engineer", "backend_engineer"] },
+              { ability: "deploy", label: "Deploy", roles: ["engineering_captain"], needs_setup: true }],
   step_gaps: [], missing_roles: 0, kit_ok: true, kit_reason: null } } } };
 
 describe("Organization's actions", () => {
@@ -97,8 +98,9 @@ describe("Organization's actions", () => {
     expect(stub.calls.some((c) => c.url === "/api/kit")).toBe(false);
     await click('[data-testid="ag-orgteam-give-recommended-yes-engineering"]');
     const post = stub.calls.find((c) => c.url === "/api/kit")!;
+    // Only what will actually be given: Deploy must be set up first, so its agent is not asked.
     expect(body(post)).toMatchObject({ action: "recommended", actor: "paramg",
-      roles: ["engineering_captain", "software_engineer", "backend_engineer", "frontend_engineer"] });
+      roles: ["software_engineer", "backend_engineer"] });
     expect(toasts).toContainEqual(["success", "Gave 2 abilities"]);
   });
 

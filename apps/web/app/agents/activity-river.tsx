@@ -38,6 +38,8 @@ export type ActivityRiverProps = {
   runLabel?: string;
   /** OPTIONAL (S3): who is reading, so the work card names a person "you" only for them. */
   viewer?: string;
+  /** A link's window (`&days=`; Organization's edges): 1 or 7, the river's own windows. */
+  initialDays?: 1 | 7;
 };
 
 export const RIVER_POLL_MS = 8000;
@@ -146,10 +148,11 @@ function useVisible(): boolean {
   return visible;
 }
 
-export function ActivityRiver({ projectId, roleKey, runId, onClearRun, paused, runLabel, viewer = "" }: ActivityRiverProps) {
+export function ActivityRiver({ projectId, roleKey, runId, onClearRun, paused, runLabel, viewer = "",
+                               initialDays = 1 }: ActivityRiverProps) {
   useIdentityVersion();
   const [filter, setFilter] = useState<ActivityFilter>("all");
-  const [days, setDays] = useState<1 | 7>(1);
+  const [days, setDays] = useState<1 | 7>(initialDays);
   const [items, setItems] = useState<ActivityItem[] | null>(null);
   const [next, setNext] = useState<string | null>(null);
   const [fresh, setFresh] = useState<ActivityItem[]>([]);

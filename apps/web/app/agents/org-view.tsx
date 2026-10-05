@@ -203,7 +203,7 @@ export function OrgView({ projectId, live, search = "", focusRunId, focusTeam, o
                isolate={isolate} onIsolate={setIsolate} selected={selected} onSelect={select}
                onOpenEdge={(f) => { setEdge(f); setPanel(false); }}
                focusRunId={focusRunId} onClearFocus={onClearFocus} onWindow={setDays}
-               mode={flowMode} onMode={setFlowMode} />
+               mode={flowMode} onMode={setFlowMode} onShowWaits={() => setLayout("teams")} />
     );
   } else {
     body = (

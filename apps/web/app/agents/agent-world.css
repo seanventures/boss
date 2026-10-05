@@ -1445,7 +1445,7 @@
   border-radius: 10px; background: transparent; color: var(--ink); font: inherit; cursor: pointer; transition: opacity 160ms ease;
 }
 .ag-orgteam-agent:focus-visible, .ag-orgteam-missing:focus-visible, .ag-flow-node-btn:focus-visible,
-.ag-flow-agent:focus-visible, .ag-flow-edge-state:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.ag-flow-agent:focus-visible, .ag-flow-edge-label:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .ag-orgteam-agent[data-selected] { background: color-mix(in srgb, var(--team-hue) 18%, transparent); }
 /* The press is the button's: a face's SVG is redrawn when the tab stop moves on mousedown, and a
    click whose mousedown and mouseup land on different nodes never fires. */
@@ -1491,7 +1491,7 @@
 .org-menu [role="menuitem"]:hover:not(:disabled), .org-menu [role="menuitem"]:focus-visible { background: var(--accent-soft); outline: none; }
 .org-menu [role="menuitem"]:disabled { color: var(--faint); cursor: default; }
 .org-drawer {
-  position: fixed; top: 64px; right: 16px; bottom: 16px; z-index: 60; width: 380px; max-width: calc(100vw - 32px); overflow: auto;
+  position: fixed; top: 64px; right: 16px; bottom: 16px; z-index: 70; width: 380px; max-width: calc(100vw - 32px); overflow: auto;
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
   padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; font-size: 13px;
 }
@@ -1521,23 +1521,42 @@
 .ag-flow { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .ag-flow-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ag-flow-chips { display: inline-flex; align-items: center; gap: 8px; }
-.ag-flow-stage { position: relative; overflow-x: auto; padding: 4px 0 12px; }
+.ag-flow-stage { position: relative; overflow-x: auto; padding: 4px 0 40px; min-height: 340px; }
 .ag-flow-edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; z-index: 1; }
-.ag-flow-edge { fill: none; stroke: var(--border-strong); stroke-linecap: round; pointer-events: stroke; cursor: pointer;
-  transition: opacity 200ms ease; }
-.ag-flow-edge[data-level="agent"] { stroke: var(--accent-text); stroke-opacity: 0.7; }
+/* Edges read at a glance (walk D5): a contrasting stroke whose width and opacity follow volume
+   (set inline), an arrowhead, and the count in words on every edge. */
+.ag-flow-edge { fill: none; stroke: color-mix(in srgb, var(--ink) 70%, var(--accent-text)); stroke-linecap: round;
+  pointer-events: stroke; cursor: pointer; transition: opacity 200ms ease; }
+.ag-flow-edge[data-level="agent"] { stroke: var(--accent-text); }
 .ag-flow-edge[data-state="waiting"] { stroke: var(--amber); }
 .ag-flow-edge[data-state="failed"] { stroke: var(--red); }
-.ag-flow-edge[data-dim] { opacity: 0.25; }
+.ag-flow-edge[data-gate] { stroke: var(--amber); stroke-dasharray: 5 5; cursor: default; }
+.ag-flow-edge[data-dim] { opacity: 0.2; }
 .ag-flow-edge[data-lit] { stroke: var(--accent-text); stroke-opacity: 1; }
-.ag-flow-edge-state {
+.ag-flow-edge[data-lit][data-state="failed"] { stroke: var(--red); }
+.ag-flow-arrow { fill: color-mix(in srgb, var(--ink) 70%, var(--accent-text)); }
+.ag-flow-arrow-failed { fill: var(--red); }
+.ag-flow-arrow-waiting, .ag-flow-arrow-gate { fill: var(--amber); }
+.ag-flow-arrow-lit { fill: var(--accent-text); }
+.ag-flow-edge-label {
   position: absolute; z-index: 3; transform: translate(-50%, -50%); border: 1px solid var(--border-strong); border-radius: 999px;
-  background: var(--surface); color: var(--ink-soft); font: inherit; font-size: 11px; padding: 1px 7px; white-space: nowrap; cursor: pointer;
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 11px; font-weight: 600; padding: 1px 7px;
+  white-space: nowrap; cursor: pointer; font-variant-numeric: tabular-nums;
 }
-.ag-flow-edge-state[data-state="failed"] { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
-.ag-flow-edge-state[data-state="waiting"] { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
-.ag-flow-cols { position: relative; z-index: 2; display: flex; gap: 56px; align-items: flex-start; min-width: min-content; }
-.ag-flow-col { display: flex; flex-direction: column; gap: 14px; min-width: 150px; }
+.ag-flow-edge-label[data-state="failed"] { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, transparent); }
+.ag-flow-edge-label[data-state="waiting"] { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 50%, transparent); }
+.ag-flow-waits-row { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; }
+.ag-flow-waits[data-state="waiting"] { color: var(--amber); }
+.ag-flow-waits[data-state="failed"] { color: var(--red); }
+.ag-flow-gate .ag-flow-node-btn { gap: 6px; }
+.ag-flow-agent[data-failed] .ag-flow-agent-name { color: var(--red); }
+.ag-flow-agent[data-failed] .ag-flow-agent-name::after { content: " ✕"; }
+/* Stuck now: under the map, the oldest waits and the newest failures, each with its link. */
+.ag-flow-stuck { border: 1px solid var(--border); border-radius: var(--r); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.ag-flow-stuck-title { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+.ag-flow-stuck-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 6px 24px; font-size: 13px; }
+.ag-flow-cols { position: relative; z-index: 2; display: flex; gap: 88px; align-items: flex-start; min-width: min-content; }
+.ag-flow-col { display: flex; flex-direction: column; gap: 18px; min-width: 170px; }
 .ag-flow-col[data-muted] { opacity: 0.6; }
 .ag-flow-colhead { font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); min-height: 14px; }
 .ag-flow-node {
@@ -1573,6 +1592,9 @@
    the Table is whole at 390px with no sideways scroll. */
 @media (max-width: 639px) {
   .ag-org-totals { display: none; }
+  /* Every control a thumb presses is 44px (walk D11). */
+  .ag-org-bar .ag-seg button, .ag-flow-bar .ag-btn, .ag-flow-bar .ag-chip, .ag-org .ag-chip { min-height: 44px; }
+  .ag-flow-stuck-cols { grid-template-columns: 1fr; }
   .ag-flow-table, .ag-flow-table tbody { display: block; }
   .ag-flow-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .ag-flow-table tr { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; padding: 6px 0;

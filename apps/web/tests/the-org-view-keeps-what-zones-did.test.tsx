@@ -164,7 +164,7 @@ describe("Teams keeps Zones' faces", () => {
     await render(view());
     expect($('[data-testid="ag-zones"]')!.dataset.layout).toBe("list");
     const head = $('[data-testid="ag-zones-team-engineering"]')!;
-    expect(head.textContent).toContain("Done 23 · Waiting 1h 12m");
+    expect(head.textContent).toContain("Done 23 · Failed 2 · Waiting 1h 12m");
     await act(async () => { head.click(); });
     const forge = $('[data-testid="ag-zones-member-software_engineer"]')!;
     expect(forge.textContent).toMatch(/· Working$/);

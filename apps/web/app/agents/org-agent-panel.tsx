@@ -21,7 +21,7 @@ import {
 import { AgFace } from "./agent-face";
 import type { OrgActions } from "./org-actions";
 import {
-  Drawer, MenuPop, OpenItemLink, liveState, nameOf, teamLabel, workflowHref,
+  Drawer, MenuPop, OpenItemLink, kitHref, liveState, nameOf, teamLabel, workflowHref,
 } from "./org-shared";
 
 const ROWS_MAX = 5;
@@ -156,7 +156,10 @@ export function OrgAgentPanel({ board, live, roleKey, days, actions, onClose }: 
                     <span className="ag-orgteam-chip" title={`Recommended for ${name}. Not held.`}>
                       <Star size={10} weight="bold" aria-hidden /> {a.label}
                     </span>
-                    {actions ? (
+                    {a.needsSetup ? (
+                      <a className="ag-link" href={kitHref(a.ability)} data-testid={`ag-org-agent-setup-${a.ability}`}
+                         title={`${a.label} must be set up in the Kit first`}>Set up first ↗</a>
+                    ) : actions ? (
                       <button type="button" className="ag-link" data-testid={`ag-org-agent-give-${a.ability}`}
                               onClick={() => void actions.give(a.ability, a.label, roleKey)}>Give</button>
                     ) : null}
@@ -167,7 +170,9 @@ export function OrgAgentPanel({ board, live, roleKey, days, actions, onClose }: 
                     <span className="ag-trunc" title={`${g.workflowName} › ${g.stepTitle} needs ${g.label}. ${name} lacks it.`}>
                       <span data-user-text>{g.stepTitle}</span> needs <span data-user-text>{g.label}</span>
                     </span>
-                    {actions ? (
+                    {g.needsSetup ? (
+                      <a className="ag-link" href={kitHref(g.ability)} title={`${g.label} must be set up in the Kit first`}>Set up first ↗</a>
+                    ) : actions ? (
                       <button type="button" className="ag-link" data-testid={`ag-org-agent-give-${g.ability}`}
                               onClick={() => void actions.give(g.ability, g.label, roleKey)}>Give</button>
                     ) : null}
