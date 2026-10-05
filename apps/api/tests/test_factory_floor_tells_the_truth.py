@@ -221,3 +221,27 @@ def test_counts_always_equal_what_is_listed(client, engine):
         assert body["counts"]["stopped"] >= 1, path
     floor = _floor(client).json()
     assert floor["counts"]["stopped_builds"] == len(floor["stopped"])
+
+
+def test_apps_number_each_build_and_say_its_pr(client, engine):
+    """Apps on goldeneye: every expanded build read "Attempt 1" — separate builds of one app
+    each have attempt 1 in their own lineage. Each build now carries its place in the app
+    (`order`, 1 = first), its PR and that PR's state; the app says whether it ran on a plan."""
+    dec = f"dec_{uuid.uuid4().hex[:12]}"
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO decisions (id, project_id, question, recommendation, status) "
+                       "VALUES (:i, :p, 'Approve code change (PR #41)', CAST(:r AS JSONB), "
+                       "'approved')"), {"i": dec, "p": fx.PROJECT,
+                                        "r": '{"action": "review_pull_request"}'})
+    first = fx.new_run(engine, status="completed", phase="done", title="Numbered Ledger",
+                       minutes_ago=40)
+    second = fx.new_run(engine, status="completed", phase="done", pr=41, decision_id=dec,
+                        title="Numbered Ledger", minutes_ago=5)
+    body = client.get("/v1/factory/apps", params={"project_id": fx.PROJECT}).json()
+    row = next(r for r in body["apps"] if second in r["run_ids"])
+    orders = {a["run_id"]: a["order"] for a in row["attempts"]}
+    assert orders == {second: 2, first: 1}
+    assert row["pr_number"] == 41 and row["pr_state"] == "merged"
+    assert row["attempts"][0]["pr_state"] == "merged" and row["attempts"][1]["pr_state"] is None
+    assert row["brief"] == "Numbered Ledger"
+    assert row["included"] is False
