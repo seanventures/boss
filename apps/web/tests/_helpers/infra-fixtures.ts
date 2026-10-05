@@ -404,9 +404,9 @@ export const secretsFixture = (): W => ({
   ],
 });
 export const refsFixture = (): W => ({ default_branch: "main", branches: [{ name: "main", sha: "a1b2c3d" }, { name: "feat/search", sha: "5e6f7a8" }] });
+/** deployment_connectors.preflight(): `ready` plus the concrete list of what is missing. */
 export const preflightFixture = (): W => ({
-  ready: false, reachable: true, problems: ["port 4100 is held by another process"],
-  checks: [{ name: "Credentials resolve", ok: true }, { name: "Host reachable", ok: true }, { name: "Port 4100 free", ok: false, detail: "port 4100 is held by another process" }],
+  ready: false, problems: ["port 4100 is held by another process"], connector: "ssh", required_secrets: ["ssh_key"],
 });
 export const repositoriesFixture = (): W => ({
   repositories: [{ full_name: "acme/invoice", role: "primary" }, { full_name: "acme/api" }, { full_name: "acme/billing" }],

@@ -106,8 +106,10 @@ export const bindSecret = (projectId: string, targetId: string, actor: string, n
 export const createStackTarget = (projectId: string, actor: string, f: { host_id: string; app_name: string; environment: string;
   repository: string; public_url: string | null; manifest_path: string }) =>
   send<{ id?: string }>("POST", "/v1/deployments/stack/targets", { project_id: projectId, actor, ...f }, P("infra-target-add", "Create"));
-export const createAppTarget = (projectId: string, actor: string, f: Record<string, unknown>) =>
-  send<{ id?: string }>("POST", "/v1/deployment-targets", { project_id: projectId, actor, ...f }, P("infra-target-add", "Create"));
+/** `More` on the App target sheet: port, entry, publishable ports, health check (merged, never
+ *  replacing the target's other resources — main.py update_deployment_target_endpoint). */
+export const updateTarget = (targetId: string, actor: string, patch: Record<string, unknown>) =>
+  send("PATCH", `/v1/deployment-targets/${enc(targetId)}`, { ...patch, actor }, P(`infra-target-${targetId}`, "Save"));
 export const createRegistryTarget = (projectId: string, actor: string, f: Record<string, unknown>) =>
   send<{ id?: string }>("POST", "/v1/deployments", { project_id: projectId, actor, ...f }, P("infra-target-add", "Create"));
 
@@ -156,8 +158,8 @@ export const listRefs = (projectId: string, repo: string) => {
   return read<{ branches?: Array<{ name: string; sha?: string }>; default_branch?: string }>(
     `/v1/delivery/repos/${enc(owner ?? "")}/${enc(name ?? "")}/refs?project_id=${enc(projectId)}`);
 };
-export type PreflightBody = { ready?: boolean; reachable?: boolean; problems?: string[];
-  checks?: Array<{ name?: string; kind?: string; ok?: boolean; detail?: string }>; findings?: Array<{ kind: string; detail?: string; remedy?: string }> };
+/** deployment_connectors.preflight(): `ready` plus the concrete list of what is missing. */
+export type PreflightBody = { ready?: boolean; problems?: string[]; connector?: string; required_secrets?: string[] };
 export const preflightTarget = (projectId: string, targetId: string) =>
   read<PreflightBody>(`/v1/delivery/targets/${enc(targetId)}/preflight?project_id=${enc(projectId)}`);
 export const listRepositories = (projectId: string) =>
