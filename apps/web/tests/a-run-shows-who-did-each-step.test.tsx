@@ -281,13 +281,14 @@ describe("the run view, signed", () => {
     const ask = el.querySelector('[data-testid="dw-step-ask"]') as HTMLButtonElement;
     expect(ask.getAttribute("data-tip")).toBe("Ask Atlas about this step");
     // The 1:1 talk with that agent, about this step: its first reply is signed under this act.
+    // Not a fresh talk: asking again reopens the one about this step, with what was said.
     const opened: { kind: string; roleKey?: string; fresh?: boolean; context?: Record<string, string> }[] = [];
     const onOpen = (e: Event) => opened.push((e as CustomEvent<(typeof opened)[number]>).detail);
     window.addEventListener("boss:converse", onOpen);
     act(() => ask.click());
     window.removeEventListener("boss:converse", onOpen);
     expect(opened).toEqual([expect.objectContaining({
-      kind: "talk", roleKey: "chief_architect", fresh: true,
+      kind: "talk", roleKey: "chief_architect", fresh: undefined,
       context: { from: "run_step", actId: "act_plan", workflowRunId: "wfr_1", stepId: "plan" },
     })]);
   });
