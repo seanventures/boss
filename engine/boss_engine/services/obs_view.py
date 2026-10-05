@@ -1264,13 +1264,22 @@ def forget_sources(project_id: Optional[str] = None) -> None:
 
 
 def _stack_host(connection: Any, project_id: str) -> Optional[dict[str, Any]]:
-    """The target the stack borrows a host and credential from: the first active one (the
-    console's rule since the stack panel existed)."""
+    """The target the stack borrows a host and credential from. The one it was last deployed
+    through (`observability.stack_deployed`) when there is one — the same machine Infra draws its
+    Monitoring tile on — else the first active target that sits on a machine BOSS can reach
+    (a cloud/registry target has no host to run a stack on)."""
+    cols = ("SELECT t.id, t.target_ref, t.host_id, h.name AS host_name "
+            "FROM deployment_targets t LEFT JOIN deployment_hosts h ON h.id = t.host_id ")
     row = connection.execute(text(
-        "SELECT t.id, t.target_ref, t.host_id, h.name AS host_name "
-        "FROM deployment_targets t LEFT JOIN deployment_hosts h ON h.id = t.host_id "
-        "WHERE t.project_id = :p AND t.status = 'active' ORDER BY t.created_at, t.id LIMIT 1"),
+        cols + "WHERE t.project_id = :p AND t.status = 'active' AND t.id = ("
+        "  SELECT e.entity_id FROM events e WHERE e.project_id = :p "
+        "  AND e.event_type = 'observability.stack_deployed' ORDER BY e.created_at DESC LIMIT 1)"),
         {"p": project_id}).mappings().first()
+    if not row:
+        row = connection.execute(text(
+            cols + "WHERE t.project_id = :p AND t.status = 'active' "
+            "AND (t.host_id IS NOT NULL OR lower(t.target_kind) IN ('ssh', 'container')) "
+            "ORDER BY t.created_at, t.id LIMIT 1"), {"p": project_id}).mappings().first()
     return dict(row) if row else None
 
 
