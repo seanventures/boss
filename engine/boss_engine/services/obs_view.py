@@ -306,16 +306,11 @@ def _targets(connection: Any, project_id: str, target_id: Optional[str] = None) 
 
 
 def _deployed(connection: Any, ids: list[str]) -> dict[str, dict]:
-    """target → its newest succeeded deployment_run (deployment_health's DEPLOYED rule)."""
-    if not ids:
-        return {}
-    rows = connection.execute(text(
-        "SELECT DISTINCT ON (deployment_target_id) deployment_target_id AS t, id, commit_ref, "
-        "       finished_at "
-        "FROM deployment_runs WHERE deployment_target_id = ANY(:ids) AND status = 'succeeded' "
-        "ORDER BY deployment_target_id, finished_at DESC NULLS LAST"),
-        {"ids": ids}).mappings().all()
-    return {r["t"]: dict(r) for r in rows}
+    """target → its newest live deploy, registry run or healthy stack deploy (deployment_health's
+    one DEPLOYED rule, shared with Infra and the sweep)."""
+    from .deployment_health import newest_deploys
+
+    return newest_deploys(connection, ids)
 
 
 def _newest_samples(connection: Any, ids: list[str], now: datetime) -> dict[str, list[dict]]:
@@ -714,9 +709,12 @@ def probe_app(engine: Any, settings: Any, project_id: str, target_id: str) -> di
     from .deployment_health import probe
 
     with begin(engine) as c:
+        from .deployment_health import STACK_OPEN_URL_COLUMN
+
         row = c.execute(text(
-            "SELECT * FROM deployment_targets WHERE id = :t AND project_id = :p "
-            "AND status = 'active'"), {"t": target_id, "p": project_id}).mappings().first()
+            "SELECT t.*, " + STACK_OPEN_URL_COLUMN.format(alias="t") + " FROM deployment_targets t "
+            "WHERE t.id = :t AND t.project_id = :p AND t.status = 'active'"),
+            {"t": target_id, "p": project_id}).mappings().first()
         if not row:
             raise LookupError(f"No app {target_id} in this project.")
         target = dict(row)
