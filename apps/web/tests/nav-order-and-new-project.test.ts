@@ -121,7 +121,7 @@ describe("New build, from anywhere", () => {
     // creates a RUN, and the run is what the operator then needs to see.
     const DWN = codeOnly("app/delivery-workflows-ui.tsx")
       + codeOnly("app/workflows/new-project-composer.tsx");
-    expect(DWN).toContain("readNewProjectIntent(window.location.search)");
+    expect(DWN).toContain("readComposeIntent(window.location.search)");
     expect(DWN).toContain('data-testid="dw-new-project"');
     expect(DWN).toContain('data-testid="dw-new-start"');
   });
@@ -139,9 +139,9 @@ describe("New build, from anywhere", () => {
     // `new=1`, popstate fired, and the form reopened over the project you clicked. The reader
     // lives on the Workflow page now, which is where the composer is.
     const DWC = codeOnly("app/delivery-workflows-ui.tsx");
-    const reader = DWC.slice(DWC.indexOf("readNewProjectIntent(window.location.search)"));
-    expect(reader.slice(0, 700)).toContain("history.replaceState");
-    expect(reader.slice(0, 700)).toContain("intent.nextSearch");
+    const reader = DWC.slice(DWC.indexOf("readComposeIntent(window.location.search)"));
+    expect(reader.slice(0, 1200)).toContain("history.replaceState");
+    expect(reader.slice(0, 1200)).toContain("intent.nextSearch");
   });
 
   it("Factory offers one button with its doors behind it, not a second form", () => {

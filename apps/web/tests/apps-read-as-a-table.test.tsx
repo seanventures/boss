@@ -129,3 +129,20 @@ describe("the State column", () => {
     expect(states).toEqual({ "On line": "Reviewing · Review", Shipped: "PR open" });
   });
 });
+
+describe("adding a feature is on every app's row", () => {
+  it("a hover action and the row's menu both open New project on that app's working build", async () => {
+    const opened: string[] = [];
+    await render(realShape, (id) => opened.push(id));
+    const first = (realShape as { apps: Array<{ key?: string; run_id: string }> }).apps[0];
+    const key = first.run_id;
+    const add = $(`[data-testid="fx-app-add-${key}"]`) as HTMLAnchorElement;
+    const href = new URLSearchParams(add.getAttribute("href")!.replace(/^\?/, ""));
+    expect([href.get("area"), href.get("compose")]).toEqual(["delivery_workflows", "add"]);
+    expect(href.get("app")).toMatch(/^crun_/);
+    await click($(`[data-testid="fx-app-more-${key}"]`));
+    expect($(`[data-testid="fx-app-menu-add-${key}"]`)?.getAttribute("href")).toBe(add.getAttribute("href"));
+    // Neither press opens the build underneath it.
+    expect(opened).toEqual([]);
+  });
+});

@@ -540,15 +540,40 @@ def palette() -> list[dict[str, Any]]:
     ]
 
 
-def stops_for_a_person(capability_key: str, requested: Optional[str] = None) -> bool:
+def prd_auto_approved(settings: Any = None) -> bool:
+    """Whether a panel's PRD is approved by BOSS (True) or waits for a person (False).
+
+    THE runtime rule, read where the runtime reads it: meeting_service._finalize_meeting
+    approves the PRD decision itself when `meeting_prd_auto_approve`
+    (BOSS_MEETING_PRD_AUTO_APPROVE, default on) is set. Everything that tells an operator
+    whether they will be asked — the catalogue card, the plan, /asks — reads this function.
+    """
+    if settings is None:
+        try:
+            from ..config import get_settings
+
+            settings = get_settings()
+        except Exception:  # noqa: BLE001 — the setting's own default
+            return True
+    return bool(getattr(settings, "meeting_prd_auto_approve", True))
+
+
+def stops_for_a_person(capability_key: str, requested: Optional[str] = None,
+                       prd_auto_approve: Optional[bool] = None) -> bool:
     """Whether a run waits for a PERSON at this step — the question an operator plans around.
 
     Not the same as "approval is manual". `spec_review` is manual by the risk floor and is
     answered by the panel's own PRD decision, approved automatically by default, so counting it
     told the catalogue card and the plan "you approve: spec_review" for a step nobody is asked
     about. One function, so the card, the plan and the start preflight agree.
+
+    "By default" is a setting, not a fact: with BOSS_MEETING_PRD_AUTO_APPROVE off a person
+    signs the PRD, and this says so (`prd_auto_approve`, read from settings when not given).
     """
     capability = get(capability_key)
+    if capability.answered_by == "panel":
+        auto = prd_auto_approved() if prd_auto_approve is None else bool(prd_auto_approve)
+        return not auto
     if capability.answered_by != "person":
         return False
     return approval_mode_for(capability_key, requested) == "manual"

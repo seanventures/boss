@@ -995,7 +995,15 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
         from .code_task_service import retry_code_task
         note = (f"Task Shepherd: {p['class_name']}. {p['check']} "
                 f"Applying remedy {remedy.id!r}: {remedy.describe}.")
-        if remedy.action in ("retry_code_task", "extend_code_task"):
+        no_access = (repo_access_blocker(engine, settings, run_id)
+                     if remedy.action in ("retry_code_task", "extend_code_task",
+                                          "create_code_task") else None)
+        if no_access:
+            # A build that cannot reach its repository fails the same way every time; a retry
+            # only burns the build slot. Ask the operator to connect it instead.
+            escalate_no_repo_access(engine, p.get("project_id"), run_id, no_access)
+            outcome = f"no_action: no repository access — {no_access[:160]}"
+        elif remedy.action in ("retry_code_task", "extend_code_task"):
             # BACKGROUND: a repair the system chose to do must never queue ahead of a person.
             # Eleven of these went in front of an operator's PRD meeting and it never started.
             # The ceiling is passed EXPLICITLY rather than left to the callee's default: an
@@ -1281,7 +1289,8 @@ def _open_fix_task(engine, settings, jobs, run_id: str, p: dict, remedy, note: s
                 owner=spec.get("owner") or settings.target_github_owner,
                 repo=spec.get("repo") or settings.target_github_repo,
                 base_branch=spec.get("base_branch") or "main",
-                finalize_ctx=None, jobs=jobs, open_pr=True,
+                finalize_ctx={"source": "shepherd"},
+                jobs=jobs, open_pr=True, job_priority=JOB_PRIORITY_BACKGROUND,
             )
     except Exception:  # noqa: BLE001 — a remedy that cannot start is data, not a crash
         return None
@@ -1599,9 +1608,12 @@ def _retry_run(engine, settings, jobs, run_id: str, reason: str) -> int:
     try:
         # No actor parameter: retry_code_task records lineage, not authorship. The
         # shepherd.retry event below is what attributes this to the shepherd.
+        # BACKGROUND: an automatic retry never takes a build slot ahead of a person.
         result = retry_code_task(
             engine, settings, jobs, run_id,
             fix_note=f"Automatic retry by the task shepherd: {reason}",
+            job_priority=JOB_PRIORITY_BACKGROUND,
+            attempt_ceiling=SHEPHERD_MAX_LINEAGE_ATTEMPTS,
         )
     except Exception as error:  # noqa: BLE001
         logger.warning("shepherd: retry of %s failed: %s", run_id, error)
@@ -1794,6 +1806,15 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
         # for safety must still produce evidence, or "review it later" becomes "never".
         klass_mode = mode_for(verdict.klass, class_modes)
         may_act, why = act_now(verdict, snap)
+        if may_act and verdict.action == "retry" and not dry_run:
+            no_access = repo_access_blocker(engine, settings, snap.run_id)
+            if no_access:
+                escalate_no_repo_access(engine, project_id, snap.run_id, no_access)
+                _record_observation(engine, project_id, snap, verdict, klass_mode,
+                                    acted=False, dry_run=dry_run)
+                escalated.append({**record, "gate": f"no repository access: {no_access}",
+                                  "no_repo_access": True})
+                continue
         if may_act and klass_mode != LIVE:
             may_act, why = False, f"{verdict.name} is in shadow mode — recorded, not acted on"
         _record_observation(engine, project_id, snap, verdict, klass_mode,
@@ -1882,3 +1903,86 @@ def _escalate_exhausted_lineage(engine, project_id: Optional[str], run_id: str,
                 evidence={"reason": reason, "limit": SHEPHERD_MAX_LINEAGE_ATTEMPTS})
     except Exception:
         logger.debug("escalate_exhausted_lineage_failed run=%s", run_id, exc_info=True)
+
+
+#: The question an operator is asked when a build cannot reach its repository.
+NO_REPO_ACCESS = "no_repo_access"
+
+
+def repo_access_blocker(engine, settings: Settings, run_id: str) -> Optional[str]:
+    """Why a retry of `run_id` could not reach its repository, or None when it can (or when it
+    cannot be told — an unreadable credential source never blocks a retry).
+
+    The build resolves its credential (github_app_adapter.repo_token) only after it holds a build
+    slot. A repository with no credential — no App installation, no BOSS_GITHUB_TOKEN, nothing
+    connected in Setup — therefore failed the same way on every automatic retry, each one taking
+    the slot from work that could run. Asked here, before the retry, with the same function.
+    """
+    from ..db import begin
+
+    try:
+        with begin(engine) as c:
+            row = c.execute(sql("SELECT project_id, spec FROM code_task_runs WHERE id = :i"),
+                            {"i": run_id}).mappings().first()
+            if not row:
+                return None
+            spec = row["spec"]
+            if isinstance(spec, str):
+                spec = json.loads(spec or "{}")
+            spec = spec or {}
+            from .repo_host import resolve_repo_host_kind
+
+            if resolve_repo_host_kind(settings, spec) != "github":
+                return None
+            owner = spec.get("owner") or settings.target_github_owner
+            repo = spec.get("repo") or settings.target_github_repo
+            if not owner or not repo:
+                return None
+            from .github_app_adapter import GitHubAppConfigurationError, repo_token
+
+            try:
+                repo_token(settings, owner, repo, connection=c, project_id=row["project_id"])
+            except GitHubAppConfigurationError as error:
+                message = str(error)
+                # Only the answers that say "no access": nothing configured for this repo, or
+                # the App refusing it outright. A GitHub outage is not a missing credential.
+                if (message.startswith("No GitHub credentials")
+                        or "(404)" in message or "(422)" in message):
+                    return message
+                return None
+    except Exception:  # noqa: BLE001
+        logger.debug("repo_access_blocker_failed run=%s", run_id, exc_info=True)
+        return None
+    return None
+
+
+def escalate_no_repo_access(engine, project_id: Optional[str], run_id: str,
+                            reason: str) -> None:
+    """One open question per run: connect the repository, then retry. Also what keeps the run
+    out of the next sweep (sweep/autopilot skip runs with an open escalation)."""
+    from ..db import begin
+
+    if not project_id:
+        project_id = _project_of(engine, run_id)
+    if not project_id:
+        return
+    try:
+        with begin(engine) as c:
+            inserted = c.execute(
+                sql("INSERT INTO shepherd_escalations "
+                    "(id, project_id, task_ref, question, options, evidence) "
+                    "SELECT :i, :p, :t, :q, CAST(:o AS JSONB), CAST(:e AS JSONB) "
+                    "WHERE NOT EXISTS (SELECT 1 FROM shepherd_escalations e "
+                    "                  WHERE e.task_ref = :t AND e.status = 'open')"),
+                {"i": make_id("shesc"), "p": project_id, "t": run_id,
+                 "q": ("No repository access: BOSS cannot reach this build's repository, so "
+                       "retrying it would fail the same way. Connect the repository in Setup "
+                       "(or install the GitHub App on it), then retry."),
+                 "o": json.dumps(["retry", "abandon"]),
+                 "e": json.dumps({"reason": NO_REPO_ACCESS, "detail": reason[:400]})},
+            ).rowcount
+            if inserted:
+                emit_event(c, project_id, "shepherd.no_repo_access", SHEPHERD_ACTOR,
+                           "code_task_run", run_id, {"detail": reason[:400]})
+    except Exception:
+        logger.debug("escalate_no_repo_access_failed run=%s", run_id, exc_info=True)

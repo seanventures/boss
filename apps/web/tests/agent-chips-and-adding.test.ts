@@ -115,16 +115,15 @@ describe("adding an agent adds one", () => {
 });
 
 describe("the wizard's agents are where you confirm things", () => {
-  it("they appear on the Review step", () => {
-    expect(WIZARD).toContain('data-testid="dw-review-agents"');
-    expect(WIZARD).toContain('agentPicker("dw-review-agent-add"');
+  it("they are on the plan, next to the steps they will do", () => {
+    // One screen now: the Team fact shows the faces; Edit opens the picker in place.
+    expect(WIZARD).toContain('data-testid="np-team"');
+    expect(WIZARD).toContain('data-testid="np-team-edit"');
+    expect(WIZARD).toContain("{editTeam ? agentPicker : null}");
   });
 
   it("and are editable there, not merely listed", () => {
-    // The Review step draws the same editable picker as the path step.
-    const at = WIZARD.indexOf('data-testid="dw-review-agents"');
-    const block = WIZARD.slice(at, at + 600);
-    expect(block).toContain('agentPicker("dw-review-agent-add"');
+    // Add, remove, and "Put it back" — the same picker the wizard had.
     const picker = WIZARD.slice(WIZARD.indexOf("const agentPicker = "));
     expect(picker.slice(0, 1600)).toContain('set("agents"');
   });

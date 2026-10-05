@@ -32,27 +32,30 @@ describe("choosing who builds it", () => {
 
   it("and they follow the chosen workflow", () => {
     // A workflow whose gate names release_manager needs them assigned or the gate refuses.
-    expect(UI).toContain("workflow_key=${encodeURIComponent(draft.workflowKey)}");
-    expect(UI).toContain("[projectId, draft.workflowKey]");
+    // Adding a feature, the workflow of the change: Small seeds a different team from Standard.
+    expect(UI).toContain("workflow_key=${encodeURIComponent(teamKey)}");
+    expect(UI).toContain("[projectId, teamKey]");
   });
 
   it("they are shown pre-selected, not as an empty picker", () => {
-    expect(UI).toContain("draft.agents.length ? draft.agents : defaultAgents");
-    expect(UI).toContain("Who works on it");
+    // New project's Team fact: the defaults (or, adding to an app, the crew that built it).
+    expect(UI).toContain("draft.agents.length ? draft.agents");
+    expect(UI).toContain(": defaultAgents");
+    expect(UI).toContain('data-testid="np-team"');
   });
 
   it("an unchanged list is not written back as a decision", () => {
     // The panel distinguishes a seeded default from a person's choice, and the gate refuses on
     // both. Recording an identical list as `operator` would claim a decision nobody made.
     expect(UI).toContain("sameAsDefault");
-    expect(UI).toContain("chosen.length && !sameAsDefault");
+    expect(UI).toContain("chosenAgents.length && !sameAsDefault");
   });
 
   it("and a removal actually removes", () => {
     // Assigning the kept ones is not enough: the run has already seeded the full default set,
     // so anyone taken off in the wizard is still assigned unless they are unassigned for real.
     expect(UI).toContain('action: "unassign"');
-    expect(UI).toContain("defaultAgents.filter((d) => !chosen.includes(d))");
+    expect(UI).toContain("defaultAgents.filter((d) => !chosenAgents.includes(d))");
   });
 
   it("the change is reversible before it is committed", () => {
@@ -63,8 +66,8 @@ describe("choosing who builds it", () => {
     // The run is already started and seeded by the time this fires, so a failure here must not
     // surface as "could not start it". Asserted as the property — the comment saying so is
     // stripped by codeOnly, and pinning comment text is how a grep test rots.
-    const at = UI.indexOf("sameAsDefault");
-    const block = UI.slice(at, at + 1400);
+    const at = UI.indexOf("const assignTeam");
+    const block = UI.slice(at, UI.indexOf("const startRun", at));
     expect(block).toContain("try {");
     expect(block).toContain("} catch");
     expect(block).not.toContain("setError(");

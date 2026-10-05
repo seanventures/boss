@@ -6127,7 +6127,18 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
         require_project_actor(
             connection, payload.project_id, payload.actor, "workflow_execute"
         )
-        # Attach to an existing task if one was supplied.
+        from .services.meeting_service import (
+            ExtendTargetError, convene_prd_meeting_core, meeting_subject, prepare_extend_panel,
+        )
+        # A FEATURE FOR AN APP THAT EXISTS (`constraints.extends_run_id`): validated, framed for
+        # the panel, and carried to its PRD decision so approving it builds onto that app.
+        try:
+            constraints, panel_directive, extends_run_id = prepare_extend_panel(
+                connection, payload.project_id, payload.directive, payload.constraints)
+        except ExtendTargetError as error:
+            raise HTTPException(status_code=error.status, detail=str(error)) from error
+        from boss_engine.services.decisions import strip_extend_marker
+        meeting_title = meeting_subject(strip_extend_marker(payload.directive))
         if payload.task_id:
             exists = connection.execute(
                 text("SELECT id FROM tasks WHERE id = :t AND project_id = :p"),
@@ -6135,22 +6146,20 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
             ).mappings().first()
             if not exists:
                 raise HTTPException(status_code=404, detail="task_id not found in project.")
-        # THE ONE CONVENE PATH. This endpoint used to create its own task with the directive's
-        # dedupe key, so convening the same ask a second time ("Convene again" on a failed panel)
-        # raised "ValueError: Task with dedupe_key already exists" as a 500 the console printed
-        # verbatim. convene_prd_meeting_core adopts that task and returns a panel already in
-        # session on the same ask instead of starting a second one.
-        from .services.meeting_service import convene_prd_meeting_core
+        # THE ONE CONVENE PATH: adopts an existing task for the same ask and returns a panel
+        # already in session instead of a 500 on the dedupe key.
         result = convene_prd_meeting_core(
             connection, settings=settings, budget=budget, intake=intake, jobs=jobs,
-            project_id=payload.project_id, directive=payload.directive, url=payload.url or "",
-            constraints=payload.constraints, role_keys=payload.roles, task_id=payload.task_id,
+            project_id=payload.project_id, directive=panel_directive, url=payload.url or "",
+            constraints=constraints, role_keys=payload.roles, task_id=payload.task_id,
+            title=f"PRD meeting: {meeting_title}",
             # Who convened it: the person its seats are accountable to (agent_acts).
             origin={"actor": payload.actor},
         )
         return MeetingProposeResponse(
             status="already_running" if result.get("duplicate_of") else "accepted",
-            task_id=result["task_id"], job_id=result.get("job_id"), run_id=result.get("run_id"))
+            task_id=result["task_id"], job_id=result.get("job_id"), run_id=result.get("run_id"),
+            meeting_run_id=result.get("run_id"), extends_run_id=extends_run_id)
 
 
 @app.get("/v1/meeting-roles")
@@ -23312,7 +23321,10 @@ def list_delivery_catalogue() -> dict:
     """
     from boss_engine.services.workflow_catalogue import WORK_CLASSES, catalogue_summary
 
-    return {"items": catalogue_summary(), "work_classes": list(WORK_CLASSES)}
+    from boss_engine.services.workflow_capabilities import prd_auto_approved
+
+    return {"items": catalogue_summary(prd_auto_approve=prd_auto_approved(settings)),
+            "work_classes": list(WORK_CLASSES)}
 
 
 @app.post("/v1/delivery-workflows/catalogue/install")
@@ -23494,6 +23506,28 @@ def apply_delivery_workflow(payload: WorkflowApplyBody) -> dict:
                 "rule outranks this one by scope or priority."
             ),
         }
+
+
+@app.get("/v1/delivery-workflows/costs")
+def get_delivery_workflow_costs(project_id: str) -> dict:
+    """What a run of each workflow has cost in this project, as a 20th–80th percentile range,
+    and `@change` for a quick change with no workflow. From recorded model calls only; a
+    workflow with no history is left out rather than guessed (services/workflow_costs.py)."""
+    from boss_engine.services.workflow_costs import workflow_costs
+
+    with begin(engine) as connection:
+        return workflow_costs(connection, project_id)
+
+
+@app.get("/v1/delivery-workflows/asks")
+def get_delivery_workflow_asks(project_id: str) -> dict:
+    """Every time the operator will be asked, per workflow and per route (@quick, @spec), in
+    run order: {step_id, label, kind: gate|spec|merge, who: you|boss}. The console shows this
+    rather than its own copy of the rules (services/workflow_asks.py)."""
+    from boss_engine.services.workflow_asks import project_asks
+
+    with begin(engine) as connection:
+        return project_asks(connection, settings, project_id)
 
 
 @app.get("/v1/delivery-workflows/runs")
@@ -24786,6 +24820,46 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
             # alternative is a run against an app that does not exist.
             raise HTTPException(status_code=409, detail=why_no_sample(str(wanted or "")))
         run_input = {**chosen, **run_input}
+
+    # BUILD ONTO AN APP THAT EXISTS. `extends_run_id` names a build of the app; every build
+    # step of this run then continues that app — its branch, its repository, its lineage — and
+    # the Factory shows the result as the app's next build. Checked here — before anything is
+    # spent, and after a re-run or a sample has filled the input in — because a run told to
+    # extend an app that is not in this project, or a simulated fixture with no code behind
+    # it, would otherwise convene a panel and fail only at the build.
+    extends: Optional[dict] = None
+    extends_run_id = str(run_input.get("extends_run_id") or "").strip()
+    run_input.pop("extends_run_id", None)
+    if extends_run_id:
+        from boss_engine.services.code_task_service import (
+            is_simulated_run, load_code_task_run, work_branch_for,
+        )
+        from boss_engine.services.factory_view import app_name
+
+        with begin(engine) as connection:
+            parent = load_code_task_run(connection, extends_run_id)
+        if not parent or str(parent.get("project_id")) != project_id:
+            raise HTTPException(status_code=404, detail="that app is not in this project")
+        if is_simulated_run(parent):
+            raise HTTPException(
+                status_code=422,
+                detail="that build is a simulated fixture — there is no code to build onto")
+        run_input["extends_run_id"] = extends_run_id
+        extends = {"run_id": extends_run_id, "app": app_name(parent),
+                   "branch": work_branch_for(parent)}
+    # WHICH RUNNING PREVIEW the operator was looking at when they asked for the change: the
+    # build is told, as the quick change's feedback is (anchor /v1/previews/<id>/web/). Only
+    # alongside extends_run_id, and only a preview of this project.
+    preview_id = str(run_input.pop("preview_id", None) or "").strip()
+    if preview_id and extends_run_id:
+        with begin(engine) as connection:
+            seen = connection.execute(
+                text("SELECT id FROM app_previews WHERE id = :i AND project_id = :p"),
+                {"i": preview_id, "p": project_id}).scalar()
+        if not seen:
+            raise HTTPException(status_code=404, detail="that preview is not in this project")
+        run_input["preview_id"] = preview_id
+        extends["preview_id"] = preview_id
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
         _authorize_delivery_target_input(connection, project_id, actor, run_input)
@@ -24863,7 +24937,8 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
         # adoption and did not get it should be able to see that, not wonder why its run
         # behaved differently from the one it copied.
         return {"run": run, **({"ignored_input": dropped} if dropped else {}),
-                **({"readiness": readiness} if readiness.get("missing") else {})}
+                **({"readiness": readiness} if readiness.get("missing") else {}),
+                **({"extends": extends} if extends else {})}
 
 
 def _delivery_readiness_or_409(

@@ -134,8 +134,8 @@ async function click(el: HTMLElement | null) {
   await act(async () => { el!.click(); });
   await settle();
 }
-const rail = () => $$('[data-testid="dw-wiz-rail"] li').map((li) => li.textContent?.replace(/^[\d✓]+/, ""));
-const ticked = () => $$('[data-testid="dw-wiz-rail"] li').map((li) => li.dataset.state);
+/** One screen now (New project, 2026-10-05): the form on the left, the plan on the right. */
+const mode = () => $('[data-testid="dw-new-project"]')?.dataset.mode;
 
 /** A well-formed value for a field, by the kind the composer draws for it. */
 function valueFor(kind: string, name: string): string {
@@ -171,7 +171,10 @@ describe.each(Object.entries(EXAMPLES))("the %s example", (key, form) => {
       expect($(`[data-testid="${id}"]`), id).toBeNull();
     }
     expect(host!.textContent).not.toContain("What should it do?");
-    expect(rail()).toEqual(["What it needs", "How it runs", "Review"]);
+    // Its own form, with no mode switch and no "Lives in": it is not a product brief.
+    expect(mode()).toBe("form");
+    expect($('[data-testid="np-mode"]')).toBeNull();
+    expect($('[data-testid="np-lives"]')).toBeNull();
   });
 
   it("says what THIS workflow does, on one line, never the product boilerplate", async () => {
@@ -183,17 +186,14 @@ describe.each(Object.entries(EXAMPLES))("the %s example", (key, form) => {
     expect($('[data-testid="dw-new-heading"]')?.textContent).toBe(form.name);
   });
 
-  it("is not ✓ and cannot start until its required fields are filled", async () => {
+  it("cannot start until its required fields are filled", async () => {
     await mount({ workflows: [installed(key, form)], startWith: key, checked: {} });
-    expect($('[data-testid="dw-wiz-start-now"]')!.hasAttribute("disabled")).toBe(true);
-    expect($('[data-testid="dw-wiz-next"]')!.hasAttribute("disabled")).toBe(true);
-    expect($('[data-testid="dw-wiz-blocked"]')?.textContent)
+    expect($('[data-testid="dw-new-start"]')!.hasAttribute("disabled")).toBe(true);
+    expect($('[data-testid="np-blocked"]')?.textContent)
       .toBe(`Needs ${required.map((f) => f.label).join(", ")}`);
     for (const f of required) await type($(`[data-testid="dw-workflow-input-${f.name}"]`), valueFor(f.kind, f.name));
-    expect($('[data-testid="dw-wiz-blocked"]')).toBeNull();
-    expect($('[data-testid="dw-wiz-start-now"]')!.hasAttribute("disabled")).toBe(false);
-    await click($('[data-testid="dw-wiz-next"]'));
-    expect(ticked()).toEqual(["done", "current", "todo"]);
+    expect($('[data-testid="np-blocked"]')).toBeNull();
+    expect($('[data-testid="dw-new-start"]')!.hasAttribute("disabled")).toBe(false);
   });
 
   it("posts exactly its declared keys, with the values typed", async () => {
@@ -203,13 +203,6 @@ describe.each(Object.entries(EXAMPLES))("the %s example", (key, form) => {
       expected[f.name] = valueFor(f.kind, f.name);
       await type($(`[data-testid="dw-workflow-input-${f.name}"]`), expected[f.name]);
     }
-    // The review lists what it will be given.
-    await click($('[data-testid="dw-wiz-next"]'));
-    await click($('[data-testid="dw-wiz-next"]'));
-    for (const f of fields) {
-      expect($(`[data-testid="dw-review-input-${f.name}"]`)?.textContent).toContain(expected[f.name]);
-    }
-    expect($('[data-testid="dw-review-repo"]')).toBeNull();
     await click($('[data-testid="dw-new-start"]'));
     expect(api.posts).toHaveLength(1);
     expect(api.posts[0]).toMatchObject({ action: "start", project_id: "p1", workflow_key: key });
@@ -221,13 +214,13 @@ describe.each(Object.entries(EXAMPLES))("the %s example", (key, form) => {
   it("leaves an optional field out rather than sending it blank", async () => {
     const api = await mount({ workflows: [installed(key, form)], startWith: key, checked: {} });
     for (const f of required) await type($(`[data-testid="dw-workflow-input-${f.name}"]`), valueFor(f.kind, f.name));
-    await click($('[data-testid="dw-wiz-start-now"]'));
+    await click($('[data-testid="dw-new-start"]'));
     expect(Object.keys(api.posts[0].input ?? {}).sort()).toEqual(required.map((f) => f.name).sort());
   });
 
   it("keeps its copy to labels and tooltips", async () => {
     await mount({ workflows: [installed(key, form)], startWith: key, checked: {} });
-    for (const sel of ['[data-testid="dw-wiz-step-brief"]', ".dw-new-head", '[data-testid="dw-wiz-rail"]']) {
+    for (const sel of ['[data-testid="np-brief"]', ".np-head", ".np-foot"]) {
       expect(overBudget($(sel)!), sel).toEqual([]);
     }
   });
@@ -239,8 +232,8 @@ describe("a malformed value is caught at the form", () => {
     await mount({ workflows: [installed("trend", form)], startWith: "trend", checked: {} });
     await type($('[data-testid="dw-workflow-input-trend"]'), "AI coding setups");
     await type($('[data-testid="dw-workflow-input-to"]'), "not an address");
-    expect($('[data-testid="dw-wiz-blocked"]')?.textContent).toBe("Check Reviewer email");
-    expect($('[data-testid="dw-wiz-start-now"]')!.hasAttribute("disabled")).toBe(true);
+    expect($('[data-testid="np-blocked"]')?.textContent).toBe("Check Reviewer email");
+    expect($('[data-testid="dw-new-start"]')!.hasAttribute("disabled")).toBe(true);
   });
 });
 
@@ -264,7 +257,7 @@ describe("the start form's own types and defaults", () => {
     const urgent = $('[data-testid="dw-workflow-input-urgent"]') as HTMLInputElement;
     expect(urgent.type).toBe("checkbox");
     await click(urgent);
-    await click($('[data-testid="dw-wiz-start-now"]'));
+    await click($('[data-testid="dw-new-start"]'));
     expect(api.posts[0].input).toEqual({ count: 5, urgent: true });
   });
 });
@@ -279,26 +272,24 @@ describe("a catalogue product template keeps the product brief", () => {
                   checked: { [PRODUCT.key]: ["repository", "model", "deployment_target"] } });
     expect($('[data-testid="dw-new-directive"]')).not.toBeNull();
     expect($('[data-testid="dw-new-audience"]')).not.toBeNull();
-    expect($('[data-testid="dw-new-criterion-0"]')).not.toBeNull();
+    // Done when starts empty, with "+ Add a check" (the panel proposes criteria otherwise).
+    expect($('[data-testid="dw-new-criterion-add"]')).not.toBeNull();
     // What the product questions and "Where it lives" collect is not asked twice.
     expect($$('[data-testid^="dw-workflow-input-"]').map((e) => e.dataset.testid))
       .toEqual(["dw-workflow-input-notify_channel"]);
-    expect(rail()).toEqual(["What you are building", "How it gets built", "Where it lives", "Review"]);
-    expect($('[data-testid="dw-new-subtitle"]')?.textContent)
-      .toBe("Idea to shipped, watched software. The full path, with gates.");
+    // The product brief is New project: the mode switch, and "Lives in" because it builds.
+    expect(mode()).toBe("new");
+    expect($('[data-testid="np-mode"]')).not.toBeNull();
+    expect($('[data-testid="np-lives"]')?.textContent).toContain("acme/app");
   });
 
   it("starts with the brief's own keys and the repository", async () => {
     const api = await mount({ workflows: [spd], catalogue: [PRODUCT], startWith: PRODUCT.key,
                               checked: { [PRODUCT.key]: ["repository"] } });
-    expect($('[data-testid="dw-wiz-blocked"]')?.textContent).toMatch(/^Describe what you want built/);
+    expect($('[data-testid="np-blocked"]')?.textContent).toMatch(/^Describe what you want built/);
     await type($('[data-testid="dw-new-directive"]'), "A shift-swap board for the duty team.");
     await type($('[data-testid="dw-workflow-input-notify_channel"]'), "email:team@example.com");
-    await click($('[data-testid="dw-wiz-next"]'));
-    await click($('[data-testid="dw-wiz-next"]'));
-    expect($('[data-testid="dw-wiz-step-where"]')).not.toBeNull();
-    await click($('[data-testid="dw-wiz-next"]'));
-    expect($('[data-testid="dw-review-repo"]')?.textContent).toBe("acme/app");
+    expect($('[data-testid="np-lives"]')?.textContent).toContain("acme/app");
     await click($('[data-testid="dw-new-start"]'));
     expect(api.posts[0]).toMatchObject({ workflow_key: PRODUCT.key });
     expect(api.posts[0].input).toEqual({
@@ -308,11 +299,12 @@ describe("a catalogue product template keeps the product brief", () => {
     });
   });
 
-  it("drops the repository step when the readiness check says no step needs one", async () => {
+  it("drops Lives in when the readiness check says no step needs one", async () => {
     // Research-Led Discovery and the like end in a decision, not in code.
     await mount({ workflows: [spd], catalogue: [PRODUCT], startWith: PRODUCT.key,
                   checked: { [PRODUCT.key]: ["model"] } });
-    expect(rail()).toEqual(["What you are building", "How it gets built", "Review"]);
+    expect($('[data-testid="np-lives"]')).toBeNull();
+    expect($('[data-testid="dw-new-link-add"]')).toBeNull();
   });
 });
 

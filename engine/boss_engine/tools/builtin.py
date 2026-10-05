@@ -623,6 +623,104 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         return {"project_id": pid, "deployments": [_json_safe(dict(r)) for r in rows]}
 
 
+def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends: str,
+                             finalize_ctx: dict) -> dict:
+    """create_code_task for a feature on an app that already exists: the app's next build.
+
+    A fresh task branches from the default branch and scaffolds; an app whose PR is still open
+    does not exist there, so the builder wrote a second, parallel app and the Factory showed it
+    as a new one. The follow-up path already knows how to continue an app — its branch, its
+    repository, its lineage and app id — so this hands it the feature rather than re-deriving
+    any of that. Only the workflow's own bookkeeping (the governing run, who started it, which
+    agent builds) travels with it.
+    """
+    with ctx.begin() as c:
+        parent = _code_task_in_project(c, extends, pid)
+        if parent is None:
+            return {"ok": False, "error": f"no app build {extends} in this project"}
+        # ONE BUILD ON A BRANCH AT A TIME. A build of this app still on the line (the launch
+        # check's repair, a retry) writes the same branch; starting the feature beside it races
+        # it — and start_code_task's same-app guard would hand back THAT run instead, so the
+        # step would wait on someone else's work as if it were the feature. Wait for it.
+        busy = _app_build_in_flight(c, pid, extends)
+        if busy:
+            said = (f"Waiting for build {busy} of this app to finish: a feature is built on the "
+                    "app's branch, one build at a time.")
+            if finalize_ctx.get("workflow_run_id"):
+                from ..services.workflow_capability_runner import CapabilityWaitError
+
+                raise CapabilityWaitError(said, wait_seconds=60, kind="app_busy")
+            return {"ok": False, "error": said}
+        agent = _building_agent(c, pid, actor)
+        instructions = args.get("instructions") or ""
+        preview_id = str(args.get("preview_id") or "").strip()
+        if preview_id:
+            if _preview_in_project(c, preview_id, pid) is None:
+                return {"ok": False, "error": f"no preview {preview_id} in this project"}
+            # Said the way the quick change's feedback says it (its anchor), so the builder
+            # knows WHICH running app the operator was looking at when they asked.
+            instructions = (f"{instructions}\n\nThe operator asked for this while looking at "
+                            f"the running preview {preview_id} "
+                            f"(anchor: /v1/previews/{preview_id}/web/).").strip()
+        try:
+            started = cts.start_followup_task(
+                c,
+                parent_run_id=extends,
+                instructions=instructions,
+                jobs=ctx.jobs,
+                title=_titled_for_the_app(c, cts, extends, args.get("title")),
+                acceptance_criteria=cts.with_existing_tests_criterion(
+                    args.get("acceptance_criteria")),
+                test_commands=args.get("test_commands") or None,
+                profile=args.get("profile"),
+                actor=actor,
+                reference_links=args.get("reference_links") or None,
+                workflow_run_id=finalize_ctx.get("workflow_run_id"),
+                finalize_extra={"origin": finalize_ctx.get("origin"), "agent": agent},
+            )
+        except ValueError as exc:  # a simulated or vanished parent: say so, start nothing
+            return {"ok": False, "error": str(exc)}
+    owner, repo = started.get("owner"), started.get("repo")
+    return {
+        "status": "queued",
+        "run_id": started["run_id"],
+        "project_id": pid,
+        "repository": f"{owner}/{repo}" if owner and repo else None,
+        "repository_source": "extended_app",
+        "binding_id": None,
+        "base_branch": started["base_branch"],
+        "extended_existing_app": True,
+        "extended_from_root": started["root_run_id"],
+    }
+
+
+def _app_build_in_flight(connection, project_id: str, run_id: str):
+    """A build of the same app (its lineage or its app id) that is still running, or None."""
+    from sqlalchemy import text as _text
+
+    return connection.execute(_text(
+        "WITH me AS (SELECT COALESCE(finalize_ctx->>'root_run_id', id) AS root, "
+        "                   finalize_ctx->>'app_id' AS app FROM code_task_runs WHERE id = :r) "
+        "SELECT c.id FROM code_task_runs c, me WHERE c.project_id = :p "
+        "  AND c.status IN ('running', 'queued') "
+        "  AND (COALESCE(c.finalize_ctx->>'root_run_id', c.id) = me.root "
+        "       OR (me.app IS NOT NULL AND c.finalize_ctx->>'app_id' = me.app)) "
+        "ORDER BY c.created_at LIMIT 1"), {"r": run_id, "p": project_id}).scalar()
+
+
+def _titled_for_the_app(connection, cts, run_id: str, title) -> str:
+    """"<App>: <feature>". The Factory names an app from its newest build's title, so a build
+    titled only for the feature would rename the app on screen to the feature it gained."""
+    feature = str(title or "").strip()
+    parent = cts.load_code_task_run(connection, run_id) or {}
+    app = services_module("factory_view").app_name(parent) if parent else ""
+    if not app or app == "Untitled app":
+        return feature or "Change"
+    if feature.lower().startswith(app.lower()):
+        return feature
+    return f"{app}: {feature or 'a change'}"
+
+
 def _building_agent(connection, project_id: str, actor: str) -> dict | None:
     """{role_key, agent_id} when `actor` is an agent on this project (not a person), else None."""
     from sqlalchemy import text as _text
@@ -690,6 +788,20 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "workflow step is creating it. Names the run that already "
                                    "governs the work so a second one is not started for it.",
                 },
+                "extends_run_id": {
+                    "type": "string",
+                    "description": "a build (crun_...) of an EXISTING app to build this onto. "
+                                   "The task starts from that app's branch and code, in its "
+                                   "repository, and is recorded as the app's next build; its "
+                                   "existing tests must still pass. `repository` and "
+                                   "`base_branch` are ignored — the app decides both.",
+                },
+                "preview_id": {
+                    "type": "string",
+                    "description": "with extends_run_id: the running preview (prev_...) the "
+                                   "operator was looking at when they asked for this. The "
+                                   "builder is told which one.",
+                },
                 "risk_tier": {"type": "integer", "minimum": 0, "maximum": 3},
                 "profile": {
                     "type": "string",
@@ -724,6 +836,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         started_by = services_module("agent_acts").current_origin(actor)
         if started_by:
             finalize_ctx["origin"] = started_by
+        extends = str(args.get("extends_run_id") or "").strip()
+        if extends:
+            return _build_onto_existing_app(ctx, cts, pid, actor, args, extends, finalize_ctx)
         risk_tier = args.get("risk_tier")
         extended_from = None
         rr = services_module("repo_registry")

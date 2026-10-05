@@ -1097,6 +1097,37 @@ def _record_redelivery(client: ControlPlaneClient, job) -> None:
         LOGGER.debug("redelivery_note_failed job_id=%s", job.id, exc_info=True)
 
 
+def _is_conflict(error: BaseException) -> bool:
+    """A 409 from the control plane: the lease this worker holds is no longer its to settle."""
+    response = getattr(error, "response", None)
+    return getattr(response, "status_code", None) == 409
+
+
+def _hand_back_after_conflict(client: ControlPlaneClient, settings: WorkerSettings,
+                              job: LeasedJob, what: str, error: BaseException) -> None:
+    """The control plane refused to settle this job (409). Hand the lease back and carry on.
+
+    Raising here used to take the whole cycle down with the job still leased to this worker: it
+    sat for a full lease TTL (300s) before anything could run it again, and a worker started
+    with --drain-once simply exited. The API settles an expired-but-untaken lease, so a 409 now
+    means the job is someone else's or already settled; handing back is then a no-op the API
+    also refuses, which is fine — either way the loop lives and the job is not held by us.
+    """
+    LOGGER.warning(
+        "job_settle_conflict worker_id=%s job_id=%s kind=%s step=%s detail=%s — the control "
+        "plane no longer holds this lease for us; handing it back and moving on",
+        settings.worker_id, job.id, job.kind, what, str(error)[:200],
+    )
+    try:
+        client.heartbeat(settings.worker_id, job.id, job.lease_token,
+                         SHUTDOWN_LEASE_TTL_SECONDS, handing_back=True)
+        LOGGER.info("job_handed_back_after_conflict worker_id=%s job_id=%s",
+                    settings.worker_id, job.id)
+    except Exception:  # noqa: BLE001 — not ours any more: nothing left to release
+        LOGGER.info("job_not_ours_after_conflict worker_id=%s job_id=%s",
+                    settings.worker_id, job.id)
+
+
 def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bool:
     _tick_ai_sre_overwatch(settings)
     job = client.poll(
@@ -1135,12 +1166,19 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
         job.kind,
         job.attempt,
     )
-    client.heartbeat(
-        settings.worker_id,
-        job.id,
-        job.lease_token,
-        settings.lease_ttl_seconds,
-    )
+    try:
+        client.heartbeat(
+            settings.worker_id,
+            job.id,
+            job.lease_token,
+            settings.lease_ttl_seconds,
+        )
+    except Exception as error:
+        if not _is_conflict(error):
+            raise
+        # Leased and immediately lost: never start work we do not hold.
+        _hand_back_after_conflict(client, settings, job, "heartbeat", error)
+        return True
 
     # Keep the lease alive for the WHOLE (possibly many-minute) job. execute_job is a
     # single blocking call — e.g. code.task runs the entire governed pipeline, whose
@@ -1308,17 +1346,22 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
             if retryable
             else 0
         )
-        client.fail(
-            settings.worker_id,
-            job.id,
-            job.lease_token,
-            {
-                "message": str(error),
-                "type": error.__class__.__name__,
-            },
-            retryable=retryable,
-            retry_delay_seconds=retry_delay_seconds,
-        )
+        try:
+            client.fail(
+                settings.worker_id,
+                job.id,
+                job.lease_token,
+                {
+                    "message": str(error),
+                    "type": error.__class__.__name__,
+                },
+                retryable=retryable,
+                retry_delay_seconds=retry_delay_seconds,
+            )
+        except Exception as fail_error:
+            if not _is_conflict(fail_error):
+                raise
+            _hand_back_after_conflict(client, settings, job, "fail", fail_error)
         return True
     finally:
         hb_stop.set()
@@ -1347,12 +1390,18 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
         )
         return True
 
-    completion = client.complete(
-        settings.worker_id,
-        job.id,
-        job.lease_token,
-        result,
-    )
+    try:
+        completion = client.complete(
+            settings.worker_id,
+            job.id,
+            job.lease_token,
+            result,
+        )
+    except Exception as error:
+        if not _is_conflict(error):
+            raise
+        _hand_back_after_conflict(client, settings, job, "complete", error)
+        return True
     LOGGER.info(
         "job_completed worker_id=%s job_id=%s status=%s artifact_id=%s decision_id=%s",
         settings.worker_id,

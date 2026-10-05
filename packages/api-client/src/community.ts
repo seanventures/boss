@@ -5797,7 +5797,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
       });
     },
     conveneMeeting(payload: MeetingConvenePayload) {
-      return request<{ status: string; task_id: string; job_id: string | null; run_id?: string | null }>(
+      return request<{ status: string; task_id: string; job_id: string | null; run_id?: string | null; meeting_run_id?: string | null; extends_run_id?: string | null }>(
         "POST", "/v1/meetings/prd", { body: payload },
       );
     },
