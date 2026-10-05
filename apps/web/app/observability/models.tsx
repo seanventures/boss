@@ -30,6 +30,7 @@ import { Routing } from "./routing";
 import { Spark } from "./spark";
 import { TokenStream, slotOf } from "./token-stream";
 import { Empty, Skeleton, ZoneHead } from "../infra/kit";
+import { useLocalTime } from "../../lib/local-time";
 
 // ── the stat strip ──────────────────────────────────────────────────────────────────────────
 
@@ -151,6 +152,7 @@ function GroupTable({ m, group, selected, onSelect, slots }: {
 // ── FAILED CALLS ────────────────────────────────────────────────────────────────────────────
 
 function FailedCalls({ m, since }: { m: Models; since: string | null }) {
+  const lt = useLocalTime();
   return (
     <section className="obs-zone" aria-labelledby="obs-failed-head" data-testid="obs-failed">
       <ZoneHead id="obs-failed-head" label="FAILED CALLS" count={m.totals.failed}>
@@ -161,8 +163,8 @@ function FailedCalls({ m, since }: { m: Models; since: string | null }) {
         <ul className="obs-list">
           {m.failed.map((f, i) => (
             <li key={`${f.at}-${i}`} className="obs-line" data-testid="obs-failed-row">
-              <span className="inf-num inf-muted" title={new Date(f.at).toLocaleString()}>
-                {new Date(f.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}
+              <span className="inf-num inf-muted" title={lt.full(f.at)}>
+                {lt.hhmm(Date.parse(String(f.at)))}
               </span>
               <RunFace roleKey={f.roleKey} variant={f.roleKey ? "agent" : "boss"} size={20} />
               <span data-copy="data">{f.stage ?? "—"}</span>

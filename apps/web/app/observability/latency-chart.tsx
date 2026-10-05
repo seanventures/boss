@@ -15,6 +15,7 @@ import React, { useMemo, useState } from "react";
 import type { Incident, Pin, SeriesPoint } from "../../lib/obs-view";
 import { ms } from "../../lib/obs-view";
 import { TableToggle } from "../infra/kit";
+import { useLocalTime } from "../../lib/local-time";
 
 const W = 560;
 const H = 168;
@@ -25,8 +26,6 @@ const B = 22;   // x labels
 const PW = W - L - R;
 const PH = H - T - B;
 
-const hhmm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-const dayhm = (t: number, long: boolean) => (long ? new Date(t).toLocaleDateString([], { month: "short", day: "numeric" }) : hhmm(t));
 
 /** A round top for the y axis: 212 → 250, 2400 → 2500, 18400 → 20000. */
 export function niceMax(v: number): number {
@@ -51,6 +50,9 @@ export function linePath(xs: number[], ys: (number | null)[]): string {
 export function LatencyChart({ series, pins, incidents, fromIso, toIso, testId = "obs-latency-chart", label }: {
   series: SeriesPoint[]; pins: Pin[]; incidents: Incident[]; fromIso: string | null; toIso: string | null; testId?: string; label: string;
 }) {
+  const lt = useLocalTime();
+  const hhmm = lt.hhmm;
+  const dayhm = (t: number, long: boolean) => (long ? lt.day(t) : lt.hhmm(t));
   const [table, setTable] = useState(false);
   const [hover, setHover] = useState<number | null>(null);
   const geo = useMemo(() => {

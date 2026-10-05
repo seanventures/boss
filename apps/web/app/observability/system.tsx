@@ -24,6 +24,7 @@ import { ago, plainClick, useNow } from "../agents/live-util";
 import type { ObsTabProps } from "./obs-home";
 import { leaveTo } from "./obs-util";
 import { Empty, Skeleton, TableToggle, ZoneHead } from "../infra/kit";
+import { useLocalTime } from "../../lib/local-time";
 
 // ── a gauge ─────────────────────────────────────────────────────────────────────────────────
 
@@ -81,11 +82,12 @@ function useOnRail(area: string): boolean {
 // ── stalls ──────────────────────────────────────────────────────────────────────────────────
 
 function StallStrip({ strip, fromMs }: { strip: number[]; fromMs: number }) {
+  const lt = useLocalTime();
   const [table, setTable] = useState(false);
   const n = Math.max(1, strip.length);
   const W = n * 10;
   const cellMs = (24 * 3600_000) / n;
-  const hhmm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  const hhmm = (t: number) => lt.hhmm(t);
   const total = strip.reduce((a, b) => a + b, 0);
   return (
     <div className="obs-stallstrip">
@@ -112,7 +114,8 @@ function StallStrip({ strip, fromMs }: { strip: number[]; fromMs: number }) {
 }
 
 function Stalls({ s, now }: { s: System; now: number | null }) {
-  const fromMs = (now ?? Date.now()) - 24 * 3600_000;
+  const lt = useLocalTime();
+  const fromMs = now === null ? NaN : now - 24 * 3600_000;   // the clock starts after mount
   return (
     <section className="obs-zone" aria-labelledby="obs-stalls-head" data-testid="obs-stalls">
       <ZoneHead id="obs-stalls-head" label="STALLS · 24H" count={s.stalls.total} />
@@ -121,8 +124,8 @@ function Stalls({ s, now }: { s: System; now: number | null }) {
         <ul className="obs-list">
           {s.stalls.rows.map((r, i) => (
             <li key={`${r.at}-${i}`} className="obs-line" data-testid="obs-stall-row">
-              <span className="inf-num inf-muted" title={new Date(r.at).toLocaleString()}>
-                {new Date(r.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}
+              <span className="inf-num inf-muted" title={lt.full(r.at)}>
+                {lt.hhmm(Date.parse(String(r.at)))}
               </span>
               <span className="obs-strong">{r.word}</span>
               {r.subject ? <span className="inf-trunc inf-muted" data-copy="data" data-user-text>{r.subject}</span> : null}
@@ -145,6 +148,7 @@ function Stalls({ s, now }: { s: System; now: number | null }) {
 // ── the tab ─────────────────────────────────────────────────────────────────────────────────
 
 export function SystemTab({ projectId, actor, orgId, system }: ObsTabProps) {
+  const lt = useLocalTime();
   const s = system.data;
   const now = useNow(30_000);
   const shepherd = useOnRail("shepherd");
@@ -177,7 +181,7 @@ export function SystemTab({ projectId, actor, orgId, system }: ObsTabProps) {
       <section className="obs-zone obs-machine" aria-labelledby="obs-machine-head" data-testid="obs-machine">
         <ZoneHead id="obs-machine-head" label="BOSS MACHINE">
           {s.build.sha7 ? (
-            <span className="inf-faint inf-num" title={s.build.builtAt ? `Built ${new Date(s.build.builtAt).toLocaleString()}` : undefined} data-testid="obs-build">
+            <span className="inf-faint inf-num" title={s.build.builtAt ? `Built ${lt.full(s.build.builtAt)}` : undefined} data-testid="obs-build">
               build <span className="inf-mono" data-copy="data">{s.build.sha7}</span>{s.build.builtAt && now !== null ? ` · ${ago(s.build.builtAt, now)}` : ""}
             </span>
           ) : null}
@@ -238,7 +242,7 @@ export function SystemTab({ projectId, actor, orgId, system }: ObsTabProps) {
           <ul className="obs-list">
             {s.actions.map((a, i) => (
               <li key={`${a.at}-${i}`} className="obs-line" data-testid="obs-action-row">
-                <span className="inf-num inf-muted" title={new Date(a.at).toLocaleString()}>{ago(a.at, now) || "—"}</span>
+                <span className="inf-num inf-muted" title={lt.full(a.at)}>{ago(a.at, now) || "—"}</span>
                 <span className="obs-strong">{a.action}</span>
                 {a.target ? <span className="inf-mono inf-faint inf-trunc" data-copy="data">{a.target}</span> : null}
                 {a.outcome ? <span className="inf-muted inf-trunc" data-copy="data">{a.outcome}</span> : null}

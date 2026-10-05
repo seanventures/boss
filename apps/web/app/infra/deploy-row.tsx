@@ -16,6 +16,7 @@ import { RunFace } from "../agents/run-face";
 import { afterWrite, decideDeploy, rollbackDeploy } from "./infra-actions";
 import { ago, dur, localTime, useNow } from "./infra-util";
 import { StateWord } from "./kit";
+import { LOCAL, useLocalTime, type LocalTime } from "../../lib/local-time";
 
 const GLYPH: Record<StepState, string> = { done: "●", running: "◐", failed: "✗", pending: "○", skipped: "–" };
 const STEP_WORD: Record<StepState, string> = { done: "done", running: "running", failed: "failed", pending: "waiting", skipped: "skipped" };
@@ -131,7 +132,7 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
 }
 
 /** TODAY · YESTERDAY · MONDAY … · Sep 28 — by the local day a deploy started. */
-export function dayLabel(iso: string | null, now: number): string {
+export function dayLabel(iso: string | null, now: number, lt: LocalTime = LOCAL): string {
   if (!iso) return "EARLIER";
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return "EARLIER";
@@ -139,8 +140,8 @@ export function dayLabel(iso: string | null, now: number): string {
   const days = Math.round((start(new Date(now)) - start(d)) / 86_400_000);
   if (days <= 0) return "TODAY";
   if (days === 1) return "YESTERDAY";
-  if (days < 7) return d.toLocaleDateString("en-US", { weekday: "long" }).toUpperCase();
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase();
+  if (days < 7) return lt.weekday(d.getTime()).toUpperCase();
+  return lt.monthDay(d.getTime()).toUpperCase();
 }
 
 /** Rows grouped by day. `grouped={false}` for a short list (the target drawer's 5). */
@@ -149,9 +150,11 @@ export function DeployRail({ rows, projectId, actor, onOpen, onChanged, grouped 
   grouped?: boolean; actions?: boolean; testId?: string;
 }) {
   const now = useNow(30_000);
+  const lt = useLocalTime();
   const groups: { label: string; rows: DeployRow[] }[] = [];
   for (const row of rows) {
-    const label = grouped ? dayLabel(row.startedAt ?? row.finishedAt, now ?? Date.now()) : "";
+    // Day heads need the viewer's clock, which starts after mount (the server render agrees).
+    const label = grouped && now !== null ? dayLabel(row.startedAt ?? row.finishedAt, now, lt) : "";
     const last = groups[groups.length - 1];
     if (last && last.label === label) last.rows.push(row); else groups.push({ label, rows: [row] });
   }

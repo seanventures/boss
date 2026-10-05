@@ -6,6 +6,7 @@
 import type { DockSubject } from "../../lib/dock-subject";
 import type { Pulse } from "../../lib/obs-view";
 import { navigate } from "../agents/live-util";
+import type { LocalTime } from "../../lib/local-time";
 
 /** `1h 4m`, `38m`, `2d 3h`. */
 export function dur(seconds: number): string {
@@ -21,16 +22,14 @@ export const SPAN: Record<string, string> = { "24h": "24 hours", "7d": "7 days",
 export const HEAD: Record<string, string> = { "24h": "PULSE · 24H", "7d": "PULSE · 7D", "30d": "PULSE · 30D" };
 
 /** Five evenly spaced labels across the window: times for 24h, days for 7d/30d, `now` last. */
-export function timeTicks(fromIso: string | null, toIso: string | null, win: string): string[] {
+export function timeTicks(fromIso: string | null, toIso: string | null, win: string, lt: LocalTime): string[] {
   const from = fromIso ? Date.parse(fromIso) : NaN;
   const to = toIso ? Date.parse(toIso) : NaN;
   if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return [];
   return [0, 1, 2, 3, 4].map((k) => {
     if (k === 4) return "now";
-    const at = new Date(from + ((to - from) * k) / 4);
-    return win === "24h"
-      ? at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
-      : at.toLocaleDateString([], { month: "short", day: "numeric" });
+    const at = from + ((to - from) * k) / 4;
+    return win === "24h" ? lt.hhmm(at) : lt.day(at);
   });
 }
 

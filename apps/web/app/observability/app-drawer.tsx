@@ -26,6 +26,7 @@ import { LatencyChart } from "./latency-chart";
 import { obsWrite } from "./obs-write";
 import { dur, leaveTo, obsAsks } from "./obs-util";
 import { Drawer, DrawerSection, Skeleton, StateWord } from "../infra/kit";
+import { useLocalTime } from "../../lib/local-time";
 
 function Fact({ label, children, tip }: { label: string; children: React.ReactNode; tip?: string }) {
   return (
@@ -37,6 +38,7 @@ function Fact({ label, children, tip }: { label: string; children: React.ReactNo
 }
 
 export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: ObsTabProps & { targetId: string; row: PulseRow | null }) {
+  const lt = useLocalTime();
   const detail = useAppDetail(projectId, targetId, url.win);
   const d = detail.data;
   const now = useNow(30_000);
@@ -76,7 +78,7 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
     <span className="obs-dhead">
       <span className="obs-dhead-name" data-copy="data" data-user-text>{name}</span>
       {word ? <StateWord w={word} testId="obs-app-state" /> : null}
-      <span className="inf-faint inf-num" data-testid="obs-app-since" title={since ? new Date(since).toLocaleString() : "Never probed"}>
+      <span className="inf-faint inf-num" data-testid="obs-app-since" title={since ? lt.full(since) : "Never probed"}>
         {since && now !== null ? `since ${dur((now - Date.parse(since)) / 1000)}` : since ? "since —" : "No signal"}
       </span>
       <button type="button" className="ag-icon-btn" aria-label="Copy link" title="Copy link" data-testid="obs-app-copy" onClick={copyLink}>⋯</button>
@@ -91,11 +93,11 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
             <Fact label="Uptime 24h">{pct(d.facts.uptime24h, 2)}</Fact>
             <Fact label="Uptime 7d">{pct(d.facts.uptime7d, 2)}</Fact>
             <Fact label="p95" tip={d.facts.p95Ms === null ? "No latency recorded" : `avg ${ms(d.facts.avgMs)}`}>{ms(d.facts.p95Ms)}</Fact>
-            <Fact label="Last probe" tip={d.facts.lastProbeAt ? new Date(d.facts.lastProbeAt).toLocaleString() : "Never probed"}>
+            <Fact label="Last probe" tip={d.facts.lastProbeAt ? lt.full(d.facts.lastProbeAt) : "Never probed"}>
               {d.facts.lastProbeAt ? ago(d.facts.lastProbeAt, now) || "—" : "—"}
             </Fact>
             <Fact label="Probes" tip={`${d.facts.failed} failed of ${d.facts.probes}`}>{d.facts.probes.toLocaleString("en-US")}</Fact>
-            <Fact label="Build" tip={d.facts.deployedAt ? `Deployed ${new Date(d.facts.deployedAt).toLocaleString()}` : undefined}>
+            <Fact label="Build" tip={d.facts.deployedAt ? `Deployed ${lt.full(d.facts.deployedAt)}` : undefined}>
               <span className="inf-mono" data-copy="data">{d.facts.buildSha7 ?? "—"}</span>
             </Fact>
             {d.facts.servingMismatch && d.facts.observedVersion ? (
@@ -119,7 +121,7 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
                   return (
                     <li key={inc.start} className="obs-incident" data-ongoing={inc.end ? undefined : "1"}>
                       <span className="obs-line">
-                        <span className="inf-num" title={new Date(start).toLocaleString()}>{new Date(start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}</span>
+                        <span className="inf-num" title={lt.full(start)}>{lt.hhmm(Date.parse(String(start)))}</span>
                         {inc.end ? <span className="inf-muted inf-num">{inc.durationS !== null ? dur(inc.durationS) : "—"}</span>
                                  : <span className="obs-ongoing" data-testid="obs-incident-ongoing">Ongoing</span>}
                         {inc.firstError ? <span className="inf-mono inf-trunc obs-err" title={inc.firstError} data-copy="data">{inc.firstError}</span> : null}

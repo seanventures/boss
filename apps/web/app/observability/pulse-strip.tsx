@@ -15,6 +15,7 @@
 import React, { useId } from "react";
 
 import type { Tone } from "../../lib/infra-view";
+import { LOCAL, useLocalTime, type LocalTime } from "../../lib/local-time";
 
 export type StripCellIn = { ok: number; n: number; p95?: number | null };
 export type StripPin = { at: string; sha7: string | null; word: string; tone: Tone; href?: string | null };
@@ -27,11 +28,10 @@ export function cellKind(c: StripCellIn): CellKind {
   return "some";
 }
 
-const hhmm = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-const day = (ms: number) => new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
 
 /** `<from>–<to> · k of n ok · p95 <ms>` or `<from>–<to> · No probes`. */
-export function cellTip(c: StripCellIn, startMs: number | null, cellS: number): string {
+export function cellTip(c: StripCellIn, startMs: number | null, cellS: number, t: LocalTime = LOCAL): string {
+  const { hhmm, day } = t;
   let when = "";
   if (startMs !== null && cellS > 0) {
     const end = startMs + cellS * 1000;
@@ -66,6 +66,8 @@ export function PulseStrip({ cells, fromIso, cellS, pins = [], label, span, dens
   onPin?: (pin: StripPin) => void;
 }) {
   const hatch = `obs-hatch-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const t = useLocalTime();
+  const { hhmm } = t;
   const start = fromIso ? Date.parse(fromIso) : NaN;
   const startMs = Number.isFinite(start) ? start : null;
   const n = Math.max(1, cells.length);
@@ -107,7 +109,7 @@ export function PulseStrip({ cells, fromIso, cellS, pins = [], label, span, dens
           return (
             <rect key={i} className="obs-cell" data-k={k} x={i * 10 + 1} y={k === "gap" ? 1 : 0} width={8} height={k === "gap" ? 10 : 12}
                   rx={1.5} fill={k === "none" ? `url(#${hatch})` : undefined} vectorEffect="non-scaling-stroke">
-              <title>{cellTip(c, startMs === null ? null : startMs + i * cellS * 1000, cellS)}</title>
+              <title>{cellTip(c, startMs === null ? null : startMs + i * cellS * 1000, cellS, t)}</title>
             </rect>
           );
         })}
@@ -118,6 +120,7 @@ export function PulseStrip({ cells, fromIso, cellS, pins = [], label, span, dens
 
 /** The same buckets as a table (`View as table`, §7). */
 export function StripTable({ cells, fromIso, cellS, testId }: { cells: StripCellIn[]; fromIso: string | null; cellS: number; testId?: string }) {
+  const { hhmm, day } = useLocalTime();
   const start = fromIso ? Date.parse(fromIso) : NaN;
   return (
     <table className="inf-table obs-strip-table" data-testid={testId}>

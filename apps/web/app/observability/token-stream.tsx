@@ -18,6 +18,7 @@ import React, { useMemo, useState } from "react";
 
 import { compact, ms, usd, type Metric } from "../../lib/obs-view";
 import { TableToggle } from "../infra/kit";
+import { useLocalTime } from "../../lib/local-time";
 
 export const OTHER = "__other__";
 export const isOther = (b: { key: string; label: string }) => b.key === OTHER || b.label === "Other";
@@ -77,13 +78,12 @@ export function TokenStream({ buckets, bands, metric, selected, onSelect, testId
     });
     return d;
   };
+  const lt = useLocalTime();
   const when = (i: number) => {
     const t = Date.parse(buckets[i] ?? "");
     if (!Number.isFinite(t)) return "";
     const spanMs = n > 1 ? Date.parse(buckets[n - 1]) - Date.parse(buckets[0]) : 0;
-    return spanMs > 36 * 3600_000
-      ? new Date(t).toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", hour12: false })
-      : new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+    return spanMs > 36 * 3600_000 ? lt.dayHour(t) : lt.hhmm(t);
   };
   const xTicks = n ? [0, Math.floor((n - 1) / 3), Math.floor((2 * (n - 1)) / 3), n - 1] : [];
   const onMove = (e: React.MouseEvent<SVGSVGElement>) => {

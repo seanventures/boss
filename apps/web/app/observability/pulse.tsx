@@ -24,18 +24,20 @@ import type { ObsTabProps } from "./obs-home";
 import { AppDrawer } from "./app-drawer";
 import { PulseStrip, StripTable } from "./pulse-strip";
 import { Empty, LiveRegion, Skeleton, StateWord, ZoneHead, useAnnouncer } from "../infra/kit";
+import { useLocalTime } from "../../lib/local-time";
 
 // ── one row ─────────────────────────────────────────────────────────────────────────────────
 
 function PulseRowView({ row, pulse, onOpen, changed, now }: {
-  row: PulseRow; pulse: Pulse; onOpen: (id: string) => void; changed: boolean; now: number;
+  row: PulseRow; pulse: Pulse; onOpen: (id: string) => void; changed: boolean; now: number | null;
 }) {
+  const lt = useLocalTime();
   const [table, setTable] = useState(false);
   const name = `${row.app} · ${row.env}`;
   const notDeployed = row.state === "not_deployed";
   const sinceMs = row.since ? Date.parse(row.since) : NaN;
-  const right = row.state === "down" && Number.isFinite(sinceMs)
-    ? <span className="obs-down" title={`Down since ${new Date(sinceMs).toLocaleString()}`}>down {dur((now - sinceMs) / 1000)}</span>
+  const right = row.state === "down" && Number.isFinite(sinceMs) && now !== null
+    ? <span className="obs-down" title={`Down since ${lt.full(sinceMs)}`}>down {dur(((now ?? sinceMs) - sinceMs) / 1000)}</span>
     : row.p95Ms !== null
       ? <span>p95 {ms(row.p95Ms)}</span>
       : notDeployed ? <span className="inf-faint">—</span>
@@ -95,8 +97,11 @@ function PulseRowView({ row, pulse, onOpen, changed, now }: {
 export function AppsTab(props: ObsTabProps) {
   const { pulse, url, go, query } = props;
   const data = pulse.data;
-  const [now, setNow] = useState(() => Date.now());
+  // The clock starts after mount (the server and the first client render agree), and is read
+  // again whenever a new answer lands.
+  const [now, setNow] = useState<number | null>(null);
   useEffect(() => { setNow(Date.now()); }, [data]);
+  const lt = useLocalTime();
 
   // A state word that changed between polls rings its dot once and is announced (§5.2, §7).
   const [said, say] = useAnnouncer();
@@ -137,7 +142,7 @@ export function AppsTab(props: ObsTabProps) {
     return !q || `${r.app} ${r.env} ${r.host?.name ?? ""}`.toLowerCase().includes(q);
   });
   const open = (id: string) => go({ app: id }, "push");
-  const ticks = data ? timeTicks(data.window.from, data.window.to, data.window.win) : [];
+  const ticks = data ? timeTicks(data.window.from, data.window.to, data.window.win, lt) : [];
   const head = HEAD[url.win] ?? "PULSE";
 
   return (
