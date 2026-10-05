@@ -40,6 +40,10 @@ import { AgFace } from "../agents/agent-face";
 import { ANIMATED_STATES, RING_BUDGET, ago, linkTo, navigate, plainClick, runPatch, useNow, type Band } from "../agents/live-util";
 import { TeamZones, faceStateOf, teamHue } from "../agents/team-zones";
 
+/** SVG coordinates to 1/100 px: the server and the browser print a float's last digits
+ *  differently, and one digit is a hydration mismatch (seen on the walk). */
+const q = (n: number): number => Math.round(n * 100) / 100;
+
 /** useLayoutEffect in the browser, nothing on the server (which has no layout to read). */
 const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
@@ -122,7 +126,8 @@ export function floorFooter(view: CommandCenterView, nowMs: number | null):
     const text = age ? `All idle · last work ${age}` : "All idle";
     return { text, parts: age ? ["All idle", `last work ${age}`] : ["All idle"] };
   }
-  const parts = [`${c.working} working`, ...(c.onRuns ? [`${c.onRuns} on runs`] : []), `${c.idle} idle`];
+  const parts = [`${c.working} working`, ...(c.onRuns ? [`${c.onRuns} on runs`] : []),
+                 ...(c.stuck ? [`${c.stuck} stuck`] : []), `${c.idle} idle`];
   return { text: parts.join(" · "), parts,
            tip: c.onRuns ? "On runs: their run is in flight or waiting on you" : undefined };
 }
@@ -500,21 +505,31 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
         </defs>
         {/* Depth: a dotted floor, a soft core, three faint orbits and the team spokes. Static. */}
         <rect x={0} y={0} width={W} height={H} fill="url(#cc-floor-grid)" className="cc-grid" />
-        <circle cx={layout.cx} cy={layout.cy} r={R * 1.15} fill="url(#cc-floor-core)" />
-        <circle className="cc-orbit" cx={layout.cx} cy={layout.cy} r={R * 0.34} />
-        <circle className="cc-orbit" cx={layout.cx} cy={layout.cy} r={R * 0.68} />
-        <circle className="cc-orbit cc-orbit-outer" cx={layout.cx} cy={layout.cy} r={R + 40} />
+        <circle cx={q(layout.cx)} cy={q(layout.cy)} r={q(R * 1.15)} fill="url(#cc-floor-core)" />
+        <circle className="cc-orbit" cx={q(layout.cx)} cy={q(layout.cy)} r={q(R * 0.34)} />
+        <circle className="cc-orbit" cx={q(layout.cx)} cy={q(layout.cy)} r={q(R * 0.68)} />
+        <circle className="cc-orbit cc-orbit-outer" cx={q(layout.cx)} cy={q(layout.cy)} r={q(R + 40)} />
         {layout.arcs.map((arc) => (
-          <line key={`s-${arc.team}`} className="cc-spoke" x1={layout.cx + R * 0.36 * Math.cos(arc.start)}
-                y1={layout.cy + R * 0.36 * Math.sin(arc.start)} x2={layout.cx + (R + 40) * Math.cos(arc.start)}
-                y2={layout.cy + (R + 40) * Math.sin(arc.start)} />
+          <line key={`s-${arc.team}`} className="cc-spoke" x1={q(layout.cx + R * 0.36 * Math.cos(arc.start))}
+                y1={q(layout.cy + R * 0.36 * Math.sin(arc.start))} x2={q(layout.cx + (R + 40) * Math.cos(arc.start))}
+                y2={q(layout.cy + (R + 40) * Math.sin(arc.start))} />
         ))}
 
         {layout.arcs.map((arc) => {
           const mid = (arc.start + arc.end) / 2;
           const lr = R + 50;
-          const lx = layout.cx + lr * Math.cos(mid), ly = layout.cy + lr * Math.sin(mid);
+          let lx = layout.cx + lr * Math.cos(mid);
+          const ly = layout.cy + lr * Math.sin(mid);
           const anchor = Math.abs(Math.cos(mid)) < 0.3 ? "middle" : Math.cos(mid) > 0 ? "start" : "end";
+          // A label never leaves the stage ("ARCHITECTURE" was cut at the panel's edge).
+          // First it shrinks (to 70%), and only then slides inward — sliding alone pushed it onto
+          // the next team's band, which painted over its first letter.
+          const wide = arc.label.length * 9.6; // caps with letter-spacing: ~9.6px a letter at 11px
+          const room = anchor === "start" ? layout.width - 8 - lx : anchor === "end" ? lx - 8 : wide;
+          const scale = Math.max(0.7, Math.min(1, room / wide));
+          const fit = wide * scale;
+          if (anchor === "start") lx = Math.min(lx, layout.width - 8 - fit);
+          if (anchor === "end") lx = Math.max(lx, 8 + fit);
           const hue = teamHue(arc.team);
           const team = view.teams.find((t) => t.key === arc.team);
           const busy = view.agents.filter((a) => a.team === arc.team && kinds.get(a.roleKey) === "working").length;
@@ -522,12 +537,13 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
             <g key={arc.team} className="cc-arc" data-team={arc.team} style={{ ["--team-hue" as string]: hue }}>
               <path className="cc-arc-band" d={arcPath(layout.cx, layout.cy, R, arc.start, arc.end)} />
               <path className="cc-arc-line" d={arcPath(layout.cx, layout.cy, R + 26, arc.start, arc.end)} />
-              <text className="cc-arc-label" x={lx} y={ly} textAnchor={anchor} dominantBaseline="middle">
+              <text className="cc-arc-label" x={q(lx)} y={q(ly)} textAnchor={anchor} dominantBaseline="middle"
+                    style={scale < 1 ? { fontSize: `${Math.round(scale * 100)}%` } : undefined}>
                 {arc.label}
                 {busy > 0 ? <tspan className="cc-arc-busy">{` · ${busy}`}</tspan> : null}
               </text>
               {fold && arc.idleFolded ? (
-                <text className="cc-arc-fold" x={lx} y={ly + 14} textAnchor={anchor}>{`+${arc.idleFolded} idle`}</text>
+                <text className="cc-arc-fold" x={q(lx)} y={q(ly + 14)} textAnchor={anchor}>{`+${arc.idleFolded} idle`}</text>
               ) : null}
               <title>{busy > 0 ? `${team?.tip || arc.label} · ${busy} working` : (team?.tip || arc.label)}</title>
             </g>
@@ -539,7 +555,7 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
           const k = kinds.get(n.roleKey);
           if (k !== "working" && k !== "waiting" && k !== "stuck") return null;
           const fill = k === "waiting" ? "url(#cc-floor-glow-amber)" : k === "stuck" ? "url(#cc-floor-glow-red)" : "url(#cc-floor-glow)";
-          return <circle key={`g-${n.roleKey}`} className="cc-node-glow" cx={n.x} cy={n.y} r={38} fill={fill} />;
+          return <circle key={`g-${n.roleKey}`} className="cc-node-glow" cx={q(n.x)} cy={q(n.y)} r={38} fill={fill} />;
         })}
 
         {edges.map((e) => {
@@ -568,7 +584,7 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
               <path className="cc-chain-hit" d={d} />
               <path className="cc-chain-glow" d={d} />
               <path className="cc-chain-line" d={d} />
-              {pts.map((p, i) => <circle key={i} className="cc-chain-dot" cx={p.x} cy={p.y} r={2.5} />)}
+              {pts.map((p, i) => <circle key={i} className="cc-chain-dot" cx={q(p.x)} cy={q(p.y)} r={2.5} />)}
             </g>
           );
         })}
@@ -581,8 +597,8 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
                data-new={newThreads.has(t.key) || undefined} data-tip={title} role="button" tabIndex={-1}
                onClick={() => onThread(t.ids[0])}>
               <title>{title}</title>
-              <line className="cc-thread-hit" x1={t.a.x} y1={t.a.y} x2={layout.cx} y2={layout.cy} />
-              <line className="cc-thread-line" x1={t.a.x} y1={t.a.y} x2={layout.cx} y2={layout.cy} />
+              <line className="cc-thread-hit" x1={q(t.a.x)} y1={q(t.a.y)} x2={q(layout.cx)} y2={q(layout.cy)} />
+              <line className="cc-thread-line" x1={q(t.a.x)} y1={q(t.a.y)} x2={q(layout.cx)} y2={q(layout.cy)} />
               {t.ids.length > 1 ? (
                 <g className="cc-thread-badge" transform={`translate(${mx} ${my})`}>
                   <circle r={9} />
@@ -648,7 +664,7 @@ function Ring({ view, motion, motionWhy, nowMs, onYou, onThread }: {
         })}
         {cardAgent && cardNode ? (
           <MiniCard agent={cardAgent} kind={kinds.get(cardAgent.roleKey) ?? "never"} nowMs={nowMs}
-                    x={cardNode.x} y={cardNode.y} stage={{ width: W, height: H }}
+                    x={q(cardNode.x)} y={q(cardNode.y)} stage={{ width: W, height: H }}
                     onEnter={() => show(cardAgent.roleKey, card?.pinned)} onLeave={() => hide()}
                     onClose={() => hide(false)} />
         ) : null}

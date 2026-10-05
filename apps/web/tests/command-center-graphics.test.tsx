@@ -175,7 +175,9 @@ describe("the Floor, as the day really is", () => {
     const k = floorKinds(v, NOW_MS);
     expect(k.get("media_publisher")).toBe("waiting");
     expect(k.get("pm")).toBe("on_run");
-    expect(floorCounts(k)).toMatchObject({ working: 0, onRuns: 3 });
+    // A stopped run is not running: its agent (the engineer whose step failed) is stuck.
+    expect(k.get("software_engineer")).toBe("stuck");
+    expect(floorCounts(k)).toMatchObject({ working: 0, onRuns: 2, stuck: 1 });
   });
 
   it("draws each run in flight as its chain of faces, into You when it waits on you", async () => {

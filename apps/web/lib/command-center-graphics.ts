@@ -222,13 +222,17 @@ export function floorKinds(view: Pick<CommandCenterView, "agents" | "missions" |
     Map<string, FloorKind> {
   const waiting = new Set<string>();
   const onRun = new Set<string>();
+  const stoppedOn = new Set<string>();
   for (const m of liveMissions(view.missions)) {
     const hops = m.hops.filter((h): h is Extract<typeof h, { kind: "hop" }> => h.kind === "hop" && !!h.roleKey);
+    // A STOPPED run is not running (the RUNNING rule): its last agent is stuck, the rest rest.
+    if (m.state === "stopped") { if (hops.length) stoppedOn.add(hops[hops.length - 1].roleKey as string); continue; }
     for (const h of hops) onRun.add(h.roleKey as string);
     if (m.state === "waiting_you" && hops.length) waiting.add(hops[hops.length - 1].roleKey as string);
   }
   for (const a of view.attention) if (a.kind === "approval" && a.roleKey) waiting.add(a.roleKey);
   const stuck = new Set(view.attention.filter((a) => STOPPED_KINDS.has(a.kind) && a.roleKey).map((a) => a.roleKey as string));
+  for (const k of stoppedOn) stuck.add(k);
   const out = new Map<string, FloorKind>();
   for (const a of view.agents) {
     const since = Date.parse(a.since ?? "");
@@ -246,14 +250,16 @@ export function floorKinds(view: Pick<CommandCenterView, "agents" | "missions" |
 }
 
 /** The footer's counts: working, on a run (waiting or between steps — not working), at rest. */
-export function floorCounts(kinds: Map<string, FloorKind>): { working: number; onRuns: number; idle: number } {
-  let working = 0, onRuns = 0, idle = 0;
+export function floorCounts(kinds: Map<string, FloorKind>):
+    { working: number; onRuns: number; stuck: number; idle: number } {
+  let working = 0, onRuns = 0, stuck = 0, idle = 0;
   for (const k of kinds.values()) {
     if (k === "working") working += 1;
-    else if (k === "waiting" || k === "on_run" || k === "stuck") onRuns += 1;
+    else if (k === "waiting" || k === "on_run") onRuns += 1;
+    else if (k === "stuck") stuck += 1;
     else idle += 1;
   }
-  return { working, onRuns, idle };
+  return { working, onRuns, stuck, idle };
 }
 
 /** A run's chain on the ring: its hop agents in order (repeats collapsed), whether it ends at
@@ -282,7 +288,7 @@ export function chainsOf(missions: Mission[], known: Set<string>): Chain[] {
  *  window, less 10% padding, at least an hour, snapped to a nice tick), `full` is the whole
  *  `hours`. Returns [since, now] in ms and 3-6 ticks. */
 export function stripWindow(rows: Pick<DayRow, "startedAt">[], nowMs: number, hours: number,
-                            mode: "fit" | "full"): { since: number; ticks: number[] } {
+                            mode: "fit" | "full", maxTicks = 6): { since: number; ticks: number[] } {
   const full = nowMs - hours * 3_600_000;
   let since = full;
   if (mode === "fit") {
@@ -293,9 +299,11 @@ export function stripWindow(rows: Pick<DayRow, "startedAt">[], nowMs: number, ho
   }
   const span = nowMs - since;
   const steps = [5, 10, 15, 30, 60, 120, 180, 240, 360].map((m) => m * 60_000);
-  const step = steps.find((s) => span / s <= 6) ?? 360 * 60_000;
+  const step = steps.find((s) => span / s <= maxTicks) ?? 360 * 60_000;
   const snapped = mode === "fit" ? Math.max(full, Math.floor(since / step) * step) : since;
   const ticks: number[] = [];
   for (let t = Math.ceil(snapped / step) * step; t <= nowMs; t += step) ticks.push(t);
-  return { since: snapped, ticks: ticks.slice(-6) };
+  // A tick this close to now would print over the `now` label (seen on a phone).
+  const room = (nowMs - snapped) * 0.14;
+  return { since: snapped, ticks: ticks.filter((t) => nowMs - t >= room).slice(-maxTicks) };
 }
