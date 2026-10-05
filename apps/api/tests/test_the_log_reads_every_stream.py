@@ -178,7 +178,15 @@ def test_deployments_are_a_source_and_a_failed_one_is_an_error(log):
         seed.deployment(c, id="dpr_bad", at=T_NEW, status="failed",
                         failure_reason="health check never passed")
     items = {i["id"]: i for i in _list(log, source="deployment")}
-    assert items["dpr_ok"]["status"] == "ok" and items["dpr_ok"]["service"] == "checkout"
+    assert items["dpr_ok"]["status"] == "ok" and items["dpr_ok"]["data"]["app"] == "checkout"
+    # An app is not a process: PROCESS is API and worker (D16) — and the old `service=` link
+    # to an app's deploys still finds them.
+    assert items["dpr_ok"]["service"] == ""
+    with log.begin() as c:
+        facets = ActivityLogService.facets(c, PROJECT)
+        by_app = ActivityLogService.query(c, PROJECT, service="checkout")
+    assert "checkout" not in facets["services"]
+    assert {i["id"] for i in by_app["items"]} == {"dpr_ok", "dpr_bad"}
     assert items["dpr_ok"]["data"]["duration_seconds"] == 3600.0
     assert items["dpr_bad"]["level"] == "error"
     assert "health check never passed" in items["dpr_bad"]["body"]

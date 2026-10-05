@@ -16,6 +16,7 @@ import { nameOf } from "../agents/run-face";
 import { usePolledRead } from "../../lib/log-stream";
 import { consoleHref } from "../url-intent";
 import { DailyBars } from "./cap-preview";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 
 const WINDOWS = ["24h", "7d", "30d"] as const;
@@ -52,6 +53,7 @@ function pctText(v: unknown): string {
 }
 
 export function SpendTab({ projectId, paused }: { projectId: string; paused: boolean }) {
+  useIdentityVersion(); // names land when the install's agents load
   const [win, setWin] = useState<(typeof WINDOWS)[number]>("7d");
   const read = usePolledRead<SpendView>({
     key: `${projectId}|${win}`, pollMs: 60_000, paused,

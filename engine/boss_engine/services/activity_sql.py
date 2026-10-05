@@ -99,6 +99,9 @@ class Source:
     #: `subject=<id>`: the one thing a sibling screen links here about (a deploy target, a
     #: model, a service). Raw columns; None means the source never names that kind of thing.
     subject_match: Optional[str] = None
+    #: `service=<x>` for a source whose rows are not a PROCESS (a deploy's app): it still
+    #: answers the filter links already send, but never appears in the PROCESS facet (D16).
+    service_match: Optional[str] = None
     fts: Optional[str] = None
     started: str = "NULL::timestamptz"
     finished: str = "NULL::timestamptz"
@@ -306,7 +309,9 @@ SOURCES: dict[str, Source] = {
         entity_type="'deployment_run'", entity_id="t.id", title=_DEPLOY_ACTION,
         text=_text_of(_DEPLOY_KIND, "t.created_by", "'deployment_run'", "t.id",
                       "t.failure_reason", _words(_DEPLOY_ACTION)),
-        service="t.app_name",
+        # The app is not a process: PROCESS is API and worker. A deploy is found by its app
+        # through `subject=` (and the old `service=` links, below), and names it in its row.
+        service_match="t.app_name = :service",
         subject_match=("(t.deployment_target_id = :subject OR t.id = :subject "
                        "OR t.app_name = :subject)"),
         started="t.started_at", finished="t.finished_at",

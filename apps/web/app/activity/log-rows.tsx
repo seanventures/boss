@@ -20,6 +20,7 @@ import { STREAM_ICON } from "./facet-rail";
 import {
   REFUSAL_KINDS, LEVEL_LABEL, costOf, durationOf, firstLine, flatten, runChip, windowOf, type DisplayRow,
 } from "./log-model";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 const LEVEL_GLYPH: Record<string, React.ComponentType<{ size?: number; weight?: "bold" | "fill" | "regular" }>> = {
   error: XCircle, warn: Warning, info: Info,
@@ -48,6 +49,7 @@ export function LogLine({ row, labels, selected, fresh, onOpen, onFold }: {
   onOpen: (id: string) => void;
   onFold: (foldKey: string) => void;
 }) {
+  useIdentityVersion(); // names land when the install's agents load
   const { item } = row;
   const Glyph = LEVEL_GLYPH[item.level];
   const run = runChip(item, labels);
