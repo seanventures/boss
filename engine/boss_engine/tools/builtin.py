@@ -529,13 +529,14 @@ def _register_read_tools(reg: ToolRegistry) -> None:
             rows = c.execute(
                 _text(
                     "SELECT id, name, address, ssh_user, ssh_port, arch, status, labels, "
-                    "       port_min, port_max, max_apps, last_preflight_at "
+                    "       port_min, port_max, max_apps, last_preflight_at, last_preflight, "
+                    "       key_secret_ref, key_public, admin_identity_file "
                     "FROM deployment_hosts WHERE project_id=:p "
                     "ORDER BY name LIMIT :l"
                 ),
                 {"p": pid, "l": limit},
             ).mappings().all()
-        return {"project_id": pid, "hosts": [_json_safe(dict(r)) for r in rows]}
+        return {"project_id": pid, "hosts": [_host_said(dict(r)) for r in rows]}
 
     @reg.tool(
         "describe_deployment_host",
@@ -579,10 +580,26 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 ),
                 {"p": pid, "h": row["id"]},
             ).mappings().all()
-        host = _json_safe(dict(row))
-        # Never hand the model a credential reference it has no use for.
-        host.pop("key_secret_ref", None)
+        host = _host_said(dict(row), full=True)
         return {"host": host, "apps_on_this_host": [_json_safe(dict(a)) for a in apps]}
+
+    def _host_said(row: dict, *, full: bool = False) -> dict:
+        """A host as the console says it: the one state word and the setup stage
+        (infra_view.host_word / host_stage), so the agent and the Fleet never disagree."""
+        from ..services import infra_view
+
+        ready = infra_view._host_ready(row)
+        state = infra_view.host_word(ready)
+        stage = infra_view.host_stage(ready)
+        out = _json_safe(dict(row))
+        # Never hand the model a credential reference it has no use for.
+        out.pop("key_secret_ref", None)
+        if not full:
+            for key in ("last_preflight", "key_public", "admin_identity_file"):
+                out.pop(key, None)
+        out["state"] = state["word"]
+        out["stage"] = stage["label"]
+        return out
 
     @reg.tool(
         "list_deployments",

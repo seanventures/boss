@@ -119,8 +119,13 @@ def build_infra_router(
                     service: Optional[str] = None):
         filters = {k: v for k, v in {"provider": provider, "account": account, "env": env,
                                       "region": region, "service": service}.items() if v}
+        # The provider profiles live in resource_plane, which loads the SSH adapter; the API
+        # reads them so the view module never imports it (§6.8).
+        from boss_engine.services.resource_plane import PROVIDER_CONNECTION_PROFILES
+
         return _read(project_id, request, response, lambda c: infra_view.cloud(
-            c, settings(), project_id.strip(), view, viewer=viewer_of(viewer), filters=filters))
+            c, settings(), project_id.strip(), view, viewer=viewer_of(viewer), filters=filters,
+            profiles=PROVIDER_CONNECTION_PROFILES))
 
     # ── writes ───────────────────────────────────────────────────────────────────────────
     # Every write binds its actor through require_write_actor with the SAME permission the
