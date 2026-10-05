@@ -238,22 +238,48 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   // view to show (not the hidden streamed copy, which has no box).
   const announced = useRef(false);
   useEffect(() => {
-    if (announced.current || !view || !rootRef.current || rootRef.current.getClientRects().length === 0) return;
-    announced.current = true;
-    announcePainted("overview");
+    const root = rootRef.current;
+    if (announced.current || !view || !root) return undefined;
+    const say = () => {
+      if (announced.current || root.getClientRects().length === 0) return announced.current;
+      announced.current = true;
+      announcePainted("overview");
+      return true;
+    };
+    if (say() || typeof ResizeObserver === "undefined") return undefined;
+    const watch = new ResizeObserver(() => { if (say()) watch.disconnect(); });
+    watch.observe(root);
+    return () => watch.disconnect();
   }, [view]);
   useEffect(() => {
-    const kept = readStore("local", TAB_KEY);
+    // The session's choice first (an automatic switch to Spend, below), then the viewer's.
+    // Read on every mount: the page can be remounted after the switch was made, and the new
+    // instance must show what the operator was shown.
+    const kept = readStore("session", TAB_KEY) ?? readStore("local", TAB_KEY);
     if (kept === "spend" || kept === "work") setTab(kept);
   }, []);
-  const chooseTab = useCallback((t: TodayTab) => { setTab(t); writeStore("local", TAB_KEY, t); }, []);
+  const chooseTab = useCallback((t: TodayTab) => {
+    setTab(t); writeStore("local", TAB_KEY, t); writeStore("session", TAB_KEY, t);
+  }, []);
   useEffect(() => {
-    if (view?.status.key !== "budget_stopped" || readStore("session", SPEND_ONCE_KEY)) return;
-    // Only an instance on screen may spend the once: Next streams a second, hidden copy of the
-    // shell, and it used to take the flag first, so the page you see never switched.
-    if (!rootRef.current || rootRef.current.getClientRects().length === 0) return;
-    writeStore("session", SPEND_ONCE_KEY, "1");
-    setTab("spend");
+    if (view?.status.key !== "budget_stopped") return undefined;
+    // Only an instance ON SCREEN may spend the once. Next streams the page into a hidden
+    // container and moves it into place later, so an instance can mount with no box and get
+    // one afterwards: it waits for its box (ResizeObserver) instead of giving up (the walk
+    // found the tab never switched on a production build).
+    const root = rootRef.current;
+    const claim = () => {
+      if (readStore("session", SPEND_ONCE_KEY)) return true;
+      if (!root || root.getClientRects().length === 0) return false;
+      writeStore("session", SPEND_ONCE_KEY, "1");
+      writeStore("session", TAB_KEY, "spend");
+      setTab("spend");
+      return true;
+    };
+    if (claim() || !root || typeof ResizeObserver === "undefined") return undefined;
+    const watch = new ResizeObserver(() => { if (claim()) watch.disconnect(); });
+    watch.observe(root);
+    return () => watch.disconnect();
   }, [view?.status.key]);
 
   const [helpOpen, setHelpOpen] = useState(false);

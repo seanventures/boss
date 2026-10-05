@@ -6445,6 +6445,13 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .bx-topbar-title small { display: none; }
 .bx-new-project { order: 2; border-radius: 6px; background: transparent; }
+/* THE TOP BAR NEVER SCROLLS THE PAGE SIDEWAYS (Command Center independent test: at 1024 the
+   "+ New build" button sat 23px past the window). Between the phone layout and a wide window
+   it tightens its padding and gaps, and its items may shrink. */
+.bx-topbar > * { min-width: 0; white-space: nowrap; }
+@media (max-width: 1279px) {
+  .bx-topbar { padding: 0 16px; gap: 8px; }
+}
 .bx-topbar-spacer { order: 1; }
 .bx-org-chip {
   padding: 5px 8px; border: 0; border-radius: 4px;

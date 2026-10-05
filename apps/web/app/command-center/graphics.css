@@ -358,7 +358,10 @@
   .cc-day-axis, .cc-day-row { grid-template-columns: minmax(90px, 36%) minmax(0, 1fr); gap: 10px; }
   .cc-day-label { min-height: 44px; }
   .cc-day-bar { top: 8px; height: 28px; }
-  .cc-day-bar::before { content: ""; position: absolute; left: -4px; right: -4px; top: -8px; bottom: -8px; }
+  /* A short bar is still a 44px target (independent test D8): its hit area is centred on it
+     and never narrower than a fingertip. */
+  .cc-day-bar::before { content: ""; position: absolute; left: 50%; transform: translateX(-50%);
+                        width: max(calc(100% + 8px), 44px); top: -8px; bottom: -8px; }
   .cc-day-zoom .cc-seg, .cc-today-tabs .cc-seg { min-height: 44px; min-width: 44px; padding: 0 14px; }
 }
 

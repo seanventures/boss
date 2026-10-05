@@ -217,9 +217,11 @@
   /* EVERY DOT INSIDE ITS CARD at every width (independent test D1: a nowrap row pushed Deploys
      outside the card and scrolled the page sideways at 1280 and 1024). One row of seven when
      it fits, wrapping into equal cells when it does not. */
-  .cc-systems { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 8px; }
+  .cc-systems { display: grid; grid-template-columns: repeat(auto-fit, minmax(176px, 1fr)); gap: 8px; }
   .cc-sys { min-width: 0; }
-  .cc-sys a { padding: 0 10px; white-space: nowrap; width: 100%; box-sizing: border-box; overflow: hidden; }
+  /* The word and its state are never cut ("Not set…" at 1440): a cell is wide enough for the
+     longest pair, and the grid takes a second row before it clips one. */
+  .cc-sys a { padding: 0 10px; white-space: nowrap; width: 100%; box-sizing: border-box; }
 }
 .cc-sys a {
   display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px;
@@ -259,7 +261,8 @@
   /* ≥ 44px targets on a phone (§8), including the composer's small controls. */
   .cc .cc-help-btn, .cc [aria-label^="Help: "], .cc [data-testid="split-more"], .cc .askboss-arrow,
   .cc .split-action-main, .cc .split-action-caret, .cc .split-action-item, .cc .askboss-ideas-btn,
-  .cc .cc-waits, .cc .cc-expired, .cc [data-testid="cc2-setup"] a, .cc [data-testid="cc-stopped-earlier"] {
+  .cc .cc-waits, .cc .cc-expired, .cc [data-testid="cc2-setup"] a, .cc [data-testid="cc-stopped-earlier"],
+  .cc .cc-lanes .ag-face-btn {
     display: inline-flex; align-items: center;
     min-width: 44px; min-height: 44px;
   }
