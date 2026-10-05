@@ -14,7 +14,7 @@ import {
 import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
-import { railForDock } from "../lib/shell-rail";
+import { dockWidthFor, railForDock } from "../lib/shell-rail";
 import { ProjectStrip } from "./project-strip";
 import { PresencePill } from "./agents/presence-pill";
 import { openPlan } from "../lib/converse-doors";
@@ -828,23 +828,30 @@ export default function ConsoleShell({
 
   // Width is the operator's choice and it persists. A chat you cannot widen is a chat you
   // stop using for anything longer than a sentence.
-  const [dockWidth, setDockWidth] = useState(520);
+  // RESPONSIVE BY DEFAULT (cc/v2): clamp(360px, 40vw, 520px), the dragged width when there
+  // is one, and never so wide that the page column falls under 560px (lib/shell-rail.ts).
+  const [dragged, setDragged] = useState<number | null>(null);
+  const [viewportW, setViewportW] = useState(1440);
   useEffect(() => {
     const saved = Number(window.localStorage.getItem("boss.dock.width") || 0);
-    if (saved >= 320) setDockWidth(Math.min(saved, window.innerWidth - 280));
+    if (saved >= 320) setDragged(saved);
+    const read = () => setViewportW(window.innerWidth || 1440);
+    read();
+    window.addEventListener("resize", read);
+    return () => window.removeEventListener("resize", read);
   }, []);
+  const dockWidth = dockWidthFor(viewportW, dragged);
   const startResize = useCallback((event: React.MouseEvent) => {
     event.preventDefault();
     const onMove = (move: MouseEvent) => {
       // Clamped so the panel can never swallow the console or shrink past readable.
-      const next = Math.max(320, Math.min(window.innerWidth - 280, window.innerWidth - move.clientX));
-      setDockWidth(next);
+      setDragged(dockWidthFor(window.innerWidth, window.innerWidth - move.clientX));
     };
     const onUp = () => {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
       document.body.style.userSelect = "";
-      setDockWidth((w) => { window.localStorage.setItem("boss.dock.width", String(w)); return w; });
+      setDragged((w) => { if (w) window.localStorage.setItem("boss.dock.width", String(w)); return w; });
     };
     document.body.style.userSelect = "none";     // dragging must not select the page text
     document.addEventListener("mousemove", onMove);
