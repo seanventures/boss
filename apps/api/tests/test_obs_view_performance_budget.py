@@ -27,8 +27,8 @@ BUDGET_MS = {"apps_24h": 150, "apps_30d": 150, "app_30d": 150, "models_24h": 200
 PAYLOAD_KB = {"models": 40, "system": 16}
 #: The Pulse's budget (§6.8) is 48 KB at 50 apps × 96 cells. With the frozen cell shape
 #: `[ok, n, p95]` a populated cell is ~10 bytes of JSON, so 50 × 96 cells alone are ~48-53 KB
-#: before any row field: the budget cannot hold without a shape change or response compression.
-#: Kept as a strict xfail so it flips the day either lands (see the S2 report).
+#: before any row field. The operator chose response compression over a shape change
+#: (2026-10-04): the API gzips JSON, so the budget is on the bytes that cross the wire.
 PULSE_KB = 48
 
 
@@ -142,11 +142,11 @@ def test_obs_views_fit_the_budget(client, engine, monkeypatch):
         assert sizes[key] <= kb, f"{key}: {sizes[key]:.1f} KB > {kb} KB"
 
 
-@pytest.mark.xfail(strict=True, reason="frozen [ok,n,p95] cells: 50 apps × 96 cells exceed 48 KB "
-                   "uncompressed; needs a shape change or gzip (lead decision)")
 def test_the_pulse_fits_48kb_at_fifty_apps(client, engine):
     fifty = second_project(engine, "p_obs_fifty")
     _seed_fifty(engine, fifty)
-    r = client.get("/v1/observability/apps", params={"project_id": fifty})
+    r = client.get("/v1/observability/apps", params={"project_id": fifty},
+                   headers={"Accept-Encoding": "gzip"})
     assert r.status_code == 200
-    assert len(r.content) / 1024 <= PULSE_KB
+    assert r.headers.get("content-encoding") == "gzip"
+    assert r.num_bytes_downloaded / 1024 <= PULSE_KB, f"{r.num_bytes_downloaded / 1024:.1f} KB on the wire"
