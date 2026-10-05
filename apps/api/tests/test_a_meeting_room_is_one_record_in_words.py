@@ -77,3 +77,38 @@ def test_a_panel_is_found_by_its_task_and_pages_past_the_first(client, engine):
     assert len(first) == 2 and second and not {i["id"] for i in first} & {i["id"] for i in second}
     nothing = client.get("/v1/meeting-rooms", params={"project_id": PROJECT_ID, "task_id": "tsk_none"}).json()["items"]
     assert nothing == []
+
+
+def test_convening_the_same_ask_twice_returns_the_panel_never_a_500(client, engine):
+    """"Convene again" pressed twice raised `ValueError: Task with dedupe_key already exists` as
+    a 500 the console printed. The endpoint now goes through the deduping core: the same ask
+    adopts its task, and a panel already in session on it is returned, not started twice."""
+    body = {"project_id": PROJECT_ID, "actor": "ceo", "directive": "Convene me twice, please.", "url": ""}
+    first = client.post("/v1/meetings/prd", json=body)
+    assert first.status_code in (200, 201), first.text
+    again = client.post("/v1/meetings/prd", json=body)
+    assert again.status_code in (200, 201), again.text
+    assert again.json()["status"] == "already_running"
+    assert again.json()["run_id"] == first.json()["run_id"] and first.json()["run_id"]
+    with begin(engine) as c:
+        c.execute(text("UPDATE meeting_runs SET status = 'failed' WHERE id = :id"), {"id": first.json()["run_id"]})
+    third = client.post("/v1/meetings/prd", json=body)
+    assert third.status_code in (200, 201), third.text
+    assert third.json()["status"] == "accepted"
+    assert third.json()["run_id"] != first.json()["run_id"]
+    assert third.json()["task_id"] == first.json()["task_id"]
+
+
+def test_totals_count_every_panel_and_a_new_panel_never_wears_an_old_pr(client, engine):
+    with begin(engine) as c:
+        c.execute(text("INSERT INTO tasks (id, project_id, title, dedupe_key) VALUES ('tsk_rooms_pr', :p, 't', 'rooms-pr')"),
+                  {"p": PROJECT_ID})
+        c.execute(text("""INSERT INTO artifacts (id, project_id, task_id, artifact_type, title, content, created_at)
+                          VALUES ('art_rooms_old', :p, 'tsk_rooms_pr', 'published_document', 'PRD',
+                          '{"pull_request_url": "https://github.com/o/r/pull/7", "pull_request_number": 7}'::jsonb,
+                          now() - interval '2 days')"""), {"p": PROJECT_ID})
+        _run(c, "mrun_rooms_new", task_id="tsk_rooms_pr")
+    body = client.get("/v1/meeting-rooms", params={"project_id": PROJECT_ID, "limit": 1}).json()
+    assert body["totals"]["panels"] >= 1 and len(body["items"]) == 1
+    new = client.get("/v1/meeting-rooms/mrun_rooms_new", params={"project_id": PROJECT_ID}).json()
+    assert new["pull_request_url"] is None

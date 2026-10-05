@@ -6064,10 +6064,7 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
         require_project_actor(
             connection, payload.project_id, payload.actor, "workflow_execute"
         )
-        from .services.meeting_service import meeting_subject
-        # The meeting's name is its subject, not the directive verbatim (see meeting_subject).
-        meeting_title = meeting_subject(payload.directive)
-        # Attach to an existing task if one was supplied, else create one.
+        # Attach to an existing task if one was supplied.
         if payload.task_id:
             exists = connection.execute(
                 text("SELECT id FROM tasks WHERE id = :t AND project_id = :p"),
@@ -6075,46 +6072,22 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
             ).mappings().first()
             if not exists:
                 raise HTTPException(status_code=404, detail="task_id not found in project.")
-            task_id = payload.task_id
-        else:
-            task = intake.create_task(
-                connection,
-                project_id=payload.project_id,
-                title=f"PRD meeting: {meeting_title}",
-                description=payload.directive,
-                # Same directive in the same project is the same meeting. A double-submit or a
-                # retried request must not convene a second panel and spend twice.
-                dedupe_key=stable_dedupe_key("prd-meeting", payload.project_id,
-                                             payload.directive),
-                priority="p1",
-                risk_tier=2,
-                inputs={"directive": payload.directive, "url": payload.url, "constraints": payload.constraints},
-                required_artifacts=["meeting_minutes"],
-                data_boundary=str(payload.constraints.get("data_boundary") or "internal"),
-            )
-            task_id = task["task_id"]
-        reservation = budget.reserve(
-            connection, payload.project_id, "model",
-            settings.plan_budget_usd_micros * 4,  # a panel runs ~10 model calls
-            "Multi-agent PRD meeting.", 120,
-        )
-        reservation_id = reservation.get("reservation_id") if reservation.get("status") == "reserved" else None
-        # Start a DURABLE meeting run (one phase per worker step → crash-resumable).
-        from .services.meeting_service import start_meeting_run
-        run_id = start_meeting_run(
-            connection,
-            project_id=payload.project_id, task_id=task_id,
-            directive=payload.directive, url=payload.url,
-            constraints=payload.constraints, role_keys=payload.roles,
+        # THE ONE CONVENE PATH. This endpoint used to create its own task with the directive's
+        # dedupe key, so convening the same ask a second time ("Convene again" on a failed panel)
+        # raised "ValueError: Task with dedupe_key already exists" as a 500 the console printed
+        # verbatim. convene_prd_meeting_core adopts that task and returns a panel already in
+        # session on the same ask instead of starting a second one.
+        from .services.meeting_service import convene_prd_meeting_core
+        result = convene_prd_meeting_core(
+            connection, settings=settings, budget=budget, intake=intake, jobs=jobs,
+            project_id=payload.project_id, directive=payload.directive, url=payload.url or "",
+            constraints=payload.constraints, role_keys=payload.roles, task_id=payload.task_id,
             # Who convened it: the person its seats are accountable to (agent_acts).
-            finalize_ctx={"reservation_id": reservation_id, "origin": {"actor": payload.actor}},
-            title=meeting_title,
+            origin={"actor": payload.actor},
         )
-        job = jobs.create_job(
-            connection, project_id=payload.project_id, task_id=task_id,
-            kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE, payload={"run_id": run_id},
-        )
-        return MeetingProposeResponse(status="accepted", task_id=task_id, job_id=job["id"])
+        return MeetingProposeResponse(
+            status="already_running" if result.get("duplicate_of") else "accepted",
+            task_id=result["task_id"], job_id=result.get("job_id"), run_id=result.get("run_id"))
 
 
 @app.get("/v1/meeting-roles")
@@ -6208,11 +6181,12 @@ def list_meeting_rooms(project_id: str, limit: int = 25, offset: int = 0,
     task (a dossier's "Convene a panel" links by task)."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.meeting_rooms import meeting_room_items
+    from .services.meeting_rooms import meeting_room_items, meeting_room_totals
     with begin(engine) as connection:
         items = meeting_room_items(connection, project_id, limit=limit, offset=offset,
                                    task_id=task_id)
-    return {"project_id": project_id, "items": items}
+        totals = meeting_room_totals(connection, project_id)
+    return {"project_id": project_id, "items": items, "totals": totals}
 
 
 @app.get("/v1/meeting-rooms/{meeting_id}")
@@ -11188,9 +11162,10 @@ def list_discoveries_endpoint(project_id: str, limit: int = 50, offset: int = 0)
     past the first `limit` (Research's "Show more")."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.discovery_service import list_discovery_runs
+    from .services.discovery_service import discovery_totals, list_discovery_runs
     with begin(engine) as c:
-        return {"discoveries": list_discovery_runs(c, project_id, max(1, min(limit, 100)), offset)}
+        return {"discoveries": list_discovery_runs(c, project_id, max(1, min(limit, 100)), offset),
+                "totals": discovery_totals(c, project_id)}
 
 
 @app.get("/v1/discoveries/{run_id}")

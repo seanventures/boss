@@ -1,6 +1,6 @@
 "use client";
 
-import { voteSentence } from "../lib/research-panels";
+import { dissentLine, voteSentence } from "../lib/research-panels";
 import { meetingCardTitle } from "../lib/meeting-title";
 import React, { useActionState } from "react";
 import { type AckState } from "../lib/comms-ack";
@@ -202,7 +202,7 @@ export function MeetingConsensusCard({
           <b>{voteSentence(d)}</b>
           {/* Dissent in words, never the tally's machine fields. */}
           {((d.dissent_records as Array<{ role?: string; reason?: string }> | undefined) ?? []).map((r, i) => (
-            <span key={i} style={{ display: "block" }}>{r.role === "quorum" ? "" : `${r.role}: `}{r.reason}</span>
+            <span key={i} style={{ display: "block" }}>{dissentLine(r)}</span>
           ))}
         </>
       )} />

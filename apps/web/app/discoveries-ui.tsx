@@ -16,7 +16,7 @@
 import React, { useActionState, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type {
-  DiscoveryRun, DiscoveryFinding, DiscoveryListItem, DiscoveryOutcome, ModelAttention,
+  DiscoveryRun, DiscoveryFinding, DiscoveryListItem, DiscoveryOutcome, DiscoveryTotals, ModelAttention,
 } from "@boss/api-client";
 
 import { startDiscoveryAction, promoteOutcomeAction, deepenDiscoveryAction } from "./actions";
@@ -148,17 +148,19 @@ function ResearchAgain({ projectId, seed, context }: { projectId: string; seed: 
 // --------------------------------------------------------------------------- //
 // Research home
 
-function ResearchHero({ projectId, researchAvailable, discoveries, onStarted }: {
+function ResearchHero({ projectId, researchAvailable, discoveries, totals, onStarted }: {
   projectId: string;
   researchAvailable: boolean;
   discoveries: DiscoveryListItem[];
+  /** The server's totals over EVERY dossier; the loaded page only when an older API sends none. */
+  totals: DiscoveryTotals | null;
   onStarted: (runId: string) => void;
 }) {
   const [state, action, pending] = useActionState(callAction(startDiscoveryAction), null);
   useEffect(() => { if (state?.runId) onStarted(state.runId); }, [state?.runId, onStarted]);
-  const promising = discoveries.filter((d) => dossierVerdict(d).filter === "promising").length;
-  const signals = discoveries.reduce((n, d) => n + (d.summary?.findings ?? 0), 0);
-  const outcomes = discoveries.reduce((n, d) => n + (d.summary?.outcomes ?? 0), 0);
+  const promising = totals?.promising ?? discoveries.filter((d) => dossierVerdict(d).filter === "promising").length;
+  const signals = totals?.signals ?? discoveries.reduce((n, d) => n + (d.summary?.findings ?? 0), 0);
+  const outcomes = totals?.outcomes ?? discoveries.reduce((n, d) => n + (d.summary?.outcomes ?? 0), 0);
   return (
     <section className="rp-hero" data-testid="research-hero">
       <div className="rp-aurora" aria-hidden />
@@ -194,7 +196,7 @@ function ResearchHero({ projectId, researchAvailable, discoveries, onStarted }: 
                      "An evidence gate decides"]} />
       </div>
       <div className="rp-stats" data-testid="research-totals">
-        <div className="rp-stat"><b>{discoveries.length}</b><span>dossiers</span></div>
+        <div className="rp-stat"><b>{totals?.dossiers ?? discoveries.length}</b><span>dossiers</span></div>
         <div className="rp-stat"><b className="rp-good-t">{promising}</b><span>promising</span></div>
         <div className="rp-stat"><b>{signals}</b><span>cited signals</span></div>
         <div className="rp-stat"><b>{outcomes}</b><span>candidate outcomes</span></div>
@@ -254,11 +256,12 @@ function DossierCard({ d, onOpen }: { d: DiscoveryListItem; onOpen: () => void }
 // --------------------------------------------------------------------------- //
 export function DiscoveriesHome({
   projectId, orgId, discoveries, apiReachable, initialDiscoveryId,
-  researchAvailable = true,
+  researchAvailable = true, totals = null,
 }: {
   projectId: string;
   orgId?: string;
   discoveries: DiscoveryListItem[];
+  totals?: DiscoveryTotals | null;
   apiReachable: boolean;
   researchAvailable?: boolean;
   /** A dossier named in the URL — `?area=discovery&run=drun_…`, which is what the workflow's
@@ -317,10 +320,14 @@ export function DiscoveriesHome({
   const [filter, setFilter] = useState<VerdictFilter>("all");
   const [query, setQuery] = useState("");
   const counts = useMemo(() => {
+    if (totals) {
+      return { all: totals.dossiers, promising: totals.promising, needs_more: totals.needs_more,
+               not_worth: totals.not_worth } as Record<VerdictFilter, number>;
+    }
     const c: Record<VerdictFilter, number> = { all: all.length, promising: 0, needs_more: 0, not_worth: 0 };
     for (const d of all) { const f = dossierVerdict(d).filter; if (f) c[f] += 1; }
     return c;
-  }, [all]);
+  }, [all, totals]);
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     return all.filter((d) => (filter === "all" || dossierVerdict(d).filter === filter)
@@ -337,7 +344,7 @@ export function DiscoveriesHome({
 
   return (
     <div className="rp" data-testid="research-home">
-      <ResearchHero projectId={projectId} researchAvailable={researchAvailable} discoveries={all}
+      <ResearchHero projectId={projectId} researchAvailable={researchAvailable} discoveries={all} totals={totals}
                     onStarted={open} />
       <section aria-label="Dossiers">
         <div className="rp-sec-h">
@@ -370,7 +377,7 @@ export function DiscoveriesHome({
             <div className="rp-grid">
               {shown.map((d) => <DossierCard key={d.id} d={d} onOpen={() => open(d.id)} />)}
             </div>
-            {discoveries.length >= 50 && moreState !== "done" ? (
+            {(totals ? all.length < totals.dossiers : discoveries.length >= 50) && moreState !== "done" ? (
               <div className="rp-more-row">
                 <button type="button" className="rp-btn" onClick={() => void loadMore()} disabled={moreState === "loading"}
                         data-testid="dossiers-show-more">

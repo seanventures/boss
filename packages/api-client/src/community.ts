@@ -1034,7 +1034,10 @@ export type DiscoverySummary = {
   deep?: boolean;
 };
 export type DiscoveryListItem = Omit<DiscoveryRun, "state" | "context"> & { summary: DiscoverySummary };
-export type DiscoveriesResponse = { discoveries: DiscoveryListItem[] };
+/** The project's true totals (every dossier, not only the listed page). */
+export type DiscoveryTotals = { dossiers: number; promising: number; needs_more: number; not_worth: number;
+                               signals: number; outcomes: number };
+export type DiscoveriesResponse = { discoveries: DiscoveryListItem[]; totals?: DiscoveryTotals };
 
 /** engine/boss_engine/services/model_failures.py `explain`, plus where the work stands. */
 export type ModelAttention = {
@@ -1666,6 +1669,8 @@ export type MeetingTurnGist = { headline: string; points: string[] };
 export type MeetingsResponse = {
   project_id: string;
   items: Meeting[];
+  /** The project's true totals (every panel, not only the listed page). */
+  totals?: { panels: number; prds: number };
 };
 
 export type MeetingConvenePayload = {
@@ -5792,7 +5797,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
       });
     },
     conveneMeeting(payload: MeetingConvenePayload) {
-      return request<{ status: string; task_id: string; job_id: string }>(
+      return request<{ status: string; task_id: string; job_id: string | null; run_id?: string | null }>(
         "POST", "/v1/meetings/prd", { body: payload },
       );
     },

@@ -61,7 +61,7 @@ describe("a panel's stages and outcome", () => {
                  pull_request_number: 185, prd_markdown: "# PRD\n## 1. Summary\n## 2. Problem & Context\nx\n### not this\n## Risks" };
   it("Opening views → Debate → Synthesis → PRD → Build, live while it runs", () => {
     const states = (m: object) => panelStages(m as never).map((s) => `${s.label}:${s.state}`);
-    expect(states(done)).toEqual(["Opening views:done", "Debate:done", "Synthesis:done", "PRD:done", "Build:now"]);
+    expect(states(done)).toEqual(["Opening views:done", "Debate:done", "Synthesis:done", "PRD:done", "Build:todo"]);
     expect(states({ status: "running", phase: "round2" }))
       .toEqual(["Opening views:done", "Debate:now", "Synthesis:todo", "PRD:todo", "Build:todo"]);
     expect(states({ status: "running", phase: "research" })[0]).toBe("Opening views:now");

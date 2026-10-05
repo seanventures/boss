@@ -208,3 +208,48 @@ describe("the meeting room", () => {
     expect(host!.querySelector('[data-testid="meeting-room"]')!.getAttribute("data-status")).toBe("completed");
   });
 });
+
+// ── The re-check (f923b20c) ──────────────────────────────────────────────────────────────────
+import { dissentLine } from "../lib/research-panels";
+
+describe("the re-check of f923b20c", () => {
+  it("a vote's dissent never names a machine id", () => {
+    expect(dissentLine({ role: "r0", reason: "voted to reject" })).toBe("Voted to reject");
+    expect(dissentLine({ role: "panel", reason: "1 seat voted to reject" })).toBe("1 seat voted to reject");
+    expect(dissentLine({ role: "QA / Test", reason: "Flake open" })).toBe("QA / Test: Flake open");
+  });
+
+  it("the room's Build and PRD stages say what happened, not what might", () => {
+    const done = { status: "completed", phase: "done", meeting_type: "prd_panel" };
+    const stages = (m: object) => Object.fromEntries(panelStages(m as never).map((s) => [s.key, s.state]));
+    expect(stages({ ...done, prd_markdown: "# PRD", pull_request_url: "u" })).toMatchObject({ prd: "done", build: "todo" });
+    expect(stages({ ...done })).toMatchObject({ prd: "skipped", build: "todo" });
+    expect(stages({ ...done, prd_markdown: "# P", build: { id: "c", status: "running" } })).toMatchObject({ build: "now" });
+  });
+
+  it("the kind is not repeated in the title", () => {
+    expect(shortTitle("Go/No-Go: Should we ship snooze this week?")).toBe("Should we ship snooze this week?");
+    expect(shortTitle("Standup: Daily blockers")).toBe("Daily blockers");
+  });
+
+  it("Panels home: attach-to titles, server totals, and a vote with nothing to vote on", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({}, { status: 404 })));
+    window.history.replaceState(null, "", "/?area=meetings");
+    act(() => root!.render(
+      <MeetingsHome projectId="p" actor="ceo" meetings={[meeting({ can_vote: false })] as never}
+                    totals={{ panels: 140, prds: 96 }} roles={[]} apiReachable
+                    tasks={[{ id: "t1", title: `PRD meeting: ${SCAFFOLDED}` }]} />));
+    await settle();
+    const options = [...host!.querySelectorAll('[data-testid="meeting-task-select"] option')].map((o) => o.textContent);
+    expect(options[1]).toMatch(/^Small internal status page that lists/);
+    for (const w of SCAFFOLD_WORDS) expect(options[1]).not.toContain(w);
+    expect(host!.querySelector('[data-testid="panels-counts"]')!.textContent).toContain("140 panels · 96 became PRDs");
+    act(() => (host!.querySelector('[data-testid="maint-vote"]') as HTMLButtonElement).click());
+    expect(host!.querySelector('[data-testid="maint-vote-none"]')!.textContent).toContain("nothing to vote on");
+  });
+
+  it("a panel with no task does not offer a linked task in the drawer's summary", async () => {
+    await open(meeting({ task_id: null }));
+    expect(host!.querySelector('[data-testid="meeting-drawer"] > summary')!.textContent).not.toContain("Linked task");
+  });
+});
