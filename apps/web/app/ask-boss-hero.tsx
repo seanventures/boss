@@ -1026,11 +1026,16 @@ export function AskBossHero({
   orgId,
   researchAvailable = true,
   deploymentAvailable = true,
+  ideasInline = false,
 }: {
   projectId: string;
   actor: string;
   orgId?: string;
   researchAvailable?: boolean;
+  //: NO RUN HAS EVER HAPPENED (command-center spec §4.6): the empty landing page is where the
+  //: templates earn their space, so `Ideas` opens inline under the composer instead of as a
+  //: popover, and stays open until it is closed.
+  ideasInline?: boolean;
   //: Separate from research: Community researches as a governed job, but SSH host deployment
   //: stays paused there, and the sheet must not promise a deploy it will not do.
   deploymentAvailable?: boolean;
@@ -1435,6 +1440,34 @@ export function AskBossHero({
   // inside either, a turn running, an answer on screen, or any text typed. Motion that
   // competes with what you are doing is worse than no motion.
   const [stripHeld, setStripHeld] = useState(false);
+  //: `Ideas` (command-center spec §4.6): today's "Need an example?" contents, unchanged, in a
+  //: popover anchored to the composer — or inline on a fresh install.
+  const [ideasOpen, setIdeasOpen] = useState(ideasInline);
+  const ideasRef = useRef<HTMLDivElement>(null);
+  const ideasButton = useRef<HTMLButtonElement>(null);
+  //: Under 1024px the pickers fold behind `▾` beside Build, so the composer stays one line.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => {
+    if (!ideasOpen || ideasInline) return undefined;
+    const outside = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (!target || ideasRef.current?.contains(target) || ideasButton.current?.contains(target)) return;
+      // The template page is portalled to the body: reading one is not leaving the popover.
+      if (target.closest?.(".tpl-page")) return;
+      setIdeasOpen(false);
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || document.querySelector(".tpl-page")) return;
+      setIdeasOpen(false);
+      ideasButton.current?.focus();
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [ideasOpen, ideasInline]);
   // Defaults to OFF for anyone who asked the OS for less motion, but it is a VISIBLE toggle
   // rather than a silent gate: drifting was requested, and a requested feature that quietly
   // does nothing because of a system setting is indistinguishable from a bug.
@@ -1476,7 +1509,7 @@ export function AskBossHero({
     };
     raf = window.requestAnimationFrame(step);
     return () => window.cancelAnimationFrame(raf);
-  }, [stripHeld, drift, busy, reply, input]);
+  }, [stripHeld, drift, busy, reply, input, ideasOpen]);
 
   /**
    * Step the strip by one card.
@@ -1497,34 +1530,12 @@ export function AskBossHero({
   const state = busy ? (slow ? "slow" : "thinking") : reply || error ? "answered" : "idle";
 
   return (
-    <section className="askboss" data-state={state} aria-label="Ask BOSS">
+    <section className="askboss" data-state={state} data-layout="bar" aria-label="Ask BOSS">
       <div className="askboss-aura" aria-hidden />
       <div className="askboss-inner">
-        {/* The console's standard header shape — eyebrow, title, status pills on the right,
-            the same one the Meeting room uses. This was a bespoke card with its own type
-            scale, which is why it read as a different product bolted onto the page. */}
-        <header className="mr-header askboss-head">
-          <div className="mr-header-main">
-            <span className="eyebrow">Ask BOSS</span>
-            <div className="help-heading">
-              <h3 className="mr-title">What do you want to do?</h3>
-              <HelpTip label="Ask BOSS"
-                text="Ask about current work or describe something to build. BOSS shows the steps before taking gated actions." />
-            </div>
-            {/* The first line on the first page described PLUMBING — "reads live control-plane
-                state and acts with your approval" — which tells a visitor how it is wired, not
-                what it is for.
-                
-                It then said "without the meetings", which sold the wrong thing: the governed
-                panel IS the product. Agents convene it and it produces the PRD, so naming it as
-                friction to avoid undersold the part that makes the output trustworthy. */}
-            <p className="askboss-sub">Gated actions require your approval.</p>
-          </div>
-          {busy ? <div className="mr-header-meta" role="status">
-            {slow ? `Still working · ${elapsed}s` : "Working"}
-          </div> : null}
-        </header>
-
+        {/* NO HEADER IN VIEW (command-center spec §4.6, copy budget). The eyebrow is the
+            section's aria-label, the title the textarea's, and the sub the ✦'s tooltip. The
+            busy status sits in the bar, and the turn view below says what is happening. */}
         <form
           className="askboss-form"
           // THE SAME ACTION THE PRIMARY BUTTON RUNS. A form whose submit handler disagrees with
@@ -1536,16 +1547,23 @@ export function AskBossHero({
             onMouseEnter={() => setStripHeld(true)}
             onMouseLeave={() => setStripHeld(false)}
           >
+            <span className="askboss-glyph" title="Gated actions require your approval.">
+              <span aria-hidden>✦</span>
+              <HelpTip label="Ask BOSS"
+                text="Ask about current work or describe something to build. BOSS shows the steps before taking gated actions." />
+            </span>
             <textarea
               ref={boxRef}
               className="askboss-input"
+              aria-label="What do you want to do?"
+              title="⌘/Ctrl+Enter builds it. Questions: Talk to BOSS."
               value={input}
               rows={1}
               disabled={busy}
               // NOT "or ask a question": ⌘/Ctrl+Enter runs Build, the path that spends budget,
               // so a box inviting questions turned typed questions into builds. Questions go
               // through "Talk to BOSS" beside Build.
-              placeholder="Describe what to build — ⌘/Ctrl+Enter builds it. To ask something, use Talk to BOSS."
+              placeholder="Describe what to build…"
               onChange={(e) => {
                 setInput(e.target.value);
                 // A brief is many lines; a fixed one-row box hid all but the first.
@@ -1572,7 +1590,12 @@ export function AskBossHero({
                 picker and the agent picker — so the textarea collapsed to half its width and
                 the buttons marched toward the right edge. A composer's box is for what you are
                 writing; everything that acts on it belongs beneath. */}
-            <div className="askboss-bar">
+            <div className="askboss-bar" data-settings-open={settingsOpen ? "true" : undefined}>
+              {busy ? (
+                <span className="askboss-busy" role="status">
+                  {slow ? `Still working · ${elapsed}s` : "Working"}
+                </span>
+              ) : null}
               <div className="askboss-bar-settings">
                 <DefaultWorkflowPicker projectId={projectId} />
                 {/* WHO RUNS IT, chosen where the workflow is chosen. Build does not create a
@@ -1605,12 +1628,25 @@ export function AskBossHero({
                     onRun: () => research(input) }] : []),
                 ]}
               />
+              <button type="button" className="askboss-more" aria-label="Workflow and team"
+                      title="Workflow and team" aria-expanded={settingsOpen}
+                      onClick={() => setSettingsOpen((o) => !o)}>▾</button>
+              {!reply && !busy ? (
+                <button type="button" ref={ideasButton} className="askboss-ideas-btn"
+                        data-testid="askboss-examples" aria-expanded={ideasOpen}
+                        aria-haspopup={ideasInline ? undefined : "dialog"}
+                        title="Example questions and templates"
+                        onClick={() => setIdeasOpen((o) => !o)}>
+                  Ideas
+                </button>
+              ) : null}
             </div>
           </div>
 
-          {!reply && !busy ? (
-            <details className="askboss-examples" data-testid="askboss-examples">
-              <summary>Need an example?</summary>
+          {!reply && !busy && ideasOpen ? (
+            <div className={ideasInline ? "askboss-examples askboss-ideas-inline" : "askboss-examples askboss-ideas-pop"}
+                 ref={ideasRef} data-testid="askboss-ideas"
+                 role={ideasInline ? "region" : "dialog"} aria-label="Need an example?">
             <div className="askboss-openers">
               {OPENERS.map((o) => (
                 <button
@@ -1620,7 +1656,8 @@ export function AskBossHero({
                   onClick={() => { setInput(o.text); ask(o.text); }}
                 >
                   <span className={`mr-avatar tone-${o.tone}`} aria-hidden>{o.badge}</span>
-                  {o.text}
+                  {/* An example of what YOU would ask: the words go into the composer as yours. */}
+                  <span data-user-text>{o.text}</span>
                 </button>
               ))}
             </div>
@@ -1653,9 +1690,9 @@ export function AskBossHero({
                   </button>
                 ))}
                 <span className="askboss-research-hint">→ then press Research</span>
-              </div> : <div className="askboss-research-row" role="status">
-                Discovery research is paused in Community while budget and recovery safeguards
-                are completed. Saved dossiers are available under Discovery.
+              </div> : <div className="askboss-research-row" role="status"
+                  title="Discovery research is paused in Community while budget and recovery safeguards are completed. Saved dossiers are available under Discovery.">
+                Research is paused in Community
               </div>}
               {/* A SCROLL STRIP, NOT A SLIDESHOW.
                   These flipped pages on a nine-second timer, which means the one you were
@@ -1664,7 +1701,10 @@ export function AskBossHero({
                   whatever pace you want, nothing moves on its own, and the arrows are there
                   for a trackpad that will not scroll sideways. */}
               <div className="askboss-ideas-head">
-                <span className="askboss-ideas-label">Or start something</span>
+                <span className="askboss-ideas-label"
+                      title="Open one to read what it must do and how you will know it worked. Nothing builds until you press Build.">
+                  Or start something
+                </span>
                 {/* NO FILTERS. Eight chips were added by analogy with Lovable, which has 204
                     templates and genuinely needs them. We have sixteen, all visible in one
                     press of "See all" — so the chips cost a row of screen and a decision to
@@ -1735,6 +1775,8 @@ export function AskBossHero({
                       </span>
                     </span>
                     <span className="askboss-idea-tag">{i.tag}</span>
+                    {/* A template's own words (its brief), drafted into the composer as yours. */}
+                    <span className="askboss-idea-words" data-user-text>
                     <span className="askboss-idea-title">{i.title}</span>
                     {/* The first brief line just restates the title ("PR review-time tracker"
                         / "a pull-request review-time tracker"). WHO it is for is the line that
@@ -1754,15 +1796,12 @@ export function AskBossHero({
                         .slice(0, 2).map((l) => l.replace(/^\s*-\s*/, "").trim())
                         .join(" · ") ?? "").slice(0, 150)}
                     </span>
+                    </span>
                   </button>
                 ))}
               </div>
-              <p className="askboss-ideas-foot">
-                Open one to read what it must do and how you will know it worked. Nothing
-                builds until you press Build.
-              </p>
             </div>
-            </details>
+            </div>
           ) : null}
         </form>
 
@@ -2024,7 +2063,8 @@ export function AskBossHero({
 
         {proposed.length > 0 ? (
           <div className="askboss-actions" data-testid="askboss-actions">
-            <p className="askboss-actions-head">BOSS can do this for you — nothing runs until you choose:</p>
+            <p className="askboss-actions-head"
+               title="BOSS can do this for you — nothing runs until you choose.">BOSS can do this:</p>
             <div className="askboss-actions-row">
               {proposed.map((a) => (
                 <button
