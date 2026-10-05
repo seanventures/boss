@@ -59,7 +59,8 @@ describe("only the requested area is rendered", () => {
     // Missed on the first pass and caught by measuring: a Discovery render still carried a
     // GitHub panel and a Govern panel.
     expect(PAGE).toContain('{shows("github") ? <RepoActivityPanel');
-    expect(PAGE).toContain('{shows("budget") ? (\n          <TokenEfficiencyPanel');
+    // Govern is one gated section around its own client component (app/govern/govern-home.tsx).
+    expect(PAGE).toMatch(/\{shows\("budget"\) \? \(\s*<section[^>]*data-area="budget"[\s\S]{0,400}<GovernHome/);
   });
 });
 

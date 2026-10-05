@@ -164,6 +164,13 @@ def _knob_control(connection: Connection, settings: Any, project_id: str, key: s
         "evidence": _evidence_entry(key, counts),
         "advisory": False,
         "note": note,
+        # How a stored value becomes the effective one, so an edit's preview ("BOSS will use 6")
+        # is the engine's arithmetic with the engine's constants, not a copy of them.
+        "rule": ({"kind": "floor", "floor": ps.REVIEW_LANES_FLOOR,
+                  "fallback": ps.REVIEW_LANES_FALLBACK}
+                 if key == "code_agent_max_concurrency" else
+                 {"kind": "zero_reads_as", "value": ps.REVIEW_ROUNDS_FALLBACK}
+                 if key == "code_review_inrun_max_rounds" else None),
         "version": version,
     }
 
@@ -442,7 +449,7 @@ def envelopes(connection: Connection, engine: Any, settings: Any,
         summary = None
     if summary is None:
         state = "not_loaded"
-    elif not any(int(p.get("event_count") or 0) for p in summary.get("spend_by_provider") or []):
+    elif not (summary.get("spend_by_provider") or []):
         state = "no_events"
     else:
         state = "recorded"

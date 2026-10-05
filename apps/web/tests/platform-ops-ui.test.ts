@@ -11,7 +11,6 @@ import { OncallSreHome } from "../app/oncall-sre-ui";
 import { SecurityScanCard } from "../app/security-scan-ui";
 import { ReleasePlanningPanel } from "../app/release-planning-ui";
 import { WorkerAutoscalingPanel } from "../app/worker-autoscaling-ui";
-import { TokenEfficiencyPanel } from "../app/token-efficiency-ui";
 import { ObservabilitySuitePanel } from "../app/observability-suite-ui";
 import { KnowledgeGraphPanel } from "../app/knowledge-graph-ui";
 import { CICDPipelinesPanel } from "../app/cicd-pipelines-ui";
@@ -25,7 +24,6 @@ export const PLATFORM_OPS_AREA_NESTING = {
   releases: "portfolio",
   cicd: "delivery",
   scaling: "infra",
-  tokenEfficiency: "budget",
   observability: "monitoring",
   knowledgeGraph: "reliability",
 } as const;
@@ -76,7 +74,6 @@ describe("platform-ops UI nesting", () => {
     expect(PLATFORM_OPS_AREA_NESTING.releases).toBe("portfolio");
     expect(PLATFORM_OPS_AREA_NESTING.cicd).toBe("delivery");
     expect(PLATFORM_OPS_AREA_NESTING.scaling).toBe("infra");
-    expect(PLATFORM_OPS_AREA_NESTING.tokenEfficiency).toBe("budget");
     expect(PLATFORM_OPS_AREA_NESTING.observability).toBe("monitoring");
     expect(PLATFORM_OPS_AREA_NESTING.knowledgeGraph).toBe("reliability");
   });
@@ -95,7 +92,6 @@ describe("platform-ops UI smoke imports", () => {
     expect(typeof SecurityScanCard).toBe("function");
     expect(typeof ReleasePlanningPanel).toBe("function");
     expect(typeof WorkerAutoscalingPanel).toBe("function");
-    expect(typeof TokenEfficiencyPanel).toBe("function");
     expect(typeof ObservabilitySuitePanel).toBe("function");
     expect(typeof KnowledgeGraphPanel).toBe("function");
     expect(typeof CICDPipelinesPanel).toBe("function");

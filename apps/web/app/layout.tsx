@@ -15,6 +15,8 @@ import "./skills/kit.css";
 // Factory (Floor, Line, Apps, the cockpit): fx- classes.
 import "./factory/factory.css";
 import "./factory/cockpit.css";
+import "./activity/log.css";
+import "./govern/govern.css";
 import type { Metadata } from "next";
 import { Toaster } from "./client-forms";
 
