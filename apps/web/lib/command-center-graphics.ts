@@ -107,20 +107,85 @@ export function quadAt(a: { x: number; y: number }, c: { x: number; y: number },
   return { x: u * u * a.x + 2 * u * t * c.x + t * t * b.x, y: u * u * a.y + 2 * u * t * c.y + t * t * b.y };
 }
 
-/** An edge's opacity by how recent it is (§4.7, widened to the six hours the Floor draws): 0.9
- *  under 10 min, falling to 0.18 at 6 h. Computed on the poll, never tweened. */
+/** An edge's opacity by how recent it is (§4.7): 0.9 under 5 min, falling to 0.2 at 60 min.
+ *  Computed on the poll, never tweened. `FLOW_HOURS` stays the "recent agent" window. */
 export const FLOW_HOURS = 6;
+export const FLOW_MINUTES = 60;
 export function recencyOpacity(lastAtMs: number, nowMs: number): number {
   const min = Math.max(0, (nowMs - lastAtMs) / 60_000);
-  const end = FLOW_HOURS * 60;
-  if (min <= 10) return 0.9;
-  if (min >= end) return 0.18;
-  return round(0.9 - ((min - 10) / (end - 10)) * 0.72);
+  if (min <= 5) return 0.9;
+  if (min >= FLOW_MINUTES) return 0.2;
+  return round(0.9 - ((min - 5) / (FLOW_MINUTES - 5)) * 0.7);
 }
 
-/** An edge's stroke width by volume: 1.25 + log2(n), at most 5. */
+/** An edge's stroke width by volume: thin, 1 + log2(n)/2, at most 2.5 (the map, not a pipe). */
 export function edgeWidth(n: number): number {
-  return Math.min(5, 1.25 + Math.log2(Math.max(1, n)));
+  return round(Math.min(2.5, 1 + Math.log2(Math.max(1, n)) / 2));
+}
+
+// ── Labels that never collide or leave the stage (fix pass D9/D16) ─────────────────────────
+
+export type NameItem = { key: string; x: number; y: number; angle: number; size: number; text: string;
+                         /** Lower draws first and wins a collision. */ rank: number };
+export type NamePlace = { x: number; y: number; align: "left" | "right" | "center"; w: number; h: number };
+type Box = { l: number; t: number; r: number; b: number };
+const overlaps = (a: Box, b: Box) => a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b;
+
+/** Where each active face's name goes: just outside the face, away from the ring's centre,
+ *  inside the stage. A name that would overlap a higher-ranked name — or another face — is not
+ *  drawn (the face's tooltip and the mini card still say it). Pure; tested. */
+export function placeNames(items: NameItem[], stage: { width: number; height: number },
+                           charW = 6.4, lineH = 13): Map<string, NamePlace> {
+  const out = new Map<string, NamePlace>();
+  const faces: (Box & { key: string })[] = items.map((i) => ({
+    key: i.key, l: i.x - i.size / 2, t: i.y - i.size / 2, r: i.x + i.size / 2, b: i.y + i.size / 2 }));
+  const taken: Box[] = [];
+  for (const it of [...items].sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key))) {
+    const w = Math.ceil(it.text.length * charW) + 4, h = lineH;
+    const cos = Math.cos(it.angle), sin = Math.sin(it.angle);
+    const gap = it.size / 2 + 5;
+    const align: NamePlace["align"] = cos > 0.35 ? "left" : cos < -0.35 ? "right" : "center";
+    let ax = it.x + cos * gap, ay = it.y + sin * gap;
+    // `left` = text starts at ax; `right` = text ends at ax; `center` = centred on ax.
+    let l = align === "left" ? ax : align === "right" ? ax - w : ax - w / 2;
+    let t = align === "center" ? (sin >= 0 ? ay : ay - h) : ay - h / 2;
+    l = Math.max(2, Math.min(stage.width - w - 2, l));
+    t = Math.max(2, Math.min(stage.height - h - 2, t));
+    const box = { l, t, r: l + w, b: t + h };
+    if (taken.some((b) => overlaps(b, box)) || faces.some((f) => f.key !== it.key && overlaps(f, box))) continue;
+    taken.push(box);
+    ax = align === "left" ? l : align === "right" ? l + w : l + w / 2;
+    ay = t + h / 2;
+    out.set(it.key, { x: round(ax), y: round(ay), align, w, h });
+  }
+  return out;
+}
+
+/** A team label on the ring, fitted to the stage at any size: it shrinks (to 55%), then slides
+ *  inward, and only past that is it shortened with `…` — never cut by the panel's edge. */
+export function fitArcLabel(label: string, x: number, y: number, anchor: "start" | "end" | "middle",
+                            stage: { width: number; height: number }, charW = 9.6):
+    { x: number; y: number; scale: number; text: string; width: number } {
+  const margin = 6;
+  const full = label.length * charW;
+  const room = anchor === "start" ? stage.width - margin - x : anchor === "end" ? x - margin
+    : Math.min(x - margin, stage.width - margin - x) * 2;
+  let scale = Math.max(0.55, Math.min(1, room / Math.max(1, full)));
+  let text = label;
+  let width = full * scale;
+  if (width > room) {
+    const roomFor = Math.max(3, Math.floor(room / (charW * scale)) - 1);
+    if (roomFor < label.length) text = `${label.slice(0, roomFor)}…`;
+    width = text.length * charW * scale;
+  }
+  // Slide in when the label still runs past an edge (a long label at a narrow stage).
+  let nx = x;
+  if (anchor === "start") nx = Math.min(x, stage.width - margin - width);
+  else if (anchor === "end") nx = Math.max(x, margin + width);
+  else nx = Math.min(Math.max(x, margin + width / 2), stage.width - margin - width / 2);
+  const ny = Math.min(Math.max(y, 10), stage.height - 8);
+  scale = round(scale);
+  return { x: round(nx), y: round(ny), scale, text, width: round(width) };
 }
 
 /** Cumulative series for Today (§4.9): `today` stops at now (hour index + fraction), `yesterday`
@@ -284,15 +349,20 @@ export function chainsOf(missions: Mission[], known: Set<string>): Chain[] {
 
 // ── The day strip's window (design pass) ──────────────────────────────────────────────────
 
-/** The strip's time window: `fit` zooms to the runs on it (the earliest start in the full
- *  window, less 10% padding, at least an hour, snapped to a nice tick), `full` is the whole
- *  `hours`. Returns [since, now] in ms and 3-6 ticks. */
-export function stripWindow(rows: Pick<DayRow, "startedAt">[], nowMs: number, hours: number,
+/** The strip's time window: `fit` frames LIVE work first — from the earliest live run's start
+ *  (or, with nothing live, the latest three finished runs' earliest start) less 10% padding, at
+ *  least an hour, snapped to a nice tick; `full` is the whole `hours`. Older runs on the strip
+ *  clip at the left edge (`‹`). Returns `since` in ms and up to `maxTicks` ticks. */
+export function stripWindow(rows: (Pick<DayRow, "startedAt"> & { finishedAt?: string | null })[], nowMs: number, hours: number,
                             mode: "fit" | "full", maxTicks = 6): { since: number; ticks: number[] } {
   const full = nowMs - hours * 3_600_000;
   let since = full;
   if (mode === "fit") {
-    const starts = rows.map((r) => Date.parse(r.startedAt)).filter(Number.isFinite).map((t) => Math.max(t, full));
+    const live = rows.filter((r) => !r.finishedAt);
+    const latest = [...rows].filter((r) => r.finishedAt)
+      .sort((a, b) => Date.parse(b.finishedAt as string) - Date.parse(a.finishedAt as string)).slice(0, 3);
+    const base = live.length ? live : latest;
+    const starts = base.map((r) => Date.parse(r.startedAt)).filter(Number.isFinite).map((t) => Math.max(t, full));
     const first = starts.length ? Math.min(...starts) : full;
     const span = Math.max(3_600_000, (nowMs - first) * 1.1);
     since = Math.max(full, nowMs - span);
@@ -306,4 +376,11 @@ export function stripWindow(rows: Pick<DayRow, "startedAt">[], nowMs: number, ho
   // A tick this close to now would print over the `now` label (seen on a phone).
   const room = (nowMs - snapped) * 0.14;
   return { since: snapped, ticks: ticks.filter((t) => nowMs - t >= room).slice(-maxTicks) };
+}
+
+/** An idle agent is a dot, not a face (spec §4.7): these kinds draw as faces. */
+export const FACE_KINDS: ReadonlySet<FloorKind> = new Set<FloorKind>(["working", "waiting", "stuck", "on_run"]);
+/** An idle dot's diameter: 10px, 6px past 48 agents (§4.7). */
+export function idleDot(total: number): number {
+  return total > SMALL_AT ? 6 : 10;
 }

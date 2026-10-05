@@ -15,7 +15,7 @@ import type { Week } from "../../lib/command-center-view";
 
 export type WeekBarsProps = { week: Week; tz: string };
 
-const BAR_H = 84;
+const BAR_H = 110;
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 

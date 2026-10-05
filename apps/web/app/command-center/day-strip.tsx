@@ -61,6 +61,18 @@ function tickWord(ms: number, client: boolean): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
+/** Wide enough for words inside the bar (a share of the track). */
+export const WORDS_INSIDE = 22;
+
+/** What a wide bar says inside itself: its state and how long, e.g. `Waiting on you · 4m`. */
+export function barWords(row: DayRow, nowMs: number): string {
+  const start = Date.parse(row.startedAt);
+  const end = row.finishedAt ? Date.parse(row.finishedAt) : nowMs;
+  const took = Number.isFinite(start) && Number.isFinite(end) ? span((end - start) / 1000) : "";
+  const word = LIVE.has(row.state) ? (row.verb || OUTCOME[row.state]) : (OUTCOME[row.state] ?? row.state);
+  return [word, took].filter(Boolean).join(" · ");
+}
+
 export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion, hoverRunId, onHover, orgId, onStartWork }: DayStripProps) {
   const now = nowMs ?? Date.parse(generatedAt);
   const full = now - windowHours * 3_600_000;
@@ -95,7 +107,9 @@ export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion
 
   return (
     <div className="cc-day" data-testid="cc-day-strip" data-window={windowHours} data-zoom={zoom} data-motion={motion}>
-      <div className="cc-day-grid" onMouseLeave={() => onHover(null)}>
+      {/* THE HEIGHT IS RESERVED for rowsMax lanes (D14): a poll that adds or ends a run never
+          moves the page below. */}
+      <div className="cc-day-grid" style={{ ["--rows" as string]: rowsMax }} onMouseLeave={() => onHover(null)}>
         <div className="cc-day-axis">
           <div className="cc-day-axis-pad">
             <div className="cc-day-zoom" role="group" aria-label="Time window">
@@ -149,7 +163,9 @@ export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion
                     if (!Number.isFinite(gs) || ge < since) return null;
                     const l = Math.max(0, local(gs)), w = Math.max(1, Math.min(100, local(ge)) - l);
                     const waited = span((ge - gs) / 1000);
-                    return <span key={i} className="cc-day-gate" data-testid="cc-day-gate" title={`Waited for you ${waited}`}
+                    // A wait is always visible (min 6px), and an open one runs to now, striped.
+                    return <span key={i} className="cc-day-gate" data-testid="cc-day-gate" data-open={g.to ? undefined : "true"}
+                                 title={g.to ? `Waited for you ${waited}` : `Waiting for you ${waited}`}
                                  style={{ left: `${l}%`, width: `${w}%` }} />;
                   })}
                   {r.ticks.map((t, i) => {
@@ -158,6 +174,7 @@ export function DayStrip({ day, nowMs, generatedAt, windowHours, rowsMax, motion
                     return <span key={t + i} className="cc-day-tick" data-new={i >= r.ticks.length - newTicks || undefined}
                                  style={{ left: `${local(ms)}%` }} aria-hidden />;
                   })}
+                  {width >= WORDS_INSIDE ? <span className="cc-day-in" aria-hidden>{barWords(r, now)}</span> : null}
                   <span className="cc-day-cap" data-cap={cap} data-new={capNew || undefined} aria-hidden>
                     {cap === "live" ? "▶" : null}
                   </span>
