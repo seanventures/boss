@@ -21229,7 +21229,8 @@ def put_project_setting(key: str, payload: ProjectSettingBody, request: Request)
     project_id = str(payload.get("project_id") or "").strip()
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
-    actor = str(payload.get("actor") or current_api_principal.get() or "executive_console")
+    from .govern_guard import govern_actor
+    actor = govern_actor(payload.get("actor"), current_api_principal.get())
     spec = ps.KNOBS.get(key)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"'{key}' is not a setting BOSS knows about.")

@@ -93,10 +93,10 @@ def put_policies(payload: PoliciesPutRequest, request: Request) -> dict[str, Any
     Needs `budget_manage` (it needed nothing: anyone who could reach the API could rewrite a
     project's token guides). An `If-Match` (the stage's version, from GET /v1/govern) guards a
     one-stage edit against a stale screen; without one, the old behaviour."""
-    from apps.api.app.govern_guard import require_fresh
+    from apps.api.app.govern_guard import govern_actor, require_fresh
     from apps.api.app.main import current_api_principal, engine, require_project_actor
 
-    actor = str(current_api_principal.get() or payload.actor or "executive_console").strip()
+    actor = govern_actor(payload.actor, current_api_principal.get())
     try:
         with begin(engine) as connection:
             require_project_actor(connection, payload.project_id, actor, "budget_manage")

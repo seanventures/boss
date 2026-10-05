@@ -51,7 +51,7 @@ const OLD = {
 const TIGHTENED = {
   intensity: { ...OLD.intensity.body, actor: "ceo" },                      // §10 Q4
   token: { ...OLD.token.body, actor: "ceo" },                              // §10 Q3
-  monthly: { ...OLD.monthly.body, via: "govern" },                         // §4.4.3
+  monthly: { ...OLD.monthly.body, via: "govern", actor: "ceo" },          // §4.4.3 + D5: the signed-in actor
   reconcile: { ...OLD.reconcile.body, actor: "ceo" },                      // §10 Q4
   initiative: { ...OLD.initiative.body, actor: "ceo" },                    // §10 Q4
 };
