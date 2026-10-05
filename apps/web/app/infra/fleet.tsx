@@ -229,10 +229,13 @@ export function fleetStarters(host: { name: string; address: string | null } | n
   ];
 }
 
-export function InfraAskBoss({ fleet }: InfraTabProps & { fleet: Polled<Fleet> }) {
+export function InfraAskBoss({ fleet, projectId }: InfraTabProps & { fleet: Polled<Fleet> }) {
   const racks = fleet.data?.racks ?? [];
   const host = racks.find((r) => !r.thisComputer && r.state.tone === "green") ?? racks.find((r) => !r.thisComputer) ?? null;
-  const ask = (question: string) => openDockAbout({ subject: null, question, role: "Deployment Manager", history: "push" });
+  // THE FLEET IS THE SUBJECT: the turn reads every machine, what is placed on each and the
+  // deploys that failed lately (turn_subject._resolve_fleet), not a sentence about them.
+  const ask = (question: string) => openDockAbout({ subject: { kind: "fleet", id: projectId }, question,
+                                                     role: "Deployment Manager", history: "push" });
   return (
     <Menu label="Ask BOSS" testId="infra-ask" tip="Ask the Deployment Manager about your machines and deploys" items={[
       ...fleetStarters(host).map((s, i) => ({ key: `s${i}`, label: s.label, testId: "infra-ask-starter", tip: s.question, onPick: () => ask(s.question) })),

@@ -58,6 +58,9 @@ SUBJECT_KINDS: tuple[str, ...] = (
     "discovery",
     "deployment",
     "decision",
+    # Infra's Ask BOSS (infra-observability spec, operator decision 2026-10-04): the machines,
+    # what is placed on them and how their last deploys went. The id is the project id.
+    "fleet",
 )
 
 #: An id prefix is enough to know the kind of an untyped legacy reference.
@@ -870,6 +873,57 @@ def _resolve_decision(connection, project_id: str, ref: SubjectRef) -> SubjectEv
 
 #: THE REGISTRY. A kind missing here is a door that opens onto nothing — the enforcing test
 #: checks every kind the console can send against this mapping.
+def _resolve_fleet(connection, project_id: str, ref: SubjectRef) -> SubjectEvidence:
+    """The project's fleet: every machine with its state and last check, what is placed on
+    each, and the deploys that failed lately. Read from stored rows only — never a host check."""
+    ev = SubjectEvidence(ref)
+    # The fleet IS the project's: a ref naming another project is not this project's evidence.
+    if ref.id != project_id:
+        return ev
+    hosts = _rows(connection,
+                  "SELECT id, name, address, arch, status, last_preflight_at, last_preflight "
+                  "FROM deployment_hosts WHERE project_id = :p AND status <> 'retired' "
+                  "ORDER BY name", {"p": project_id})
+    targets = _rows(connection,
+                    "SELECT id, app_name, environment, host_id, target_kind, status "
+                    "FROM deployment_targets WHERE project_id = :p AND status = 'active' "
+                    "ORDER BY app_name", {"p": project_id})
+    ev.found = True
+    ev.title = "Your fleet"
+    ev.facts["project"] = project_id
+    ev.status = f"{len(hosts)} machines, {len(targets)} app targets"
+    placed: dict[str, list[str]] = {}
+    for t in targets:
+        placed.setdefault(str(t.get("host_id") or ""), []).append(
+            f"{t.get('app_name')} ({t.get('environment')}, {t.get('target_kind')})")
+    unreachable = []
+    for h in hosts:
+        pf = _json(h.get("last_preflight")) or {}
+        problems = [str(x) for x in (pf.get("problems") or [])][:3] if isinstance(pf, dict) else []
+        line = (f"{h.get('address')} · {h.get('arch') or 'arch unknown'} · {h.get('status')}"
+                f" · checked {h.get('last_preflight_at') or 'never'}")
+        if problems:
+            line += " · problems: " + "; ".join(problems)
+        apps = placed.get(str(h["id"])) or []
+        ev.facts[f"machine {h.get('name')} ({h['id']})"] = line + (
+            f" · apps: {', '.join(apps)}" if apps else " · no apps")
+        if h.get("status") == "degraded" or (isinstance(pf, dict) and pf.get("reachable") is False):
+            unreachable.append(str(h.get("name")))
+    if placed.get(""):
+        ev.facts["not on a machine BOSS manages"] = ", ".join(placed[""])
+    failed = _rows(connection,
+                   "SELECT d.id, t.app_name, d.commit_sha, d.failure_reason, d.created_at "
+                   "FROM stack_deployments d JOIN deployment_targets t ON t.id = d.target_id "
+                   "WHERE d.project_id = :p AND d.status = 'failed' "
+                   "ORDER BY d.created_at DESC LIMIT 3", {"p": project_id})
+    for f in failed:
+        ev.linked.append(f"stack deploy {f['id']} of {f.get('app_name')} at "
+                         f"{str(f.get('commit_sha') or '')[:7]} — failed: {_short(f.get('failure_reason'), 200)}")
+    if unreachable:
+        ev.error = f"Unreachable: {', '.join(unreachable)}"
+    return ev
+
+
 RESOLVERS: dict[str, Callable[[Any, str, SubjectRef], SubjectEvidence]] = {
     "workflow_step": _resolve_workflow_step,
     "workflow_run": _resolve_workflow_run,
@@ -878,6 +932,7 @@ RESOLVERS: dict[str, Callable[[Any, str, SubjectRef], SubjectEvidence]] = {
     "discovery": _resolve_discovery,
     "deployment": _resolve_deployment,
     "decision": _resolve_decision,
+    "fleet": _resolve_fleet,
 }
 
 

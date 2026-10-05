@@ -31,6 +31,8 @@ export const SUBJECT_KINDS = [
   "discovery",
   "deployment",
   "decision",
+  // Infra's Ask BOSS: the machines and what runs on them. The id is the project id.
+  "fleet",
 ] as const;
 
 export type SubjectKind = (typeof SUBJECT_KINDS)[number];
