@@ -190,7 +190,8 @@ class System(TypedDict, total=False):
 
 class Sources(TypedDict, total=False):
     stack: dict[str, Any]    # {state, word, tone, host{id,name}|None, grafana_url, containers[{name,status}],
-                             #  checked_at, error, can_deploy, needs_machine}
+                             #  checked_at, error, can_deploy, needs_machine,
+                             #  host_target_id (S2, additive: the deploy route's host_target_id)}
     scraped: list[dict[str, Any]]    # {app, env, scrape_url, dashboard_url, watched(bool)}
     sources: list[dict[str, Any]]    # {id, kind, name, url, enabled}
     gaps: list[dict[str, str]]       # {id, label, tip}

@@ -261,7 +261,9 @@ export function parseSystem(w: unknown): System {
 export type Sources = {
   stack: { state: string; word: string; tone: Tone; host: { id: string; name: string } | null; grafanaUrl: string | null;
            containers: { name: string; status: string }[]; checkedAt: string | null; error: string | null;
-           canDeploy: boolean; needsMachine: boolean };
+           canDeploy: boolean; needsMachine: boolean;
+           /** The target the stack borrows a host + credential from: POST /v1/observability/stack/deploy's host_target_id. */
+           hostTargetId: string | null };
   scraped: { app: string; env: string; scrapeUrl: string | null; dashboardUrl: string | null; watched: boolean }[];
   sources: { id: string; kind: string; name: string; url: string | null; enabled: boolean }[];
   gaps: { id: string; label: string; tip: string }[];
@@ -276,7 +278,8 @@ export function parseSources(w: unknown): Sources {
     stack: { state: str(s.state, "unknown"), word: str(s.word, "Status unknown"), tone: toneOf(s.tone), host: ref(s.host),
              grafanaUrl: optStr(s.grafana_url),
              containers: arr(s.containers).map((c) => { const x = obj(c); return { name: str(x.name), status: str(x.status) }; }),
-             checkedAt: optStr(s.checked_at), error: optStr(s.error), canDeploy: s.can_deploy === true, needsMachine: s.needs_machine === true },
+             checkedAt: optStr(s.checked_at), error: optStr(s.error), canDeploy: s.can_deploy === true, needsMachine: s.needs_machine === true,
+             hostTargetId: optStr(s.host_target_id) },
     scraped: arr(o.scraped).map((x) => { const y = obj(x); return { app: str(y.app), env: str(y.env), scrapeUrl: optStr(y.scrape_url),
                                                                      dashboardUrl: optStr(y.dashboard_url), watched: y.watched !== false }; }),
     sources: arr(o.sources).map((x) => { const y = obj(x); return { id: str(y.id), kind: str(y.kind), name: str(y.name), url: optStr(y.url), enabled: y.enabled !== false }; }),
