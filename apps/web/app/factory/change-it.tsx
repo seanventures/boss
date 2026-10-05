@@ -9,9 +9,10 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 
 import { callAction } from "../../lib/call-action";
-import { confirmCodeTaskFeedbackAction, submitCodeTaskFeedbackAction, type FeedbackActionResult } from "../actions";
+import { confirmCodeTaskFeedbackAction, conveneMeetingAction, submitCodeTaskFeedbackAction, type FeedbackActionResult } from "../actions";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
+import { areaHref } from "./cockpit-util";
 
 /** The chips. Each fills the fields the way the old templates did; both stay editable. */
 export const CHANGE_CHIPS: { key: string; label: string; tip: string; message: string; expected: string }[] = [
@@ -37,6 +38,30 @@ export const CHANGE_CHIPS: { key: string; label: string; tip: string; message: s
 
 type Workflow = { id: string; name: string; active_version_id?: string | null };
 
+/** Two ways through that spec the change first with a panel (the old card's `Add a feature`
+ *  and `Rebuild with a fresh spec`): a PRD, then a build. Picked in `Run through`. */
+export const SPEC_FIRST = { feature: "@panel-feature", rebuild: "@panel-rebuild" } as const;
+
+/** The panel's directive, word for word what the old card sent. `[boss:extend_run=…]` routes the
+ *  approved PRD to a build on this app's own branch instead of a fresh scaffold. */
+export function specFirstDirective(mode: "feature" | "rebuild", app: string, repo: string, runId: string, what: string): string {
+  return mode === "feature"
+    ? `Add a feature to "${app}" — an existing, working application in `
+      + `${repo || "this project"}. [boss:extend_run=${runId}]\n\n`
+      + `What is wanted: ${what.trim()}\n\n`
+      + `Write a PRD for THIS FEATURE ONLY. The app already exists and must keep working: do `
+      + `not redesign it, do not re-scaffold it, do not restate the whole product. Cover what `
+      + `changes, what must not change, the acceptance scenarios for the new behaviour, and `
+      + `the evidence required to prove them.`
+    : `Rebuild "${app}" — an existing application in ${repo || "this project"}.\n\n`
+      + `What is wrong with the current build: ${what.trim()}\n\n`
+      + `Write a PRD for a replacement that fixes this. It must be a real, working full-stack `
+      + `application: a server, a database with migrations and seed data, and a UI that is `
+      + `visually finished — considered layout, typography, spacing and states (loading, empty, `
+      + `error), not an unstyled prototype. Include acceptance scenarios and the evidence `
+      + `required to prove them.`;
+}
+
 function useWorkflows(projectId: string): Workflow[] {
   const [items, setItems] = useState<Workflow[]>([]);
   useEffect(() => {
@@ -54,8 +79,12 @@ function useWorkflows(projectId: string): Workflow[] {
   return items;
 }
 
-export function ChangeIt({ projectId, runId, actor, onClose, onStarted }: {
+export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = "", repo = "", previewId = null }: {
   projectId: string; runId: string; actor: string; onClose: () => void;
+  /** The app and its repo, for a spec-first change (the panel is told which app it is). */
+  app?: string; repo?: string;
+  /** A live preview: the change is anchored to it, as the old feedback form did. */
+  previewId?: string | null;
   /** A new build (or workflow run) started from the proposal. */
   onStarted?: (runId: string) => void;
 }) {
@@ -77,8 +106,29 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted }: {
     return () => document.removeEventListener("keydown", onKey, true);
   }, [onClose]);
 
+  const panel = through === SPEC_FIRST.feature ? "feature" : through === SPEC_FIRST.rebuild ? "rebuild" : null;
+
+  const convene = async () => {
+    if (!panel || !message.trim() || busy) return;
+    setBusy(true);
+    setError("");
+    const what = [message.trim(), expected.trim() ? `Done when: ${expected.trim()}` : ""].filter(Boolean).join("\n");
+    const form = new FormData();
+    form.set("project_id", projectId);
+    form.set("actor", actor);
+    form.set("meeting_type", "prd_panel");
+    form.set("directive", specFirstDirective(panel, app, repo, runId, what));
+    const r = await callAction(conveneMeetingAction)(form);
+    setBusy(false);
+    if (r && r.ok === false) { setError(r.error ?? "The panel could not be convened."); return; }
+    notifyChanged("meetings");
+    showToast("success", "Panel convened");
+    onClose();
+  };
+
   const propose = async () => {
     if (!message.trim() || busy) return;
+    if (panel) { await convene(); return; }
     setBusy(true);
     setError("");
     const form = new FormData();
@@ -87,6 +137,7 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted }: {
     form.set("expected", expected);
     form.set("workflow_version_id", through);
     form.set("actor", actor);
+    if (previewId) form.set("anchor", `/v1/previews/${previewId}/web/`);
     const r = await callAction(submitCodeTaskFeedbackAction)(null, form);
     setBusy(false);
     if (r?.error) setError(r.error); else setProposal(r);
@@ -105,6 +156,10 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted }: {
     notifyChanged("code-tasks");
     showToast("success", r?.path === "workflow" ? `Started ${r.workflow_name ?? "the workflow"}` : "Change started");
     if (r?.run_id) onStarted?.(r.run_id);
+    else if (r?.workflow_run_id) {
+      // A workflow run with no build yet: go where it is watched (the old form linked to it).
+      window.location.assign(areaHref({ area: "delivery_workflows", wfr: r.workflow_run_id }));
+    }
     onClose();
   };
 
@@ -117,9 +172,16 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted }: {
         </header>
         {proposal?.proposal ? (
           <div className="fx-sheet-body" data-testid="fx-change-proposal">
-            <span className="fx-out-sub" title={proposal.proposal.path === "workflow"
-              ? `Runs as the ${proposal.proposal.workflow_name ?? ""} workflow` : "Runs inline in the Factory"}>
-              {proposal.proposal.path === "workflow" ? proposal.proposal.workflow_name : "Inline"}
+            <span className="fx-out-links">
+              <span className="fx-out-sub" title={proposal.proposal.path === "workflow"
+                ? `Runs as the ${proposal.proposal.workflow_name ?? ""} workflow` : "Runs inline in the Factory"}>
+                {proposal.proposal.path === "workflow" ? proposal.proposal.workflow_name : "Inline"}
+              </span>
+              {/* How big the agent judged it (the old proposal's badge). */}
+              <span className="fx-muted" data-testid="fx-change-kind"
+                    title={proposal.proposal.classification === "full_rerun" ? "Re-runs the whole build on the same branch" : "A scoped change on the same branch and PR"}>
+                {proposal.proposal.classification === "full_rerun" ? "Full rerun" : "Small change"}
+              </span>
             </span>
             <pre className="fx-log fx-log-small" data-user-text>{proposal.proposal.fix_note}</pre>
             <span className="fx-out-links">
@@ -152,12 +214,15 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted }: {
               <select className="mr-select" value={through} onChange={(e) => setThrough(e.target.value)} data-testid="fx-change-through">
                 <option value="">Inline</option>
                 {workflows.map((w) => <option key={w.id} value={w.active_version_id as string}>{w.name}</option>)}
+                <option value={SPEC_FIRST.feature} title="A panel specs the feature, then it is built onto this app">Spec it first</option>
+                <option value={SPEC_FIRST.rebuild} title="A panel writes a new PRD, then the app is rebuilt from it">Fresh spec, rebuild</option>
               </select>
             </label>
             {proposal?.question ? <span className="fx-ask" data-user-text title="The agent needs this answered">{proposal.question}</span> : null}
             <span className="fx-out-links">
               <button type="button" className="ag-btn ag-btn-primary" disabled={busy || !message.trim()} data-testid="fx-change-propose"
-                      onClick={() => void propose()}>Propose</button>
+                      title={panel ? "Costs a panel and a build" : undefined}
+                      onClick={() => void propose()}>{panel ? "Convene panel" : "Propose"}</button>
             </span>
           </div>
         )}

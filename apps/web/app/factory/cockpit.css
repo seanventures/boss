@@ -230,3 +230,14 @@ span.fx-row-face { cursor: default; }
   .fx-ck-title { max-width: 100%; }
   .fx-confirm { right: auto; left: 0; white-space: normal; }
 }
+
+/* Parity: what a build's old page said, kept in the Outputs rows (Brief, gate reasons, diff
+   size, model calls). Tokens only. */
+.fx-kv { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; min-width: 0; }
+.fx-kv > .fx-out-sub { min-width: 88px; }
+.fx-gate .fx-muted.fx-trunc { min-width: 0; max-width: 40ch; }
+.fx-diffstat { display: inline-flex; gap: 6px; font-variant-numeric: tabular-nums; }
+.fx-add { color: var(--green); }
+.fx-del { color: var(--red); }
+.fx-call { display: flex; flex-wrap: wrap; gap: 0 2px; min-width: 0; font-size: 12px; }
+.fx-call[data-ok="false"] { color: var(--red); }

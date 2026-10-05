@@ -19,7 +19,7 @@ import { plural, type Station, type StationKey } from "../../lib/factory-floor";
 import type { ToolCalls } from "../../lib/agents-live-board";
 import { nameOf, RunFace } from "../agents/run-face";
 import { fetchTools } from "./cockpit-actions";
-import { clockOf, costWord, secondsWord, spanOf, whoName } from "./cockpit-util";
+import { areaHref, clockOf, costWord, secondsWord, spanOf, whoName } from "./cockpit-util";
 
 
 
@@ -88,7 +88,7 @@ function ToolsFold({ projectId, runId, act }: { projectId: string; runId: string
               {t.latencyMs !== null ? <span> · {t.latencyMs}ms</span> : null}
             </span>
           )) : failed ? <span className="fx-muted">Not available</span> : <span className="fx-muted">Loading</span>}
-          <a className="ag-link" href={`?area=activity&run=${encodeURIComponent(runId)}`} data-testid="fx-tools-log">
+          <a className="ag-link" href={areaHref({ area: "activity", run: runId })} data-testid="fx-tools-log">
             Open in Activity log ↗
           </a>
         </span>

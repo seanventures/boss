@@ -25,7 +25,25 @@ export type CockpitRun = {
   attempt: number; rootRunId: string;
 };
 
-export type LineageItem = { runId: string; attempt: number; state: BuildStateKey; word: string; at?: string };
+/** One build of this app: an attempt of this lineage, or another build on the same app (a
+ *  follow-up, a change on its branch) — the old page's run list. */
+export type LineageItem = {
+  runId: string; attempt: number; state: BuildStateKey; word: string; at?: string;
+  kind?: string; title?: string; prNumber?: number; prUrl?: string; costUsd: number; sameLineage: boolean;
+};
+
+/** What the build was asked to do and how it was built (the old page's head and meta rows). */
+export type Brief = {
+  repo?: string; branch?: string; baseBranch?: string;
+  criteria: string[]; testCommands: string[];
+  workflow: { name: string; version?: number; default: boolean } | null;
+  engine?: string; model?: string; reviewEngine?: string; reviewModel?: string; crossModel: boolean;
+  turns?: number; builtOn?: string; profile?: string; riskTier?: number;
+  reviewerIndependent?: boolean; testAuthorIndependent?: boolean;
+  qaBenchmark: { name: string; id?: string } | null;
+  deferredFindings: number; advisoryFailing: number; mutationCaught?: boolean; notRun: string[];
+  redelivered: number; error?: string;
+};
 
 export type StoryAct = {
   type: "act"; id: string; station: StationKey | null;
@@ -65,12 +83,13 @@ export type Gate = {
   station: StationKey | null; evidence?: string; waivable: boolean; reason?: string;
 };
 export type ChecksOutput = { word: string; tip?: string; advisory: boolean; gates: Gate[] };
-export type TestCommand = { command: string; exitCode: number | null; ok: boolean; timedOut: boolean };
+export type TestCommand = { command: string; exitCode: number | null; ok: boolean; timedOut: boolean; durationMs?: number };
 export type TestsOutput = { word: string; roleKey: string | null; commands: TestCommand[]; outputTail?: string };
 export type ChangedFile = { path: string; bytes?: number };
 export type ChangesOutput = {
   word: string; tests: ChangedFile[]; code: ChangedFile[];
   testsRoleKey: string | null; codeRoleKey: string | null; diffUrl?: string;
+  filesChanged?: number; additions?: number; deletions?: number;
 };
 export type ReviewComment = {
   id: string; round: number; severity: "blocker" | "major" | "minor" | "nit" | string;
@@ -78,9 +97,12 @@ export type ReviewComment = {
   author?: string; authorRoleKey: string | null; status: "open" | "addressed" | "dismissed" | string;
 };
 export type CommentsOutput = { word: string; items: ReviewComment[] };
+export type PreviewStep = { label: string; status: string; durationMs?: number; log?: string };
 export type PreviewOutput = {
   id: string; status: string; word: string; url?: string; expiresAt?: string;
   stepsDone?: number; stepsTotal?: number; error?: string;
+  /** `docker` · `retained rootfs` · `host process`; and each step of starting it. */
+  substrate?: string; steps: PreviewStep[];
 };
 export type DeployOutput = { word: string; items: Record<string, unknown>[] };
 export type CostOutput = {
@@ -115,6 +137,7 @@ export type Cockpit = {
   failure: { line: string; tip: string } | null;
   lineage: LineageItem[];
   origin: Origin | null;
+  brief: Brief;
   agents: { roleKey: string; state: string }[];
   stations: Station[];
   attention: AttentionItem[];
@@ -192,12 +215,14 @@ export function parseOutputs(w: unknown): CockpitOutputs {
       word: str(tests.word), roleKey: roleOf(tests.role_key), outputTail: opt(tests.output_tail),
       commands: arr(tests.commands).map((c) => {
         const x = obj(c);
-        return { command: str(x.command), exitCode: optNum(x.exit_code) ?? null, ok: x.ok === true, timedOut: x.timed_out === true };
+        return { command: str(x.command), exitCode: optNum(x.exit_code) ?? null, ok: x.ok === true, timedOut: x.timed_out === true,
+                 durationMs: optNum(x.duration_ms) };
       }),
     } : null,
     changes: changes ? {
       word: str(changes.word), tests: files(changes.tests), code: files(changes.code),
       testsRoleKey: roleOf(changes.tests_role_key), codeRoleKey: roleOf(changes.code_role_key), diffUrl: opt(changes.diff_url),
+      filesChanged: optNum(changes.files_changed), additions: optNum(changes.additions), deletions: optNum(changes.deletions),
     } : null,
     comments: {
       word: str(comments.word, "None"),
@@ -210,7 +235,12 @@ export function parseOutputs(w: unknown): CockpitOutputs {
     },
     preview: preview ? { id: str(preview.id), status: str(preview.status), word: str(preview.word), url: opt(preview.url),
                          expiresAt: opt(preview.expires_at), stepsDone: optNum(preview.steps_done),
-                         stepsTotal: optNum(preview.steps_total), error: opt(preview.error) } : null,
+                         stepsTotal: optNum(preview.steps_total), error: opt(preview.error),
+                         substrate: opt(preview.substrate),
+                         steps: arr(preview.steps).map((x) => {
+                           const y = obj(x);
+                           return { label: str(y.label), status: str(y.status), durationMs: optNum(y.duration_ms), log: opt(y.log) };
+                         }) } : null,
     deploy: { word: str(deploy.word, "Not set up"), items: arr(deploy.items).map((d) => obj(d)) },
     cost: {
       word: str(cost.word), meteredUsd: num(cost.metered_usd), subscriptionCalls: num(cost.subscription_calls),
@@ -220,6 +250,29 @@ export function parseOutputs(w: unknown): CockpitOutputs {
       }),
       byStation: Object.fromEntries(Object.entries(obj(cost.by_station)).map(([k, v]) => [k, num(v)])) as CostOutput["byStation"],
     },
+  };
+}
+
+const optBool = (v: unknown): boolean | undefined => (typeof v === "boolean" ? v : undefined);
+const strs = (v: unknown): string[] => arr(v).map((x) => String(x ?? "")).filter((x) => x.trim());
+
+/** The brief (`cockpit.brief`). An older API sends none: every field reads as unknown. */
+export function parseBrief(w: unknown): Brief {
+  const b = obj(w);
+  const wf = b.workflow ? obj(b.workflow) : null;
+  const bench = b.qa_benchmark ? obj(b.qa_benchmark) : null;
+  return {
+    repo: opt(b.repo), branch: opt(b.branch), baseBranch: opt(b.base_branch),
+    criteria: strs(b.criteria), testCommands: strs(b.test_commands),
+    workflow: wf && opt(wf.name) ? { name: str(wf.name), version: optNum(wf.version), default: wf.default === true } : null,
+    engine: opt(b.engine), model: opt(b.model), reviewEngine: opt(b.review_engine), reviewModel: opt(b.review_model),
+    crossModel: b.cross_model === true, turns: optNum(b.turns), builtOn: opt(b.built_on),
+    profile: opt(b.profile), riskTier: optNum(b.risk_tier),
+    reviewerIndependent: optBool(b.reviewer_independent), testAuthorIndependent: optBool(b.test_author_independent),
+    qaBenchmark: bench && opt(bench.name) ? { name: str(bench.name), id: opt(bench.id) } : null,
+    deferredFindings: num(b.deferred_findings), advisoryFailing: num(b.advisory_failing),
+    mutationCaught: optBool(b.mutation_caught), notRun: strs(b.not_run),
+    redelivered: num(b.redelivered), error: opt(b.error),
   };
 }
 
@@ -254,9 +307,12 @@ export function parseCockpit(w: unknown): Cockpit {
     lineage: arr(o.lineage).map((l) => {
       const x = obj(l);
       return { runId: str(x.run_id), attempt: num(x.attempt, 1), state: str(x.state) as BuildStateKey,
-               word: str(x.word), at: opt(x.at) };
+               word: str(x.word), at: opt(x.at), kind: opt(x.kind), title: opt(x.title),
+               prNumber: optNum(x.pr_number), prUrl: opt(x.pr_url), costUsd: num(x.cost_usd),
+               sameLineage: x.same_lineage !== false };
     }),
     origin: o.origin ? parseOrigin(o.origin) : null,
+    brief: parseBrief(o.brief),
     agents: arr(o.agents).map((a) => { const x = obj(a); return { roleKey: str(x.role_key), state: str(x.state, "idle") }; })
       .filter((a) => a.roleKey),
     stations: arr(o.stations).map(parseStation),

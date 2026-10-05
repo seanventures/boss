@@ -309,8 +309,10 @@ class Cockpit(TypedDict, total=False):
     retryable: bool
     retry_reason: Optional[str]
     failure: Optional[dict[str, str]]   # failure_line(): {line, tip}
-    lineage: list[dict[str, Any]]  # [{run_id, attempt, state, word, at}]
+    lineage: list[dict[str, Any]]  # [{run_id, attempt, state, word, at, kind, title, pr_number,
+    #                                 cost_usd, same_lineage}] every build of this app
     origin: Optional[Origin]
+    brief: dict[str, Any]          # brief_of(): criteria, checks, repo, branch, workflow, engines
     agents: list[dict[str, Any]]   # [{role_key, state}] live first
     stations: list[Station]
     attention: list[dict[str, Any]]
@@ -631,7 +633,7 @@ def load_facts(connection: Any, project_id: str, runs: list[Mapping[str, Any]], 
             facts.decisions[str(row["id"])] = item
     for row in connection.execute(
         text("SELECT DISTINCT ON (run_id) id, run_id, status, url, error, expires_at, steps, "
-             "created_at FROM app_previews WHERE project_id = :p AND run_id = ANY(:ids) "
+             "created_at, substrate FROM app_previews WHERE project_id = :p AND run_id = ANY(:ids) "
              "ORDER BY run_id, created_at DESC"),
         {"p": project_id, "ids": ids},
     ).mappings().all():
@@ -1336,6 +1338,22 @@ def _origin(connection: Any, project_id: str, run: Mapping[str, Any],
     return None
 
 
+def lineage_origin(connection: Any, project_id: str,
+                   run: Mapping[str, Any]) -> Optional[Origin]:
+    """Where a build came from when it does not say: a RETRY CARRIES NO ORIGIN OF ITS OWN, the
+    build it retries does (boss-1's attempt 2 of the freshness board named no workflow run,
+    while attempt 1 named the one that asked for it)."""
+    root = _lineage_key(run)
+    if root == str(run["id"]):
+        return None
+    from .code_task_service import load_code_task_run
+
+    first = load_code_task_run(connection, root)
+    if not first or first.get("project_id") != project_id:
+        return None
+    return _origin(connection, project_id, first)
+
+
 def _workflow_names(connection: Any, project_id: str,
                     runs: list[Mapping[str, Any]]) -> dict[str, str]:
     ids = []
@@ -1672,16 +1690,57 @@ def _now_arg(tool: str, content: Any) -> Optional[str]:
     return None
 
 
+#: How far back the cockpit looks for the other builds of the same app.
+SIBLING_SCAN = FLOOR_RUNS
+SIBLINGS_CAP = 20
+
+
+def _app_siblings(connection: Any, project_id: str, run: Mapping[str, Any]) -> list[str]:
+    """Every build of the app this build makes — retries, follow-ups, changes on its branch —
+    newest first: the old page's run list (`groupRunsIntoApps`), not only this lineage. Reads
+    identity columns only, never whole evidence blobs."""
+    rows = [dict(r) for r in connection.execute(
+        text("SELECT id, title, created_at, "
+             "jsonb_build_object('app_id', finalize_ctx->'app_id', "
+             "'qa_benchmark', finalize_ctx->'qa_benchmark', "
+             "'root_run_id', finalize_ctx->'root_run_id', "
+             "'deferred_from_run', finalize_ctx->'deferred_from_run', "
+             "'parent_run_id', finalize_ctx->'parent_run_id', "
+             "'origin', jsonb_build_object('title', finalize_ctx->'origin'->'title', "
+             "'directive', finalize_ctx->'origin'->'directive')) AS finalize_ctx, "
+             "jsonb_build_object('repo', spec->'repo', 'base_branch', spec->'base_branch') AS spec "
+             "FROM code_task_runs WHERE project_id = :p ORDER BY created_at DESC LIMIT :n"),
+        {"p": project_id, "n": SIBLING_SCAN},
+    ).mappings().all()]
+    rid = str(run["id"])
+    if not any(str(r["id"]) == rid for r in rows):
+        rows.append({"id": rid, "title": run.get("title"), "created_at": run.get("created_at"),
+                     "finalize_ctx": run.get("finalize_ctx"), "spec": run.get("spec")})
+    mine_internal = _is_internal(run)
+    rows = [r for r in rows if str(r["id"]) == rid or _is_internal(r) == mine_internal]
+    for r in rows:
+        r["finalize_ctx"] = _j(r.get("finalize_ctx"), {}) or {}
+        r["spec"] = _j(r.get("spec"), {}) or {}
+    for group in group_into_apps(rows):
+        if any(str(r["id"]) == rid for r in group):
+            return [str(r["id"]) for r in group][:SIBLINGS_CAP]
+    return [rid]
+
+
 def _lineage(connection: Any, project_id: str, run: Mapping[str, Any], now: datetime,
              viewer: Optional[str]) -> list[dict[str, Any]]:
     root = _lineage_key(run)
+    try:
+        siblings = _app_siblings(connection, project_id, run)
+    except Exception:  # noqa: BLE001 — a missing sibling list is not a missing build
+        siblings = [str(run["id"])]
     rows = [dict(r) for r in connection.execute(
         text("SELECT id, project_id, status, phase, title, spec, state, finalize_ctx, error, "
              "decision_id, pull_request_url, pull_request_number, created_at, updated_at "
              "FROM code_task_runs WHERE project_id = :p "
-             "AND (id = :root OR finalize_ctx->>'root_run_id' = :root) "
-             "ORDER BY created_at DESC LIMIT 20"),
-        {"p": project_id, "root": root},
+             "AND (id = :root OR finalize_ctx->>'root_run_id' = :root OR id = ANY(:ids)) "
+             "ORDER BY created_at DESC LIMIT :n"),
+        {"p": project_id, "root": root, "ids": siblings, "n": SIBLINGS_CAP},
     ).mappings().all()]
     for r in rows:
         r["finalize_ctx"] = _j(r.get("finalize_ctx"), {}) or {}
@@ -1694,8 +1753,16 @@ def _lineage(connection: Any, project_id: str, run: Mapping[str, Any], now: date
         st = build_state(r, acts=acts, decision=facts.decisions.get(str(r.get("decision_id") or "")),
                          preview=facts.previews.get(str(r["id"])), now=now, viewer=viewer,
                          job=facts.jobs.get(str(r["id"])))
+        metered = float((facts.cost.get(str(r["id"])) or {}).get("metered_usd") or 0)
         out.append({"run_id": r["id"], "attempt": int(r["finalize_ctx"].get("attempt") or 1),
-                    "state": st["state"], "word": st["word"], "at": _iso(r.get("created_at"))})
+                    "state": st["state"], "word": st["word"], "at": _iso(r.get("created_at")),
+                    # What the old run list said about each one: which kind of attempt, its
+                    # title, its PR and what it cost.
+                    "kind": _attempt_kind(r, r["finalize_ctx"]),
+                    "title": str(r.get("title") or "")[:200],
+                    "pr_number": _pr_number(r), "pr_url": r.get("pull_request_url"),
+                    "cost_usd": round(metered, 4) if metered > 0 else 0,
+                    "same_lineage": _lineage_key(r) == root})
     return out
 
 
@@ -1855,20 +1922,48 @@ def _story(connection: Any, project_id: str, run: Mapping[str, Any], facts: Fact
     # BOSS's machinery.
     boss: list[dict[str, Any]] = []
     timings = [t for t in fctx.get("phase_timings") or [] if isinstance(t, dict)]
+    # THE WALL CLOCK OF BOSS'S OWN STEPS (the old Steps table): cloning, running the tests,
+    # starting the app and opening the PR take minutes no agent is billed for.
+    spent = phase_ms(fctx)
     cloned = next((t for t in timings if t.get("phase") == "provisioning"), None)
     if cloned or str(run.get("phase") or "") not in ("queued", "provisioning"):
         boss.append({"id": "cloned", "type": "boss", "station": "plan", "what": "cloned",
                      "text": "Cloned the repo", "at": _iso(run.get("created_at")) or "",
-                     "ms": int(cloned.get("ms") or 0) if cloned else None})
-    tests = [t for t in evidence.get("tests") or [] if isinstance(t, dict)]
+                     "ms": spent.get("provisioning") if cloned else None})
+    tests = test_commands(evidence)
     if tests:
         check = [a for a in stages if _station_of_stage(a.get("step_id")) == "check"]
         at = (check[-1].get("ended_at") if check else None) or run.get("updated_at")
         boss.append({"id": "ran_tests", "type": "boss", "station": "check", "what": "ran_tests",
-                     "text": "Ran tests", "at": _iso(at) or "",
-                     "detail": {"commands": [{"command": t.get("command"),
-                                              "exit_code": t.get("exit_code"),
-                                              "ok": bool(t.get("ok"))} for t in tests]}})
+                     "text": "Ran tests", "at": _iso(at) or "", "ms": spent.get("run_tests"),
+                     "detail": {"commands": [{"command": t["command"], "exit_code": t["exit_code"],
+                                              "ok": t["ok"], "duration_ms": t["duration_ms"]}
+                                             for t in tests]}})
+    if "serve_check" in spent:
+        served = evidence.get("app_serves") if isinstance(evidence.get("app_serves"), dict) else {}
+        check = [a for a in stages if _station_of_stage(a.get("step_id")) == "check"]
+        at = (check[-1].get("ended_at") if check else None) or run.get("updated_at")
+        boss.append({"id": "serve_check", "type": "boss", "station": "check",
+                     "what": "serve_check",
+                     "text": "Started the app" if served.get("ok") or not served
+                     else "App didn't start", "at": _iso(at) or "", "ms": spent["serve_check"],
+                     "detail": {"command": served.get("command"),
+                                "error": _first_line(served.get("error"), 200) or None}
+                     if served else None})
+    if not stages:
+        # A BUILD WITH NO ACTS STILL RAN (older builds, before acts were recorded): one row
+        # per phase it timed, so its Story says what happened instead of "Nothing yet".
+        began = _aware(run.get("created_at"))
+        offset = 0
+        for i, t in enumerate(timings):
+            phase, ms = str(t.get("phase") or ""), int(t.get("ms") or 0)
+            if phase in _AGENT_PHASES:
+                boss.append({"id": f"phase:{i}", "type": "boss",
+                             "station": _station_of_stage(phase) or "build", "what": "phase",
+                             "text": _AGENT_PHASES[phase],
+                             "at": _iso(began + timedelta(milliseconds=offset)) if began else "",
+                             "ms": ms})
+            offset += ms
     n = _pr_number(run)
     if n or run.get("pull_request_url"):
         opened = connection.execute(
@@ -1879,7 +1974,8 @@ def _story(connection: Any, project_id: str, run: Mapping[str, Any], facts: Fact
         ).scalar()
         boss.append({"id": "opened_pr", "type": "boss", "station": "pr", "what": "opened_pr",
                      "text": f"Opened PR #{n}" if n else "Opened the PR",
-                     "at": _iso(opened or run.get("updated_at")) or ""})
+                     "at": _iso(opened or run.get("updated_at")) or "",
+                     "ms": spent.get("opening_pr")})
     preview = facts.previews.get(rid)
     if preview:
         steps = [s for s in _j(preview.get("steps"), []) or [] if isinstance(s, dict)]
@@ -1953,6 +2049,232 @@ def _now_line(connection: Any, acts: list[Mapping[str, Any]]) -> Optional[Now]:
     return {"act_id": open_act["act_id"], "role_key": open_act.get("role_key"),
             "tool": str(row["tool_name"]), "arg": _now_arg(row["tool_name"], row["content"]),
             "at": _iso(row["created_at"]) or ""}
+
+
+# ── what a build's page said before the redesign, kept (parity) ──────────────────────────────
+#
+# THE OLD PAGE WAS READ FROM THE RUN ROW; THE COCKPIT IS READ FROM ACTS AND GATE ROWS. Every
+# fact below was on the old per-build page (code-tasks-ui.tsx before the Factory redesign) and
+# was dropped on the way: the brief's acceptance criteria and checks, the repo and branch, the
+# workflow and its version, which engines built and reviewed it, each gate's reason, each test
+# command's time, the diff's size. They are all on the run row already; these derive them.
+
+#: Machinery phases that the Story shows as BOSS rows, with the wall clock they took.
+_MACHINE_PHASES: dict[str, tuple[str, str, str]] = {
+    # phase: (story id, station, sentence)
+    "provisioning": ("cloned", "plan", "Cloned the repo"),
+    "run_tests": ("ran_tests", "check", "Ran tests"),
+    "serve_check": ("serve_check", "check", "Started the app"),
+    "opening_pr": ("opened_pr", "pr", "Opened the PR"),
+}
+#: The agent phases, for a build whose work was never recorded as acts (older builds): one
+#: BOSS row per phase so its Story is never empty while its phases have timings.
+_AGENT_PHASES: dict[str, str] = {
+    "design": "Planned", "write_tests": "Wrote tests", "implement": "Coded", "repair": "Repaired",
+    "review_panel": "Reviewed", "review_code": "Reviewed the code",
+    "security_check": "Checked security", "consistency_check": "Checked consistency",
+    "check_tests": "Checked the tests",
+}
+
+
+def phase_ms(fctx: Mapping[str, Any]) -> dict[str, int]:
+    """Wall clock per phase, summed over repeats (a repair re-runs a phase)."""
+    out: dict[str, int] = {}
+    for t in fctx.get("phase_timings") or []:
+        if isinstance(t, dict) and t.get("phase"):
+            out[str(t["phase"])] = out.get(str(t["phase"]), 0) + int(t.get("ms") or 0)
+    return out
+
+
+def test_commands(evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The commands that ran, as the old page judged them: a command without an `ok` passed when
+    it exited 0 and did not time out (older records carry only the exit code)."""
+    out = []
+    for t in evidence.get("tests") or []:
+        if not isinstance(t, dict):
+            continue
+        timed_out = bool(t.get("timed_out"))
+        code = t.get("exit_code")
+        ok = bool(t["ok"]) if isinstance(t.get("ok"), bool) else (code == 0 and not timed_out)
+        out.append({"command": str(t.get("command") or ""), "exit_code": code, "ok": ok,
+                    "timed_out": timed_out,
+                    "duration_ms": int(t["duration_ms"]) if isinstance(t.get("duration_ms"),
+                                                                        (int, float)) else None})
+    return out
+
+
+def gate_reason(name: str, ok: bool, evidence: Mapping[str, Any],
+                run: Optional[Mapping[str, Any]] = None) -> Optional[str]:
+    """Why a gate passed or failed, in ≤ 6 words, from the run's own evidence.
+
+    The gate row's `evidence` column is the WHOLE evidence dict, keyed by evidence names
+    (`adversarial_verdict`, `tests`, `app_serves` …), never by gate names — so looking a gate up
+    in it by name found nothing, and every Checks row said ✓ or ✗ with no reason. The old page
+    said `exit 1`, `refuted`, `drift`, `mutation caught`. This says the same, from the same facts.
+    """
+    ev = evidence if isinstance(evidence, Mapping) else {}
+    cmds = test_commands(ev)
+    if name == "written_tests_pass":
+        bad = [c for c in cmds if not c["ok"]]
+        if bad:
+            c = bad[0]
+            return "timed out" if c["timed_out"] else f"exit {c['exit_code']}"
+        code = ev.get("test_exit_code")
+        if cmds or code is not None:
+            return f"exit {code if code is not None else 0}"
+        return None
+    if name == "code_review_passed":
+        verdict = ev.get("adversarial_verdict")
+        conf = ev.get("review_confidence")
+        if isinstance(conf, (int, float)) and (ev.get("review_panel_size") or 0) > 1:
+            return f"{verdict or 'not run'} · {round(conf * 100)}% held"
+        if ok and verdict and verdict not in _GOOD_VERDICTS:
+            # Graded findings: the reviewer refuted, but nothing it found met the blocking bar.
+            return f"{verdict} · none blocking"
+        return str(verdict) if verdict else None
+    if name == "security_clean":
+        return str(ev["security_verdict"]) if ev.get("security_verdict") else None
+    if name == "consistent":
+        return str(ev["consistency_verdict"]) if ev.get("consistency_verdict") else None
+    if name == "tests_strong_enough":
+        caught = ev.get("mutation_caught")
+        return None if caught is None else ("mutation caught" if caught else "mutation missed")
+    if name == "nothing_broke":
+        good = ev.get("regressions_ok")
+        return None if good is None else ("no regressions" if good else "a regression")
+    if name == "existing_tests_intact":
+        weak = ev.get("weakened_existing_tests") or []
+        return f"{_plural(len(weak), 'test file', 'test files')} weakened" if weak else (
+            None if ok else "a test was weakened")
+    if name == "code_written":
+        files = len(ev.get("impl_files") or []) or int(ev.get("files_changed") or 0)
+        return _plural(files, "file", "files") if files else (None if ok else "no code changed")
+    if name == "tests_written_first":
+        n = len(ev.get("test_files") or [])
+        return _plural(n, "test file", "test files") if n else (None if ok else "no tests first")
+    if name == "coder_did_not_edit_tests":
+        return None if ok else "coder edited tests"
+    if name == "web_package_honest":
+        contract = ev.get("web_package_contract") if isinstance(ev.get("web_package_contract"),
+                                                               dict) else {}
+        if ok or not contract:
+            return None
+        stubs = contract.get("stubs") or []
+        missing = contract.get("missing_runners") or []
+        return (f"stubs: {', '.join(map(str, stubs))[:40]}" if stubs else
+                f"missing: {', '.join(map(str, missing))[:40]}" if missing else "not honest")
+    if name == "app_serves":
+        rec = ev.get("app_serves") if isinstance(ev.get("app_serves"), dict) else {}
+        if rec.get("skipped"):
+            return "skipped"
+        return None if ok else (_first_line(rec.get("error"), 60) or "did not answer")
+    return None
+
+
+#: The gates a run's own verdicts decide, for a build with no gate row (the old page's GateRows).
+_EVIDENCE_GATES: tuple[tuple[str, str], ...] = (
+    ("written_tests_pass", "tests_passed"), ("code_review_passed", "adversarial_verdict"),
+    ("security_clean", "security_verdict"), ("nothing_broke", "regressions_ok"),
+    ("consistent", "consistency_verdict"), ("tests_strong_enough", "mutation_caught"),
+)
+_GOOD_VERDICTS = {"survived", "clean", "consistent", "pass"}
+
+
+def _checks_from_evidence(run: Mapping[str, Any], evidence: Mapping[str, Any],
+                          fctx: Mapping[str, Any], acts: list[Mapping[str, Any]],
+                          waived: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """Checks for a finished build whose gate row is missing: from the run's verdicts, the way
+    the old page drew them. None when the run recorded no verdict at all."""
+    failing = {str(g) for g in (fctx.get("failing_gates") or [])
+               + (fctx.get("advisory_failing_gates") or [])}
+    gates = []
+    for name, key in _EVIDENCE_GATES:
+        value = evidence.get(key)
+        if value is None or value in ("skipped", "not_run"):
+            continue
+        ok = (value in _GOOD_VERDICTS) if isinstance(value, str) else bool(value)
+        if name in failing:
+            ok = False
+        gates.append({"name": name, "label": gate_label(name), "ok": ok,
+                      "waived_by": waived.get("by") if name in (waived.get("gates") or []) else None,
+                      "role_key": gate_owner(name, list(acts)), "station": gate_station(name),
+                      "evidence": gate_reason(name, ok, evidence, run),
+                      "waivable": name not in UNWAIVABLE_GATES})
+    if not gates:
+        return None
+    failed = [g for g in gates if not g["ok"]]
+    advisory = bool(failed) and bool(run.get("pull_request_url")) and not waived and bool(
+        fctx.get("advisory_failing_gates"))
+    word = (f"All {len(gates)} passed" if not failed else
+            f"{len(failed)} failed" + (" · shipped anyway" if advisory else ""))
+    return {"word": word, "advisory": advisory, "gates": gates,
+            "tip": "First pass: checks advise, they don't block" if advisory else None}
+
+
+
+def brief_of(run: Mapping[str, Any]) -> dict[str, Any]:
+    """What the build was asked to do and how it was built — the old page's head, contract and
+    meta rows (repo, engine, model, turns, where it ran, the workflow, the review setup)."""
+    spec = _j(run.get("spec"), {}) or {}
+    ev = _j(run.get("state"), {}) or {}
+    fctx = _j(run.get("finalize_ctx"), {}) or {}
+    usage = _j(run.get("usage"), {}) or {}
+    wf = fctx.get("workflow") if isinstance(fctx.get("workflow"), dict) else {}
+    owner, repo = str(spec.get("owner") or ""), str(spec.get("repo") or "")
+    substrate = fctx.get("execution_substrate") or ev.get("substrate")
+    sandbox = fctx.get("sandbox_task_id")
+    built_on = (f"micro-VM {sandbox}".strip() if substrate == "microvm" else
+                "API host" if substrate in (None, "", "local", "local_subprocess", "host") else
+                str(substrate))
+    build_engine = ev.get("build_engine") or ev.get("engine")
+    review_engine = ev.get("review_engine")
+    bench = fctx.get("qa_benchmark") if isinstance(fctx.get("qa_benchmark"), dict) else {}
+    deferred = fctx.get("deferred_findings") or ev.get("deferred_findings") or []
+    return {
+        "repo": f"{owner}/{repo}" if owner and repo and owner != "_fixture" else None,
+        "branch": fctx.get("work_branch") or None,
+        "base_branch": spec.get("base_branch") or None,
+        "criteria": [str(c) for c in spec.get("acceptance_criteria") or [] if str(c).strip()],
+        "test_commands": [str(c) for c in spec.get("test_commands") or [] if str(c).strip()],
+        "workflow": ({"name": str(wf["name"]), "version": wf.get("version"),
+                      "default": wf.get("source") == "default"} if wf.get("name") else None),
+        "engine": build_engine or None,
+        "model": ev.get("model") or usage.get("model") or None,
+        "review_engine": review_engine or None,
+        "review_model": ev.get("review_model") or None,
+        "cross_model": bool(review_engine and build_engine and review_engine != build_engine),
+        "turns": ev.get("turns"),
+        "built_on": built_on,
+        "profile": ev.get("profile") or None,
+        "risk_tier": ev.get("risk_tier"),
+        "reviewer_independent": ev.get("reviewer_independent"),
+        "test_author_independent": ev.get("test_author_independent"),
+        "qa_benchmark": {"name": str(bench.get("name") or ""), "id": bench.get("id")}
+        if bench.get("name") else None,
+        "deferred_findings": len(deferred) if isinstance(deferred, list) else 0,
+        "advisory_failing": len(fctx.get("advisory_failing_gates") or []),
+        "mutation_caught": ev.get("mutation_caught"),
+        "not_run": [k for k, v in (("adversarial review", ev.get("adversarial_verdict")),
+                                   ("security review", ev.get("security_verdict")),
+                                   ("consistency check", ev.get("consistency_verdict")))
+                    if v == "not_run"],
+        "redelivered": len(fctx.get("redelivered_attempts") or []),
+        "error": _first_line(run.get("error"), 300) or None,
+    }
+
+
+def _attempt_kind(run: Mapping[str, Any], fctx: Mapping[str, Any]) -> str:
+    """What kind of attempt a build is (the old sibling list's words)."""
+    title = str(run.get("title") or "")
+    if re.match(r"^Follow-up:\s*deferred review findings", title, re.I) or fctx.get("is_followup"):
+        return "Follow-up"
+    retry = re.search(r"·\s*retry (\d+)\s*$", title, re.I)
+    if retry:
+        return f"Retry {retry.group(1)}"
+    attempt = int(fctx.get("attempt") or 1)
+    if attempt > 1:
+        return f"Attempt {attempt}"
+    return "First build"
 
 
 def _cost(connection: Any, run_id: str, st: BuildState) -> dict[str, Any]:
@@ -2032,6 +2354,9 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
         gates = []
         for name, ok in [(g, True) for g in passed] + [(g, False) for g in failed]:
             ev = gate_evidence.get(name)
+            if not isinstance(ev, str) or not ev.strip():
+                # The row's evidence is keyed by evidence names, not gate names (gate_reason).
+                ev = gate_reason(name, ok, gate_evidence or evidence, run)
             gates.append({
                 "name": name, "label": gate_label(name), "ok": ok,
                 "waived_by": waived.get("by") if name in (waived.get("gates") or []) else None,
@@ -2048,10 +2373,10 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
                   "tip": "First pass: checks advise, they don't block" if advisory else None}
     elif running:
         checks = {"word": "After review", "advisory": False, "gates": []}
+    else:
+        checks = _checks_from_evidence(run, evidence, fctx, acts, waived)
     # Tests.
-    commands = [{"command": str(t.get("command") or ""), "exit_code": t.get("exit_code"),
-                 "ok": bool(t.get("ok")), "timed_out": bool(t.get("timed_out"))}
-                for t in evidence.get("tests") or [] if isinstance(t, dict)]
+    commands = test_commands(evidence)
     tail = "\n".join(str(evidence.get("last_verify_output") or "").splitlines()[-40:]) or None
     if commands:
         bad = sum(1 for c in commands if not c["ok"])
@@ -2064,11 +2389,20 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
     # Changes.
     test_files = [{"path": str(f)} for f in evidence.get("test_files") or [] if f]
     code_files = [{"path": str(f)} for f in evidence.get("impl_files") or [] if f]
+    if not test_files and not code_files:
+        # A solo/inline build names its diff's paths only (the old Diff summary's list).
+        code_files = [{"path": str(f)} for f in evidence.get("paths") or [] if f]
+    adds, dels = evidence.get("additions"), evidence.get("deletions")
+    counted = int(evidence.get("files_changed") or 0)
     changes = None
-    if test_files or code_files:
+    if test_files or code_files or counted:
         url = run.get("pull_request_url")
-        changes = {"word": _plural(len(test_files) + len(code_files), "file", "files"),
+        n_files = max(counted, len(test_files) + len(code_files))
+        size = (f" · +{int(adds or 0)} −{int(dels or 0)}"
+                if isinstance(adds, int) or isinstance(dels, int) else "")
+        changes = {"word": _plural(n_files, "file", "files") + size,
                    "tests": test_files, "code": code_files,
+                   "files_changed": n_files, "additions": adds, "deletions": dels,
                    "tests_role_key": role_at.get("tests"), "code_role_key": role_at.get("build"),
                    "diff_url": f"{url}/files" if url else None}
     # Comments.
@@ -2090,7 +2424,15 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
                    "url": p.get("url") if flag and shown == "running" else None,
                    "expires_at": _iso(p.get("expires_at")),
                    "steps_done": sum(1 for s in steps if s.get("status") in ("ok", "skipped")),
-                   "steps_total": len(steps), "error": _first_line(p.get("error")) or None}
+                   "steps_total": len(steps), "error": _first_line(p.get("error")) or None,
+                   # Where it runs and how far each step got (the old preview pill and ledger).
+                   "substrate": {"preview_rootfs": "retained rootfs", "preview_docker": "docker",
+                                 "preview_host": "host process"}.get(str(p.get("substrate") or ""))
+                   if p.get("substrate") else None,
+                   "steps": [{"label": str(s.get("label") or s.get("step") or ""),
+                              "status": str(s.get("status") or ""),
+                              "duration_ms": s.get("duration_ms"),
+                              "log": _first_line(s.get("log"), 120) or None} for s in steps][:12]}
     # Deploy.
     deploys = facts.deploys.get(rid, [])
     ok = [d for d in deploys if str(d.get("status") or "") in DEPLOY_OK]
@@ -2184,6 +2526,7 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
     ok, why = _retry_offer(run)
     live = row["state"] in ("building", "queued", "quiet", "budget_wait", "needs_plan")
     fctx = run.get("finalize_ctx") or {}
+    origin = row.get("origin") or lineage_origin(connection, project_id, run)
     out: Cockpit = {
         "etag": "", "run": {**run, "attempt": row["attempt"], "root_run_id": row["root_run_id"],
                             "finalize_ctx": None, "spec": None, "state": None},
@@ -2194,7 +2537,8 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
         "retryable": ok, "retry_reason": why,
         "failure": failure_line(fctx, run.get("error")) if row["state"] == "failed" else None,
         "lineage": _lineage(connection, project_id, run, now, viewer),
-        "origin": row.get("origin"), "agents": agent_list, "stations": row["stations"],
+        "origin": origin, "brief": brief_of(run),
+        "agents": agent_list, "stations": row["stations"],
         "attention": attention,
         "story": _story(connection, project_id, run, facts, st, comments, plan_decision, now,
                         viewer),
@@ -2227,6 +2571,10 @@ class AppRow(TypedDict, total=False):
     deploys: list[AppDeploy]
     builds: int                    # how many builds (attempts included)
     run_ids: list[str]             # every build, newest first (the row expands to these)
+    pr_number: Optional[int]       # the newest attempt's PR that opened one
+    pr_url: Optional[str]
+    cost_usd: float                # metered spend over every build of the app
+    repo: Optional[str]
     attempts: list[dict[str, Any]]  # [{run_id, attempt, state, word, at}] newest first
     at: Optional[str]
 
@@ -2308,7 +2656,19 @@ def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
                             "word": f"{env} ✓" if good else
                             (f"Failed · {env}" if str(d.get("status") or "") in DEPLOY_BAD
                              else f"{env} —")})
+        # THE APP'S PR AND WHAT IT COST (the old card's foot): the newest attempt that opened
+        # a PR, and the metered spend of every build of the app.
+        with_pr = next((r for r in group if _pr_number(r)), None)
+        spend = sum(float((facts.cost.get(str(r["id"])) or {}).get("metered_usd") or 0)
+                    for r in group)
+        spec = _j(head.get("spec"), {}) or {}
         rows.append({"key": rid, "app": app_name(head), "builders": roles, "run_id": rid,
+                     "pr_number": _pr_number(with_pr) if with_pr else None,
+                     "pr_url": (with_pr or {}).get("pull_request_url"),
+                     "cost_usd": round(spend, 4) if spend > 0 else 0,
+                     "repo": f"{spec.get('owner')}/{spec.get('repo')}"
+                     if spec.get("owner") and spec.get("repo") and spec.get("owner") != "_fixture"
+                     else None,
                      "state": state, "word": word, "preview": flag, "deploys": deploys,
                      "builds": len(group), "run_ids": [str(r["id"]) for r in group],
                      "attempts": [_attempt_row(r, facts, now=now, viewer=viewer)

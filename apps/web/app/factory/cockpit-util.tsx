@@ -13,6 +13,19 @@ import type { Station, StationStatus } from "../../lib/factory-floor";
 import { ActCard } from "../agents/act-card";
 import { fetchAct, type ActDetail } from "../agents/run-acts";
 import { nameOf, RunFace } from "../agents/run-face";
+import { consoleHref } from "../url-intent";
+import type { AreaId } from "../../lib/area-ids";
+
+/**
+ * A link to another console area that KEEPS WHO YOU ARE (`org=`). The cockpit built these from
+ * scratch (`?area=activity&run=…`), which dropped the org and landed the operator on the
+ * organisation picker — the fault url-intent.ts's consoleHref exists to prevent. The area is
+ * typed: a research origin linked to `area=discoveries`, an area the console does not have.
+ */
+export function areaHref(params: { area: AreaId } & Record<string, string | null | undefined>): string {
+  const search = typeof window === "undefined" ? "" : window.location.search;
+  return consoleHref(search, params);
+}
 
 /** A station's status as the face's state. Waiting and pending never move (motion would lie). */
 export function faceState(status: StationStatus): AvatarState {

@@ -36,11 +36,12 @@ import { useRunChain } from "../agents/run-acts";
 import { nameOf } from "../agents/run-face";
 import { ChangeIt } from "./change-it";
 import { stopBuild, steerBuild } from "./cockpit-actions";
-import { ActPopover, StationFaceView, money, secondsWord, spanOf } from "./cockpit-util";
+import { ActPopover, StationFaceView, areaHref, money, secondsWord, spanOf } from "./cockpit-util";
 import { LogsDrawer, type LogTab } from "./logs-drawer";
 import { Outputs, defaultOpen, type OutputKey } from "./outputs";
 import { StationLine } from "./station-line";
 import { Story, bayLabel } from "./story";
+import { plural } from "../../lib/factory-floor";
 
 export type CockpitProps = {
   projectId: string;
@@ -58,9 +59,39 @@ const AGENT_STATES = new Set(["idle", "thinking", "speaking", "working", "needs_
 const quietish = (s: string) => s === "quiet" || s === "budget_wait" || s === "blocked";
 
 function originHref(kind: string, id: string): string {
-  if (kind === "workflow_run") return `?area=delivery_workflows&wfr=${encodeURIComponent(id)}`;
-  if (kind === "meeting") return `?area=meetings&meeting=${encodeURIComponent(id)}`;
-  return `?area=discoveries&discovery=${encodeURIComponent(id)}`;
+  if (kind === "workflow_run") return areaHref({ area: "delivery_workflows", wfr: id });
+  if (kind === "meeting") return areaHref({ area: "meetings", meeting: id });
+  // The research dossier: `?area=discovery&run=drun_…` (discoveries-ui.tsx reads `run`).
+  return areaHref({ area: "discovery", run: id });
+}
+
+/**
+ * What to ask BOSS about THIS build, from what it recorded (the old page's suggestions): the
+ * findings it shipped past, the checks that never ran or only advised, a mutation the tests
+ * missed, criteria nobody proved, why an attempt failed. Nothing is suggested without its fact.
+ */
+export function askSuggestions(c: Pick<CockpitData, "app" | "brief" | "lineage" | "failure" | "run">): string[] {
+  const b = c.brief;
+  const out: string[] = [];
+  if (b.deferredFindings) out.push(`Fix the ${b.deferredFindings} deferred review finding${b.deferredFindings === 1 ? "" : "s"} on ${c.app}`);
+  if (b.notRun.length) out.push(`No ${b.notRun.join(", ")} ran on this build — what would they most likely find?`);
+  else if (b.advisoryFailing) out.push(`${b.advisoryFailing} checks failed but shipped as advisory — which should block next time?`);
+  if (b.mutationCaught === false) out.push("The tests missed an injected bug — where are they weakest?");
+  if (b.criteria.length) out.push(`Which of the ${b.criteria.length} acceptance criteria are not actually covered by a test?`);
+  const broken = c.lineage.find((l) => l.state === "failed");
+  if (b.error || broken) out.push(`Why did ${broken && broken.runId !== c.run.id ? `attempt ${broken.attempt}` : "this build"} fail${b.error ? ` — ${b.error.slice(0, 60)}` : ""}?`);
+  out.push(`Given the brief and review notes for ${c.app}, what should we build next, and why?`);
+  return out.slice(0, 5);
+}
+
+/** What a retry reuses, said before the press (the old Retry's tooltip, mirroring the server's
+ *  _repair_needs_write_tests): it resumes, it does not rebuild from scratch. */
+const TEST_GATES = new Set(["tests_strong_enough", "tests_written_first", "coder_did_not_edit_tests",
+  "written_tests_pass", "existing_tests_intact"]);
+export function retryTip(c: Pick<CockpitData, "outputs">): string {
+  const failing = (c.outputs.checks?.gates ?? []).filter((g) => !g.ok && !g.waivedBy).map((g) => g.name);
+  const reusesTests = failing.length > 0 && !failing.some((g) => TEST_GATES.has(g));
+  return `Resumes on the same branch, reusing the plan${reusesTests ? " and the tests" : ""}`;
 }
 
 function usePaused(): boolean {
@@ -100,7 +131,7 @@ export function Cockpit({ projectId, runId, actor, onClose, onOpenBuild }: Cockp
 }
 
 function CockpitSkeleton({ runId, onClose }: { runId: string; onClose: () => void }) {
-  const labels = ["Pull request", "Checks", "Tests", "Changes", "Comments", "Preview", "Deploy", "Cost"];
+  const labels = ["Brief", "Pull request", "Checks", "Tests", "Changes", "Comments", "Preview", "Deploy", "Cost"];
   return (
     <section className="fx-cockpit" data-testid="fx-cockpit" data-run={runId} aria-busy="true">
       <span className="ag-sr" role="status">Loading</span>
@@ -281,6 +312,9 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
   const faceStates = new Map<string, AvatarState>(c.agents.map((a) => [a.roleKey,
     (still && (a.state === "working" || a.state === "needs_you") ? "idle" : AGENT_STATES.has(a.state) ? a.state : "idle") as AvatarState]));
   const attempt = c.lineage.find((l) => l.runId === c.run.id)?.attempt ?? c.run.attempt;
+  // Builds of this app beyond this lineage (a follow-up, a change on its branch): the menu
+  // lists them all, so it names itself by count.
+  const sameApp = c.lineage.some((l) => !l.sameLineage);
   // CREDITS ARE THIS BUILD'S ACTS (its own chain, /v1/code-tasks/{id}/acts) — not the workflow
   // run that started it, which credited one agent and $0.00 while Outputs said five.
   const { chain } = useRunChain(projectId, c.run.id, c.live);
@@ -330,10 +364,15 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                 <span id={menuId} role="menu" className="fx-ck-menu" data-testid="fx-ck-menu">
                   {stoppable ? <button type="button" role="menuitem" className="fx-phone-only" onClick={() => { setMenu(false); setSteering(true); }}>Steer</button> : null}
                   {stoppable ? <button type="button" role="menuitem" className="fx-phone-only" title={stopTip} onClick={() => { setMenu(false); setConfirmStop(true); }}>Stop</button> : null}
-                  {c.retryable ? <button type="button" role="menuitem" data-testid="fx-menu-retry" onClick={() => void doRetry()}>Retry</button> : null}
+                  {c.retryable ? <button type="button" role="menuitem" data-testid="fx-menu-retry" title={retryTip(c)} onClick={() => void doRetry()}>Retry</button> : null}
                   <button type="button" role="menuitem" data-testid="fx-menu-change" onClick={() => { setMenu(false); setChangeIt(true); }}>Change it</button>
-                  <button type="button" role="menuitem" onClick={() => { setMenu(false); openDockAbout({ subject: { kind: "code_task", id: c.run.id }, question: "", role: null, history: "push" }); }}>Ask BOSS</button>
-                  <a role="menuitem" href={`?area=activity&run=${encodeURIComponent(c.run.id)}`}>Activity log ↗</a>
+                  <button type="button" role="menuitem" data-testid="fx-menu-ask" onClick={() => {
+                    setMenu(false);
+                    // The dock's starters for THIS build (agent-ui.tsx reads them by run id).
+                    try { window.sessionStorage.setItem(`boss.agent.suggests.${c.run.id}`, JSON.stringify(askSuggestions(c))); } catch { /* private mode */ }
+                    openDockAbout({ subject: { kind: "code_task", id: c.run.id }, question: "", role: null, history: "push" });
+                  }}>Ask BOSS</button>
+                  <a role="menuitem" href={areaHref({ area: "activity", run: c.run.id })}>Activity log ↗</a>
                   <button type="button" role="menuitem" onClick={copyLink}>Copy link</button>
                 </span>
               ) : null}
@@ -352,15 +391,19 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
           {c.lineage.length > 1 ? (
             <span className="fx-pop-anchor">
               <button type="button" className="ag-link" aria-haspopup="menu" aria-expanded={attempts} data-testid="fx-attempts"
-                      title="Each retry is a new attempt on the same branch" onClick={() => setAttempts((v) => !v)}>
-                attempt {attempt} ▾
+                      title="Every build of this app: retries, follow-ups, changes" onClick={() => setAttempts((v) => !v)}>
+                {sameApp ? `${plural(c.lineage.length, "build")} ▾` : `attempt ${attempt} ▾`}
               </button>
               {attempts ? (
                 <span role="menu" className="fx-ck-menu" data-testid="fx-attempts-menu">
                   {c.lineage.map((l) => (
                     <button key={l.runId} type="button" role="menuitem" aria-current={l.runId === c.run.id || undefined}
+                            data-testid={`fx-attempt-${l.runId}`} title={l.title || undefined}
                             onClick={() => { setAttempts(false); if (l.runId !== c.run.id) onOpenBuild(l.runId); }}>
-                      Attempt {l.attempt} · {l.word}{l.at ? ` · ${secondsWord(Math.max(0, Math.round(((now ?? Date.parse(l.at)) - Date.parse(l.at)) / 1000)))}` : ""}
+                      {l.sameLineage || !l.kind ? `Attempt ${l.attempt}` : l.kind} · {l.word}
+                      {l.prNumber ? ` · PR #${l.prNumber}` : ""}
+                      {c.metered && l.costUsd > 0 ? ` · ${money(l.costUsd)}` : ""}
+                      {l.at ? ` · ${secondsWord(Math.max(0, Math.round(((now ?? Date.parse(l.at)) - Date.parse(l.at)) / 1000)))}` : ""}
                     </button>
                   ))}
                 </span>
@@ -431,7 +474,9 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                     previewStatus={c.outputs.preview?.status} deployId={latestDeploy}
                     tab={logs} onTab={setLogs} onClose={() => setLogs(null)} />, document.body,
       ) : null}
-      {changeIt ? <ChangeIt projectId={projectId} runId={c.run.id} actor={actor} onClose={() => setChangeIt(false)} onStarted={onOpenBuild} /> : null}
+      {changeIt ? <ChangeIt projectId={projectId} runId={c.run.id} actor={actor} onClose={() => setChangeIt(false)} onStarted={onOpenBuild}
+                            app={c.app} repo={c.brief.repo ?? ""}
+                            previewId={c.outputs.preview?.status === "running" ? c.outputs.preview.id : null} /> : null}
       {pop ? <ActPopover projectId={projectId} actId={pop.actId} viewer={actor} anchor={pop.anchor} onClose={() => setPop(null)} /> : null}
     </section>
   );
