@@ -7,7 +7,8 @@
  * hands it, so these tests pin what the PAGE decides: the state sentence, the numbers, the
  * order, the cards, and when motion is allowed at all.
  */
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import React, { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -115,30 +116,19 @@ const SENTENCES: [string, string, string][] = [
 ];
 
 describe("the status line", () => {
-  // THE SERVER'S SENTENCE, CALMLY (design pass): a severity is a chip beside a summary of what
-  // is moving ("2 running · 1 needs you" — the fixture's counts), never a red headline; a count
-  // state IS that summary; a quiet/first-build state is the headline itself.
-  const SEVERE = new Set(["stopped", "budget_stopped", "host_critical", "host_slow", "budget_high", "setup"]);
+  // THE SERVER'S SENTENCE (§4.5), CALMLY (independent test D3): the headline is the first
+  // matching rule's words; the tone is the dot's, the text stays in the page's ink.
   it.each(SENTENCES)("%s draws the server's sentence `%s` with a %s dot", async (key, words, tone) => {
     await mount(page(V(view({ status: { key, text: words, tone, tip: "why" } }))));
-    if (SEVERE.has(key)) {
-      expect(text(".cc-status-text")).toBe("2 running · 1 needs you");
-      expect(text('[data-testid="cc-status-chip"]')).toBe(words);
-      expect($('[data-testid="cc-status-chip"]')?.getAttribute("title")).toBe("why");
-    } else if (key === "needs_you" || key === "running") {
-      expect(text(".cc-status-text")).toBe("2 running · 1 needs you");
-    } else {
-      expect(text(".cc-status-text")).toBe(words);
-      expect($(".cc-status-text")?.getAttribute("title")).toBe("why");
-    }
+    expect(text(".cc-status-text")).toBe(words);
+    expect($(".cc-status-text")?.getAttribute("title")).toBe("why");
     expect($(".cc-status .cc-dot")?.getAttribute("data-tone")).toBe(tone);
+    expect($('[data-testid="cc-status-chip"]')).toBeNull();
   });
 
-  it("a severity with nothing moving is the headline itself, not a chip beside nothing", async () => {
-    await mount(page(V(view({ status: { key: "host_critical", text: "Host struggling", tone: "red", tip: "x" },
-                             counts: { agents: 7, working: 0, needs_you: 0, stopped: 0, setup: 0, running: 0, expired_answerable: 0 } }))));
-    expect(text(".cc-status-text")).toBe("Host struggling");
-    expect($('[data-testid="cc-status-chip"]')).toBeNull();
+  it("never paints the headline in a status colour", () => {
+    const css = readFileSync(resolve(__dirname, "../app/command-center/bridge.css"), "utf8");
+    expect(css).not.toMatch(/\.cc-status\[data-tone="(red|amber)"\]\s+\.cc-status-text\s*\{[^}]*color/);
   });
 
   it("NEED YOU is counts.needs_you, amber when it is not zero, and links to the cards", async () => {
@@ -228,7 +218,7 @@ describe("when nothing may move", () => {
     expect(viewCalls()).toHaveLength(0);
     expect(text('[data-testid="cc-paused"]')).toBe("Paused");
     // The sentence is unchanged; the chip says Paused.
-    expect(text('[data-testid="cc-status-chip"]')).toBe("1 stopped");
+    expect(text(".cc-status-text")).toBe("1 stopped");
     expect($('[data-testid="stub-floor"]')?.getAttribute("data-motion")).toBe("none");
     expect($('[data-testid="stub-strip"]')?.getAttribute("data-motion")).toBe("none");
     expect(document.querySelectorAll("[data-comet]")).toHaveLength(0);
@@ -261,8 +251,7 @@ describe("when nothing may move", () => {
               detail: "Docker has 0.2 GB free.", action: "Quit other apps, then restart Docker." },
     }))));
     expect(text('[data-testid="host-advice"]')).toContain("This computer is out of memory");
-    // The fix is the server's words too, one hover away (design pass: a system card, not prose).
-    expect($('[data-testid="cc-host-fix"]')?.getAttribute("title")).toBe("Quit other apps, then restart Docker.");
+    expect(text('[data-testid="host-advice"]')).toContain("Quit other apps, then restart Docker.");
     const floor = $('[data-testid="stub-floor"]')!;
     expect(floor.getAttribute("data-motion")).toBe("none");
     expect(floor.getAttribute("data-why")).toBe("Motion paused while the host struggles");
@@ -303,13 +292,37 @@ describe("when nothing may move", () => {
 // ── Needs you (§4.8) is exactly Live's list ─────────────────────────────────────────────────
 
 describe("needs you", () => {
-  it("stopped first, then decisions; the head counts decisions and chips the stopped", async () => {
+  it("today's decisions first, then what stopped today; the head counts decisions and chips the stopped", async () => {
+    // Independent test, improvement 1 (the coordinator's decision): what you can decide now
+    // leads; the spec's "stopped first" put week-old failures above today's gates.
     await mount(page(V(view({ attention: [gate(), failed()] }))));
     const ids = $$("#cc2-needs-you [data-att-card]").map((c) => c.getAttribute("data-att-id"));
-    expect(ids).toEqual(["run:wfr_ship:build", "dec_gate"]);
+    expect(ids).toEqual(["dec_gate", "run:wfr_ship:build"]);
     expect(text("#cc2-needs-you .cc-head-count")).toBe("1");
     expect(text('[data-testid="cc-stopped-chip"]')).toBe("1 stopped");
     expect(text("#cc2-needs-you .cc-head-link")).toBe("All in Approvals ↗");
+  });
+
+  it("stopped work from before today is one line, not a card each", async () => {
+    const old = (n: number) => failed({ id: `run:old${n}:build`, at: "2026-10-01T09:00:00Z" });
+    await mount(page(V(view({ attention: [gate(), failed(), old(1), old(2), old(3)] }))));
+    expect($$("#cc2-needs-you [data-att-card]").map((c) => c.getAttribute("data-att-id")))
+      .toEqual(["dec_gate", "run:wfr_ship:build"]);
+    expect(text('[data-testid="cc-stopped-earlier"]')).toBe("3 stopped earlier ↗");
+    expect(text('[data-testid="cc-stopped-chip"]')).toBe("4 stopped");
+  });
+
+  it("a budget that refuses at the door is the first card and the sentence", async () => {
+    window.sessionStorage.clear();
+    await mount(page(V(view({
+      status: { key: "budget_stopped", text: "Budget stopped work", tone: "red", tip: "Over the day cap. Raise it in Budget." },
+      budget_refusal: { period: "day", cap_usd_micros: 5_000_000, actual_usd_micros: 6_200_000, resets_at_label: "",
+                        title: "Budget refused new work", detail: "$6.20 of $5 today. Raise the cap to start work." },
+    }))));
+    const first = $("#cc2-needs-you [data-att-card]");
+    expect(first?.getAttribute("data-att-id")).toBe("budget:refusal");
+    expect(first?.textContent).toContain("Budget refused new work");
+    expect(text(".cc-status-text")).toBe("Budget stopped work");
   });
 
   it("past four cards, `+n more` expands in place", async () => {
@@ -444,16 +457,68 @@ describe("before the first run", () => {
   });
 });
 
-describe("the host card", () => {
-  it("keeps the server's words, with a command behind a copy button, not on the page", async () => {
-    const { commandIn } = await import("../app/command-center/host-card");
-    expect(commandIn("Free disk space — `docker system prune` reclaims old images")).toBe("docker system prune");
-    expect(commandIn("Quit other apps.")).toBeNull();
-    await mount(page(V(view({ host: { show: true, severity: "warning", headline: "This server's disk is nearly full",
-      detail: "Right now: disk 86% full.", action: "Free disk space — `docker system prune` reclaims old images." } }))));
-    const card = $('[data-testid="host-advice"]')!;
-    expect(card.textContent).toContain("This server's disk is nearly full");
-    expect(card.textContent).not.toContain("docker system prune");
-    expect($('[data-testid="cc-host-copy"]')?.getAttribute("title")).toBe("Copy: docker system prune");
+describe("the host banner", () => {
+  it("mounts only for a critical host; a warning is the Host dot's word", async () => {
+    await mount(page(V(view({ host: { show: true, severity: "warning", cause: "disk",
+      headline: "This server's disk is nearly full", detail: "Right now: disk 86% full.",
+      action: "Free disk space — `docker system prune` reclaims old images." } }))));
+    expect($('[data-testid="host-advice"]')).toBeNull();
+  });
+});
+
+describe("the keyboard (independent test D15)", () => {
+  it("Needs you and RUNNING are one tab stop each; arrows move, Enter steps in, Esc steps out", async () => {
+    const gates = Array.from({ length: 3 }, (_, i) => gate({ id: `dec_${i}`, decision_id: `dec_${i}` }));
+    await mount(page(V(view({ attention: gates }))));
+    const cards = $$("#cc2-needs-you [data-att-card]");
+    const stops = (root: Element) => [...root.querySelectorAll<HTMLElement>("a[href], button, [tabindex]")]
+      .filter((el) => el.tabIndex >= 0);
+    // The cards list: exactly one stop (its first card).
+    expect(stops($(".cc-cards")!)).toEqual([cards[0]]);
+    // The lanes list: exactly one stop too.
+    const lanes = $$(".cc-lanes .cc-lane");
+    expect(lanes.length).toBeGreaterThan(1);
+    expect(stops($(".cc-lanes")!).filter((el) => el.closest(".cc-lane"))).toEqual([lanes[0]]);
+    // ↓ moves; Enter opens the card's own controls; Esc returns to the card.
+    cards[0].focus();
+    await act(async () => { cards[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
+    expect(document.activeElement).toBe(cards[1]);
+    await act(async () => { cards[1].dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect(cards[1].contains(document.activeElement) && document.activeElement !== cards[1]).toBe(true);
+    await act(async () => { document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(document.activeElement).toBe(cards[1]);
+  });
+});
+
+describe("the lanes (improvement 7, D7)", () => {
+  it("two or more runs waiting on you fold into one line that opens to them", async () => {
+    const w = (id: string) => mission({ run_id: id, subject: id, state: "waiting_you", verb: "Needs you" });
+    await mount(page(V(view({ missions: [mission(), w("wfr_a"), w("wfr_b"), w("wfr_c")] }))));
+    expect(text('[data-testid="cc-lanes-waits"]')).toContain("3 runs");
+    expect($$(".cc-lanes .cc-lane").map((l) => l.getAttribute("data-run-id"))).toEqual(["wfr_182"]);
+    await click($('[data-testid="cc-lanes-waits"]'));
+    expect($$(".cc-lanes .cc-lane")).toHaveLength(4);
+  });
+
+  it("a lane's state word never truncates (only the step and time after it may)", () => {
+    const css = readFileSync(resolve(__dirname, "../app/agents/agent-world.css"), "utf8");
+    expect(css).toMatch(/\.ag-mission-now > span:first-child \{ flex: none; overflow: visible; \}/);
+  });
+});
+
+describe("the layout (D1, D4)", () => {
+  it("the Systems row wraps inside its card at every width, and heads never wrap", () => {
+    const css = readFileSync(resolve(__dirname, "../app/command-center/bridge.css"), "utf8");
+    expect(css).not.toMatch(/\.cc-systems \{[^}]*nowrap/);
+    expect(css).toMatch(/\.cc-systems \{ display: grid; grid-template-columns: repeat\(auto-fit/);
+    expect(css).toMatch(/\.cc-head-label, \.cc-head-link, \.cc-head \.cc-chip \{ white-space: nowrap/);
+    expect(css).not.toMatch(/\.cc-status-text \{[^}]*text-overflow: ellipsis/);
+  });
+});
+
+describe("the loading bar (D11)", () => {
+  it("the shell ends it when an area says it has painted, and the Command Center says so", () => {
+    expect(codeOnly("app/ConsoleShell.tsx")).toContain("Promise.all([painted, documentDone])");
+    expect(codeOnly("app/command-center-ui.tsx")).toContain('announcePainted("overview")');
   });
 });

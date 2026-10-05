@@ -31,6 +31,9 @@
   display: flex; align-items: center; gap: 8px;
   min-height: 24px; margin: 0 0 12px;
 }
+/* A section head is one line at every width (independent test D4: NEEDS YOU and its link
+   wrapped at 390). Labels and links never break; the spacer gives way. */
+.cc-head-label, .cc-head-link, .cc-head .cc-chip { white-space: nowrap; flex: none; }
 .cc-head-label {
   margin: 0; font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--faint);
   font-family: var(--sans);
@@ -83,7 +86,8 @@
 .cc-dot[data-tone="grey"] { background: transparent; border: 2px solid var(--faint); box-shadow: none; }
 .cc-status-text {
   margin: 0; font-family: var(--display); font-size: 1.45rem; font-weight: 700; letter-spacing: -0.01em;
-  color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--ink); white-space: normal; overflow-wrap: anywhere; line-height: 1.2;
+  /* The sentence is the server's (≤ 6 words): it is never cut (D4); at worst it takes 2 lines. */
 }
 .cc-status[data-tone="grey"] .cc-status-text { color: var(--muted); }
 
@@ -166,6 +170,8 @@
 .cc-now { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--cc-gap); }
 .cc-now > .cc-sec-floor { grid-column: span 7; min-height: 520px; }
 .cc-now > .cc-sec-needs { grid-column: span 5; }
+/* Nothing waiting: the box is its one line, not a column as tall as the Floor (improvement 6). */
+.cc-now > .cc-sec-needs[data-quiet] { align-self: start; }
 .cc[data-layout="split"] .cc-now > .cc-sec-floor,
 .cc[data-layout="split"] .cc-now > .cc-sec-needs { grid-column: span 6; }
 .cc[data-layout="stacked"] .cc-now > * { grid-column: 1 / -1; }
@@ -208,8 +214,12 @@
 .cc-systems { display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 0; padding: 0; list-style: none; }
 /* ONE ROW of seven from 1024px (Apple's status row): each dot takes an equal share. */
 @media (min-width: 1024px) {
-  .cc-systems { display: flex; flex-wrap: nowrap; justify-content: space-between; gap: 6px; }
-  .cc-sys a { padding: 0 10px; white-space: nowrap; }
+  /* EVERY DOT INSIDE ITS CARD at every width (independent test D1: a nowrap row pushed Deploys
+     outside the card and scrolled the page sideways at 1280 and 1024). One row of seven when
+     it fits, wrapping into equal cells when it does not. */
+  .cc-systems { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 8px; }
+  .cc-sys { min-width: 0; }
+  .cc-sys a { padding: 0 10px; white-space: nowrap; width: 100%; box-sizing: border-box; overflow: hidden; }
 }
 .cc-sys a {
   display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px;
@@ -247,7 +257,10 @@
 
 @media (max-width: 639px) {
   /* ≥ 44px targets on a phone (§8), including the composer's small controls. */
-  .cc .cc-help-btn, .cc [aria-label^="Help: "], .cc [data-testid="split-more"], .cc .askboss-arrow {
+  .cc .cc-help-btn, .cc [aria-label^="Help: "], .cc [data-testid="split-more"], .cc .askboss-arrow,
+  .cc .split-action-main, .cc .split-action-caret, .cc .split-action-item, .cc .askboss-ideas-btn,
+  .cc .cc-waits, .cc .cc-expired, .cc [data-testid="cc2-setup"] a, .cc [data-testid="cc-stopped-earlier"] {
+    display: inline-flex; align-items: center;
     min-width: 44px; min-height: 44px;
   }
   .cc { gap: 14px; padding: 0 16px 32px; }
@@ -285,18 +298,15 @@
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
 }
 
-/* The host, as one calm system line (design pass): headline, measurement, fix on hover/copy. */
-.cc-host {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 12px;
-  border-radius: var(--r); border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border));
-  background: color-mix(in srgb, var(--amber) 7%, var(--surface)); font-size: 0.86rem;
-}
-.cc-host[data-severity="critical"] { border-color: color-mix(in srgb, var(--red) 40%, var(--border)); background: color-mix(in srgb, var(--red) 7%, var(--surface)); }
-.cc-host-icon { color: var(--amber); flex: none; }
-.cc-host[data-severity="critical"] .cc-host-icon { color: var(--red); }
-.cc-host-head { color: var(--ink); font-weight: 650; }
-.cc-host-detail { color: var(--muted); }
-.cc-host-fix { color: var(--accent-text); cursor: help; border-bottom: 1px dotted currentColor; }
-.cc-host-copy { display: inline-flex; align-items: center; gap: 6px; }
+
 
 .cc-chip { white-space: nowrap; }
+
+/* Runs parked at your gate, folded into one line (improvement 7). */
+.cc-waits {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 14px;
+  border-radius: var(--r); border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border));
+  background: color-mix(in srgb, var(--amber) 6%, transparent); color: var(--ink); font: inherit; cursor: pointer; text-align: left;
+}
+.cc-waits-word { color: var(--amber); font-weight: 650; }
+.cc-waits-n { color: var(--ink-soft); }

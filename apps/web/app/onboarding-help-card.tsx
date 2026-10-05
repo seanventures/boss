@@ -28,7 +28,7 @@ export function OnboardingHelpCard() {
           <ul className="help-list">
             <li>
               <b>Build</b> — describe what you want. BOSS starts a workflow run: a panel writes the
-              spec, an agent builds and tests it and opens a pull request. Watch every step in
+              plan, an agent builds and tests it and opens a pull request. Watch every step in
               {" "}<b>Workflow</b>; the finished project is in <b>Factory</b>.
             </li>
             <li>

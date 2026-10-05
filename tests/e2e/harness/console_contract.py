@@ -79,6 +79,7 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
               why="the Floor as a list, for anyone who prefers it to the map"),
         Press("cc-dot-budget", "app/command-center/systems-row.tsx",
               why="a Systems dot opens the area that fixes it (Budget)"),
+        Journey("command_center_fits"),
     ),
     "code_tasks": (
         Press("fx-new-build", "app/code-tasks-ui.tsx", expect=_tid("fx-new-menu"),

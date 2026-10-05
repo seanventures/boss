@@ -131,9 +131,21 @@ export function ReadinessPanel({ readiness, accepted, onAccept, projectId = "" }
           <li key={need.key} data-testid={`dw-readiness-missing-${need.key}`}
               data-accepted={accepted.includes(need.key) || undefined}>
             <strong>{need.label}</strong>
-            <span className="detail">
-              {" "}— needed by {need.needed_by.map((n) => n.label).join(", ")}. {need.detail}.
-            </span>
+            {/* SAID ONCE, SHORT (independent test D6): the refusal's line and this list both
+                said every reason in full — ~80 words twice. The item is its name and its fix;
+                why it is needed is one press away. */}
+            <details className="dw-ready-why">
+              <summary>Why</summary>
+              <span className="detail">
+                Needed by {need.needed_by.map((n) => n.label).join(", ")}. {need.detail}.
+              </span>
+              {need.after_a_person ? (
+                <span className="detail dw-ready-later">
+                  {" "}The run stops for you before {need.first_step_label}, so this can be added
+                  while it runs.
+                </span>
+              ) : null}
+            </details>
             <span className="dw-ready-fix">
               {/* Only an area the console has: the API names it as a string, and a link to an area
                   that is gone did nothing when clicked (console-b, lib/area-ids.ts). */}
@@ -149,12 +161,6 @@ export function ReadinessPanel({ readiness, accepted, onAccept, projectId = "" }
                 it is drawn right here rather than sending the operator away from Start. */}
             {need.key === "email" && projectId ? (
               <EmailSetup projectId={projectId} compact />
-            ) : null}
-            {need.after_a_person ? (
-              <span className="detail dw-ready-later">
-                The run stops for you before {need.first_step_label}, so this can be added
-                while it runs.
-              </span>
             ) : null}
           </li>
         ))}
@@ -208,7 +214,14 @@ export function StartRefusal({ refusal, projectId = "", busy = false, onDismiss 
   const open = unaccepted(refusal.readiness, accepted);
   return (
     <div className="dw-refusal" data-testid="start-refusal" role="alert">
-      <p className="dw-new-error">{refusal.label} — not started. {refusal.message}</p>
+      {/* ONE SHORT LINE; the list below names each thing and its fix. The API's whole sentence
+          stays one hover away. */}
+      <p className="dw-new-error" title={refusal.message}>
+        {refusal.label} — not started.{" "}
+        {refusal.readiness.missing.length
+          ? `${refusal.readiness.missing.length} ${refusal.readiness.missing.length === 1 ? "thing" : "things"} missing.`
+          : refusal.message}
+      </p>
       <ReadinessPanel readiness={refusal.readiness} accepted={accepted}
                       onAccept={setAccepted} projectId={projectId} />
       <div className="dw-refusal-foot">
