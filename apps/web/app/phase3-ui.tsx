@@ -1,7 +1,8 @@
 "use client";
 
+import { voteSentence } from "../lib/research-panels";
 import { meetingCardTitle } from "../lib/meeting-title";
-import { useActionState } from "react";
+import React, { useActionState } from "react";
 import { type AckState } from "../lib/comms-ack";
 import { type WipStatus } from "../lib/factory";
 import {
@@ -24,11 +25,19 @@ function tone(s: string): string {
   return "#8b949e";
 }
 
-function Result({ state, testid }: { state: ActionResult | null; testid?: string }) {
+function Result({ state, testid, say }: {
+  state: ActionResult | null; testid?: string;
+  /** The result in words. Without it the card shows the raw reply. */
+  say?: (data: Record<string, unknown>) => React.ReactNode;
+}) {
   if (!state) return null;
   if (!state.ok) {
     return <p className="detail" style={{ color: "#f85149" }} data-testid={testid}
               data-ok="false">{state.error}</p>;
+  }
+  if (say) {
+    return <div className="detail" data-testid={testid} data-ok="true" style={{ marginTop: 8 }}>
+      {say((state.data ?? {}) as Record<string, unknown>)}</div>;
   }
   return (
     <pre className="mono" data-testid={testid} data-ok="true"
@@ -188,7 +197,15 @@ export function MeetingConsensusCard({
           {tallyPending ? "Tallying…" : "Record the vote"}
         </SubmitButton>
       </form>
-      <Result state={tallyState} />
+      <Result state={tallyState} say={(d) => (
+        <>
+          <b>{voteSentence(d)}</b>
+          {/* Dissent in words, never the tally's machine fields. */}
+          {((d.dissent_records as Array<{ role?: string; reason?: string }> | undefined) ?? []).map((r, i) => (
+            <span key={i} style={{ display: "block" }}>{r.role === "quorum" ? "" : `${r.role}: `}{r.reason}</span>
+          ))}
+        </>
+      )} />
       <details style={{ marginTop: 10 }}>
         <summary className="detail">Maintenance</summary>
         <p className="detail">
@@ -201,7 +218,7 @@ export function MeetingConsensusCard({
             {sweepPending ? "Sweeping…" : "Sweep stalled meeting runs"}
           </SubmitButton>
         </form>
-        <Result state={sweepState} />
+        <Result state={sweepState} say={(d) => (Number(d.swept) ? `Swept ${Number(d.swept)} stalled panel${Number(d.swept) === 1 ? "" : "s"}; they can be convened again.` : "Nothing was stalled.")} />
       </details>
     </>
   );

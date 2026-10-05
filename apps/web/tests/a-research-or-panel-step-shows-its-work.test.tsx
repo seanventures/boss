@@ -135,7 +135,7 @@ describe("the step panel", () => {
     expect(q('[data-testid="meeting-compact-outcome"]')!.textContent).toBe("In session");
     expect(panel!.textContent).toContain("The seats are debating");
     const rounds = [...panel!.querySelectorAll(".rp-round-live")].map((r) => r.textContent);
-    expect(rounds).toEqual(["Round 12/2", "Round 21/2"]);
+    expect(rounds).toEqual(["Opening views2/2", "Debate1/2"]);
     expect(panel!.querySelectorAll('[data-filled="true"] .ag-avatar').length).toBe(3);
     const stages = [...panel!.querySelectorAll(".rp-ph")].map((p) => `${p.textContent}:${p.getAttribute("data-state")}`);
     expect(stages).toEqual(["✓Opening views:done", "→Debate:now", "3Synthesis:todo", "4PRD:todo", "5Build:todo"]);

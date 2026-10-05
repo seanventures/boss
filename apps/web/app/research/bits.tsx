@@ -8,7 +8,7 @@ import React, { useEffect, useState, type ReactNode } from "react";
 // and the compact views inside a workflow run's step panel alike.
 import "./research.css";
 
-import type { Stage, Tone } from "../../lib/research-panels";
+import { ago as agoText, type Stage, type Tone } from "../../lib/research-panels";
 
 export function Ring({ value, size = 40, color = "var(--teal)", big = false, live = false, label }: {
   /** 0..1 */
@@ -40,7 +40,7 @@ export function Verdict({ tone, children, big = false, testId }: {
   );
 }
 
-const GLYPH: Record<Stage["state"], string> = { done: "✓", now: "→", todo: "", stopped: "✕" };
+const GLYPH: Record<Stage["state"], string> = { done: "✓", now: "→", todo: "", stopped: "✕", skipped: "–" };
 
 export function Stepper({ stages, live = false, testId }: { stages: Stage[]; live?: boolean; testId?: string }) {
   return (
@@ -103,4 +103,33 @@ export function clip(text: string | null | undefined, max: number): string {
   if (t.length <= max) return t;
   const cut = t.lastIndexOf(" ", max - 1);
   return `${t.slice(0, cut > max / 2 ? cut : max - 1).replace(/[,;:\s]+$/, "")}…`;
+}
+
+/** A technical id kept out of the copy, one press away for support. */
+export function CopyId({ id, label = "Copy id" }: { id: string; label?: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button type="button" className="rp-link sm rp-copy" title={id} data-testid="rp-copy-id"
+            onClick={() => {
+              try { void navigator.clipboard?.writeText(id); } catch { /* no clipboard */ }
+              setDone(true);
+              window.setTimeout(() => setDone(false), 1500);
+            }}>
+      {done ? "Copied" : label}
+    </button>
+  );
+}
+
+/** "3m ago", worked out after mount — the server's clock is not the browser's, and an age that
+ *  differs between the two is a hydration error. */
+export function Ago({ iso, prefix = "" }: { iso?: string | null; prefix?: string }) {
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    setNow(Date.now());
+    const t = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(t);
+  }, []);
+  if (!iso || now === null) return null;
+  const text = agoText(iso, now);
+  return text ? <>{prefix}{text}</> : null;
 }

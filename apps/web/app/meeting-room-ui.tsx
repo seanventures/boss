@@ -10,11 +10,16 @@
  * meeting); styles in research/research.css.
  *
  *   Panels home  — convene hero (type, directive, website, task, the seats around the table),
- *                  recent panel cards, Manage seats.
- *   Meeting room — hero with the stage stepper and the outcome card; Round 1 and Round 2 as
- *                  speaker cards (each seat's gist, "Read all" for the full reply); the
- *                  facilitator's synthesis beside the PRD's sections; a drawer with the vote,
- *                  the directive, the linked task, status and cost, and the phase timeline.
+ *                  recent panel cards, Manage seats, Maintenance (vote, sweep).
+ *   Meeting room — hero with the stage stepper and the outcome card; the rounds as speaker
+ *                  cards (each seat's gist, "Read all" for the full reply); the facilitator's
+ *                  synthesis beside the PRD's sections (or the verdict / the actions for a
+ *                  go/no-go or a stand-up); a drawer with the vote, what was asked and the
+ *                  context BOSS added, the linked task, status and cost, and the timeline.
+ *
+ * NEVER THE PROMPT. Titles, heroes, cards and the drawer read the person's own words through
+ * humanBrief (lib/research-panels) — the scaffolding BOSS wraps around a panel's prompt is
+ * shown only as the readable "Context BOSS added".
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -33,16 +38,17 @@ import { MeetingConsensusCard } from "./phase3-ui";
 import { SubmitButton } from "./submit-button";
 import { ActionForm } from "./client-forms";
 import { consoleHref } from "./url-intent";
-import { BossMark, How, Stepper, Verdict, clip, pushParams, useSearch } from "./research/bits";
+import { Ago, BossMark, CopyId, How, Stepper, Verdict, clip, pushParams, useSearch } from "./research/bits";
 
 import { callAction } from "../lib/call-action";
 import type { AvatarState } from "../lib/agent-world-types";
 import { agentIdentity, seatAvatar } from "../lib/agent-identity";
 import { useIdentityVersion } from "../lib/use-agent-identities";
-import { fetchMeetingRoom } from "../lib/meeting-room-detail";
+import { fetchMeetingForTask, fetchMeetingPage, fetchMeetingRoom, sayLoadError } from "../lib/meeting-room-detail";
 import {
-  ago, briefLine, composerHref, meetingFromUrl, meetingLive, meetingOutcome, orderedSeats, panelDoing,
-  panelStages, prdSections, repoOf, seatGist, seatsOf, shortTitle, took, usd, SEAT_ORDER,
+  ago, briefLine, composerHref, decisionHref, humanBrief, kindOf, meetingFromUrl, meetingLive,
+  meetingOutcome, orderedSeats, panelDoing, panelStages, prdDigest, prdSections, repoOf, roundNames,
+  seatGist, seatsOf, shortTitle, took, usd, SEAT_ORDER, type StageState,
 } from "../lib/research-panels";
 import { AgentAvatar } from "./agent-avatar";
 
@@ -59,6 +65,12 @@ const PHASE_LABEL: Record<string, string> = {
 };
 
 const TYPE_LABEL: Record<string, string> = { prd_panel: "PRD panel", go_no_go: "Go / no-go", standup: "Stand-up" };
+
+/** A status in words: the drawer never shows a raw status code. */
+const STATUS_WORDS: Record<string, string> = {
+  running: "In session", queued: "Waiting to start", completed: "Finished", simulated: "Finished (no-spend fixture)",
+  failed: "Stopped", cancelled: "Cancelled",
+};
 
 /** A seat's face. The seat title resolves to its agent through the one resolver, so a panel's
  *  "QA / Test" is the same face as `qa` on a workflow step. Seats that share an agent (Growth and
@@ -77,30 +89,40 @@ function callsignOf(seat: string): string {
   return agentIdentity(seat).callsign ?? "";
 }
 
-/** A meeting, kept fresh: the list's copy when it has one, else read by id — and re-read every
- *  4s while the panel is in session, so rounds fill in as the seats speak. */
+/** The person's words for a meeting (never the prompt), and its title. */
+function briefOf(m: Pick<Meeting, "directive" | "brief" | "title">): string {
+  return humanBrief(m.directive ?? meetingCardTitle(m.title), m.brief);
+}
+function titleOf(m: Pick<Meeting, "directive" | "brief" | "title">): string {
+  return shortTitle(meetingCardTitle(m.title));
+}
+
+/**
+ * A meeting, kept fresh: the list's copy when it has one, else read by id (or, for `task:<id>`,
+ * the panel held for that task). Re-read every 4s ONLY while the panel is in session; a meeting
+ * that is not there is said once and not asked for again.
+ */
 function useMeeting(id: string, projectId: string, listed: Meeting | null): { meeting: Meeting | null; error: string | null } {
   const [loaded, setLoaded] = useState<Meeting | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const current = loaded && loaded.id === id ? loaded : listed;
-  const live = !current || meetingLive(current);
-
+  const byTask = id.startsWith("task:");
+  const mine = loaded && (byTask || loaded.id === id) ? loaded : null;
+  const current = mine && listed && !meetingLive(listed) && meetingLive(mine) ? listed : mine ?? listed;
+  const live = current ? meetingLive(current) : false;
+  const have = Boolean(current);
   useEffect(() => {
     let cancelled = false;
-    const load = () => fetchMeetingRoom(id, projectId).then((res) => {
-      if (cancelled) return;
-      if (res.ok) { setLoaded(res.meeting); setError(null); } else setError(res.error);
-    });
-    if (!listed || live) void load();
+    const load = () => (byTask ? fetchMeetingForTask(id.slice(5), projectId) : fetchMeetingRoom(id, projectId))
+      .then((res) => {
+        if (cancelled) return;
+        if (res.ok) { setLoaded(res.meeting); setError(null); } else setError(res.error);
+      });
+    if (!have) void load();
     if (!live) return () => { cancelled = true; };
     const t = setInterval(() => { void load(); }, 4000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [id, projectId, live, listed]);
-  // The read wins, unless the list has since seen the panel finish and the read has not.
-  const pick = loaded && loaded.id === id
-    ? (listed && !meetingLive(listed) && meetingLive(loaded) ? listed : loaded)
-    : listed;
-  return { meeting: pick ?? null, error };
+  }, [id, projectId, live, have, byTask]);
+  return { meeting: current ?? null, error: current ? null : error };
 }
 
 // ── Speaker cards ──────────────────────────────────────────────────────────────────────────
@@ -145,13 +167,14 @@ function Round({ meeting, round, seats, live }: { meeting: Meeting; round: 1 | 2
   const now = live && ((round === 1 && ["research", "round1"].includes(meeting.phase ?? ""))
                        || (round === 2 && meeting.phase === "round2"));
   if (!started && !now) return null;
+  const names = roundNames(meeting);
+  const [label, sub] = round === 1 ? [names[0], names[1]] : [names[2], names[3]];
   return (
-    <section className="rp-round" aria-label={round === 1 ? "Opening views" : "Debate"} data-testid={`meeting-round-${round}`}>
+    <section className="rp-round" aria-label={label} data-testid={`meeting-round-${round}`}>
       <div className="rp-r-h">
         <span className="rp-r-n" aria-hidden>{round}</span>
-        <b>{round === 1 ? "Opening views" : "Debate"}</b>
-        <span className="rp-sub">{round === 1 ? "Each seat frames it through its own lens"
-          : "They answer each other — agreements, gaps, risks"}</span>
+        <b>{label}</b>
+        <span className="rp-sub">{sub}</span>
       </div>
       <div className="rp-turns" data-n={Math.min(seats.length, 4)}>
         {seats.map((s) => <TurnCard key={s} meeting={meeting} round={round} seat={s} live={now} />)}
@@ -160,9 +183,41 @@ function Round({ meeting, round, seats, live }: { meeting: Meeting; round: 1 | 2
   );
 }
 
+/** What a go/no-go decided and who disagreed, or what a stand-up committed to. */
+function TypedResult({ meeting }: { meeting: Meeting }) {
+  const k = kindOf(meeting);
+  if (k === "prd_panel") return null;
+  const dissent = meeting.dissent ?? [];
+  const actions = meeting.action_items ?? [];
+  return (
+    <div className="rp-prd" data-testid="meeting-typed-result">
+      {k === "go_no_go" ? (
+        <div className="rp-verdict-big" data-verdict={meeting.verdict ?? "none"} data-testid="meeting-verdict">
+          {meeting.verdict === "go" ? "GO" : meeting.verdict === "no_go" ? "NO-GO" : "No verdict"}
+        </div>
+      ) : null}
+      {dissent.length ? (
+        <>
+          <small className="rp-cap">Dissent</small>
+          <ul className="rp-dis">{dissent.map((d, i) => (
+            <li key={i}><b>{d.role}</b>{d.position ? ` (${d.position})` : ""}: {d.reason}</li>
+          ))}</ul>
+        </>
+      ) : k === "go_no_go" ? <span className="rp-sub">No dissent recorded.</span> : null}
+      {actions.length ? (
+        <>
+          <small className="rp-cap">{k === "standup" ? "Commitments" : "Follow-ups"}</small>
+          <ul className="rp-dis">{actions.map((a, i) => <li key={i}>{a.title}</li>)}</ul>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function Synthesis({ meeting }: { meeting: Meeting }) {
   const [open, setOpen] = useState(false);
   const [prdOpen, setPrdOpen] = useState(false);
+  const typed = kindOf(meeting) !== "prd_panel";
   const sections = prdSections(meeting.prd_markdown);
   const gist = meeting.synthesis_gist ?? null;
   if (!meeting.synthesis && !meeting.prd_markdown) return null;
@@ -172,7 +227,7 @@ function Synthesis({ meeting }: { meeting: Meeting }) {
         <div className="rp-synth" data-testid="meeting-synthesis">
           <div className="rp-t-h">
             <BossMark size={36} />
-            <div><b>Facilitator</b><span>Reconciles the panel</span></div>
+            <div><b>Facilitator</b><span>{typed ? "Calls it" : "Reconciles the panel"}</span></div>
           </div>
           {gist?.headline ? <p className="rp-t-head">{gist.headline}</p> : null}
           {gist?.points.length ? <ul>{gist.points.map((p, i) => <li key={i}>{p}</li>)}</ul> : null}
@@ -183,7 +238,7 @@ function Synthesis({ meeting }: { meeting: Meeting }) {
           {open || !gist?.headline ? <div className="rp-full"><Markdown text={meeting.synthesis} /></div> : null}
         </div>
       ) : <div />}
-      {meeting.prd_markdown ? (
+      {typed ? <TypedResult meeting={meeting} /> : meeting.prd_markdown ? (
         <div className="rp-prd" data-testid="meeting-prd">
           <div className="rp-card-h">
             <b>The PRD</b><span className="rp-spacer" />
@@ -207,56 +262,87 @@ function Synthesis({ meeting }: { meeting: Meeting }) {
 
 // ── The outcome card ───────────────────────────────────────────────────────────────────────
 
-function buildBrief(meeting: Meeting): string {
-  const directive = (meeting.directive ?? meetingCardTitle(meeting.title)).trim();
-  return meeting.pull_request_url ? `${directive}\n\nThe PRD: ${meeting.pull_request_url}` : directive;
+/** "Build it": the composer, prefilled from the AGREED PRD — never the raw directive. */
+function buildHref(meeting: Meeting, search: string): string {
+  const title = titleOf(meeting);
+  return composerHref(search, {
+    title,
+    brief: meeting.prd_markdown ? prdDigest(meeting.prd_markdown, title, meeting.pull_request_url) : briefOf(meeting),
+  });
 }
 
-function OutcomeCard({ meeting, search, inWorkflow = false }: { meeting: Meeting; search: string; inWorkflow?: boolean }) {
+/** Convene the same panel again: a failed one's way forward. */
+function ConveneAgain({ meeting, projectId }: { meeting: Meeting; projectId: string }) {
+  return (
+    <ActionForm action={conveneMeetingAction} successMessage="Convened again — the new panel is in session.">
+      <input type="hidden" name="project_id" value={projectId} />
+      <input type="hidden" name="directive" value={meeting.directive ?? briefOf(meeting)} />
+      <input type="hidden" name="meeting_type" value={kindOf(meeting)} />
+      {meeting.url ? <input type="hidden" name="url" value={meeting.url} /> : null}
+      {meeting.task_id ? <input type="hidden" name="task_id" value={meeting.task_id} /> : null}
+      {(meeting.role_keys ?? []).map((r) => <input key={r} type="hidden" name="roles" value={r} />)}
+      <SubmitButton type="submit" className="rp-btn primary" pendingLabel="Convening…" data-testid="meeting-convene-again">
+        Convene again
+      </SubmitButton>
+    </ActionForm>
+  );
+}
+
+export function OutcomeCard({ meeting, search, projectId, inWorkflow = false }: {
+  meeting: Meeting; search: string; projectId: string; inWorkflow?: boolean;
+}) {
   const o = meetingOutcome(meeting);
-  const live = meetingLive(meeting);
   const sections = prdSections(meeting.prd_markdown).length;
   const seats = seatsOf(meeting);
   const repo = repoOf(meeting.pull_request_url);
-  const title = shortTitle(meeting.title);
+  const typed = kindOf(meeting) !== "prd_panel";
+  const sub = o.stage === "live" ? `${seats.length} seats · updates live`
+    : o.stage === "published" ? [repo, sections ? `${sections} sections` : ""].filter(Boolean).join(" · ")
+    : o.stage === "building" ? "The PRD is being built"
+    : o.stage === "approved" ? "Approved — publishing it as a pull request"
+    : o.stage === "awaiting" ? "Publishing waits for your approval"
+    : o.stage === "simulated" ? "No model was called"
+    : o.stage === "verdict" ? `${(meeting.dissent ?? []).length} dissent${(meeting.dissent ?? []).length === 1 ? "" : "s"} recorded`
+    : o.stage === "failed" ? `Stopped at ${PHASE_LABEL[meeting.phase ?? ""] ?? "a phase"}`
+    : "";
   return (
-    <div className="rp-vcard" data-tone={o.tone} data-testid="meeting-outcome">
-      <Verdict tone={o.tone} big>
-        {o.pill}{o.pill === "Agreed" ? (meeting.pull_request_url ? " · PRD ready" : " · PRD drafted") : ""}
-      </Verdict>
-      <b>{live ? panelDoing(meeting) : o.headline}</b>
-      <span className="rp-sub">
-        {live ? `${seats.length} seats · updates live`
-          : meeting.pull_request_url ? [repo, sections ? `${sections} sections` : ""].filter(Boolean).join(" · ")
-          : meeting.prd_markdown ? "Publishing waits for your approval"
-          : meeting.status === "simulated" ? "No model was called"
-          : meeting.status === "failed" ? `Stopped at ${PHASE_LABEL[meeting.phase ?? ""] ?? meeting.phase ?? "a phase"}`
-          : ""}
-      </span>
-      {live ? (
+    <div className="rp-vcard" data-tone={o.tone} data-testid="meeting-outcome" data-stage={o.stage}>
+      <Verdict tone={o.tone} big>{o.pill}</Verdict>
+      <b>{o.stage === "live" ? panelDoing(meeting) : o.headline}</b>
+      {sub ? <span className="rp-sub">{sub}</span> : null}
+      {o.stage === "failed" && meeting.error ? (
+        <div className="rp-attn" data-testid="meeting-error"><b>Why it stopped</b><span>{meeting.error}</span></div>
+      ) : null}
+      {o.stage === "live" ? (
         <span className="rp-faces" aria-label="Seats">
           {seats.map((s) => <SeatAvatar key={s} role={s} size={32} state="thinking" />)}
           <BossMark size={32} />
         </span>
       ) : null}
       <div className="rp-vact">
-        {meeting.pull_request_url && !inWorkflow ? (
-          <a className="rp-btn primary" data-testid="meeting-build-it"
-             href={composerHref(search, { title, brief: buildBrief(meeting) })}>Build it →</a>
+        {o.stage === "failed" ? <ConveneAgain meeting={meeting} projectId={projectId} /> : null}
+        {o.stage === "building" || o.stage === "built" ? (
+          <a className="rp-btn primary" href={consoleHref(search, { area: "code_tasks", run: meeting.build?.id })}>
+            Open the build →</a>
+        ) : null}
+        {!typed && !inWorkflow && (o.stage === "published" || o.stage === "approved") ? (
+          <a className="rp-btn primary" data-testid="meeting-build-it" href={buildHref(meeting, search)}>Build it →</a>
         ) : null}
         {meeting.pull_request_url ? (
           <a className={`rp-btn${inWorkflow ? " primary" : ""}`} href={meeting.pull_request_url} target="_blank" rel="noreferrer">
             Open the PR ↗
           </a>
-        ) : meeting.prd_markdown && !live ? (
-          <a className="rp-btn primary" href={consoleHref(search, { area: "decisions" })}>Review in Approvals →</a>
+        ) : null}
+        {(o.stage === "awaiting" || o.stage === "declined" || (typed && meeting.decision_id)) ? (
+          <a className="rp-btn primary" data-testid="meeting-review" href={decisionHref(search, meeting.decision_id)}>
+            {typed ? "Answer it in Approvals →" : "Review in Approvals →"}</a>
         ) : null}
       </div>
     </div>
   );
 }
 
-// ── The drawer: vote, directive, task, status, timeline ────────────────────────────────────
+// ── The drawer: vote, what was asked, task, status, timeline ───────────────────────────────
 
 function MeetingEvidence({ meetingId, projectId }: { meetingId: string; projectId: string }) {
   const [evidence, setEvidence] = useState<{
@@ -278,47 +364,58 @@ function MeetingEvidence({ meetingId, projectId }: { meetingId: string; projectI
     return (
       <div className="rp-card" data-testid="meeting-evidence-none">
         <div className="rp-card-h"><b>Phase timeline</b></div>
-        <span className="rp-sub">{evidence ? "No phase artifacts were recorded." : "Loading…"}</span>
+        <span className="rp-sub">{evidence ? "No phase records were kept for this panel." : "Loading…"}</span>
       </div>
     );
   }
+  const ids = [evidence.decision_id, evidence.receipt_id, ...evidence.artifact_links.map((l) => l.artifact_id)]
+    .filter(Boolean).join(" ");
   return (
     <div className="rp-card" data-testid="meeting-evidence">
-      <div className="rp-card-h"><b>Phase timeline &amp; artifacts</b></div>
-      {evidence.meeting_type ? <p className="rp-sub" data-testid="meeting-type">Type <code>{evidence.meeting_type}</code></p> : null}
-      {evidence.simulated ? <p className="rp-sub">Simulated fixture — no live model was called.</p> : null}
-      {evidence.decision_id ? <p className="rp-sub">Decision <code>{evidence.decision_id}</code></p> : null}
+      <div className="rp-card-h"><b>Phase timeline</b></div>
+      {evidence.simulated ? <p className="rp-sub">A no-spend fixture — no live model was called.</p> : null}
       {evidence.phase_timeline.length ? (
         <ol className="rp-timeline">
           {evidence.phase_timeline.map((step) => (
             <li key={step.phase}>
-              <b>{PHASE_LABEL[step.phase] ?? step.phase}</b> {step.status ?? "recorded"}
-              {step.artifact_id ? <> · <code>{step.artifact_id}</code></> : null}
+              <b>{PHASE_LABEL[step.phase] ?? step.phase.replace(/_/g, " ")}</b>
+              {" — "}{step.status === "completed" || !step.status ? "done" : step.status.replace(/_/g, " ")}
             </li>
           ))}
         </ol>
       ) : null}
       {evidence.artifact_links.length ? (
-        <ul className="rp-timeline">
-          {evidence.artifact_links.map((link) => (
-            <li key={`${link.kind}:${link.artifact_id}`}>{link.kind}: <code>{link.artifact_id}</code></li>
-          ))}
-        </ul>
+        <p className="rp-sub">{evidence.artifact_links.length} record{evidence.artifact_links.length === 1 ? "" : "s"} kept
+          ({[...new Set(evidence.artifact_links.map((l) => l.kind.replace(/_/g, " ")))].join(", ")})</p>
       ) : null}
-      {evidence.receipt_id ? <p className="rp-sub">Receipt <code>{evidence.receipt_id}</code></p> : null}
+      {ids ? <CopyId id={ids} label="Copy record ids" /> : null}
     </div>
   );
 }
 
 function Drawer({ meeting, projectId, actor, search }: { meeting: Meeting; projectId: string; actor: string; search: string }) {
+  const brief = briefOf(meeting);
   return (
     <details className="rp-more" data-testid="meeting-drawer">
-      <summary>Record the vote · directive · linked task</summary>
+      <summary>Record the vote · what was asked · linked task</summary>
       <div className="rp-drawer">
-        <MeetingConsensusCard projectId={projectId} actor={actor} meetingId={meeting.id} />
+        {meeting.can_vote === false ? (
+          <div className="rp-card" data-testid="meeting-vote-closed">
+            <div className="rp-card-h"><b>Meeting consensus</b></div>
+            <span className="rp-sub">The vote opens when the panel finishes and records its minutes.</span>
+          </div>
+        ) : (
+          <MeetingConsensusCard projectId={projectId} actor={actor} meetingId={meeting.id} />
+        )}
         <div className="rp-card" data-testid="meeting-directive">
-          <div className="rp-card-h"><b>Directive</b></div>
-          <div className="rp-directive">{(meeting.directive ?? meetingCardTitle(meeting.title)).replace(/\r\n/g, "\n")}</div>
+          <div className="rp-card-h"><b>What was asked</b></div>
+          <div className="rp-directive">{brief || "—"}</div>
+          {meeting.context ? (
+            <details className="rp-fold" data-testid="meeting-context">
+              <summary>Context BOSS added</summary>
+              <div className="rp-full"><Markdown text={meeting.context} /></div>
+            </details>
+          ) : null}
           {meeting.url ? (
             <a className="rp-link sm" href={meeting.url} target="_blank" rel="noreferrer">Studied {meeting.url} ↗</a>
           ) : null}
@@ -327,8 +424,8 @@ function Drawer({ meeting, projectId, actor, search }: { meeting: Meeting; proje
           <div className="rp-card-h"><b>Linked task</b></div>
           {meeting.task_id ? (
             <>
-              <p className="rp-hyp">{(meeting.task_title ?? meeting.task_id).replace(/^(CEO command|PRD meeting):\s*/, "").slice(0, 200)}</p>
-              <span className="rp-sub">{meeting.task_status ?? ""}</span>
+              <p className="rp-hyp">{shortTitle(meeting.task_title ?? "", 200)}</p>
+              {meeting.task_status ? <span className="rp-sub">{meeting.task_status.replace(/_/g, " ")}</span> : null}
               <a className="rp-link sm" href={consoleHref(search, { area: "work", task: meeting.task_id })}>View in Work →</a>
             </>
           ) : <span className="rp-sub">No task — this panel stands on its own.</span>}
@@ -336,15 +433,16 @@ function Drawer({ meeting, projectId, actor, search }: { meeting: Meeting; proje
         <div className="rp-card" data-testid="meeting-status">
           <div className="rp-card-h"><b>Status and cost</b></div>
           <dl className="rp-kv">
-            <dt>Status</dt><dd>{meeting.status}{meetingLive(meeting) ? ` · ${PHASE_LABEL[meeting.phase ?? ""] ?? meeting.phase}` : ""}</dd>
-            {meeting.prd_label ? <><dt>PRD</dt><dd>{meeting.prd_label}</dd></> : null}
+            <dt>Kind</dt><dd>{TYPE_LABEL[kindOf(meeting)]}</dd>
+            <dt>Status</dt><dd>{STATUS_WORDS[meeting.status] ?? meeting.status}{meetingLive(meeting) ? ` · ${PHASE_LABEL[meeting.phase ?? ""] ?? ""}` : ""}</dd>
+            {meeting.prd_label && kindOf(meeting) === "prd_panel" ? <><dt>PRD</dt><dd>{meeting.prd_label}</dd></> : null}
             {took(meeting.created_at, meeting.completed_at) ? <><dt>Took</dt><dd>{took(meeting.created_at, meeting.completed_at)}</dd></> : null}
             {meeting.model ? <><dt>Model</dt><dd>{meeting.model}</dd></> : null}
-            <dt>Cost</dt><dd>{meeting.cost_usd_micros ? `${usd(meeting.cost_usd_micros, 4)} equiv` : "—"}</dd>
+            <dt>Cost</dt><dd>{meeting.cost_usd_micros ? usd(meeting.cost_usd_micros, 2) : "—"}</dd>
             {meeting.research_summary?.pages_studied ? <><dt>Studied</dt><dd>{meeting.research_summary.pages_studied} pages</dd></> : null}
             <dt>Seats</dt><dd>{(meeting.participants ?? []).join(", ")}</dd>
-            <dt>Id</dt><dd><code>{meeting.id}</code></dd>
           </dl>
+          <CopyId id={meeting.id} />
         </div>
         <MeetingEvidence meetingId={meeting.id} projectId={projectId} />
       </div>
@@ -363,8 +461,8 @@ function MeetingRoom({ id, listed, projectId, actor, onBack }: {
     return (
       <div className="rp" data-testid="meeting-room">
         <button type="button" className="rp-back" onClick={onBack}>← All panels</button>
-        <div className="rp-empty" role="status">
-          {error ? <><b>That panel did not open.</b>{error === "meeting not found" ? `Meeting ${id} is not in this project.` : error}</>
+        <div className="rp-empty" role="status" data-testid={error ? "meeting-not-found" : undefined}>
+          {error ? <><b>This panel isn&apos;t here any more.</b>{sayLoadError(error, "panel")}</>
             : <b>Opening the panel…</b>}
         </div>
       </div>
@@ -372,27 +470,26 @@ function MeetingRoom({ id, listed, projectId, actor, onBack }: {
   }
   const live = meetingLive(meeting);
   const seats = orderedSeats(Object.fromEntries(seatsOf(meeting).map((s) => [s, 1])));
-  const line = briefLine(meeting.directive);
-  const type = TYPE_LABEL[(meeting as { meeting_type?: string }).meeting_type ?? ""] ?? "PRD panel";
+  const line = briefLine(meeting.directive, 220, meeting.brief);
+  const kind = kindOf(meeting);
   return (
-    <div className="rp" data-testid="meeting-room" data-status={meeting.status}>
+    <div className="rp" data-testid="meeting-room" data-status={meeting.status} data-kind={kind}>
       <button type="button" className="rp-back" onClick={onBack}>← All panels</button>
       <section className="rp-dhero" data-kind="meeting">
         <div className="rp-aurora" aria-hidden />
         <div className="rp-dh-l">
           <div className="rp-eyebrow">
             <span className="rp-dot" data-tone={live ? undefined : meeting.status === "failed" ? "bad" : "idle"} aria-hidden />
-            {meeting.status === "simulated" ? "Fixture" : type}
-            {meeting.created_at ? ` · ${ago(meeting.created_at)}` : ""}
+            {TYPE_LABEL[kind]}{meeting.status === "simulated" ? " · fixture" : ""}
+            <Ago iso={meeting.created_at} prefix=" · " />
             {took(meeting.created_at, meeting.completed_at) ? ` · took ${took(meeting.created_at, meeting.completed_at)}` : ""}
             {meeting.cost_usd_micros ? ` · ${usd(meeting.cost_usd_micros)}` : ""}
           </div>
-          <h2 className="rp-dh-t" title={meetingCardTitle(meeting.title)}>{shortTitle(meeting.title)}</h2>
+          <h2 className="rp-dh-t" title={briefOf(meeting)}>{titleOf(meeting)}</h2>
           {line ? <p className="rp-dh-s">{line}</p> : null}
           <Stepper stages={panelStages(meeting)} live={live} testId="meeting-stages" />
-          {live ? <p className="rp-sub" role="status">{panelDoing(meeting)} — this room updates live.</p> : null}
         </div>
-        <div className="rp-dh-r"><OutcomeCard meeting={meeting} search={search} /></div>
+        <div className="rp-dh-r"><OutcomeCard meeting={meeting} search={search} projectId={projectId} /></div>
       </section>
 
       <Round meeting={meeting} round={1} seats={seats} live={live} />
@@ -561,10 +658,10 @@ function PanelCard({ m, onOpen }: { m: Meeting; onOpen: () => void }) {
   const t = took(m.created_at, m.completed_at);
   return (
     <button type="button" className="rp-card-link" onClick={onOpen} data-testid="meeting-card" data-status={m.status}
-            title={meetingCardTitle(m.title)}>
+            title={briefOf(m)}>
       <span className="rp-dtop">
         <Verdict tone={o.tone}>{o.pill}</Verdict>
-        <span className="rp-when">{ago(m.created_at)}</span>
+        <span className="rp-when"><Ago iso={m.created_at} /></span>
       </span>
       <b className="rp-dtitle">{shortTitle(meetingCardTitle(m.title))}</b>
       <span className="rp-mrow">
@@ -573,6 +670,7 @@ function PanelCard({ m, onOpen }: { m: Meeting; onOpen: () => void }) {
           <BossMark size={28} />
         </span>
         {live ? <span className="rp-prc">{PHASE_LABEL[m.phase ?? ""] ?? "In session"}</span>
+          : kindOf(m) !== "prd_panel" ? <span className="rp-prc" data-tone="muted">{TYPE_LABEL[kindOf(m)]}</span>
           : m.pull_request_url ? <span className="rp-prc">PRD · PR #{m.pull_request_number}</span>
           // FROM THE PRD'S DECISION, never a hard-coded guess (meeting_service.prd_state_of).
           : <span className="rp-prc" data-tone="muted" data-testid="mr-meeting-prd-state">{m.prd_label ?? "PRD state unknown"}</span>}
@@ -611,7 +709,11 @@ function ManageSeats({ projectId, roles }: { projectId: string; roles: MeetingRo
               <ActionForm action={deleteMeetingRoleAction}>
                 <input type="hidden" name="project_id" value={projectId} />
                 <input type="hidden" name="role_key" value={r.key} />
-                <SubmitButton type="submit" className="rp-btn sm">Remove</SubmitButton>
+                <SubmitButton type="submit" className="rp-btn sm" data-testid="meeting-seat-remove"
+                              onClick={(e) => {
+                                // Removing a seat drops it from every new panel: ask first.
+                                if (!window.confirm(`Remove the ${r.title} seat from new panels?`)) e.preventDefault();
+                              }}>Remove</SubmitButton>
               </ActionForm>
             </div>
           </div>
@@ -653,16 +755,26 @@ export function MeetingsHome({
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [showSeats, setShowSeats] = useState(false);
+  // Panels past the first page ("Show more"), and whether there may be more still.
+  const [more, setMore] = useState<Meeting[]>([]);
+  const [moreState, setMoreState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const all = useMemo(() => {
+    const seen = new Set(meetings.map((m) => m.id));
+    return [...meetings, ...more.filter((m) => !seen.has(m.id))];
+  }, [meetings, more]);
 
   // Open from a deep link after mount (avoids a hydration mismatch) — `meeting=`, a run id in
   // `run=`, the task a dossier's panel was convened for (`task=`), or `#id` — and keep the
-  // selection in sync with Back/Forward.
-  const meetingsRef = useMemo(() => meetings.map((m) => ({ id: m.id, task_id: m.task_id })), [meetings]);
+  // selection in sync with Back/Forward. A task whose panel is not on this page is looked up
+  // by task (`task:<id>`), never dropped on the list.
+  const meetingsRef = useMemo(() => all.map((m) => ({ id: m.id, task_id: m.task_id })), [all]);
   useEffect(() => {
     const read = () => {
       const q = new URLSearchParams(window.location.search);
       if (q.get("area") && q.get("area") !== "meetings") return;
-      setSelected(meetingFromUrl(window.location.search, window.location.hash, meetingsRef));
+      const found = meetingFromUrl(window.location.search, window.location.hash, meetingsRef);
+      const task = q.get("task");
+      setSelected(found ?? (task ? `task:${task}` : null));
     };
     read();
     window.addEventListener("popstate", read);
@@ -675,22 +787,42 @@ export function MeetingsHome({
     pushParams({ meeting: id, run: null, task: null });
   }, []);
 
+  const loadMore = useCallback(async () => {
+    setMoreState("loading");
+    const page = await fetchMeetingPage(projectId, meetings.length + more.length);
+    if (page === null) { setMoreState("error"); return; }
+    setMore((cur) => [...cur, ...page]);
+    setMoreState(page.length < 25 ? "done" : "idle");
+  }, [projectId, meetings.length, more.length]);
+
   if (selected) {
     return (
-      <MeetingRoom id={selected} listed={meetings.find((m) => m.id === selected) ?? null}
+      <MeetingRoom id={selected} listed={all.find((m) => m.id === selected) ?? null}
                    projectId={projectId} actor={actor} onBack={() => selectMeeting(null)} />
     );
   }
 
-  const prds = meetings.filter((m) => m.pull_request_url).length;
+  const prds = all.filter((m) => m.pull_request_url).length;
+  const seatsAvailable = roles.filter((r) => r.enabled !== false).length;
   return (
     <div className="rp" data-testid="panels-home">
       <ConveneHero projectId={projectId} roles={roles} tasks={tasks} meetings={meetings} />
       <section aria-label="Recent panels">
         <div className="rp-sec-h">
           <h3>Recent panels</h3>
-          <span className="rp-sub">{meetings.length} panel{meetings.length === 1 ? "" : "s"} · {prds} became PRDs</span>
+          <span className="rp-sub" data-testid="panels-counts">
+            {all.length} panel{all.length === 1 ? "" : "s"} · {prds} became PRDs · {seatsAvailable} role-agent{seatsAvailable === 1 ? "" : "s"}
+          </span>
           <span className="rp-spacer" />
+          <details className="rp-menu" data-testid="panels-maintenance">
+            <summary className="rp-link">Maintenance</summary>
+            <div className="rp-menu-body">
+              {/* Voting on any panel, and the stall sweep, without a deep link into the room. */}
+              <MeetingConsensusCard projectId={projectId} actor={actor}
+                                    meetings={all.filter((m) => m.can_vote !== false)
+                                      .map((m) => ({ id: m.id, title: titleOf(m) }))} />
+            </div>
+          </details>
           <button type="button" className="rp-link" aria-expanded={showSeats} data-testid="meeting-manage-seats"
                   onClick={() => setShowSeats((x) => !x)}>
             {showSeats ? "Done with seats" : "Manage seats ↗"}
@@ -699,7 +831,7 @@ export function MeetingsHome({
         {showSeats ? <div style={{ marginBottom: 14 }}><ManageSeats projectId={projectId} roles={roles} /></div> : null}
         {!apiReachable ? (
           <div className="rp-empty" role="status"><b>The control plane is not answering.</b>Panels will show here once it is back.</div>
-        ) : meetings.length === 0 ? (
+        ) : all.length === 0 ? (
           <div className="rp-empty" data-testid="panels-empty">
             <b>No panels yet.</b>
             Convene one above. To see the phases without spending anything, run the no-spend fixture.
@@ -710,9 +842,19 @@ export function MeetingsHome({
             </ActionForm>
           </div>
         ) : (
-          <div className="rp-grid">
-            {meetings.map((m) => <PanelCard key={m.id} m={m} onOpen={() => selectMeeting(m.id)} />)}
-          </div>
+          <>
+            <div className="rp-grid">
+              {all.map((m) => <PanelCard key={m.id} m={m} onOpen={() => selectMeeting(m.id)} />)}
+            </div>
+            {meetings.length >= 25 && moreState !== "done" ? (
+              <div className="rp-more-row">
+                <button type="button" className="rp-btn" onClick={() => void loadMore()} disabled={moreState === "loading"}
+                        data-testid="panels-show-more">
+                  {moreState === "loading" ? "Loading…" : moreState === "error" ? "Try again" : "Show more"}
+                </button>
+              </div>
+            ) : null}
+          </>
         )}
       </section>
     </div>
@@ -724,9 +866,11 @@ export function MeetingsHome({
 /**
  * A panel step's meeting, inside a workflow run's step panel: the outcome first (agreed, the
  * PR), the stages and each round filling in with seat faces while it runs, and the full room
- * one press away.
+ * one press away. `buildState` is the run's own build step, so "Build" says what the run did.
  */
-export function MeetingCompact({ meetingId, projectId }: { meetingId: string; projectId: string }) {
+export function MeetingCompact({ meetingId, projectId, buildState }: {
+  meetingId: string; projectId: string; buildState?: StageState;
+}) {
   useIdentityVersion(); // seat callsigns are read here
   const search = useSearch();
   const { meeting, error } = useMeeting(meetingId, projectId, null);
@@ -737,7 +881,7 @@ export function MeetingCompact({ meetingId, projectId }: { meetingId: string; pr
         <div className="rp-cmp">
           <BossMark size={48} />
           <div className="rp-cmp-body">
-            <span className={error ? "rp-err" : "rp-sub"}>{error ? `The panel did not load: ${error}` : "Opening the panel…"}</span>
+            <span className={error ? "rp-err" : "rp-sub"}>{error ? `This panel isn't here any more. ${sayLoadError(error, "panel")}` : "Opening the panel…"}</span>
           </div>
           <div className="rp-cmp-foot"><a className="rp-btn sm" href={full}>Open full view ↗</a></div>
         </div>
@@ -749,6 +893,7 @@ export function MeetingCompact({ meetingId, projectId }: { meetingId: string; pr
   const seats = orderedSeats(Object.fromEntries(seatsOf(meeting).map((s) => [s, 1])));
   const t = took(meeting.created_at, meeting.completed_at);
   const head = meeting.synthesis_gist?.headline;
+  const names = roundNames(meeting);
   return (
     <div className="rp rp-compact" data-testid="meeting-compact" data-status={meeting.status}>
       <div className="rp-cmp">
@@ -758,25 +903,23 @@ export function MeetingCompact({ meetingId, projectId }: { meetingId: string; pr
         </span>
         <div className="rp-cmp-body">
           <div className="rp-cmp-top">
-            <Verdict tone={o.tone} testId="meeting-compact-outcome">
-              {o.pill}{o.pill === "Agreed" ? (meeting.pull_request_url ? " · PRD ready" : " · PRD drafted") : ""}
-            </Verdict>
+            <Verdict tone={o.tone} testId="meeting-compact-outcome">{o.pill}</Verdict>
             <span className="rp-sub">
               {[`${seats.length} seats`, t ? `took ${t}` : "", meeting.cost_usd_micros ? usd(meeting.cost_usd_micros) : ""].filter(Boolean).join(" · ")}
             </span>
           </div>
           <b className="rp-cmp-title">{live ? panelDoing(meeting) : o.headline}</b>
           {head && !live ? <p className="rp-cmp-line" title={head}><b>Agreed:</b> {clip(head, 160)}</p>
-            : <p className="rp-cmp-line">{shortTitle(meeting.title)}</p>}
+            : <p className="rp-cmp-line">{titleOf(meeting)}</p>}
         </div>
-        <div className="rp-cmp-foot"><Stepper stages={panelStages(meeting)} live={live} /></div>
+        <div className="rp-cmp-foot"><Stepper stages={panelStages(meeting, buildState)} live={live} /></div>
         {live || Object.keys(meeting.round1 ?? {}).length ? (
           <div className="rp-rounds-live" data-testid="meeting-compact-rounds">
             {([1, 2] as const).map((r) => {
               const have = (r === 1 ? meeting.round1 : meeting.round2) ?? {};
               return (
                 <div key={r} className="rp-round-live">
-                  <span>Round {r}</span>
+                  <span>{r === 1 ? names[0] : names[2]}</span>
                   <span className="rp-faces">
                     {seats.map((s) => (
                       <span key={s} data-filled={have[s] ? "true" : "false"}
@@ -791,13 +934,17 @@ export function MeetingCompact({ meetingId, projectId }: { meetingId: string; pr
             })}
           </div>
         ) : null}
+        {meeting.status === "failed" && meeting.error ? (
+          <div className="rp-cmp-err"><div className="rp-attn"><b>Why it stopped</b><span>{meeting.error}</span></div></div>
+        ) : null}
         <div className="rp-cmp-foot">
           {meeting.pull_request_url ? (
-            <a className="rp-btn sm primary" href={meeting.pull_request_url} target="_blank" rel="noreferrer">Open the PR ↗</a>
-          ) : meeting.prd_markdown && !live ? (
-            <a className="rp-btn sm primary" href={consoleHref(search, { area: "decisions" })}>Review in Approvals →</a>
+            <a className="rp-btn sm primary" href={meeting.pull_request_url} target="_blank" rel="noreferrer"
+               data-testid="meeting-compact-pr">Open the PR ↗</a>
+          ) : o.stage === "awaiting" ? (
+            <a className="rp-btn sm primary" href={decisionHref(search, meeting.decision_id)}>Review in Approvals →</a>
           ) : null}
-          <a className={`rp-btn sm${meeting.pull_request_url || (meeting.prd_markdown && !live) ? "" : " primary"}`}
+          <a className={`rp-btn sm${meeting.pull_request_url || o.stage === "awaiting" ? "" : " primary"}`}
              href={full} data-testid="meeting-compact-open">Open full view ↗</a>
         </div>
       </div>

@@ -69,10 +69,10 @@ describe("a panel's stages and outcome", () => {
   });
 
   it("says where it ended up", () => {
-    expect(meetingOutcome(done as never)).toEqual({ pill: "Agreed", tone: "good", headline: "PRD in pull request #185" });
+    expect(meetingOutcome(done as never)).toEqual({ pill: "Agreed · PRD ready", tone: "good", headline: "PRD in pull request #185", stage: "published" });
     expect(meetingOutcome({ status: "running" } as never).pill).toBe("In session");
-    expect(meetingOutcome({ status: "completed", prd_markdown: "# x", prd_label: "awaiting approval" } as never).headline)
-      .toBe("Awaiting approval");
+    expect(meetingOutcome({ status: "completed", prd_markdown: "# x", prd_state: "awaiting_approval" } as never).headline)
+      .toBe("PRD awaiting your approval");
     expect(repoOf(done.pull_request_url)).toBe("paramg/boss-sandbox");
     expect(prdSections(done.prd_markdown)).toEqual(["Summary", "Problem & Context", "Risks"]);
     expect(took("2026-09-12T17:15:24Z", "2026-09-12T17:15:56Z")).toBe("32s");
