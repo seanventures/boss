@@ -123,17 +123,42 @@
 .fx-bay-link { font-size: 0.74rem; color: var(--accent-text); text-decoration: none; }
 .fx-loop { display: inline-flex; align-items: center; gap: 4px; }
 
-/* Apps. */
-.fx-apps { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.fx-app { list-style: none; }
-.fx-app-row { grid-template-columns: minmax(140px, 220px) minmax(60px, auto) minmax(0, 1fr) auto auto auto auto auto; cursor: default; }
-.fx-app-faces, .fx-app-preview, .fx-app-deploys, .fx-app-count, .fx-app-pr { display: inline-flex; gap: 8px; font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
-.fx-app-builds { list-style: none; margin: 4px 0 0 24px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.fx-app-build {
-  display: inline-flex; gap: 4px; min-height: 32px; padding: 0 8px; border: 0; border-radius: var(--r); background: none;
-  color: var(--ink-soft); font: inherit; font-size: 0.82rem; cursor: pointer;
+/* Apps: one aligned table. Every row — head, app, build — is the same grid, so columns line up. */
+.fx-apps { display: flex; flex-direction: column; min-width: 0; font-size: 0.84rem; }
+.fx-app-grid {
+  display: grid; align-items: center; column-gap: 12px;
+  grid-template-columns: 28px minmax(200px, 2.2fr) 132px minmax(120px, 1.3fr) 96px minmax(84px, 0.8fr) 72px 52px 72px;
 }
-.fx-app-build:hover, .fx-app-build:focus-visible { background: var(--surface-3); outline: none; }
+.fx-apps-head { padding: 0 12px 6px; border-bottom: 1px solid var(--border-soft); color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.fx-apps-th { white-space: nowrap; }
+.fx-apps-sort { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+.fx-apps-sort[data-active] { color: var(--ink); }
+.fx-apps-sort[data-active]::after { content: " ↓"; }
+.fx-apps-list { list-style: none; margin: 0; padding: 0; }
+.fx-app { list-style: none; border-bottom: 1px solid var(--border-soft); }
+.fx-app-row { min-height: 52px; padding: 8px 12px; cursor: pointer; border-radius: var(--r); }
+.fx-app-row:hover, .fx-app-row:focus-visible { background: var(--surface-2, var(--surface-3)); outline: none; }
+.fx-app-row:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-line); }
+.fx-app-chev { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; }
+.fx-app-chev:disabled { opacity: 0.25; cursor: default; }
+.fx-app-name { font-weight: 600; color: var(--ink); line-height: 1.3; overflow-wrap: normal; word-break: normal;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.fx-crew { display: inline-flex; align-items: center; gap: 4px; }
+.fx-crew-face { display: inline-flex; flex: none; }
+.fx-crew-more { font-size: 0.74rem; color: var(--muted); margin-left: 2px; }
+.fx-c-state, .fx-c-pr, .fx-c-deploy, .fx-c-spend, .fx-c-builds, .fx-c-updated { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.fx-c-spend, .fx-c-builds, .fx-c-updated { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+.fx-pr { display: inline-flex; gap: 6px; align-items: baseline; }
+.fx-pr-state { font-size: 0.74rem; color: var(--muted); }
+.fx-pr[data-state="merged"] .fx-pr-state { color: var(--green); }
+.fx-pr[data-state="closed"] .fx-pr-state { color: var(--muted); text-decoration: line-through; }
+.fx-c-deploy [data-ok] { color: var(--green); }
+.fx-app-builds { list-style: none; margin: 0 0 8px; padding: 0; }
+.fx-app-build { min-height: 40px; padding: 4px 12px; cursor: pointer; border-radius: var(--r); color: var(--ink-soft); }
+.fx-app-build:hover, .fx-app-build:focus-visible { background: var(--surface-2, var(--surface-3)); outline: none; }
+.fx-build-n { display: inline-flex; align-items: baseline; gap: 2px; padding-left: 12px; }
+.fx-latest { margin-left: 8px; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent-text); }
+.fx-app-build .fx-line { gap: 2px; }
 
 /* Sheets (Waive…, Direct change, From a benchmark). */
 .fx-sheet-back { position: fixed; inset: 0; z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding: 10vh 16px 16px; background: color-mix(in srgb, var(--ink) 30%, transparent); }
@@ -169,8 +194,8 @@
   .fx-row { grid-template-columns: minmax(100px, 150px) minmax(0, auto) minmax(130px, 1fr) auto; }
   .fx-row-cost { display: none; }
   .fx-stopped { grid-template-columns: minmax(100px, 150px) 32px minmax(0, 1fr) auto auto; }
-  .fx-app-row { grid-template-columns: minmax(0, 1fr) auto auto auto; }
-  .fx-app-faces, .fx-app-deploys, .fx-app-pr { display: none; }
+  .fx-app-grid { grid-template-columns: 28px minmax(160px, 1fr) 112px minmax(100px, 0.9fr) 84px 64px 64px; }
+  .fx-app-grid > .fx-c-deploy, .fx-app-grid > .fx-c-builds { display: none; }
 }
 @media (max-width: 639px) {
   .fx { gap: 14px; }
@@ -192,8 +217,21 @@
   .fx-stopped .fx-retry { grid-area: retry; }
   .fx-stopped .fx-retry, .fx-split button, .fx-empty .ag-btn, .fx-sheet .ag-btn { min-height: 44px; }
   .fx-empty .ag-btn { flex: 1 1 100%; justify-content: center; }
-  .fx-app-row { grid-template-columns: minmax(0, 1fr) auto auto; }
-  .fx-app-preview, .fx-app-count { display: none; }
+  /* Phone: a card per app. Name and state on top; crew, PR, spend, builds and when below. */
+  .fx-apps-head { display: none; }
+  .fx-app-grid { grid-template-columns: 44px minmax(0, 1fr) auto;
+    grid-template-areas: "chev app updated" ". state state" ". crew crew" ". pr spend"; row-gap: 4px; }
+  .fx-app-grid > .fx-c-chev { grid-area: chev; align-self: start; }
+  .fx-app-grid > .fx-c-app { grid-area: app; }
+  .fx-app-grid > .fx-c-updated { grid-area: updated; align-self: start; }
+  .fx-app-grid > .fx-c-state { grid-area: state; white-space: normal; }
+  .fx-app-grid > .fx-c-crew { grid-area: crew; }
+  .fx-app-grid > .fx-c-pr { grid-area: pr; }
+  .fx-app-grid > .fx-c-spend { grid-area: spend; }
+  .fx-app-grid > .fx-c-deploy, .fx-app-grid > .fx-c-builds { display: none; }
+  .fx-app-chev { width: 44px; height: 44px; }
+  .fx-app-row, .fx-app-build { padding: 10px 4px; }
+  .fx-build-n { padding-left: 0; }
   .fx-sheet-back { padding: 0; align-items: stretch; }
   .fx-sheet { width: 100%; max-height: none; border-radius: 0; }
 }
