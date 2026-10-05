@@ -349,11 +349,14 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
     if not planned.get("changeset_id"):
         return {"status": "blocked", "deployment_run_id": deployment_run_id,
                 "reason": "Deployment has no governed ChangeSet."}
+    governed = _governed_plan_fields(planned)
     return {"status": "planned", "deployment_run_id": deployment_run_id,
             "target_id": target["id"], "app_name": target.get("app_name"),
             "environment": target["environment"],
             "changeset_id": planned["changeset_id"],
-            "next_action": "approve_and_apply_changeset"}
+            "next_action": ("approve_decision" if governed
+                            else "approve_and_apply_changeset"),
+            **governed}
 
 
 def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_id: str,
@@ -484,7 +487,10 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
                                      "deployment_run_id": deployment_run_id,
                                      "changeset_id": planned.get("changeset_id"),
                                      **({"next_action": "approve_and_apply_changeset"}
-                                        if planned.get("changeset_id") else {})})
+                                        if planned.get("changeset_id") else {}),
+                                     **({"next_action": "approve_decision"}
+                                        if _governed_plan_fields(planned) else {}),
+                                     **_governed_plan_fields(planned)})
 
     except Exception as exc:  # noqa: BLE001
         # A delivery failure must never un-merge a PR or fail a completed code task.
@@ -601,7 +607,8 @@ def redeploy(engine, settings: Settings, deployment_run_id: str, *,
     if not execute:
         return {"status": "planned", "deployment_run_id": new_id,
                 "redeploy_of": deployment_run_id,
-                "changeset_id": planned.get("changeset_id")}
+                "changeset_id": planned.get("changeset_id"),
+                **_governed_plan_fields(planned)}
     return {"deployment_run_id": new_id,
             **execute_deployment(engine, settings, new_id, actor=actor)}
 
@@ -757,6 +764,20 @@ def pipeline_view(connection, project_id: str, *, limit: int = 25) -> dict[str, 
 # --------------------------------------------------------------------------- #
 # Execution — BOSS places the artifact, observes it, and rolls back on its own
 # --------------------------------------------------------------------------- #
+def _governed_plan_fields(planned: dict) -> dict[str, Any]:
+    """A governed host plan's decision and review, for the console to show and link."""
+    review = (planned.get("release_packet") or {}).get("plan_review")
+    if not review or not planned.get("decision_id"):
+        return {}
+    return {"decision_id": planned["decision_id"], "plan_review": review}
+
+
+def connector_target_kind(run: dict) -> bool:
+    from .governed_host_deploy import is_host_kind
+
+    return is_host_kind(run.get("target_kind"))
+
+
 def block_ungoverned_connector_execution(
     connection, run: dict, settings: Settings, *, actor: str
 ) -> dict[str, Any]:
@@ -828,6 +849,19 @@ def block_ungoverned_connector_execution(
                     "Direct connector execution has no ResourceReceipt boundary; "
                     "apply the approved ChangeSet through ProviderOps."
                 )
+
+    if changeset_id and (run.get("release_packet") or {}).get("governed"):
+        # A governed host deployment (services/governed_host_deploy.py) has exactly one way to
+        # the host: its decision's approval queues the apply under the ChangeSet.
+        from .governed_host_deploy import GOVERNED_PATH
+
+        reason_code = "governed_host_deployment_applies_on_approval"
+        reason = ("This host deployment is applied by BOSS once its decision is approved, "
+                  "never executed directly. " + GOVERNED_PATH)
+    elif not changeset_id and connector_target_kind(run):
+        from .governed_host_deploy import ungoverned_refusal
+
+        reason = ungoverned_refusal()
 
     # A historical run with no ChangeSet can never be repaired by retrying it;
     # leave a durable refusal and decision. A linked ChangeSet may still be

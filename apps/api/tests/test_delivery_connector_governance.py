@@ -72,7 +72,8 @@ def test_enterprise_manual_host_deploy_records_block_without_worker(
         json={"target_id": target_id, "actor": "ceo", "ref": "main", "wait": True},
     )
     assert response.status_code == 409, response.text
-    assert "Direct host deployment" in response.text
+    # Host targets plan only through the governed path, which needs a verified host.
+    assert "not attached to a deployment host" in response.text
     with engine.begin() as connection:
         run = connection.execute(
             text("SELECT status, decision_id, changeset_id, failure_reason "
@@ -86,7 +87,7 @@ def test_enterprise_manual_host_deploy_records_block_without_worker(
         ).first()
     assert run["status"] == "failed"
     assert run["decision_id"] and run["changeset_id"] is None
-    assert "ResourceReceipt" in run["failure_reason"]
+    assert "verified host" in run["failure_reason"]
     assert event and not started
 
 
@@ -212,7 +213,7 @@ def test_historical_direct_run_blocks_before_connector_preflight(
         headers=headers, json={"actor": "ceo"},
     )
     assert response.status_code == 409, response.text
-    assert "no ChangeSet" in response.text
+    assert "outside an approved Resource Plane ChangeSet" in response.text
     with engine.begin() as connection:
         run = connection.execute(
             text("SELECT status, decision_id, failure_reason FROM deployment_runs "
@@ -224,7 +225,7 @@ def test_historical_direct_run_blocks_before_connector_preflight(
             {"id": run_id},
         ).scalar_one()
     assert run["status"] == "blocked" and run["decision_id"]
-    assert "no ChangeSet" in run["failure_reason"]
+    assert "outside an approved Resource Plane ChangeSet" in run["failure_reason"]
     assert events_before_replay == 1
 
     replay = delivery_pipeline.execute_deployment(
@@ -422,7 +423,7 @@ def test_first_deploy_direct_host_returns_409_with_audited_block(
               "target_id": target_id, "actor": "ceo"},
     )
     assert denied.status_code == 409, denied.text
-    assert "Direct host deployment" in denied.text
+    assert "not attached to a deployment host" in denied.text
     with engine.begin() as connection:
         run = connection.execute(
             text("SELECT status, decision_id, changeset_id FROM deployment_runs "
