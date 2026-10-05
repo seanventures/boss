@@ -16,7 +16,9 @@ export type CcApp = {
   state: string; word: string;
   prNumber: number | null; prUrl: string | null; prState: string | null;
   costUsd: number; included: boolean; builds: number; at: string | null;
-  /** The build the card opens: the newest attempt that BUILT something, else the newest. */
+  /** The latest attempt's state (what the app is doing now). */
+  latestState: string;
+  /** The build the card opens: the attempt that needs you, else the latest. */
   openRunId: string;
 };
 
@@ -26,14 +28,17 @@ const arr = (w: unknown): unknown[] => (Array.isArray(w) ? w : []);
 const str = (w: unknown): string => (typeof w === "string" ? w : w == null ? "" : String(w));
 const num = (w: unknown): number => (typeof w === "number" && Number.isFinite(w) ? w : Number(w) || 0);
 
-const BUILT = new Set(["pr_open", "merged", "deployed", "done_no_pr"]);
+const NEEDS = new Set(["needs_plan", "needs_waiver", "budget_refused"]);
 
 export function parseCcApps(w: unknown): CcApp[] {
   return arr(obj(w).apps).map((x) => {
     const o = obj(x);
     const attempts = arr(o.attempts).map(obj);
-    const built = attempts.find((a) => BUILT.has(str(a.state)));
     const runId = str(o.run_id) || str(o.key);
+    // THE CARD AGREES WITH NEEDS YOU (independent test): it opens the attempt that waits on
+    // you, else the latest — never an older attempt's PR.
+    const needing = attempts.find((a) => NEEDS.has(str(a.state)));
+    const latest = attempts[0];
     return {
       key: str(o.key) || runId, app: str(o.app), runId,
       builders: arr(o.builders).map(str).filter(Boolean),
@@ -44,13 +49,16 @@ export function parseCcApps(w: unknown): CcApp[] {
       costUsd: num(o.cost_usd), included: o.included === true,
       builds: num(o.builds) || attempts.length || 1,
       at: typeof o.at === "string" ? o.at : null,
-      openRunId: str(built?.run_id) || runId,
+      latestState: str(latest?.state) || str(o.state),
+      openRunId: str(needing?.run_id) || str(latest?.run_id) || runId,
     };
   });
 }
 
 /** Which chip a card wears, from the Factory's state. */
 export function shelfState(a: CcApp): ShelfState {
+  // What the app does NOW is its latest attempt: a plan waiting on you outranks an older PR.
+  if (NEEDS.has(a.latestState) || NEEDS.has(a.state)) return "needs";
   if (a.state === "pr_open" || (a.prNumber && a.prState === "open" && /^PR open/.test(a.word))) return "pr";
   if (a.state === "needs_plan" || a.state === "needs_waiver" || a.state === "budget_refused" || /^Needs you/.test(a.word)) return "needs";
   if (a.state === "failed" || /^Failed/.test(a.word)) return "failed";
@@ -63,7 +71,7 @@ export function shelfState(a: CcApp): ShelfState {
 export function shelfWord(a: CcApp): string {
   const s = shelfState(a);
   if (s === "pr") return a.prNumber ? `PR #${a.prNumber} open` : "PR open";
-  if (s === "needs") return a.state === "needs_plan" ? "Plan waiting on you" : "Needs you";
+  if (s === "needs") return a.latestState === "needs_plan" || a.state === "needs_plan" ? "Plan waiting on you" : "Needs you";
   if (s === "failed") return "Failed";
   if (s === "stopped") return "Stopped";
   return a.word || "Building";

@@ -16,7 +16,7 @@ import type { Pulse, PulseEvent, Week } from "../../lib/command-center-view";
 import { AgentAvatar } from "../agent-avatar";
 import { nameOf } from "../agents/run-face";
 import { ago, navigate, plainClick, runPatch } from "../agents/live-util";
-import { Go } from "./hero";
+import { Go, whoLine } from "./hero";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -48,9 +48,13 @@ export function Heatmap({ pulse }: { pulse: Pulse }) {
   pulse.days.forEach((d, i) => {
     const p = parts(d.date);
     const col = Math.floor((first + i) / 7);
-    if (p.m !== last && (months.length === 0 || months[months.length - 1].col !== col)) {
-      months.push({ col, word: MONTHS[p.m] });
+    if (p.m !== last) {
       last = p.m;
+      // A LABEL NEVER TOUCHES ITS NEIGHBOUR (independent test, 390px): one that would start
+      // within two weeks of the previous is dropped, the later month kept.
+      const prev = months[months.length - 1];
+      if (prev && col - prev.col < 2) months.pop();
+      months.push({ col, word: MONTHS[p.m] });
     }
   });
   return (
@@ -76,17 +80,21 @@ const VERDICT: Record<string, string> = { approved: " — approved", changes_ask
 
 function Event({ e, now, orgId }: { e: PulseEvent; now: number | null; orgId?: string | null }) {
   const who = nameOf(e.roleKey);
+  const role = who.role && who.role.toLowerCase() !== who.name.toLowerCase() ? who.role : "";
   const when = ago(e.at, now);
   const body = (
     <>
       <span className="cc-ev-face"><AgentAvatar agent={e.roleKey} size={30} aiBadge={false} /></span>
       <span className="cc-ev-text">
         <span><b>{who.name}</b> {e.verb} <b data-user-text>{e.subject}</b>{e.verdict ? VERDICT[e.verdict] : ""}</span>
-        <span className="cc-ev-sub">{[when && `${when} ago`, who.role].filter(Boolean).join(" · ")}</span>
+        <span className="cc-ev-sub">{[when && `${when} ago`, role].filter(Boolean).join(" · ")}</span>
       </span>
     </>
   );
-  if (e.kind === "run" && e.runId) {
+  if (e.url) {
+    return <a className="cc-ev" href={e.url} target="_blank" rel="noreferrer" data-testid="cc-ev">{body}</a>;
+  }
+  if ((e.kind === "run" || e.kind === "made") && e.runId && e.runId.startsWith("wfr_")) {
     const runId = e.runId;
     return (
       <a className="cc-ev" href={`/?${new URLSearchParams({ ...(orgId ? { org: orgId } : {}), area: "delivery_workflows", wfr: runId })}`}
@@ -96,7 +104,8 @@ function Event({ e, now, orgId }: { e: PulseEvent; now: number | null; orgId?: s
     );
   }
   return (
-    <Go className="cc-ev" patch={{ area: "code_tasks", view: "apps", build: e.runId, role: null }} orgId={orgId} testId="cc-ev">
+    <Go className="cc-ev" patch={e.runId ? { area: "code_tasks", view: "apps", build: e.runId, role: null }
+                                      : { area: "workforce", view: "activity", role: null }} orgId={orgId} testId="cc-ev">
       {body}
     </Go>
   );
@@ -136,11 +145,21 @@ export function PulseRow({ pulse, week, prsOpen, now, orgId }: {
               <span><b>{pulse.total.toLocaleString("en-US")}</b>agent steps</span>
               {prsOpen !== null ? <span><b>{prsOpen}</b>PRs open</span> : null}
               {pulse.busiest ? <span>Busiest <b className="cc-busy">{dayWord(pulse.busiest.date)} · {pulse.busiest.n} steps</b></span> : null}
-              {week ? (
-                <span className="cc-week" tabIndex={0} data-testid="cc-week" title={`This week: ${weekLine(week)}`}>This week</span>
-              ) : null}
+
               <span className="cc-heat-legend" aria-hidden>Less <i className="l0" /><i className="l1" /><i className="l2" /><i className="l3" /><i className="l4" /> More</span>
             </div>
+            {week ? (
+              // THIS WEEK, REACHABLE BY TOUCH (parity b): a line you open, not a tooltip.
+              <details className="cc-week" data-testid="cc-week">
+                <summary>
+                  This week: <b>{week.passed}</b> finished
+                  {week.failed ? <> · <b className="cc-failed">{week.failed}</b> failed</> : null}
+                </summary>
+                <p data-testid="cc-week-line" aria-label={weekLine(week)}>
+                  {weekLine(week).split(" · ").map((part) => <span key={part}>{part}</span>)}
+                </p>
+              </details>
+            ) : null}
             {top.length ? (
               <>
                 <div className="cc-top-h">Most active agents</div>
@@ -149,9 +168,9 @@ export function PulseRow({ pulse, week, prsOpen, now, orgId }: {
                     const who = nameOf(t.roleKey);
                     return (
                       <Go key={t.roleKey} className="cc-top-row" patch={{ area: "workforce", role: t.roleKey, view: null }}
-                          orgId={orgId} title={`${who.name} · ${who.role} · ${t.n} steps`}>
+                          orgId={orgId} title={`${whoLine(t.roleKey)} · ${t.n} steps`}>
                         <span className="cc-ev-face"><AgentAvatar agent={t.roleKey} size={30} aiBadge={false} /></span>
-                        <span className="cc-top-name">{who.name}<small>{who.role}</small></span>
+                        <span className="cc-top-name">{who.name}{who.role.toLowerCase() !== who.name.toLowerCase() ? <small>{who.role}</small> : null}</span>
                         <span className="cc-bar" aria-hidden><i style={{ width: `${Math.max(2, (100 * t.n) / most)}%` }} /></span>
                         <b>{t.n}</b>
                       </Go>

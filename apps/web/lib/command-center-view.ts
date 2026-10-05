@@ -60,7 +60,9 @@ export type PulseDay = { date: string; n: number };
 export type PulseEvent = {
   roleKey: string; verb: string; subject: string;
   verdict: "approved" | "changes_asked" | null;
-  at: string; runId: string | null; kind: "build" | "run";
+  at: string; runId: string | null; kind: "build" | "run" | "made";
+  /** What it made, when it is a link (a PR). */
+  url: string | null;
 };
 
 /** THE PULSE (served by the API, aggregated in SQL from the acts ledger): the team's last 14
@@ -179,7 +181,9 @@ export function parsePulse(w: unknown): Pulse | null {
       const v = str(y.verdict);
       return { roleKey: str(y.role_key), verb: str(y.verb), subject: str(y.subject),
                verdict: v === "approved" || v === "changes_asked" ? v : null,
-               at: str(y.at), runId: optStr(y.run_id), kind: y.kind === "run" ? "run" : "build" };
+               at: str(y.at), runId: optStr(y.run_id),
+               kind: y.kind === "run" ? "run" : y.kind === "made" ? "made" : "build",
+               url: typeof y.url === "string" && y.url.startsWith("http") ? y.url : null };
     }),
     lastActAt: optStr(o.last_act_at),
   };

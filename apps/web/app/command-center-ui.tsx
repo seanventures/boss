@@ -83,6 +83,23 @@ export function needsOrder(view: CommandCenterView | null, items: AttentionItem[
   };
 }
 
+/** Agents on a live run's current step — the same missions In flight draws — so a face glows
+ *  exactly while its run moves (independent test: Juno worked, her face sat still). */
+export function workingOn(missions: { state: string; hops: { kind: string; roleKey?: string | null; state?: string }[] }[]): Set<string> {
+  const out = new Set<string>();
+  for (const m of missions) {
+    if (m.state !== "running") continue;
+    for (let i = m.hops.length - 1; i >= 0; i -= 1) {
+      const h = m.hops[i];
+      if (h.kind === "hop" && h.roleKey) {
+        if (h.state === "working" || h.state === "thinking" || h.state === "speaking") out.add(h.roleKey);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 /** Agents something waits on you for: the face an approval or plan is attributed to. */
 export function waitingOn(items: AttentionItem[]): Set<string> {
   return new Set(items.filter((a) => a.kind === "approval" && a.roleKey).map((a) => a.roleKey as string));
@@ -194,6 +211,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const attention = useMemo(() => (view?.attention ?? []).filter((a) => !gone.has(a.id)), [view, gone]);
   const { lead, olderStopped } = needsOrder(view, attention);
   const waiting = useMemo(() => waitingOn(attention), [attention]);
+  const working = useMemo(() => workingOn(view?.missions ?? []), [view]);
   const refresh = useCallback(() => { polled.refresh(); apps.refresh(); }, [polled, apps]);
 
   const startWork = useCallback(() => {
@@ -204,10 +222,27 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
 
   const sys = systemsWord(view?.systems ?? [], reachable);
   const lastWork = view?.pulse?.lastActAt ?? view?.today.lastWorkAt ?? null;
-  const lastWorkWord = ago(lastWork, now);
+  // WORKING NOW while anything moves (independent test: "last work 22d ago" beside a run
+  // that was working): open work on any agent, or a live run that is not stalled.
+  const workingNow = !!view && (view.counts.working > 0 || working.size > 0
+    || view.missions.some((m) => m.state === "running"));
+  const lastWorkWord = workingNow ? "working now" : ago(lastWork, now) ? `last work ${ago(lastWork, now)} ago` : "";
   const firstRun = !!view && !view.today.everRan;
   const appRows = apps.data;
+  // NO HISTORY: no app built, no agent step in 14 weeks.
+  const fresh = !!view && (view.pulse?.total ?? 0) === 0 && (appRows?.length ?? 0) === 0;
   const proof = proofOf(appRows, view?.counts.agents ?? 0, (view?.teams ?? []).filter((t) => t.members.length).length);
+
+  const nowCards = (
+      <div className="cc-now" data-fresh={fresh ? "true" : undefined}>
+        <NeedsCard view={view} lead={lead} olderStopped={olderStopped} needsYou={view ? view.counts.needsYou : null}
+                   projectId={projectId} actor={actor} orgId={orgId} now={now} reachable={reachable}
+                   onGone={(id) => setGone((g) => new Set(g).add(id))} onRefresh={refresh} />
+        <FlightCard view={view} projectId={projectId} actor={actor} orgId={orgId} now={now}
+                    onRefresh={refresh} onStart={startWork} />
+        <HealthCard view={view} reachable={reachable} orgId={orgId} />
+      </div>
+  );
 
   return (
     <div className="cc" ref={rootRef} data-testid="command-center" data-reachable={reachable ? "true" : "false"}
@@ -224,7 +259,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
             {status.key !== "unreachable" && status.key !== "quiet" ? (
               <><span aria-hidden>·</span><span data-testid="cc-status-text">{status.text}</span></>
             ) : null}
-            {lastWorkWord && reachable ? <><span aria-hidden>·</span><span>last work {lastWorkWord} ago</span></> : null}
+            {lastWorkWord && reachable ? <><span aria-hidden>·</span><span data-testid="cc-last-work">{lastWorkWord}</span></> : null}
             {status.paused ? (
               <span className="cc-chip" data-testid="cc-paused" title="Live updates are paused. Press Live in the top bar.">Paused</span>
             ) : null}
@@ -247,22 +282,42 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
           <Proof n={proof} orgId={orgId} />
         </div>
         {view ? (
-          <TeamGrid teams={view.teams} agents={view.agents} waiting={waiting} orgId={orgId} still={motion !== "full"} />
+          <TeamGrid teams={view.teams} agents={view.agents} waiting={waiting} working={working} orgId={orgId}
+                    still={motion !== "full"} />
         ) : <div className="cc-hero-r" aria-hidden />}
       </section>
 
-      <div className="cc-now">
-        <NeedsCard view={view} lead={lead} olderStopped={olderStopped} needsYou={view ? view.counts.needsYou : null}
-                   projectId={projectId} actor={actor} orgId={orgId} now={now} reachable={reachable}
-                   onGone={(id) => setGone((g) => new Set(g).add(id))} onRefresh={refresh} />
-        <FlightCard view={view} projectId={projectId} actor={actor} orgId={orgId} now={now}
-                    onRefresh={refresh} onStart={startWork} />
-        <HealthCard view={view} reachable={reachable} orgId={orgId} />
-      </div>
-
+      {fresh ? null : nowCards}
+      {/* A FRESH INSTALL (independent test): nothing built and no history yet. The templates
+          lead, under one line that says where the team stands; the pulse waits for history
+          instead of drawing two near-empty boxes. */}
+      {fresh ? <FirstBuild onStart={startWork} /> : null}
       <TemplatesShelf />
+      {fresh ? nowCards : null}
       <AppsShelf apps={appRows} orgId={orgId} />
-      <PulseRow pulse={view?.pulse ?? null} week={view?.week ?? null} prsOpen={proof ? proof.prs : null} now={now} orgId={orgId} />
+      {fresh ? null : (
+        <PulseRow pulse={view?.pulse ?? null} week={view?.week ?? null} prsOpen={proof ? proof.prs : null}
+                  now={now} orgId={orgId} />
+      )}
     </div>
+  );
+}
+
+/** The fresh install's one line: nothing yet, and the two ways to start. */
+function FirstBuild({ onStart }: { onStart: () => void }) {
+  return (
+    <section className="cc-first" data-testid="cc-first-build" aria-label="Your first build">
+      <span className="cc-radar" aria-hidden />
+      <div>
+        <b>Your team hasn&apos;t built anything yet</b>
+        <span>Describe one, or pick a template</span>
+      </div>
+      <span className="cc-spacer" />
+      <button type="button" className="cc-btn primary" data-testid="cc-first-start" onClick={onStart}>Describe a build</button>
+      <button type="button" className="cc-btn" data-testid="cc-first-templates"
+              onClick={() => document.getElementById("cc-tpl-h")?.scrollIntoView({ block: "start", behavior: "smooth" })}>
+        Browse templates
+      </button>
+    </section>
   );
 }
