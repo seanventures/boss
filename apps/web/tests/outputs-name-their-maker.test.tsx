@@ -29,11 +29,13 @@ function view(c: Cockpit, open: Parameters<typeof Outputs>[0]["open"] = null, on
 const roleIn = (sel: string) => $(`${sel} [data-role]`)?.dataset.role ?? null;
 
 describe("Outputs", () => {
-  it("are eight rows in order, each with the server's word", async () => {
+  it("are the Brief, then eight outputs in order, each with the server's word", async () => {
     stubFetch(cockpit());
     await mount(view(parseCockpit(cockpit())));
+    // The Brief (what it was asked and how it was built) heads the rail: the old page's
+    // contract and meta rows, kept (a-build-page-keeps-what-the-old-page-said.test.tsx).
     expect($$(".fx-out .fx-out-label").map((l) => l.textContent)).toEqual(
-      ["Pull request", "Checks", "Tests", "Changes", "Comments", "Preview", "Deploy", "Cost"]);
+      ["Brief", "Pull request", "Checks", "Tests", "Changes", "Comments", "Preview", "Deploy", "Cost"]);
     expect($('[data-testid="fx-out-value-pr"]')?.textContent).toBe("Not yet");
     expect($('[data-testid="fx-out-value-checks"]')?.textContent).toBe("After review");
     expect($('[data-testid="fx-out-value-tests"]')?.textContent).toBe("2 of 2 commands passed");

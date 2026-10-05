@@ -40,11 +40,15 @@ type UrlState = { view: View; build: string | null };
 /** Where the URL says the Factory is. `run=` (older links) reads as `build=`. */
 export function readFactoryUrl(search: string): UrlState & { legacyRun: boolean; wantsNew: boolean } {
   const q = new URLSearchParams(search);
-  const build = q.get("build") || q.get("run") || null;
+  // `run=` names a build only when it IS one: the rail carries a Workforce `run=wfr_…` across
+  // areas, and opening a cockpit for a workflow run's id ended on an endless skeleton.
+  const run = q.get("run");
+  const legacy = run && /^crun_/.test(run) ? run : null;
+  const build = q.get("build") || legacy || null;
   return {
     view: q.get("view") === "apps" ? "apps" : "floor",
     build,
-    legacyRun: !q.get("build") && !!q.get("run"),
+    legacyRun: !q.get("build") && !!legacy,
     wantsNew: q.get("new") === "1",
   };
 }
@@ -199,7 +203,15 @@ function NewBuildButton({ open, setOpen, onPlan, onDirect, onBenchmark, hasBench
   );
 }
 
-export function CodeTasksHome({ projectId, orgId, codeTasks, apiReachable, previews = [], benchmarks = [], actor = "executive_console" }: {
+/** Where this Factory's PRs go, as the old list said it (the GitHub plane in force). */
+function githubTip(plane: string, label?: string | null, repo?: string | null): string {
+  if (plane === "mission_control_binding") return `PRs open through the project's GitHub binding${repo ? ` on ${repo}` : ""}`;
+  if (plane === "legacy_env") return `PRs open with the settings token${repo ? ` on ${repo}` : ""}. Connect GitHub for the project binding.`;
+  return label || `GitHub: ${plane}`;
+}
+
+export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiReachable, previews = [], previewBlockedReason, benchmarks = [],
+                                actor = "executive_console", githubPlane, githubPlaneLabel, githubFullName }: {
   projectId: string;
   orgId?: string;
   codeTasks: CodeTaskRun[];
@@ -321,6 +333,21 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, apiReachable, previ
             <span>{counts.building} building</span>
             {needs ? <><span aria-hidden> · </span><span className="fx-needs">{needs === 1 ? "1 needs you" : `${needs} need you`}</span></> : null}
           </span>
+        ) : null}
+        {/* WHAT THE OLD LIST SAID ABOUT ITSELF: that it is a window onto the newest builds, where
+            its PRs go, and that previews could not be listed (so no View link is a lie). */}
+        {codeTaskTotal && codeTaskTotal > codeTasks.length ? (
+          <span className="fx-muted" data-testid="fx-window" title={`The Factory reads the newest ${codeTasks.length} of ${codeTaskTotal} builds`}>
+            Newest {codeTasks.length} of {codeTaskTotal}
+          </span>
+        ) : null}
+        {githubPlane ? (
+          <span className="fx-muted fx-head-gh" data-testid="fx-github-plane" title={githubTip(githubPlane, githubPlaneLabel, githubFullName)}>
+            GitHub{githubFullName ? <> · <span data-user-text>{githubFullName}</span></> : null}
+          </span>
+        ) : null}
+        {previewBlockedReason ? (
+          <span className="fx-err" role="status" data-testid="fx-preview-list-error" title={previewBlockedReason}>Previews unavailable</span>
         ) : null}
         <span className="ag-spacer" />
         <label className="fx-find">

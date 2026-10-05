@@ -87,10 +87,14 @@ describe("clicking a project opens it", () => {
     expect(SRC).toContain('new PopStateEvent("popstate")');
   });
 
-  it("the Factory reads that param, or the click lands nowhere", () => {
-    // The Factory reads `run=` as `build=` (and rewrites it), opening that build's cockpit.
+  it("the Factory reads that param, or the click lands nowhere", async () => {
+    // The Factory reads `run=` as `build=` (and rewrites it), opening that build's cockpit —
+    // and a stale `build=` from an earlier visit never beats the build the strip just named.
+    const { readFactoryUrl } = await import("../app/code-tasks-ui");
+    const { searchForProject } = await import("../app/url-intent");
+    expect(readFactoryUrl(searchForProject("?org=o&build=crun_old", "crun_new")).build).toBe("crun_new");
+    expect(readFactoryUrl("?area=code_tasks&run=crun_new")).toMatchObject({ build: "crun_new", legacyRun: true });
     const factory = codeOnly("app/code-tasks-ui.tsx");
-    expect(factory).toContain('q.get("build") || q.get("run")');
     expect(factory).toContain("window.addEventListener(\"popstate\", read)");
   });
 });

@@ -126,8 +126,8 @@
 /* Apps. */
 .fx-apps { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .fx-app { list-style: none; }
-.fx-app-row { grid-template-columns: minmax(140px, 220px) minmax(60px, auto) minmax(0, 1fr) auto auto auto auto; cursor: default; }
-.fx-app-faces, .fx-app-preview, .fx-app-deploys, .fx-app-count { display: inline-flex; gap: 8px; font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
+.fx-app-row { grid-template-columns: minmax(140px, 220px) minmax(60px, auto) minmax(0, 1fr) auto auto auto auto auto; cursor: default; }
+.fx-app-faces, .fx-app-preview, .fx-app-deploys, .fx-app-count, .fx-app-pr { display: inline-flex; gap: 8px; font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
 .fx-app-builds { list-style: none; margin: 4px 0 0 24px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .fx-app-build {
   display: inline-flex; gap: 4px; min-height: 32px; padding: 0 8px; border: 0; border-radius: var(--r); background: none;
@@ -170,7 +170,7 @@
   .fx-row-cost { display: none; }
   .fx-stopped { grid-template-columns: minmax(100px, 150px) 32px minmax(0, 1fr) auto auto; }
   .fx-app-row { grid-template-columns: minmax(0, 1fr) auto auto auto; }
-  .fx-app-faces, .fx-app-deploys { display: none; }
+  .fx-app-faces, .fx-app-deploys, .fx-app-pr { display: none; }
 }
 @media (max-width: 639px) {
   .fx { gap: 14px; }
@@ -225,6 +225,7 @@
 
 /* From a benchmark (walk D12): one row per example app, Factory words and tokens. */
 .fx-bench { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.fx-bench-row { display: flex; align-items: center; gap: 10px; min-height: 48px; border-bottom: 1px solid var(--hair); min-width: 0; }
+.fx-bench-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-height: 48px; border-bottom: 1px solid var(--hair); min-width: 0; }
+.fx-bench-details { flex-basis: 100%; padding: 0 0 10px; }
 .fx-bench-name { font-weight: 650; color: var(--ink); max-width: 40%; }
 .fx-bench-tag { color: var(--muted); font-size: 0.8rem; min-width: 0; }
