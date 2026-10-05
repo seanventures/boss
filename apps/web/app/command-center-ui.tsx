@@ -287,6 +287,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const [moreCards, setMoreCards] = useState(false);
   const [moreRows, setMoreRows] = useState(false);
   const [openWaits, setOpenWaits] = useState(false);
+  const [stripWindowLabel, setStripWindowLabel] = useState<string | null>(null);
   // One tab stop per list (D15): Tab past Needs you and RUNNING in two presses, not eighty.
   const cardsRef = useRef<HTMLDivElement>(null);
   const lanesRef = useRef<HTMLDivElement>(null);
@@ -473,11 +474,14 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   );
   const workSec = (
     <section className="cc-sec cc-sec-work" id="cc2-running" aria-labelledby="cc-work-h">
-      <Head id="cc-work-h" label={phone ? "LAST 12H" : "LAST 24H"}>
+      {/* The head says the window the strip draws ("LAST 45M" when Fit frames 45 minutes),
+          never a 24 hours it is not showing (re-test 1). */}
+      <Head id="cc-work-h" label={(stripWindowLabel ?? (phone ? "Last 12h" : "Last 24h")).toUpperCase()}>
         <HeadLink patch={{ area: "delivery_workflows", role: null, view: null }} orgId={orgId}>Workflow ↗</HeadLink>
       </Head>
       {view ? (
         <DayStrip day={view.day} nowMs={now} generatedAt={view.generatedAt} windowHours={phone ? 12 : 24}
+                  onWindow={setStripWindowLabel}
                   rowsMax={width >= 1440 ? 10 : 8} motion={motion} hoverRunId={hoverRunId}
                   onHover={setHoverRunId} orgId={orgId} onStartWork={startWork} />
       ) : null}

@@ -39,14 +39,18 @@ vi.mock("../app/command-center/today-chart", () => ({
 }));
 vi.mock("../app/command-center/day-strip", () => ({
   DayStrip: (p: { rowsMax: number; windowHours: number; motion: string; onHover: (id: string | null) => void;
-                  day: { rows: { runId: string }[] } }) => (
+                  day: { rows: { runId: string }[] }; onWindow?: (label: string) => void }) => {
+    // The real strip reports the window it frames; the stub says "Last 45m" to test the head.
+    React.useEffect(() => { p.onWindow?.("Last 45m"); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    return (
     <div data-testid="stub-strip" data-rows-max={p.rowsMax} data-window={p.windowHours} data-motion={p.motion}>
       {p.day.rows.map((r) => (
         <button key={r.runId} type="button" data-testid={`stub-bar-${r.runId}`}
                 onMouseEnter={() => p.onHover(r.runId)}>b</button>
       ))}
     </div>
-  ),
+    );
+  },
 }));
 vi.mock("../app/command-center/week-bars", () => ({
   WeekBars: (p: { week: { runs: number } }) => <div data-testid="stub-week" data-runs={p.week.runs} />,
@@ -541,5 +545,12 @@ describe("the host banner's commands (re-test 4)", () => {
     expect(banner.textContent).not.toContain("`");
     expect(banner.querySelector("code")?.textContent).toBe("docker system prune");
     expect($('[data-testid="host-advice-copy"]')?.getAttribute("title")).toBe("Copy: docker system prune");
+  });
+});
+
+describe("the strip's head (re-test 1)", () => {
+  it("says the window the strip draws, not a fixed 24 hours", async () => {
+    await mount(page(V(view())));
+    expect(text("#cc-work-h")).toBe("LAST 45M");
   });
 });
