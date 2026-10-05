@@ -202,6 +202,15 @@ report_capacity() {
   swap="$(rshq "free -m | awk '/Swap:/{print \$2}'")"
   disk="$(rshq "df -BG --output=avail / | tail -1 | tr -dc '0-9'")"
   say "host: ${mem}MB RAM, ${swap}MB swap, ${disk}GB free disk"
+  # WHAT THIS MACHINE CAN RUN AT ONCE, measured the way admission measures it (admission.py):
+  # (RAM - max(1 GB, 15%) for the control plane) / 1.2 GB per build, clamped to [1, cores/2].
+  local cores slots reserve
+  cores="$(rshq "nproc" || echo 2)"
+  reserve=$(( mem * 15 / 100 )); [[ "$reserve" -lt 1024 ]] && reserve=1024
+  slots=$(( (mem - reserve) / 1200 ))
+  [[ "$slots" -gt $(( cores / 2 )) ]] && slots=$(( cores / 2 ))
+  [[ "$slots" -lt 1 ]] && slots=1
+  say "Builds at once: ${slots} (auto) — more are queued, not run into swap"
   [[ "${disk:-0}" -lt 15 ]] && warn "under 15GB free — the images alone are ~13GB"
   # NO SWAP IS THE RISK, not the RAM figure on its own. The console build is the peak, and on a
   # box with nothing to page out to the kernel kills it rather than slowing down — which reads
