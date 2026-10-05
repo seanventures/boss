@@ -18,6 +18,9 @@ import { AgFace } from "./agents/agent-face";
 import { DirectoryView } from "./agents/directory-view";
 import { LiveBoardView, liveDot } from "./agents/live-board";
 import { OrgView } from "./agents/org-view";
+import { PlanVsWork } from "./agents/org-drift";
+import type { OrgDrift } from "../lib/agents-org-board";
+import { notifyChanged } from "./changed";
 import { ActivityRiver } from "./agents/activity-river";
 import { openRoom } from "../lib/agent-converse";
 
@@ -112,12 +115,16 @@ export function WorkforceArea(
   const live = useLivePresence(projectId);
   const attention = useAttention(projectId);
   const consoleLive = useConsoleLive();
-  // ONE READ OF THE BOARD for Live and Organization, polled only while one of them is open.
-  const board = useLiveBoard(projectId, workforce.apiReachable && (view === "live" || view === "org"));
+  // ONE READ OF THE BOARD for Live, polled only while it is open. Organization reads its own
+  // board (`/v1/agents/org-board`, 30s) and a focused run's chain; it never polls this one.
+  const board = useLiveBoard(projectId, workforce.apiReachable && view === "live");
   // WHICH AGENT IS OPEN, read from the URL so Back closes it and a link opens it.
   const [openRole, setOpenRole] = useState("");
   const [focusId, setFocusId] = useState<string | null>(null);
   const [focusRun, setFocusRun] = useState<string | null>(null);
+  // Activity reached from a link (Organization's edges): one agent and a window, from the URL.
+  const [activityAgent, setActivityAgent] = useState<string | null>(null);
+  const [activityDays, setActivityDays] = useState<1 | 7>(1);
   const [orgId, setOrgId] = useState<string | null>(null);
   useEffect(() => {
     const sync = () => {
@@ -133,6 +140,8 @@ export function WorkforceArea(
         }
         setFocusId(url.searchParams.get("focus"));
         setFocusRun(url.searchParams.get("run"));
+        setActivityAgent(url.searchParams.get("agent"));
+        setActivityDays(Number(url.searchParams.get("days")) >= 7 ? 7 : 1);
         setOrgId(url.searchParams.get("org"));
       } catch { /* non-browser */ }
     };
@@ -145,6 +154,8 @@ export function WorkforceArea(
     try {
       const url = new URL(window.location.href);
       if (next === "live") url.searchParams.delete("view"); else url.searchParams.set("view", next);
+      // A link's one-agent Activity filter belongs to that link, not to the next visit.
+      if (!("agent" in patch)) { url.searchParams.delete("agent"); setActivityAgent(null); }
       for (const [k, v] of Object.entries(patch)) {
         if (v === null) url.searchParams.delete(k); else url.searchParams.set(k, v);
       }
@@ -153,8 +164,9 @@ export function WorkforceArea(
       if ("focus" in patch) setFocusId(patch.focus ?? null);
     } catch { /* non-browser */ }
   };
-  // `true` for a blank agent; a name to register an agent that works with no registered role.
-  const [creating, setCreating] = useState<boolean | string>(false);
+  // `true` for a blank agent; a name to register an agent that works with no registered role;
+  // a name and a team for Organization's `Make agent` (a role a workflow names, nobody fills).
+  const [creating, setCreating] = useState<boolean | string | { name: string; team?: string }>(false);
 
   const closeAgent = useCallback(() => {
     setOpenRole("");
@@ -343,7 +355,9 @@ export function WorkforceArea(
 
       {creating ? (
         <AgentQuickCreate projectId={workforce.project_id} actor={actor} orphans={orphans}
-                          initialName={typeof creating === "string" ? creating : ""}
+                          initialName={typeof creating === "string" ? creating
+                            : typeof creating === "object" ? creating.name : ""}
+                          initialTeam={typeof creating === "object" ? creating.team : undefined}
                           onClose={() => setCreating(false)}
                           onCreated={(roleKey) => { setCreating(false); openAgent(roleKey); }} />
       ) : null}
@@ -354,14 +368,15 @@ export function WorkforceArea(
                        onActivity={() => setView("activity")} onDirectory={() => setView("directory")}
                        onNewAgent={() => setCreating(true)} orgId={orgId} />
       ) : view === "org" ? (
-        <OrgView projectId={projectId} chart={chart} board={board.board} live={live} search={search}
-                 actor={actor} onChanged={() => board.refresh()}
+        <OrgView projectId={projectId} live={live} search={search} actor={actor}
                  focusRunId={focusRun} focusTeam={focusId}
                  onClearFocus={() => setView("org", { run: null, focus: null })}
-                 lines={chart ? <OrgChartArea projectId={projectId} actor={actor} chart={chart} />
-                   : <p className="detail">Team unavailable</p>} />
+                 onNewAgent={(o) => setCreating(o?.name ? { name: o.name, team: o.team } : true)}
+                 lines={(drift) => (chart ? <OrgChartArea projectId={projectId} actor={actor} chart={chart} drift={drift} />
+                   : <p className="detail">Team unavailable</p>)} />
       ) : view === "activity" ? (
-        <ActivityRiver projectId={projectId} roleKey={searchedRole} runId={focusRun}
+        <ActivityRiver projectId={projectId} roleKey={searchedRole ?? activityAgent} runId={focusRun}
+                       key={`${activityAgent ?? ""}:${activityDays}`} initialDays={activityDays}
                        runLabel={board.board?.missions.find((m) => m.runId === focusRun)?.subject || undefined}
                        onClearRun={() => setView("activity", { run: null })} paused={!consoleLive} />
       ) : view === "panels" && studio ? (
@@ -393,8 +408,10 @@ export function WorkforceArea(
  * Planned reporting lines and observed handoffs stay in separate views. A reporting line is a
  * decision by the operator; an observed handoff is evidence of recent work, not authority.
  */
-export function OrgChartArea({ chart, projectId, actor }: {
+export function OrgChartArea({ chart, projectId, actor, drift = null }: {
   chart: OrgChart; projectId: string; actor: string;
+  /** Organization › Lines › Plan vs work (org-view spec §4.5): the plan against 30 days of work. */
+  drift?: OrgDrift | null;
 }) {
   const [live, setLive] = useState<OrgChart>(chart);
   const [view, setView] = useState<"planned" | "observed">("planned");
@@ -464,7 +481,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
       // The API's own sentence: "X already sits above Y, so this would make a loop" is
       // actionable; "could not save" sends somebody looking in the wrong place.
       if (!r.ok) setNote(body.error ?? body.detail ?? "Could not move it.");
-      else await reload();
+      else { await reload(); notifyChanged("org-lines"); }
     } finally { setBusy(false); }
   }, [projectId, actor, reload]);
 
@@ -566,6 +583,11 @@ export function OrgChartArea({ chart, projectId, actor }: {
       </div>
       {note ? <p className="org-note" data-tone="error"
                  data-testid="org-note">{note}</p> : null}
+
+      {drift && (placedCount > 0 || drift.lines > 0) && view === "planned" ? (
+        <PlanVsWork drift={drift} busy={busy} declared={declared}
+                    onPlan={(child, parent) => void place(child, parent)} />
+      ) : null}
 
       {treeNow.length === 0 ? (
         <div className="org-empty" data-testid="org-empty">

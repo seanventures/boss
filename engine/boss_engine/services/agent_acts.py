@@ -2700,13 +2700,27 @@ def copy_declared_lines(connection: Connection, project_id: Optional[str] = None
 
 
 def observed_edges(connection: Connection, project_id: str, *,
-                   hours: int = 168) -> list[dict[str, Any]]:
-    """Agent→agent parent→child pairs in the window: the Team chart's observed handoffs."""
+                   hours: int = 168, with_outcomes: bool = False,
+                   include_people: bool = False) -> list[dict[str, Any]]:
+    """Agent→agent parent→child pairs in the window: the Team chart's observed handoffs.
+
+    The defaults are the Team chart's reader, unchanged. Organization (agents_org_board) asks
+    for more (org-view spec §6.1): `with_outcomes` adds, per pair, how many of the handed acts
+    ended in `error`, are open and `awaiting_input`, or went `stale`, plus the raw `how`;
+    `include_people` adds person→agent rows (`source: "person"`): an agent's act whose parent is
+    no agent and that a person handed — directly (a chat they opened), or as the first work of a
+    run they started (the step is handed by BOSS; the RUN act it hangs from is the person's)."""
+    outcomes = (
+        ", count(*) FILTER (WHERE c.status = 'error') AS failed,"
+        " count(*) FILTER (WHERE c.status = 'awaiting_input' AND c.ended_at IS NULL) AS waiting,"
+        " count(*) FILTER (WHERE c.status = 'stale') AS stale"
+    ) if with_outcomes else ""
     rows = connection.execute(
         text(
-            """
+            f"""
             SELECT p.role_key AS source, c.role_key AS target, count(*) AS times,
                    max(c.started_at) AS last_at, mode() WITHIN GROUP (ORDER BY c.how) AS how
+                   {outcomes}
             FROM agent_acts c JOIN agent_acts p ON p.act_id = c.parent_act_id
             WHERE c.project_id = :p AND c.role_key IS NOT NULL AND p.role_key IS NOT NULL
               AND c.role_key <> p.role_key
@@ -2716,9 +2730,31 @@ def observed_edges(connection: Connection, project_id: str, *,
         ),
         {"p": project_id, "h": int(hours)},
     ).mappings().all()
-    return [{"source": r["source"], "target": r["target"], "times": int(r["times"]),
-             "last_action": edge_label(r["how"]) if r["how"] in HOWS else None,
-             "last_at": r["last_at"]} for r in rows]
+    people = connection.execute(
+        text(
+            f"""
+            SELECT 'person' AS source, c.role_key AS target, count(*) AS times,
+                   max(c.started_at) AS last_at, mode() WITHIN GROUP (ORDER BY c.how) AS how
+                   {outcomes}
+            FROM agent_acts c LEFT JOIN agent_acts p ON p.act_id = c.parent_act_id
+            WHERE c.project_id = :p AND c.role_key IS NOT NULL AND p.role_key IS NULL
+              AND (c.handed_by_kind = 'person' OR p.handed_by_kind = 'person')
+              AND c.started_at > now() - make_interval(hours => :h)
+            GROUP BY 2
+            """
+        ),
+        {"p": project_id, "h": int(hours)},
+    ).mappings().all() if include_people else []
+    out = []
+    for r in [*rows, *people]:
+        edge = {"source": r["source"], "target": r["target"], "times": int(r["times"]),
+                "last_action": edge_label(r["how"]) if r["how"] in HOWS else None,
+                "last_at": r["last_at"]}
+        if with_outcomes:
+            edge.update(failed=int(r["failed"] or 0), waiting=int(r["waiting"] or 0),
+                        stale=int(r["stale"] or 0), how=r["how"])
+        out.append(edge)
+    return out
 
 
 def my_recent_work(connection: Connection, project_id: str, role_key: str, *, limit: int = 10,

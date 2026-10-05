@@ -3,8 +3,8 @@
  * The Agents area tells the truth (Agent World spec §2.1 one identity, §2.3 truthful edges).
  *
  * Each of these was a screen that looked right and said something false:
- *   - Replay last run keyed a workflow chain by an agent-process run id, so it never played;
- *   - a live dot ran along the agent's busiest edge, not from whoever really handed it work;
+ *   - (Replay last run and the live dot moved to Organization › Flow with the Swarm's retirement;
+ *     they are pinned in org-run-focus-and-replay.test.tsx)
  *   - Work's links dropped `?org=`, which lands the operator on the organisation picker;
  *   - the Passport drew a stored seed-only face raw, so Vera's hero was a procedural robot,
  *     and saving any voice field wrote that seed back;
@@ -17,14 +17,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DETAIL, PASSPORT, installAgentWorldApi, type Call } from "./_helpers/agent-world-api";
-import type { OrgChart } from "../lib/v2/workforce";
+import { DETAIL, PASSPORT, installAgentWorldApi } from "./_helpers/agent-world-api";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const { AgentDetail } = await import("../app/agent-detail-ui");
 const { AgentAvatar } = await import("../app/agent-avatar");
-const { TeamSwarm } = await import("../app/agents/team-swarm");
 const { PassportWork, actHref } = await import("../app/agents/passport-work");
 const { PassportLineage, actsAcross } = await import("../app/agents/passport-lineage");
 const { resetLiveStores, subscribeLive } = await import("../lib/agents-live");
@@ -65,63 +63,6 @@ const click = async (el: HTMLElement | null) => {
   await settle();
 };
 const svgIn = (el: Element | null) => el?.querySelector(".ag-avatar-svg")?.innerHTML ?? "";
-
-const node = (id: string, over: Record<string, unknown> = {}) => ({
-  id, name: identityOf(id).name, role: id, handoffs_in: 1, handoffs_out: 1, connected: true, ...over,
-});
-const chartOf = (ids: string[], edges: [string, string, number][], over: Record<string, Record<string, unknown>> = {}) => ({
-  project_id: "p1", window_hours: 168, apiReachable: true, nodes: ids.map((id) => node(id, over[id])),
-  tree: [], roots: [], root_inferred: false, depth: 0, derived_from: "", note: "", isolated: [],
-  edges: edges.map(([source, target, times]) => ({ source, target, times, last_action: null, last_at: null })),
-}) as unknown as OrgChart;
-
-describe("Team › Swarm: motion only for what really happened", () => {
-  it("Replay last run plays the newest WORKFLOW run's chain, never the org chart's process run id", async () => {
-    const { calls } = installAgentWorldApi([(url) => {
-      if (url.startsWith("/v1/delivery-workflows/runs")) return Response.json({ runs: [{ id: "wfr_new" }, { id: "wfr_old" }] });
-      if (url.startsWith("/v1/workflow-runs/wfr_new/chain")) {
-        return Response.json({ acts: [
-          { act_id: "a1", role_key: "pm", kind: "step", started_at: "2026-10-03T10:00:00Z" },
-          { act_id: "a2", role_key: "qa", kind: "step", parent_act_id: "a1", started_at: "2026-10-03T10:00:04Z" },
-        ] });
-      }
-      return undefined;
-    }]);
-    // run_id on an org node is an agent_process_runs id: it must never key a chain.
-    const chart = chartOf(["pm", "qa"], [["pm", "qa", 3]], { qa: { run_id: "apr_process_1", last_activity_at: "2026-10-03T10:00:00Z" } });
-    await render(<TeamSwarm projectId="p1" chart={chart} live={new Map()} />);
-    await click($('[data-testid="ag-replay"]'));
-    const chains = calls.filter((c: Call) => c.url.includes("/chain"));
-    expect(chains.map((c) => c.url)).toEqual(["/v1/workflow-runs/wfr_new/chain?project_id=p1"]);
-    expect(calls.some((c) => c.url.includes("apr_process_1"))).toBe(false);
-    expect(calls.some((c) => c.url === "/v1/delivery-workflows/runs?project_id=p1&limit=5")).toBe(true);
-    expect($('[data-edge="pm>qa"]')).not.toBeNull();
-  });
-
-  it("a live dot runs from the act's real sender — not the busiest edge — and nothing moves when it is unknown", async () => {
-    installAgentWorldApi([(url) => {
-      if (url.startsWith("/v1/acts/act_live")) {
-        return Response.json({ act_id: "act_live", role_key: "qa", kind: "step", status: "active", parent_act_id: "act_parent", handed_by_kind: "boss" });
-      }
-      if (url.startsWith("/v1/acts/act_parent")) return Response.json({ act_id: "act_parent", role_key: "software_engineer", kind: "step" });
-      if (url.startsWith("/v1/acts/")) return Response.json({ detail: "Not Found" }, { status: 404 });
-      return undefined;
-    }]);
-    const chart = chartOf(["pm", "qa", "software_engineer", "sre"],
-                          [["pm", "qa", 9], ["software_engineer", "qa", 1], ["pm", "sre", 2]]);
-    await render(<TeamSwarm projectId="p1" chart={chart} live={new Map()} />);
-    const live = new Map([["qa", { state: "working" as const, actId: "act_live", line: "Testing" }]]);
-    await act(async () => root!.render(<TeamSwarm projectId="p1" chart={chart} live={live} />));
-    await settle();
-    expect([...document.querySelectorAll(".ag-swarm-dot")].map((d) => d.getAttribute("data-edge"))).toEqual(["software_engineer>qa"]);
-
-    // sre's act has no knowable sender: no dot, even though pm→sre is drawn.
-    const live2 = new Map([...live, ["sre", { state: "working" as const, actId: "act_unknown", line: "On call" }]]);
-    await act(async () => root!.render(<TeamSwarm projectId="p1" chart={chart} live={live2} />));
-    await settle();
-    expect($('[data-edge="pm>sre"]')).toBeNull();
-  });
-});
 
 describe("Work: every link keeps who you are", () => {
   it("act links and the empty state's link carry ?org=", async () => {

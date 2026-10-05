@@ -694,6 +694,112 @@ def steps_naming(connection: Connection, project_id: str, role_key: str) -> list
     return out
 
 
+def _reachable_specs(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Every workflow version a run can reach (versions_a_run_can_reach) plus the version of
+    every run that can still go on: the one set steps_naming reads, as {workflow_key, name,
+    spec}. Read once for the whole project by the batched readers below."""
+    from . import workflows
+    from .workflow_run_actions import CLOSED_RUN_STATES
+
+    out = [{"workflow_key": v["workflow_key"], "name": v["name"],
+            "spec": v["spec"] if isinstance(v["spec"], dict) else {}}
+           for v in workflows.versions_a_run_can_reach(connection, project_id)]
+    for r in connection.execute(
+        text(
+            """
+            SELECT DISTINCT d.workflow_key, d.name, v.id, v.spec
+              FROM workflow_runs r
+              JOIN workflow_versions v ON v.id = r.workflow_version_id
+              JOIN workflow_definitions d ON d.id = v.workflow_definition_id
+             WHERE r.project_id = :p AND NOT (r.status = ANY(:closed))
+            """
+        ),
+        {"p": project_id, "closed": sorted(CLOSED_RUN_STATES)},
+    ).mappings().all():
+        out.append({"workflow_key": r["workflow_key"], "name": r["name"],
+                    "spec": r["spec"] if isinstance(r["spec"], dict) else {}})
+    return out
+
+
+def _step_title(step: dict[str, Any]) -> str:
+    return str(step.get("title") or step.get("label") or step.get("name") or step.get("id") or "")
+
+
+def steps_naming_all(connection: Connection, project_id: str) -> dict[str, list[dict[str, Any]]]:
+    """steps_naming for EVERY agent in one pass (org-view spec §6.2): {role_key: [{workflow_key,
+    workflow_name, step_id, step_title, how}]}, one entry per workflow step whatever how many
+    reachable versions name it. The same versions and the same STEP_AGENT_FIELDS as
+    steps_naming, so an agent's `Named on` and its delete guard read one set."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    seen: set[tuple[str, str, str]] = set()
+    for row in _reachable_specs(connection, project_id):
+        for step in row["spec"].get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            for role, how in _names_in_step(step).items():
+                key = (role, str(row["workflow_key"]), str(step.get("id") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.setdefault(role, []).append({
+                    "workflow_key": str(row["workflow_key"]), "workflow_name": str(row["name"]),
+                    "step_id": str(step.get("id") or ""), "step_title": _step_title(step),
+                    "how": how})
+    return out
+
+
+def missing_roles(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    """Roles a workflow step names that this project does not have (org-view spec §6.2): the
+    empty seats. For every step of every version a run can reach, validate_captain against the
+    project's roster; a named key it refuses is missing. `Auto` steps name nobody and the
+    catalogue's soft default falls back to Auto (step_agents.resolve), so neither is ever
+    missing. Each entry suggests a team: the pack's role YAML when it knows the key, else
+    `yours`. Sorted by how many steps name it, then key."""
+    from . import workflows
+    from .step_agents import HUMAN, is_default_captain, named_agent
+    from .workflow_capabilities import validate_captain
+
+    roster = workflows.project_roster(connection, project_id)
+    found: dict[str, dict[str, Any]] = {}
+    seen: set[tuple[str, str, str]] = set()
+    for row in _reachable_specs(connection, project_id):
+        for step in row["spec"].get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            named = named_agent(step)
+            if not named or named == HUMAN or named in roster or is_default_captain(step):
+                continue
+            if not validate_captain(step, roster):
+                continue
+            key = (named, str(row["workflow_key"]), str(step.get("id") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            entry = found.setdefault(named, {"role_key": named, "team": _pack_team(named),
+                                             "steps": []})
+            entry["steps"].append({"workflow_key": str(row["workflow_key"]),
+                                   "workflow_name": str(row["name"]),
+                                   "step_id": str(step.get("id") or ""),
+                                   "step_title": _step_title(step)})
+    return sorted(found.values(), key=lambda e: (-len(e["steps"]), e["role_key"]))
+
+
+def _pack_team(role_key: str) -> str:
+    """The team the shipped pack's role YAML puts this key in, else `yours`."""
+    try:
+        import yaml
+
+        from ..config import get_settings
+
+        path = get_settings().specpack_root / "roles" / f"{role_key}.yaml"
+        if not path.exists():
+            return "yours"
+        body = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return agent_identity.team_of({"team": body.get("team")})["key"]
+    except Exception:  # noqa: BLE001 — a suggestion, never a failure
+        return "yours"
+
+
 #: How a RUN reaches its version, beside workflows.VERSION_REACH (how a START reaches one).
 RUN_REACH = {
     "live run": "a run of it is in flight",
