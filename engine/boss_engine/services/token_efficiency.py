@@ -520,21 +520,27 @@ def _record_policy_change(connection: Connection, project_id: str, stage: str,
 
 def version_of(connection: Connection, project_id: str,
                stage: str) -> tuple[str, Optional[str]]:
-    """(version, None) for one stage's policy — its last write time, or 'unset' — the If-Match
-    a Govern edit sends. Policies do not record who wrote them."""
+    """(version, who) for one stage's policy — its last write time, or 'unset' — the If-Match
+    a Govern edit sends, and who wrote it (the policy row does not say; its
+    `token_policy.changed` event does), so a stale edit reads "Changed by alice", not "someone"."""
     try:
         with _savepoint(connection):
             stamp = connection.execute(
                 text("SELECT updated_at FROM token_budget_policies "
                      "WHERE project_id = :p AND stage = :s"),
                 {"p": project_id, "s": stage}).scalar()
+            who = connection.execute(
+                text("SELECT actor FROM events WHERE project_id = :p "
+                     "AND event_type = 'token_policy.changed' AND data->>'stage' = :s "
+                     "ORDER BY created_at DESC LIMIT 1"),
+                {"p": project_id, "s": stage}).scalar() if stamp is not None else None
     except Exception as exc:
         if is_missing_relation(exc):
             return "unset", None
         raise
     if stamp is None:
         return "unset", None
-    return (stamp.isoformat() if hasattr(stamp, "isoformat") else str(stamp)), None
+    return (stamp.isoformat() if hasattr(stamp, "isoformat") else str(stamp)), (who or None)
 
 
 def upsert_policies(

@@ -12,6 +12,19 @@ from typing import Optional
 from fastapi import HTTPException, Request
 
 
+def govern_actor(claimed: Optional[str], principal: Optional[str] = None) -> str:
+    """THE ONE ACTOR RULE for every Govern write (settings, Pace, monthly cap, token guides,
+    FinOps): the signed-in operator the console names wins; the API key's principal only when
+    no one is named. The console reaches the API with one key, so preferring the key recorded
+    every change as that key's principal (`ceo`) and checked its rights instead of the
+    operator's."""
+    for candidate in (claimed, principal):
+        value = str(candidate or "").strip()
+        if value:
+            return value
+    return "executive_console"
+
+
 def sent_version(request: Optional[Request]) -> Optional[str]:
     if request is None:
         return None

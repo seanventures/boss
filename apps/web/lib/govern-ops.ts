@@ -24,7 +24,7 @@ export const GOVERN_OPS: Record<string, GovernOp> = {
                  body: (b) => ({ project_id: b.project_id, period: b.period, cap_usd: b.cap_usd }) },
   // The monthly cap: Setup's Budget row's write (the same route), saying it came from Govern.
   monthly_cap: { method: "PUT", path: () => "/v1/setup/budget",
-                 body: (b) => ({ project_id: b.project_id, monthly_cap_usd: b.monthly_cap_usd, via: "govern" }) },
+                 body: (b) => ({ project_id: b.project_id, monthly_cap_usd: b.monthly_cap_usd, via: "govern", actor: b.actor }) },
   // Token guides: setStageTokenCapAction's body, now with the signed-in actor (spec §10 Q3).
   token_cap: { method: "PUT", path: () => "/v1/token-efficiency/policies",
                body: (b) => ({ project_id: b.project_id, actor: b.actor,

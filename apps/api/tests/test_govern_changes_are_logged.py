@@ -185,3 +185,42 @@ def test_if_match_is_optional_and_guards_when_sent(client, engine, fresh):
                       headers={"If-Match": "unset"}).status_code == 200
     assert client.put("/v1/token-efficiency/policies", json=stage,
                       headers={"If-Match": "unset"}).status_code == 412
+
+
+def test_every_govern_write_records_the_signed_in_actor_not_the_key(client, engine, fresh,
+                                                                     monkeypatch):
+    """D5: the console reaches the API with one key (principal `ceo`) and names the operator.
+    Every Govern write records — and checks the rights of — the operator, and a stale token
+    guide edit names who changed it."""
+    _authenticated(monkeypatch, engine)
+    with engine.begin() as c:  # operators the console key may act for (bounded delegation)
+        for member, permissions in (("gv_provider", ["providerops_manage"]),
+                                    ("gv_budget", ["budget_manage"])):
+            api_main.members.upsert_member(
+                c, project_id=PROJECT, member_id=member, display_name=member,
+                member_type="human", role_keys=["ceo"], permissions=permissions, actor="ceo")
+    console = {"Authorization": "Bearer ceo-key"}
+    stage = {"project_id": PROJECT, "actor": "gv_budget",
+             "policies": [{"stage": "review_code", "max_total_tokens_per_call": 52000}]}
+    first = client.put("/v1/token-efficiency/policies", json=stage, headers=console)
+    assert first.status_code == 200, first.text
+    assert _events(engine, "token_policy.changed")[-1]["actor"] == "gv_budget"
+    assert client.put("/v1/setup/budget", headers=console, json={
+        "project_id": PROJECT, "monthly_cap_usd": 151, "via": "govern", "actor": "gv_budget"}
+    ).status_code == 200
+    assert _events(engine, "budget.monthly_cap_set")[-1]["actor"] == "gv_budget"
+    assert client.put("/v1/settings/code_agent_max_turns", headers=console, json={
+        "key": "code_agent_max_turns", "project_id": PROJECT, "actor": "gv_provider", "value": 44}
+    ).status_code == 200
+    assert _events(engine, "settings.changed")[-1]["actor"] == "gv_provider"
+    # The operator's rights, not the key's: a provider operator may not move money.
+    assert client.put("/v1/setup/budget", headers=console, json={
+        "project_id": PROJECT, "monthly_cap_usd": 152, "actor": "gv_provider"}).status_code == 403
+    # A stale token guide edit says who.
+    stale = client.put("/v1/token-efficiency/policies", json={**stage, "actor": "ceo"},
+                       headers={**console, "If-Match": "unset"})
+    assert stale.status_code == 412
+    assert stale.json()["detail"]["message"] == "Changed by gv_budget just now"
+    assert next(c for c in client.get("/v1/govern", params={"project_id": PROJECT},
+                                      headers=console).json()["controls"]
+                if c["key"] == "monthly_cap")["value_effective"] == 151_000_000

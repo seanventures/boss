@@ -224,9 +224,10 @@ def build_setup_router(
         sends `via: govern` and an `If-Match`; a stale edit is refused with 412."""
         from boss_engine.services.budget import policy_version
 
-        from ..govern_guard import require_fresh
+        from ..govern_guard import govern_actor, require_fresh
 
-        actor = actor_for(body.actor)
+        # The monthly cap is a Govern write wherever it is made: the signed-in actor wins.
+        actor = govern_actor(body.actor, principal())
         with begin(engine) as connection:
             require_actor(connection, body.project_id, actor, "budget_manage")
             require_fresh(request, *policy_version(connection, body.project_id))
