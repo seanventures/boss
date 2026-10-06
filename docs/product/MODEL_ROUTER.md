@@ -518,19 +518,33 @@ Agent Studio's *Routed / Pinned / Local* model policy now decides an agent's mod
 
 ## Verified end to end
 
-On one local stack (`scripts/e2e.sh up`, the scripted `claude` CLI, OpenRouter pointed at the
-model stub, Smart on through `PUT /v1/setup/routing`), production console build:
+On one local stack (`scripts/e2e.sh up`, the scripted `claude` CLI, a stub OpenRouter in front
+of the model stub, Smart on through `PUT /v1/setup/routing`), production console build, after the
+independent test's fixes:
 
-- **Escalation on the real governed build path.** The stub answers *implement* with code that
-  fails its tests on any model but Opus. The build routed implement Balanced · sonnet, failed
-  twice, and the next boundary routed it Frontier · opus (`tests failed ×2 → Frontier`, well
-  before the legacy final attempt); it completed. Adversarial review, security and consistency
-  ran Frontier · opus by floor.
-- **Headroom.** The stub CLI reported Claude at 92% of its week (`rate_limit_event`). From the
-  next boundary every Fast and Balanced stage ran on OpenRouter (`moved`), while the three
-  Frontier review seats stayed on Claude · opus; both builds completed.
-- **Why this model** on both builds, and Setup › Model routing, at 1440 and 390 with no
-  horizontal scroll; `?area=pipeline` lands on the routing row.
+- **Escalation on the real governed build path:** implement failed its tests twice on Sonnet and
+  the next boundary routed it Frontier · Opus (`tests failed ×2`); the build completed.
+- **Headroom:** with Claude at 92% of its week, Fast and Balanced stages moved to OpenRouter while
+  the three Frontier review seats stayed on Claude · Opus.
+- **OpenRouter 503:** the first moved stage failed with a 503; the same stage retried at once on
+  Claude (`code_task.stage_rerouted`, transient) and later stages stayed off OpenRouter; completed.
+- **A weekly limit mid-build:** implement hit *"You've hit your weekly limit · resets Oct 13 at
+  10am (America/Los_Angeles)"*; the stage rerouted to OpenRouter by itself, the account went
+  *exhausted*, the Frontier seats went to OpenRouter Opus; completed — no manual retry.
+- **A monthly limit, then success:** the limit moved the stage away and closed the account's
+  monthly window; once half-open, the next build ran on Claude and that success cleared it.
+- **A Local-only agent with no local model:** refused with *"No local model connected — connect
+  one or change this agent's policy."* in Smart and in Fixed mode.
+- **The cheap-model classifier, live:** a brief the rules could not judge ("fix") was classified
+  by a Fast model through the governed adapter.
+- **A workflow agent step** recorded its route under the run and step; the step panel shows
+  *Why this model*. A meeting routed its facilitator Frontier and its panel Balanced.
+- **Cost of the router per call:** `record_llm_call` issues the same 3 statements as main
+  (a `rate_limit_event` adds a write only when a window's state changes); a Fixed route costs one
+  insert after its first (4 statements cold), a Smart route one insert after a 23-statement
+  snapshot load per 20 s.
+- Setup › Model routing, the builds' *Why this model*, the workflow step, and Agent Studio's model
+  policy at 1440 and 390 with no horizontal scroll; `?area=pipeline` lands on the routing row.
 
 ## Deferred
 
