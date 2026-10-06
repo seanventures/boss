@@ -91,6 +91,19 @@ class Provider:
     enforce_sso: bool
     groups_claim: Optional[str]
     status: str
+    #: SAML: the IdP's SSO endpoint (amendment S1-5). Rows saved before the column carry it in
+    #: `client_id`; read it through `sso_url`.
+    saml_sso_url: Optional[str] = None
+    #: SAML: the AuthnContextClassRef values that count as MFA under "trust IdP MFA"; None or
+    #: empty means BOSS's default list (sso_saml.MFA_CONTEXTS).
+    trusted_authn_contexts: Optional[tuple[str, ...]] = None
+
+    @property
+    def sso_url(self) -> Optional[str]:
+        """The SAML IdP SSO endpoint: the column, else (a provider saved before it) `client_id`."""
+        if self.protocol != "saml":
+            return None
+        return self.saml_sso_url or self.client_id or None
 
     @property
     def response_mode(self) -> Optional[str]:
@@ -117,14 +130,17 @@ class StartedFlow:
 
 _PROVIDER_COLS = ("id, org_id, protocol, preset, name, issuer, client_id, client_secret_vault_item_id, "
                   "scopes, allowed_algs, saml_sp_entity_id, saml_certificates, domains, jit_mode, "
-                  "trust_idp_mfa, enforce_sso, groups_claim, status")
+                  "trust_idp_mfa, enforce_sso, groups_claim, status, saml_sso_url, trusted_authn_contexts")
 
 
 def provider_from_row(r: Any) -> Provider:
+    contexts = getattr(r, "trusted_authn_contexts", None)
     return Provider(r.id, r.org_id, r.protocol, r.preset, r.name, r.issuer, r.client_id,
                     r.client_secret_vault_item_id, tuple(r.scopes or ()), tuple(r.allowed_algs or ()),
                     r.saml_sp_entity_id, tuple(r.saml_certificates or ()), tuple(r.domains or ()),
-                    r.jit_mode, bool(r.trust_idp_mfa), bool(r.enforce_sso), r.groups_claim, r.status)
+                    r.jit_mode, bool(r.trust_idp_mfa), bool(r.enforce_sso), r.groups_claim, r.status,
+                    saml_sso_url=getattr(r, "saml_sso_url", None),
+                    trusted_authn_contexts=tuple(contexts) if contexts else None)
 
 
 def load_provider(db: Any, provider_id: str, *, active_only: bool = True) -> Optional[Provider]:
