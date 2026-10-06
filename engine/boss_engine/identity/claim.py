@@ -197,8 +197,10 @@ def claim(db: Any, req: ClaimRequest, *, ip: Optional[str], bridged: Optional[Au
         except PasswordRejected as exc:
             raise ClaimRefused(exc.code, 422) from None
         password_hash = hash_password(req.password)
-    elif path != "network":
-        raise ClaimRefused("password_required", 422)
+    # No password is a passkey-first claim (IDENTITY.md §4.11 "Register a passkey"): the claim's
+    # own proof (setup link, shared password, network) made this session, and the console
+    # registers the passkey next. An Owner who never completes it has no way back in but the
+    # host's recover-owner, and posture shows "no passkey on the only Owner".
     if users.by_email(db, email):
         raise ClaimRefused("email_in_use", 409)
     pid = users.create_user(db, org_id=org_id, email=email, display_name=req.name or email,

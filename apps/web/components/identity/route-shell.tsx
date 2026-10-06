@@ -12,7 +12,7 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import ConsoleShell from "../../app/ConsoleShell";
-import { API_URL } from "../../lib/client";
+import { API_URL, PROJECT_ID } from "../../lib/client";
 import { networkTrustedConsole } from "../../lib/console-session";
 import { checkWith } from "../../lib/identity/check";
 import { snapshotFrom } from "../../lib/identity/contract";
@@ -51,7 +51,7 @@ export async function RouteShell({ section, children }: { section: "identity" | 
   return (
     <ConsoleShell
       status={{ apiReachable: true, budgetState: "", deadletters: 0, pendingDecisions: 0, controlPlane: API_URL }}
-      scope={{ project: boot.me?.org.name ?? "", actor: meName }}
+      scope={{ project: boot.me?.org.name ?? "", projectId: PROJECT_ID, actor: meName }}
       org={boot.me ? { id: boot.me.org.id, name: boot.me.org.name } : undefined}
       initialArea={section === "identity" ? "enterprise" : undefined}
       title={section === "account" ? { label: "My account", sub: "Your sign-in, sessions, agents and keys" } : undefined}
