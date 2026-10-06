@@ -557,6 +557,17 @@ def start_code_task(
         if not known:
             raise ValueError(f"no agent {role!r} on this project to run this task as.")
         spec["role_key"] = role
+    # JUST-IN-TIME CONSENT (IDENTITY.md §7.3): a person starting a build whose grants do not cover
+    # the builder answers 409 consent_required BEFORE anything is written; the covering grant is
+    # stamped on the build's job so the run executes as "<agent> for <person>" under it.
+    identity_acting = None
+    if not simulated:
+        from boss_engine.identity import consent as _consent
+
+        identity_acting = _consent.require_authority(
+            org_id=None, project_id=project_id, role_keys=[role or "forge"],
+            permissions=_consent.CODE_TASK_PERMISSIONS, repos=[f"{owner}/{repo}"] if (repo_host or "github") == "github" else [],
+            task=title, run_id=f"run_ct:{run_id}", db=connection)
     if substrate:  # per-run substrate override (retry fallback: microvm infra-failure -> local)
         spec["substrate"] = substrate
     if repo_host:  # BOSS-267: per-task SCM provider (github default; bitbucket, ...)
@@ -785,10 +796,14 @@ def start_code_task(
     # says the system started it — a captain pass, a swarm build — or continues such work
     # (work_provenance): those are BACKGROUND whoever forgot to say so.
     from .work_provenance import code_task_job_priority
-    jobs.create_job(connection, project_id=project_id, task_id=task_id,
-                    kind="code.task",
-                    priority=code_task_job_priority(connection, run_finalize, job_priority),
-                    payload={"run_id": run_id})
+    from boss_engine.identity import lineage as _identity_lineage
+
+    with (_identity_lineage.acting(identity_acting) if identity_acting is not None
+          else _identity_lineage.nullcontext()):
+        jobs.create_job(connection, project_id=project_id, task_id=task_id,
+                        kind="code.task",
+                        priority=code_task_job_priority(connection, run_finalize, job_priority),
+                        payload={"run_id": run_id})
     emit_event(connection, project_id, "code_task.started", "boss", "code_task_run", run_id,
                {"task_id": task_id, "title": title, "repo": f"{owner}/{repo}"})
 

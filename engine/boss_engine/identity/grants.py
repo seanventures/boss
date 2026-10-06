@@ -29,6 +29,8 @@ from .delegation import (
 )
 from .principal import AuthContext, Principal, PrincipalKind, PrincipalStatus
 
+TASK_GRANT_MAX = timedelta(days=7)
+PENDING_PREFIX = "pending:"
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
 #: The GitHub App permission names a grant may carry, and their levels (read < write).
 GITHUB_PERMISSIONS = frozenset({"contents", "pull_requests", "issues", "metadata", "workflows",
@@ -293,6 +295,10 @@ def create_grant(ctx: AuthContext, request: GrantRequest, *, db: Any) -> Delegat
     now = _now()
     max_days = min(int(pol.delegation_max_days), GRANT_MAX_DAYS)
     expires_at = request.expires_at
+    if request.task_run_id is not None and expires_at is None:
+        # "For this build only" ends with the run; an unclaimed one (consent given before the run
+        # existed: `pending:`) never outlives a week.
+        expires_at = now + TASK_GRANT_MAX
     if expires_at is None and not pol.delegation_allow_until_revoked:
         expires_at = now + timedelta(days=int(pol.delegation_default_days or GRANT_DEFAULT_DAYS))
     if expires_at is not None:
@@ -375,3 +381,127 @@ def end_task_grants(run_id: str, *, db: Any, org_id: str) -> list[str]:
         cascade.revoke_cascade(cascade.CascadeTrigger.GRANT_EXPIRED, gid, actor=cascade.system_actor(org_id),
                                reason="task ended", db=db)
     return list(ids)
+
+
+# ---- changing a grant: extend (time only) and narrow (never wider) ----------------------------------------
+
+def _require_live_grant(grant_id: str, db: Any) -> DelegationGrant:
+    g = load(grant_id, db=db)
+    if g is None:
+        raise GrantRefused("not_found", 404)
+    if g.status != GrantStatus.ACTIVE:
+        raise GrantRefused("revoked_is_terminal", 409)
+    return g
+
+
+def extend_grant(ctx: AuthContext, grant_id: str, days: int, *, db: Any) -> DelegationGrant:
+    """Only the person who granted it, in a human session. Extending re-authorizes, so the
+    permissions are re-checked against their live access and every ceiling (no stale widening)."""
+    from sqlalchemy import text
+
+    from . import audit, lineage, passports
+
+    if ctx is None or not ctx.is_human_session:
+        raise GrantRefused("people_only", 403)
+    g = _require_live_grant(grant_id, db)
+    if g.user_principal_id != ctx.principal.id or g.org_id != ctx.principal.org_id:
+        raise GrantRefused("forbidden", 403, {"permission": "delegation:grant"})
+    if g.task_run_id:
+        raise GrantRefused("task_grants_end_with_their_run", 409)
+    pol = policy_for(g.org_id, db=db)
+    days = max(1, min(int(days), int(pol.delegation_max_days), GRANT_MAX_DAYS))
+    person = principal(db, g.user_principal_id)
+    for project_id in g.project_ids:
+        missing = g.permissions - person_live(db, person, project_id)
+        if missing:
+            raise GrantRefused("exceeds_your_access", 403, {"project": project_id, "permissions": sorted(missing)})
+    for agent_id in g.agent_ids:
+        p = passports.get(agent_id, db=db)
+        if p is None or not p.active:
+            raise GrantRefused("agent_inactive", 409, {"agent": agent_id})
+        if not g.permissions <= p.ceiling:
+            raise GrantRefused("exceeds_ceiling", 403, {"agent": agent_id, "permissions": sorted(g.permissions - p.ceiling)})
+    new_exp = _now() + timedelta(days=days)
+    db.execute(text("UPDATE identity_delegation_grants SET expires_at = :e WHERE id = :g"), {"e": new_exp, "g": g.id})
+    event = "delegation.extended" if "delegation.extended" in audit.EVENT_TYPES else "delegation.created"
+    after = load(g.id, db=db)
+    lineage.grant_event(db, after, event, ctx=ctx, details={"change": "extended", "days": days,
+                                                            "expires_at": new_exp.isoformat()})
+    return after
+
+
+def narrow_grant(ctx: AuthContext, grant_id: str, permissions: frozenset[str], *, db: Any) -> DelegationGrant:
+    """The new set must be a strict-or-equal SUBSET (422 `narrowing_only` otherwise). The grantor or
+    `delegation:revoke_any`. Every live token narrows at its next call (grants are read live)."""
+    from sqlalchemy import text
+
+    from . import authz, lineage
+    from .scope import ResolvedScope
+
+    if ctx is None or ctx.run_token is not None:
+        raise GrantRefused("people_only", 403)
+    g = _require_live_grant(grant_id, db)
+    if g.org_id != ctx.principal.org_id:
+        raise GrantRefused("not_found", 404)
+    if g.user_principal_id != ctx.principal.id:
+        decision = authz.check(ctx, "delegation:revoke_any", ResolvedScope.org_level(g.org_id), db=db)
+        if not decision.allowed:
+            raise GrantRefused("forbidden", 403, {"permission": "delegation:revoke_any"})
+    asked = frozenset(permissions)
+    widened = sorted(asked - g.permissions)
+    if widened:
+        raise GrantRefused("narrowing_only", 422, {"permission": widened[0]})
+    if not asked:
+        raise GrantRefused("empty_permissions", 422)
+    dropped = g.permissions - asked
+    if dropped:
+        db.execute(text("DELETE FROM identity_delegation_grant_permissions WHERE grant_id = :g AND permission_key = ANY(:p)"),
+                   {"g": g.id, "p": sorted(dropped)})
+    after = load(g.id, db=db)
+    lineage.grant_event(db, after, "delegation.narrowed", ctx=ctx, details={"removed": sorted(dropped)})
+    return after
+
+
+# ---- just-in-time consent: does a standing or task grant cover this work? -----------------------------
+
+def covers(g: DelegationGrant, *, agent_ids: Iterable[str], permissions: frozenset[str], project_id: Optional[str],
+           repos: Iterable[str], run_id: Optional[str]) -> bool:
+    if not is_live(g):
+        return False
+    if not set(agent_ids) <= set(g.agent_ids) or not permissions <= g.permissions:
+        return False
+    if project_id and project_id not in g.project_ids:
+        return False
+    if set(repos) - set(github_resources(g).get("repos") or ()):
+        return False
+    if g.task_run_id:
+        if g.task_run_id.startswith(PENDING_PREFIX):
+            return True                          # claimable by this person's next matching run
+        return run_id is not None and run_matches(g, run_id)
+    return True
+
+
+def find_covering(person_id: str, *, agent_ids: Iterable[str], permissions: frozenset[str],
+                  project_id: Optional[str], repos: Iterable[str], run_id: Optional[str], db: Any
+                  ) -> Optional[DelegationGrant]:
+    """Prefer a task grant for this very run, then a standing grant, then an unclaimed pending one
+    (which is CLAIMED for `run_id` here, so it can never cover a second run)."""
+    from sqlalchemy import text
+
+    agent_ids, repos = list(agent_ids), list(repos)
+    found = [g for g in for_person(person_id, db=db)
+             if covers(g, agent_ids=agent_ids, permissions=permissions, project_id=project_id, repos=repos, run_id=run_id)]
+    found.sort(key=lambda g: (0 if g.task_run_id and not g.task_run_id.startswith(PENDING_PREFIX)
+                              else 1 if not g.task_run_id else 2))
+    for g in found:
+        if g.task_run_id and g.task_run_id.startswith(PENDING_PREFIX):
+            if run_id is None:
+                continue
+            claimed = db.execute(text("UPDATE identity_delegation_grants SET task_run_id = :r WHERE id = :g "
+                                      "AND task_run_id = :old RETURNING id"),
+                                 {"r": run_id, "g": g.id, "old": g.task_run_id}).scalar()
+            if not claimed:
+                continue
+            return load(g.id, db=db)
+        return g
+    return None

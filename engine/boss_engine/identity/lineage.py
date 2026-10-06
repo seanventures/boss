@@ -143,6 +143,9 @@ _ACTING: contextvars.ContextVar[Optional[Acting]] = contextvars.ContextVar("boss
 _CONTEXT: contextvars.ContextVar[Optional[AuthContext]] = contextvars.ContextVar("boss_identity_ctx", default=None)
 
 
+nullcontext = contextlib.nullcontext
+
+
 def current() -> Optional[Acting]:
     return _ACTING.get()
 

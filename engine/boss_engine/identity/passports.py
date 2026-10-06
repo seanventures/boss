@@ -28,10 +28,11 @@ from .principal import AuthContext, PrincipalKind
 class PassportError(Exception):
     """`code` is stable; `status` the HTTP status a route maps it to."""
 
-    def __init__(self, code: str, status: int = 400):
+    def __init__(self, code: str, status: int = 400, **detail: Any):
         super().__init__(code)
         self.code = code
         self.status = status
+        self.detail = detail
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,45 @@ class Passport:
         """`allowed_children` names role keys (the spec) or agent ids; both are accepted."""
         return self.can_spawn and (child.role_key in self.allowed_children
                                    or child.agent_id in self.allowed_children)
+
+
+EXTERNAL_PROVIDERS = {"github"}
+GITHUB_KEYS = frozenset({"contents", "pull_requests", "issues", "metadata", "workflows", "checks", "statuses",
+                         "actions"})
+_LEVEL = {"none": 0, "read": 1, "write": 2}
+
+
+def validate_external_ceiling(value: Any) -> dict[str, dict[str, str]]:
+    """{"github": {"contents": "read|write|none", ..., "push_refs": "boss/*"}}. Closed keys only."""
+    if not isinstance(value, Mapping):
+        raise PassportError("bad_external_ceiling", 422)
+    out: dict[str, dict[str, str]] = {}
+    for provider, perms in value.items():
+        if provider not in EXTERNAL_PROVIDERS or not isinstance(perms, Mapping):
+            raise PassportError("bad_external_ceiling", 422, provider=str(provider))
+        clean: dict[str, str] = {}
+        for key, level in perms.items():
+            if key == "push_refs":
+                if not isinstance(level, str) or not level.startswith("boss/") or ".." in level:
+                    raise PassportError("bad_external_ceiling", 422, key=key)
+                clean[key] = level
+            elif key in GITHUB_KEYS and level in _LEVEL:
+                if level != "none":
+                    clean[key] = level
+            else:
+                raise PassportError("bad_external_ceiling", 422, key=str(key))
+        out[provider] = clean
+    return out
+
+
+def _external_widening(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[str]:
+    widened = []
+    for provider, perms in after.items():
+        old = (before or {}).get(provider) or {}
+        for key, level in perms.items():
+            if key != "push_refs" and _LEVEL.get(level, 0) > _LEVEL.get(old.get(key, "none"), 0):
+                widened.append(f"{provider}.{key}")
+    return widened
 
 
 def preset_for_role(role_key: str) -> Optional[str]:
@@ -205,6 +245,15 @@ def set_ceiling(ctx: AuthContext, agent_id: str, permissions: frozenset[str], *,
         raise PassportError("revoked", 409)
     perms = frozenset(permissions)
     _require_delegable(perms)
+    added = perms - before.ceiling
+    if added:
+        # No escalation by proxy: you cannot raise an agent's ceiling above what you hold yourself.
+        from . import grants as _grants
+
+        mine = _grants.person_live(db, ctx.principal, None)
+        over = sorted(added - mine)
+        if over:
+            raise PassportError("forbidden", 403, permission=over[0])
     db.execute(text("DELETE FROM identity_agent_ceilings WHERE agent_id = :a"), {"a": agent_id})
     for key in sorted(perms):
         db.execute(text("INSERT INTO identity_agent_ceilings (agent_id, permission_key) VALUES (:a, :k)"),
@@ -232,6 +281,10 @@ def set_rules(ctx: AuthContext, agent_id: str, *, db: Any, can_spawn: Optional[b
         raise PassportError("revoked", 409)
     if max_depth is not None and not 0 <= max_depth <= HARD_MAX_DEPTH:
         raise PassportError("bad_max_depth", 422)
+    if external_ceiling is not None:
+        # A ceiling change: `agent_passport:manage` (checked above, step-up via the PDP), audited
+        # below with the before/after and the widened keys named.
+        external_ceiling = validate_external_ceiling(external_ceiling)
     if sponsor_principal_id is not None:
         sponsor = _principal_status(db, sponsor_principal_id)
         if sponsor is None or sponsor[0] != "user" or sponsor[1] != "active":
@@ -246,6 +299,11 @@ def set_rules(ctx: AuthContext, agent_id: str, *, db: Any, can_spawn: Optional[b
          "depth": max_depth, "sponsor": sponsor_principal_id,
          "ext": json.dumps(external_ceiling) if external_ceiling is not None else None})
     after = require(agent_id, db=db)
+    if external_ceiling is not None and dict(external_ceiling) != dict(before.external_ceiling):
+        lineage.passport_event(db, after, "agent.passport.ceiling_changed", ctx=ctx,
+                               details={"external_before": dict(before.external_ceiling),
+                                        "external_after": dict(external_ceiling),
+                                        "widened": _external_widening(before.external_ceiling, external_ceiling)})
     if sponsor_principal_id is not None and sponsor_principal_id != before.sponsor_principal_id:
         lineage.passport_event(db, after, "agent.passport.sponsor_changed", ctx=ctx,
                                details={"from": before.sponsor_principal_id, "to": sponsor_principal_id})
