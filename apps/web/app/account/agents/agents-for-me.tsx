@@ -44,8 +44,25 @@ function statusPill(d: Delegation, now: number) {
   return <Pill tone="ok">active</Pill>;
 }
 
-export function AgentsForMe({ delegations: initial, agents, connections, untilRevokedAllowed, openNew }: {
+/** What GitHub's redirect back said (`?connected=github` or `?connect_error=<code>`). */
+export type ConnectOutcome = { connected: string | null; error: string | null };
+
+const CONNECT_ERRORS: Record<string, string> = {
+  state_invalid: "The approval expired. Connect again.",
+  access_denied: "GitHub approval was cancelled.",
+  people_only: "Only a person can connect GitHub.",
+};
+
+export function connectOutcomeLine(o: ConnectOutcome | undefined): { tone: "ok" | "bad"; text: string } | null {
+  if (!o) return null;
+  if (o.error) return { tone: "bad", text: CONNECT_ERRORS[o.error] ?? `GitHub did not connect (${o.error.slice(0, 40)}).` };
+  if (o.connected) return { tone: "ok", text: o.connected.toLowerCase() === "github" ? "GitHub connected." : "Connected." };
+  return null;
+}
+
+export function AgentsForMe({ delegations: initial, agents, connections, untilRevokedAllowed, openNew, connectOutcome }: {
   delegations: Delegation[]; agents: Ref[] | null; connections: Connection[]; untilRevokedAllowed: boolean; openNew: boolean;
+  connectOutcome?: ConnectOutcome;
 }) {
   const now = useNow();
   const [delegations, setDelegations] = useState(initial);
@@ -101,7 +118,7 @@ export function AgentsForMe({ delegations: initial, agents, connections, untilRe
       </section>
 
       <div className="idn-colr">
-        <Connections connections={connections} />
+        <Connections connections={connections} outcome={connectOutcome} />
         <section className="idn-card">
           <div className="idn-card-h"><h2>What agents never get</h2></div>
           <p className="idn-dim idn-prose" data-copy="prose">Approvals, identity, secrets, production deploys and gate waivers. Whatever you grant, they stay yours.</p>
@@ -117,9 +134,10 @@ export function AgentsForMe({ delegations: initial, agents, connections, untilRe
   );
 }
 
-function Connections({ connections }: { connections: Connection[] }) {
+function Connections({ connections, outcome }: { connections: Connection[]; outcome?: ConnectOutcome }) {
   const guarded = useGuardedCall();
   const [error, setError] = useState<string | null>(null);
+  const outcomeLine = connectOutcomeLine(outcome);
   const github = connections.find((c) => c.provider.toLowerCase() === "github" && c.status !== "revoked");
   return (
     <section className="idn-card" aria-labelledby="conn-h">
@@ -140,6 +158,7 @@ function Connections({ connections }: { connections: Connection[] }) {
             </CanButton>
           )}
       </div>
+      {outcomeLine ? <div className={outcomeLine.tone === "ok" ? "idn-ok idn-row" : "idn-bad idn-row"} role="status" data-testid="connect-outcome">{outcomeLine.text}</div> : null}
       <ErrorLine error={error} />
     </section>
   );
@@ -257,8 +276,8 @@ function RevokeSheet({ grant, onClose, onDone }: { grant: Delegation; onClose: (
       <p className="idn-lede2" data-copy="prose">Their authority leaves every agent in the chain within 5 seconds. Work stops where it is; you can grant again to resume.</p>
       {preview ? (
         <ul className="idn-plain" aria-label="What revoking does" data-testid="cascade">
-          {preview.items.map((i) => (
-            <li key={i.kind} className="idn-cx">
+          {preview.items.map((i, n) => (
+            <li key={`${i.kind}-${n}`} className="idn-cx">
               <span className="idn-i" aria-hidden>{i.kind === "runs" ? <Prohibit size={14} /> : <ArrowsClockwise size={14} />}</span>
               <span><span>{i.label}</span><small data-copy="data">{i.detail}</small></span>
               <span className="idn-n">{i.count}</span>
