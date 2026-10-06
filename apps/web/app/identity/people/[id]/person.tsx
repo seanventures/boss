@@ -202,7 +202,7 @@ function ConfirmSheet({ person, kind, onClose }: { person: Person; kind: Exclude
       <div className="idn-who-s"><Face name={person.display_name} tone={person.hue} size={34} /><span><b>{person.display_name}</b><small>{person.email}</small></span></div>
       {done ? (
         <ul className="idn-cascade-list" aria-label="What happened">
-          {done.items.map((i) => <li key={i.kind}><Check size={14} className="idn-ok" aria-hidden /> <span data-copy="data">{i.label} · {i.detail}</span> <b>{i.count}</b></li>)}
+          {done.items.map((i, n) => <li key={`${i.kind}-${n}`}><Check size={14} className="idn-ok" aria-hidden /> <span data-copy="data">{i.label} · {i.detail}</span> <b>{i.count}</b></li>)}
         </ul>
       ) : (
         <ul className="idn-cascade-list" aria-label="What this does">

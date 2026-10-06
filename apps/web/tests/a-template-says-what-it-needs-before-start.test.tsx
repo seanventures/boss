@@ -102,7 +102,9 @@ describe("Start is blocked by what is missing, and says start-anyway out loud", 
     // this one route, which is exactly how the other start proxies were left forwarding the
     // object (Build crashed). Every proxy now uses the shared helper — enforced for all of them
     // in start-doors-forward-the-checklist.test.ts.
-    expect(ROUTE).toContain("refusalFrom(r.status, parsed)");
+    // The route's refusal() wraps the shared helper (and keeps a consent_required body, S3).
+    expect(ROUTE).toMatch(/refusal(From)?\(r\.status, parsed\)/);
+    expect(ROUTE).toContain("...refusalFrom(status, parsed)");
     expect(codeOnly("lib/start-refusal.ts")).toContain("readiness: d.readiness");
     expect(UI).toContain("setRefusal(r.readiness)");
   });
