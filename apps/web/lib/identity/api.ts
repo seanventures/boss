@@ -18,7 +18,11 @@ export class IdentityError extends Error {
   readonly permission: Permission | null;
   readonly attemptsLeft: number | null;
   readonly retryAfter: number | null;
-  constructor(status: number, code: IdentityErrorCode, extra: { permission?: unknown; attempts_left?: unknown; retryAfter?: number | null } = {}) {
+  /** The API's own sentence for this refusal (`detail`), when it gave one. */
+  readonly detail: string | null;
+  /** The whole refusal body as the API sent it (e.g. a 409 consent_required's fields). */
+  readonly body: Record<string, unknown>;
+  constructor(status: number, code: IdentityErrorCode, extra: { permission?: unknown; attempts_left?: unknown; retryAfter?: number | null; body?: Record<string, unknown> } = {}) {
     super(errorSentence(status, code, extra.permission));
     this.name = "IdentityError";
     this.status = status;
@@ -26,6 +30,8 @@ export class IdentityError extends Error {
     this.permission = typeof extra.permission === "string" && isPermission(extra.permission) ? extra.permission : null;
     this.attemptsLeft = typeof extra.attempts_left === "number" ? extra.attempts_left : null;
     this.retryAfter = extra.retryAfter ?? null;
+    this.body = extra.body ?? {};
+    this.detail = typeof this.body.detail === "string" && typeof this.body.error === "string" ? this.body.detail : null;
   }
   get stepUp(): boolean { return this.status === 401 && this.code === "step_up_required"; }
 }
@@ -37,9 +43,18 @@ export function errorSentence(status: number, code: string, permission?: unknown
   if (code === "unauthenticated") return "Sign in again";
   if (code === "csrf_failed") return "Reload and retry";
   if (code === "invalid_credentials") return "Wrong email or password";
-  if (code === "invalid_code") return "That code didn't work";
   if (code === "last_owner") return "Add another Owner first";
   if (code === "identity_unavailable") return "Identity is unavailable";
+  if (code === "invalid_code" || code === "code_invalid") return "That code didn't work";
+  if (code === "policy_refused") return "Not allowed by policy";
+  if (code === "invalid_policy") return "Check the fields";
+  if (code === "confirmation_required") return "Confirm critical changes";
+  if (code === "consent_required") return "Needs your consent";
+  if (code === "no_second_factor") return "Add a second factor first";
+  if (code === "task_grants_end_with_their_run") return "Ends with its run";
+  if (code === "revoked_is_terminal") return "Already ended";
+  if (code === "too_long") return "Longer than policy allows";
+  if (code === "role_exists") return "That key is taken";
   if (status === 429) return "Too many tries";
   if (status === 404) return "Not found";
   if (status === 409) return "Changed meanwhile — reload";
@@ -74,7 +89,8 @@ export async function idFetch<T>(method: string, path: string, body?: unknown, i
     const d = (data ?? {}) as { error?: unknown; detail?: unknown; permission?: unknown; attempts_left?: unknown };
     const code = typeof d.error === "string" ? d.error : typeof d.detail === "string" ? d.detail : res.status === 429 ? "rate_limited" : "error";
     const retry = Number(res.headers.get("retry-after"));
-    throw new IdentityError(res.status, code, { permission: d.permission, attempts_left: d.attempts_left, retryAfter: Number.isFinite(retry) && retry > 0 ? retry : null });
+    const body = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
+    throw new IdentityError(res.status, code, { permission: d.permission, attempts_left: d.attempts_left, retryAfter: Number.isFinite(retry) && retry > 0 ? retry : null, body });
   }
   return data as T;
 }
