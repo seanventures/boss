@@ -1236,7 +1236,7 @@ function ConsoleShellInner({
             <span className="bx-operator-avatar" aria-hidden>{(me?.display_name ?? scope.actor).slice(0, 1).toUpperCase()}</span>
             <span>
               <strong>{me?.display_name ?? scope.actor}</strong>
-              <small>{me ? (me.access_roles.map((r) => r.replace(/_/g, " ")).join(" · ") || "No access role") : "Operator · in control"}</small>
+              <small>{me ? ([...new Set(me.access_roles)].map((r) => r.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())).join(" · ") || "No access role") : "Operator · in control"}</small>
             </span>
           </div>
           <div className="bx-control-status">
@@ -1370,7 +1370,7 @@ function ConsoleShellInner({
                aria-label="Refreshing data" data-testid="console-refreshing" />
         ) : null}
 
-        {settling ? (
+        {settling && !routeMode ? (
           <div className="bx-loading" role="status" aria-live="polite"
                data-testid="console-loading">
             <span className="bx-loading-bar" aria-hidden />

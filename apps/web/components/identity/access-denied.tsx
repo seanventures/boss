@@ -29,7 +29,8 @@ export function AccessDenied({ permission, page, home = "/" }: { permission: Per
   const who = grantors === null ? "…" : grantors.length
     ? grantors.slice(0, 3).map((g) => g.name).join(", ")
     : "an Owner";
-  const role = grantors?.[0]?.role ? `${grantors[0].role}s` : "Admins";
+  const roles = new Set((grantors ?? []).map((g) => g.role));
+  const role = roles.size === 1 ? `${[...roles][0]}s` : "Admins";
 
   return (
     <div className="idn-denied" data-testid="access-denied" data-permission={permission}>

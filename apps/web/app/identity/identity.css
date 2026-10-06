@@ -87,10 +87,10 @@
 
 /* ── base ─────────────────────────────────────────────────────────────────────────────────── */
 .idn { display: flex; flex-direction: column; gap: 22px; min-width: 0; color: var(--ink); font-family: var(--sans); font-size: 14px; }
-.idn *, .idn-auth *, .idn-sheet-wrap * { box-sizing: border-box; }
+:where(.idn, .idn-auth, .idn-sheet-wrap) * { box-sizing: border-box; }
 .idn-sr { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-.idn a { color: inherit; text-decoration: none; }
-.idn button, .idn-auth button, .idn-sheet-wrap button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+:where(.idn) a { color: inherit; text-decoration: none; }
+:where(.idn, .idn-auth, .idn-sheet-wrap) button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 .idn :focus-visible, .idn-auth :focus-visible, .idn-sheet-wrap :focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; border-radius: 6px; }
 .idn-mono { font-family: var(--mono); font-size: 12px; }
 .idn-dim { color: var(--faint); }
@@ -290,7 +290,7 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
   background: radial-gradient(600px 260px at 10% -40%, color-mix(in srgb, var(--teal) 16%, transparent), transparent 60%), linear-gradient(180deg, var(--idn-hero-a), var(--idn-card-b)); }
 .idn-ph h1 { font: 600 26px var(--display); display: flex; align-items: center; gap: 12px; margin: 0; flex-wrap: wrap; }
 .idn-ph .idn-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--faint); font-size: 13px; margin-top: 6px; align-items: center; }
-.idn-ph .idn-meta span { display: inline-flex; align-items: center; gap: 6px; }
+.idn-ph .idn-meta > span { display: inline-flex; align-items: center; gap: 6px; }
 .idn-ph .idn-roles { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .idn-ph .idn-acts { justify-content: flex-end; max-width: 380px; }
 .idn-subtabs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
@@ -691,6 +691,8 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn-bar > i[data-w="6"] { width: 60%; } .idn-bar > i[data-w="7"] { width: 70%; } .idn-bar > i[data-w="8"] { width: 80%; }
 .idn-bar > i[data-w="9"] { width: 90%; } .idn-bar > i[data-w="10"] { width: 100%; }
 .idn-center { text-align: center; }
-.idn-auth a, .idn-sheet-wrap a { text-decoration: none; color: inherit; }
+:where(.idn-auth, .idn-sheet-wrap) a { text-decoration: none; color: inherit; }
 .idn-ev .idn-t1, .idn-ev .idn-m { display: block; }
 .idn-t td .idn-mut, .idn-t td .idn-warn { white-space: nowrap; }
+.idn-f label.idn-check { justify-content: flex-start; font-weight: 500; color: var(--ink-soft); }
+@media (max-width: 480px) { .idn-me > summary > span { display: none; } .idn-me > summary { padding: 3px; } }
