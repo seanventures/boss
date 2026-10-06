@@ -1451,6 +1451,11 @@ def settle_code_task(engine: Any, code_task_run_id: str) -> None:
             withdraw_superseded_pr_questions(c, code_task_run_id)
     except Exception as error:  # noqa: BLE001
         log.warning("could not supersede earlier PR decisions of %s: %s", code_task_run_id, error)
+    # ITS RUN SCORECARD, with the final numbers (docs/product/RUN_SCORECARDS.md). Every build
+    # runner's `finally` comes through here, so no terminal path is missed. Never raises.
+    from .scorecards import settle as _settle_scorecard
+
+    _settle_scorecard(engine, code_task_run_id)
 
 
 def _agent_name(connection: Connection, project_id: str, role_key: str) -> str:

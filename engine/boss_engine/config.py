@@ -679,6 +679,18 @@ class Settings(BaseSettings):
         default=False, alias="BOSS_EXCLUDE_UNTRUSTED_SKILLS"
     )
     boss_edition: str = Field(default="community", alias="BOSS_EDITION")
+    # "IMPROVE BOSS" AND THE DAILY HEARTBEAT (docs/product/RUN_SCORECARDS.md, Implementation).
+    # BOSS_TELEMETRY=off (or the standard DO_NOT_TRACK=1) disables everything, the heartbeat
+    # included: no payload is cut and no connection is opened. The URL is where the one daily
+    # POST goes; a public collector later is a change of this value.
+    telemetry: str = Field(default="", alias="BOSS_TELEMETRY")
+    do_not_track: str = Field(default="", alias="DO_NOT_TRACK")
+    telemetry_url: str = Field(
+        default="https://boss-api.local.sean.network/v1/telemetry/ingest",
+        alias="BOSS_TELEMETRY_URL")
+    #: How this install was made (compose, source, e2e …). Compose forwards it; unset reads as
+    #: "compose" inside the shipped images and "source" otherwise.
+    install_method: str = Field(default="", alias="BOSS_INSTALL_METHOD")
     # Profiles the platform will actually run. A profile named here is refused and downgraded
     # to `balanced` — the whole-platform switch for "this tier is not fit to run yet", which
     # otherwise means hunting every hardcoded `profile="strict"` and putting them all back

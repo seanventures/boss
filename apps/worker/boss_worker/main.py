@@ -293,6 +293,27 @@ def _tick_setup_checks(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("setup_recheck_failed", exc_info=True)
 
 
+#: Improve BOSS and run scorecards (docs/product/RUN_SCORECARDS.md). Every 10 minutes the API
+#: is asked; it does scorecard upkeep at most hourly and the one daily send only when due (a
+#: random time each UTC day). No thread, no retry: a failed send waits for tomorrow.
+IMPROVE_TICK_INTERVAL_SECONDS = 600
+_last_improve_tick_monotonic = 0.0
+
+
+def _tick_improve(client: ControlPlaneClient, settings) -> None:
+    """Never kill the worker; never retry here."""
+    global _last_improve_tick_monotonic
+    now = time.monotonic()
+    if now - _last_improve_tick_monotonic < IMPROVE_TICK_INTERVAL_SECONDS:
+        return
+    _last_improve_tick_monotonic = now
+    try:
+        got = client.improve_tick()
+        LOGGER.debug("improve_tick send=%s", (got or {}).get("send"))
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("improve_tick_failed", exc_info=True)
+
+
 def _tick_agent_processes(client: ControlPlaneClient, settings) -> None:
     global _last_agent_process_monotonic
     now = time.monotonic()
@@ -642,6 +663,7 @@ def main() -> None:
             _tick_process_manager(client, settings)
             _tick_factory_flow(client, settings)
             _tick_agent_wakeups(client, settings)
+            _tick_improve(client, settings)
             if _STOPPING:
                 break
             if not ran_job:

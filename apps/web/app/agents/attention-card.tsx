@@ -24,6 +24,7 @@ import { retryBuildAction } from "../factory/floor-actions";
 import { WaiveSheet } from "../factory/waive-sheet";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
+import { ReasonChips, rejectKind, sendReasons } from "../improve/rate-it";
 import { sendRunAnswer, type RunAction } from "../delivery-workflows-ui";
 import { actOnSystemFindingAction } from "../system-health-actions";
 import { actOnInfraAttentionAction } from "../infra/infra-attention-actions";
@@ -143,6 +144,8 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
   const [confirmingOpt, setConfirmingOpt] = useState<AttentionAnswer | null>(null);
   // What the option did, said in place ("Freed 1.2 GB · pressure 12% → 1%").
   const [done, setDone] = useState("");
+  // Why it is a no (optional chips, sent with the reject): the same reasons as a build's rating.
+  const [why, setWhy] = useState<string[]>([]);
 
   useEffect(() => {
     if (!focusKey || !box.current) return undefined;
@@ -184,6 +187,10 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     try {
       const result = await callAction(resolveDecisionAction)(form);
       if (result.ok) {
+        if (action.action === "reject") {
+          void sendReasons(projectId, actor, "reject", decisionId, why,
+                           rejectKind(item.decisionKind, run?.stepId, item.build?.where));
+        }
         finish(action.action === "approve"
           ? (run ? `Approved · ${subject} continues` : "Approved")
           : (run ? "Rejected · step failed" : "Rejected"));
@@ -473,6 +480,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
           <button type="button" className="ag-btn" data-tone="reject" data-testid="ag-att-confirm-reject"
                   title={confirming.effect || undefined} onClick={() => void decide(confirming)}>Reject</button>
           <button type="button" className="ag-link" onClick={() => setConfirming(null)}>Cancel</button>
+          <ReasonChips value={why} onChange={setWhy} testId="ag-att-why" />
         </div>
       ) : null}
 

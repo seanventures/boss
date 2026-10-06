@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_WORDS } from "./_helpers/copy-budget";
 import { mockObsFetch } from "./_helpers/obs-fixtures";
+import { fakeImproveApi, newImprove } from "./_helpers/improve-fixtures";
 import { $, click, mount, settle, unmount } from "./_helpers/live-render";
 
 vi.mock("next/navigation", () => ({
@@ -57,12 +58,19 @@ const CASES: { name: string; url: string; press?: string[] }[] = [
   { name: "System", url: "?view=system" },
   { name: "Sources + Check config", url: "?view=sources", press: ["obs-check-config"] },
   { name: "Sources + Add tools", url: "?view=sources", press: ["obs-add-tools", "obs-tools-recommend"] },
+  { name: "Scorecards by role", url: "?view=scorecards" },
+  { name: "Scorecards by harness, 90d", url: "?view=scorecards&by=harness&swin=90d" },
+  { name: "Experiments + new", url: "?view=scorecards&sc=experiments", press: ["sc-exp-add"] },
+  { name: "Installs (collector mode)", url: "?view=installs" },
 ];
 
 describe("the Observability copy budget", () => {
   for (const c of CASES) {
     it(c.name, async () => {
-      mockObsFetch();
+      const { fn } = mockObsFetch();
+      const improve = newImprove();
+      improve.sharing.switches.collector.on = true;
+      vi.stubGlobal("fetch", fakeImproveApi(improve, fn as never));
       window.history.replaceState(null, "", `/?area=observability&${c.url.replace(/^\?/, "")}`);
       await mount(<ObsHome projectId="p1" actor="ceo" />);
       for (const p of c.press ?? []) await click($(`[data-testid="${p}"]`));

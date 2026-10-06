@@ -290,12 +290,15 @@ export function parseSources(w: unknown): Sources {
 
 // ── URL state (§4.1) ────────────────────────────────────────────────────────────────────────
 
-export type ObsTab = "apps" | "models" | "system" | "sources";
+export type ObsTab = "apps" | "models" | "system" | "sources" | "scorecards" | "installs";
 export const OBS_TABS: { key: ObsTab; label: string; tip: string }[] = [
   { key: "apps", label: "Apps", tip: "Is each app up, and how fast" },
   { key: "models", label: "Models", tip: "Every model call: tokens, time, errors, spend" },
   { key: "system", label: "System", tip: "BOSS's own machine, its queue and stalls" },
   { key: "sources", label: "Sources", tip: "Monitoring stack and telemetry sources" },
+  { key: "scorecards", label: "Scorecards", tip: "How every run turned out, by role, workflow, harness, model" },
+  // Collector mode only (obs-home filters it): installs reporting to this BOSS.
+  { key: "installs", label: "Installs", tip: "Installs reporting to this collector" },
 ];
 export type ObsUrl = { view: ObsTab; win: Win; group: Group; metric: Metric; app: string | null; model: string | null; q: string };
 const OBS_TAB_KEYS = new Set<string>(OBS_TABS.map((t) => t.key));

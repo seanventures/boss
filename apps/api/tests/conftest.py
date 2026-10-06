@@ -87,6 +87,19 @@ def clean_tables(engine):
         # Missing tables in partial Community schemas are skipped.
         for tbl in [
             "api_idempotency_keys",
+            # Run scorecards, experiments, person feedback, Improve BOSS (client and collector).
+            "run_scorecards",
+            "experiment_assignments",
+            "experiments",
+            "person_feedback",
+            "person_prompt_state",
+            "telemetry_sends",
+            "telemetry_batches",
+            "tm_heartbeats",
+            "tm_batches",
+            "tm_shares",
+            "tm_rollups",
+            "tm_installs",
             # The one agent model's grant and the seed's memory of operator removals: a removal
             # recorded by one test must not stop the next test's seed from granting.
             "role_mcp_servers",

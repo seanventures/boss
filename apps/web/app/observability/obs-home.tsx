@@ -28,6 +28,10 @@ import { AppsTab, ObsAskBoss } from "./pulse";
 import { ModelsTab } from "./models";
 import { SystemTab } from "./system";
 import { SourcesTab } from "./sources";
+import { ScorecardsTab } from "./scorecards";
+import { InstallsTab } from "./installs";
+import { polledImprove, type SharingView } from "../../lib/improve";
+import { usePolledRead } from "../../lib/log-stream";
 import "../infra/infra.css";
 import "./obs.css";
 
@@ -65,9 +69,15 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
 
   const setTab = (key: string) => go({ view: key === "apps" ? null : key, app: null, model: null }, "push");
   const setWin = (w: Win) => go({ win: w === "24h" ? null : w }, "replace");
+  // Installs is the collector's dashboard: its tab exists only in Collector mode (read once).
+  const sharing = usePolledRead<SharingView>({
+    key: projectId, pollMs: null, paused: true, enabled: Boolean(projectId),
+    read: polledImprove<SharingView>("sharing", { project_id: projectId }),
+  });
+  const collector = Boolean(sharing.data?.switches?.collector?.on) || url.view === "installs";
   const c = pulse.data?.counts;
   const sys = system.data;
-  const tabs = OBS_TABS.map((t) => ({
+  const tabs = OBS_TABS.filter((t) => t.key !== "installs" || collector).map((t) => ({
     ...t,
     count: t.key === "apps" && pulse.data ? pulse.data.rows.length || undefined : undefined,
     dot: t.key === "system" && sys && sys.state !== "ok"
@@ -80,6 +90,8 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
     models: <ModelsTab {...props} />,
     system: <SystemTab {...props} />,
     sources: <SourcesTab {...props} />,
+    scorecards: <ScorecardsTab {...props} />,
+    installs: <InstallsTab {...props} />,
   };
   const spend = pulse.data?.spend24hMicros ?? 0;
   const attention = [
@@ -103,7 +115,7 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
                     ) : null}
                   </>
                 ) : null}>
-        {url.view !== "sources" ? (
+        {url.view !== "sources" && url.view !== "scorecards" && url.view !== "installs" ? (
           <span className="inf-seg" role="radiogroup" aria-label="Window" data-testid="obs-window">
             {WINDOWS.map((w) => (
               <button key={w} type="button" role="radio" aria-checked={url.win === w} className="inf-seg-btn"

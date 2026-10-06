@@ -8,6 +8,7 @@
  */
 
 import React, { useEffect, useMemo, useRef } from "react";
+import { RateScope } from "../improve/rate-it";
 
 import { useConversation, type ConversationView } from "../../lib/agent-converse";
 import {
@@ -64,11 +65,13 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
                   onPlan={onPlan && conversation && !plan ? () => onPlan(roleKey, conversation) : undefined}
                   onNew={onNew && roleKey ? () => onNew(roleKey) : undefined} />
         <div className="ag-talk-body" ref={scroller} data-testid="ag-talk-body">
+          <RateScope.Provider value={{ projectId, actor }}>
           {(conversation?.turns ?? []).map((turn) => (
             <TurnItem key={turn.turnId} turn={turn} live={busy && turn.status === "streaming"}
                       onStart={live.start} onDismiss={live.dismiss} />
           ))}
           {!conversation ? <span className="ag-muted">Opening…</span> : null}
+          </RateScope.Provider>
         </div>
         {problem ? <ProblemNote problem={problem} onClose={() => setProblem(null)} /> : null}
         <Composer

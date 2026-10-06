@@ -1,6 +1,7 @@
 "use client";
 
 import { WhyAsked } from "./skills/why-asked";
+import { ReasonChips, rejectKind, sendReasons } from "./improve/rate-it";
 import React, { useEffect, useMemo, useState } from "react";
 
 import { createDecisionDigestAction } from "./actions";
@@ -958,7 +959,17 @@ export function DecisionActions({ decision, projectId, actorId }: {
   // THE CONTENT THIS APPROVAL IS OF. The engine refuses the approval if the preview has moved
   // on since this card was drawn, so nobody approves an email they did not read.
   const contentHash = actionPreviewOf(decision.recommendation.action_preview)?.content_hash ?? "";
+  // Why it is a no: optional chips, sent when Reject is pressed (the press itself is unchanged).
+  const [why, setWhy] = useState<string[]>([]);
+  const onPress = (e: React.MouseEvent) => {
+    const pressed = (e.target as HTMLElement).closest?.("[data-testid='decision-reject']");
+    if (!pressed || !why.length) return;
+    void sendReasons(projectId, actorId, "reject", decision.id, why,
+                     rejectKind(null, null, null, decision.recommendation));
+  };
   return (
+    // A layout-free wrapper: it only hears which button was pressed.
+    <div className="im-contents" onClickCapture={onPress}>
     <DecisionResolveForm className="dq-actions">
       <input type="hidden" name="decision_id" value={decision.id} />
       <input type="hidden" name="project_id" value={projectId} />
@@ -979,6 +990,12 @@ export function DecisionActions({ decision, projectId, actorId }: {
           {offer.label}
         </SubmitButton>
       ))}
+      {direct.some((a) => a.action === "reject") && !dismiss ? (
+        <details className="dq-more dq-why" data-testid="decision-why">
+          <summary title="Optional: tell BOSS why, before you reject">Why no?</summary>
+          <div className="dq-more-body"><ReasonChips value={why} onChange={setWhy} /></div>
+        </details>
+      ) : null}
       {revise || delegate ? (
         <details className="dq-more">
           <summary>{[revise ? "Request changes" : "", delegate ? "hand to someone else" : ""]
@@ -1024,6 +1041,7 @@ export function DecisionActions({ decision, projectId, actorId }: {
         <ClientRelativeTime iso={decision.createdAt} empty="" as="span" />
       </span>
     </DecisionResolveForm>
+    </div>
   );
 }
 
