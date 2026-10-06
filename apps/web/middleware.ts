@@ -184,9 +184,38 @@ async function passThrough(request: NextRequest) {
   // overwritten), and stripped before any call reaches the API (every X-Boss-* is).
   const forwarded = (await pressIntentHeaders(request)) ?? new Headers(request.headers);
   forwarded.set(PATH_HEADER, request.nextUrl.pathname);
+  // THE CSP (IDENTITY.md §14.1 I, A10): pages only — never the /v1 proxy, which also serves the
+  // previewed apps, nor the hand-written /api routes. Next reads the nonce from the request's
+  // CSP header and stamps it on its own scripts; nothing else may run.
+  const page = !request.nextUrl.pathname.startsWith("/v1/") && !request.nextUrl.pathname.startsWith("/api/");
+  const policy = page ? contentSecurityPolicy(btoa(crypto.randomUUID())) : null;
+  if (policy) forwarded.set("content-security-policy", policy);
   const response = NextResponse.next({ request: { headers: forwarded } });
+  if (policy) response.headers.set("Content-Security-Policy", policy);
   response.headers.set("Cache-Control", "private, no-store");
   return response;
+}
+
+/**
+ * Scripts: only Next's own, carrying this response's nonce ('strict-dynamic' lets them load their
+ * chunks). Styles may be inline (the console sets custom properties and generated rules), fonts
+ * come from Google Fonts, the page talks only to its own origin, and nothing may frame it. Dev
+ * adds what Next's dev server needs (eval for fast refresh, ws for HMR).
+ */
+export function contentSecurityPolicy(nonce: string, dev = process.env.NODE_ENV === "development"): string {
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ""}`,
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    "img-src 'self' data: blob: https:",
+    `connect-src 'self'${dev ? " ws: wss:" : ""}`,
+    "frame-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+  ].join("; ");
 }
 
 /**
