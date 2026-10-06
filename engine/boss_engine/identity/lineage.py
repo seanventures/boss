@@ -119,16 +119,21 @@ class Acting:
     run_id: Optional[str] = None
     jti: Optional[str] = None
     extra: Mapping[str, Any] = field(default_factory=dict)
+    #: BOSS's own background work (no request, no person): stamped as `sys_worker`, marked system.
+    system: bool = False
 
     def to_json(self) -> dict[str, Any]:
-        return {"on_behalf_of": self.principal_id, "org_id": self.org_id, "grant_id": self.grant_id,
-                "chain": list(self.chain), "run_id": self.run_id, "jti": self.jti}
+        out = {"on_behalf_of": self.principal_id, "org_id": self.org_id, "grant_id": self.grant_id,
+               "chain": list(self.chain), "run_id": self.run_id, "jti": self.jti}
+        if self.system:
+            out["system"] = True
+        return out
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> "Acting":
         return cls(principal_id=str(data["on_behalf_of"]), org_id=str(data.get("org_id") or ""),
                    grant_id=data.get("grant_id"), chain=tuple(data.get("chain") or ()),
-                   run_id=data.get("run_id"), jti=data.get("jti"))
+                   run_id=data.get("run_id"), jti=data.get("jti"), system=bool(data.get("system")))
 
     @classmethod
     def from_context(cls, ctx: AuthContext) -> "Acting":
@@ -202,7 +207,8 @@ JOB_IDENTITY_KEY = "_identity"
 
 
 class PrincipalRequired(RuntimeError):
-    """A job was enqueued with no principal while identity is enforced. Fail closed (R8)."""
+    """A leased job carries no principal at all (a row from before R8) while identity is
+    enforced. Fail closed (R8)."""
 
 
 def _enforced() -> bool:
@@ -213,45 +219,57 @@ def _enforced() -> bool:
 
 _warned_unattributed: set[str] = set()
 
+#: The principal BOSS's own background work is stamped with.
+SYSTEM_PRINCIPAL = "sys_worker"
+SYSTEM_ACTING = Acting(principal_id=SYSTEM_PRINCIPAL, org_id="", system=True)
+
 
 def stamp_job(payload: dict[str, Any], who: Optional[Acting] = None) -> dict[str, Any]:
     """Stamp `payload["_identity"]` from `who` or the ambient context. A payload may not bring its
-    own `_identity` (that would be an asserted identity): it is always overwritten or refused.
+    own `_identity` (that would be an asserted identity): it is always overwritten.
+
+    Never unattributed: work enqueued OUTSIDE any authenticated request or run (system threads —
+    autopilot, the scheduler, captains — and public webhooks) is stamped as BOSS's own:
+    `sys_worker`, marked `system`, logged once per call site. An authenticated HTTP request always
+    carries the guard's acting context (identity_guard calls `enter(ctx)`), and a delegated run
+    its own, so neither ever falls back to this. A system job authorizes nothing on anyone's
+    behalf: it holds no grant, and the worker's identity never authorizes an effect (§7.14).
     The job ROW's identity columns come from `stamp_job_row` (which calls this): every INSERT INTO
     jobs goes through that, so the columns and the payload never disagree."""
     payload.pop(JOB_IDENTITY_KEY, None)
     acting_now = who if who is not None else current()
     if acting_now is None:
-        if _enforced():
-            raise PrincipalRequired("a job must carry the principal it acts for")
         import inspect
         import logging
 
-        caller = next((f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno}" for f in inspect.stack()[2:4]), "?")
+        caller = next((f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno}" for f in inspect.stack()[2:5]
+                       if not f.filename.endswith("identity/lineage.py")), "?")
         if caller not in _warned_unattributed:
             _warned_unattributed.add(caller)
-            logging.getLogger(__name__).info("[identity] job enqueued without a principal at %s (shadow)", caller)
-        return payload
+            logging.getLogger(__name__).info("[identity] job enqueued outside any request at %s: stamped as "
+                                             "system (%s)", caller, SYSTEM_PRINCIPAL)
+        acting_now = SYSTEM_ACTING
     payload[JOB_IDENTITY_KEY] = acting_now.to_json()
     return payload
 
 
-JOB_IDENTITY_COLUMNS = ("on_behalf_of", "grant_id", "chain")
+JOB_IDENTITY_COLUMNS = ("on_behalf_of", "grant_id", "chain", "on_behalf_system")
 
 
 def stamp_job_row(payload: Optional[Mapping[str, Any]], who: Optional[Acting] = None
                   ) -> tuple[dict[str, Any], dict[str, Any]]:
     """(payload, columns) for one `INSERT INTO jobs`: the payload stamped by `stamp_job`, and the
-    values for the row's `on_behalf_of`, `grant_id` and `chain` (JSON text, bind it with
-    `CAST(:chain AS JSONB)`). Every job enqueue path uses this; a raw INSERT that skipped it
-    would be a job with no principal (R8). Fails closed under enforce, like `stamp_job`."""
+    values for the row's `on_behalf_of`, `grant_id`, `chain` (JSON text, bind it with
+    `CAST(:chain AS JSONB)`) and `on_behalf_system`. Every job enqueue path uses this; a raw
+    INSERT that skipped it would be a job with no principal (R8)."""
     import json
 
     stamped = stamp_job(dict(payload or {}), who)
     data = stamped.get(JOB_IDENTITY_KEY) or {}
     chain = list(data.get("chain") or [])
     return stamped, {"on_behalf_of": data.get("on_behalf_of"), "grant_id": data.get("grant_id"),
-                     "chain": json.dumps(chain) if data else None}
+                     "chain": json.dumps(chain) if data else None,
+                     "on_behalf_system": bool(data.get("system"))}
 
 
 def _acting_from_columns(job: Mapping[str, Any], extra: Mapping[str, Any]) -> Acting:
@@ -267,7 +285,8 @@ def _acting_from_columns(job: Mapping[str, Any], extra: Mapping[str, Any]) -> Ac
     return Acting(principal_id=str(job["on_behalf_of"]),
                   org_id=str((extra.get("org_id") if same else None) or job.get("org_id") or ""),
                   grant_id=job.get("grant_id") or None, chain=tuple(chain or ()),
-                  run_id=extra.get("run_id") if same else None, jti=extra.get("jti") if same else None)
+                  run_id=extra.get("run_id") if same else None, jti=extra.get("jti") if same else None,
+                  system=bool(job.get("on_behalf_system")))
 
 
 def acting_for_job(job: Mapping[str, Any]) -> Optional[Acting]:
@@ -294,7 +313,7 @@ def acting_for_job_id(db: Any, job_id: Optional[str]) -> Optional[Acting]:
 
     if not job_id:
         return None
-    row = db.execute(text("SELECT payload, on_behalf_of, grant_id, chain FROM jobs WHERE id = :j"),
+    row = db.execute(text("SELECT payload, on_behalf_of, grant_id, chain, on_behalf_system FROM jobs WHERE id = :j"),
                      {"j": job_id}).mappings().first()
     if row is None:
         return None

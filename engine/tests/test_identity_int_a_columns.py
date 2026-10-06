@@ -65,21 +65,47 @@ def test_every_insert_into_jobs_goes_through_the_stamping_path_and_writes_the_co
         if path.endswith("identity/lineage.py"):
             continue
         assert "stamp_job_row" in body, f"{path}:{name} inserts a job without lineage.stamp_job_row (R8)"
-        for column in (":on_behalf_of", ":grant_id", "CAST(:chain AS JSONB)"):
+        for column in (":on_behalf_of", ":grant_id", "CAST(:chain AS JSONB)", ":on_behalf_system"):
             assert column in body, f"{path}:{name} does not write the job's {column} column"
 
 
-def test_stamp_job_row_fails_closed_under_enforce_and_never_keeps_a_payload_identity(monkeypatch):
+def test_stamp_job_row_never_keeps_a_payload_identity_and_never_leaves_a_job_unattributed(monkeypatch):
     who = lineage.Acting(principal_id="usr_alice", org_id="org_boss", grant_id="dlg_1",
                          chain=("agt_forge#run_ct:1",), run_id="run_ct:1")
     payload, cols = lineage.stamp_job_row({"x": 1, "_identity": {"on_behalf_of": "usr_root"}}, who)
-    assert cols == {"on_behalf_of": "usr_alice", "grant_id": "dlg_1", "chain": '["agt_forge#run_ct:1"]'}
+    assert cols == {"on_behalf_of": "usr_alice", "grant_id": "dlg_1", "chain": '["agt_forge#run_ct:1"]',
+                    "on_behalf_system": False}
     assert payload["_identity"]["on_behalf_of"] == "usr_alice"
-    payload, cols = lineage.stamp_job_row({"_identity": {"on_behalf_of": "usr_root"}})      # shadow, nobody
-    assert cols == {"on_behalf_of": None, "grant_id": None, "chain": None} and "_identity" not in payload
+    for mode in ("shadow", "enforce"):
+        monkeypatch.setenv("BOSS_AUTHZ_MODE", mode)
+        # Outside any request or run (a system thread, a webhook): BOSS's own work, said so.
+        payload, cols = lineage.stamp_job_row({"_identity": {"on_behalf_of": "usr_root", "grant_id": "dlg_x"}})
+        assert cols == {"on_behalf_of": "sys_worker", "grant_id": None, "chain": "[]", "on_behalf_system": True}
+        assert payload["_identity"]["on_behalf_of"] == "sys_worker" and payload["_identity"]["system"] is True
+
+
+def test_under_enforce_a_background_enqueue_is_system_and_a_request_enqueue_carries_the_person(monkeypatch):
+    from boss_engine.identity.principal import AuthContext, AuthMethod, Principal, PrincipalKind, PrincipalStatus
+
     monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
-    with pytest.raises(lineage.PrincipalRequired):
-        lineage.stamp_job_row({"x": 1})
+    _, background = lineage.stamp_job_row({"tick": 1})
+    assert background["on_behalf_of"] == "sys_worker" and background["on_behalf_system"] is True
+    alice = AuthContext(Principal("usr_alice", PrincipalKind.USER, "org_boss", PrincipalStatus.ACTIVE, "A"),
+                        AuthMethod.SESSION)
+    import contextvars
+
+    def request():                     # what the guard does for every authenticated request
+        lineage.enter(alice)
+        return lineage.stamp_job_row({"click": 1})
+
+    payload, cols = contextvars.copy_context().run(request)
+    assert cols["on_behalf_of"] == "usr_alice" and cols["on_behalf_system"] is False
+    assert payload["_identity"]["org_id"] == "org_boss" and "system" not in payload["_identity"]
+    acting = lineage.acting_for_job({"payload": {}, "on_behalf_of": "sys_worker", "on_behalf_system": True,
+                                     "grant_id": None, "chain": []})
+    assert acting.system is True and acting.principal_id == "sys_worker" and acting.grant_id is None
+    with pytest.raises(lineage.PrincipalRequired):            # a row with no principal at all: fail closed
+        lineage.acting_for_job({"payload": {}})
 
 
 # ---- the run path reads the columns ------------------------------------------------------------------------

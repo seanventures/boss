@@ -626,12 +626,12 @@ class A2AService:
                 INSERT INTO jobs (
                     id, project_id, kind, priority, status, payload,
                     data_boundary, max_attempts, attempt, dedupe_key, run_after,
-                    on_behalf_of, grant_id, chain
+                    on_behalf_of, grant_id, chain, on_behalf_system
                 )
                 VALUES (
                     :id, :project_id, 'a2a.dispatch', :priority, 'queued',
                     CAST(:payload AS JSONB), :data_boundary, :max_attempts, 0,
-                    :dedupe_key, :run_after, :on_behalf_of, :grant_id, CAST(:chain AS JSONB)
+                    :dedupe_key, :run_after, :on_behalf_of, :grant_id, CAST(:chain AS JSONB), :on_behalf_system
                 )
                 """
             ),

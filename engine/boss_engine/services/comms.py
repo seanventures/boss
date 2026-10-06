@@ -286,12 +286,12 @@ class CommsService:
                 INSERT INTO jobs (
                     id, project_id, task_id, kind, priority, status, payload,
                     data_boundary, max_attempts, attempt, run_after,
-                    on_behalf_of, grant_id, chain
+                    on_behalf_of, grant_id, chain, on_behalf_system
                 )
                 VALUES (
                     :id, :project_id, NULL, 'comms.outbox.deliver', :priority, 'queued',
                     CAST(:payload AS JSONB), :data_boundary, :max_attempts, 0,
-                    :run_after, :on_behalf_of, :grant_id, CAST(:chain AS JSONB)
+                    :run_after, :on_behalf_of, :grant_id, CAST(:chain AS JSONB), :on_behalf_system
                 )
                 """
             ),
