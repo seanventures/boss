@@ -30,14 +30,27 @@ export function InviteSheet({ roles, onClose, onInvited }: { roles: AccessRole[]
   const send = async () => {
     setBusy(true);
     setError(null);
+    // One invitation per person (POST /v1/identity/users takes one email). A retry after a
+    // step-up skips the ones already sent, so nobody is invited twice.
+    const invited: { email: string; link: string | null }[] = [];
     try {
-      const out = await guarded("Inviting people grants them access.", () =>
-        idPost<{ invited: { email: string; link: string | null }[] }>("/v1/identity/users", { emails: list, roles: [role], groups: [] }));
+      await guarded("Inviting people grants them access.", async () => {
+        for (const email of list) {
+          if (invited.some((i) => i.email === email)) continue;
+          const r = await idPost<{ invitation_id: string; emailed: boolean; link?: string | null }>("/v1/identity/users", {
+            email, bindings: [{ role_key: role, scope_type: "org" }], group_ids: [],
+          });
+          invited.push({ email, link: r.link ?? null });
+        }
+      });
       onInvited?.();
-      if (out.invited.some((i) => i.link)) setLinks(out.invited);
-      else { showToast("success", `${out.invited.length} invited`); onClose(); }
+      if (invited.some((i) => i.link)) setLinks(invited);
+      else { showToast("success", `${invited.length} invited`); onClose(); }
     } catch (e) {
-      setError(e instanceof IdentityError ? e.message : "Not sent");
+      if (invited.length) onInvited?.();
+      const sent = invited.length ? `${invited.length} sent; ` : "";
+      setError(`${sent}${e instanceof IdentityError ? e.message : "Not sent"}`);
+      if (invited.some((i) => i.link)) setLinks(invited);
     } finally {
       setBusy(false);
     }
@@ -71,7 +84,7 @@ export function InviteSheet({ roles, onClose, onInvited }: { roles: AccessRole[]
       <div className="idn-field">
         <span className="idn-label">Access role</span>
         <div className="idn-segs" role="radiogroup" aria-label="Access role">
-          {roles.filter((r) => r.key !== "owner").map((r) => {
+          {roles.filter((r) => r.key !== "owner" && !r.system).map((r) => {
             const ok = reachable(r);
             return (
               <button key={r.id} type="button" role="radio" aria-checked={role === r.key} aria-pressed={role === r.key}
