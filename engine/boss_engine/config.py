@@ -691,7 +691,9 @@ class Settings(BaseSettings):
     #: Proxies whose X-Forwarded-For the collector believes (comma-separated CIDRs). Only the
     #: collector's rate limits read a client address, and never store it.
     trusted_proxies: str = Field(
-        default="127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7",
+        # LOOPBACK ONLY by default (re-check item 6): a private address is not a proxy just for
+        # being private. Behind a reverse proxy on another host, name it here (see .env.example).
+        default="127.0.0.0/8,::1/128",
         alias="BOSS_TRUSTED_PROXIES")
     #: How this install was made (compose, source, e2e …). Compose forwards it; unset reads as
     #: "compose" inside the shipped images and "source" otherwise.

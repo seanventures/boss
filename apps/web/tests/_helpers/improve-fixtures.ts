@@ -28,6 +28,7 @@ export function newImprove() {
     calls: [] as ImproveCall[],
     status: 0,
     rotateOld: undefined as string | undefined,
+    urlError: "",
     sharing: {
       switches: { improve: sw(false, false, "Improve BOSS", false), heartbeat: sw(true, false, "Daily heartbeat", true),
                   collector: sw(false, false, "Collector mode", false) },
@@ -138,7 +139,8 @@ export function fakeImproveApi(f: FakeImprove, rest?: (input: unknown, init?: Re
       return Response.json(f.sharing);
     }
     if (call.op === "forget") return Response.json({ deleted: true, status: 200, error: null });
-    if (call.op === "rotate") return Response.json({ ...f.sharing, rotated: { old: f.rotateOld ?? "deleted" } });
+    if (call.op === "rotate") return Response.json({ ...f.sharing, rotated: { old: f.rotateOld ?? "deleted", removed: 3 } });
+    if (call.op === "collector_url" && f.urlError) return Response.json({ error: f.urlError }, { status: 422 });
     if (call.op === "collector_url") {
       f.sharing.url = String(call.body?.url ?? ""); f.sharing.blocked = f.sharing.url ? null : "No collector set";
       return Response.json(f.sharing);

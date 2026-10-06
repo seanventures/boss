@@ -13,7 +13,7 @@ from apps.api.app.config import get_settings
 
 STATE_KEYS = ("improve_boss", "improve_heartbeat", "improve_collector", "improve_identity",
               "improve_schedule", "improve_maint", "score_weights", "improve_retired",
-              "improve_endpoint")
+              "improve_endpoint", "improve_floor", "improve_mask")
 
 
 def project() -> str:

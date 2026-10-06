@@ -438,6 +438,7 @@ ENVELOPE: dict[str, Spec] = {
 SHARE: dict[str, Spec] = {
     "v": ("int", 1, 1),
     "install_id": ("re", _INSTALL_ID),
+    "secret_hash": ("re", _HEX64),
     "note": ("text", 2000),
     "bundle": ("text", 400_000),
     "context": {"version": ("re", _VERSION), "edition": _enum(EDITIONS, "other")},

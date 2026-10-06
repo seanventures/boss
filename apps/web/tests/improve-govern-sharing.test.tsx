@@ -153,4 +153,41 @@ describe("Govern › Sharing", () => {
     expect($("[data-testid=gv]")!.textContent).not.toContain("executive_console");
     expect($("[data-testid=gv-send]")!.textContent).toMatch(/\d{1,2}:\d{2}/);
   });
+
+  it("says the collector held nothing rather than deleted", async () => {
+    const f = newImprove();
+    f.rotateOld = "nothing_held";
+    await open(f);
+    await click($("[data-testid=gv-rotate]"));
+    await settle();
+    expect($("[data-testid=gv-rotated]")!.textContent).toBe("Collector held nothing for the old id");
+  });
+
+  it("a refused collector URL shows the reason beside the field", async () => {
+    const f = newImprove();
+    f.urlError = "The collector URL has to be https.";
+    await open(f);
+    const input = $("[data-testid=gv-url]") as HTMLInputElement;
+    const { act } = await import("react");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "http://c.example.test/v1/telemetry/ingest");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click($("[data-testid=gv-url-save]"));
+    await settle();
+    expect($("[data-testid=gv-url-error]")!.textContent).toBe("The collector URL has to be https.");
+  });
+
+  it("saves the words a shared run always masks", async () => {
+    const f = await open();
+    const input = $("[data-testid=gv-mask]") as HTMLInputElement;
+    const { act } = await import("react");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Nightjar, Larkspur");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click($("[data-testid=gv-mask-save]"));
+    await settle();
+    expect(f.calls.find((c) => c.op === "mask_words")?.body?.words).toBe("Nightjar, Larkspur");
+  });
 });

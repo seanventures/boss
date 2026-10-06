@@ -69,7 +69,7 @@ export type SendRow = { id: string; day: string; kind: string; status: string; b
 export type SharingView = {
   switches: { improve: Switch; heartbeat: Switch; collector: Switch };
   env_disabled: string | null; blocked?: string | null; install_id: string; url: string;
-  url_source?: "env" | "govern" | "none"; retired_waiting?: number; next_due_at: string | null;
+  url_source?: "env" | "govern" | "none"; retired_waiting?: number; mask_words?: string[]; next_due_at: string | null;
   last_attempt_at: string | null; sends: SendRow[]; unsent_batches: number;
   score: { version: string; weights: Weight[] }; heartbeat_fields: string[];
 };

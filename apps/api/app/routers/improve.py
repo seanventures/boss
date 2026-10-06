@@ -33,6 +33,8 @@ class SharingBody(Body):
     weights: Optional[dict[str, float]] = None
     #: The collector's ingest URL ("" clears it). Refused while BOSS_TELEMETRY_URL sets it.
     url: Optional[str] = None
+    #: Words a shared run always masks (list, or one comma/line separated string).
+    mask_words: Optional[Any] = None
 
 
 class ExperimentBody(Body):
@@ -101,11 +103,21 @@ def client_ip(peer: str, forwarded: str, trusted: str) -> str:
             return False
         return any(ip in n for n in nets)
 
-    chain = [h.strip() for h in (forwarded or "").split(",") if h.strip()] + [peer or ""]
-    for hop in reversed(chain):
+    def valid(addr: str) -> bool:
+        try:
+            ipaddress.ip_address(addr)
+            return True
+        except ValueError:
+            return False
+
+    if not is_trusted(peer or ""):
+        return peer or ""
+    # A malformed hop ("unknown", a host name, garbage) is skipped, never used as a bucket.
+    hops = [h.strip() for h in (forwarded or "").split(",") if valid(h.strip())]
+    for hop in reversed(hops):
         if not is_trusted(hop):
             return hop
-    return chain[0]
+    return hops[0] if hops else (peer or "")
 
 
 async def read_capped(request: Request, cap: int) -> bytes:
@@ -322,6 +334,8 @@ def build_improve_router(
                                             project_id=pid)
                 if payload.weights is not None:
                     scorecards.set_weights(c, payload.weights, actor, pid)
+                if payload.mask_words is not None:
+                    improve_boss.set_mask_words(c, payload.mask_words, actor=actor, project_id=pid)
                 if payload.url is not None:
                     if improve_boss.endpoint(c, settings())[1] == "env":
                         raise HTTPException(status_code=409,

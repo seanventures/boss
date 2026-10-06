@@ -1,5 +1,6 @@
 import { API_URL, API_KEY } from "../../../lib/client";
 import { COLLECTOR_PATHS } from "../../../lib/console-session";
+import { COLLECTOR_BODY_CAP, readCapped } from "../../../lib/read-capped";
 
 /**
  * The control plane, on the console's own origin.
@@ -67,12 +68,25 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
     : `${API_URL}/v1/${path.map(encodeURIComponent).join("/")}${incoming.search}`;
   const method = req.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD" && method !== "DELETE";
+  // ANOTHER INSTALL'S POST IS READ UNDER A CAP, never buffered whole (re-check item 3): the
+  // collector routes are open to anyone, so a 150 MB chunked body must stop at the cap here,
+  // before it costs this process its memory. The API applies its own, finer cap after.
+  let body: ArrayBuffer | Uint8Array | undefined;
+  if (hasBody && COLLECTOR_PATHS.has(incoming.pathname)) {
+    const read = await readCapped(req, COLLECTOR_BODY_CAP);
+    if (read === null) {
+      return Response.json({ detail: "too_large" }, { status: 413 });
+    }
+    body = read;
+  } else if (hasBody) {
+    body = await req.arrayBuffer();
+  }
   let upstream: Response;
   try {
     upstream = await fetch(target, {
       method,
       headers: forwardHeaders(req),
-      body: hasBody ? await req.arrayBuffer() : undefined,
+      body: body as BodyInit | undefined,
       cache: "no-store",
       redirect: "manual",
     });

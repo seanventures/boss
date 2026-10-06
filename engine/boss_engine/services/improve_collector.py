@@ -201,8 +201,13 @@ def delete(connection, payload: Any, *, now: Optional[float] = None) -> dict[str
         raise CollectorError(400, "bad_request") from error
     if abs((now or time.time()) - ts) > DELETE_SKEW_S:
         raise CollectorError(401, "stale")
-    stored = connection.execute(text("SELECT secret_hash FROM tm_installs WHERE install_id = :id"),
-                                {"id": install_id}).scalar()
+    # The hash this id registered: with its heartbeats and batches, or with a shared run — an id
+    # that only ever shared a run has no tm_installs row and must still be deletable.
+    stored = connection.execute(text("""
+        SELECT secret_hash FROM tm_installs WHERE install_id = :id AND secret_hash IS NOT NULL
+        UNION ALL
+        SELECT secret_hash FROM tm_shares WHERE install_id = :id AND secret_hash IS NOT NULL
+        LIMIT 1"""), {"id": install_id}).scalar()
     if not stored:
         return {"ok": True, "deleted": 0}  # nothing held: the answer is the same either way
     want = hmac.new(proof.encode(), f"delete|{install_id}|{ts}".encode(),
@@ -228,9 +233,17 @@ def share(connection, payload: Any, *, ip: str = "") -> dict[str, Any]:
     if not IP_LIMIT.allow(ip_key(ip)) or not INSTALL_LIMIT.allow("share:" + clean["install_id"]):
         raise CollectorError(429, "rate_limited")
     sid = make_id("tmsh")
+    known = connection.execute(text(
+        "SELECT secret_hash FROM tm_installs WHERE install_id = :i"), {"i": clean["install_id"]}).scalar()
+    held = known or connection.execute(text(
+        "SELECT secret_hash FROM tm_shares WHERE install_id = :i AND secret_hash IS NOT NULL LIMIT 1"),
+        {"i": clean["install_id"]}).scalar()
+    # First seen wins, as for heartbeats: a later share cannot swap the hash that deletes this id.
     connection.execute(text(
-        "INSERT INTO tm_shares (id, install_id, body) VALUES (:id, :i, CAST(:b AS JSONB))"),
-        {"id": sid, "i": clean["install_id"], "b": json.dumps(clean)})
+        "INSERT INTO tm_shares (id, install_id, body, secret_hash) "
+        "VALUES (:id, :i, CAST(:b AS JSONB), :h)"),
+        {"id": sid, "i": clean["install_id"], "h": held or clean.get("secret_hash"),
+         "b": json.dumps({k: v for k, v in clean.items() if k != "secret_hash"})})
     return {"ok": True, "id": sid}
 
 

@@ -210,9 +210,11 @@ fi
 # 9. what this install tells the BOSS project (docs/product/RUN_SCORECARDS.md). Said plainly
 # every time. The words are the engine's ONE list (improve_boss.TELEMETRY_OFF_WORDS and
 # DNT_ON_WORDS); test_the_off_words_are_one_list holds this case to it.
-_tel="$(env_value BOSS_TELEMETRY | tr '[:upper:]' '[:lower:]')"
-_dnt="$(env_value DO_NOT_TRACK | tr '[:upper:]' '[:lower:]')"
-_url="$(env_value BOSS_TELEMETRY_URL)"
+# Quotes are stripped: `BOSS_TELEMETRY="off"` in .env means off, as it does to the engine.
+_unq() { tr -d "\"'" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'; }
+_tel="$(env_value BOSS_TELEMETRY | _unq | tr '[:upper:]' '[:lower:]')"
+_dnt="$(env_value DO_NOT_TRACK | _unq | tr '[:upper:]' '[:lower:]')"
+_url="$(env_value BOSS_TELEMETRY_URL | _unq)"
 _off=0
 case "$_tel" in off|0|false|no|disabled|disable|none) _off=1 ;; esac
 case "$_dnt" in 1|true|yes|on) _off=1 ;; esac
