@@ -2692,8 +2692,8 @@ def _agent_purpose(connection, run_id: str, project_id: str, messages: Any,
     step = finalize_ctx.get("agent_step") if isinstance(finalize_ctx.get("agent_step"),
                                                          dict) else {}
     role = step.get("role_key") or finalize_ctx.get("role_key") or None
-    brief = ""
-    for message in messages or []:
+    brief = str(step.get("brief") or "")
+    for message in ([] if brief else (messages or [])):
         if isinstance(message, dict) and message.get("role") == "user":
             content = message.get("content")
             brief = content if isinstance(content, str) else json.dumps(content)[:4000]

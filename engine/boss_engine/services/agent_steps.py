@@ -765,8 +765,10 @@ def run(
                 "mcp_server_ids": [str(s["id"]) for s in servers],
                 "actor": actor,
                 # The workflow run and step this agent works for: the model router records its
-                # route under them, so the step's "Why this model" can read it.
+                # route under them, so the step's "Why this model" can read it — and routes on
+                # the operator's own instruction, not on BOSS's framing around it.
                 **{k: v for k, v in (route_ref or {}).items() if v},
+                "brief": str(said or "")[:4000],
             },
         },
     )
