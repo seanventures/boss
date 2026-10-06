@@ -31,6 +31,8 @@ export interface Binding {
   granted_by: string | null;
   granted_at: string;
   expires_at: string | null;
+  /** Drawn from a person's `access_roles` when /role-bindings was unreadable: nothing to remove. */
+  synthetic?: boolean;
 }
 
 export type GroupSource = "manual" | "scim" | "oidc";
@@ -121,6 +123,8 @@ export interface Group {
   provider: string | null;
   synced_at: string | null;
   members: (Ref & { email: string; hue: number })[];
+  /** The API's count (a list row carries no members). */
+  member_count?: number;
   bindings: Binding[];
 }
 
@@ -130,6 +134,8 @@ export interface AccessRole {
   name: string;
   description: string;
   builtin: boolean;
+  /** A fixed system role (worker, collector, SCIM): never listed, bound or cloned. */
+  system?: boolean;
   permissions: Permission[];
   bindable_scopes: ("org" | "project")[];
   holders: number;

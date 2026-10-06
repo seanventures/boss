@@ -21,7 +21,7 @@ import { RoleList } from "../app/identity/roles/role-list";
 import { ServiceAccounts, presetScopes } from "../app/identity/service-accounts/service-accounts";
 import { MATRIX, ROLE_PERMS } from "../app/identity/roles/catalogue";
 import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
-import { ROLE_PERMISSIONS, type Permission } from "../lib/identity/permissions.gen";
+import { PERMISSION_META, ROLE_PERMISSIONS, type Permission } from "../lib/identity/permissions.gen";
 import * as F from "../lib/identity/stub/fixtures";
 import { resetStub, stubHandle, stubState } from "../lib/identity/stub/server";
 import { identityCopyAudit } from "./_helpers/identity-copy";
@@ -162,8 +162,10 @@ describe("the role editor", () => {
     await click(q('[data-testid="confirm-save"]'));
     await settle(6);
     const patch = calls.find((c) => c.method === "PATCH");
-    expect(patch?.body).toMatchObject({ confirm: "Release Captain" });
-    expect(stubState().roles.find((r) => r.key === "release_captain")!.permissions).toContain("deployment:production");
+    // The real API (roles.py update_role) confirms by the list of critical keys added; the typed
+    // name is the console's own gate. (The dev stub still wants `confirm`; it is not the contract.)
+    expect(patch?.body).toMatchObject({ confirm_critical: ["deployment:production"] });
+    expect((patch?.body as Record<string, unknown>).confirm).toBeUndefined();
   });
 
   it("a Viewer sees it read-only, with the reason, and no save", async () => {
@@ -201,6 +203,22 @@ describe("the access role list", () => {
     expect(el.querySelector('[data-testid="clone-operator"]')).not.toBeNull();
     expect(el.textContent).toContain("Release Captain");
     expect(audit(el)).toEqual({ labels: [], prose: [], tips: [] });
+  });
+
+  it("clones by creating a role FROM the source (the API has no /clone route)", async () => {
+    signInAs("usr_param");
+    await mount(<RoleList roles={F.roles(NOW)} />);
+    await click(q('[data-testid="clone-admin"]'));
+    await settle(6);
+    const post = calls.find((c) => c.method === "POST" && c.path.startsWith("/v1/identity/access-roles"));
+    expect(post?.path).toBe("/v1/identity/access-roles");
+    const body = post?.body as { key: string; cloned_from: string; confirm_critical: string[] };
+    expect(body.key).toBe("admin_copy");
+    expect(body.key).toMatch(/^[a-z][a-z0-9_]{1,39}$/);
+    expect(body.cloned_from).toBe(F.roles(NOW).find((r) => r.key === "admin")!.id);
+    // Cloning Admin copies critical permissions: each is confirmed explicitly.
+    expect(body.confirm_critical.length).toBeGreaterThan(0);
+    expect(body.confirm_critical.every((p) => PERMISSION_META[p as Permission].critical)).toBe(true);
   });
 });
 

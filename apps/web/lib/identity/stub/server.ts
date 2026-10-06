@@ -298,12 +298,14 @@ on("POST", "/v1/auth/setup/claim", "public", ({ s, req, now }) => {
     200, [...(startSession(s, "usr_param", ["setup"], now) ?? []), `${STUB_CLAIM_COOKIE}=; Path=/; Max-Age=0`]);
 });
 
-on("GET", "/v1/auth/invitations/([^/]+)", "public", ({ m }) => (m[1] === "expired" ? notFound() : ok({
+// As S1 answers them: the token in the BODY, never the URL.
+const inviteToken = (req: StubRequest) => String((req.body as { token?: unknown } | null)?.token ?? "");
+on("POST", "/v1/auth/invitations/preview", "public", ({ req }) => (!inviteToken(req) || inviteToken(req) === "expired" ? notFound() : ok({
   org: F.ORG.name, inviter: "Priya Raman", email: "ana@acme.dev", roles: ["Operator · acme-web"], expires_at: new Date(Date.now() + 5 * 86_400_000).toISOString(),
   sso: [{ id: "idp_okta", name: "Acme SSO", preset: "okta" }],
 })));
-on("POST", "/v1/auth/invitations/([^/]+)/accept", "public", ({ s, now, m }) => {
-  if (m[1] === "expired") return notFound();
+on("POST", "/v1/auth/invitations/accept", "public", ({ s, now, req }) => {
+  if (!inviteToken(req) || inviteToken(req) === "expired") return err(400, "invitation_invalid");
   const ana = s.people.find((p) => p.id === "usr_ana");
   if (ana) ana.status = "active";
   return ok({ next: "enrol", methods: ["passkey", "totp"], who: null }, 200, startSession(s, "usr_ana", ["pwd"], now));

@@ -11,6 +11,7 @@ import { LockSimple } from "@phosphor-icons/react";
 import { IdentityError, idGet, idPost } from "../../lib/identity/api";
 import { PERMISSION_META, type Permission } from "../../lib/identity/permissions.gen";
 import type { Grantor } from "../../lib/identity/types";
+import { adaptGrantor } from "../../lib/identity/adapt-people";
 import { showToast } from "../../app/client-forms";
 
 export function AccessDenied({ permission, page, home = "/" }: { permission: Permission; page: string; home?: string }) {
@@ -20,8 +21,8 @@ export function AccessDenied({ permission, page, home = "/" }: { permission: Per
 
   useEffect(() => {
     let live = true;
-    idGet<{ grantors: Grantor[] }>(`/v1/identity/grantors?permission=${encodeURIComponent(permission)}`)
-      .then((r) => { if (live) setGrantors(r.grantors); })
+    idGet<{ grantors: unknown[] }>(`/v1/identity/grantors?permission=${encodeURIComponent(permission)}`)
+      .then((r) => { if (live) setGrantors((r.grantors ?? []).map(adaptGrantor)); })
       .catch(() => { if (live) setGrantors([]); });
     return () => { live = false; };
   }, [permission]);
@@ -29,7 +30,7 @@ export function AccessDenied({ permission, page, home = "/" }: { permission: Per
   const who = grantors === null ? "…" : grantors.length
     ? grantors.slice(0, 3).map((g) => g.name).join(", ")
     : "an Owner";
-  const roles = new Set((grantors ?? []).map((g) => g.role));
+  const roles = new Set((grantors ?? []).map((g) => g.role).filter(Boolean));
   const role = roles.size === 1 ? `${[...roles][0]}s` : "Admins";
 
   return (
@@ -49,7 +50,7 @@ export function AccessDenied({ permission, page, home = "/" }: { permission: Per
             onClick={async () => {
               setBusy(true);
               try {
-                await idPost("/v1/identity/access-requests", { permission, page });
+                await idPost("/v1/identity/access-requests", { permission, reason: `From ${page}` });
                 setSent(true);
                 showToast("success", "Request sent");
               } catch (e) {

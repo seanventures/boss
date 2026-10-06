@@ -11,8 +11,16 @@ import { CopySimple, LockSimple, PencilSimple, ShieldCheck } from "@phosphor-ico
 import { CanButton, useGuardedCall } from "../../../components/identity/identity-provider";
 import { ErrorLine, RoleChip } from "../../../components/identity/kit";
 import { IdentityError, idPost } from "../../../lib/identity/api";
+import { PERMISSION_META } from "../../../lib/identity/permissions.gen";
 import type { AccessRole } from "../../../lib/identity/types";
 import { ROLE_PERMS } from "./catalogue";
+
+/** A role key the API accepts (^[a-z][a-z0-9_]{1,39}$): `operator_copy`, `operator_copy2`, … */
+export function cloneKey(source: string, n: number): string {
+  const suffix = n === 1 ? "_copy" : `_copy${n}`;
+  const base = source.toLowerCase().replace(/[^a-z0-9_]/g, "_").replace(/^[^a-z]+/, "") || "role";
+  return `${base.slice(0, 40 - suffix.length)}${suffix}`;
+}
 
 export function useCloneRole() {
   const guarded = useGuardedCall();
@@ -22,8 +30,22 @@ export function useCloneRole() {
     setBusy(role.id);
     setError(null);
     try {
-      const made = await guarded(`Cloning ${role.name} creates a new access role.`,
-        () => idPost<AccessRole>(`/v1/identity/access-roles/${encodeURIComponent(role.id)}/clone`, {}));
+      // A clone is a new role created FROM the source (POST /v1/identity/access-roles with
+      // cloned_from): a fresh key, and the source's critical permissions confirmed explicitly.
+      const confirm = role.permissions.filter((p) => PERMISSION_META[p].critical);
+      const made = await guarded(`Cloning ${role.name} creates a new access role.`, async () => {
+        for (let n = 1; ; n += 1) {
+          const key = cloneKey(role.key, n);
+          try {
+            return await idPost<{ id: string }>("/v1/identity/access-roles", {
+              key, name: n === 1 ? `${role.name} copy` : `${role.name} copy ${n}`, description: role.description,
+              cloned_from: role.id, confirm_critical: confirm,
+            });
+          } catch (e) {
+            if (!(e instanceof IdentityError && e.code === "role_exists") || n >= 9) throw e;
+          }
+        }
+      });
       window.location.assign(`/identity/roles/${made.id}`);
     } catch (e) {
       setError(e instanceof IdentityError ? e.message : "Not cloned");

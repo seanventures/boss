@@ -21,7 +21,8 @@ import { CanButton, useCan, useGuardedCall, useIdentity } from "../../../../comp
 import { ErrorLine, Face, Perm, Sheet, shortDate } from "../../../../components/identity/kit";
 import { showToast } from "../../../client-forms";
 import { IdentityError, idGet, idPatch, idPost } from "../../../../lib/identity/api";
-import { PERMISSION_META, type Permission } from "../../../../lib/identity/permissions.gen";
+import { PERMISSION_META, isPermission, type Permission } from "../../../../lib/identity/permissions.gen";
+import { adaptRole, adaptRolePreview } from "../../../../lib/identity/adapt-people";
 import type { AccessRole, RolePreview, RoleVersion } from "../../../../lib/identity/types";
 import { MATRIX, ROLE_PERMS, actionOf } from "../catalogue";
 import { useCloneRole } from "../role-list";
@@ -49,7 +50,10 @@ function Toggle({ p, cell, readOnly, why, onFlip }: { p: Permission; cell: Cell;
   );
 }
 
-export function RoleEditor({ role: initial, versions }: { role: AccessRole; versions: RoleVersion[] }) {
+export function RoleEditor({ role: initial, versions, names = {} }: {
+  role: AccessRole; versions: RoleVersion[]; names?: Record<string, { name: string; hue: number }>;
+}) {
+  const nameMap = useMemo(() => new Map(Object.entries(names)), [names]);
   const { org, mirrored } = useIdentity();
   const manage = useCan("access_role:manage");
   const guarded = useGuardedCall();
@@ -84,12 +88,12 @@ export function RoleEditor({ role: initial, versions }: { role: AccessRole; vers
   useEffect(() => {
     if (!permsDirty) { setPreview(null); setPreviewError(null); return; }
     const t = window.setTimeout(() => {
-      idPost<RolePreview>(`/v1/identity/access-roles/${encodeURIComponent(role.id)}/preview`, { permissions: [...draft] })
-        .then((p) => { setPreview(p); setPreviewError(null); })
+      idPost<unknown>(`/v1/identity/access-roles/${encodeURIComponent(role.id)}/preview`, { permissions: [...draft] })
+        .then((p) => { setPreview(adaptRolePreview(p, nameMap)); setPreviewError(null); })
         .catch((e) => setPreviewError(e instanceof IdentityError ? e.message : "No preview"));
     }, 250);
     return () => window.clearTimeout(t);
-  }, [draft, permsDirty, role.id]);
+  }, [draft, permsDirty, role.id, nameMap]);
 
   const cell = (p: Permission): Cell => ({
     on: draft.has(p),
@@ -113,9 +117,10 @@ export function RoleEditor({ role: initial, versions }: { role: AccessRole; vers
     setError(null);
     try {
       const next = await guarded(`Saving ${role.name} v${role.version + 1} changes access for ${people} ${people === 1 ? "person" : "people"}.`,
-        () => idPatch<AccessRole>(`/v1/identity/access-roles/${encodeURIComponent(role.id)}`, {
-          permissions: [...draft], name, description, confirm: criticalAdds.length ? typed : undefined,
-        }));
+        // The typed name is the console's own gate; the API's is the list of critical keys.
+        () => idPatch<unknown>(`/v1/identity/access-roles/${encodeURIComponent(role.id)}`, {
+          permissions: [...draft], name, description, confirm_critical: criticalAdds,
+        })).then((r) => ({ ...adaptRole(r), cloned_from: role.cloned_from }));
       setRole(next);
       setDraft(new Set(next.permissions));
       setName(next.name);
@@ -124,11 +129,15 @@ export function RoleEditor({ role: initial, versions }: { role: AccessRole; vers
       setTyped("");
       showToast("success", `Saved v${next.version}`);
     } catch (e) {
-      if (e instanceof IdentityError && e.code === "forbidden" && e.permission) {
-        setCeiling((c) => new Set([...c, e.permission!]));
-        setError(`You don't hold ${e.permission}`);
+      // A grant-ceiling refusal names what you lack: `missing` (roles.py), or one `permission`.
+      const lacking = e instanceof IdentityError && e.code === "forbidden"
+        ? [...(Array.isArray(e.body.missing) ? e.body.missing.map(String) : []), ...(e.permission ? [e.permission] : [])].filter(isPermission)
+        : [];
+      if (lacking.length) {
+        setCeiling((c) => new Set([...c, ...lacking]));
+        setError(`You don't hold ${lacking.join(", ")}`);
         setConfirming(false);
-      } else if (e instanceof IdentityError && e.code === "confirm_required") {
+      } else if (e instanceof IdentityError && (e.code === "confirmation_required" || e.code === "confirm_required")) {
         setConfirming(true);
       } else if (!(e instanceof IdentityError && e.code === "step_up_cancelled")) {
         setError(e instanceof IdentityError ? e.message : "Not saved");
@@ -211,7 +220,7 @@ export function RoleEditor({ role: initial, versions }: { role: AccessRole; vers
           {role.cloned_from ? (
             <div className="idn-field">
               <span className="idn-label">Started from</span>
-              <span className="idn-chip"><CopySimple size={12} aria-hidden /> {role.cloned_from.name} (built-in) · {shortDate(role.cloned_from.at)}</span>
+              <span className="idn-chip"><CopySimple size={12} aria-hidden /> {role.cloned_from.name}{role.cloned_from.at ? ` · ${shortDate(role.cloned_from.at)}` : ""}</span>
             </div>
           ) : null}
           <div className="idn-hr" />
@@ -222,7 +231,7 @@ export function RoleEditor({ role: initial, versions }: { role: AccessRole; vers
                 <button key={v.version} type="button" onClick={() => loadVersion(v)} disabled={readOnly}
                   title={readOnly ? readOnlyWhy : `Load v${v.version} as a new draft`}>
                   <b>v{v.version}</b>
-                  <span>{v.by} · {shortDate(v.at)} · <span className="idn-mono" data-copy="data">{v.summary}</span></span>
+                  <span>{nameMap.get(v.by)?.name ?? v.by} · {shortDate(v.at)} · <span className="idn-mono" data-copy="data">{v.summary}</span></span>
                 </button>
               )) : <span className="idn-dim">v1 · built in</span>}
             </div>
