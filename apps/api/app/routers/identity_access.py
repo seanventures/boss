@@ -88,6 +88,12 @@ class BindingCreate(_Strict):
     reason: Optional[str] = Field(default=None, max_length=500)
 
 
+class AccessRequest(_Strict):
+    permission: str = Field(min_length=3, max_length=80)
+    project_id: Optional[str] = Field(default=None, max_length=120)
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
 def request_context(request: Request) -> AuthContext:
     """The request's AuthContext, from the same credential the enforcement point verified (never
     from a body, query or client header). The guard has already refused an unauthenticated call
@@ -99,6 +105,36 @@ def request_context(request: Request) -> AuthContext:
         raise AccessError(401, "unauthenticated")
     return ctx
 
+
+
+def request_identity(request: Request) -> Optional[AuthContext]:
+    """The request's AuthContext, or None when there is none yet (shadow mode before S1/S5)."""
+    try:
+        return request_context(request)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+PRODUCTION_ENVIRONMENTS = frozenset({"production", "prod"})
+
+
+def require_production(request: Request, project_id: str, environment: Any) -> None:
+    """A deploy whose target environment is production also needs deployment:production at the
+    target's project (the route's own declaration is deployment:create). Refuses only under
+    BOSS_AUTHZ_MODE=enforce; in shadow the old guards still decide."""
+    if str(environment or "").strip().lower() not in PRODUCTION_ENVIRONMENTS:
+        return
+    ctx = request_identity(request)
+    if ctx is None:
+        return
+    from boss_engine.config import get_settings
+
+    decision = authz.check(ctx, P.DEPLOYMENT_PRODUCTION,
+                           ResolvedScope.in_project(ctx.principal.org_id, project_id))
+    if not decision.allowed and get_settings().authz_mode == "enforce":
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=decision.status, detail=decision.error_body())
 
 def _refused(error: AccessError) -> JSONResponse:
     return JSONResponse(status_code=error.status, content=error.body())
@@ -257,6 +293,23 @@ def readable_projects(request: Request, project_ids: list[str]) -> Optional[set[
                 ctx, ResolvedScope.in_project(org, pid)).permissions}
 
 
+def declare_framework_routes(app: Any) -> None:
+    """Attach identity_guard.FRAMEWORK_DECLARATIONS to the framework routes' endpoints, so the
+    enforcement point (which reads the endpoint's declaration) decides /openapi.json and /docs
+    the way the coverage report says it does. Without this they are undeclared at request time
+    and denied under enforce."""
+    from starlette.routing import Route
+
+    from boss_engine.identity.declarations import ACCESS_ATTR
+
+    from .. import identity_guard
+
+    for route in app.router.routes:
+        declaration = identity_guard.FRAMEWORK_DECLARATIONS.get(getattr(route, "path", ""))
+        if declaration is not None and type(route) is Route:
+            setattr(route.endpoint, ACCESS_ATTR, declaration)
+
+
 def build_identity_access_router(engine: Any) -> APIRouter:
     router = APIRouter(tags=["identity"])
 
@@ -302,6 +355,12 @@ def build_identity_access_router(engine: Any) -> APIRouter:
     def list_access_role_versions(role_id: str, request: Request):
         return run(request, lambda db, ctx: {
             "versions": roles_service.versions(db, ctx.principal.org_id, role_id)})
+
+    @router.get("/v1/identity/access-roles/{role_id}/versions/{number}")
+    @permit(P.ACCESS_ROLE_READ, scope=Scope.org())
+    def get_access_role_version(role_id: str, number: int, request: Request):
+        return run(request, lambda db, ctx: roles_service.version(
+            db, ctx.principal.org_id, role_id, number))
 
     @router.post("/v1/identity/access-roles/{role_id}/preview")
     @permit(P.ACCESS_ROLE_READ, scope=Scope.org(), readonly_post=True)
@@ -460,6 +519,36 @@ def build_identity_access_router(engine: Any) -> APIRouter:
             return {"principal_id": row["id"], "scope": scope.label(), "epoch": eff.epoch,
                     "permissions": [{"key": k, "via": [str(w) for w in eff.why.get(k, ())]}
                                     for k in sorted(eff.permissions)]}
+        return run(request, work)
+
+    # ---- who can grant it, and asking them (the Access-denied page) ----------------------------------
+    @router.get("/v1/identity/grantors")
+    @authenticated(note="display names of who could grant a permission; no security detail")
+    def list_grantors(request: Request, permission: str, project_id: Optional[str] = None):
+        def work(db, ctx):
+            if permission not in PERMISSION_META:
+                raise AccessError(422, "unknown_permission")
+            org = ctx.principal.org_id
+            if project_id and db.execute(text(
+                    "SELECT 1 FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                    "WHERE p.id = :p AND w.org_id = :o"), {"p": project_id, "o": org}).first() is None:
+                raise AccessError(404, "not_found")
+            return {"permission": permission,
+                    "scope": f"project:{project_id}" if project_id else "org",
+                    "grantors": bindings_service.grantors(db, org, permission, project_id=project_id)}
+        return run(request, work)
+
+    @router.post("/v1/identity/access-requests", status_code=202)
+    @authenticated(self_only=True, note="the caller asks for access for themselves")
+    def request_access(body: AccessRequest, request: Request):
+        def work(db, ctx):
+            if body.permission not in PERMISSION_META:
+                raise AccessError(422, "unknown_permission")
+            org = ctx.principal.org_id
+            grantors = bindings_service.grantors(db, org, body.permission, project_id=body.project_id)
+            # Durable storage and notification need amendment A13 (identity_access_requests and
+            # the access.requested event type); until then the request is answered with who to ask.
+            return {"status": "noted", "permission": body.permission, "grantors": grantors}
         return run(request, work)
 
     # ---- approval seats (read) -------------------------------------------------------------------

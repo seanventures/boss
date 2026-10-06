@@ -154,8 +154,17 @@ def _now() -> datetime:
 
 # ---- system principals: fixed sets ---------------------------------------------------------------
 
-def system_permissions(principal_id: str) -> frozenset[str]:
-    """The fixed set of a system principal (§6.6 step 2). Unknown system ids hold nothing."""
+def system_permissions(principal_id: str, *, db: Any = None) -> frozenset[str]:
+    """The fixed set of a system principal (§6.6 step 2). Unknown system ids hold nothing.
+    The legacy bridge principals (sys_legacy_*, sys_scim_legacy) take theirs from S5's
+    `legacy.system_permissions`, which also empties them once their path is retired."""
+    from . import legacy
+
+    legacy_set = getattr(legacy, "system_permissions", None)
+    if legacy_set is not None:
+        fixed = legacy_set(principal_id, db=db)
+        if fixed is not None:
+            return frozenset(fixed)
     if principal_id == LEGACY_CONSOLE_PRINCIPAL:
         return ROLE_PERMISSIONS["owner"]
     meta = SYSTEM_PRINCIPALS.get(principal_id)
@@ -274,10 +283,25 @@ def _step_up_window_seconds(org_id: str, conn: Any) -> int:
         return DEFAULT_STEP_UP_SECONDS
 
 
+def _step_up_exempt(ctx: AuthContext) -> bool:
+    """In-process system principals, and the legacy bridges as S5 defines them
+    (`legacy.step_up_exempt`: a bridged context with no session and no run token)."""
+    if ctx.run_token is not None:
+        return False
+    if ctx.method == AuthMethod.SYSTEM:
+        return True
+    from . import legacy
+
+    exempt = getattr(legacy, "step_up_exempt", None)
+    if exempt is not None:
+        return bool(exempt(ctx))
+    return ctx.method in STEP_UP_EXEMPT_METHODS and ctx.session is None
+
+
 def step_up_fresh_until(ctx: AuthContext, *, window_seconds: int = DEFAULT_STEP_UP_SECONDS
                         ) -> Optional[datetime]:
     """When the context's step-up stops being fresh; None when it is not fresh at all."""
-    if ctx.method in STEP_UP_EXEMPT_METHODS and ctx.run_token is None:
+    if _step_up_exempt(ctx):
         return datetime.max.replace(tzinfo=timezone.utc)
     if ctx.session is None or ctx.session.mfa_at is None or ctx.run_token is not None:
         return None
@@ -462,7 +486,7 @@ def check(ctx: AuthContext, permission: str, scope: ResolvedScope, *, db: Any = 
         if p.kind == PrincipalKind.SYSTEM:                              # 2. system fixed sets
             if status is not None and status != "active":
                 return _finish(ctx, deny(meta.key, scope, DenyReason.PRINCIPAL_INACTIVE))
-            if meta.key in system_permissions(p.id):
+            if meta.key in system_permissions(p.id, db=conn):
                 return _finish(ctx, Decision.allow(meta.key, scope, (
                     Why(role_key=f"system:{p.id}", binding_id="system", binding_scope="org"),)))
             return _finish(ctx, deny(meta.key, scope, DenyReason.MISSING_PERMISSION))
@@ -479,6 +503,10 @@ def check(ctx: AuthContext, permission: str, scope: ResolvedScope, *, db: Any = 
                 return _finish(ctx, deny(meta.key, scope, DenyReason.CREDENTIAL_INVALID))
         if scope.kind == ScopeKind.PROJECT and not _project_in_org(conn, p.org_id, scope.project_id or ""):
             return _finish(ctx, deny(meta.key, scope, DenyReason.NOT_FOUND))
+        if ctx.run_token is not None:                                   # 3a. agent runs: S3
+            delegated = _delegate_run_token(ctx, meta.key, scope, conn)
+            if delegated is not None:
+                return delegated
         base = _base(conn, ctx, scope, epoch)                           # 3. the base set
         if base.deny is not None:
             return _finish(ctx, deny(meta.key, scope, base.deny[0], base.deny[1]))
@@ -492,6 +520,26 @@ def check(ctx: AuthContext, permission: str, scope: ResolvedScope, *, db: Any = 
             if fresh is None or fresh <= _now():
                 return _finish(ctx, deny(meta.key, scope, DenyReason.STEP_UP_REQUIRED))
         return _finish(ctx, Decision.allow(meta.key, scope, base.why.get(meta.key, ())))  # 5.
+
+
+def _delegate_run_token(ctx: AuthContext, permission: str, scope: ResolvedScope,
+                        conn: Any) -> Optional[Decision]:
+    """On-behalf-of and autonomous agent runs are decided by S3's `tokens.decide` (the live
+    intersection: the person's live access ∩ every ceiling in the chain ∩ grant ∩ task; never a
+    non-delegable key), which audits its own denials in the lineage stream. None while S3's module
+    has not landed: then this module's own intersection (`_base`) decides."""
+    try:
+        from . import tokens
+    except ImportError:
+        return None
+    decide = getattr(tokens, "decide", None)
+    if decide is None:
+        return None
+    decision = decide(ctx.run_token, permission, scope, db=conn)
+    if not decision.allowed and decision.reason == DenyReason.MISSING_PERMISSION and \
+            scope.object_kind and decision.narrowed_by == ():
+        return Decision.deny(permission, scope, DenyReason.NOT_FOUND)
+    return decision
 
 
 #: The spec's name for the same function (IDENTITY.md §6.6).
@@ -514,7 +562,7 @@ def effective_permissions(subject: AuthContext | Principal, scope: ResolvedScope
                 and not _project_in_org(conn, principal.org_id, scope.project_id or "")):
             return EffectivePermissions(frozenset(), scope, epoch)
         if principal.kind == PrincipalKind.SYSTEM:
-            perms = system_permissions(principal.id)
+            perms = system_permissions(principal.id, db=conn)
             return EffectivePermissions(perms, scope, epoch,
                                         datetime.max.replace(tzinfo=timezone.utc))
         if isinstance(subject, AuthContext):

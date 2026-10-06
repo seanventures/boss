@@ -1,5 +1,7 @@
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from .routers.identity_access import readable_projects as _readable_projects  # noqa: E402  (identity S2)
+from .routers.identity_access import request_identity as _request_identity  # noqa: E402  (identity S2)
+from .routers.identity_access import require_production as _require_production  # noqa: E402  (identity S2)
 from .routers.identity_access import withhold_sections as _withhold_sections  # noqa: E402  (identity S2)
 from . import identity_verifiers as _identity_verifiers  # noqa: E402  (identity S2)
 from contextlib import asynccontextmanager
@@ -8584,6 +8586,8 @@ def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] 
                                                provisioned_dashboards, scrape_targets,
                                                stack_status)
     with begin(engine) as connection:
+        _identity_verifiers.require_in_project(connection, "deployment_targets", host_target_id,
+                                               project_id)
         targets = scrape_targets(connection, project_id)
         source = connection.execute(
             text("SELECT id, config FROM telemetry_sources WHERE project_id=:p "
@@ -8660,6 +8664,9 @@ def deploy_observability_stack_endpoint(payload: ObservabilityStackDeployBody):
     for field in ("project_id", "host_target_id"):
         if not payload.get(field):
             raise HTTPException(status_code=422, detail=f"{field} is required")
+    with begin(engine) as connection:
+        _identity_verifiers.require_in_project(connection, "deployment_targets",
+                                               payload["host_target_id"], payload["project_id"])
     plan = _governed_plan(payload)
     if plan:
         actor = str(payload.get("actor") or "").strip()
@@ -8819,7 +8826,7 @@ def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) ->
 
 @app.post("/v1/delivery/deploy")
 @permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_target", body="target_id"))
-def delivery_deploy_endpoint(payload: ManualDeployBody):
+def delivery_deploy_endpoint(payload: ManualDeployBody, request: Request):
     """Plan a governed deployment of a target at a chosen ref.
 
     The manual half of the trigger story: automatic on merge, this for everything else
@@ -8858,6 +8865,7 @@ def delivery_deploy_endpoint(payload: ManualDeployBody):
         actor = signed_in_actor(connection, target["project_id"], actor)
         require_project_actor(
             connection, target["project_id"], actor, "providerops_manage")
+        _require_production(request, target["project_id"], target["environment"])
         # A newly registered cloud target is still `created`. It must be able
         # to plan its first governed ChangeSet before any deployment exists.
         provider_target = (
@@ -8879,6 +8887,9 @@ def delivery_deploy_endpoint(payload: ManualDeployBody):
         # with "code task run not found:", which is what the console's Deploy button did for
         # every target. Planning was tested; executing was not.
         source_run = payload.get("code_task_run_id")
+        # IDENTITY (S2): the build being shipped must be this target's project's build.
+        _identity_verifiers.require_in_project(connection, "code_task_runs", source_run,
+                                               target["project_id"])
         if not source_run:
             prior = connection.execute(
                 text("SELECT release_packet FROM deployment_runs "
@@ -12336,6 +12347,9 @@ def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentA
 
     with begin(engine) as connection:
         require_project_actor(connection, payload.project_id, payload.actor, "agent_chat")
+        # IDENTITY (S2): the thread the press is recorded in must be this project's.
+        _identity_verifiers.require_in_project(connection, "agent_threads", payload.thread_id,
+                                               payload.project_id)
 
     ctx = EngineContext(settings=settings, engine=engine)
     # THIS IS THE ACK, AND ONLY THIS PATH CAN GIVE IT.
@@ -12350,6 +12364,9 @@ def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentA
     result = registry.invoke(
         spec.name, ctx, project_id=payload.project_id, actor=payload.actor,
         args=dict(payload.args or {}), operator_confirmed=True,
+        # IDENTITY (S2): the person who pressed it must hold the TOOL's permission too
+        # (`run_on_host` is host:exec), not only assistant:chat.
+        auth=_request_identity(request),
     )
     ok = bool(result.get("ok", True))
     with begin(engine) as connection:
@@ -21286,6 +21303,11 @@ def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSumm
             parse_error = parsed.get("parse_error")
             decision_id = parsed.get("decision_id")
             action = parsed.get("action")
+            # IDENTITY (S2): a reply may only answer a decision of the project it arrived in.
+            if isinstance(decision_id, str) and not parse_error and connection.execute(
+                    text("SELECT 1 FROM decisions WHERE id = :d AND project_id = :p"),
+                    {"d": decision_id, "p": payload.project_id}).first() is None:
+                parse_error = "decision_not_in_project"
             if parse_error or not isinstance(decision_id, str) or not isinstance(action, str):
                 comms.deadletter_inbox_message(
                     connection,
@@ -29545,6 +29567,9 @@ app.include_router(build_identity_me_router())
 from .routers.identity_access import build_identity_access_router  # noqa: E402  (identity S2)
 
 app.include_router(build_identity_access_router(engine))
+from .routers.identity_access import declare_framework_routes  # noqa: E402  (identity S2)
+
+declare_framework_routes(app)
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

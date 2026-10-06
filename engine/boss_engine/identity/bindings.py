@@ -62,7 +62,13 @@ def assert_owner_remains(db: Any, org_id: str, **without: Any) -> None:
 
 
 def _present(row: Any) -> dict:
+    via_group = None
+    if row["subject_type"] == "group":
+        via_group = {"id": row["subject_id"], "name": row.get("group_name"),
+                     # where the group's membership comes from: manual | scim | oidc
+                     "provider": row.get("group_source")}
     return {"id": row["id"], "subject_type": row["subject_type"], "subject_id": row["subject_id"],
+            "via_group": via_group,
             "role_id": row["role_id"], "role_key": row.get("role_key"),
             "scope": "org" if row["scope_type"] == "org" else f"project:{row['scope_id']}",
             "scope_type": row["scope_type"], "scope_id": row["scope_id"],
@@ -70,8 +76,10 @@ def _present(row: Any) -> dict:
             "expires_at": row["expires_at"], "reason": row["reason"]}
 
 
-_SELECT = ("SELECT b.*, r.key AS role_key FROM identity_role_bindings b "
-           "JOIN identity_access_roles r ON r.id = b.role_id ")
+_SELECT = ("SELECT b.*, r.key AS role_key, g.name AS group_name, g.source AS group_source "
+           "FROM identity_role_bindings b "
+           "JOIN identity_access_roles r ON r.id = b.role_id "
+           "LEFT JOIN identity_groups g ON b.subject_type = 'group' AND g.id = b.subject_id ")
 
 
 def list_bindings(db: Any, org_id: str, *, subject_id: Optional[str] = None,
@@ -196,3 +204,33 @@ def remove_binding(db: Any, ctx: AuthContext, binding_id: str, *,
                 db=db, target_type=binding["subject_type"], target_id=binding["subject_id"],
                 scope=binding["scope"], details={"role": binding["role_key"], "binding_id": binding_id})
     authz.bump_epoch(org, db=db, reason="role_binding.removed")
+
+
+def grantors(db: Any, org_id: str, permission: str, *, project_id: Optional[str] = None,
+             limit: int = 10) -> list[dict]:
+    """Who could grant `permission` (at the project, or org-wide): active people who hold
+    role_binding:assign AND the permission itself there (the grant ceiling). Names only — this
+    feeds "ask Priya or Sam" on an Access-denied page, never anyone's security detail."""
+    from .principal import Principal, PrincipalKind, PrincipalStatus
+    from .scope import ResolvedScope
+
+    scope = (ResolvedScope.in_project(org_id, project_id) if project_id
+             else ResolvedScope.org_level(org_id))
+    rows = db.execute(text(
+        "SELECT DISTINCT p.id, p.display_name FROM identity_principals p "
+        "WHERE p.org_id = :o AND p.kind = 'user' AND p.status = 'active' AND NOT p.network_bound "
+        "AND (EXISTS (SELECT 1 FROM identity_role_bindings b WHERE b.org_id = :o "
+        "             AND b.subject_type = 'principal' AND b.subject_id = p.id) "
+        "  OR EXISTS (SELECT 1 FROM identity_group_members m JOIN identity_role_bindings b "
+        "             ON b.subject_type = 'group' AND b.subject_id = m.group_id "
+        "             WHERE m.principal_id = p.id AND b.org_id = :o)) "
+        "ORDER BY p.display_name"), {"o": org_id}).mappings().all()
+    out: list[dict] = []
+    for r in rows:
+        subject = Principal(r["id"], PrincipalKind.USER, org_id, PrincipalStatus.ACTIVE, r["display_name"])
+        held = authz.effective_permissions(subject, scope, db=db).permissions
+        if "role_binding:assign" in held and permission in held:
+            out.append({"principal_id": r["id"], "display_name": r["display_name"]})
+            if len(out) >= limit:
+                break
+    return out

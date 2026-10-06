@@ -33,7 +33,7 @@ def _final_msg(text):
 def _registry(calls):
     reg = ToolRegistry()
     reg.register(ToolSpec("project_status", "r", {"type": "object"},
-                          lambda ctx, **k: {"total_running": 3}, kind="read"))
+                          lambda ctx, **k: {"total_running": 3}, kind="read", permission="system:read"))
 
     def do_write(ctx, **k):
         calls.append(k["args"])
@@ -44,8 +44,8 @@ def _registry(calls):
     # registered because it is PROPOSE_ONLY — it must NOT run even when writes are allowed, and
     # the test below pins that difference. Using one tool for both properties hid the
     # distinction and is why these tests broke when propose-only landed.
-    reg.register(ToolSpec("redeploy", "w", {"type": "object"}, do_write, kind="write"))
-    reg.register(ToolSpec("create_code_task", "w", {"type": "object"}, do_write, kind="write"))
+    reg.register(ToolSpec("redeploy", "w", {"type": "object"}, do_write, kind="write", permission="system:read"))
+    reg.register(ToolSpec("create_code_task", "w", {"type": "object"}, do_write, kind="write", permission="system:read"))
     return reg
 
 

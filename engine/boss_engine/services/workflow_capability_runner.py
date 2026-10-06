@@ -339,6 +339,13 @@ def _invoke_tool(
         raise CapabilityExecutionError(
             f"this BOSS does not have the '{tool_name}' tool installed."
         )
+    # IDENTITY (S2): a workflow step calls the handler directly, so the dispatch check that
+    # registry.invoke runs must run here too, or a workflow would be a way around it.
+    from ..tools.registry import CURRENT_TOOL_AUTH, identity_gate
+
+    refused = identity_gate(spec, CURRENT_TOOL_AUTH.get(), project_id)
+    if refused is not None:
+        return refused
     result = spec.handler(ctx, project_id=project_id, actor=actor, args=args)
     if isinstance(result, dict) and result.get("ok") is False:
         raise CapabilityExecutionError(str(result.get("error") or f"{tool_name} failed."))
