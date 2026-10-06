@@ -2027,12 +2027,13 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     # AND THE ROUTER PICKS IT, ONCE FOR THE RUN (docs/product/MODEL_ROUTER.md): an agent step
     # is routed on its brief and its role, honours the agent's Agent Studio model policy
     # (Routed / Pinned / Local), and keeps that model for every turn of the session.
-    adapter = governed(project_chat_adapter(connection, settings, project_id,
-                                            purpose=_agent_purpose(connection, run_id,
-                                                                   project_id, messages,
-                                                                   finalize_ctx)),
-                       connection, settings, project_id,
-                       skill_id="model.agent_turn", ref=run_id)
+    from .model_routing import routing_purpose
+
+    with routing_purpose(_agent_purpose(connection, run_id, project_id, messages,
+                                        finalize_ctx)):
+        adapter = governed(project_chat_adapter(connection, settings, project_id),
+                           connection, settings, project_id,
+                           skill_id="model.agent_turn", ref=run_id)
     mcp = MCPClient(settings)
 
     # A BOUNDED RUN GETS NO NATIVE TOOLS AT ALL.

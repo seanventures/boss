@@ -18,8 +18,7 @@ from sqlalchemy import text
 
 from .classifier import jev_state
 from .escalation import EscalationLedger
-from .headroom import MODEL_WINDOWS, WEEKLY, assess, windows_from_limit_message, \
-    windows_from_rate_limit_event
+from .headroom import MODEL_WINDOWS, assess
 from .policy import PolicyError, RoutingPolicy, from_dict, seed
 from .router import ROUTER, RouteDecision, RouteRequest, Snapshot
 from .selection import SourceState
@@ -47,7 +46,8 @@ def invalidate(project_id: Optional[str] = None) -> None:
             _SNAPS.clear()
             _MODES.clear()
         else:
-            _SNAPS.pop(project_id, None)
+            for key in [k for k in _SNAPS if k.split("|", 1)[0] == project_id]:
+                _SNAPS.pop(key, None)
             _MODES.pop(project_id, None)
 
 
@@ -282,51 +282,46 @@ def _job_pins(connection: Any, project_id: Optional[str]) -> dict[str, tuple[str
     return pins
 
 
-def _observed(connection: Any, settings: Any, project_id: Optional[str],
-              engines: list[str]) -> dict[str, dict[str, Any]]:
-    """Observed capacity per engine from the entitlement rows that spend for it — for a source
-    connected through the environment (a CLAUDE_CODE_OAUTH_TOKEN), whose connection carries no
-    row of its own, but whose catalogue row is where telemetry records the CLI's windows."""
-    if connection is None or not project_id or not engines:
-        return {}
-    try:
-        from ..provider_limits import source_ids_for_engine
+def _subscription_windows(connection: Any, settings: Any, project_id: Optional[str],
+                          engines: list[str]) -> dict[str, tuple[str, dict[str, Any]]]:
+    """engine → (account key, account row) for each subscription engine: windows pooled per
+    ACCOUNT (model_router.accounts), so one project's limit is every project's limit."""
+    from . import accounts
 
-        with connection.begin_nested():
-            rows = connection.execute(text(
-                "SELECT source_id, observed_capacity FROM entitlement_sources "
-                "WHERE project_id = :p"), {"p": project_id}).mappings().all()
-    except Exception:  # noqa: BLE001
-        return {}
-    by_id = {str(r["source_id"]): _json(r["observed_capacity"]) for r in rows}
-    out: dict[str, dict[str, Any]] = {}
-    for engine in engines:
-        for sid in source_ids_for_engine(settings, engine):
-            if by_id.get(sid, {}).get("windows"):
-                out[engine] = by_id[sid]
-                break
-    return out
+    keys = {e: accounts.account_key(connection, settings, project_id, e) for e in engines}
+    rows = accounts.load(connection, list(set(keys.values()))) if keys else {}
+    return {e: (k, rows.get(k) or {}) for e, k in keys.items()}
 
 
 def sources_from(connected: Mapping[str, Mapping[str, Any]], policy: RoutingPolicy,
                  used: Mapping[str, float], now: Optional[datetime] = None,
-                 observed_by_engine: Optional[Mapping[str, dict]] = None
-                 ) -> dict[str, SourceState]:
+                 accounts_by_engine: Optional[Mapping[str, tuple[str, dict]]] = None,
+                 with_headroom: bool = True) -> dict[str, SourceState]:
+    from . import accounts
+
     out: dict[str, SourceState] = {}
     for engine, info in connected.items():
         capacity = info.get("capacity") or {}
         observed = capacity.get("observed") if isinstance(capacity.get("observed"), dict) else {}
-        if not observed.get("windows") and (observed_by_engine or {}).get(engine):
-            observed = {**observed, **observed_by_engine[engine]}
         kind = str(info.get("kind") or "metered")
         if kind == "env":
             kind = "local" if engine in ("ollama", "vllm") else (
                 "subscription" if info.get("env_attr") == "claude_code_oauth_token" else "env")
-        headroom = assess(engine, observed if kind == "subscription" else
-                          {k: v for k, v in observed.items() if k != "windows"},
-                          thresholds=policy.thresholds,
-                          used_usd=used.get(engine) if kind == "subscription" else None,
-                          allowance_usd=policy.weekly_allowance_usd.get(engine), now=now)
+        account_key, account = (accounts_by_engine or {}).get(engine, (None, {}))
+        if kind == "subscription" and with_headroom:
+            observed = {**{k: v for k, v in observed.items() if k != "windows"},
+                        "windows": dict(account.get("windows") or {})}
+            if account.get("learned_weekly_allowance_usd"):
+                observed["learned_weekly_allowance_usd"] = account["learned_weekly_allowance_usd"]
+            previous = accounts.PREVIOUS.get(account_key or engine)
+            headroom = assess(engine, observed, thresholds=policy.thresholds,
+                              used_usd=used.get(engine),
+                              allowance_usd=policy.weekly_allowance_usd.get(engine), now=now,
+                              previous=previous)
+            accounts.PREVIOUS[account_key or engine] = headroom.state
+        else:
+            headroom = assess(engine, {k: v for k, v in observed.items() if k != "windows"},
+                              thresholds=policy.thresholds, now=now)
         out[engine] = SourceState(
             engine=engine, kind=kind, connected=True,
             working=info.get("working") is not False,
@@ -336,10 +331,13 @@ def sources_from(connected: Mapping[str, Mapping[str, Any]], policy: RoutingPoli
 
 
 def snapshot(connection: Any, settings: Any, project_id: Optional[str], *,
-             fresh: bool = False) -> Snapshot:
+             fresh: bool = False, lite: bool = False) -> Snapshot:
     """Everything a route reads. Cached per project; never raises (a failure is Fixed mode
-    with no sources, which routes exactly as the legacy code would)."""
-    key = project_id or ""
+    with no sources, which routes exactly as the legacy code would).
+
+    `lite`: what a Fixed-mode route needs — the connected sources and nothing else (no policy
+    seeding, no headroom, no budget, no pins), so Fixed mode pays a fraction of a full load."""
+    key = f"{project_id or ''}|{'lite' if lite else 'full'}"
     if not fresh:
         with _SNAP_LOCK:
             hit = _SNAPS.get(key)
@@ -350,20 +348,28 @@ def snapshot(connection: Any, settings: Any, project_id: Optional[str], *,
 
         effective = applied(connection, project_id, settings) if project_id else settings
         connected = _connected(connection, effective, project_id)
-        policy = effective_policy(connection, settings, project_id, connected=connected)
-        snap = Snapshot(
-            project_id=project_id, policy=policy,
-            sources=sources_from(
-                connected, policy, _used_usd(connection, project_id) if policy.smart else {},
-                observed_by_engine=_observed(
-                    connection, effective, project_id,
-                    [e for e, i in connected.items()
-                     if not ((i.get("capacity") or {}).get("observed") or {}).get("windows")])
-                if policy.smart else None),
-            budget_state=_budget_state(connection, settings, project_id),
-            job_pins=_job_pins(connection, project_id), jev_state=jev_state(effective),
-            settings=effective)
-        _wire_deciders(snap, connection, effective, project_id)
+        if lite:
+            snap = Snapshot(project_id=project_id, policy=RoutingPolicy(mode="fixed"),
+                            sources=sources_from(connected, RoutingPolicy(), {},
+                                                 with_headroom=False),
+                            settings=effective)
+        else:
+            policy = effective_policy(connection, settings, project_id, connected=connected)
+            subs = [e for e, i in connected.items()
+                    if str(i.get("kind")) == "subscription"
+                    or i.get("env_attr") == "claude_code_oauth_token"]
+            snap = Snapshot(
+                project_id=project_id, policy=policy,
+                sources=sources_from(
+                    connected, policy, _used_usd(connection, project_id),
+                    accounts_by_engine=_subscription_windows(connection, effective, project_id,
+                                                             subs)),
+                budget_state=_budget_state(connection, settings, project_id),
+                job_pins=_job_pins(connection, project_id), jev_state=jev_state(effective),
+                settings=effective)
+            _wire_deciders(snap, connection, effective, project_id)
+            if "openrouter" in connected:
+                _openrouter_catalogue(connection, effective, project_id)
     except Exception:  # noqa: BLE001 — routing must never fail the work it serves
         log.warning("model router snapshot failed; routing as Fixed", exc_info=True)
         snap = Snapshot(project_id=project_id, policy=RoutingPolicy(), sources={},
@@ -371,6 +377,36 @@ def snapshot(connection: Any, settings: Any, project_id: Optional[str], *,
     with _SNAP_LOCK:
         _SNAPS[key] = (time.monotonic() + SNAPSHOT_TTL_S, snap)
     return snap
+
+
+_CATALOGUE_REFRESHING = threading.Lock()
+
+
+def _openrouter_catalogue(connection: Any, settings: Any, project_id: Optional[str]) -> None:
+    """OpenRouter's priced catalogue: loaded from the database on first use, refreshed in the
+    background when older than its TTL — never a network call on the routing path."""
+    from .. import openrouter_catalog as cat
+
+    if not cat.cached():
+        cat.load(connection)
+    if cat.fresh() or not project_id or not _CATALOGUE_REFRESHING.acquire(blocking=False):
+        return
+    try:
+        db_engine = connection.engine
+    except Exception:  # noqa: BLE001
+        _CATALOGUE_REFRESHING.release()
+        return
+
+    def run() -> None:
+        try:
+            with db_engine.begin() as c:
+                cat.refresh(c, settings, project_id)
+        except Exception:  # noqa: BLE001
+            log.warning("OpenRouter catalogue refresh failed", exc_info=True)
+        finally:
+            _CATALOGUE_REFRESHING.release()
+
+    threading.Thread(target=run, name="openrouter-catalogue", daemon=True).start()
 
 
 def _wire_deciders(snap: Snapshot, connection: Any, settings: Any,
@@ -434,9 +470,14 @@ class GovernedModelDecider:
 def route(connection: Any, settings: Any, request: RouteRequest, *,
           ledger: Optional[EscalationLedger] = None, record_it: bool = True) -> RouteDecision:
     """The one call sites use: snapshot (cached), route (pure), record (one insert)."""
-    snap = snapshot(connection, settings, request.project_id)
+    mode = (request.mode_override or mode_of(connection, settings, request.project_id))
+    agent_mode = str((request.agent_policy or {}).get("selection_mode") or "router").lower()
+    # A Fixed route needs the connected sources only; Smart (or an agent's Local/Pinned policy,
+    # or an experiment's Smart arm on a Fixed project) needs the whole picture, headroom too.
+    lite = mode != "smart" and agent_mode not in ("local", "pinned")
+    snap = snapshot(connection, settings, request.project_id, lite=lite)
     if request.sticky and request.unit_id and request.session_pin is None \
-            and snap.policy.mode == "smart":
+            and mode == "smart":
         prior = last_route(connection, request.unit_id, request.step, request.ref)
         if prior and prior.get("engine"):
             from dataclasses import replace
@@ -555,52 +596,13 @@ def routes_for(connection: Any, unit_id: str) -> list[dict[str, Any]]:
 
 def observe(connection: Any, settings: Any, project_id: Optional[str], engine: str, *,
             event: Optional[Mapping[str, Any]] = None, error: Optional[str] = None,
-            now: Optional[datetime] = None) -> dict[str, dict[str, Any]]:
-    """Fold a CLI `rate_limit_event` or a limit message into the engine's sources' windows.
-    When the weekly window closes, the usage so far becomes the LEARNED allowance. Never
-    raises; returns the window patch it applied (for tests and the caller's log)."""
-    patch: dict[str, dict[str, Any]] = {}
-    if event:
-        patch.update(windows_from_rate_limit_event(event))
-    if error:
-        patch.update(windows_from_limit_message(error, now))
-    if not patch or connection is None or not project_id:
-        return patch
-    try:
-        from ..provider_limits import source_ids_for_engine
+            ok_model: Optional[str] = None, now: Optional[datetime] = None
+            ) -> dict[str, dict[str, Any]]:
+    """Fold a call's evidence into its subscription ACCOUNT (model_router.accounts)."""
+    from . import accounts
 
-        ids = source_ids_for_engine(settings, engine)
-        with connection.begin_nested():
-            rows = connection.execute(
-                text("SELECT source_id, observed_capacity FROM entitlement_sources "
-                     "WHERE project_id = :p"), {"p": project_id}).mappings().all()
-            targets = [r for r in rows if r["source_id"] in ids
-                       or any(str(r["source_id"] or "").startswith(i + "-") for i in ids
-                              if i.startswith("setup-"))]
-            learned = None
-            if patch.get(WEEKLY, {}).get("used", 0) >= 0.999 or \
-                    patch.get(WEEKLY, {}).get("status") == "rejected":
-                learned = _used_usd(connection, project_id).get(engine)
-            for row in targets:
-                observed = _json(row["observed_capacity"])
-                windows = dict(observed.get("windows") or {})
-                stamp = (now or datetime.now(timezone.utc)).isoformat()
-                for kind, body in patch.items():
-                    windows[kind] = {**body, "observed_at": stamp}
-                observed["windows"] = windows
-                if learned:
-                    observed["learned_weekly_allowance_usd"] = round(learned, 2)
-                connection.execute(
-                    text("UPDATE entitlement_sources SET observed_capacity = :o "
-                         "WHERE project_id = :p AND source_id = :s")
-                    if connection.dialect.name == "sqlite" else
-                    text("UPDATE entitlement_sources SET observed_capacity = CAST(:o AS JSONB), "
-                         "updated_at = now() WHERE project_id = :p AND source_id = :s"),
-                    {"o": json.dumps(observed), "p": project_id, "s": row["source_id"]})
-        invalidate(project_id)
-    except Exception:  # noqa: BLE001 — bookkeeping never fails the call it observes
-        log.warning("headroom observation failed (non-fatal)", exc_info=True)
-    return patch
+    return accounts.observe(connection, settings, project_id, engine, event=event,
+                            error=error, ok_model=ok_model, now=now)
 
 
 __all__ = ["PolicyConflict", "PolicyError", "MODEL_WINDOWS", "effective_policy", "invalidate",

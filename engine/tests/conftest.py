@@ -141,7 +141,13 @@ def _fresh_model_router():
     from boss_engine.services.model_router import store
     from boss_engine.services.model_router.classifier import CLASSIFIER
 
+    from boss_engine.services.model_router import accounts, breaker
+
     store.invalidate()
     CLASSIFIER.clear()
+    accounts.reset_caches()
+    breaker.reset()
     yield
     store.invalidate()
+    accounts.reset_caches()
+    breaker.reset()

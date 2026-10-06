@@ -19,11 +19,11 @@ from typing import Any, Callable, Mapping, Optional
 from .classifier import CLASSIFIER, Classification, Classifier, TaskSignal
 from .escalation import EscalationLedger
 from .headroom import Headroom
-from .policy import LOCAL_ENGINES, RoutingPolicy, Target, tier_model
+from .policy import LOCAL_ENGINES, RoutingPolicy, Target, model_tier, tier_model
 from .selection import SourceState, engine_label, select
 from .tiers import (
-    BALANCED, CODING_STEPS, LEGACY_CLASS, MECHANICAL_STEPS, TIER_LABELS, at_least, down,
-    job_for, rank, step_label,
+    BALANCED, CODING_STEPS, FRONTIER, LEGACY_CLASS, MECHANICAL_STEPS, TIER_LABELS, TIERS,
+    at_least, down, job_for, rank, step_label,
 )
 
 KINDS = ("build_stage", "workflow_step", "agent", "chat", "decision", "panel", "research")
@@ -72,6 +72,8 @@ class RouteRequest:
     #: Floors this unit adds to the policy's: a build's own profile (a task that asked for
     #: `strict` gets strict's floors, whatever the project's default preset is).
     extra_floors: tuple = ()
+    #: A SOFT pin for this step (a profile's explicit step model): tried first within the tier.
+    preferred: Optional[Target] = None
 
     def signal(self) -> TaskSignal:
         return TaskSignal(kind=self.kind, step=self.step, text=self.text,
@@ -106,6 +108,11 @@ class RouteDecision:
     budget_lite: bool = False
     latency_ms: float = 0.0
     headroom: Optional[Mapping[str, Any]] = None
+    #: Nothing may take this work; `refusal` says why and what fixes it. Callers refuse the call.
+    refused: bool = False
+    refusal: str = ""
+    #: Obeyed even in Fixed mode (an Agent Studio Local/Pinned policy).
+    binding: bool = False
 
     @property
     def label(self) -> str:
@@ -134,6 +141,7 @@ class RouteDecision:
             "fallback": self.fallback,
             "moved_by_headroom": self.moved_by_headroom, "budget_lite": self.budget_lite,
             "latency_ms": round(self.latency_ms, 3), "headroom": dict(self.headroom or {}),
+            "refused": self.refused, "refusal": self.refusal, "binding": self.binding,
         }
 
 
@@ -179,10 +187,16 @@ class Router:
               ledger: Optional[EscalationLedger] = None) -> RouteDecision:
         started = time.perf_counter()
         mode = (request.mode_override or snapshot.policy.mode or "fixed").lower()
-        if mode != "smart":
+        agent_mode = _agent_mode(request)
+        if mode != "smart" and agent_mode not in ("local", "pinned"):
             decision = self._fixed(request, snapshot)
         else:
             decision = self._smart(request, snapshot, ledger)
+            if mode != "smart":
+                # LOCAL MEANS LOCAL, IN FIXED MODE TOO: an Agent Studio Local/Pinned policy is
+                # obeyed whatever the routing mode (Decision 15).
+                decision = _with(decision, mode="fixed", binding=True,
+                                 rules=decision.rules + ("agent_policy",))
         decision = _with(decision, latency_ms=(time.perf_counter() - started) * 1000,
                          ref=request.ref)
         return self._remember(decision)
@@ -195,8 +209,8 @@ class Router:
     # ── Fixed: the legacy answer, recorded ─────────────────────────────────────────────────
     def _fixed(self, request: RouteRequest, snapshot: Snapshot) -> RouteDecision:
         legacy = request.legacy() if request.legacy else LegacyRoute("", None, "no resolver")
-        tier = LEGACY_CLASS.get(legacy.model_class or "", None) or \
-            _tier_of_model(legacy.engine, legacy.model) or BALANCED
+        tier = model_tier(legacy.engine, legacy.model) \
+            or LEGACY_CLASS.get(legacy.model_class or "", None) or BALANCED
         state = snapshot.sources.get(legacy.engine)
         why = [f"Fixed: {legacy.why}"]
         if legacy.flags.get("budget_lite"):
@@ -229,13 +243,13 @@ class Router:
                                      jev_state=snapshot.jev_state,
                                      model=snapshot.model_factory)
         tier = c.tier
-        judge = {"rules": "built-in rules", "jev": "Jev", "model": "a Fast model"}.get(c.classifier,
-                                                                           c.classifier)
+        judge = {"rules": "built-in rules", "jev": "Jev", "model": "a Fast model"}.get(
+            c.classifier, c.classifier)
         source = f"{judge}, {round(c.confidence * 100)}% sure"
         why.append(f"Task: {c.reason} → {TIER_LABELS[c.tier]} ({source})"
                    + (f" — {c.fallback_note}" if c.fallback_note else ""))
         rules.append(f"classified:{c.classifier}")
-        if request.step in MECHANICAL_STEPS and rank(tier) > 0:
+        if request.step in MECHANICAL_STEPS and rank(tier) > 0 and not c.sensitive:
             tier = down(tier)
             why.append(f"{step_label(request.step)} is mechanical → {TIER_LABELS[tier]}")
             rules.append("mechanical")
@@ -250,9 +264,12 @@ class Router:
         if extra:
             floors = list(floors) + extra
             floor = max((f.tier for f in floors), key=rank)
+        if c.sensitive and request.kind != "chat":
+            floor = FRONTIER if not floor else max((floor, FRONTIER), key=rank)
         if floor and rank(floor) > rank(tier):
-            top = max(floors, key=lambda f: rank(f.tier))
-            why.append(f"Floor: {top.describe()} ≥ {TIER_LABELS[floor]}")
+            top = max(floors, key=lambda f: rank(f.tier)) if floors else None
+            why.append(f"Floor: {top.describe()} ≥ {TIER_LABELS[floor]}" if top is not None
+                       else f"Floor: sensitive work ≥ {TIER_LABELS[floor]}")
             rules.append("floor")
             tier = floor
 
@@ -279,57 +296,103 @@ class Router:
                 rules.append(f"escalation:{escalation.signal}")
                 tier = escalation.tier
 
-        # Pins: task ▸ agent ▸ job. A hard pin names engine and model; an engine pin keeps
-        # the tier's model on that source; an agent's `local` policy restricts sources.
+        # Pins (Decision 5). HARD: the session's own model, a task pin, an agent pin, a job
+        # marked "Always use". SOFT (a preference): any other job pin, a profile's step pin —
+        # tried first, but headroom and exhaustion can move it, and a floor raises it.
         hard: Optional[Target] = None
         engine_pin: Optional[str] = None
+        preferred: Optional[Target] = request.preferred
         allowed: Optional[set[str]] = None
-        if request.session_pin and request.session_pin.engine:
-            hard = request.session_pin
-            why.append("Same model for the whole session (prompt cache)")
-            rules.append("pin:session")
+        strict = False
+        hard_is_job = False
+        session = request.session_pin
+        if session and session.engine:
+            problem = _blocked(session, snapshot)
+            if problem is None:
+                hard = session
+                why.append("Same model for the whole session (prompt cache)")
+                rules.append("pin:session")
+            else:
+                why.append(f"The session's model can't run now ({problem}); a new session")
+                rules.append("session_broken")
+        agent_mode = _agent_mode(request)
+        if hard is not None:
+            pass
         elif request.task_pin and request.task_pin.engine:
             hard = request.task_pin if request.task_pin.model else None
             engine_pin = None if hard else request.task_pin.engine
             why.append(f"Pinned on the task: {engine_label(request.task_pin.engine)}")
             rules.append("pin:task")
-        else:
-            mode = str((request.agent_policy or {}).get("selection_mode") or "router").lower()
-            if mode == "pinned":
-                pinned = _parse_pin((request.agent_policy or {}).get("pinned_model"),
-                                    (snapshot.job_pins.get(job) or ("claude_code", None))[0])
-                if pinned and pinned.engine:
-                    hard = pinned if pinned.model else None
-                    engine_pin = None if hard else pinned.engine
-                    why.append("Pinned on the agent")
-                    rules.append("pin:agent")
-            elif mode == "local":
-                allowed = set(LOCAL_ENGINES)
-                pinned = _parse_pin((request.agent_policy or {}).get("pinned_model"), None)
-                if pinned and pinned.engine in LOCAL_ENGINES:
-                    hard = pinned if pinned.model else None
-                    engine_pin = None if hard else pinned.engine
-                why.append("The agent runs on local models only")
-                rules.append("pin:agent_local")
-            if hard is None and engine_pin is None and allowed is None:
-                pin = snapshot.job_pins.get(job)
-                if pin and pin[0]:
+        elif agent_mode == "pinned":
+            pinned = _parse_pin((request.agent_policy or {}).get("pinned_model"),
+                                (snapshot.job_pins.get(job) or ("claude_code", None))[0])
+            if pinned and pinned.engine:
+                hard = pinned if pinned.model else None
+                engine_pin = None if hard else pinned.engine
+                why.append("Pinned on the agent")
+                rules.append("pin:agent")
+        elif agent_mode == "local":
+            allowed, strict = set(LOCAL_ENGINES), True
+            pinned = _parse_pin((request.agent_policy or {}).get("pinned_model"), None)
+            if pinned and pinned.engine in LOCAL_ENGINES:
+                hard = pinned if pinned.model else None
+                engine_pin = None if hard else pinned.engine
+            why.append("The agent runs on local models only")
+            rules.append("pin:agent_local")
+        if hard is None and engine_pin is None and allowed is None and agent_mode != "pinned":
+            pin = snapshot.job_pins.get(job)
+            if pin and pin[0]:
+                label = engine_label(pin[0]) + (f" · {pin[1]}" if pin[1] else "")
+                if job in policy.hard_pins:
+                    hard_is_job = True
                     if pin[1]:
                         hard = Target(pin[0], pin[1])
                     else:
                         engine_pin = pin[0]
-                    why.append(f"Job pin: {job.capitalize()} → {engine_label(pin[0])}"
-                               + (f" · {pin[1]}" if pin[1] else ""))
-                    rules.append("pin:job")
+                    why.append(f"Job pin (always): {job.capitalize()} → {label}")
+                    rules.append("pin:job_hard")
+                elif preferred is None:
+                    preferred = Target(pin[0], pin[1])
+                    why.append(f"Job preference: {job.capitalize()} → {label}")
+                    rules.append("prefer:job")
+        if preferred is not None and "prefer:job" not in rules and "pin:agent_local" not in rules:
+            rules.append("prefer:profile")
+
+        # A floor beats every job pin, hard or soft: the review pinned to haiku under a
+        # Frontier floor runs Frontier, and says so.
+        if hard is not None and hard_is_job and floor:
+            have = model_tier(hard.engine, hard.model)
+            if have is not None and rank(have) < rank(floor):
+                from .selection import _model_on
+
+                raised = Target(hard.engine, _model_on(policy, hard.engine, tier))
+                why.append(f"Floor raised your pin: {hard.model} → {raised.model or 'default'}")
+                hard = raised
 
         # (c) a source for the tier
         fallback = moved = False
+        refusal = ""
+        no_metered = snapshot.budget_state == "red" and not request.task_pin
         if hard is not None:
             state = snapshot.sources.get(hard.engine)
             target = hard
         else:
             chosen = select(tier, policy, snapshot.sources, allowed=allowed,
-                            engine_pin=engine_pin)
+                            engine_pin=engine_pin, preferred=preferred,
+                            no_metered=no_metered, strict=strict)
+            if chosen.target is None and no_metered:
+                # BUDGET RED: no new metered spend. An included source's lower tier, down to
+                # the floor, before a refusal (Decision 16).
+                for lower in (t for t in reversed(TIERS[:rank(tier)])
+                              if rank(t) >= rank(floor or "fast")):
+                    retry = select(lower, policy, snapshot.sources, allowed=allowed,
+                                   no_metered=True, strict=strict)
+                    if retry.target is not None:
+                        chosen.notes.append(f"Budget spent: {TIER_LABELS[lower]} on an "
+                                            "included source instead")
+                        retry.notes[:0] = chosen.notes
+                        chosen, tier = retry, lower
+                        break
             why.extend(chosen.notes)
             if chosen.moved_by_headroom:
                 rules.append("headroom")
@@ -337,14 +400,21 @@ class Router:
                 rules.append("fallback")
             fallback, moved = chosen.fallback, chosen.moved_by_headroom
             target, state = chosen.target, chosen.source
+            refusal = chosen.refusal
         if target is None:
-            why.append("Nothing connected can take this work")
+            refusal = refusal or "Nothing connected can take this work."
+            why.append(refusal)
             return RouteDecision(
                 id=_new_id(), mode="smart", kind=request.kind, step=request.step, tier=tier,
-                engine="", model=None, reason=why[-1], why=tuple(why), classified_tier=c.tier,
-                classification=c, rules=tuple(rules), role=request.role,
+                engine="", model=None, reason=refusal, why=tuple(why), classified_tier=c.tier,
+                classification=c, rules=tuple(rules) + ("refused",), role=request.role,
                 unit_id=request.unit_id,
-                project_id=request.project_id or snapshot.project_id, fallback=True)
+                project_id=request.project_id or snapshot.project_id, fallback=True,
+                refused=True, refusal=refusal)
+        # THE RECORD NEVER DISAGREES WITH THE MODEL: a pinned or session model is recorded at
+        # its own tier, whatever tier the task asked for.
+        if hard is not None:
+            tier = model_tier(target.engine, target.model) or tier
         picked = f"{TIER_LABELS[tier]} · {engine_label(target.engine)}" + (
             f" · {target.model}" if target.model else "")
         reason = picked + " — " + _headline(why, c)
@@ -378,21 +448,23 @@ class Router:
         return decision
 
 
+def _agent_mode(request: RouteRequest) -> str:
+    return str((request.agent_policy or {}).get("selection_mode") or "router").lower()
+
+
+def _blocked(target: Target, snapshot: Snapshot) -> Optional[str]:
+    """Why a pinned session's source can't run now (exhausted, limited, failing), or None."""
+    from .selection import _why_not
+
+    return _why_not(target, snapshot.sources.get(target.engine), None)
+
+
 def _headline(why: list[str], c: Classification) -> str:
     for line in reversed(why):
-        if line.startswith(("Escalated", "Floor", "Budget", "Pinned", "Job pin")) \
-                or "moves to" in line or "exhausted" in line:
+        if line.startswith(("Escalated", "Floor", "Budget", "Pinned", "Job pin", "Job pref",
+                            "The session")) or "moves to" in line or "exhausted" in line:
             return line
     return c.reason
-
-
-def _tier_of_model(engine: str, model: Optional[str]) -> Optional[str]:
-    name = str(model or "").lower()
-    for tier in ("frontier", "balanced", "fast"):
-        hint = tier_model(engine, tier) if engine != "openrouter" else None
-        if hint and hint in name:
-            return tier
-    return None
 
 
 def _new_id() -> str:

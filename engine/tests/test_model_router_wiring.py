@@ -8,7 +8,6 @@ model" has a record. A new call site that forgets is caught here.
 from __future__ import annotations
 
 import inspect
-import re
 
 from boss_engine.services import (
     agent_loop, discovery_service, governed_code_task_service, intent_router, meeting_service,
@@ -31,13 +30,12 @@ def test_every_escalation_is_a_signal_on_the_ledger():
 
 
 def test_call_sites_that_know_their_work_name_it():
+    """The purpose rides a context (`model_routing.routing_purpose`), so the adapter's
+    signature — and every test double of it — is unchanged."""
     for module in (agent_loop, meeting_service):
-        calls = re.findall(r"project_chat_adapter\([^)]*\)", inspect.getsource(module),
-                           re.DOTALL)
-        assert calls and all("purpose" in c for c in calls), module.__name__
+        assert "routing_purpose(" in inspect.getsource(module), module.__name__
     skills = inspect.getsource(skill_executors)
-    assert len(re.findall(r"project_chat_adapter\(", skills)) == skills.count(
-        "purpose=_route_purpose(") == 4
+    assert skills.count("with _routed(context,") == 4
     assert "purpose=purpose" in inspect.getsource(
         intent_router.IntentRouter._use_project_chat_model)
     assert "_research_model(" in inspect.getsource(discovery_service)

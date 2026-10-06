@@ -37,7 +37,7 @@ def test_the_meeting_uses_the_adapter_that_reads_that_setting():
     source = inspect.getsource(meeting_service)
     # The project's routed model — the one router every model call uses (model_routing), which
     # reads chat_llm_engine through `choose`.
-    assert 'model_routing.project_chat_adapter(c, settings, run["project_id"],' in source
+    assert 'model_routing.project_chat_adapter(c, settings, run["project_id"])' in source
     # And no longer the one that silently ignores it.
     assert "adapter = make_chat_adapter(settings)" not in source
 

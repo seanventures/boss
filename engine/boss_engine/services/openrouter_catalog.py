@@ -14,6 +14,7 @@ Never raises to a caller that is doing work: an unreachable catalogue reads as e
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -165,17 +166,28 @@ def load(connection: Any) -> list[CatalogModel]:
 def refresh(connection: Any, settings: Any, project_id: Optional[str]) -> list[CatalogModel]:
     """Fetch with this project's stored OpenRouter key (or the environment's), remember and
     persist. Never raises: returns what is cached when the fetch fails."""
-    key = None
+    key, base_url = None, ""
     try:
-        from .credential_resolve import resolve_project_credential
+        # THE SOURCE'S OWN STORED KEY AND URL (a custom OpenRouter endpoint, a proxy), the same
+        # binding a call on this lane uses; the environment only when nothing is stored.
+        from .code_agent import _project_api_model_binding
 
-        key = resolve_project_credential(connection, settings, project_id=project_id,
-                                         provider=PROVIDER,
-                                         env_fallback_attr="openrouter_api_key")
+        bound = _project_api_model_binding(connection, settings, project_id or "", "openrouter")
+        if bound:
+            key, _model, base_url = bound
     except Exception:  # noqa: BLE001
-        key = str(getattr(settings, "openrouter_api_key", "") or "") or None
+        key = None
+    if not key:
+        try:
+            from .credential_resolve import resolve_project_credential
+
+            key = resolve_project_credential(connection, settings, project_id=project_id,
+                                             provider=PROVIDER,
+                                             env_fallback_attr="openrouter_api_key")
+        except Exception:  # noqa: BLE001
+            key = str(getattr(settings, "openrouter_api_key", "") or "") or None
     try:
-        models = fetch(str(getattr(settings, "openrouter_base_url", "") or ""), key)
+        models = fetch(base_url or str(getattr(settings, "openrouter_base_url", "") or ""), key)
     except Exception:  # noqa: BLE001
         log.warning("OpenRouter catalogue fetch failed", exc_info=True)
         return list(cached().values())
@@ -188,35 +200,38 @@ def refresh(connection: Any, settings: Any, project_id: Optional[str]) -> list[C
     return models
 
 
+#: A curated quality floor per tier: families known to do the tier's work well, best first.
+#: The cheapest listed model is NOT the default — a 3B model is cheap and wrong for code.
+CURATED = {
+    "fast": ("qwen/qwen3-coder-flash", "qwen/qwen3-coder-30b", "deepseek/deepseek-chat",
+             "google/gemini-2.5-flash", "openai/gpt-5-mini", "z-ai/glm-4.5-air",
+             "mistralai/devstral"),
+    "balanced": ("qwen/qwen3-coder", "moonshotai/kimi-k2", "z-ai/glm-4.6",
+                 "deepseek/deepseek-chat", "deepseek/deepseek-v3", "anthropic/claude-sonnet"),
+    "frontier": ("anthropic/claude-opus", "openai/gpt-5", "google/gemini-2.5-pro"),
+}
+MIN_CONTEXT = {"fast": 32_000, "balanced": 64_000, "frontier": 128_000}
+
+
 def suggest(models: Optional[Iterable[CatalogModel]] = None) -> dict[str, str]:
-    """A model per tier from the listed catalogue; {} when nothing is cached. Cheap families
-    for Fast and Balanced (tool-capable, enough context), the newest Opus-class for Frontier."""
+    """A model per tier from the listed catalogue, held to CURATED and MIN_CONTEXT; {} for a
+    tier nothing qualifies for (the router's static defaults stand in)."""
+    from .model_router.policy import model_tier
+
     pool = [m for m in (models if models is not None else cached().values())
-            if m.tools and not m.id.endswith(":free") and m.prompt_usd_per_mtok is not None]
-    if not pool:
-        return {}
+            if m.tools and not m.id.endswith(":free")]
     picks: dict[str, str] = {}
-
-    def family_rank(m: CatalogModel) -> int:
-        return next((i for i, f in enumerate(_CHEAP_FAMILIES) if m.id.startswith(f)),
-                    len(_CHEAP_FAMILIES))
-
-    cheap = [m for m in pool if family_rank(m) < len(_CHEAP_FAMILIES)
-             and (m.context_length or 0) >= 32_000]
-    fast = sorted((m for m in cheap if m.blended <= 0.6), key=lambda m: (m.blended, -m.created))
-    if fast:
-        picks["fast"] = fast[0].id
-    balanced = sorted((m for m in cheap if m.blended <= 2.5 and (m.context_length or 0) >= 64_000
-                       and ("coder" in m.id or family_rank(m) <= 2)),
-                      key=lambda m: (-("coder" in m.id), family_rank(m), -m.created))
-    if balanced:
-        picks["balanced"] = balanced[0].id
-    for prefix in _FRONTIER_PREFIXES:
-        frontier = sorted((m for m in pool if m.id.startswith(prefix)),
-                          key=lambda m: -m.created)
-        if frontier:
-            picks["frontier"] = frontier[0].id
-            break
+    for tier, families in CURATED.items():
+        for family in families:
+            found = [m for m in pool if m.id.startswith(family)
+                     and (m.context_length or 0) >= MIN_CONTEXT[tier]
+                     and model_tier("openrouter", m.id) == (
+                         tier if tier == "frontier" else model_tier("openrouter", m.id))
+                     and not (tier != "fast" and model_tier("openrouter", m.id) == "fast")
+                     and not (tier == "fast" and re.search(r"(^|[-/])[1-8]b\b", m.id))]
+            if found:
+                picks[tier] = sorted(found, key=lambda m: (-m.created, m.blended))[0].id
+                break
     return picks
 
 

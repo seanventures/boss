@@ -129,14 +129,20 @@ def test_jev_answers_when_ready():
     assert (c.classifier, c.tier) == ("jev", "frontier") and jev.calls == 1
 
 
-def test_a_failing_jev_falls_back_and_is_not_cached():
+def test_a_failing_jev_falls_back_and_is_cached_briefly():
+    """A failure is remembered for a short while (FALLBACK_TTL_S), so every stage of a build
+    does not ask — and wait on — a broken classifier again."""
+    from boss_engine.services.model_router import classifier as clf_mod
+
     jev = _Decider(fail=True)
     clf = Classifier()
     signal = TaskSignal(kind="chat", step="chat", text="hello there")
     first = clf.classify(signal, policy().classifier, jev=jev, jev_state="ready")
-    clf.classify(signal, policy().classifier, jev=jev, jev_state="ready")
+    second = clf.classify(signal, policy().classifier, jev=jev, jev_state="ready")
     assert first.classifier == "rules" and first.fallback_note == "Jev failed"
-    assert jev.calls == 2  # a failure is retried at the next boundary, not remembered
+    assert second.cached and jev.calls == 1
+    assert clf._cache[next(iter(clf._cache))][0] - __import__("time").monotonic() \
+        <= clf_mod.FALLBACK_TTL_S
 
 
 def test_the_cheap_model_is_asked_only_when_the_rules_are_unsure_and_it_is_on():

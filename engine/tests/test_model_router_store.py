@@ -75,38 +75,102 @@ def test_smart_mode_is_the_project_setting(db):
     assert d.mode == "smart" and d.tier == "frontier" and d.model == "opus"
 
 
-def test_the_clis_window_numbers_become_headroom(db):
+ACCOUNTS = ("CREATE TABLE subscription_accounts (account_key TEXT PRIMARY KEY, engine TEXT, "
+            "windows TEXT, learned_weekly_allowance_usd NUMERIC, updated_at TIMESTAMP)")
+
+
+@pytest.fixture()
+def accounts_db(db):
+    with db.begin() as c:
+        c.execute(text(ACCOUNTS))
+    return db
+
+
+def _windows(c) -> dict:
+    raw = c.execute(text("SELECT windows FROM subscription_accounts")).scalar()
+    return json.loads(raw) if raw else {}
+
+
+def test_the_clis_window_numbers_become_headroom(accounts_db):
     settings = _settings()
     event = {"type": "rate_limit_event", "rate_limit_info": {
         "status": "allowed_warning", "rateLimitType": "seven_day", "utilization": 0.9,
         "resetsAt": 4102444800}}
-    with db.begin() as c:
+    with accounts_db.begin() as c:
         patch = store.observe(c, settings, "p1", "claude_code", event=event)
     assert patch["seven_day"]["used"] == 0.9
-    with db.begin() as c:
-        observed = json.loads(c.execute(text(
-            "SELECT observed_capacity FROM entitlement_sources")).scalar())
+    with accounts_db.begin() as c:
+        assert _windows(c)["seven_day"]["status"] == "allowed_warning"
         snap = store.snapshot(c, settings, "p1", fresh=True)
-    assert observed["windows"]["seven_day"]["status"] == "allowed_warning"
     assert snap.sources["claude_code"].headroom.state == "near_limit"
 
 
-def test_a_weekly_limit_teaches_the_allowance(db):
+def test_a_weekly_limit_teaches_the_allowance(accounts_db):
     settings = _settings()
     from datetime import datetime, timezone
 
-    with db.begin() as c:
+    with accounts_db.begin() as c:
         c.execute(text("INSERT INTO llm_calls VALUES ('claude_code', 'p1', 412000000, 1, :t)"),
                   {"t": datetime.now(timezone.utc)})
         store.observe(c, settings, "p1", "claude_code",
                       error="You've hit your weekly limit · resets Mon 12:00am")
-        observed = json.loads(c.execute(text(
-            "SELECT observed_capacity FROM entitlement_sources")).scalar())
-    assert observed["learned_weekly_allowance_usd"] == 412.0
-    assert observed["windows"]["seven_day"]["status"] == "rejected"
+        row = c.execute(text("SELECT learned_weekly_allowance_usd FROM subscription_accounts")
+                        ).scalar()
+        assert float(row) == 412.0
+        assert _windows(c)["seven_day"]["status"] == "rejected"
 
 
-def test_a_resumed_session_keeps_its_model(db):
+def test_one_projects_limit_is_every_projects_limit(accounts_db):
+    """Two projects on one Claude login share one week (Decision 14)."""
+    settings = _settings()
+    with accounts_db.begin() as c:
+        c.execute(text("INSERT INTO entitlement_sources (project_id, source_id, provider, "
+                       "connection_status, observed_capacity, cost_mode) VALUES ('p2', "
+                       "'anthropic_claude_code', 'anthropic', 'connected', '{}', 'subscription')"))
+        store.observe(c, settings, "p1", "claude_code",
+                      error="Weekly limit reached ∙ resets Oct 13, 10am")
+    with accounts_db.begin() as c:
+        p2 = store.snapshot(c, settings, "p2", fresh=True)
+    assert p2.sources["claude_code"].headroom.state == "exhausted"
+
+
+def test_a_later_success_clears_the_rejected_window(accounts_db):
+    """Live, not sticky: the monthly limit was lifted (the operator raised it); the next call
+    succeeds, and the source is usable again at once."""
+    settings = _settings()
+    with accounts_db.begin() as c:
+        store.observe(c, settings, "p1", "claude_code",
+                      error="You've hit your org's monthly spend limit")
+        store.observe(c, settings, "p1", "claude_code",
+                      error="You've hit your Opus limit · resets 9pm")
+        assert {"monthly", "seven_day_opus"} <= set(_windows(c))
+        cleared = store.observe(c, settings, "p1", "claude_code", ok_model="sonnet")
+        assert set(cleared) == {"monthly"}            # a Sonnet success says nothing of Opus
+        assert set(_windows(c)) == {"seven_day_opus"}
+        snap = store.snapshot(c, settings, "p1", fresh=True)
+    assert snap.sources["claude_code"].headroom.state != "exhausted"
+
+
+def test_an_unchanged_rate_limit_event_is_not_written_again(accounts_db):
+    settings = _settings()
+    event = {"rate_limit_info": {"status": "allowed", "rateLimitType": "seven_day",
+                                 "utilization": 0.50, "resetsAt": 4102444800}}
+    nudge = {"rate_limit_info": {"status": "allowed", "rateLimitType": "seven_day",
+                                 "utilization": 0.52, "resetsAt": 4102444800}}
+    writes = []
+    from sqlalchemy import event as sa_event
+
+    sa_event.listen(accounts_db, "before_cursor_execute",
+                    lambda *a: writes.append(a[2]) if "subscription_accounts (" in a[2] else None)
+    with accounts_db.begin() as c:
+        store.observe(c, settings, "p1", "claude_code", event=event)
+        for _ in range(5):
+            assert store.observe(c, settings, "p1", "claude_code", event=nudge) == {}
+    assert len([w for w in writes if w.lstrip().upper().startswith("INSERT")]) == 1
+
+
+def test_a_resumed_session_keeps_its_model(accounts_db):
+    db = accounts_db
     settings = _settings()
     with db.begin() as c:
         c.execute(text("INSERT INTO project_settings (project_id, key, value) "
@@ -127,23 +191,3 @@ def test_an_unreadable_store_routes_as_fixed():
                              begin_nested=lambda: (_ for _ in ()).throw(RuntimeError("down")))
     snap = store.snapshot(broken, _settings(), "p9", fresh=True)
     assert snap.policy.mode == "fixed"
-
-
-def test_an_environment_subscription_reads_its_catalogue_rows_windows(db, monkeypatch):
-    """A Claude subscription connected through CLAUDE_CODE_OAUTH_TOKEN has no connection row;
-    telemetry records its windows on the catalogue row, and the snapshot must read them there."""
-    from boss_engine.services.model_router.store import sources_from, _observed
-    from boss_engine.services.model_router.policy import RoutingPolicy
-
-    settings = _settings()
-    event = {"rate_limit_info": {"status": "allowed_warning", "rateLimitType": "seven_day",
-                                 "utilization": 0.92, "resetsAt": 4102444800}}
-    with db.begin() as c:
-        c.execute(text("UPDATE entitlement_sources SET connection_status = 'not_connected'"))
-        store.observe(c, settings, "p1", "claude_code", event=event)
-        observed = _observed(c, settings, "p1", ["claude_code"])
-    env_only = {"claude_code": {"kind": "env", "env_attr": "claude_code_oauth_token",
-                                "working": True}}
-    sources = sources_from(env_only, RoutingPolicy(), {}, observed_by_engine=observed)
-    assert sources["claude_code"].kind == "subscription"
-    assert sources["claude_code"].headroom.state == "near_limit"

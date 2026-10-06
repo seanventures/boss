@@ -1456,9 +1456,7 @@ class IntentRouter:
         self._chat_engine_applied = None  # which model that answerer was built for
         self._answer_adapter = None  # the project's routed model (model_routing)
 
-    def _use_project_chat_model(self, connection, project_id: str,
-                                messages: Optional[list] = None,
-                                thread_id: Optional[str] = None) -> None:
+    def _use_project_chat_model(self, connection, project_id: str) -> None:
         """Point the answer agent at the model THIS PROJECT connected.
 
         Called once per turn, before the agent is built. The chat asked for OPENAI_API_KEY on
@@ -1475,6 +1473,8 @@ class IntentRouter:
             # THE ROUTER PICKS ONCE PER THREAD, from the thread's first message (LangChain's
             # harness router; docs/product/MODEL_ROUTER.md) — sticky for the thread, so a
             # conversation never switches model mid-way. Fixed mode: `choose`, as before.
+            messages = getattr(self, "_turn_messages", None)
+            thread_id = getattr(self, "_turn_thread", None)
             purpose = None
             if thread_id:
                 from .model_router.router import RouteRequest
@@ -1562,7 +1562,9 @@ class IntentRouter:
         # BEFORE ANYTHING ELSE IN THE TURN: whichever model this project connected is the one
         # that should answer, and the router is the first place that knows both the project and
         # the database.
-        self._use_project_chat_model(connection, project_id, messages, thread_id)
+        # The thread and its first message: what the model router picks a model from, once.
+        self._turn_messages, self._turn_thread = messages, thread_id
+        self._use_project_chat_model(connection, project_id)
         latest = str(messages[-1].get("content") or "").strip() if messages else ""
         if confirm_plan_id:
             return self._confirm_plan(

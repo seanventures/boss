@@ -6994,3 +6994,14 @@ CREATE TABLE IF NOT EXISTS provider_model_catalog (
   fetched_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (provider, model_id)
 );
+
+-- A subscription's windows belong to the ACCOUNT that spends, not to a project: two projects on
+-- one Claude login share one week (model_router.accounts). Keyed by the credential's identity —
+-- a secret ref id, a hash prefix of an install token, or the host's CLI login; never a secret.
+CREATE TABLE IF NOT EXISTS subscription_accounts (
+  account_key                   TEXT PRIMARY KEY,
+  engine                        TEXT NOT NULL,
+  windows                       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  learned_weekly_allowance_usd  NUMERIC,
+  updated_at                    TIMESTAMPTZ NOT NULL DEFAULT now()
+);

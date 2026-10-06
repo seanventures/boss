@@ -17,7 +17,6 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Optional
@@ -100,6 +99,31 @@ def _has(words: tuple[str, ...], haystack: str) -> list[str]:
     return [w for w in words if re.search(r"\b" + re.escape(w), haystack)]
 
 
+#: Words that make work sensitive for ROUTING: rigor's own list (pipeline_profiles) plus the
+#: ones a model choice must not get wrong. Kept apart from rigor's list so Fixed mode's pipeline
+#: shape is unchanged.
+ROUTER_SENSITIVE = ("oauth", "sso", "saml", "2fa", "mfa", "prod database", "production database",
+                    "prod db", "security", "pii", "gdpr", "private key", "ssh key", "rbac")
+
+
+def sensitive_in(signal: "TaskSignal") -> list[str]:
+    """The sensitive words in the task's own words (BOSS boilerplate stripped, whole words)."""
+    from ..pipeline_profiles import SENSITIVE_MARKERS, _matches, _task_haystack
+
+    spec = dict(signal.spec or {}) or {"title": "", "instructions": signal.text or ""}
+    haystack = _task_haystack(spec)
+    return [m for m in (*SENSITIVE_MARKERS, *ROUTER_SENSITIVE) if _matches(m, haystack)]
+
+
+def minimum_tier(signal: "TaskSignal", markers: Optional[list[str]] = None) -> Optional[str]:
+    """The lowest tier sensitive work may get, whoever classifies it: Frontier for work that
+    changes things, Balanced for a chat answer. Jev or a model may raise it, never lower it."""
+    markers = sensitive_in(signal) if markers is None else markers
+    if not markers:
+        return None
+    return BALANCED if signal.kind == "chat" else FRONTIER
+
+
 def rules_classify(signal: TaskSignal) -> Classification:
     """The deterministic answer. Pure, a few microseconds, and the floor under everything."""
     text = signal.text or ""
@@ -115,9 +139,13 @@ def rules_classify(signal: TaskSignal) -> Classification:
     if kind == "decision":
         return Classification(FAST, 0.7, "rules", "a decision from fixed options")
     if kind == "chat":
+        markers = sensitive_in(signal)
         judgment = _has(_JUDGMENT, lowered)
         if judgment:
-            return Classification(FRONTIER, 0.6, "rules", f"judgment: {judgment[0]}")
+            return Classification(FRONTIER, 0.6, "rules", f"judgment: {judgment[0]}", None,
+                                  bool(markers))
+        if markers:
+            return Classification(BALANCED, 0.7, "rules", f"sensitive: {markers[0]}", None, True)
         if len(text) > 1500:
             return Classification(BALANCED, 0.7, "rules", "a long request")
         think = _has(_THINK, lowered)
@@ -137,17 +165,19 @@ def rules_classify(signal: TaskSignal) -> Classification:
     if not spec:
         spec = {"title": "", "instructions": text}
     haystack = _task_haystack(spec)
-    markers = sensitive_markers_in(spec)
+    markers = sensitive_markers_in(spec) or sensitive_in(signal)
     explicit = signal.risk_tier if signal.risk_tier is not None else spec.get("risk_tier")
+    if markers:
+        # SENSITIVE WORDS WIN OVER A STATED RISK LEVEL: `risk_tier: 0` on an OAuth change is not
+        # a reason to give it Haiku.
+        conf = 0.8 if len(markers) > 1 or len(haystack) > 200 else 0.65
+        return Classification(FRONTIER, conf, "rules", f"sensitive: {markers[0]}", 3, True)
     if isinstance(explicit, int) and 0 <= explicit <= 3:
         tier = {0: FAST, 1: BALANCED, 2: BALANCED, 3: FRONTIER}[explicit]
         return Classification(tier, 0.9, "rules", f"the task set its risk level ({explicit} of 3)",
                               explicit, explicit >= 3)
     if len(haystack.strip()) < 12:
         return Classification(BALANCED, 0.4, "rules", "too little to judge", 2)
-    if markers:
-        conf = 0.8 if len(markers) > 1 or len(haystack) > 200 else 0.65
-        return Classification(FRONTIER, conf, "rules", f"sensitive: {markers[0]}", 3, True)
     judgment = _has(_JUDGMENT, haystack)
     if _is_trivial_change(haystack, spec):
         tier, conf, why, rigor = FAST, (0.9 if len(haystack) < 240 else 0.8), \
@@ -195,11 +225,34 @@ def _from_batch(batch: Any, signal: TaskSignal, name: str) -> Optional[Classific
                           (decision.reason or f"{name} judged it")[:200], rigor, sensitive)
 
 
-_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="route-classify")
-
-
 def _bounded(fn: Callable[[], Any], timeout_s: float) -> Any:
-    return _POOL.submit(fn).result(timeout=timeout_s)
+    """`fn()` within `timeout_s`, or FutureTimeout. A thread of its own per call: a hung
+    classifier must never queue the next route behind it (a shared pool of four did)."""
+    box: dict[str, Any] = {}
+    done = threading.Event()
+
+    def run() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as error:  # noqa: BLE001 — handed to the caller
+            box["error"] = error
+        finally:
+            done.set()
+
+    threading.Thread(target=run, name="route-classify", daemon=True).start()
+    if not done.wait(timeout_s):
+        raise FutureTimeout()
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+#: After Jev times out, it is skipped for this long: one slow minute must not make every stage
+#: of every build wait the full timeout again (a negative cache on the backend itself).
+JEV_COOLDOWN_S = 60.0
+#: A classification made because a better classifier timed out is kept this long, not an hour.
+FALLBACK_TTL_S = 120.0
+_JEV_COOL_UNTIL = [0.0]
 
 
 # ── The cascade ────────────────────────────────────────────────────────────────────────────────
@@ -215,6 +268,7 @@ class Classifier:
     def clear(self) -> None:
         with self._lock:
             self._cache.clear()
+            _JEV_COOL_UNTIL[0] = 0.0
 
     def _get(self, key: str) -> Optional[Classification]:
         with self._lock:
@@ -227,9 +281,9 @@ class Classifier:
             self._cache.move_to_end(key)
             return hit[1]
 
-    def _put(self, key: str, value: Classification) -> None:
+    def _put(self, key: str, value: Classification, ttl: Optional[float] = None) -> None:
         with self._lock:
-            self._cache[key] = (time.monotonic() + self._ttl, value)
+            self._cache[key] = (time.monotonic() + (ttl or self._ttl), value)
             self._cache.move_to_end(key)
             while len(self._cache) > self._size:
                 self._cache.popitem(last=False)
@@ -247,11 +301,14 @@ class Classifier:
                            latency_ms=(time.perf_counter() - started) * 1000)
         result: Optional[Classification] = None
         note = ""
-        cacheable = True
+        short = False                       # cache briefly: a better answer may come soon
         questions = None
         if config.backend in ("auto", "jev"):
             if jev_state == "held":
                 note = "Jev paused"
+            elif jev_state == "ready" and jev is not None \
+                    and time.monotonic() < _JEV_COOL_UNTIL[0]:
+                note, short = "Jev slow — rules for a minute", True
             elif jev_state == "ready" and jev is not None:
                 questions = self._questions(signal, config)
                 try:
@@ -261,9 +318,10 @@ class Classifier:
                     if result is None:
                         note = "Jev gave no usable answer"
                 except FutureTimeout:
-                    note, cacheable = "Jev timed out", False
+                    note, short = "Jev timed out", True
+                    _JEV_COOL_UNTIL[0] = time.monotonic() + JEV_COOLDOWN_S
                 except Exception:  # noqa: BLE001 — the fast backend is optional
-                    note, cacheable = "Jev failed", False
+                    note, short = "Jev failed", True
             elif config.backend == "jev":
                 note = "Jev not set up"
         if result is None:
@@ -285,14 +343,22 @@ class Classifier:
                 except FutureTimeout:
                     result = replace(result, fallback_note=(note + "; " if note else "")
                                      + "cheap model timed out")
-                    cacheable = False
+                    short = True
                 except Exception:  # noqa: BLE001 — the rules' answer stands
                     result = replace(result, fallback_note=(note + "; " if note else "")
                                      + "cheap model failed")
-                    cacheable = False
+                    short = True
+        # SENSITIVE WORK HAS A MINIMUM no classifier may lower (Decision 17).
+        markers = sensitive_in(signal)
+        floor = minimum_tier(signal, markers)
+        if floor is not None and TIERS.index(result.tier) < TIERS.index(floor):
+            result = replace(result, tier=floor, sensitive=True,
+                             reason=f"{result.reason}; sensitive ({markers[0]}) keeps it "
+                                    f"≥ {floor.capitalize()}")
+        elif markers:
+            result = replace(result, sensitive=True)
         result = replace(result, latency_ms=(time.perf_counter() - started) * 1000)
-        if cacheable:
-            self._put(key, result)
+        self._put(key, result, ttl=FALLBACK_TTL_S if short else None)
         return result
 
     @staticmethod
