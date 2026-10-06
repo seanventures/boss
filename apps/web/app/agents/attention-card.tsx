@@ -185,7 +185,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     if (item.contentHash) form.set("content_hash", item.contentHash);
     if (run?.id) form.set("workflow_run_id", run.id);
     try {
-      const result = await callAction(resolveDecisionAction)(form);
+      const result = await callAction(resolveDecisionAction, undefined, "decision:approve")(form);
       if (result.ok) {
         if (action.action === "reject") {
           void sendReasons(projectId, actor, "reject", decisionId, why,
@@ -245,7 +245,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     form.set("project_id", projectId);
     form.set("actor", actor);
     try {
-      const r = await callAction(retryBuildAction)(form);
+      const r = await callAction(retryBuildAction, undefined, "code_task:retry")(form);
       if (r.ok) finish(r.attempt ? `Attempt ${r.attempt} started` : "Retrying");
       else { setError(r.error ?? ""); onRefresh?.(); }
     } catch (e) {
@@ -266,7 +266,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     form.set("option", a.key);
     form.set("actor", actor);
     try {
-      const r = await callAction(actOnSystemFindingAction)(form);
+      const r = await callAction(actOnSystemFindingAction, undefined, "system:operate")(form);
       if (r.ok) {
         if (r.open) openTarget(r.open);
         setDone(r.result || a.label);
@@ -294,7 +294,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     form.set("actor", actor);
     form.set("project_id", projectId);
     try {
-      const r = await callAction(actOnInfraAttentionAction)(form);
+      const r = await callAction(actOnInfraAttentionAction, undefined, "infra:provision")(form);
       if (r.ok) {
         if (r.open) navigate(infraOpenPatch(r.open));
         setDone(r.result || a.label);

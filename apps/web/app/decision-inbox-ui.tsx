@@ -560,7 +560,7 @@ export function DecisionInbox({
               Creates a durable digest artifact. Optional channel creates an
               outbox draft only; sending still requires a budgeted queue action.
             </p>
-            <ActionForm action={createDecisionDigestAction} className="decision-actions">
+            <ActionForm permission="decision:read" action={createDecisionDigestAction} className="decision-actions">
               <input type="hidden" name="project_id" value={projectId} />
               <input type="hidden" name="actor" value={actorId} />
               <label className="field">
@@ -913,7 +913,7 @@ function DecisionInboxRow({
                     name="external_ref"
                     placeholder="External reference (PR URL, commit SHA, ticket)"
                   />
-                  <SubmitButton className="dq-btn approve" name="action" value="execute"
+                  <SubmitButton permission="decision:execute" className="dq-btn approve" name="action" value="execute"
                                 data-testid="decision-execute">
                     Mark executed
                   </SubmitButton>
@@ -979,7 +979,7 @@ export function DecisionActions({ decision, projectId, actorId }: {
       {dismiss ? <input type="hidden" name="reject_label" value="Dismiss" /> : null}
       {contentHash ? <input type="hidden" name="content_hash" value={contentHash} /> : null}
       {direct.map((offer) => (
-        <SubmitButton
+        <SubmitButton permission="decision:approve"
           key={offer.action}
           className={`dq-btn ${offer.tone === "neutral" ? "neutral" : offer.tone}`}
           name="action"
@@ -1010,7 +1010,7 @@ export function DecisionActions({ decision, projectId, actorId }: {
                   rows={3}
                   placeholder="What should change? This is sent back with the decision."
                 />
-                <SubmitButton className="dq-btn neutral" name="action" value="revise"
+                <SubmitButton permission="decision:approve" className="dq-btn neutral" name="action" value="revise"
                               data-testid="decision-revise" title={revise.effect}>
                   {revise.label}
                 </SubmitButton>
@@ -1028,7 +1028,7 @@ export function DecisionActions({ decision, projectId, actorId }: {
                     data-testid="decision-delegate-target"
                   />
                 </label>
-                <SubmitButton className="dq-btn escalate" name="action" value="delegate"
+                <SubmitButton permission="decision:delegate" className="dq-btn escalate" name="action" value="delegate"
                               data-testid="decision-delegate" title={delegate.effect}>
                   {delegate.label}
                 </SubmitButton>

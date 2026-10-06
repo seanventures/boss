@@ -8,6 +8,7 @@
  */
 import { navigate } from "../agents/live-util";
 import { read, send } from "./infra-actions";
+import { declareAction } from "../../lib/identity/guarded-action";
 
 const enc = encodeURIComponent;
 
@@ -60,3 +61,12 @@ export function goConsole(href: string): void {
   for (const [k, v] of new URLSearchParams(href.replace(/^[^?]*\?/, ""))) patch[k] = v;
   navigate(patch);
 }
+
+// THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
+// A declaration for the console to mirror — disabled with the reason when not held — never a
+// decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
+declareAction(listTargets, "deployment:read");
+declareAction(listPolicies, "deployment:read");
+declareAction(loadCi, "cicd:read");
+declareAction(generateCi, "cicd:manage");
+declareAction(validateCi, "cicd:read");

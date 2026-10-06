@@ -42,11 +42,11 @@ export function MetatronCaptain({
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    callAction(loadMetatronCaptainSessionAction)(projectId, actor).then(async (result) => {
+    callAction(loadMetatronCaptainSessionAction, undefined, "assistant:chat")(projectId, actor).then(async (result) => {
       if (!alive) return;
       if (result.ok && result.data) {
         const next = mapMetatronCaptainSession(result.data);
-        const theater = await callAction(loadMetatronTheaterAction)(projectId, actor);
+        const theater = await callAction(loadMetatronTheaterAction, undefined, "autopilot:read")(projectId, actor);
         if (!alive) return;
         setState({
           ...next,
@@ -89,7 +89,7 @@ export function MetatronCaptain({
       onSend={(formData) => {
         setError(null);
         startTransition(async () => {
-          const result = await callAction(sendMetatronCaptainMessageAction)(formData);
+          const result = await callAction(sendMetatronCaptainMessageAction, undefined, "assistant:chat")(formData);
           if (result.ok && result.data) {
             setState(mapMetatronCaptainSession(result.data));
             return;
@@ -103,9 +103,9 @@ export function MetatronCaptain({
       onAddGoal={(formData) => {
         setError(null);
         startTransition(async () => {
-          const result = await callAction(createMetatronCaptainGoalAction)(formData);
+          const result = await callAction(createMetatronCaptainGoalAction, undefined, "autopilot:configure")(formData);
           if (result.ok) {
-            const session = await callAction(loadMetatronCaptainSessionAction)(
+            const session = await callAction(loadMetatronCaptainSessionAction, undefined, "assistant:chat")(
               projectId,
               actor,
             );
@@ -125,7 +125,7 @@ export function MetatronCaptain({
       onWatch={(formData) => {
         setError(null);
         startTransition(async () => {
-          const result = await callAction(refreshMetatronCaptainWatchAction)(formData);
+          const result = await callAction(refreshMetatronCaptainWatchAction, undefined, "autopilot:read")(formData);
           if (result.ok && result.data) {
             setState((prev) => ({
               ...prev,
@@ -140,7 +140,7 @@ export function MetatronCaptain({
       onDrive={(formData) => {
         setError(null);
         startTransition(async () => {
-          const result = await callAction(proposeMetatronCaptainDriveAction)(formData);
+          const result = await callAction(proposeMetatronCaptainDriveAction, undefined, "autopilot:operate")(formData);
           if (result.ok && result.data) {
             setState((prev) => ({
               ...prev,
@@ -158,7 +158,7 @@ export function MetatronCaptain({
       onTheater={(formData) => {
         setError(null);
         startTransition(async () => {
-          const result = await callAction(runMetatronTheaterAction)(formData);
+          const result = await callAction(runMetatronTheaterAction, undefined, "autopilot:operate")(formData);
           if (result.ok && result.data) {
             setState((prev) => ({
               ...prev,
@@ -182,7 +182,7 @@ export function MetatronCaptain({
       onOverwatch={(formData) => {
         setError(null);
         startTransition(async () => {
-          const result = await callAction(runMetatronCaptainOverwatchAction)(formData);
+          const result = await callAction(runMetatronCaptainOverwatchAction, undefined, "autopilot:operate")(formData);
           if (result.ok && result.data) {
             setState((prev) => ({
               ...prev,
@@ -330,7 +330,7 @@ export function MetatronCaptainView({
             disabled={pending}
           />
         </label>
-        <SubmitButton className="button" type="submit" disabled={pending}>
+        <SubmitButton permission="assistant:chat" className="button" type="submit" disabled={pending}>
           Send to captain
         </SubmitButton>
       </form>
@@ -398,7 +398,7 @@ export function MetatronCaptainView({
             disabled={pending}
           />
         </label>
-        <SubmitButton className="button secondary" type="submit" disabled={pending}>
+        <SubmitButton permission="autopilot:configure" className="button secondary" type="submit" disabled={pending}>
           Add goal
         </SubmitButton>
       </form>
@@ -438,7 +438,7 @@ export function MetatronCaptainView({
       <form data-testid="metatron-captain-watch" action={onWatch}>
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="actor" value={actor} />
-        <SubmitButton className="button secondary" type="submit" disabled={pending}>
+        <SubmitButton permission="autopilot:read" className="button secondary" type="submit" disabled={pending}>
           Refresh watch
         </SubmitButton>
       </form>
@@ -446,7 +446,7 @@ export function MetatronCaptainView({
         <form data-testid="metatron-captain-overwatch" action={onOverwatch}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
-          <SubmitButton className="button" type="submit" disabled={pending}>
+          <SubmitButton permission="autopilot:operate" className="button" type="submit" disabled={pending}>
             Run overwatch now
           </SubmitButton>
         </form>
@@ -491,7 +491,7 @@ export function MetatronCaptainView({
         <form data-testid="metatron-captain-theater-run" action={onTheater}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
-          <SubmitButton className="button" type="submit" disabled={pending}>
+          <SubmitButton permission="autopilot:operate" className="button" type="submit" disabled={pending}>
             Command the fleet
           </SubmitButton>
         </form>
@@ -529,7 +529,7 @@ export function MetatronCaptainView({
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="actor" value={actor} />
         <input type="hidden" name="auto" value="false" />
-        <SubmitButton className="button secondary" type="submit" disabled={pending}>
+        <SubmitButton permission="autopilot:operate" className="button secondary" type="submit" disabled={pending}>
           Propose next moves
         </SubmitButton>
       </form>
@@ -537,7 +537,7 @@ export function MetatronCaptainView({
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="actor" value={actor} />
         <input type="hidden" name="auto" value="true" />
-        <SubmitButton className="button" type="submit" disabled={pending}>
+        <SubmitButton permission="autopilot:operate" className="button" type="submit" disabled={pending}>
           Launch validated work
         </SubmitButton>
       </form>

@@ -10,6 +10,7 @@
  */
 import { apiWrite, type Press } from "../../lib/api-write";
 import { notifyChanged } from "../changed";
+import { declareAction } from "../../lib/identity/guarded-action";
 
 export type Result<T = Record<string, unknown>> = { ok: true; data: T } | { ok: false; error: string; status?: number };
 
@@ -165,3 +166,36 @@ export const preflightTarget = (projectId: string, targetId: string) =>
 export const listRepositories = (projectId: string) =>
   read<{ repositories?: Array<{ full_name: string; role?: string; archived?: boolean }>; suggested?: string }>(
     `/v1/projects/${enc(projectId)}/repositories`);
+
+// THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
+// A declaration for the console to mirror — disabled with the reason when not held — never a
+// decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
+declareAction(registerHost, "host:manage");
+declareAction(generateHostKey, "host:manage");
+declareAction(adoptHostKey, "host:manage");
+declareAction(verifyHost, "host:manage");
+declareAction(installHostKey, "host:manage");
+declareAction(provisionHost, "host:manage");
+declareAction(retireHost, "host:manage");
+declareAction(deployTarget, "deployment:create");
+declareAction(setTargetToggles, "deployment_target:manage");
+declareAction(moveTarget, "deployment_target:manage");
+declareAction(retireTarget, "deployment_target:manage");
+declareAction(bindSecret, "deployment_target:manage");
+declareAction(createStackTarget, "deployment_target:manage");
+declareAction(updateTarget, "deployment_target:manage");
+declareAction(createRegistryTarget, "deployment_target:manage");
+declareAction(decideDeploy, "decision:approve");
+declareAction(rollbackDeploy, "deployment:rollback");
+declareAction(redeployDelivery, "deployment:create");
+declareAction(runHealthCheck, "deployment:create");
+declareAction(saveEnvironmentPolicy, "deployment_target:manage");
+declareAction(stopPreview, "preview:manage");
+declareAction(restartPreview, "preview:manage");
+declareAction(listSecrets, "secret:read_metadata");
+declareAction(putSecret, "secret:manage");
+declareAction(generateKeypair, "secret:manage");
+declareAction(verifySecret, "secret:read_metadata");
+declareAction(listRefs, "repository:read");
+declareAction(preflightTarget, "deployment:read");
+declareAction(listRepositories, "repository:read");

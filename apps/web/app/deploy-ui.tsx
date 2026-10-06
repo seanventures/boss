@@ -155,7 +155,7 @@ export function LiveDeployment({ runId, onFinished }: {
     let ticks = 0;
     let lastStatus = "";
     const tick = async () => {
-      const d = await callAction(getDeploymentAction)(runId);
+      const d = await callAction(getDeploymentAction, undefined, "deployment:read")(runId);
       if (!live || !d || d.error) return;
       lastStatus = d.status;
       setRun(d);
@@ -389,7 +389,7 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
   // Who owns the repo BOSS clones when a target does not say. Fetched once, on open.
   useEffect(() => {
     if (!open || defaultOwner) return;
-    callAction(getDeliveryDefaultsAction)().then((d) => { if (d?.owner) setDefaultOwner(d.owner); });
+    callAction(getDeliveryDefaultsAction, undefined, "deployment:read")().then((d) => { if (d?.owner) setDefaultOwner(d.owner); });
   }, [open, defaultOwner]);
 
   /** Branches for a target's repo.
@@ -406,7 +406,7 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
       : [t.repo_owner || fallbackOwner, repo];
     if (!owner) { setRefsError("no repo owner configured for this app"); return; }
     setRefsError(null);
-    const d = await callAction(listRefsAction)(owner, name);
+    const d = await callAction(listRefsAction, undefined, "repository:read")(owner, name);
     if (d?.error || !d?.branches) {
       setRefsError(`could not list branches for ${owner}/${name}`);
       return;
@@ -418,7 +418,7 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
   const start = async () => {
     if (!targetId) { setErr("choose which app to deploy"); return; }
     setErr(null); setStarting(true);
-    const out = await callAction(deployTargetAction)(targetId, ref);
+    const out = await callAction(deployTargetAction, undefined, "deployment:create")(targetId, ref);
     setStarting(false);
     if (out?.error) {
       setErr(typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 220));
@@ -592,7 +592,7 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
       delete next[id];
       return next;
     });
-    const out = await callAction(redeployAction)(id);
+    const out = await callAction(redeployAction, undefined, "deployment:create")(id);
     setBusy(null);
     if (out?.error) {
       setErrors((current) => ({ ...current, [id]: String(out.error) }));

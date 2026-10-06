@@ -8,6 +8,7 @@
  */
 import type { Press } from "../../lib/api-write";
 import { send } from "./infra-actions";
+import { declareAction } from "../../lib/identity/guarded-action";
 
 const enc = encodeURIComponent;
 const P = (scope: string, label: string): Press => ({ scope, label });
@@ -85,3 +86,22 @@ export const approveChange = (actor: string, id: string) =>
   send("POST", `/v1/changesets/${enc(id)}/approve`, { actor }, P(`cloud-change-${id}`, "Approve"));
 export const applyChange = (actor: string, id: string) =>
   send("POST", `/v1/changesets/${enc(id)}/apply`, { actor }, P(`cloud-change-${id}`, "Apply"));
+
+// THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
+// A declaration for the console to mirror — disabled with the reason when not held — never a
+// decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
+declareAction(pasteKey, "cloud_account:manage");
+declareAction(connectWithRefs, "cloud_account:manage");
+declareAction(savePolicy, "cloud_account:manage");
+declareAction(testAccount, "cloud_account:manage");
+declareAction(syncAccount, "cloud_account:manage");
+declareAction(enableAccount, "cloud_account:manage");
+declareAction(disableAccount, "cloud_account:manage");
+declareAction(rotateAccount, "cloud_account:manage");
+declareAction(revokeAccount, "cloud_account:manage");
+declareAction(cleanUp, "infra:terminate");
+declareAction(addPool, "infra:provision");
+declareAction(reviewScaling, "infra:provision");
+declareAction(createChange, "infra:provision");
+declareAction(approveChange, "changeset:approve");
+declareAction(applyChange, "infra:provision");

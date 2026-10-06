@@ -103,7 +103,7 @@ function DirectChangeSheet({ projectId, actor, owner, repo, onClose, onStarted }
     setBusy(true);
     setError("");
     try {
-      const res = await callAction(startDirectChangeAction)(form);
+      const res = await callAction(startDirectChangeAction, undefined, "code_task:create")(form);
       if (res.ok) {
         showToast("success", "Build started");
         notifyChanged("code_tasks");

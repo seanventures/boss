@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { API_URL, authHeaders } from "../lib/client";
 import { apiWrite } from "../lib/api-write";
+import { declareAction } from "../lib/identity/guarded-action";
 
 export type ProcessManagerActionResult = {
   ok: boolean;
@@ -138,3 +139,11 @@ export async function tickProcessManagerAction(
     actor: actor || "executive_console",
   });
 }
+
+// THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
+// A declaration for the console to mirror — disabled with the reason when not held — never a
+// decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
+declareAction(loadProcessManagerAction, "autopilot:read");
+declareAction(loadProcessManagerMetricsAction, "autopilot:read");
+declareAction(loadProcessManagerProposalsAction, "autopilot:read");
+declareAction(tickProcessManagerAction, "autopilot:operate");

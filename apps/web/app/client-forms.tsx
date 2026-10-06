@@ -21,6 +21,9 @@ import {
 } from './actions';
 
 import { callAction } from "../lib/call-action";
+import type { Permission } from "../lib/identity/permissions.gen";
+import { useCan, useIdentity } from "../components/identity/identity-provider";
+import { FormPermission } from "../components/identity/form-permission";
 export type ToastType = 'success' | 'error';
 
 interface Toast {
@@ -102,6 +105,10 @@ interface ActionFormProps extends FormAttributes {
   successMessage?: string;
   /** Called with the result, for a form that has more to do than show it (open a run, say). */
   onResult?: (result: ActionResult) => void;
+  /** The permission the action declares (lib/identity/action-permissions.ts). The form's submit
+   *  buttons mirror it (disabled with the reason when not held), and a `step_up_required` answer
+   *  opens the step-up sheet and submits once more. The API decides every call. */
+  permission?: Permission;
   children: ReactNode;
   'data-testid'?: string;
 }
@@ -134,23 +141,39 @@ export function ActionForm({
   action,
   successMessage,
   onResult,
+  permission,
   children,
   ...rest
 }: ActionFormProps): React.ReactElement {
   const [result, setResult] = useState<ActionResult | null>(null);
+  const access = useCan(permission ?? "directory:read");
+  const { stepUp, refresh } = useIdentity();
 
   // An async form action: React holds the form's pending state until it settles, which is
   // what SubmitButton and ActionFormPending read.
   const handleAction = async (formData: FormData) => {
     setResult(null);
-    let outcome: ActionResult;
-    try {
-      // Through callAction, so the press reaches the server and the action's API writes are
-      // keyed by it: these forms submit with a plain button, not a SubmitButton.
-      const returned = await callAction(action)(formData);
-      outcome = isActionResult(returned) ? returned : { ok: true };
-    } catch (err: unknown) {
-      outcome = { ok: false, error: describeActionError(err) };
+    if (permission && !access.allowed) {
+      // Mirrored: the controls already say why; a submit by Enter says it once more.
+      showToast('error', access.reason);
+      return;
+    }
+    const submit = async (): Promise<ActionResult> => {
+      try {
+        // Through callAction, so the press reaches the server and the action's API writes are
+        // keyed by it: these forms submit with a plain button, not a SubmitButton.
+        const returned = await callAction(action)(formData);
+        return isActionResult(returned) ? returned : { ok: true };
+      } catch (err: unknown) {
+        return { ok: false, error: describeActionError(err) };
+      }
+    };
+    let outcome = await submit();
+    const identity = (outcome.data as { identity?: { error?: string } } | undefined)?.identity;
+    if (!outcome.ok && identity?.error === 'step_up_required') {
+      if (await stepUp(permission ? `This needs ${permission}.` : 'This needs a fresh check.')) outcome = await submit();
+    } else if (!outcome.ok && identity?.error === 'forbidden') {
+      refresh().catch(() => undefined);
     }
     setResult(outcome);
     onResult?.(outcome);
@@ -167,7 +190,8 @@ export function ActionForm({
   };
 
   return (
-    <form {...rest} action={handleAction}>
+    <form {...rest} action={handleAction} data-permission={permission}>
+      <FormPermission.Provider value={permission ?? null}>
       {children}
       <ActionFormPending />
       {result && !result.ok ? (
@@ -187,6 +211,7 @@ export function ActionForm({
           ) : null}
         </p>
       ) : null}
+      </FormPermission.Provider>
     </form>
   );
 }
@@ -196,7 +221,7 @@ export function ActionForm({
 
 export function KpiCreateForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm
+    <ActionForm permission="improvement:manage"
       action={createKpiAction}
       successMessage="KPI saved. Registry revalidated; event feed updated (kpi.upserted)."
       className={className}
@@ -215,7 +240,7 @@ export function DecisionResolveForm({
   className?: string;
 }) {
   return (
-    <ActionForm
+    <ActionForm permission="decision:approve"
       action={resolveDecisionAction}
       successMessage="Decision recorded. Inbox revalidated."
       className={className}
@@ -228,7 +253,7 @@ export function DecisionResolveForm({
 
 export function CommandSubmitForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm
+    <ActionForm permission="budget:manage"
       action={submitCommandAction}
       successMessage="Command submitted. Task/plan created + planning job leased (budget gated)."
       className={className}
@@ -241,7 +266,7 @@ export function CommandSubmitForm({ children, className }: { children: ReactNode
 
 export function ProviderCreateForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm
+    <ActionForm permission="cloud_account:manage"
       action={createProviderAccountAction}
       successMessage="Provider account registered. Use Test/Sync for inventory + receipts."
       className={className}
@@ -263,7 +288,7 @@ export function ProviderEasyConnectForm({ children, className }: { children: Rea
     setLocalError(null);
     startTransition(async () => {
       try {
-        const result = await callAction(easyConnectProviderAction)(formData);
+        const result = await callAction(easyConnectProviderAction, undefined, "cloud_account:manage")(formData);
         formRef.current?.reset();
         setSecretRefId(result.secret_ref_id);
         showToast("success", pasteConnectSuccessCopy(result.secret_ref_id));
@@ -315,7 +340,7 @@ export function ProviderEasyConnectForm({ children, className }: { children: Rea
 
 export function BudgetReserveQueueForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm
+    <ActionForm permission="comms:send"
       action={queueOutboxMessageAction}
       successMessage="Outbox queued with active budget reservation. Delivery worker will process."
       className={className}
@@ -329,7 +354,7 @@ export function BudgetReserveQueueForm({ children, className }: { children: Reac
 // Additional for >5 coverage (provider test/sync, self-imp canary/rollout, changeset apply)
 export function ProviderTestForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm
+    <ActionForm permission="cloud_account:manage"
       action={testProviderAccountAction}
       successMessage="Provider test executed. Status and receipt recorded."
       className={className}
@@ -342,7 +367,7 @@ export function ProviderTestForm({ children, className }: { children: ReactNode;
 
 export function ProviderSyncForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm
+    <ActionForm permission="cloud_account:manage"
       action={syncProviderResourcesAction}
       successMessage="Provider sync started. Inventory + costs reconciled with receipts."
       className={className}
@@ -355,7 +380,7 @@ export function ProviderSyncForm({ children, className }: { children: ReactNode;
 
 export function ChangeSetApplyForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm
+    <ActionForm permission="infra:provision"
       action={applyChangeSetAction}
       successMessage="ChangeSet applied via ResourceReceipt. Provider state updated."
       className={className}

@@ -11,6 +11,7 @@
 import { mapActivityLog } from "../../lib/activity-log";
 import { parseToolCalls, type ToolCalls } from "../../lib/agents-live-board";
 import { stepLogSentence } from "../workflows/step-run";
+import { declareAction } from "../../lib/identity/guarded-action";
 
 export type Posted<T = Record<string, unknown>> = { ok: boolean; data?: T; error?: string; status?: number };
 
@@ -126,3 +127,15 @@ export async function fetchCalls(projectId: string, runId: string): Promise<Mode
     return null;
   }
 }
+
+// THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
+// A declaration for the console to mirror — disabled with the reason when not held — never a
+// decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
+declareAction(stopBuild, "code_task:cancel");
+declareAction(steerBuild, "code_task:steer");
+declareAction(retryBuild, "code_task:retry");
+declareAction(resolveComment, "code_task:steer");
+declareAction(stopPreview, "preview:manage");
+declareAction(fetchTools, "code_task:read");
+declareAction(fetchBuildLog, "code_task:read");
+declareAction(fetchCalls, "code_task:read");

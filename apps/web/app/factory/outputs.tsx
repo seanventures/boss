@@ -427,7 +427,7 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
     const form = new FormData();
     form.set("run_id", c.run.id);
     form.set("actor", actor);
-    const res = await callAction(startPreviewAction)(null, form);
+    const res = await callAction(startPreviewAction, undefined, "preview:manage")(null, form);
     setBusy(false);
     // A CLIENT TIMEOUT IS NOT A VERDICT: the preview builds on after the console stops waiting.
     if (res?.error && /did not answer within/i.test(res.error)) { notifyChanged("previews"); onRefresh(); return; }

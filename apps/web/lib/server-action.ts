@@ -1,4 +1,5 @@
 import { apiWrite, type WriteInit } from "./api-write";
+import { identityRefusal, identitySentence, type IdentityRefusalInfo } from "./identity/guarded-action";
 import {
   describeActionError,
   failResult,
@@ -25,6 +26,11 @@ export async function act(
     return okResult(success);
   } catch (error) {
     if (isNextControlFlow(error)) throw error;
+    // AN IDENTITY REFUSAL IS SOMETHING THE PAGE CAN ACT ON (lib/identity/guarded-action.ts):
+    // step-up opens the sheet and retries; a missing permission is named. Short, not logged as
+    // a failure of the action.
+    const identity = error instanceof ApiRefusal ? error.identity : identityOfThrown(error);
+    if (identity) return failResult(identitySentence(identity), { data: { identity } });
     // Logged on the server as well: the operator sees the sentence, the log keeps the stack.
     console.error("server action failed", error);
     return failResult(describeActionError(error));
@@ -43,23 +49,35 @@ export function isNextControlFlow(error: unknown): boolean {
     && /^(NEXT_|DYNAMIC_SERVER_USAGE|BAILOUT_TO_CLIENT_SIDE_RENDERING)/.test(digest);
 }
 
+/** The typed client's BossApiError (status + parsed body) as an identity refusal, if it is one. */
+function identityOfThrown(error: unknown): IdentityRefusalInfo | null {
+  if (!error || typeof error !== "object") return null;
+  const e = error as { status?: unknown; body?: unknown };
+  return typeof e.status === "number" ? identityRefusal(e.status, e.body) : null;
+}
+
 /** An HTTP refusal, carrying the status so the failure can say what to do about it. */
 export class ApiRefusal extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** Set when the API refused for identity (401 step_up_required, 403 forbidden + permission). */
+  identity: IdentityRefusalInfo | null;
+  constructor(message: string, status: number, identity: IdentityRefusalInfo | null = null) {
     super(message);
     this.name = "ApiRefusal";
     this.status = status;
+    this.identity = identity;
   }
 }
 
 /** The API's own explanation from a refused response, never just "HTTP 409". */
 export async function refusalFrom(response: Response): Promise<ApiRefusal> {
   let said = "";
+  let identity: IdentityRefusalInfo | null = null;
   try {
     const raw = await response.text();
     try {
       const body = JSON.parse(raw) as { detail?: unknown; error?: unknown; message?: unknown };
+      identity = identityRefusal(response.status, body);
       const detail = body.detail ?? body.error ?? body.message;
       if (typeof detail === "string") said = detail;
       else if (detail && typeof detail === "object") {
@@ -74,6 +92,7 @@ export async function refusalFrom(response: Response): Promise<ApiRefusal> {
   } catch {
     /* an unreadable body still has a status */
   }
+  if (identity) return new ApiRefusal(identitySentence(identity), response.status, identity);
   return new ApiRefusal(said || `BOSS's API refused the request (HTTP ${response.status})`,
                         response.status);
 }
