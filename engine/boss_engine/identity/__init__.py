@@ -21,6 +21,7 @@ from .declarations import (
     permit,
     public,
 )
+from .object_rules import Confine, Production
 from .permissions_gen import CATALOGUE_FINGERPRINT, CATALOGUE_VERSION, P, Permission
 from .principal import (
     ActorChain,
@@ -39,7 +40,7 @@ from .principal import (
 from .scope import ResolvedScope, Scope, ScopeKind, ScopeNotFound, ScopeSpec
 
 __all__ = [
-    "Access", "ActorChain", "AgentInstance", "AuthContext", "AuthMethod", "Authenticated",
+    "Access", "ActorChain", "Confine", "Production", "AgentInstance", "AuthContext", "AuthMethod", "Authenticated",
     "CATALOGUE_FINGERPRINT", "CATALOGUE_VERSION", "CatalogueError", "CredentialRef", "Decision",
     "DenyReason", "EffectivePermissions", "P", "Permission", "PermissionMeta", "Permit",
     "Principal", "PrincipalKind", "PrincipalStatus", "Public", "PublicReason", "ResolvedScope",

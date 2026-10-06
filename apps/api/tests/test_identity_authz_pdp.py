@@ -277,13 +277,17 @@ def test_the_epoch_makes_a_binding_change_visible_on_the_next_decision(world):
     binding = world.bind(op, "operator")
     a = at(world, world.project_a)
     assert authz.check(world.ctx(op), "code_task:create", a).allowed   # cached now
+    cached_at = authz._epoch.read(world.org)                            # noqa: SLF001
     with world.engine.begin() as db:
         db.execute(text("DELETE FROM identity_role_bindings WHERE id = :b"), {"b": binding})
-        before = authz.bump_epoch(world.org, db=db, reason="test.demote")
+        bumped = authz.bump_epoch(world.org, db=db, reason="test.demote")
     assert not authz.check(world.ctx(op), "code_task:create", a).allowed
+    # The statement-level change-feed triggers (S5) bump the epoch too, so it is not an exact
+    # count: what matters is that it moved past the cached decision's epoch.
     with world.engine.begin() as db:
-        assert db.execute(text("SELECT epoch FROM identity_settings WHERE org_id = :o"),
-                          {"o": world.org}).scalar() == before
+        now = db.execute(text("SELECT epoch FROM identity_settings WHERE org_id = :o"),
+                         {"o": world.org}).scalar()
+    assert now >= bumped > cached_at
 
 
 def test_an_expired_binding_grants_nothing(world):
@@ -354,18 +358,16 @@ def test_legacy_bridges_are_step_up_exempt_exactly_as_s5_says(world, monkeypatch
 
 
 def test_agent_runs_are_decided_by_s3_and_people_are_not(world, monkeypatch):
-    import sys
-    import types
+    from boss_engine.identity import tokens
 
     calls = []
-    fake = types.ModuleType("boss_engine.identity.tokens")
 
     def decide(claims, permission, scope, *, db):
         calls.append((claims.jti, permission))
         return authz.Decision.deny(permission, scope, DenyReason.MISSING_PERMISSION, ("ceiling:agt_fake",))
 
-    fake.decide = decide
-    monkeypatch.setitem(sys.modules, "boss_engine.identity.tokens", fake)
+    # authz delegates to the attribute it looks up on S3's (real, imported) module
+    monkeypatch.setattr(tokens, "decide", decide)
     alice = world.person("alice")
     world.bind(alice, "operator")
     forge = world.agent("forge", ceiling=("code_task:read",))

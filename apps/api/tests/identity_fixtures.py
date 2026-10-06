@@ -116,6 +116,21 @@ class IdentityWorld:
             authz.bump_epoch(self.org, db=db, reason="test.bind")
         return binding_id
 
+    def custom_role(self, key: str, permissions: tuple[str, ...] | list[str]) -> str:
+        """A custom access role in this org holding exactly `permissions` (test setup: no grant
+        ceiling). Returns its id, which `bind` takes as the role."""
+        role_id = _id("arl")
+        with self.engine.begin() as db:
+            db.execute(text(
+                "INSERT INTO identity_access_roles (id, org_id, key, name, builtin, bindable_scopes) "
+                "VALUES (:id, :o, :k, :k, false, ARRAY['org','project'])"),
+                {"id": role_id, "o": self.org, "k": f"{key}-{role_id[-6:]}"})
+            for permission in permissions:
+                db.execute(text("INSERT INTO identity_access_role_permissions (role_id, permission_key) "
+                                "VALUES (:r, :p)"), {"r": role_id, "p": permission})
+            authz.bump_epoch(self.org, db=db, reason="test.custom_role")
+        return role_id
+
     def group(self, key: str, *, members: tuple[Principal, ...] = (), source: str = "manual") -> str:
         gid = _id("grp")
         with self.engine.begin() as db:
@@ -172,8 +187,11 @@ class IdentityWorld:
                 "INSERT INTO identity_delegation_grants (id, org_id, user_principal_id, agent_ids, "
                 "project_ids, status, allow_subdelegation, allowed_children) VALUES "
                 "(:g, :o, :u, :a, :p, :s, :sub, :ch)"),
+                # A grant always names its projects (grants.create refuses none): a run with no
+                # task project is granted every project of this world.
                 {"g": grant_id, "o": self.org, "u": person.id, "a": [a.id for a in chain],
-                 "p": [project_id] if project_id else [], "s": grant_status,
+                 "p": [project_id] if project_id else [self.project_a, self.project_b],
+                 "s": grant_status,
                  "sub": allow_subdelegation, "ch": list(allowed_children)})
             for key in grant_permissions:
                 db.execute(text("INSERT INTO identity_delegation_grant_permissions (grant_id, permission_key) "

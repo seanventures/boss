@@ -388,7 +388,7 @@ def _invoke_tool(
     # registry.invoke runs must run here too, or a workflow would be a way around it.
     from ..tools.registry import CURRENT_TOOL_AUTH, identity_gate
 
-    refused = identity_gate(spec, CURRENT_TOOL_AUTH.get(), project_id)
+    refused = identity_gate(spec, CURRENT_TOOL_AUTH.get(), project_id, args)
     if refused is not None:
         return refused
     # Inside a delegated run, the step's tool is decided against the run token (IDENTITY.md §7.4);

@@ -238,7 +238,7 @@ def list_grants(
 
 
 @router.post("/keys/{key_entry_id}/lease", status_code=201)
-@permit(P.SECRET_LEASE)
+@permit(P.SECRET_LEASE, scope=Scope.project(body="project_id"))
 def lease_key(key_entry_id: str, payload: LeaseRequest):
     settings = get_settings()
     try:
@@ -265,7 +265,7 @@ def lease_key(key_entry_id: str, payload: LeaseRequest):
 
 
 @router.post("/leases/{lease_id}/resolve")
-@permit(P.SECRET_LEASE)
+@permit(P.SECRET_LEASE, scope=Scope.project(body="project_id"))
 def resolve_lease(lease_id: str, payload: ResolveLeaseRequest):
     """Return secret material for an authorized active lease (counts against reveal limit)."""
     settings = get_settings()

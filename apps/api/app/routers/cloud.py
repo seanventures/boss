@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from ..identity_guard import writing_get  # noqa: E402  (identity int-b)
 from typing import Callable
 
 from fastapi import FastAPI, HTTPException
@@ -99,8 +100,8 @@ def register_community_cloud_routes(
             except CloudConnectAuthSessionStateError as error:
                 raise HTTPException(status_code=409, detail=str(error)) from error
 
-    @app.get("/v1/cloud/easy-connect/{session_id}")
-    @permit(P.CLOUD_ACCOUNT_MANAGE, scope=Scope.org())
+    @writing_get(app, "/v1/cloud/easy-connect/{session_id}")
+    @permit(P.CLOUD_ACCOUNT_MANAGE, scope=Scope.org(), writes_on_get=True)
     def poll_cloud_easy_connect(session_id: str, project_id: str, actor: str = "ceo") -> dict:
         """Poll Easy Connect session (device flow) until completed or expired."""
         with begin(engine) as connection:
