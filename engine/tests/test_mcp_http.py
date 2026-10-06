@@ -24,8 +24,7 @@ from boss_engine.tools.registry import ToolRegistry, ToolSpec  # noqa: E402
 def _client() -> TestClient:
     reg = ToolRegistry()
     reg.register(ToolSpec(
-        "read_x", "r", {"type": "object"}, lambda ctx, **k: {"n": 1}, kind="read"
-    ))
+        "read_x", "r", {"type": "object"}, lambda ctx, **k: {"n": 1}, kind="read", permission="system:read"))
     return TestClient(MCPServer(
         ctx=None, project_id="p", registry=reg, read_only=True
     ).asgi_app())
@@ -116,11 +115,9 @@ def test_http_cli_defaults_to_read_only():
 def test_http_read_only_server_hides_write_tools():
     reg = ToolRegistry()
     reg.register(ToolSpec(
-        "read_x", "r", {"type": "object"}, lambda ctx, **k: {"n": 1}, kind="read"
-    ))
+        "read_x", "r", {"type": "object"}, lambda ctx, **k: {"n": 1}, kind="read", permission="system:read"))
     reg.register(ToolSpec(
-        "write_x", "w", {"type": "object"}, lambda ctx, **k: {"done": True}, kind="write"
-    ))
+        "write_x", "w", {"type": "object"}, lambda ctx, **k: {"done": True}, kind="write", permission="system:read"))
     client = TestClient(
         MCPServer(ctx=None, project_id="p", registry=reg, read_only=True).asgi_app()
     )
@@ -138,8 +135,7 @@ def test_write_capable_http_requires_token_and_authenticates_every_rpc():
     reg = ToolRegistry()
     reg.register(ToolSpec(
         "write_x", "w", {"type": "object"},
-        lambda ctx, **k: {"done": True}, kind="write",
-    ))
+        lambda ctx, **k: {"done": True}, kind="write", permission="system:read"))
     with pytest.raises(ValueError, match="BOSS_MCP_HTTP_TOKEN"):
         MCPServer(ctx=None, project_id="p", registry=reg).asgi_app()
 
@@ -170,12 +166,10 @@ def _prepare_http_cli(monkeypatch):
     def build_registry():
         reg = ToolRegistry()
         reg.register(ToolSpec(
-            "read_x", "r", {"type": "object"}, lambda ctx, **k: {"n": 1}, kind="read",
-        ))
+            "read_x", "r", {"type": "object"}, lambda ctx, **k: {"n": 1}, kind="read", permission="system:read"))
         reg.register(ToolSpec(
             "write_x", "w", {"type": "object"},
-            lambda ctx, **k: {"done": True}, kind="write",
-        ))
+            lambda ctx, **k: {"done": True}, kind="write", permission="system:read"))
         return reg
 
     monkeypatch.setattr("boss_engine.mcp.server.build_default_registry", build_registry)

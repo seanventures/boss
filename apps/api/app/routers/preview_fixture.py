@@ -1,6 +1,7 @@
 """No-spend preview fixture so View HTML can be proven without a microVM."""
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -22,6 +23,7 @@ class PreviewFixtureRequest(BaseModel):
 
 
 @router.post("/v1/previews/fixture", status_code=201)
+@permit(P.PREVIEW_MANAGE, scope=Scope.project(body="project_id"))
 def start_preview_fixture(payload: PreviewFixtureRequest) -> dict[str, Any]:
     """Create a running fixture preview. Serves honest HTML at /web/. No sandbox."""
     settings = get_settings()

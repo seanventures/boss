@@ -9,6 +9,7 @@ Stream S2 owns this file.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -50,18 +51,21 @@ def build_observability_router(
         return etagged(request, response, jsonable_encoder(body))
 
     @router.get("/v1/observability/apps")
+    @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
     def obs_apps(project_id: str, request: Request, response: Response, win: str = "24h",
                  cells: Optional[int] = None):
         return _read(project_id, request, response, lambda c: obs_view.pulse(
             c, settings(), project_id.strip(), win=obs_view.window_of(win), cells=cells))
 
     @router.get("/v1/observability/apps/{target_id}")
+    @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
     def obs_app(target_id: str, project_id: str, request: Request, response: Response,
                 win: str = "24h"):
         return _read(project_id, request, response, lambda c: obs_view.app_detail(
             c, settings(), project_id.strip(), target_id, win=obs_view.window_of(win)))
 
     @router.get("/v1/observability/models")
+    @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
     def obs_models(project_id: str, request: Request, response: Response, win: str = "24h",
                    group: str = "model", metric: str = "tokens"):
         return _read(project_id, request, response, lambda c: obs_view.models(
@@ -69,16 +73,19 @@ def build_observability_router(
             metric=metric))
 
     @router.get("/v1/observability/system")
+    @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
     def obs_system(project_id: str, request: Request, response: Response):
         return _read(project_id, request, response, lambda c: obs_view.system(
             c, settings(), project_id.strip()))
 
     @router.get("/v1/observability/sources")
+    @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
     def obs_sources(project_id: str, request: Request, response: Response, fresh: bool = False):
         return _read(project_id, request, response, lambda c: obs_view.sources(
             c, settings(), project_id.strip(), fresh=fresh))
 
     @router.post("/v1/observability/apps/{target_id}/probe")
+    @permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(body="project_id"))
     def obs_probe_app(target_id: str, payload: ObsBody):
         """`Probe now` in the app drawer: probes ONLY this app (operator decision §11.5), not
         the project sweep, records the sample and answers {word, tone, checked_at}. Gated like

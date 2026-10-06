@@ -7,6 +7,7 @@ Prefix: /v1/concurrency
 
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -26,6 +27,7 @@ def _service() -> ConcurrencyGovernanceService:
 
 
 @router.get("/policy")
+@permit(P.POLICY_READ, scope=Scope.org())
 def get_policy() -> dict[str, Any]:
     """Documented concurrency / backpressure / rate-limit policy knobs."""
     svc = _service()
@@ -53,6 +55,7 @@ def get_policy() -> dict[str, Any]:
 
 
 @router.get("/status")
+@permit(P.POLICY_READ, scope=Scope.project(query="project_id"))
 def get_status(
     project_id: str = Query(..., description="Project scope for queue/lease metrics"),
     include_sandbox_host: bool = Query(

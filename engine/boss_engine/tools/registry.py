@@ -18,6 +18,7 @@ require confirmation before invoking them.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Optional
 
@@ -66,20 +67,23 @@ class ToolSpec:
     #: API-backed tools use the API's durable control plane. Native engine
     #: writes still require the local Postgres workspace.
     requires_durable_workspace: bool = True
-    #: THE CATALOGUE PERMISSION THIS TOOL NEEDS (docs/product/IDENTITY.md §6.4). Checked against
-    #: packages/identity/catalogue.yaml when the spec is built, so a misspelt key fails at import.
-    #: Optional only until stream S2 declares every tool (tests/identity/undeclared_mcp_tools.txt
-    #: is the shrinking list); then it becomes required.
+    #: THE CATALOGUE PERMISSION THIS TOOL NEEDS (docs/product/IDENTITY.md §6.4). Required: a spec
+    #: with neither a permission nor `inherits_route_permission` cannot be built, and the key is
+    #: checked against packages/identity/catalogue.yaml then, so a misspelt key fails at import.
+    #: `invoke` checks it with authz.check before the handler runs.
     permission: Optional[str] = None
     #: True for the API-surface tools: each one calls an API route, whose own declaration is
     #: checked when the call is dispatched, so the tool cannot drift from the route.
     inherits_route_permission: bool = False
 
     def __post_init__(self) -> None:
-        if self.permission is not None:
-            from ..identity.catalogue import require_known
+        from ..identity.catalogue import CatalogueError, require_known
 
+        if self.permission is not None:
             require_known(self.permission)
+        elif not self.inherits_route_permission:
+            raise CatalogueError(f"tool {self.name!r} declares no permission: pass permission= "
+                                 "(a catalogue key) or inherits_route_permission=True")
 
     @property
     def self_executable(self) -> bool:
@@ -212,6 +216,7 @@ class ToolRegistry:
         actor: str,
         args: dict,
         operator_confirmed: bool = False,
+        auth: Any = None,
     ) -> dict:
         spec = self.get(name)
         if (
@@ -266,11 +271,13 @@ class ToolRegistry:
                     + " — so it runs only when an operator clicks it."
                 ),
             }
-        # IDENTITY, PHASE 0: record a call to an undeclared tool (shadow). Stream S2 replaces this
-        # with authz.check(ctx, spec.permission, scope) before the handler runs (IDENTITY.md §6.4).
-        from ..identity.enforcement import shadow_tool_call
-
-        shadow_tool_call(name, spec.permission, inherits_route=spec.inherits_route_permission)
+        # IDENTITY (IDENTITY.md §6.4): the caller must hold the tool's permission at the
+        # session's project before the handler runs. An agent run is checked against its run
+        # token, so a non-delegable permission is always refused to an agent.
+        refused = identity_gate(spec, auth if auth is not None else CURRENT_TOOL_AUTH.get(),
+                                project_id)
+        if refused is not None:
+            return refused
         try:
             result = spec.handler(ctx, project_id=project_id, actor=actor, args=safe_args)
         except ToolError:
@@ -282,6 +289,71 @@ class ToolRegistry:
         result.setdefault("ok", True)
         result.setdefault("tool", name)
         return result
+
+
+#: The verified identity of whoever is calling tools on this thread (an AuthContext). Set by the
+#: transport that authenticated the caller (the MCP server, the API's agent endpoints, the run
+#: supervisor with a run token); `invoke(auth=...)` overrides it for one call. Never set from a
+#: tool argument.
+CURRENT_TOOL_AUTH: ContextVar[Any] = ContextVar("boss_tool_auth", default=None)
+
+#: The router key tool calls use for BOSS_AUTHZ_MODE / BOSS_AUTHZ_ROUTER_MODES ("mcp=enforce").
+TOOL_ROUTER_KEY = "mcp"
+
+
+def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str]) -> Optional[dict]:
+    """Decide one tool call (IDENTITY.md §6.4). Returns None to proceed, or the refusal result.
+
+    Mode follows the API (off | shadow | enforce, per-router key `mcp`): shadow records what it
+    would refuse and refuses nothing; enforce refuses, and refuses a call it cannot evaluate (no
+    verified identity on this call path) — fail closed. API-surface tools are re-checked by the
+    route they call, so they pass here."""
+    if getattr(spec, "inherits_route_permission", False):
+        return None
+    from ..config import get_settings
+    from ..identity import authz
+    from ..identity.authz import DenyReason
+    from ..identity.enforcement import LEDGER, AuthzMode, Outcome, mode_for
+    from ..identity.permissions_gen import PERMISSION_META
+    from ..identity.scope import ResolvedScope
+
+    settings = get_settings()
+    mode = mode_for(TOOL_ROUTER_KEY, global_mode=settings.authz_mode,
+                    router_modes=settings.authz_router_modes)
+    if mode == AuthzMode.OFF:
+        return None
+    permission = str(getattr(spec, "permission", None) or "")
+    if permission not in PERMISSION_META:
+        outcome = Outcome(False, DenyReason.UNDECLARED_ROUTE, permission, "undeclared",
+                          detail="tool declares no catalogue permission")
+    elif auth is None:
+        outcome = Outcome(False, DenyReason.NOT_EVALUATED, permission, f"tool:{permission}",
+                          detail="no verified identity on this tool call")
+    else:
+        meta = PERMISSION_META[permission]
+        org = auth.principal.org_id
+        scope = (ResolvedScope.org_level(org) if meta.org_only or meta.system_only or not project_id
+                 else ResolvedScope.in_project(org, str(project_id)))
+        try:
+            decision = authz.check(auth, permission, scope)
+        except Exception as exc:  # noqa: BLE001 — a decision that cannot be made is not an allow
+            outcome = Outcome(False, DenyReason.NOT_EVALUATED, permission, f"tool:{permission}",
+                              detail=f"authz error: {type(exc).__name__}")
+        else:
+            if decision.allowed:
+                return None
+            outcome = Outcome(False, decision.reason, permission, f"tool:{permission}",
+                              auth.principal.kind.value, decision=decision)
+    LEDGER.record(router_key=TOOL_ROUTER_KEY, method="TOOL", path_template=str(getattr(spec, "name", "?")),
+                  outcome=outcome, mode=mode)
+    if mode != AuthzMode.ENFORCE:
+        return None
+    body = outcome.error_body()
+    return {"ok": False, "tool": getattr(spec, "name", "?"), "status": body.get("error", "forbidden"),
+            "error": body.get("error", "forbidden"), "permission": permission,
+            "message": (f"'{getattr(spec, 'name', '?')}' needs {permission or 'a declared permission'}"
+                        + (" (agents can never hold it)" if outcome.reason == DenyReason.NOT_DELEGABLE
+                           else "") + ".")}
 
 
 def _empty_object_schema() -> dict:

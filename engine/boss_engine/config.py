@@ -425,8 +425,9 @@ class Settings(BaseSettings):
     authz_mode: str = Field(default="shadow", alias="BOSS_AUTHZ_MODE")
     # Per-router override during the rollout: "setup=enforce,github=shadow".
     authz_router_modes: str = Field(default="", alias="BOSS_AUTHZ_ROUTER_MODES")
-    # warn | fail. Undeclared routes at boot: warn (default in shadow) or refuse to start.
-    authz_coverage: str = Field(default="", alias="BOSS_AUTHZ_COVERAGE")
+    # warn | fail. An undeclared route at boot refuses to start (fail, the default since every
+    # route is declared: IDENTITY_BUILD.md §2.6, stream S2); `warn` only lists it.
+    authz_coverage: str = Field(default="fail", alias="BOSS_AUTHZ_COVERAGE")
     bootstrap_seed_api_enabled: bool = Field(
         default=False,
         alias="BOSS_BOOTSTRAP_SEED_API_ENABLED",

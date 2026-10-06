@@ -506,13 +506,11 @@ def test_installed_api_container_cannot_use_native_database_authority_in_api_mod
     registry.register(ToolSpec(
         "native_write", "native DB write", {"type": "object", "properties": {}},
         lambda ctx, *, project_id, actor, args: (called.append(project_id) or {"ok": True}),
-        kind="write", reversibility="safe",
-    ))
+        kind="write", reversibility="safe", permission="system:read"))
     registry.register(ToolSpec(
         "native_read", "native DB read", {"type": "object", "properties": {}},
         lambda ctx, *, project_id, actor, args: (called.append(project_id) or {"ok": True}),
-        kind="read",
-    ))
+        kind="read", permission="system:read"))
     ctx = type("Context", (), {"durable_workspace_configured": True})()
     api_mode = MCPServer(ctx, project_id="alpha", registry=registry, api_surface=surface)
     assert "native_write" not in {tool["name"] for tool in api_mode._tools()}

@@ -15,6 +15,7 @@ token policies, FinOps), unchanged but for an optional If-Match.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 import hashlib
 import json
 from typing import Any, Optional
@@ -45,6 +46,7 @@ def _etagged(request: Request, body: Any) -> Response:
 
 
 @router.get("/v1/govern")
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def get_govern(request: Request, project_id: str = Query(...)) -> Response:
     """The Limits board in one read. ETag'd: the console polls it every 15s while visible."""
     from boss_engine.services import govern_view
@@ -57,6 +59,7 @@ def get_govern(request: Request, project_id: str = Query(...)) -> Response:
 
 
 @router.get("/v1/govern/spend")
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def get_govern_spend(request: Request, project_id: str = Query(...),
                      window: str = Query("7d", pattern="^(24h|7d|30d)$")) -> Response:
     from boss_engine.services import govern_view
@@ -72,6 +75,7 @@ def get_govern_spend(request: Request, project_id: str = Query(...),
 
 
 @router.get("/v1/govern/envelopes")
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def get_govern_envelopes(request: Request, project_id: str = Query(...)) -> Response:
     from boss_engine.services import govern_view
 
@@ -83,6 +87,7 @@ def get_govern_envelopes(request: Request, project_id: str = Query(...)) -> Resp
 
 
 @router.get("/v1/budget/daily")
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def get_budget_daily(project_id: str = Query(...),
                      days: int = Query(30, ge=1, le=90)) -> dict[str, Any]:
     from boss_engine.services import govern_view
@@ -101,6 +106,7 @@ class CapPreviewBody(BaseModel):
 
 
 @router.post("/v1/budget/cap/preview")
+@permit(P.BUDGET_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def post_cap_preview(body: CapPreviewBody) -> dict[str, Any]:
     """Replays the last 30 days of real spend against a proposed cap. Writes nothing."""
     from boss_engine.services import govern_view
@@ -121,6 +127,7 @@ class IntensityPreviewBody(BaseModel):
 
 
 @router.post("/v1/budget/intensity/preview")
+@permit(P.BUDGET_READ, scope=Scope.org(), readonly_post=True)
 def post_intensity_preview(body: IntensityPreviewBody) -> dict[str, Any]:
     """Exactly what `set_intensity` would write for this value (the same function), and — when
     a project is named — how many of its last 30 days the resulting daily cap would have

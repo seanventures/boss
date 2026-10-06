@@ -14,6 +14,7 @@ Prefix: ``/v1/release-planning``
 
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -58,6 +59,7 @@ class LinkIssueRequest(ActorBody):
 
 
 @router.get("/status")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def get_status(project_id: str = Query(...)) -> dict[str, Any]:
     """Mission Control status snapshot: built / todo / in_progress / blocked."""
     with begin(_engine) as connection:
@@ -65,6 +67,7 @@ def get_status(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @router.get("/board")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def get_board(project_id: str = Query(...)) -> dict[str, Any]:
     """Delivery board columns: built, building, planned, blocked."""
     with begin(_engine) as connection:
@@ -72,6 +75,7 @@ def get_board(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @router.post("/releases", status_code=201)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_release(payload: CreateReleaseRequest) -> dict[str, Any]:
     with begin(_engine) as connection:
         _require_actor(
@@ -93,6 +97,7 @@ def create_release(payload: CreateReleaseRequest) -> dict[str, Any]:
 
 
 @router.get("/releases")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def list_releases(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(_engine) as connection:
         items = _service.list_releases(connection, project_id)
@@ -104,6 +109,7 @@ def list_releases(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @router.get("/releases/{release_id}")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def get_release(
     release_id: str, project_id: str = Query(...)
 ) -> dict[str, Any]:
@@ -115,6 +121,7 @@ def get_release(
 
 
 @router.post("/releases/{release_id}/link-issue")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def link_issue(release_id: str, payload: LinkIssueRequest) -> dict[str, Any]:
     with begin(_engine) as connection:
         _require_actor(
@@ -137,6 +144,7 @@ def link_issue(release_id: str, payload: LinkIssueRequest) -> dict[str, Any]:
 
 
 @router.post("/sync-from-features")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def sync_from_features(payload: ActorBody) -> dict[str, Any]:
     """Pull feature catalog entries into the durable board."""
     with begin(_engine) as connection:
@@ -149,6 +157,7 @@ def sync_from_features(payload: ActorBody) -> dict[str, Any]:
 
 
 @router.post("/sync-from-trackers")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def sync_from_trackers(payload: ActorBody) -> dict[str, Any]:
     """Best-effort list from work tracker bindings (always soft-success)."""
     with begin(_engine) as connection:

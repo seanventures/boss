@@ -5,6 +5,7 @@ Missing incidents 404. Never invents RCA. Does not resolve the incident. Not GA.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -30,6 +31,7 @@ def _require_actor(connection, project_id: str, actor: str) -> None:
 
 
 @router.post("/v1/reliability/incidents/{incident_id}/postmortem")
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def create_incident_postmortem(incident_id: str, payload: PostmortemRequest) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         _require_actor(connection, payload.project_id, payload.actor)
@@ -40,6 +42,7 @@ def create_incident_postmortem(incident_id: str, payload: PostmortemRequest) -> 
 
 
 @router.get("/v1/reliability/incidents/{incident_id}/postmortem")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def read_incident_postmortem(
     incident_id: str,
     project_id: str = Query(...),

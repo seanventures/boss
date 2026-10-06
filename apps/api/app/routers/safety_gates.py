@@ -9,6 +9,7 @@ Prefix: /v1/safety
 
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -49,6 +50,7 @@ class SimulateRequest(BaseModel):
 
 
 @router.get("/branch-protection/checklist")
+@permit(P.POLICY_READ, scope=Scope.org())
 def get_checklist() -> dict[str, Any]:
     return {
         "required_checks": REQUIRED_CHECKS,
@@ -61,6 +63,7 @@ def get_checklist() -> dict[str, Any]:
 
 
 @router.get("/branch-protection")
+@permit(P.POLICY_READ, scope=Scope.org())
 def get_branch_protection(
     owner: Optional[str] = Query(default=None),
     repo: Optional[str] = Query(default=None),
@@ -76,6 +79,7 @@ def get_branch_protection(
 
 
 @router.post("/branch-protection/verify")
+@permit(P.POLICY_READ, scope=Scope.org(), readonly_post=True)
 def post_verify(payload: VerifyRequest) -> dict[str, Any]:
     return _svc().verify(
         owner=payload.owner,
@@ -86,6 +90,7 @@ def post_verify(payload: VerifyRequest) -> dict[str, Any]:
 
 
 @router.post("/branch-protection/simulate")
+@permit(P.POLICY_MANAGE, scope=Scope.org())
 def post_simulate(payload: SimulateRequest) -> dict[str, Any]:
     """Store a simulated checklist. Fail closed: live_demo_ready only if all required pass."""
     target = _svc().default_target()

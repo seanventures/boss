@@ -10,6 +10,8 @@ receives (services/improve_collector.py). Every other route is a normal project 
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from apps.api.app import identity_verifiers as _identity_verifiers  # noqa: E402  (identity S2)
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -207,6 +209,7 @@ def build_improve_router(
 
     # -------------------------------------------------------------- scorecards
     @router.get("/v1/scorecards")
+    @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
     def get_scorecards(project_id: str, group: str = "role", win: str = "30d",
                        kind: str = "build") -> dict:
         pid = _reader(project_id)
@@ -218,6 +221,7 @@ def build_improve_router(
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.post("/v1/scorecards/backfill")
+    @permit(P.SYSTEM_OPERATE, scope=Scope.org())
     def backfill_scorecards(payload: Body) -> dict:
         """Build scorecards for history now (the tick also does it, a batch an hour)."""
         pid = _reader(payload.project_id)
@@ -234,6 +238,7 @@ def build_improve_router(
 
     # -------------------------------------------------------------- experiments
     @router.get("/v1/experiments")
+    @permit(P.IMPROVEMENT_READ, scope=Scope.project(query="project_id"))
     def list_experiments(project_id: str) -> dict:
         pid = _reader(project_id)
         with begin(engine) as c:
@@ -241,6 +246,7 @@ def build_improve_router(
             return experiments.list_all(c, pid)
 
     @router.post("/v1/experiments", status_code=201)
+    @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
     def create_experiment(payload: ExperimentBody) -> dict:
         pid = _reader(payload.project_id)
         with begin(engine) as c:
@@ -256,6 +262,7 @@ def build_improve_router(
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.post("/v1/experiments/{experiment_id}/stop")
+    @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
     def stop_experiment(experiment_id: str, payload: Body) -> dict:
         pid = _reader(payload.project_id)
         with begin(engine) as c:
@@ -266,6 +273,7 @@ def build_improve_router(
                 raise HTTPException(status_code=404, detail=str(error)) from error
 
     @router.post("/v1/experiments/{experiment_id}/promote")
+    @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
     def promote_experiment(experiment_id: str, payload: PromoteBody) -> dict:
         pid = _reader(payload.project_id)
         with begin(engine) as c:
@@ -289,6 +297,7 @@ def build_improve_router(
         return who
 
     @router.post("/v1/feedback")
+    @permit(P.FEEDBACK_SUBMIT, scope=Scope.project(body="project_id"))
     def give_feedback(payload: FeedbackBody) -> dict:
         pid = _reader(payload.project_id)
         with begin(engine) as c:
@@ -306,6 +315,7 @@ def build_improve_router(
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.get("/v1/feedback/prompts")
+    @permit(P.FEEDBACK_SUBMIT, scope=Scope.project(query="project_id"))
     def feedback_prompts(project_id: str, actor: Optional[str] = None,
                          subjects: Optional[str] = None) -> dict:
         pid = _reader(project_id)
@@ -319,6 +329,7 @@ def build_improve_router(
             return person_feedback.prompts(c, actor=who, subjects=pairs)
 
     @router.post("/v1/feedback/prompts/shown")
+    @permit(P.FEEDBACK_SUBMIT, scope=Scope.project(body="project_id"))
     def feedback_prompt_shown(payload: ShownBody) -> dict:
         pid = _reader(payload.project_id)
         if payload.prompt not in ("rate", "checkin"):
@@ -329,6 +340,7 @@ def build_improve_router(
         return {"ok": True}
 
     @router.post("/v1/feedback/checkin")
+    @permit(P.FEEDBACK_SUBMIT, scope=Scope.project(body="project_id"))
     def feedback_checkin(payload: CheckinBody) -> dict:
         pid = _reader(payload.project_id)
         with begin(engine) as c:
@@ -344,6 +356,7 @@ def build_improve_router(
 
     # -------------------------------------------------------------- sharing (client)
     @router.get("/v1/telemetry/sharing")
+    @permit(P.TELEMETRY_READ, scope=Scope.org())
     def get_sharing(project_id: str) -> dict:
         pid = _reader(project_id)
         with begin(engine) as c:
@@ -351,6 +364,7 @@ def build_improve_router(
             return improve_boss.sharing_view(c, settings())
 
     @router.put("/v1/telemetry/sharing")
+    @permit(P.TELEMETRY_MANAGE, scope=Scope.org())
     def put_sharing(payload: SharingBody) -> dict:
         pid = _reader(payload.project_id)
         with begin(engine) as c:
@@ -375,6 +389,7 @@ def build_improve_router(
             return improve_boss.sharing_view(c, settings())
 
     @router.get("/v1/telemetry/preview")
+    @permit(P.TELEMETRY_READ, scope=Scope.org())
     def get_preview(project_id: str) -> dict:
         """The exact next payload. Reading it freezes it: this is the one that is sent."""
         pid = _reader(project_id)
@@ -383,6 +398,7 @@ def build_improve_router(
             return improve_boss.preview(c, settings())
 
     @router.get("/v1/telemetry/sends/{send_id}")
+    @permit(P.TELEMETRY_READ, scope=Scope.org())
     def get_send(send_id: str, project_id: str) -> dict:
         pid = _reader(project_id)
         with begin(engine) as c:
@@ -393,6 +409,7 @@ def build_improve_router(
         return {"id": send_id, "json": body}
 
     @router.get("/v1/telemetry/export")
+    @permit(P.TELEMETRY_SHARE, scope=Scope.org())
     def export_batch(project_id: str, actor: Optional[str] = None) -> Response:
         pid = _reader(project_id)
         with begin(engine) as c:
@@ -411,6 +428,7 @@ def build_improve_router(
             raise HTTPException(status_code=409, detail={"code": "sharing_blocked", "message": why})
 
     @router.post("/v1/telemetry/rotate")
+    @permit(P.TELEMETRY_MANAGE, scope=Scope.org())
     def rotate_install_id(payload: Body) -> dict:
         """A new id. The old id's data is deleted at the collector first when it can be; if not,
         the old id is kept to delete later, and the answer says so (`old`)."""
@@ -422,6 +440,7 @@ def build_improve_router(
             return {**improve_boss.sharing_view(c, settings()), "rotated": got}
 
     @router.post("/v1/telemetry/forget")
+    @permit(P.TELEMETRY_MANAGE, scope=Scope.org())
     def forget_sent(payload: Body) -> dict:
         """Delete what was sent: a signed request per id this install used, then a new id."""
         pid = _reader(payload.project_id)
@@ -431,6 +450,7 @@ def build_improve_router(
         return improve_boss.forget(engine, settings(), actor=actor, project_id=pid)
 
     @router.get("/v1/telemetry/share-bundle")
+    @permit(P.TELEMETRY_SHARE, scope=Scope.project(query="project_id"))
     def share_bundle(project_id: str, unit_kind: str, unit_id: str,
                      actor: Optional[str] = None) -> dict:
         pid = _reader(project_id)
@@ -444,6 +464,7 @@ def build_improve_router(
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.post("/v1/telemetry/share-run")
+    @permit(P.TELEMETRY_SHARE, scope=Scope.org())
     def share_run(payload: ShareRunBody) -> dict:
         """Send one edited, redacted run bundle, once (the person pressed Send)."""
         pid = _reader(payload.project_id)
@@ -457,6 +478,7 @@ def build_improve_router(
         return got
 
     @router.post("/v1/telemetry/tick")
+    @permit(P.WORKER_LEASE)
     def telemetry_tick(payload: Optional[dict] = None) -> dict:
         """The worker's loop: scorecard upkeep, collector retention, the daily send if due."""
         require_worker()
@@ -471,6 +493,7 @@ def build_improve_router(
             raise HTTPException(status_code=404, detail="Collector mode is off.")
 
     @router.get("/v1/telemetry/collector")
+    @permit(P.TELEMETRY_READ, scope=Scope.org())
     def collector_view(project_id: str) -> dict:
         pid = _reader(project_id)
         with begin(engine) as c:
@@ -479,6 +502,7 @@ def build_improve_router(
             return improve_collector.dashboard(c)
 
     @router.get("/v1/telemetry/collector.csv")
+    @permit(P.TELEMETRY_READ, scope=Scope.org())
     def collector_csv(project_id: str) -> PlainTextResponse:
         pid = _reader(project_id)
         with begin(engine) as c:
@@ -522,15 +546,18 @@ def build_improve_router(
             return JSONResponse(status_code=error.status, content={"detail": error.code})
 
     @router.post("/v1/telemetry/ingest")
+    @public(reason=PublicReason.COLLECTOR_SIGNED, verifier=_identity_verifiers.collector_ingest)
     async def telemetry_ingest(request: Request) -> JSONResponse:
         return await _machine(request, lambda c, p, ip: improve_collector.ingest(c, p, ip=ip))
 
     @router.post("/v1/telemetry/delete")
+    @public(reason=PublicReason.COLLECTOR_SIGNED, verifier=_identity_verifiers.collector_delete)
     async def telemetry_delete(request: Request) -> JSONResponse:
         return await _machine(request, lambda c, p, ip: improve_collector.delete(c, p),
                               cap=16 * 1024)
 
     @router.post("/v1/telemetry/share")
+    @public(reason=PublicReason.COLLECTOR_SIGNED, verifier=_identity_verifiers.collector_share)
     async def telemetry_share(request: Request) -> JSONResponse:
         return await _machine(request, lambda c, p, ip: improve_collector.share(c, p, ip=ip))
 

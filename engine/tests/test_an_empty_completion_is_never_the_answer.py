@@ -68,10 +68,10 @@ def _agent(scripted):
     reg.register(ToolSpec("get_code_task", "r", {"type": "object"},
                           lambda ctx, **k: {"ok": True, "status": "succeeded",
                                             "title": "Payment Processor"},
-                          kind="read"))
+                          kind="read", permission="system:read"))
     reg.register(ToolSpec("list_previews", "r", {"type": "object"},
                           lambda ctx, **k: {"ok": True, "previews": [{"id": "prev_1"}]},
-                          kind="read"))
+                          kind="read", permission="system:read"))
     agent = EngineAgent(ctx=object(), registry=reg)
     agent._adapter = ScriptedAdapter(scripted)
     return agent, agent._adapter

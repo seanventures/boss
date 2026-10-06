@@ -10,8 +10,8 @@ from boss_engine.tools.registry import ToolRegistry, ToolSpec
 
 def _stub_registry():
     reg = ToolRegistry()
-    reg.register(ToolSpec("read_x", "r", {"type": "object"}, lambda ctx, **k: {"n": 1}, kind="read"))
-    reg.register(ToolSpec("write_x", "w", {"type": "object"}, lambda ctx, **k: {"done": True}, kind="write"))
+    reg.register(ToolSpec("read_x", "r", {"type": "object"}, lambda ctx, **k: {"n": 1}, kind="read", permission="system:read"))
+    reg.register(ToolSpec("write_x", "w", {"type": "object"}, lambda ctx, **k: {"done": True}, kind="write", permission="system:read"))
     return reg
 
 
@@ -82,8 +82,7 @@ def test_tools_call_strips_project_id_override():
     reg.register(ToolSpec(
         "write_x", "w",
         {"type": "object", "properties": {"project_id": {"type": "string"}}},
-        _capture, kind="write",
-    ))
+        _capture, kind="write", permission="system:read"))
     srv = MCPServer(ctx=None, project_id="session-project", registry=reg)
     resp = srv.handle({
         "jsonrpc": "2.0", "id": 5, "method": "tools/call",
@@ -114,8 +113,7 @@ def test_mcp_never_accepts_internal_operator_authority():
             "_operator_confirmed": {"type": "boolean"},
             "_writes_allowed": {"type": "boolean"},
         }},
-        _dangerous, kind="write", reversibility="destroys_work",
-    ))
+        _dangerous, kind="write", reversibility="destroys_work", permission="system:read"))
     srv = MCPServer(ctx=None, project_id="session-project", registry=reg)
     schema = srv.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})[
         "result"
@@ -142,8 +140,7 @@ def test_mcp_strips_internal_write_license_from_safe_tool():
     reg.register(ToolSpec(
         "write_x", "write", {"type": "object"},
         lambda ctx, *, args, **kwargs: seen.append(args) or {"ok": True},
-        kind="write",
-    ))
+        kind="write", permission="system:read"))
     srv = MCPServer(ctx=None, project_id="p", registry=reg)
     srv.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                 "params": {"name": "write_x", "arguments": {

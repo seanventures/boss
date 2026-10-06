@@ -7,10 +7,10 @@
  *  - every permission literal in the console's identity code is a catalogue key;
  *  - can() answers "cannot" for anything it does not positively know.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AREA_IDS } from "../lib/area-ids";
-import { AREA_ACCESS } from "../lib/identity/areas";
+import { AREA_ACCESS, AREA_ACTIONS, IDENTITY_PAGE_ACCESS } from "../lib/identity/areas";
 import { can, snapshotFrom, type MePermissionsResponse, type MeResponse } from "../lib/identity/contract";
 import { isPermission, PERMISSIONS, PERMISSION_META, ROLE_PERMISSIONS } from "../lib/identity/permissions.gen";
 
@@ -69,17 +69,19 @@ describe("the /me contract", () => {
 });
 
 describe("console area coverage", () => {
-  const baseline = readFileSync("../../tests/identity/undeclared_console_areas.txt", "utf8")
-    .split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
-
-  it("every area is declared or on the shrinking list, and the list holds only undeclared areas", () => {
-    const undeclared = AREA_IDS.filter((id) => !(id in AREA_ACCESS)).slice().sort();
-    expect(undeclared).toEqual([...baseline].sort());
+  it("every area is declared (AREA_ACCESS is total; the shrinking list is gone)", () => {
+    const undeclared = AREA_IDS.filter((id) => !(id in AREA_ACCESS));
+    expect(undeclared).toEqual([]);
+    expect(existsSync("../../tests/identity/undeclared_console_areas.txt")).toBe(false);
   });
 
-  it("every declared area names a catalogue permission", () => {
-    for (const access of Object.values(AREA_ACCESS)) {
-      if (access && "permission" in access) expect(isPermission(access.permission)).toBe(true);
+  it("every declared area, identity page and action names a catalogue permission", () => {
+    const pages = [...Object.values(AREA_ACCESS), ...Object.values(IDENTITY_PAGE_ACCESS)];
+    for (const access of pages) {
+      if ("permission" in access) expect(isPermission(access.permission)).toBe(true);
+    }
+    for (const actions of Object.values(AREA_ACTIONS)) {
+      for (const permission of Object.values(actions)) expect(isPermission(permission)).toBe(true);
     }
   });
 });
