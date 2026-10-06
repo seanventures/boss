@@ -542,6 +542,28 @@ def get_credential(connection: ConnectionRef, purpose: CredentialPurpose, *, ctx
                                     expires_at=row.get("access_expires_at") or (_now() + timedelta(hours=1)),
                                     provider=row.get("provider") or "", item_id=row["id"],
                                     scopes=frozenset(row.get("granted_scopes") or ()))
+    if purpose == CredentialPurpose.TOTP_VERIFY:
+        # S1's sign-in/step-up check: the person's OWN authenticator secret, never a run's, never
+        # another person's (the owner is the verified subject, A54).
+        if ctx.run_token is not None or caller_owner is None or not connection.item_id:
+            raise VaultForbidden("totp_is_the_persons_own")
+        row = _load(db, connection.item_id)
+        if (row["kind"] != VaultItemKind.TOTP_SECRET.value or row.get("owner_principal_id") != caller_owner
+                or row["status"] != "active"):
+            raise VaultForbidden("not_your_connection")
+        return ShortLivedCredential(token=_open(db, row), expires_at=_now() + timedelta(seconds=60),
+                                    provider="totp", item_id=row["id"], scopes=frozenset())
+    if purpose == CredentialPurpose.SSO_CLIENT:
+        # An OIDC client secret, for the SSO token call identity makes itself: a system context of
+        # the provider's own org only — never a person, never an agent.
+        if ctx.principal.kind != PrincipalKind.SYSTEM or ctx.run_token is not None or not connection.item_id:
+            raise VaultForbidden("sso_client_is_systems")
+        row = _load(db, connection.item_id)
+        if (row["kind"] != VaultItemKind.OIDC_CLIENT_SECRET.value or row["org_id"] != ctx.principal.org_id
+                or row["status"] != "active"):
+            raise VaultForbidden("wrong_kind")
+        return ShortLivedCredential(token=_open(db, row), expires_at=_now() + timedelta(seconds=60),
+                                    provider=row.get("provider") or "", item_id=row["id"], scopes=frozenset())
     raise VaultForbidden("purpose_not_served_here")
 
 
