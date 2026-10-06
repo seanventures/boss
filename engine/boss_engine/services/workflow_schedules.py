@@ -336,7 +336,17 @@ def create(
     # Required inputs are part of that check: storing a schedule that cannot start is the
     # same failure, just deferred until the worker ticks.
     spec = _active_spec(connection, project_id, workflow_key)
-    input_data = require_schedule_inputs(spec, input_data)
+    from boss_engine.identity import consent as _consent
+
+    input_data = require_schedule_inputs(spec, _consent.strip_identity(input_data))
+    # A SCHEDULE RUNS UNATTENDED, SO IT RUNS ON A STANDING GRANT (IDENTITY.md §7.3 3). The person
+    # creating it must have one that covers the workflow's agents and permissions, else 409
+    # consent_required (scope "schedule"). The link is stored server-side; when the grant ends the
+    # schedule pauses with "Renew authority" instead of running on stale authority.
+    link = _consent.require_for_schedule(connection, project_id=project_id, spec=spec,
+                                         input_data=input_data, name=name)
+    if link is not None:
+        input_data = {**(input_data or {}), _consent.IDENTITY_KEY: link}
 
     cadence, minute, hour, weekday, tz_name = validate(
         cadence=cadence, minute=minute, hour=hour, weekday=weekday, tz_name=tz_name)
@@ -399,7 +409,13 @@ def replace_inputs(
     if row is None:
         raise ScheduleError(f"no schedule '{schedule_id}'.")
     spec = _active_spec(connection, project_id, row["workflow_key"])
-    data = require_schedule_inputs(spec, input_data)
+    from boss_engine.identity import consent as _consent
+
+    data = require_schedule_inputs(spec, _consent.strip_identity(input_data))
+    kept_link = connection.execute(text("SELECT input->'_identity' FROM workflow_schedules WHERE id = :i"),
+                                   {"i": schedule_id}).scalar()
+    if kept_link:
+        data = {**data, _consent.IDENTITY_KEY: kept_link}       # the server's link survives an edit
     zone = row["timezone"]
     due = row["next_run_at"]
     if tz_name is not None:
@@ -594,6 +610,24 @@ def run_due(
             if not active:
                 raise ScheduleError(
                     f"'{row['workflow_key']}' has no published version to run.")
+            # THE SCHEDULE'S AUTHORITY, CHECKED AT EVERY FIRING: its linked standing grant must still
+            # be live and its creator's. If not, the schedule PAUSES ("Renew authority").
+            from boss_engine.identity import consent as _consent
+            from boss_engine.identity import lineage as _lineage
+
+            try:
+                schedule_acting = _consent.schedule_acting(connection, row)
+            except _consent.AuthorityLost as lost:
+                connection.execute(text(
+                    "UPDATE workflow_schedules SET enabled = FALSE, next_run_at = :due, "
+                    "last_error = :err, updated_at = now() WHERE id = :i"),
+                    {"due": following, "i": row["id"],
+                     "err": f"Renew authority: the grant this schedule runs under has ended ({lost.reason})."})
+                emit_event(connection, project_id, "workflow.schedule_disabled", row["actor"],
+                           "workflow_schedule", row["id"], {"name": row["name"], "error": "authority ended"})
+                started.append({"schedule_id": row["id"], "name": row["name"], "error": "authority ended",
+                                "disabled": True})
+                continue
             # CHECKED AT EVERY FIRING, NOT ONCE. A schedule runs unattended, so a newsletter on
             # an install with no mail server would research every Monday and fail at the send
             # every Monday. What the operator accepted when saving the schedule
@@ -604,7 +638,8 @@ def run_due(
             try:
                 readiness = refuse_unless_ready(
                     connection, None, project_id, version_id=str(active),
-                    input_data=dict(row["input"] if isinstance(row["input"], dict) else {}),
+                    input_data={k: v for k, v in (row["input"] if isinstance(row["input"], dict) else {}).items()
+                                if not str(k).startswith("_identity")},
                     start_anyway=[str(k) for k in _json_list(row.get("start_anyway"))])
             except WorkflowNotReadyError as refused:
                 _refused(connection, project_id, row, following, refused.readiness)
@@ -614,16 +649,17 @@ def run_due(
                                             if m["key"] not in refused.readiness.get(
                                                 "started_anyway", [])]})
                 continue
-            run = start_run(
-                connection,
-                project_id=project_id,
-                actor=row["actor"],
-                input_data=dict(row["input"] if isinstance(row["input"], dict) else {}),
-                # THE SCHEDULED TIME, NOT NOW. Two workers that both got past the lock, or a
-                # tick retried after a crash, produce the same key and therefore one run.
-                dedupe_key=f"schedule:{row['id']}:{fired_at.isoformat()}",
-                workflow_version_id=str(active),
-            )
+            with (_lineage.acting(schedule_acting) if schedule_acting is not None else _lineage.nullcontext()):
+                run = start_run(
+                    connection,
+                    project_id=project_id,
+                    actor=row["actor"],
+                    input_data=_consent.strip_identity(dict(row["input"] if isinstance(row["input"], dict) else {})),
+                    # THE SCHEDULED TIME, NOT NOW. Two workers that both got past the lock, or a
+                    # tick retried after a crash, produce the same key and therefore one run.
+                    dedupe_key=f"schedule:{row['id']}:{fired_at.isoformat()}",
+                    workflow_version_id=str(active),
+                )
             if not run.get("duplicate"):
                 from .workflow_readiness import record_started_anyway
 

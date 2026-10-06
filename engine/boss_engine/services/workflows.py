@@ -2688,8 +2688,9 @@ def start_run(
     (`workflow_run_actions.research_to_adopt`, or `start_project_run`, true by construction).
     """
     dedupe_key = _clean_text(dedupe_key, "dedupe_key")
+    # Identity is never a caller's to set (IDENTITY.md §2): `_identity*` keys are dropped here.
     input_data = {k: v for k, v in (input_data or {}).items()
-                  if not str(k).startswith(ADOPT_PREFIX)}
+                  if not str(k).startswith(ADOPT_PREFIX) and not str(k).startswith("_identity")}
     for key, value in (adopted or {}).items():
         if not str(key).startswith(ADOPT_PREFIX):
             raise WorkflowValidationError(f"{key!r} is not an adoption key")
@@ -2754,6 +2755,17 @@ def start_run(
 
     run_id = make_id("wfr")
     root_run_id = run_id
+    # WHOSE AUTHORITY THIS RUN USES (IDENTITY.md §7.3): a person starting it needs a grant that
+    # covers the agents and permissions its steps will use, else 409 consent_required. The result
+    # is recorded server-side on the run; every job, build and sub-agent the worker starts for it
+    # carries it, so worker-started work acts for that person under that grant.
+    from boss_engine.identity import consent as _consent
+
+    identity_acting = _consent.require_for_workflow(
+        connection, project_id=project_id, spec=spec, input_data=input_data, run_id=run_id,
+        parent_run_id=parent_run_id,
+        title=str((input_data or {}).get("title") or (input_data or {}).get("directive") or ""))
+    policy_snapshot = _consent.record_on_run(policy_snapshot, identity_acting)
     if parent_run_id:
         parent = connection.execute(
             text(

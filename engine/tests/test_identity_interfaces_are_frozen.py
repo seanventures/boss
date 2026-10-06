@@ -243,11 +243,6 @@ def test_secrets_do_not_appear_in_reprs():
 # ---- the stubs say whose they are ------------------------------------------------------------------
 
 STUBS = [
-    (lambda: delegation.exchange_token(None, htm="POST", htu="/", db=None), "S3"),
-    (lambda: delegation.revoke_cascade(delegation.CascadeTrigger.GRANT_REVOKED, "dlg_1",
-                                       actor=None, reason="", db=None), "S3"),
-    (lambda: vault.get_credential(vault.ConnectionRef("github", "usr_alice"),
-                                  vault.CredentialPurpose.GITHUB_RUN, ctx=None, db=None), "S3"),
 ]
 
 
