@@ -358,3 +358,21 @@ These deviate from, or decide what was open in, IDENTITY.md as written. They are
 | S1-9 *(S1 ↔ S4, console contract)* | S1 serves the console's shapes: `GET /v1/auth/options` (AuthOptions: providers, smtp, signup, legacy_password, claim {path, origin, expires_at, seats}); SignInStep `{next: mfa\|done\|enrol, methods: [passkey, totp, recovery], who}` on every sign-in answer; `GET /v1/identity/me/factors` and `/users/{id}/factors` (Factor); `/me/identities` (LinkedIdentity); `qr_svg` in the TOTP enrolment (rendered server-side with segno); `DELETE /v1/identity/me/sessions` (everywhere else); `GET /sessions?principal_id=`; `GET /service-accounts/{id}/scopes`; `PATCH /service-accounts/{id}` with `name`; ApiKey and IssuedSecret `{key, secret, replaces}`, with `replaces` + `overlap_hours` as a rotation; the claim body's `origin` and `seat`. **Two deliberate differences:** an invitation token is never in a URL path — `POST /v1/auth/invitations/preview {token}` and `POST /v1/auth/invitations/accept {token, name, password}` replace S4's `GET /v1/auth/invitations/{token}` and `…/{token}/accept` (access logs keep paths; A88/A92's rule). The invite body stays `{email, bindings[], group_ids[]}`, one person per call (S4's stub sends `{emails[], roles[], groups[]}`). | The console was built on a stub; these are the real routes. |
 
 **To ask for an amendment:** write it as a row in this table (what, why, which streams it touches) and send it to the lead. The lead makes the change in one commit, with its regenerated outputs and the test it needs. Streams rebase onto it. A stream never edits a frozen file itself.
+
+---
+
+## 8. Integration (lead, branch `id/integration`)
+
+The five streams merged in order (S1 → S5 → S2 → S3 → S4), then three follow-up branches (int-a: S3 follow-ups; int-b: S2's holes; int-c/c2: the console on the real API). Amendments the lead made, each with its test:
+
+| # | Amendment | Why |
+|---|---|---|
+| I1 | The guard authenticates once and keeps the AuthContext on `request.state.identity`; handlers and the legacy transport reuse it (`identity_guard.request_auth`); it sets `lineage.enter(ctx)` and `CURRENT_TOOL_AUTH`. | S1-4: a DPoP proof must never be spent twice; jobs and tools need the acting principal. |
+| I2 | `Outcome` keeps an `AuthnError`'s status: 403 `csrf_failed`, 400 `ambiguous_credentials`. | S1-1. |
+| I3 | Zone L: identity `@public` routes are exempt from the legacy transport; a NEW credential (session, `boss_` key, run token) is authenticated by identity; the legacy checks see the principal's legacy seat (the Owner and the bridge people act as the console's member) and defer to the guard once a route is enforced (`IDENTITY_ENFORCED`). The org picker and project list follow identity under enforce. | S1-8 and the console no longer carrying a shared key: sign-in was unreachable and an invited person saw no org. |
+| I4 | Epoch triggers live in `schema.sql`; `identity_access_requests` + `access.requested` (A13); the vault master key is a file on its own volume, created once (O_EXCL, 0600); the server key and audit HMAC derive from it; boot checks the KEK, provisions signing keys and Passports. | Persistent keys without an installer step (install.sh untouched); A53 was never called. |
+| I5 | The vault serves S1's `totp.verify` and `sso.client` purposes. | TOTP sign-in and OIDC login were 500s against the real vault. |
+| I6 | Passport presets match the persona callsign; an empty ceiling is repaired once; Passports are made at the claim and lazily (in their own transaction); an un-passported agent is refused under enforce. | Every shipped agent had an empty ceiling, so no grant could name it and builds silently ran outside delegation. |
+| I7 | A run's consent asks for each step's tool permission and brings the step's capability captain. Revoking a grant also stops a queued or running build under it. | The enforce-mode walk: a build step was refused mid-run; a revoked build ran on. |
+| I8 | 500 bodies carry the class and request id, never the message; the deferred last-Owner trigger answers 409 `last_owner` on every path. | S5's flag; a SCIM delete gave a 500. |
+| I9 | A passkey-first claim needs no password. | The console's passkey path sent none and the claim answered 422. |
