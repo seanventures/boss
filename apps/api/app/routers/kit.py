@@ -10,6 +10,7 @@ Mounted from main.py with the auth helpers injected, so this module does not imp
 from __future__ import annotations
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from ..identity_guard import writing_get  # noqa: E402  (identity int-b)
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Optional
@@ -122,8 +123,8 @@ def build_kit_router(
         except Exception:  # noqa: BLE001 — the Kit still renders what was recorded
             pass
 
-    @router.get("/v1/kit")
-    @permit(P.SKILL_READ, scope=Scope.project(query="project_id"))
+    @writing_get(router, "/v1/kit")
+    @permit(P.SKILL_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
     def get_kit(project_id: str, check: str = "stale") -> dict[str, Any]:
         with begin(engine) as connection:
             require_reader(connection, project_id)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from ..identity_guard import writing_get  # noqa: E402  (identity int-b)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -169,8 +170,8 @@ def compile_process(payload: CompileProcessRequest) -> dict[str, Any]:
         return _compile_process_text(payload.text or payload.description)
 
 
-@router.get("/v1/agent-processes/templates")
-@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
+@writing_get(router, "/v1/agent-processes/templates")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def list_templates(project_id: str) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         templates = _service().list_templates(connection, project_id)
@@ -209,8 +210,8 @@ def create_template(payload: TemplateCreateRequest) -> dict[str, Any]:
         return created
 
 
-@router.get("/v1/agent-processes/templates/{process_key}")
-@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
+@writing_get(router, "/v1/agent-processes/templates/{process_key}")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def get_template(process_key: str, project_id: str) -> dict[str, Any]:
     if not project_id.strip() or not process_key.strip():
         raise HTTPException(status_code=422, detail="project_id and process_key are required")

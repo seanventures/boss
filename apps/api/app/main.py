@@ -1,4 +1,5 @@
-from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from boss_engine.identity import Confine, P, Production, PublicReason, Scope, access_of, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from .identity_guard import writing_get  # noqa: E402  (identity int-b)
 from .routers.identity_access import readable_projects as _readable_projects  # noqa: E402  (identity S2)
 from .routers.identity_access import request_identity as _request_identity  # noqa: E402  (identity S2)
 from .routers.identity_access import require_production as _require_production  # noqa: E402  (identity S2)
@@ -1670,12 +1671,19 @@ def matched_get_route(path: str, root_path: str) -> tuple[Any, Optional[str]] | 
 
 
 def requested_get_project_id(request: Request) -> Optional[str]:
-    """Return only the project scope consumed by a matched GET operation."""
-    if request.method != "GET":
-        return None
+    """Return only the project scope consumed by a matched GET operation — or by the POST twin of
+    a writing GET (identity_guard.writing_get), which reads exactly what its GET reads."""
     path = request.scope["path"]
     root_path = request.scope.get("root_path", "")
     route_path = _route_relative_path(request)
+    if request.method == "POST" and route_path.endswith(identity_guard.WRITING_GET_TWIN_SUFFIX):
+        suffix = len(identity_guard.WRITING_GET_TWIN_SUFFIX)
+        twin_of = matched_get_route(path[:-suffix], root_path)
+        if twin_of is None or not getattr(access_of(twin_of[0].endpoint), "writes_on_get", False):
+            return None
+        path, route_path = path[:-suffix], route_path[:-suffix]
+    elif request.method != "GET":
+        return None
     if (
         "project_id" not in request.query_params
         and route_path not in DEFAULT_PROJECT_READ_PATHS
@@ -3908,8 +3916,8 @@ def get_openapi_coverage() -> dict[str, Any]:
     }
 
 
-@app.get("/v1/diag/sandbox-roundtrip")
-@permit(P.SYSTEM_OPERATE, scope=Scope.org())
+@writing_get(app, "/v1/diag/sandbox-roundtrip")
+@permit(P.SYSTEM_OPERATE, scope=Scope.org(), writes_on_get=True)
 def diag_sandbox_roundtrip() -> dict:
     """Run a submit->poll round-trip to the sandbox-service FROM INSIDE this container,
     so we can tell (API, not SSH) whether the control plane can actually reach + drive
@@ -3984,8 +3992,8 @@ def diag_sandbox_roundtrip() -> dict:
     return out
 
 
-@app.get("/v1/diag/host-capabilities")
-@permit(P.SYSTEM_OPERATE, scope=Scope.org())
+@writing_get(app, "/v1/diag/host-capabilities")
+@permit(P.SYSTEM_OPERATE, scope=Scope.org(), writes_on_get=True)
 def diag_host_capabilities() -> dict:
     """Introspect what THIS container (boss-api) can do on the host, so we can tell
     empirically — API, not SSH — whether it can create micro-VMs / containers.
@@ -5956,6 +5964,7 @@ def execute_webhook_delivery(
     delivery_id: str,
     payload: WebhookDeliveryExecuteRequest,
 ) -> WebhookDeliverySummary:
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             item = webhooks.deliver(
@@ -6155,6 +6164,7 @@ def plane_sync_endpoint(payload: open_bodies.PlaneSyncBody):
 def execute_github_community_job(
     job_id: str, payload: GitHubCommunityJobExecuteRequest
 ):
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             return github_community.execute_job(
@@ -6170,8 +6180,8 @@ def execute_github_community_job(
             raise HTTPException(status_code=422, detail=str(error)) from error
 
 
-@app.get("/v1/mcp/servers")
-@permit(P.MCP_SERVER_READ, scope=Scope.project(query="project_id"))
+@writing_get(app, "/v1/mcp/servers")
+@permit(P.MCP_SERVER_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def list_mcp(project_id: str, check: Literal["none", "stale", "now"] = "none"):
     """Every registered server, with what the last probe found and what points at it.
 
@@ -6370,8 +6380,8 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
             meeting_run_id=result.get("run_id"), extends_run_id=extends_run_id)
 
 
-@app.get("/v1/meeting-roles")
-@permit(P.MEETING_READ, scope=Scope.project(query="project_id"))
+@writing_get(app, "/v1/meeting-roles")
+@permit(P.MEETING_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def list_meeting_roles(project_id: str):
     """The org's AI role-agent catalog (the meeting template) — read from the DB,
     seeded from the baseline on first use, editable per organization."""
@@ -6518,7 +6528,9 @@ def run_meeting_step_endpoint(payload: open_bodies.MeetingStepBody):
 
 
 @app.post("/v1/code-tasks")
-@permit(P.CODE_TASK_CREATE, scope=Scope.project(body="project_id"))
+@permit(P.CODE_TASK_CREATE, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("task_id", "task"),
+                 Confine.body("workflow_version_id", "workflow_version")))
 def start_code_task_endpoint(payload: CodeTaskStartBody):
     """Convene a durable coding task: clone -> agent edits + tests -> gated PR.
     Returns the run_id; a `code.task` worker picks it up and runs the pipeline.
@@ -7781,6 +7793,7 @@ def record_host_stall_endpoint(payload: open_bodies.HostStallBody) -> dict:
     wait that comes round minutes late is reported here. Stored as an event so any run overlapping it can be asked the only question
     that matters: how much of this was the machine, and how much was us.
     """
+    require_worker_principal()
     payload = payload.payload()
     stalled = float(payload.get("stalled_seconds") or 0.0)
     if stalled <= 0:
@@ -7899,7 +7912,8 @@ def code_task_activity_endpoint(run_id: str):
 
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/execute")
-@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"))
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"),
+        production=Production(deployment_run="path:deployment_run_id"))
 def delivery_execute_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
     """Refuse direct connector execution until it has a governed receipt path."""
     if not database_is_reachable(engine):
@@ -8658,7 +8672,8 @@ def delivery_repo_apps_endpoint(
 
 
 @app.get("/v1/observability/stack")
-@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"),
+        confine=(Confine.query("host_target_id", ("deployment_target", "deployment_host")),))
 def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] = None):
     """What the stack WOULD monitor, plus whether it is currently running.
 
@@ -8734,7 +8749,8 @@ def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] 
 
 
 @app.post("/v1/observability/stack/deploy")
-@permit(P.OBSERVABILITY_MANAGE, scope=Scope.of("deployment_target", body="host_target_id"))
+@permit(P.OBSERVABILITY_MANAGE, scope=Scope.of("deployment_target", body="host_target_id"),
+        confine=(Confine.body("project_id", "project"),))
 def deploy_observability_stack_endpoint(payload: ObservabilityStackDeployBody):
     """Render the collector/Prometheus/Grafana stack from the registry and put it on the host.
 
@@ -8910,7 +8926,10 @@ def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) ->
 
 
 @app.post("/v1/delivery/deploy")
-@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_target", body="target_id"))
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_target", body="target_id"),
+        confine=(Confine.body("code_task_run_id", "code_task"),
+                 Confine.body("reservation_id", "budget_reservation")),
+        production=Production(target="body:target_id"))
 def delivery_deploy_endpoint(payload: ManualDeployBody, request: Request):
     """Plan a governed deployment of a target at a chosen ref.
 
@@ -8950,7 +8969,7 @@ def delivery_deploy_endpoint(payload: ManualDeployBody, request: Request):
         actor = signed_in_actor(connection, target["project_id"], actor)
         require_project_actor(
             connection, target["project_id"], actor, "providerops_manage")
-        _require_production(request, target["project_id"], target["environment"])
+        # deployment:production for a production target: the declaration's production= rule.
         # A newly registered cloud target is still `created`. It must be able
         # to plan its first governed ChangeSet before any deployment exists.
         provider_target = (
@@ -9589,7 +9608,9 @@ def create_stack_target_endpoint(payload: open_bodies.StackTargetCreateBody):
 
 
 @app.post("/v1/deployments/stack/plan")
-@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("target_id", "deployment_target"),),
+        production=Production(target="body:target_id"))
 def plan_stack_deployment_endpoint(payload: open_bodies.StackDeployPlanBody):
     """Plan repository@ref (branch, tag, commit or pull/N) onto a stack target.
 
@@ -9681,6 +9702,7 @@ def execute_stack_deployment_endpoint(deployment_id: str,
                                       payload: open_bodies.StackDeployExecuteBody):
     """The worker hands its leased `deployment.stack_apply` job here. Fenced by the lease; the
     apply runs inside the approved ChangeSet (services/stack_deploy.py)."""
+    require_worker_principal()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from boss_engine.services.stack_deploy import execute_stack_job
@@ -9696,6 +9718,7 @@ def apply_host_deployment_endpoint(deployment_run_id: str,
                                    payload: open_bodies.StackDeployExecuteBody):
     """The worker hands its leased `deployment.host_apply` job here. Fenced by the lease; the
     apply runs inside the approved ChangeSet (services/governed_host_deploy.py)."""
+    require_worker_principal()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from boss_engine.services.governed_host_deploy import execute_host_job
@@ -9875,7 +9898,9 @@ def get_deployment_run_endpoint(deployment_run_id: str):
 
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/redeploy")
-@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"))
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"),
+        confine=(Confine.body("reservation_id", "budget_reservation"),),
+        production=Production(deployment_run="path:deployment_run_id"))
 def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
     """Plan the same target again as a NEW deployment run.
 
@@ -10319,7 +10344,7 @@ def override_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
 
 @app.post("/v1/code-tasks/{run_id}/deploy")
 @permit(P.DEPLOYMENT_CREATE, scope=Scope.of("code_task", path="run_id"))
-def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
+def deploy_code_task_endpoint(run_id: str, request: Request, payload: Optional[dict] = None):
     """Deploy a sandbox-built app to a customer's own host (governed SSH-host path).
 
     Phase 1: mode='dry_run' (default) returns the exact deploy PLAN — steps, SSH/docker commands,
@@ -10345,6 +10370,10 @@ def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     mode = str(p.get("mode", "dry_run")).lower()
     if mode not in {"dry_run", "ssh"}:
         raise HTTPException(status_code=422, detail="mode must be 'dry_run' or 'ssh'")
+    if mode == "ssh":
+        # A caller-named host has no environment of its own to say it is not production, so
+        # shipping to one is treated as production (IDENTITY: deployment:production).
+        _require_production(request, project_id, always=True)
     plan = _governed_plan(p)
     if mode == "ssh" and plan:
         with begin(engine) as connection:
@@ -10868,8 +10897,8 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@app.get("/v1/previews")
-@permit(P.PREVIEW_READ, scope=Scope.org())
+@writing_get(app, "/v1/previews")
+@permit(P.PREVIEW_READ, scope=Scope.org(), writes_on_get=True)
 def list_previews_endpoint(project_id: Optional[str] = None, limit: int = 50):
     """List app previews for a project (reaps expired ones)."""
     project_id = resolve_list_project_id(project_id)
@@ -11436,15 +11465,20 @@ def mutation_gate_endpoint(payload: open_bodies.MutationGateBody):
     target = payload.get("target_file")
     if not isinstance(files, dict) or not files or not target:
         raise HTTPException(status_code=422, detail="files (path->content) and target_file are required.")
-    return mg.run_mutation_gate(
-        files, target,
-        payload.get("test_command") or ["python3", "-m", "unittest", "discover", "-v"],
-        min_score=payload.get("min_score", settings.mutation_min_score),
-        max_mutants=payload.get("max_mutants", settings.mutation_max_mutants),
-        timeout=payload.get("timeout", settings.mutation_timeout_seconds),
-        require_property_tests=payload.get(
-            "require_property_tests", settings.mutation_require_property_tests),
-    )
+    try:
+        # test_command is one of mg.ALLOWED_TEST_COMMANDS or refused: the caller never chooses
+        # the program that runs on the API host (identity int-b), and file paths stay in the tree.
+        return mg.run_mutation_gate(
+            files, target,
+            payload.get("test_command") or None,
+            min_score=payload.get("min_score", settings.mutation_min_score),
+            max_mutants=payload.get("max_mutants", settings.mutation_max_mutants),
+            timeout=payload.get("timeout", settings.mutation_timeout_seconds),
+            require_property_tests=payload.get(
+                "require_property_tests", settings.mutation_require_property_tests),
+        )
+    except mg.MutationGateRefused as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.post("/v1/independence-check")
@@ -11616,6 +11650,7 @@ def execute_discovery_endpoint(run_id: str, payload: open_bodies.DiscoveryExecut
     """The worker hands a leased `discovery.run` job here: the research agent (the Claude CLI)
     lives in this container. Each stage spends under the job's lease, with its own
     reservation and receipt; stages already paid for replay. Fenced by the lease token."""
+    require_worker_principal()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.discovery_service import execute_discovery_job
@@ -12197,8 +12232,8 @@ def list_capabilities(project_id: str):
     }
 
 
-@app.get("/v1/status", response_model=StatusResponse)
-@permit(P.SYSTEM_READ, scope=Scope.project(query="project_id"))
+@writing_get(app, "/v1/status", response_model=StatusResponse)
+@permit(P.SYSTEM_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def status(project_id: str) -> StatusResponse:
     if not database_is_reachable(engine):
         return StatusResponse(
@@ -12401,7 +12436,8 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
 
 
 @app.post("/v1/engine/agent/action", response_model=AgentActionRunResponse)
-@permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"))
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("thread_id", "agent_thread"),))
 def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentActionRunResponse:
     """Execute one action the operator ACCEPTED by clicking its button.
 
@@ -13185,7 +13221,8 @@ def list_plans(project_id: str, limit: int = 50, offset: int = 0) -> PlanListRes
 
 
 @app.post("/v1/plans", response_model=PlanSummary, status_code=201)
-@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("task_id", "task"), Confine.body("artifact_id", "artifact")))
 def create_plan(payload: PlanCreateRequest) -> PlanSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -13210,7 +13247,8 @@ def create_plan(payload: PlanCreateRequest) -> PlanSummary:
 
 
 @app.post("/v1/plans/{plan_id}/dispatch")
-@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"),
+        confine=(Confine.path("plan_id", "plan"),))
 def dispatch_plan(plan_id: str, payload: PlanDispatchRequest) -> dict:
     """Turn a plan's phases into sequenced, executable child tasks (plan → task/job engine)."""
     with begin(engine) as connection:
@@ -13231,8 +13269,25 @@ def dispatch_plan(plan_id: str, payload: PlanDispatchRequest) -> dict:
 def execute_orchestrator_next_move(
     payload: OrchestratorNextMoveExecuteRequest,
 ) -> dict[str, Any]:
-    """Worker-only boundary for leased agent.orchestrator.next_move jobs (BOSS-345)."""
+    """Worker-only boundary for leased agent.orchestrator.next_move jobs (BOSS-345).
+
+    The worker principal, holding a LIVE lease on the very job this executes: knowing a
+    project id is not enough to make the orchestrator dispatch work (identity int-b)."""
+    require_worker_principal()
+    worker_id = str(payload.worker_id or "").strip()
+    job_id = str(payload.created_by_job_id or "").strip()
+    lease_token = str(payload.lease_token or "").strip()
+    if not worker_id or not job_id or not lease_token:
+        raise HTTPException(status_code=422,
+                            detail="an active next_move job lease is required "
+                                   "(worker_id, created_by_job_id, lease_token)")
     with begin(engine) as connection:
+        try:
+            lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if lease["kind"] != "agent.orchestrator.next_move" or lease["project_id"] != payload.project_id:
+            raise HTTPException(status_code=409, detail="lease does not match this next_move")
         try:
             return orchestrator_next_move.execute(
                 connection,
@@ -13542,22 +13597,34 @@ def factory_merge_check(payload: FactoryMergeCheckRequest) -> dict:
 
 
 @app.post("/v1/factory/quality-gate", status_code=201)
-@permit(P.CODE_TASK_OVERRIDE, scope=Scope.project(body="project_id"))
+@permit(P.CODE_TASK_OVERRIDE, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("code_task_run_id", "code_task"), Confine.body("task_id", "task")))
 def factory_quality_gate(payload: FactoryQualityGateRequest) -> dict:
     """Evaluate + persist a quality gate (explicit lint + CI-green, second-model cross-check,
     confidence-gated merge) and store a review-packet artifact (spec §E)."""
     with begin(engine) as connection:
         require_project_actor(connection, payload.project_id, payload.actor, "task_create")
-        return factory_scale_service.record_quality_gate(
-            connection,
-            payload.project_id,
-            checks=payload.checks,
-            actor=payload.actor,
-            code_task_run_id=payload.code_task_run_id,
-            task_id=payload.task_id,
-            min_confidence=payload.min_confidence,
-            risk_tier=payload.risk_tier,
-        )
+        # code_task:override is the declaration (a caller-written gate is a waiver), the run is
+        # confined to this project, and a recorded verdict is replaced only with a reason.
+        from boss_engine.services.factory_scale import QualityGateOverrideRefused
+
+        who = identity_guard.REQUEST_IDENTITY.get()
+        try:
+            return factory_scale_service.record_quality_gate(
+                connection,
+                payload.project_id,
+                checks=payload.checks,
+                # the verified principal when there is one: a body's actor is only a claim
+                actor=(who.principal.id if who is not None else payload.actor),
+                code_task_run_id=payload.code_task_run_id,
+                task_id=payload.task_id,
+                min_confidence=payload.min_confidence,
+                risk_tier=payload.risk_tier,
+                override_reason=payload.override_reason,
+                recorded_via="api:/v1/factory/quality-gate",
+            )
+        except QualityGateOverrideRefused as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.post("/v1/factory/chunk-plan")
@@ -13982,7 +14049,11 @@ def refresh_health_snapshot(
 
 
 @app.post("/v1/delivery/first-deploy")
-@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("run_id", "code_task"), Confine.body("target_id", "deployment_target"),
+                 Confine.body("reservation_id", "budget_reservation")),
+        production=Production(target="body:target_id", environment="body:environment",
+                              environment_default="staging"))
 def create_deployment_endpoint(payload: FirstDeployBody = Body(...)) -> dict:
     """Plan a successful build's first deployment to an existing target.
 
@@ -15774,8 +15845,8 @@ def knowledge_graph_seed_from_infra(
         )
 
 
-@app.get("/v1/knowledge/eval", response_model=KnowledgeRetrievalEvalResponse)
-@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
+@writing_get(app, "/v1/knowledge/eval", response_model=KnowledgeRetrievalEvalResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def knowledge_retrieval_eval(
     project_id: str,
     threshold: float = Query(default=0.35, ge=0.0, le=1.0),
@@ -16255,6 +16326,7 @@ def upload_model_credential(
 def acquire_model_gateway_lease(
     payload: ModelGatewayLeaseAcquireRequest,
 ) -> ModelGatewayLeaseAcquireResponse:
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             result = model_gateway.acquire(
@@ -16381,6 +16453,7 @@ def reap_model_gateway_leases(
 def heartbeat_model_gateway_lease(
     lease_id: str, payload: ModelGatewayLeaseHeartbeatRequest
 ) -> ModelGatewayLeaseSummary:
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             lease = model_gateway.heartbeat(
@@ -16403,6 +16476,7 @@ def heartbeat_model_gateway_lease(
 def start_model_gateway_invocation(
     lease_id: str, payload: ModelGatewayInvocationStartRequest
 ) -> ModelGatewayInvocationStartResponse:
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             result = model_gateway.start_invocation(
@@ -16428,6 +16502,7 @@ def settle_model_gateway_invocation(
     invocation_id: str,
     payload: ModelGatewayInvocationSettleRequest,
 ) -> ModelGatewayInvocationSummary:
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             invocation = model_gateway.settle_invocation(
@@ -16452,6 +16527,7 @@ def settle_model_gateway_invocation(
 def release_model_gateway_lease(
     lease_id: str, payload: ModelGatewayLeaseReleaseRequest
 ) -> ModelGatewayLeaseSummary:
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             lease = model_gateway.release(
@@ -18517,6 +18593,7 @@ def apply_github_code_sync(
     sync_run_id: str,
     payload: GitHubCodeSyncApplyRequest,
 ) -> GitHubCodeSyncRunSummary:
+    require_worker_principal()
     with begin(engine) as connection:
         require_project_actor(
             connection,
@@ -18714,6 +18791,7 @@ def apply_github_resolution_plan(
     plan_id: str,
     payload: GitHubResolutionPlanApplyRequest,
 ) -> GitHubResolutionApplyResponse:
+    require_worker_principal()
     with begin(engine) as connection:
         require_project_actor(
             connection,
@@ -18925,6 +19003,7 @@ def apply_github_merge(
     authorization_id: str,
     payload: GitHubMergeAuthorizationApplyRequest,
 ) -> GitHubMergeAuthorizationSummary:
+    require_worker_principal()
     with begin(engine) as connection:
         require_project_actor(
             connection,
@@ -19055,6 +19134,7 @@ def execute_github_reconciliation_run(
     run_id: str,
     payload: GitHubReconciliationExecuteRequest,
 ) -> GitHubReconciliationExecuteResponse:
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             result = github_reconciler.execute(
@@ -20187,8 +20267,8 @@ def run_autoscaler_plan(payload: ScalePlanRunRequest) -> ScalePlanRunResponse:
 # ---------------------------------------------------------------------------
 
 
-@app.get("/v1/elastic/status")
-@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
+@writing_get(app, "/v1/elastic/status")
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def get_elastic_status(project_id: str) -> dict:
     """Elastic fabric overview: pools, instances, per-provider usage."""
     with begin(engine) as connection:
@@ -20263,8 +20343,8 @@ def reconcile_elastic_pool(worker_pool_id: str, payload: open_bodies.ElasticReco
             raise HTTPException(status_code=422, detail=str(error)) from error
 
 
-@app.get("/v1/elastic/instances")
-@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
+@writing_get(app, "/v1/elastic/instances")
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def list_elastic_instances(
     project_id: str,
     worker_pool_id: Optional[str] = None,
@@ -20289,6 +20369,7 @@ def list_elastic_instances(
 @app.post("/v1/elastic/instances/{instance_id}/heartbeat")
 @permit(P.WORKER_LEASE)
 def heartbeat_elastic_instance(instance_id: str, payload: open_bodies.ElasticHeartbeatBody) -> dict:
+    require_worker_principal()
     payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "worker").strip()
@@ -20336,8 +20417,8 @@ def terminate_elastic_instance(instance_id: str, payload: open_bodies.ElasticTer
             raise HTTPException(status_code=404, detail=str(error)) from error
 
 
-@app.get("/v1/provider-usage")
-@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
+@writing_get(app, "/v1/provider-usage")
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def list_provider_usage(
     project_id: str,
     provider: Optional[str] = None,
@@ -20360,8 +20441,8 @@ def list_provider_usage(
         return {"project_id": project_id, "items": items, "count": len(items)}
 
 
-@app.get("/v1/provider-usage/summary")
-@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
+@writing_get(app, "/v1/provider-usage/summary")
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def provider_usage_summary(
     project_id: str, provider: Optional[str] = None
 ) -> dict:
@@ -20793,7 +20874,10 @@ def list_deployment_runs(
 
 
 @app.post("/v1/deployment-runs", response_model=DeploymentRunSummary, status_code=201)
-@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("deployment_target_id", "deployment_target"),
+                 Confine.body("reservation_id", "budget_reservation")),
+        production=Production(target="body:deployment_target_id"))
 def create_deployment_run(
     payload: DeploymentRunCreateRequest,
 ) -> DeploymentRunSummary:
@@ -20858,7 +20942,8 @@ def run_deployment_health_check(
     "/v1/deployment-runs/{deployment_run_id}/rollout/start",
     response_model=DeploymentRolloutSummary,
 )
-@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"))
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"),
+        production=Production(deployment_run="path:deployment_run_id"))
 def start_deployment_rollout(
     deployment_run_id: str,
     payload: DeploymentRolloutStartRequest,
@@ -20886,7 +20971,8 @@ def start_deployment_rollout(
     "/v1/deployment-runs/{deployment_run_id}/rollout/advance",
     response_model=DeploymentRolloutSummary,
 )
-@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"))
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"),
+        production=Production(deployment_run="path:deployment_run_id"))
 def advance_deployment_rollout(
     deployment_run_id: str,
     payload: DeploymentRolloutAdvanceRequest,
@@ -21228,8 +21314,13 @@ def create_outbox_message(payload: OutboxMessageCreateRequest) -> OutboxMessageS
         return outbox_message_summary_from_row(item)
 
 
+#: The comms spend the API reserves for a queued delivery that brings no reservation of its own.
+OUTBOX_QUEUE_RESERVATION_MICROS = 50_000
+
+
 @app.post("/v1/comms/outbox/{message_id}/queue", response_model=JobSummary, status_code=201)
-@permit(P.COMMS_SEND, scope=Scope.project(body="project_id"))
+@permit(P.COMMS_SEND, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("reservation_id", "budget_reservation"),))
 def queue_outbox_delivery(message_id: str, payload: OutboxQueueRequest) -> JobSummary:
     with begin(engine) as connection:
         try:
@@ -21239,11 +21330,22 @@ def queue_outbox_delivery(message_id: str, payload: OutboxQueueRequest) -> JobSu
                 payload.actor,
                 "comms_manage",
             )
+            reservation_id = payload.reservation_id
+            if not reservation_id:
+                # SERVER-SIDE, not the console's: reserving spend is the system-only
+                # spend:reserve, so the person's comms:send buys the reservation here.
+                reserved = budget.reserve(
+                    connection, payload.project_id, "comms", OUTBOX_QUEUE_RESERVATION_MICROS,
+                    "Queue outbound communication from the executive console.", 30)
+                if reserved.get("status") != "reserved" or not reserved.get("reservation_id"):
+                    raise HTTPException(status_code=409,
+                                        detail=reserved.get("message") or "budget refused")
+                reservation_id = reserved["reservation_id"]
             job = comms.queue_outbox_delivery(
                 connection,
                 payload.project_id,
                 message_id,
-                payload.reservation_id,
+                reservation_id,
                 payload.dedupe_key,
                 payload.actor,
                 payload.priority,
@@ -21258,10 +21360,14 @@ def queue_outbox_delivery(message_id: str, payload: OutboxQueueRequest) -> JobSu
 
 
 @app.post("/v1/comms/outbox/{message_id}/deliver", response_model=OutboxDeliveryResponse)
-@permit(P.COMMS_SEND, scope=Scope.project(body="project_id"))
+@permit(P.COMMS_SEND, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("reservation_id", "budget_reservation"),
+                 Confine.body("created_by_job_id", "job")))
 def deliver_outbox_message(
     message_id: str, payload: OutboxQueueRequest
 ) -> OutboxDeliveryResponse:
+    if not payload.reservation_id:
+        raise HTTPException(status_code=422, detail="reservation_id is required to deliver")
     with begin(engine) as connection:
         try:
             require_project_actor(
@@ -21541,7 +21647,11 @@ def _job_effect_permission(kind: str) -> Optional[str]:
 
 
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)
-@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("task_id", "task"), Confine.body("work_item_id", "work_item"),
+                 Confine.body("reservation_id", "budget_reservation"),
+                 Confine.body("tracker_binding_id", "work_tracker_binding"),
+                 Confine.body("allocation_id", "resource_allocation")))
 def create_job(payload: JobCreateRequest) -> JobSummary:
     with begin(engine) as connection:
         actor = current_api_principal.get() or "ceo"
@@ -22156,7 +22266,7 @@ def quote_budget(payload: BudgetQuoteRequest) -> BudgetQuoteResponse:
 
 
 @app.post("/v1/budget/reserve", response_model=BudgetReserveResponse, status_code=201)
-@permit(P.SPEND_RESERVE)
+@permit(P.SPEND_RESERVE, scope=Scope.project(body="project_id"))
 def reserve_budget(payload: BudgetReserveRequest) -> BudgetReserveResponse:
     with begin(engine) as connection:
         actor = current_api_principal.get() or "ceo"
@@ -22175,7 +22285,7 @@ def reserve_budget(payload: BudgetReserveRequest) -> BudgetReserveResponse:
 
 
 @app.post("/v1/budget/release", response_model=BudgetReleaseResponse)
-@permit(P.SPEND_RESERVE)
+@permit(P.SPEND_RESERVE, scope=Scope.project(body="project_id"))
 def release_budget(payload: BudgetReleaseRequest) -> BudgetReleaseResponse:
     with begin(engine) as connection:
         actor = current_api_principal.get() or "ceo"
@@ -22190,7 +22300,7 @@ def release_budget(payload: BudgetReleaseRequest) -> BudgetReleaseResponse:
 
 
 @app.post("/v1/budget/consume", response_model=BudgetConsumeResponse)
-@permit(P.SPEND_RESERVE)
+@permit(P.SPEND_RESERVE, scope=Scope.project(body="project_id"))
 def consume_budget(payload: BudgetConsumeRequest) -> BudgetConsumeResponse:
     with begin(engine) as connection:
         require_project_actor(
@@ -22242,20 +22352,23 @@ def _is_worker_principal() -> bool:
                 and current_api_principal.get() == expected)
 
 
-def require_worker_principal() -> None:
-    """Only the configured worker identity may claim or settle leased work."""
-    if identity_guard.identity_enforced():
-        return   # worker:lease is system-only: the guard admitted a worker principal
+def _legacy_worker_ok() -> bool:
+    """The legacy worker rule: transport auth off (local development), or the transport's
+    principal is BOSS_WORKER_PRINCIPAL."""
     if not current_transport_authenticated.get():
-        # The local development mode may explicitly disable transport auth.
-        return
+        return True
     expected = settings.worker_principal.strip()
-    principal = current_api_principal.get()
-    if not expected or principal != expected:
-        raise HTTPException(
-            status_code=403,
-            detail="Authenticated principal is not the configured worker principal.",
-        )
+    return bool(expected) and current_api_principal.get() == expected
+
+
+identity_guard.configure(legacy_member=current_api_principal.get,
+                         legacy_method=current_auth_method.get,
+                         legacy_worker_ok=_legacy_worker_ok)
+
+
+def require_worker_principal() -> None:
+    """Only the worker identity may claim or settle leased work (identity_guard owns the rule)."""
+    identity_guard.require_worker_principal()
 
 
 @app.post("/v1/worker/poll", response_model=WorkerPollResponse)
@@ -22277,6 +22390,7 @@ def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
 @app.post("/v1/workers/register")
 @permit(P.WORKER_LEASE)
 def register_worker(payload: WorkerRegistrationRequest) -> dict[str, Any]:
+    require_worker_principal()
     with begin(engine) as connection:
         require_project_actor(connection, payload.project_id, payload.actor, "command_submit")
         try:
@@ -22350,8 +22464,8 @@ def worker_fail(payload: WorkerFailRequest) -> WorkerFailResponse:
         return WorkerFailResponse(**result)
 
 
-@app.get("/v1/decisions/inbox", response_model=DecisionInboxResponse)
-@permit(P.DECISION_READ, scope=Scope.project(query="project_id"))
+@writing_get(app, "/v1/decisions/inbox", response_model=DecisionInboxResponse)
+@permit(P.DECISION_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def decision_inbox(
     project_id: str, limit: Optional[int] = None, offset: int = 0
 ) -> DecisionInboxResponse:
@@ -22783,7 +22897,9 @@ def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResp
 @app.post(
     "/v1/software-factory/deployments", response_model=SandboxDeploymentResponse
 )
-@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("decision_id", "decision"), Confine.body("created_by_job_id", "job")),
+        production=Production(environment="body:environment"))
 def create_sandbox_deployment(
     payload: SandboxDeploymentRequest,
 ) -> SandboxDeploymentResponse:
@@ -23097,7 +23213,9 @@ def queue_pull_request_merge(
     response_model=JobSummary,
     status_code=201,
 )
-@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("decision_id", "decision"), Confine.body("task_id", "task")),
+        production=Production(environment="body:environment"))
 def queue_sandbox_deployment(payload: SandboxDeploymentJobRequest) -> JobSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -23987,6 +24105,8 @@ def _authorize_delivery_target_input(
         return
     require_project_actor(connection, project_id, actor, "providerops_manage")
     if "target_id" not in run_input:
+        # The deploy step picks its target by this environment.
+        _require_production(None, project_id, run_input.get("environment"))
         return
     target_id = str(run_input.get("target_id") or "").strip()
     if not target_id:
@@ -24003,6 +24123,8 @@ def _authorize_delivery_target_input(
         raise HTTPException(
             status_code=422, detail="environment does not match deployment target",
         )
+    # The run's deploy step ships to this target: a production one needs deployment:production.
+    _require_production(None, project_id, target["environment"])
 
 
 @app.post("/v1/delivery-workflows/custom-steps")
@@ -25267,7 +25389,9 @@ def recheck_delivery_run(run_id: str, payload: WorkflowRecheckBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/deploy-target")
-@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(body="project_id"))
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(body="project_id"),
+        confine=(Confine.path("run_id", "workflow_run"), Confine.body("host_id", "deployment_host")),
+        production=Production(environment="body:environment", environment_default="staging"))
 def prepare_delivery_deploy_target(run_id: str, payload: WorkflowDeployTargetBody) -> dict:
     """Give this run somewhere to ship to, and point its deploy step at it.
 
@@ -26207,6 +26331,7 @@ def cancel_workflow_run(
 def claim_workflow_step(
     run_id: str, payload: WorkflowStepClaimRequest
 ) -> Optional[WorkflowStepRunSummary]:
+    require_worker_principal()
     with begin(engine) as connection:
         require_project_actor(
             connection, payload.project_id, payload.worker_id, "workflow_execute"
@@ -26232,6 +26357,7 @@ def claim_workflow_step(
 def heartbeat_workflow_step(
     step_run_id: str, payload: WorkflowStepHeartbeatRequest
 ) -> WorkflowStepRunSummary:
+    require_worker_principal()
     with begin(engine) as connection:
         require_project_actor(
             connection, payload.project_id, payload.worker_id, "workflow_execute"
@@ -26258,6 +26384,7 @@ def heartbeat_workflow_step(
 def complete_workflow_step(
     step_run_id: str, payload: WorkflowStepCompleteRequest
 ) -> WorkflowStepRunSummary:
+    require_worker_principal()
     with begin(engine) as connection:
         require_project_actor(
             connection, payload.project_id, payload.worker_id, "workflow_execute"
@@ -26285,6 +26412,7 @@ def complete_workflow_step(
 def fail_workflow_step(
     step_run_id: str, payload: WorkflowStepFailRequest
 ) -> WorkflowStepRunSummary:
+    require_worker_principal()
     with begin(engine) as connection:
         require_project_actor(
             connection, payload.project_id, payload.worker_id, "workflow_execute"
@@ -26383,6 +26511,7 @@ def compensate_workflow_run(
 def claim_workflow_compensation(
     run_id: str, payload: WorkflowCompensationClaimRequest
 ) -> Optional[dict[str, Any]]:
+    require_worker_principal()
     with begin(engine) as connection:
         require_project_actor(
             connection, payload.project_id, payload.worker_id, "workflow_execute"
@@ -26404,6 +26533,7 @@ def claim_workflow_compensation(
 def complete_workflow_compensation(
     compensation_id: str, payload: WorkflowCompensationCompleteRequest
 ) -> dict[str, Any]:
+    require_worker_principal()
     with begin(engine) as connection:
         require_project_actor(
             connection, payload.project_id, payload.worker_id, "workflow_execute"
@@ -26425,6 +26555,7 @@ def complete_workflow_compensation(
 def fail_workflow_compensation(
     compensation_id: str, payload: WorkflowCompensationFailRequest
 ) -> dict[str, Any]:
+    require_worker_principal()
     with begin(engine) as connection:
         require_project_actor(
             connection, payload.project_id, payload.worker_id, "workflow_execute"
@@ -26788,6 +26919,7 @@ def execute_work_tracker_sync(
     payload: WorkTrackerSyncExecuteRequest,
 ) -> dict[str, Any]:
     """Execute a tracker write only inside a fenced, receipt-producing job."""
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             leased_job = jobs.require_active_lease(
@@ -26914,7 +27046,9 @@ def execute_work_tracker_sync(
 
 
 @app.post("/v1/work-orchestration/bot-identities")
-@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"),
+        confine=(Confine.body("agent_definition_id", "agent_definition"),
+                 Confine.body("credential_secret_ref_id", "secret_ref")))
 def upsert_delivery_bot_identity(
     payload: DeliveryBotIdentityUpsertRequest,
 ) -> dict[str, Any]:
@@ -27577,6 +27711,7 @@ def replay_a2a_message(
 def dispatch_a2a_message(
     message_id: str, payload: A2ADispatchRequest
 ) -> dict[str, Any]:
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             job = jobs.require_active_lease(
@@ -27606,6 +27741,7 @@ def dispatch_a2a_message(
 @app.post("/v1/a2a/poll")
 @permit(P.WORKER_LEASE)
 def poll_a2a(payload: A2APollRequest) -> dict[str, Any]:
+    require_worker_principal()
     with begin(engine) as connection:
         require_project_actor(
             connection, payload.project_id, payload.actor, "agent_chat"
@@ -27631,6 +27767,7 @@ def poll_a2a(payload: A2APollRequest) -> dict[str, Any]:
 def acknowledge_a2a_delivery(
     delivery_id: str, payload: A2AAcknowledgeRequest
 ) -> dict[str, Any]:
+    require_worker_principal()
     with begin(engine) as connection:
         try:
             return a2a.acknowledge(
@@ -29292,8 +29429,8 @@ def agent_lineage(role_key: str, project_id: str, days: int = 30,
             raise HTTPException(status_code=422, detail=str(error)) from error
 
 
-@app.get("/v1/workflow-runs/{run_id}/chain")
-@permit(P.WORKFLOW_RUN_READ, scope=Scope.project(query="project_id"))
+@writing_get(app, "/v1/workflow-runs/{run_id}/chain")
+@permit(P.WORKFLOW_RUN_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def workflow_run_chain(run_id: str, project_id: str, viewer: Optional[str] = None) -> dict:
     """A run's acts as one ordered tree, rooted at the person who started it, with Credits.
 

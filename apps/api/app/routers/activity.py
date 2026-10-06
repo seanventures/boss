@@ -377,7 +377,9 @@ __all__ = ["router"]
 
 
 @router.post("/v1/activity/retention/prune")
-@permit(P.ACTIVITY_PRUNE, scope=Scope.org())
+# The worker's hourly call (worker protocol), not the Owner's activity:prune: a person never
+# calls it, and activity:prune is Owner-only, so the worker could not (identity int-b).
+@permit(P.WORKER_LEASE)
 def prune_activity_retention(payload: Optional[dict] = None) -> dict[str, Any]:
     """Age log rows out of the retention window. Called hourly by the worker.
 

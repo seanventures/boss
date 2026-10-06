@@ -6,6 +6,7 @@ Fail closed without a host unless ``simulate=true`` (tests / local demos).
 from __future__ import annotations
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from ..identity_guard import writing_get  # noqa: E402  (identity int-b)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -96,9 +97,9 @@ def reserve_preview_sandbox(payload: ReserveRequest) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
-@router.get("")
-@router.get("/")
-@permit(P.PREVIEW_READ, scope=Scope.project(query="project_id"))
+@writing_get(router, "")
+@writing_get(router, "/")
+@permit(P.PREVIEW_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def list_preview_sandboxes(
     project_id: str = Query(...),
     actor: str = Query(...),
@@ -117,8 +118,8 @@ def list_preview_sandboxes(
     return {"project_id": project_id, "items": items, "count": len(items)}
 
 
-@router.get("/{preview_id}")
-@permit(P.PREVIEW_READ, scope=Scope.project(query="project_id"))
+@writing_get(router, "/{preview_id}")
+@permit(P.PREVIEW_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def get_preview_sandbox(
     preview_id: str,
     project_id: str = Query(...),

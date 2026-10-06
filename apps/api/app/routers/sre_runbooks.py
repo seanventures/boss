@@ -7,6 +7,7 @@ Not public GA.
 from __future__ import annotations
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from ..identity_guard import writing_get  # noqa: E402  (identity int-b)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -59,8 +60,8 @@ class RunCreate(BaseModel):
     adapter: str = "slack_webhook"
 
 
-@router.get("")
-@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
+@writing_get(router, "")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def list_runbooks(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(_engine()) as connection:
         items = _svc().list_runbooks(connection, project_id)

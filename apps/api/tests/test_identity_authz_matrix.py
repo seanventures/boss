@@ -77,7 +77,10 @@ def test_framework_routes_are_public_at_request_time(world):
 
 
 OBJECT_OPS = [o for o in HTTP_OPS if isinstance(o[2], Permit) and o[2].scope.source == ScopeSource.OBJECT]
-PROJECT_OPS = [o for o in HTTP_OPS if isinstance(o[2], Permit) and o[2].scope.source == ScopeSource.PROJECT]
+#: System-only permissions are refused to every person before any project is looked at (403
+#: whatever the project): test_identity_authz_system_only.py covers them.
+PROJECT_OPS = [o for o in HTTP_OPS if isinstance(o[2], Permit) and o[2].scope.source == ScopeSource.PROJECT
+               and not identity_matrix.PERMISSION_META[o[2].permission].system_only]
 
 
 def test_r3_another_projects_object_is_404_even_with_full_permissions_here(mirror, world, objects_in):
