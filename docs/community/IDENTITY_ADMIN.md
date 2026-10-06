@@ -96,7 +96,7 @@ Legacy credentials are also listed on their own, with their cutoffs (`GET /v1/id
 | `legacy_cutoff_days` | 30 | Days after the claim at which the shared credentials stop working (0–90). |
 | `network_bridge_enabled` | on | Off ends the network bridge at the claim. |
 
-A value outside its range, or a key that does not exist, is refused with `422`.
+A value outside its range, or a key that does not exist, is refused with `422`. A save applies only the fields that changed, so an automatic setting stays automatic. Two fields are not switches: `smtp` reports whether email is configured, and `network_mode` can only be turned **off** (Require sign-in); network trust is never turned back on (`409`). `github_require_user_repo_access` is automatic until an Owner sets it (on exactly when more than one person is active); setting it to `null` makes it automatic again.
 
 ## From shadow mode to enforcement
 

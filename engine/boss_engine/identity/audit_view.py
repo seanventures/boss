@@ -163,11 +163,13 @@ def page(org_id: str, *, db: Any, q: Optional[str] = None, outcome: Optional[str
                      "coalesce(e.target_type, '') ILIKE :q OR coalesce(e.permission, '') ILIKE :q "
                      "OR coalesce(e.actor_principal_id, '') ILIKE :q OR coalesce(e.on_behalf_of, "
                      "'') ILIKE :q OR coalesce(e.grant_id, '') ILIKE :q OR coalesce(e.token_jti, "
-                     "'') ILIKE :q OR coalesce(e.request_id, '') ILIKE :q OR coalesce(p.display_name"
-                     ", '') ILIKE :q OR coalesce(e.details->>'what', '') ILIKE :q)")
+                     "'') ILIKE :q OR coalesce(e.request_id, '') ILIKE :q OR "
+                     "coalesce(p.display_name, '') ILIKE :q OR "
+                     "coalesce(e.details->>'what', '') ILIKE :q)")
         params["q"] = _like(q.strip()[:200])
     if outcome:
-        wanted = sorted({OUTCOME_IN[o.strip()] for o in outcome.split(",") if o.strip() in OUTCOME_IN})
+        wanted = sorted({OUTCOME_IN[o.strip()] for o in outcome.split(",")
+                         if o.strip() in OUTCOME_IN})
         where.append("e.outcome = ANY(:outcomes)")
         params["outcomes"] = wanted or ["-none-"]
     if actor:
