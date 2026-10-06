@@ -10,7 +10,7 @@ import { Key, Fingerprint } from "@phosphor-icons/react";
 
 import type { MeResponse } from "../../lib/identity/contract";
 import { IdentityError, idPost } from "../../lib/identity/api";
-import { getAssertion, PasskeyCancelled, webauthnAvailable, type AssertionOptions } from "../../lib/identity/webauthn";
+import { getAssertion, PasskeyCancelled, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../lib/identity/webauthn";
 import { CodeInput, ErrorLine, Sheet } from "./kit";
 
 export function StepUpSheet({ reason, me, onDone }: { reason: string; me: MeResponse | null; onDone: (ok: boolean) => void }) {

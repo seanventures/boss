@@ -9,7 +9,7 @@ import { CaretRight, Fingerprint } from "@phosphor-icons/react";
 
 import { idPost } from "../../lib/identity/api";
 import type { SignInStep } from "../../lib/identity/types";
-import { getAssertion, webauthnAvailable, type AssertionOptions } from "../../lib/identity/webauthn";
+import { getAssertion, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../lib/identity/webauthn";
 import { CodeInput } from "../../components/identity/kit";
 import { sayAuth } from "./auth-flow";
 
