@@ -316,7 +316,7 @@ def test_a60_j9_revoking_a_grant_mid_run_halts_it_within_5s_and_revokes_the_gith
     with env.db() as c:
         c.execute(text("INSERT INTO code_task_runs (id, project_id) VALUES ('task1', :p)"), {"p": env.project})
         c.execute(text("INSERT INTO workflow_schedules (id, input) VALUES ('sch1', CAST(:i AS JSONB))"),
-                  {"i": json.dumps({"_identity_grant": g.id})})
+                  {"i": json.dumps({"_identity": {"grant_id": g.id, "on_behalf_of": env.alice}})})
     forge = spawn(env, shim, env.vera, "vera", scope=("code_task:read",))
     assert _git(proxy, shim, "GET", "/acme/web.git/info/refs", "service=git-upload-pack").status == 200
     install_token = hub.issued[0]

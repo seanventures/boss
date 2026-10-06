@@ -798,6 +798,12 @@ def start_code_task(
     from .work_provenance import code_task_job_priority
     from boss_engine.identity import lineage as _identity_lineage
 
+    if identity_acting is None and _identity_lineage.current() is None and run_finalize.get("workflow_run_id"):
+        # A build a workflow step started (in the worker): it acts for the person under the grant
+        # recorded on that workflow run — never under the worker's own identity.
+        from boss_engine.identity import consent as _consent
+
+        identity_acting = _consent.acting_for_workflow_run(connection, str(run_finalize["workflow_run_id"]))
     with (_identity_lineage.acting(identity_acting) if identity_acting is not None
           else _identity_lineage.nullcontext()):
         jobs.create_job(connection, project_id=project_id, task_id=task_id,

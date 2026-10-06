@@ -144,6 +144,11 @@ def enqueue_job(
     """
     from boss_engine.identity import lineage as _identity_lineage
 
+    if on_behalf_of is None and _identity_lineage.current() is None and (payload or {}).get("workflow_run_id"):
+        # Work the worker queues for a workflow run carries that run's recorded authority.
+        from boss_engine.identity import consent as _identity_consent
+
+        on_behalf_of = _identity_consent.acting_for_workflow_run(connection, str(payload["workflow_run_id"]))
     job_payload = _identity_lineage.stamp_job(dict(payload or {}), on_behalf_of)
     boundary = resolve_job_data_boundary(
         connection, task_id, job_payload, data_boundary

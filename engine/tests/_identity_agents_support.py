@@ -53,10 +53,11 @@ CREATE TABLE IF NOT EXISTS code_task_runs (id TEXT PRIMARY KEY, project_id TEXT 
 CREATE TABLE IF NOT EXISTS code_task_stop_requests (run_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, actor TEXT NOT NULL,
   reason TEXT, phase TEXT, requested_at TIMESTAMPTZ NOT NULL DEFAULT now(), honoured_at TIMESTAMPTZ);
 CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, paused_at TIMESTAMPTZ,
-  blocked_reason TEXT, updated_at TIMESTAMPTZ);
+  blocked_reason TEXT, updated_at TIMESTAMPTZ, policy_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb);
 CREATE TABLE IF NOT EXISTS workflow_schedules (id TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT true,
   input JSONB NOT NULL DEFAULT '{}'::jsonb, last_error TEXT, updated_at TIMESTAMPTZ);
-CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, project_id TEXT, kind TEXT, payload JSONB NOT NULL DEFAULT '{}'::jsonb);
+CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, project_id TEXT, kind TEXT, payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'queued', last_error JSONB, updated_at TIMESTAMPTZ);
 """
 
 _TRUNCATE = ("identity_security_events", "identity_egress_log", "identity_egress_credentials", "identity_dpop_replay",

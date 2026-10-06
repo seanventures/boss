@@ -69,6 +69,19 @@ def parse_run_id(rid: str) -> Optional[tuple[str, str]]:
     return kind, rest.split("/", 1)[0]
 
 
+def run_segments(rid: str) -> list[tuple[str, str]]:
+    """Every halt-able piece of a nested run id: `run_wf:W/ct:C/forge` -> [(wf, W), (ct, C)]."""
+    first = parse_run_id(rid)
+    if first is None:
+        return []
+    out = [first]
+    for seg in rid.split("/")[1:]:
+        kind, sep, entity = seg.partition(":")
+        if sep and kind.isalnum() and entity:
+            out.append((kind, entity))
+    return out
+
+
 # ---- default halters for BOSS's run kinds --------------------------------------------------------------
 
 def _table_exists(db: Any, name: str) -> bool:
@@ -132,8 +145,30 @@ def _schedules_for(db: Any, grant_ids: list[str]) -> list[str]:
 
     if not grant_ids or not _table_exists(db, "workflow_schedules"):
         return []
-    return list(db.execute(text("SELECT id FROM workflow_schedules WHERE enabled AND input->>'_identity_grant' = ANY(:g)"),
-                           {"g": grant_ids}).scalars().all())
+    return list(db.execute(text("SELECT id FROM workflow_schedules WHERE enabled "
+                                "AND input->'_identity'->>'grant_id' = ANY(:g)"), {"g": grant_ids}).scalars().all())
+
+
+def _workflow_runs_for(db: Any, grant_ids: list[str]) -> list[str]:
+    """Live workflow runs whose recorded authority is one of these grants (they may have no token
+    yet: a run waiting between steps is still halted)."""
+    from sqlalchemy import text
+
+    if not grant_ids or not _table_exists(db, "workflow_runs"):
+        return []
+    rows = db.execute(text(
+        "SELECT id FROM workflow_runs WHERE policy_snapshot->'_identity'->>'grant_id' = ANY(:g) AND status NOT IN "
+        "('completed','failed','deadlettered','cancelled','compensated','paused')"), {"g": grant_ids}).scalars().all()
+    return [f"run_wf:{r}" for r in rows]
+
+
+def _queued_jobs_for(db: Any, grant_ids: list[str]) -> list[str]:
+    from sqlalchemy import text
+
+    if not grant_ids or not _table_exists(db, "jobs"):
+        return []
+    return list(db.execute(text("SELECT id FROM jobs WHERE status = 'queued' "
+                                "AND payload->'_identity'->>'grant_id' = ANY(:g)"), {"g": grant_ids}).scalars().all())
 
 
 def _egress_for(db: Any, run_ids: list[str]) -> int:
@@ -153,7 +188,7 @@ def _plan(trigger: CascadeTrigger, target: str, db: Any) -> dict[str, Any]:
 
     plan: dict[str, Any] = {"revoke_grants": [], "expire_grants": [], "suspend_grants": [],
                             "jtis": [], "runs": [], "passports": [], "sessions": 0, "keys": 0,
-                            "vault_items": [], "schedules": []}
+                            "vault_items": [], "schedules": [], "jobs": []}
     if trigger in (CascadeTrigger.GRANT_REVOKED, CascadeTrigger.GRANT_EXPIRED):
         live = _grants_where(db, "id = :g AND status IN ('active','suspended')", {"g": target})
         family = live + [g for g in grants_mod.descendants(db, live)]
@@ -163,6 +198,8 @@ def _plan(trigger: CascadeTrigger, target: str, db: Any) -> dict[str, Any]:
             plan["revoke_grants"] = [g for g in family if g != target]
         all_ids = [target] + family
         plan["jtis"], plan["runs"] = _active_runs(db, "grant_id = ANY(:g)", {"g": all_ids})
+        plan["runs"] = sorted(set(plan["runs"]) | set(_workflow_runs_for(db, all_ids)))
+        plan["jobs"] = _queued_jobs_for(db, all_ids)
         plan["schedules"] = _schedules_for(db, all_ids)
     elif trigger in (CascadeTrigger.PERSON_DISABLED, CascadeTrigger.PERSON_DELETED):
         mine = _grants_where(db, "user_principal_id = :u AND status IN ('active','suspended')", {"u": target})
@@ -249,17 +286,24 @@ def revoke_cascade(trigger: CascadeTrigger, target_id: str, *, actor: AuthContex
     if plan["runs"]:
         db.execute(text("UPDATE identity_egress_credentials SET revoked_at = now() WHERE run_id = ANY(:r) "
                         "AND revoked_at IS NULL"), {"r": plan["runs"]})
+        halted: set[tuple[str, str]] = set()
         for rid in plan["runs"]:
-            parsed = parse_run_id(rid)
-            halter = HALTERS.get(parsed[0]) if parsed else None
-            if halter is not None:
+            for kind, entity in run_segments(rid):
+                halter = HALTERS.get(kind)
+                if halter is None or (kind, entity) in halted:
+                    continue
+                halted.add((kind, entity))
                 db.execute(text("SAVEPOINT identity_halt"))
                 try:
-                    halter(parsed[1], why, db)
+                    halter(entity, why, db)
                     db.execute(text("RELEASE SAVEPOINT identity_halt"))
                 except Exception:  # noqa: BLE001 — tokens are already dead; the halt is best effort
                     db.execute(text("ROLLBACK TO SAVEPOINT identity_halt"))
                     log.warning("could not halt %s", rid)
+    if plan["jobs"]:
+        # Queued work under the dead grant never starts (leased work stops at its next token check).
+        db.execute(text("UPDATE jobs SET status = 'cancelled', last_error = to_jsonb(CAST(:why AS TEXT)), updated_at = now() "
+                        "WHERE id = ANY(:j) AND status = 'queued'"), {"j": plan["jobs"], "why": why})
     for sid in plan["schedules"]:
         db.execute(text("UPDATE workflow_schedules SET enabled = false, last_error = 'Renew authority: the grant "
                         "this schedule ran under has ended', updated_at = now() WHERE id = :s"), {"s": sid})
