@@ -392,18 +392,31 @@ def forget_usage() -> None:
 
 def system_permissions(principal_id: str, *, db: Any = None) -> Optional[frozenset[str]]:
     """S2: the fixed set of a legacy SYSTEM principal (IDENTITY.md §6.6 step 2 reads fixed sets
-    for system principals). None for a principal that is not a legacy one; empty once its path
-    is retired (sys_legacy_console after the cutoff)."""
+    for system principals). None for a principal that is not a legacy one.
+
+    sys_legacy_console (BOSS_API_KEY) depends on the claim: the full Owner set before the first
+    Owner is claimed; from the claim, the Owner set minus every identity write
+    (CONSOLE_AFTER_CLAIM_SET); empty once its path is retired at the cutoff."""
     from . import migration
     fixed = migration.legacy_system_set(principal_id)
     if fixed is None:
         return None
-    if principal_id == LEGACY_CONSOLE_PRINCIPAL and db is not None:
-        row = db.execute(_sql(
-            "SELECT retired_at FROM identity_legacy_mappings WHERE legacy_kind = "
-            "'console_api_key' AND principal_id = :p"), {"p": principal_id}).first()
-        if row and row[0] is not None:
-            return frozenset()
+    if principal_id != LEGACY_CONSOLE_PRINCIPAL:
+        return fixed
+    if db is None:
+        from ..db import begin
+        with begin() as conn:
+            return system_permissions(principal_id, db=conn)
+    row = db.execute(_sql(
+        "SELECT m.retired_at, p.org_id FROM identity_principals p LEFT JOIN "
+        "identity_legacy_mappings m ON m.legacy_kind = 'console_api_key' AND m.principal_id = p.id "
+        "WHERE p.id = :p"), {"p": principal_id}).first()
+    if row is None:
+        return fixed              # not seeded yet: nothing is claimed either
+    if row[0] is not None:
+        return frozenset()
+    if migration.claimed_at(db, row[1]) is not None:
+        return migration.CONSOLE_AFTER_CLAIM_SET
     return fixed
 
 

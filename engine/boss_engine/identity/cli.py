@@ -9,6 +9,7 @@
     audit verify | audit export --out F | audit prune --older-than-days N
     shadow-report [--json]                   the per-router shadow -> enforce report
     posture                                  the six posture checks
+    claim-status                             one line for `boss doctor`: claimed or not
 
 HOST SHELL ONLY, by construction: these functions are reached from no HTTP route and no MCP tool
 (test_identity_audit_recovery_is_host_only pins it). Run them where the database is:
@@ -120,6 +121,25 @@ def recover_owner(email: str, *, db: Any, origin: Optional[str] = None,
     return Recovery(pid, link, expires, reactivated, not had_owner)
 
 
+def claim_status(org_id: str, *, db: Any) -> str:
+    """For `boss doctor` (scripts/install/checkup.sh): `unclaimed`, or
+    `claimed <when>; shared credentials stop <when>` (never a secret)."""
+    from .legacy import LegacyKind
+    from .migration import claimed_at, mapping
+    when = claimed_at(db, org_id)
+    if when is None:
+        return "unclaimed"
+    cutoffs = [m["retire_after"] for m in (
+        mapping(db, org_id, k, r) for k, r in ((LegacyKind.SHARED_PASSWORD, "BOSS_CONSOLE_PASSWORD"),
+                                               (LegacyKind.CONSOLE_API_KEY, "BOSS_API_KEY"),
+                                               (LegacyKind.NETWORK_MODE,
+                                                "BOSS_CONSOLE_AUTH=network")))
+        if m and m["retired_at"] is None and m["retire_after"]]
+    tail = (f"; shared credentials stop {min(cutoffs).date().isoformat()}" if cutoffs
+            else "; shared credentials retired")
+    return f"claimed {when.date().isoformat()}{tail}"
+
+
 # ---- the command line ----------------------------------------------------------------------------
 
 def _print(value: Any, as_json: bool = True) -> None:
@@ -149,6 +169,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     rep = sub.add_parser("shadow-report", help="per-router shadow report")
     rep.add_argument("--json", action="store_true")
     sub.add_parser("posture", help="identity posture checks")
+    sub.add_parser("claim-status", help="one line: unclaimed, or claimed and the legacy cutoff")
     args = parser.parse_args(argv)
 
     try:
@@ -212,6 +233,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                               f"  unexplained {r['unexplained']:>6}  {'; '.join(r['blockers'])}")
             elif args.cmd == "posture":
                 _print(posture.posture(org_id, db=db))
+            elif args.cmd == "claim-status":
+                print(claim_status(org_id, db=db))
     except (RecoveryError, ValueError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 1

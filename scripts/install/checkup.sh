@@ -256,6 +256,18 @@ esac
 # 7. can this machine run BOSS at all
 if [ -n "$blocked" ]; then warn "host: $blocked"; else ok "host: scheduling BOSS normally"; fi
 
+# NAMED ACCOUNTS (docs/community/IDENTITY_UPGRADE.md): the first visit to /claim creates the Owner
+# account; the console password proves it is you, then works 30 days more as an Operator.
+claim=""
+if [ "${#DOCKER[@]}" -gt 0 ]; then
+  claim=$("${DOCKER[@]}" exec boss-community-api-1 python -m boss_engine.identity.cli claim-status 2>/dev/null | tail -n 1 || echo "")
+fi
+case "$claim" in
+  unclaimed) warn "identity: not claimed yet — open $CONSOLE_URL/claim once to create your Owner account (boss password proves it is you)" ;;
+  claimed*) ok "identity: $claim" ;;
+  *) : ;;   # an older image without the identity CLI: nothing to say
+esac
+
 # 8. configuration drift — how far this install has wandered from a stock one.
 #
 # ADVISORY, NEVER A FAILURE. Most drift is correct: an install needs its own credentials, its

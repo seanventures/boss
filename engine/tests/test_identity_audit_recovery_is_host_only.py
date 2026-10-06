@@ -85,3 +85,18 @@ def test_recovery_is_reachable_only_from_the_host_shell():
     assert set(hits) <= {"engine/boss_engine/identity/cli.py"}, hits
     with pytest.raises(SystemExit):
         cli.main(["recover-owner"])            # --email is required
+
+
+def test_claim_status_is_the_one_line_boss_doctor_prints(db):
+    community_install(db)
+    cfg = settings(legacy_console_auth="network")
+    migration.seed(db, settings=cfg, now=NOW)
+    assert cli.claim_status("org_boss", db=db) == "unclaimed"
+    fake_claim(db, name="Param", email="param@example.com", via="network_bridge", now=NOW,
+               cfg=cfg)
+    claimed_on = migration.claimed_at(db, "org_boss").date().isoformat()
+    assert cli.claim_status("org_boss", db=db) == \
+        f"claimed {claimed_on}; shared credentials stop " \
+        f"{(NOW + timedelta(days=30)).date().isoformat()}"
+    doctor = (REPO / "scripts/install/checkup.sh").read_text()
+    assert "boss_engine.identity.cli claim-status" in doctor and "/claim once" in doctor

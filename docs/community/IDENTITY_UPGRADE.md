@@ -11,7 +11,7 @@ The upgrade itself changes nothing you can see. On the first request after it st
 | Today | After the upgrade |
 | --- | --- |
 | The shared console password (`BOSS_CONSOLE_PASSWORD`) | The credential that proves you are the operator when you claim the install. |
-| The console's API key (`BOSS_API_KEY`) | A legacy principal, **Legacy console key**, with Owner-level access until the cutoff. |
+| The console's API key (`BOSS_API_KEY`) | A legacy principal, **Legacy console key**, with Owner-level access until you claim the install. |
 | Other API keys (`BOSS_API_KEYS` with `BOSS_API_KEY_PRINCIPALS`) | Legacy keys, stored as hashes. Each one keeps exactly the access of the member it was bound to. |
 | The worker's key | Unchanged. It keeps its access until the worker moves to per-job credentials. |
 | Members such as `ceo`, `cto` and `cao` | Placeholder people, *pending*, holding exactly what that member could do. |
@@ -24,14 +24,14 @@ Authorization runs in **shadow mode** by default. BOSS evaluates every request a
 
 ## Claim the install (once)
 
-Claiming creates the first Owner: you. Open the console and choose **Claim this BOSS**, then:
+Claiming creates the first Owner: you. Open `/claim` on your console address (for example `http://127.0.0.1:3000/claim`), or choose **Claim this BOSS** in the console, then:
 
 1. **Password installs:** enter the shared console password as proof that you are the operator.
    **Network-trusted installs** (no password, reached over a private network such as a tailnet): the network trust that already makes you the operator is the proof. The claim screen shows the address it will bind to, for example `https://boss.your-tailnet.ts.net`. Confirm it.
 2. Enter your name and email.
 3. Register a passkey. On a password install you can use a password plus an authenticator app instead.
 
-The claim works once. After it, the claim page answers *not found*.
+The claim works once. After it, the claim page answers *not found*. `boss doctor` tells you whether the install is claimed yet, and when the shared credentials stop working.
 
 When you claim, you can take over a legacy member such as `ceo`. Old records then show your name, for example **Param (was: ceo)**, and the `ceo` approval seat moves to you.
 
@@ -46,7 +46,7 @@ The cutoff counts from the moment you claim:
 | --- | --- | --- |
 | Shared console password | Signs in as **Shared console password**, with the **Operator** role. | Refused. |
 | Network-trusted access | Visitors act as **Network operator**, with the **Operator** role. | Refused. Visitors see the sign-in page. |
-| `BOSS_API_KEY` | Unchanged (Owner-level). | Refused, unless an Owner keeps it explicitly (posture shows it red). |
+| `BOSS_API_KEY` | Everything an Owner can do **except identity changes**: people, groups, roles, keys, service accounts, agent delegations, sign-in providers and the sign-in policy. Those are done by real Owners from the claim on. | Refused, unless an Owner keeps it explicitly (posture shows it red). |
 | Other env API keys and the worker's key | Unchanged. | Unchanged, until you rotate each one into a service-account key. |
 | OIDC bearer callers | Unchanged. | Unchanged, until the legacy paths are removed in a later release. |
 
