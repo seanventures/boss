@@ -1,5 +1,12 @@
 
-import { consoleAuthConfig } from "../lib/console-session";
+import { redirect } from "next/navigation";
+import { networkTrustedConsole } from "../lib/console-session";
+import { accessForArea } from "../lib/identity/area-access";
+import { checkWith } from "../lib/identity/check";
+import { snapshotFrom } from "../lib/identity/contract";
+import { loadIdentityCached } from "../lib/identity/server-cache";
+import { identityStubEnabled } from "../lib/identity/stub/enabled";
+import { isAreaId } from "../lib/area-ids";
 import { CheckinCard } from "./improve/checkin-card";
 import { cookies, headers } from "next/headers";
 import {
@@ -546,8 +553,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     cookie: requestCookies.get(LOADED_AREAS_COOKIE)?.value,
     fullDocument: isFullDocumentRequest((name) => requestHeaders.get(name)),
   });
-  const shows = (area: string) => loadedAreas.has(area);
-  const needs = (...areas: string[]) => areas.some((area) => loadedAreas.has(area));
+  // WHO IS SIGNED IN, AND WHAT THEY MAY OPEN (IDENTITY.md §6.5). Read before any area's feeds:
+  // an area the viewer cannot open is neither fetched nor rendered — the shell shows
+  // <AccessDenied> for it — so no area loads and then 403s.
+  const identity = await loadIdentityCached(activeProjectId);
+  if (identity.problem === "unauthenticated" && !networkTrustedConsole()) {
+    redirect(`/login?next=${encodeURIComponent(`/?area=${initialArea ?? "overview"}&org=${activeOrgId}`)}`);
+  }
+  const identityUnavailable = !identity.org;
+  const orgSnap = identity.org ? snapshotFrom(identity.org) : null;
+  const projectSnap = identity.project ? snapshotFrom(identity.project) : null;
+  const openable = (area: string) => {
+    if (identityUnavailable || !isAreaId(area)) return true;
+    const access = accessForArea(area);
+    return !("permission" in access) || checkWith(orgSnap, projectSnap, activeProjectId, access.permission).allowed;
+  };
+  const shows = (area: string) => loadedAreas.has(area) && openable(area);
+  const needs = (...areas: string[]) => areas.some((area) => loadedAreas.has(area) && openable(area));
   // LOAD ONLY WHAT THIS AREA NEEDS.
   //
   // Every area paid for every other: one render fetched ~70 feeds and shipped 8.38 MB in
@@ -866,7 +888,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       initialArea={initialArea}
       // Sign out only means something when the console has a password; without one the button
       // led to a sign-in page that could only say authentication is not configured.
-      signOutAvailable={consoleAuthConfig() !== null}
+      signOutAvailable={!networkTrustedConsole()}
+      identity={{ me: identity.me, org: identity.org, project: identity.project, stub: identityStubEnabled(), unavailable: identityUnavailable }}
       loadedAreas={[...loadedAreas]}
     >
       <div className="frame">
