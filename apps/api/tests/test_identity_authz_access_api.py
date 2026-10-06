@@ -59,3 +59,29 @@ def test_grantors_are_the_people_who_could_grant_it_and_nobody_else(world):
     assert [g["display_name"] for g in owners["grantors"]] == ["Olive"]
     assert asked.status_code == 202 and asked.json()["grantors"] == deploy["grantors"]
     assert smuggled.status_code == 422      # nobody asks on someone else's behalf
+
+
+def test_a13_an_access_request_is_stored_once_recorded_and_listed_for_admins(world):
+    """Amendment A13 (integration): the request is durable, de-duplicated while open, audited as
+    access.requested, and visible to whoever can read bindings — not to the requester's peers."""
+    from sqlalchemy import text
+
+    owner, viewer = world.person("Olive"), world.person("Vic")
+    world.bind(owner, "owner")
+    world.bind(viewer, "viewer")
+    with world.acting_as(world.ctx(viewer)):
+        first = client.post("/v1/identity/access-requests",
+                            json={"permission": "deployment:create", "reason": "ship the fix"})
+        again = client.post("/v1/identity/access-requests", json={"permission": "deployment:create"})
+        peers = client.get("/v1/identity/access-requests")
+    assert first.status_code == 202 and first.json()["status"] == "requested"
+    assert again.json()["id"] == first.json()["id"] and again.json()["already_open"] is True
+    assert peers.status_code == 403
+    with world.acting_as(world.ctx(owner)):
+        listed = client.get("/v1/identity/access-requests").json()["requests"]
+    assert [(r["requester_principal_id"], r["permission_key"]) for r in listed] == [
+        (viewer.id, "deployment:create")]
+    with world.engine.begin() as db:
+        events = db.execute(text("SELECT count(*) FROM identity_security_events WHERE org_id = :o AND "
+                                 "event_type = 'access.requested'"), {"o": world.org}).scalar()
+    assert events == 1

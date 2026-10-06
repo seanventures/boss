@@ -541,14 +541,54 @@ def build_identity_access_router(engine: Any) -> APIRouter:
     @router.post("/v1/identity/access-requests", status_code=202)
     @authenticated(self_only=True, note="the caller asks for access for themselves")
     def request_access(body: AccessRequest, request: Request):
+        """Amendment A13: the request is stored (one open request per person, permission and
+        scope) and recorded as `access.requested`; the answer names who can grant it."""
+        from boss_engine.identity import audit as audit_module
+        from boss_engine.identity.ids import new_id
+
         def work(db, ctx):
             if body.permission not in PERMISSION_META:
                 raise AccessError(422, "unknown_permission")
             org = ctx.principal.org_id
+            if body.project_id and db.execute(text(
+                    "SELECT 1 FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                    "WHERE p.id = :p AND w.org_id = :o"), {"p": body.project_id, "o": org}).first() is None:
+                raise AccessError(404, "not_found")
             grantors = bindings_service.grantors(db, org, body.permission, project_id=body.project_id)
-            # Durable storage and notification need amendment A13 (identity_access_requests and
-            # the access.requested event type); until then the request is answered with who to ask.
-            return {"status": "noted", "permission": body.permission, "grantors": grantors}
+            existing = db.execute(text(
+                "SELECT id FROM identity_access_requests WHERE org_id = :o AND requester_principal_id = :r "
+                "AND permission_key = :k AND coalesce(project_id, '') = coalesce(:p, '') AND status = 'open'"),
+                {"o": org, "r": ctx.principal.id, "k": body.permission, "p": body.project_id}).scalar()
+            if existing:
+                return {"status": "requested", "id": existing, "already_open": True,
+                        "permission": body.permission, "grantors": grantors}
+            request_id = new_id("acr")
+            db.execute(text(
+                "INSERT INTO identity_access_requests (id, org_id, requester_principal_id, permission_key, "
+                "project_id, reason) VALUES (:id, :o, :r, :k, :p, :why)"),
+                {"id": request_id, "o": org, "r": ctx.principal.id, "k": body.permission,
+                 "p": body.project_id, "why": (body.reason or None)})
+            audit_module.record(audit_module.SecurityEvent.from_context(
+                ctx, "access.requested", audit_module.Outcome.INFO, target_type="permission",
+                target_id=body.permission,
+                scope=f"project:{body.project_id}" if body.project_id else "org",
+                details={"request_id": request_id}), db=db)
+            return {"status": "requested", "id": request_id, "already_open": False,
+                    "permission": body.permission, "grantors": grantors}
+        return run(request, work, write=True)
+
+    @router.get("/v1/identity/access-requests")
+    @permit(P.ROLE_BINDING_READ, scope=Scope.org())
+    def list_access_requests(request: Request, status: str = "open"):
+        """Open (or decided) access requests, for whoever can see bindings."""
+        def work(db, ctx):
+            rows = db.execute(text(
+                "SELECT r.id, r.requester_principal_id, p.display_name AS requester_name, r.permission_key, "
+                "r.project_id, r.reason, r.status, r.created_at, r.resolved_at, r.resolved_by "
+                "FROM identity_access_requests r JOIN identity_principals p ON p.id = r.requester_principal_id "
+                "WHERE r.org_id = :o AND r.status = :s ORDER BY r.created_at DESC LIMIT 200"),
+                {"o": ctx.principal.org_id, "s": status}).mappings().all()
+            return {"requests": [dict(r) for r in rows]}
         return run(request, work)
 
     # ---- approval seats (read) -------------------------------------------------------------------

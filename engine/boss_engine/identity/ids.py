@@ -8,7 +8,7 @@ import base64
 import secrets
 
 PREFIXES = frozenset({
-    "usr", "sva", "agt", "sys", "grp", "arl", "rbd", "ses", "key", "pky", "inv", "idp", "dlg",
+    "usr", "sva", "agt", "sys", "grp", "arl", "rbd", "ses", "key", "pky", "inv", "idp", "dlg", "acr",
     "rt", "vlt", "egr", "evt",
 })
 

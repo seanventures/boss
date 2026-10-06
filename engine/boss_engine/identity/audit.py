@@ -76,6 +76,7 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "vault.connection.revoked", "vault.decrypt_failed", "vault.master_key_rotated",
     # authorization
     "authz.denied", "authz.shadow_deny", "authz.allowed_critical", "authz.mode_changed",
+    "access.requested",
     # policy and system
     "policy.changed", "bootstrap.claimed", "owner.recovered_by_host", "legacy.password_used",
     "legacy.api_key_used", "legacy.network_used", "legacy.claimed_actor_ignored",
