@@ -126,9 +126,54 @@ export function tryStep(): SetupView {
   };
 }
 
+/** Model routing on Smart, Thursday, Claude at 8% of its week: what the board renders. */
+export const ROUTING: NonNullable<SetupView["routing"]> = {
+  mode: "smart", version: 3,
+  tiers: [
+    { tier: "fast", label: "Fast", criteria: "One small, well-specified change or a quick answer.",
+      targets: [{ engine: "claude_code", model: "haiku", label: "Claude Code · haiku" },
+                { engine: "openrouter", model: "deepseek/deepseek-chat", label: "OpenRouter · deepseek/deepseek-chat" }] },
+    { tier: "balanced", label: "Balanced", criteria: "Real engineering with a clear goal.",
+      targets: [{ engine: "claude_code", model: "sonnet", label: "Claude Code · sonnet" },
+                { engine: "openrouter", model: "qwen/qwen3-coder", label: "OpenRouter · qwen/qwen3-coder" }] },
+    { tier: "frontier", label: "Frontier", criteria: "Judgment where a wrong call is expensive.",
+      targets: [{ engine: "claude_code", model: "opus", label: "Claude Code · opus" }] },
+  ],
+  floors: [
+    { match: { step: "review_code" }, tier: "frontier", describe: "Adversarial review", tier_label: "Frontier" },
+    { match: { step: "security_check" }, tier: "frontier", describe: "Security check", tier_label: "Frontier" },
+    { match: { step: "panel_facilitator" }, tier: "frontier", describe: "Panel facilitator", tier_label: "Frontier" },
+  ],
+  floor_preset: "balanced",
+  presets: [{ name: "lean", label: "Lean" }, { name: "balanced", label: "Balanced" },
+            { name: "strict", label: "Strict" }, { name: "vag", label: "VAG" }],
+  floor_steps: [{ step: "implement", label: "Implement" }, { step: "review_code", label: "Adversarial review" }],
+  headroom: [{ engine: "claude_code", source_label: "Claude Code", state: "near_limit", label: "Near limit",
+               left: 0.08, resets_at: "2026-10-12T00:00:00+00:00", basis: "cli", exhausted_models: [],
+               describe: "8% left (near limit)" }],
+  headroom_rules: [{ source: "claude_code", when: "near_limit", tiers: ["fast", "balanced"], to: "openrouter" }],
+  headroom_states: [{ state: "tight", label: "Tight" }, { state: "near_limit", label: "Near limit" },
+                    { state: "exhausted", label: "Exhausted" }],
+  thresholds: { tight: 0.4, near_limit: 0.15 },
+  budget: { orange: 1, red: 1 }, budget_state: "green",
+  classifier: { backend: "auto", jev: "held", model_fallback: false, model_below: 0.6,
+                criteria: { fast: "Small.", balanced: "Features.", frontier: "Judgment." },
+                backends: [{ value: "auto", label: "Auto" }, { value: "jev", label: "Jev" },
+                           { value: "rules", label: "Rules only" }, { value: "model", label: "Cheap model" }] },
+  sources: [
+    { engine: "claude_code", label: "Claude Code", kind: "subscription", working: true,
+      models: ["opus", "sonnet", "haiku"] },
+    { engine: "openrouter", label: "OpenRouter", kind: "metered", working: true,
+      models: ["deepseek/deepseek-chat", "qwen/qwen3-coder", "anthropic/claude-opus-4.1"] },
+  ],
+  pins: {},
+  week: { routes: 112, smart_routes: 112, tiers: { fast: 38, balanced: 58, frontier: 16 },
+          escalations: 6, moved: 9, saved_usd: 41.2 },
+};
+
 export function board(): SetupView {
   return {
-    ...tryStep(), next: null,
+    ...tryStep(), next: null, routing: ROUTING,
     try: { workflow_key: "setup_first_pr", done: true, last_run: {
       run_id: "wfr1", status: "completed", pr_url: "https://github.com/owner/app/pull/12",
       pr_number: 12, pill: { state: "pr_open", tone: "green", label: "PR #12 ↗",

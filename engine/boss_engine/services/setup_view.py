@@ -925,10 +925,26 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "detected": detected,
         "catalogue": [dict(entry) for entry in CATALOGUE],
         "jobs": jobs,
+        # Model routing (docs/product/MODEL_ROUTER.md): Smart / Fixed, tiers, floors, headroom,
+        # the classifier and this week's mix. None when the router's tables are not there yet.
+        "routing": _routing(connection, settings, project_id),
         "budget": budget,
         "try": trying,
         "generated_at": now.isoformat(),
     }
+
+
+def _routing(connection: Connection, settings: Any, project_id: str) -> Optional[dict[str, Any]]:
+    try:
+        from .model_router.view import routing_view
+
+        with connection.begin_nested():
+            return routing_view(connection, settings, project_id)
+    except Exception:  # noqa: BLE001 — the rest of Repo and models still renders
+        import logging
+
+        logging.getLogger("boss.setup_view").warning("routing view failed", exc_info=True)
+        return None
 
 
 def basics(view: dict[str, Any], *, router_runnable: Optional[bool] = None) -> dict[str, Any]:

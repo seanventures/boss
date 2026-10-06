@@ -71,7 +71,7 @@ function AddKey({ onDone }: { onDone: () => void }) {
   );
 }
 
-function JobLine({ job }: { job: Job }) {
+export function JobLine({ job }: { job: Job }) {
   const { projectId, view, apply } = useBoard();
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);

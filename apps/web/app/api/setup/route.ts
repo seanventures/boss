@@ -38,6 +38,8 @@ const OPS: Record<string, Op> = {
   budget: { method: "PUT", path: () => "/v1/setup/budget" },
   try: { method: "POST", path: () => "/v1/setup/try" },
   decision_key: { method: "POST", path: () => "/v1/setup/decisions/key" },
+  routing: { method: "PUT", path: () => "/v1/setup/routing" },
+  routing_catalogue: { method: "POST", path: () => "/v1/setup/routing/catalogue" },
 };
 
 async function forward(r: Response) {

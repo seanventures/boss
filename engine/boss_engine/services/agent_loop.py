@@ -2697,7 +2697,11 @@ def _agent_purpose(connection, run_id: str, project_id: str, messages: Any,
             content = message.get("content")
             brief = content if isinstance(content, str) else json.dumps(content)[:4000]
             break
-    return RouteRequest(kind="agent", step="agent", project_id=project_id, unit_id=run_id,
+    # Recorded under the workflow run and its step when the agent works for one, so the
+    # step's "Why this model" reads it; a stand-alone agent run is its own unit.
+    return RouteRequest(kind="agent", step="agent", project_id=project_id,
+                        unit_id=step.get("workflow_run_id") or run_id,
+                        ref=step.get("step_id") or None,
                         role=role, text=str(brief)[:6000],
                         agent_policy=agent_model_policy(connection, project_id, role),
                         sticky=True)

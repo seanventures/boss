@@ -212,10 +212,6 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
         Press("gv-more-pace", "app/govern/control-board.tsx", write=True,
               then=("gv-edit-pace", "gv-pace-apply"), expect=_tid("gv-value-pace")),
     ),
-    "pipeline": (
-        Press("chunk-plan", "app/phase3-ui.tsx", fill=(("chunk-title", "E2E chunk plan"),),
-              expect='[data-testid="chunk-plan-result"][data-ok="true"]'),
-    ),
     "comms": (
         Press("slack-render", "app/phase3-ui.tsx",
               fill=(("slack-persona", "E2E"), ("slack-body", "All systems green.")),
@@ -223,6 +219,10 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
     ),
     "ops": (
         Press("eval-run", "app/phase2-ui.tsx", write=True, expect=_tid("eval-latest")),
+        # The Factory scale card moved here when the Coding Pipeline page folded into
+        # Setup › Model routing (docs/product/MODEL_ROUTER.md).
+        Press("chunk-plan", "app/phase3-ui.tsx", fill=(("chunk-title", "E2E chunk plan"),),
+              expect='[data-testid="chunk-plan-result"][data-ok="true"]'),
     ),
     "assurance": (
         Press("assurance-seed", "app/assurance-ui.tsx", write=True,

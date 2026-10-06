@@ -16420,6 +16420,7 @@ app.include_router(build_setup_router(
     get_settings=lambda: settings,
     require_actor=require_project_actor,
     principal=lambda: current_api_principal.get(),
+    require_reader=require_project_reader,
 ))
 
 

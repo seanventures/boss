@@ -16,6 +16,7 @@
  * else who the workflow assigns it to — the very view the lane node draws — so the node, the
  * chain and this panel cannot name three different people for one step.
  */
+import { WhyThisModel, type RouteRow } from "../why-this-model";
 import React, { useState } from "react";
 
 import type { Act, AvatarVariant } from "../../lib/agent-world-types";
@@ -296,7 +297,7 @@ export function actorVerb(phase: string, status: string): string {
 /** "Done by <face> <name> · $0.03 · model", the step's facts, and the agent's card below them. */
 export function StepDoneBy({ act, approval, output, phase, status, planned, viewer, projectId, failure,
                              question, cost, calls, model, onAsk, stepId, facts, skipped,
-                             askBossTip = "Ask about this step" }: {
+                             askBossTip = "Ask about this step", route = null }: {
   act: Act | null; approval?: Act | null; output: unknown;
   /** phaseOf(step), and the raw status for Queued vs Doing. */
   phase: string; status: string;
@@ -313,6 +314,8 @@ export function StepDoneBy({ act, approval, output, phase, status, planned, view
   facts: string[];
   /** Why a skipped step did not apply. */
   skipped?: string;
+  /** The model router's route for this step ("Why this model"), when it recorded one. */
+  route?: RouteRow | null;
 }) {
   useIdentityVersion();
   const [open, setOpen] = useState(false);
@@ -342,10 +345,11 @@ export function StepDoneBy({ act, approval, output, phase, status, planned, view
             <strong className="wf-doneby-name" data-testid="dw-step-doneby-name"
                     data-tip={named.role !== named.name ? named.role : undefined}>{named.name}</strong>
           </span>
-          {priced || model ? (
+          {priced || model || route ? (
             <span className="wf-doneby-facts">
               {priced ? <span className="wf-doneby-fact" data-testid="dw-step-cost">{usd(spent)}</span> : null}
-              {model ? <span className="wf-doneby-fact" data-testid="dw-step-model" data-user-text>{model}</span> : null}
+              {route ? <span className="wf-doneby-fact" data-testid="dw-step-route"><WhyThisModel route={route} /></span>
+                : model ? <span className="wf-doneby-fact" data-testid="dw-step-model" data-user-text>{model}</span> : null}
             </span>
           ) : null}
           <span className="wf-doneby-acts">

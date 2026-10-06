@@ -2546,11 +2546,28 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
                         viewer),
         "now": _now_line(connection, acts) if live else None,
         "outputs": _outputs(connection, run, facts, st, row["stations"], comments, decision, now),
+        # WHY THIS MODEL (docs/product/MODEL_ROUTER.md): the router's decision per stage.
+        "routes": _routes(connection, run_id),
     }
     for key in ("finalize_ctx", "spec", "state"):
         out["run"].pop(key, None)
     out["etag"] = _etag({k: v for k, v in out.items() if k != "etag"})
     return out
+
+
+def _routes(connection: Any, run_id: str) -> list[dict[str, Any]]:
+    """Each stage's route, newest per stage last — compact, for "Why this model"."""
+    try:
+        from .model_router.store import routes_for
+
+        with connection.begin_nested():
+            rows = routes_for(connection, run_id)
+    except Exception:  # noqa: BLE001 — a store without the router's tables has none
+        return []
+    keep = ("id", "step", "ref", "mode", "tier", "classified_tier", "classifier", "confidence",
+            "engine", "model", "reason", "why", "escalation", "moved_by_headroom",
+            "budget_lite", "fallback", "created_at", "label", "step_label", "tier_label")
+    return [{k: r.get(k) for k in keep} for r in rows]
 
 
 # ── GET /v1/factory/apps (§4.6) ─────────────────────────────────────────────────────────────
