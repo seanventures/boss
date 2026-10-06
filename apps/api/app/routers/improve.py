@@ -86,7 +86,10 @@ _RESOLVED: dict[str, tuple[float, list[str]]] = {}
 
 
 def _resolve(name: str) -> list[str]:
-    """A trusted proxy given by name, resolved and cached for a minute. Unknown → nothing."""
+    """A trusted proxy given by name, resolved and cached for a minute. A FAILED lookup is never
+    cached (re-check 4, item 3): the console container may simply not be up yet, and a cached
+    miss would leave it untrusted for a minute. Blocking — call it off the event loop
+    (client_ip runs in the threadpool)."""
     import socket
     import time as _time
 
@@ -97,7 +100,10 @@ def _resolve(name: str) -> list[str]:
         addrs = sorted({ai[4][0] for ai in socket.getaddrinfo(name, None)})
     except OSError:
         addrs = []
-    _RESOLVED[name] = (_time.monotonic(), addrs)
+    if addrs:
+        _RESOLVED[name] = (_time.monotonic(), addrs)
+    else:
+        _RESOLVED.pop(name, None)
     return addrs
 
 
@@ -497,9 +503,12 @@ def build_improve_router(
             body = await read_capped(request, cap)
         except improve_collector.CollectorError as error:
             return JSONResponse(status_code=error.status, content={"detail": error.code})
-        ip = client_ip(request.client.host if request.client else "",
-                       request.headers.get("x-forwarded-for") or "",
-                       str(getattr(settings(), "trusted_proxies", "") or ""))
+        # Off the event loop (re-check 4, item 3): a trusted proxy given by NAME is a blocking
+        # DNS lookup, and one slow resolver must not stall every other request.
+        ip = await run_in_threadpool(
+            client_ip, request.client.host if request.client else "",
+            request.headers.get("x-forwarded-for") or "",
+            str(getattr(settings(), "trusted_proxies", "") or ""))
 
         def _work() -> dict:
             payload = improve_collector.unpack(body, request.headers.get("content-encoding"),

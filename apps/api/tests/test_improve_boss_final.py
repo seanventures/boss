@@ -93,15 +93,15 @@ def test_xff_is_believed_only_from_the_console_by_name(monkeypatch):
 def test_compose_wires_the_trust_and_the_hops():
     compose = (ROOT / "scripts/install/community-compose.yml").read_text()
     assert "BOSS_TRUSTED_PROXIES: ${BOSS_TRUSTED_PROXIES:-127.0.0.0/8,::1/128,web}" in compose
-    assert "BOSS_CONSOLE_PROXY_HOPS: ${BOSS_CONSOLE_PROXY_HOPS:-1}" in compose
+    assert "BOSS_CONSOLE_PROXY_HOPS: ${BOSS_CONSOLE_PROXY_HOPS:-0}" in compose
 
 
 # ------------------------------------------------------------------ nits
 def _env_value(tmp_path, content, key):
     env = tmp_path / ".env"
     env.write_text(content)
-    fn = subprocess.run(["sed", "-n", "/^env_value() {/,/^}/p", str(ROOT / "scripts/install/checkup.sh")],
-                        capture_output=True, text=True, check=True).stdout
+    src = (ROOT / "scripts/install/checkup.sh").read_text()
+    fn = src[src.index("_env_awk='"):src.index("\n}\n", src.index("env_value() {")) + 3]
     out = subprocess.run(["bash", "-c", f'{fn}\nenv_value "$1"', "_", key], capture_output=True,
                          text=True, env={"ENV_FILE": str(env), "PATH": "/usr/bin:/bin"})
     return out.stdout.strip()

@@ -27,7 +27,7 @@ console key to a worker-only route) were invisible to all of them.
 | Piece | How | Why that way |
 |---|---|---|
 | Postgres | `postgres:16-alpine` in its own container, database `boss_e2e` | never the operator's `boss` database |
-| API | `uvicorn apps.api.app.main:app` — the image's own entry point | |
+| API | `python -m apps.api.serve` (uvicorn, forwarded-header trust from `BOSS_TRUSTED_PROXIES`) — the image's own entry point | |
 | Worker | `python -m apps.worker.boss_worker.main` | runs advance on their own, as on an install |
 | Console | `next build` + `next start` (`--web-mode dev` for `next dev`) | |
 | Auth | `BOSS_REQUIRE_API_AUTH=true`, owner key → `ceo`, worker key → `system` | exactly `scripts/install/community-compose.yml` |

@@ -620,10 +620,19 @@ browser always sends one), and the console's `/v1` proxy does not attach its API
   trusts `web`, the console's own container, so a request through the console is counted by the
   client the console vouches for and a request at the published API port by its own address. The
   console forwards ONE hop, never a client's X-Forwarded-For as is: the hop its own proxies
-  appended (`BOSS_CONSOLE_PROXY_HOPS`, 1 in compose — the install's TLS proxy), or none (0, a
-  console reached directly: it is then one bucket rather than a believed claim). The console's
+  appended (`BOSS_CONSOLE_PROXY_HOPS`, set it to 1 behind your own TLS proxy), or none (0, the
+  compose default: no proxy ships, so a console reached directly is one bucket rather than a
+  believed claim). The API is started by `python -m apps.api.serve`, which gives uvicorn the IP
+  and CIDR entries of `BOSS_TRUSTED_PROXIES` as its `forwarded_allow_ips` — uvicorn otherwise
+  believes loopback's X-Forwarded-For on its own. A host-name entry is resolved off the event
+  loop, cached a minute, and a failed lookup is never cached. The console decides "is this a
+  collector route" once, on the normalised path (query ignored, percent-encoding decoded,
+  repeated and trailing slashes collapsed, case-sensitive): every such spelling gets the browser
+  check, the cap, no console key, the plain upstream path and no relayed `Location`; a spelling
+  middleware cannot skip (`%69ngest`, `//`) is refused there. The console's
   `/v1` route refuses any browser request to these paths (Origin, cookie or any `Sec-Fetch-*`
-  header) before reading the body. One address may introduce 3 **new**
+  header) before reading the body; a refused or over-cap POST answers with `Connection: close`
+  and the body is cancelled, so Node stops reading it. One address may introduce 3 **new**
   install ids a day; more are stored but marked `suspicious` and kept out of every count (the
   dashboard says how many are held back). The address is hashed, held an hour in memory, never
   stored, and the API's access log writes "-" for it on `/v1/telemetry/*`. Idempotent per `(install_id, day)` for the
@@ -632,11 +641,12 @@ browser always sends one), and the console's `/v1` proxy does not attach its API
 - `POST /v1/telemetry/delete`: `{"install_id","ts","proof","sig"}` where `proof` is the install
   secret and `sig = HMAC-SHA256(secret, "delete|<install_id>|<ts>")`; `sha256(proof)` must equal
   the id's FIRST registered `secret_hash` (from its first heartbeat or its first shared run,
-  whichever came earlier — an envelope offering another hash for a known id is refused, 409, so a
-  forged heartbeat cannot take an id over) and
+  whichever came earlier — an envelope offering another hash, or none, for a known id is refused,
+  409, so a forged heartbeat cannot take an id over) and
   `ts` be within 10 minutes. Deletes every row for that id — heartbeats, batches, shared runs —
   and answers how many; the console reports that number, never "deleted" for nothing.
-- `POST /v1/telemetry/share`: ≤ 256 KB gzip, same limits; stored in `tm_shares`.
+- `POST /v1/telemetry/share`: ≤ 256 KB gzip, same limits; stored in `tm_shares`. A share for a
+  known id carrying a different hash, or none, is refused (409).
 - Storage: `tm_installs`, `tm_heartbeats`, `tm_batches`, `tm_shares`, `tm_rollups`. No IP address,
   hostname or name. Retention: rows older than 18 months are rolled into `tm_rollups` (monthly
   active installs, batches, by version and edition) and deleted, daily, by the tick.
