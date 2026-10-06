@@ -83,7 +83,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
           </div>
           <h1 id="idn-hero-h">Who can do what, <em>and for whom.</em></h1>
           <p className="idn-lede" data-copy="prose">
-            Every person signs in as themselves. Every agent acts for someone, with less than they have, and every action carries the chain that allowed it.
+            Everyone signs in as themselves. Every agent acts for someone, with less than they have, and carries the chain that allowed it.
           </p>
           <div className="idn-acts">
             <CanButton permission="user:invite" className="idn-btn primary" onClick={() => setInviting(true)} data-testid="overview-invite" tip="Invite by email, with an access role">
