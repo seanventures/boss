@@ -9,6 +9,7 @@ a provider API.
 
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 import hashlib
 import json
 import re
@@ -976,6 +977,7 @@ def _reject_raw_secret_fields(fields: dict[str, Any]) -> None:
 
 
 @router.get("/places", response_model=PlaceListResponse)
+@permit(P.HOST_READ, scope=Scope.project(query="project_id"))
 def get_places(project_id: str = Query(min_length=1)) -> dict[str, Any]:
     def run(connection: Any) -> dict[str, Any]:
         project = _require_id(project_id, "project_id")
@@ -992,6 +994,7 @@ def get_places(project_id: str = Query(min_length=1)) -> dict[str, Any]:
 
 
 @router.post("/places/local", response_model=ResolveResponse)
+@permit(P.HOST_MANAGE, scope=Scope.project(body="project_id"))
 def post_local_place(payload: LocalPlaceRequest) -> dict[str, Any]:
     def run(connection: Any) -> dict[str, Any]:
         who = _authorize(connection, payload.project_id, payload.actor)
@@ -1016,6 +1019,7 @@ def post_local_place(payload: LocalPlaceRequest) -> dict[str, Any]:
 
 
 @router.post("/places/agents", response_model=AgentPlaceResponse)
+@permit(P.HOST_MANAGE, scope=Scope.project(body="project_id"))
 def post_agent_place(payload: AgentPlaceRequest) -> dict[str, Any]:
     def run(connection: Any) -> dict[str, Any]:
         who = _authorize(connection, payload.project_id, payload.actor)
@@ -1035,6 +1039,7 @@ def post_agent_place(payload: AgentPlaceRequest) -> dict[str, Any]:
 
 
 @router.post("/agents/enroll", response_model=ResolveResponse)
+@public(reason=PublicReason.AUTH_ENDPOINT, verifier=enroll_agent)
 def post_enroll(payload: EnrollRequest) -> dict[str, Any]:
     """Unauthenticated node call-home. The body token is the credential."""
 
@@ -1053,6 +1058,7 @@ def post_enroll(payload: EnrollRequest) -> dict[str, Any]:
 
 
 @router.post("/places/providers", response_model=ResolveResponse)
+@permit(P.HOST_MANAGE, scope=Scope.project(body="project_id"))
 def post_provider_place(payload: ProviderPlaceRequest) -> dict[str, Any]:
     _reject_raw_secret_fields(payload.model_dump())
 
@@ -1079,6 +1085,7 @@ def post_provider_place(payload: ProviderPlaceRequest) -> dict[str, Any]:
 
 
 @router.post("/places/{place_id}/propose", response_model=ProposeResponse)
+@permit(P.HOST_MANAGE, scope=Scope.project(body="project_id"))
 def post_propose(place_id: str, payload: ProposeRequest) -> dict[str, Any]:
     def run(connection: Any) -> dict[str, Any]:
         who = _authorize(connection, payload.project_id, payload.actor)
@@ -1115,6 +1122,7 @@ def post_propose(place_id: str, payload: ProposeRequest) -> dict[str, Any]:
 
 
 @router.get("/resolve", response_model=ResolveResponse)
+@permit(P.HOST_READ, scope=Scope.project(query="project_id"))
 def get_resolve(
     project_id: str = Query(min_length=1),
     place_id: str | None = Query(default=None),

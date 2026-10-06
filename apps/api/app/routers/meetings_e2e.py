@@ -6,6 +6,7 @@ phase evidence without touching that file.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 import json
 from typing import Any, Literal, Optional
 
@@ -62,6 +63,7 @@ def _require_actor(connection: Any, project_id: str, actor: str, permission: str
 
 
 @router.post("/v1/meetings/{meeting_id}/simulated-run")
+@permit(P.MEETING_CONVENE, scope=Scope.of("meeting", path="meeting_id"))
 def simulated_meeting_run(meeting_id: str, payload: SimulatedMeetingRunRequest) -> dict[str, Any]:
     """Walk research→round1→round2→synthesis→draft→finalize with fixtures.
 
@@ -92,6 +94,7 @@ def simulated_meeting_run(meeting_id: str, payload: SimulatedMeetingRunRequest) 
 
 
 @router.post("/v1/meetings/simulated-run", status_code=201)
+@permit(P.MEETING_CONVENE, scope=Scope.project(body="project_id"))
 def create_and_run_simulated_meeting(payload: SimulatedMeetingRunRequest) -> dict[str, Any]:
     if not payload.simulated:
         raise HTTPException(
@@ -118,6 +121,7 @@ def create_and_run_simulated_meeting(payload: SimulatedMeetingRunRequest) -> dic
 
 
 @router.post("/v1/meetings/standup", status_code=201)
+@permit(P.MEETING_CONVENE, scope=Scope.project(body="project_id"))
 def create_and_run_standup(payload: StandupMeetingRequest) -> dict[str, Any]:
     """Convene a typed standup and complete it with the no-spend fixture.
 
@@ -148,6 +152,7 @@ def create_and_run_standup(payload: StandupMeetingRequest) -> dict[str, Any]:
 
 
 @router.post("/v1/meetings/{meeting_id}/tally")
+@permit(P.MEETING_CONVENE, scope=Scope.of("meeting", path="meeting_id"))
 def tally_bound_to_meeting(meeting_id: str, payload: BoundMeetingTallyRequest) -> dict[str, Any]:
     """Tally votes against a real meeting and persist dissent on that row."""
     if not payload.votes:
@@ -218,6 +223,7 @@ def tally_bound_to_meeting(meeting_id: str, payload: BoundMeetingTallyRequest) -
 
 
 @router.get("/v1/meetings/{meeting_id}/evidence")
+@permit(P.MEETING_READ, scope=Scope.of("meeting", path="meeting_id"))
 def get_meeting_evidence(
     meeting_id: str,
     project_id: str = Query(...),

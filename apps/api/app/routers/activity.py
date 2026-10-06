@@ -13,6 +13,7 @@ nothing new costs one index probe per stream and answers 304.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 import csv
 import io
 import json
@@ -151,6 +152,7 @@ def _json(body: Any, etag: str) -> JSONResponse:
 
 
 @router.get("/v1/activity")
+@permit(P.ACTIVITY_READ, scope=Scope.org())
 def list_activity(
     request: Request,
     filters: _FilterParams = Depends(),
@@ -191,6 +193,7 @@ def list_activity(
 
 
 @router.get("/v1/activity/histogram")
+@permit(P.ACTIVITY_READ, scope=Scope.org())
 def activity_histogram(
     request: Request,
     filters: _FilterParams = Depends(),
@@ -220,6 +223,7 @@ def activity_histogram(
 
 
 @router.get("/v1/activity/facets")
+@permit(P.ACTIVITY_READ, scope=Scope.org())
 def activity_facets(
     request: Request,
     filters: _FilterParams = Depends(),
@@ -245,6 +249,7 @@ def activity_facets(
 
 
 @router.get("/v1/activity/kinds")
+@permit(P.ACTIVITY_READ, scope=Scope.org())
 def activity_kinds(
     filters: _FilterParams = Depends(),
     project_id: Optional[str] = Query(default=None),
@@ -267,6 +272,7 @@ def activity_kinds(
 
 
 @router.get("/v1/activity/row/{row_id}")
+@permit(P.ACTIVITY_READ, scope=Scope.org())
 def activity_row(row_id: str, project_id: Optional[str] = Query(default=None)) -> dict[str, Any]:
     """One line by id (a permalink's target). 404 when it is gone or another project's."""
     project_id = _resolve_project_id(project_id)
@@ -283,6 +289,7 @@ def activity_row(row_id: str, project_id: Optional[str] = Query(default=None)) -
 
 
 @router.get("/v1/activity/context")
+@permit(P.ACTIVITY_READ, scope=Scope.org())
 def activity_context(
     id: str = Query(..., description="the line to read around"),
     project_id: Optional[str] = Query(default=None),
@@ -309,6 +316,7 @@ _CSV_COLUMNS = ("created_at", "level", "status", "source", "kind", "title", "act
 
 
 @router.get("/v1/activity/export")
+@permit(P.ACTIVITY_EXPORT, scope=Scope.org())
 def activity_export(
     filters: _FilterParams = Depends(),
     project_id: Optional[str] = Query(default=None),
@@ -369,6 +377,7 @@ __all__ = ["router"]
 
 
 @router.post("/v1/activity/retention/prune")
+@permit(P.ACTIVITY_PRUNE, scope=Scope.org())
 def prune_activity_retention(payload: Optional[dict] = None) -> dict[str, Any]:
     """Age log rows out of the retention window. Called hourly by the worker.
 

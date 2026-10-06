@@ -5,6 +5,7 @@ gauges, the findings that need a person, what BOSS did on its own, and the opera
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any
 
 from typing import Optional, Union
@@ -25,6 +26,7 @@ class BuildsAtOnceBody(BaseModel):
 
 
 @router.get("/v1/system/deploy-readiness")
+@permit(P.SYSTEM_READ, scope=Scope.org())
 def get_deploy_readiness() -> dict[str, Any]:
     """Would an update now interrupt builds, and did the operator ask to hold updates while
     builds run? Deploy scripts (remote.sh update) wait on this before recreating containers."""
@@ -35,6 +37,7 @@ def get_deploy_readiness() -> dict[str, Any]:
 
 
 @router.get("/v1/system/health")
+@permit(P.SYSTEM_READ, scope=Scope.org())
 def get_system_health() -> dict[str, Any]:
     """Gauges with their scope ("This server" / "Docker Desktop VM, not your Mac"), the
     degradation level, and admission ("Builds at once: 2 (auto) · 1 queued, waiting for
@@ -50,6 +53,7 @@ def get_system_health() -> dict[str, Any]:
 
 
 @router.put("/v1/projects/{project_id}/settings/builds_at_once")
+@permit(P.PROJECT_UPDATE, scope=Scope.org())
 def put_builds_at_once(project_id: str, payload: BuildsAtOnceBody) -> dict[str, Any]:
     """`{"value": "auto"}` or `{"value": N}`. Install-wide: builds share one machine."""
     from fastapi import HTTPException
@@ -105,6 +109,7 @@ def _actor(explicit: Optional[str]) -> str:
 
 
 @router.get("/v1/system-doctor/findings")
+@permit(P.SYSTEM_READ, scope=Scope.org())
 def get_findings(include_resolved: bool = False) -> dict[str, Any]:
     """What the doctor has found: open (and snoozed) findings, each with its options."""
     from sqlalchemy import text
@@ -123,6 +128,7 @@ def get_findings(include_resolved: bool = False) -> dict[str, Any]:
 
 
 @router.post("/v1/system-doctor/findings/{finding_id}/act")
+@permit(P.SYSTEM_OPERATE, scope=Scope.org())
 def act_on_finding(finding_id: str, payload: FindingActBody) -> dict[str, Any]:
     """Do what the operator chose on a system-health card; answers what happened, in place."""
     from fastapi import HTTPException
@@ -140,6 +146,7 @@ def act_on_finding(finding_id: str, payload: FindingActBody) -> dict[str, Any]:
 
 
 @router.get("/v1/system-doctor/actions")
+@permit(P.SYSTEM_READ, scope=Scope.org())
 def get_actions(since: Optional[str] = None, limit: int = 100) -> dict[str, Any]:
     """Everything the doctor did on its own and everything a person chose, newest first."""
     from boss_engine.services import system_doctor
@@ -149,6 +156,7 @@ def get_actions(since: Optional[str] = None, limit: int = 100) -> dict[str, Any]
 
 
 @router.post("/v1/self/host-sample")
+@permit(P.SYSTEM_OPERATE, scope=Scope.org())
 def post_host_sample(payload: HostSampleBody) -> dict[str, Any]:
     """The Mac under Docker Desktop, as the optional helper measured it."""
     from boss_engine.services import system_doctor

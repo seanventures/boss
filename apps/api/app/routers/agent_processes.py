@@ -1,6 +1,7 @@
 """Agent process HTTP — templates, start, advance, handoff timeline."""
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -159,6 +160,7 @@ def _attach_run_view(connection, project_id: str, run: dict[str, Any]) -> dict[s
 
 
 @router.post("/v1/agent-processes/compile")
+@permit(P.AUTOPILOT_CONFIGURE, scope=Scope.project(body="project_id"))
 def compile_process(payload: CompileProcessRequest) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
@@ -168,6 +170,7 @@ def compile_process(payload: CompileProcessRequest) -> dict[str, Any]:
 
 
 @router.get("/v1/agent-processes/templates")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def list_templates(project_id: str) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         templates = _service().list_templates(connection, project_id)
@@ -181,6 +184,7 @@ def list_templates(project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/agent-processes/templates", status_code=201)
+@permit(P.AUTOPILOT_CONFIGURE, scope=Scope.project(body="project_id"))
 def create_template(payload: TemplateCreateRequest) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         _require(connection, payload.project_id, payload.actor)
@@ -206,6 +210,7 @@ def create_template(payload: TemplateCreateRequest) -> dict[str, Any]:
 
 
 @router.get("/v1/agent-processes/templates/{process_key}")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def get_template(process_key: str, project_id: str) -> dict[str, Any]:
     if not project_id.strip() or not process_key.strip():
         raise HTTPException(status_code=422, detail="project_id and process_key are required")
@@ -223,6 +228,7 @@ def get_template(process_key: str, project_id: str) -> dict[str, Any]:
 
 
 @router.get("/v1/agent-processes/runs")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def list_runs(project_id: str) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         runs = _service().list_runs(connection, project_id)
@@ -233,6 +239,7 @@ def list_runs(project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/agent-processes/runs", status_code=201)
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def start_run(payload: ProcessStartRequest) -> dict[str, Any]:
     if not payload.project_id.strip() or not payload.prd.strip():
         raise HTTPException(status_code=422, detail="project_id and prd are required")
@@ -270,6 +277,7 @@ def start_run(payload: ProcessStartRequest) -> dict[str, Any]:
 
 
 @router.get("/v1/agent-processes/runs/{run_id}")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def get_run(run_id: str, project_id: str) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         try:
@@ -280,6 +288,7 @@ def get_run(run_id: str, project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/agent-processes/runs/{run_id}/advance")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def advance_run(run_id: str, payload: ProcessActorRequest) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         _require(connection, payload.project_id, payload.actor)
@@ -296,6 +305,7 @@ def advance_run(run_id: str, payload: ProcessActorRequest) -> dict[str, Any]:
 
 
 @router.post("/v1/agent-processes/tick-all")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def tick_all(payload: ProcessActorRequest) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         _require(connection, payload.project_id, payload.actor)

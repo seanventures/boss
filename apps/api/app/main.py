@@ -1,3 +1,7 @@
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from .routers.identity_access import readable_projects as _readable_projects  # noqa: E402  (identity S2)
+from .routers.identity_access import withhold_sections as _withhold_sections  # noqa: E402  (identity S2)
+from . import identity_verifiers as _identity_verifiers  # noqa: E402  (identity S2)
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from functools import lru_cache, wraps
@@ -3442,6 +3446,7 @@ _db_health_cache = {"ok": True, "checked_at": 0.0}
 
 
 @app.get("/health", response_model=HealthResponse)
+@public(reason=PublicReason.LIVENESS)
 async def health() -> HealthResponse:
     now = time.monotonic()
     if now - _db_health_cache["checked_at"] > 15.0:
@@ -3461,6 +3466,7 @@ async def health() -> HealthResponse:
 
 
 @app.get("/v1/auth/session", response_model=AuthSessionResponse)
+@authenticated(note="returns the caller's own principal/auth method from context vars")
 def auth_session() -> AuthSessionResponse:
     principal = current_api_principal.get()
     auth_method = current_auth_method.get()
@@ -3557,6 +3563,7 @@ def _decision_action_actor(claimed_actor: str) -> str:
 
 
 @app.post("/v1/mcp-confirmations", status_code=201)
+@authenticated(note="bound MCP API key asks for human confirmation of its own request; handler inline requires ")
 def request_mcp_confirmation(payload: McpConfirmationRequest) -> dict:
     """Ask a separate human to approve one exact MCP request; no effect runs."""
     principal = current_api_principal.get()
@@ -3595,6 +3602,7 @@ def request_mcp_confirmation(payload: McpConfirmationRequest) -> dict:
 
 
 @app.get("/v1/mcp-confirmations")
+@permit(P.DECISION_READ, scope=Scope.project(query="project_id"))
 def list_mcp_confirmations(project_id: str, limit: int = 30) -> dict:
     with begin(engine) as connection:
         _require_human_mcp_reviewer(connection, project_id)
@@ -3604,6 +3612,7 @@ def list_mcp_confirmations(project_id: str, limit: int = 30) -> dict:
 
 
 @app.get("/v1/mcp-confirmations/{confirmation_id}")
+@permit(P.DECISION_READ, scope=Scope.project(query="project_id"))
 def get_mcp_confirmation(confirmation_id: str, project_id: str) -> dict:
     with begin(engine) as connection:
         _require_human_mcp_reviewer(connection, project_id)
@@ -3616,6 +3625,7 @@ def get_mcp_confirmation(confirmation_id: str, project_id: str) -> dict:
 
 
 @app.post("/v1/mcp-confirmations/{confirmation_id}/approve")
+@permit(P.DECISION_APPROVE, scope=Scope.project(body="project_id"))
 def approve_mcp_confirmation(
     confirmation_id: str, payload: McpConfirmationApproval,
 ) -> dict:
@@ -3645,6 +3655,7 @@ def approve_mcp_confirmation(
 
 
 @app.get("/saml/v2/{project_id}/metadata", response_class=Response)
+@public(reason=PublicReason.SAML_SIGNED_ASSERTION, verifier=_identity_verifiers.saml_assertion)
 def saml_metadata(project_id: str, request: Request) -> Response:
     with begin(engine) as connection:
         metadata_xml = saml_sessions.metadata(
@@ -3671,6 +3682,7 @@ async def saml_response_from_request(request: Request) -> str:
 
 
 @app.post("/saml/v2/{project_id}/acs", response_model=SamlLoginResponse)
+@public(reason=PublicReason.SAML_SIGNED_ASSERTION, verifier=_identity_verifiers.saml_assertion)
 async def saml_acs(project_id: str, request: Request) -> SamlLoginResponse:
     if not settings.enterprise_saml_enabled:
         with begin(engine) as connection:
@@ -3718,6 +3730,7 @@ async def saml_acs(project_id: str, request: Request) -> SamlLoginResponse:
 
 
 @app.get("/v1/edition", response_model=EditionStatusResponse)
+@permit(P.SYSTEM_READ, scope=Scope.project(query="project_id"))
 def get_edition(project_id: str) -> EditionStatusResponse:
     with begin(engine) as connection:
         return edition_status_from_service(
@@ -3726,6 +3739,7 @@ def get_edition(project_id: str) -> EditionStatusResponse:
 
 
 @app.get("/v1/meta/api-catalog")
+@permit(P.SYSTEM_READ, scope=Scope.org())
 def get_meta_api_catalog() -> dict[str, Any]:
     """Full HTTP capability catalog: every mounted route grouped by product domain.
 
@@ -3771,6 +3785,7 @@ def get_meta_api_catalog() -> dict[str, Any]:
 
 
 @app.get("/v1/meta/api-catalog/{domain}")
+@permit(P.SYSTEM_READ, scope=Scope.org())
 def get_meta_api_catalog_domain(domain: str) -> dict[str, Any]:
     """Single domain slice of the API catalog (e.g. reference host, providers, core)."""
     full = get_meta_api_catalog()
@@ -3781,6 +3796,7 @@ def get_meta_api_catalog_domain(domain: str) -> dict[str, Any]:
 
 
 @app.get("/v1/meta/openapi-coverage")
+@permit(P.SYSTEM_READ, scope=Scope.org())
 def get_openapi_coverage() -> dict[str, Any]:
     """Report OpenAPI documentation coverage vs live routes."""
     catalog = get_meta_api_catalog()
@@ -3806,6 +3822,7 @@ def get_openapi_coverage() -> dict[str, Any]:
 
 
 @app.get("/v1/diag/sandbox-roundtrip")
+@permit(P.SYSTEM_OPERATE, scope=Scope.org())
 def diag_sandbox_roundtrip() -> dict:
     """Run a submit->poll round-trip to the sandbox-service FROM INSIDE this container,
     so we can tell (API, not SSH) whether the control plane can actually reach + drive
@@ -3881,6 +3898,7 @@ def diag_sandbox_roundtrip() -> dict:
 
 
 @app.get("/v1/diag/host-capabilities")
+@permit(P.SYSTEM_OPERATE, scope=Scope.org())
 def diag_host_capabilities() -> dict:
     """Introspect what THIS container (boss-api) can do on the host, so we can tell
     empirically — API, not SSH — whether it can create micro-VMs / containers.
@@ -3976,6 +3994,7 @@ def diag_host_capabilities() -> dict:
 
 
 @app.get("/v1/entitlements", response_model=LicenseEntitlementListResponse)
+@permit(P.ENTITLEMENT_READ, scope=Scope.project(query="project_id"))
 def list_license_entitlements(
     project_id: str,
     include_inactive: bool = False,
@@ -3996,6 +4015,7 @@ def list_license_entitlements(
 
 # ── AI SRE reliability pipeline (RB-3/RB-4/RB-5) ─────────────────────────────
 @app.post("/v1/reliability/scan", response_model=ReliabilityScanResponse)
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def reliability_scan(payload: ReliabilityScanRequest) -> ReliabilityScanResponse:
     """Distill a telemetry window into the Insight report; when `persist`, cluster into incidents."""
     with begin(engine) as connection:
@@ -4013,6 +4033,7 @@ def reliability_scan(payload: ReliabilityScanRequest) -> ReliabilityScanResponse
 
 
 @app.get("/v1/reliability/incidents", response_model=ReliabilityIncidentListResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def reliability_list_incidents(
     project_id: str, status: Optional[str] = None, limit: int = 50
 ) -> ReliabilityIncidentListResponse:
@@ -4022,6 +4043,7 @@ def reliability_list_incidents(
 
 
 @app.get("/v1/reliability/incidents/{incident_id}", response_model=ReliabilityIncidentDetail)
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def reliability_get_incident(incident_id: str, project_id: str) -> ReliabilityIncidentDetail:
     with begin(engine) as connection:
         inc = reliability.get_incident(connection, project_id, incident_id)
@@ -4032,6 +4054,7 @@ def reliability_get_incident(incident_id: str, project_id: str) -> ReliabilityIn
 
 @app.post("/v1/reliability/incidents/{incident_id}/diagnose",
           response_model=ReliabilityDiagnoseResponse)
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def reliability_diagnose(
     incident_id: str, payload: ReliabilityDiagnoseRequest
 ) -> ReliabilityDiagnoseResponse:
@@ -4046,6 +4069,7 @@ def reliability_diagnose(
 
 @app.post("/v1/reliability/incidents/{incident_id}/remediate",
           response_model=ReliabilityRemediateResponse)
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def reliability_remediate(
     incident_id: str, payload: ReliabilityRemediateRequest
 ) -> ReliabilityRemediateResponse:
@@ -4064,6 +4088,7 @@ def reliability_remediate(
 
 @app.post("/v1/reliability/incidents/{incident_id}/feedback",
           response_model=ReliabilityFeedbackResponse)
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def reliability_feedback(
     incident_id: str, payload: ReliabilityFeedbackRequest
 ) -> ReliabilityFeedbackResponse:
@@ -4082,6 +4107,7 @@ def reliability_feedback(
 
 
 @app.get("/v1/reliability/graph", response_model=ReliabilityGraphResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def reliability_graph(project_id: str, service: str, depth: int = 2) -> ReliabilityGraphResponse:
     """The knowledge-graph subgraph around a service — the same context bundle RCA reasons over."""
     with begin(engine) as connection:
@@ -4091,6 +4117,7 @@ def reliability_graph(project_id: str, service: str, depth: int = 2) -> Reliabil
 
 
 @app.post("/v1/reliability/graph/walk", response_model=ReliabilityGraphWalkResponse)
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def reliability_graph_walk(payload: ReliabilityGraphWalkRequest) -> ReliabilityGraphWalkResponse:
     """Run a topology walker: kubernetes (deterministic, read-only RBAC), infra (BOSS inventory),
     or cooccurrence (inferred correlates_with edges from overlapping incidents)."""
@@ -4120,6 +4147,7 @@ def reliability_graph_walk(payload: ReliabilityGraphWalkRequest) -> ReliabilityG
 
 
 @app.post("/v1/reliability/sources", response_model=ReliabilitySourceSummary, status_code=201)
+@permit(P.RELIABILITY_MANAGE, scope=Scope.project(body="project_id"))
 def reliability_register_source(payload: ReliabilitySourceRequest) -> ReliabilitySourceSummary:
     """Register/enable a telemetry source (config only — creds stay indirect via env/SecretRef)."""
     with begin(engine) as connection:
@@ -4133,6 +4161,7 @@ def reliability_register_source(payload: ReliabilitySourceRequest) -> Reliabilit
 
 
 @app.get("/v1/reliability/sources", response_model=ReliabilitySourceListResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def reliability_list_sources(project_id: str) -> ReliabilitySourceListResponse:
     with begin(engine) as connection:
         items = reliability.list_sources(connection, project_id)
@@ -4140,6 +4169,7 @@ def reliability_list_sources(project_id: str) -> ReliabilitySourceListResponse:
 
 
 @app.post("/v1/reliability/alert", status_code=202)
+@public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.reliability_alert_hmac)
 async def reliability_alert_webhook(request: Request):
     """RB-10 — the incident-response trigger: a signed alert (Alertmanager/Grafana/PagerDuty/generic)
     becomes an incident, every enabled source is scan-scoped to the alert window, and diagnose runs
@@ -4161,12 +4191,14 @@ async def reliability_alert_webhook(request: Request):
 
 
 @app.get("/v1/reliability/policy", response_model=ReliabilityPolicyResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def reliability_get_policy(project_id: str) -> ReliabilityPolicyResponse:
     with begin(engine) as connection:
         return ReliabilityPolicyResponse(**reliability.get_policy(connection, project_id))
 
 
 @app.post("/v1/reliability/policy", response_model=ReliabilityPolicyResponse)
+@permit(P.RELIABILITY_MANAGE, scope=Scope.project(body="project_id"))
 def reliability_set_policy(payload: ReliabilityPolicyRequest) -> ReliabilityPolicyResponse:
     """RB-19 — the governed autonomy spectrum, per project. Tier-0 auto-launch stays fail-closed:
     the remediation it triggers is the same gated pipeline PR."""
@@ -4182,6 +4214,7 @@ def reliability_set_policy(payload: ReliabilityPolicyRequest) -> ReliabilityPoli
 
 @app.get("/v1/reliability/incidents/{incident_id}/decision",
          response_model=ReliabilityDecisionResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def reliability_decision(incident_id: str, project_id: str) -> ReliabilityDecisionResponse:
     """What the autonomy policy would do with this incident right now (tier + action + why)."""
     with begin(engine) as connection:
@@ -4190,6 +4223,7 @@ def reliability_decision(incident_id: str, project_id: str) -> ReliabilityDecisi
 
 
 @app.get("/v1/reliability/incidents/{incident_id}/investigation")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def reliability_investigation(incident_id: str, project_id: str):
     """RB-20 — the consolidated investigation bundle (the MCP surface): incident + signals +
     evidence + remediations + graph neighborhood + autonomy decision in one call."""
@@ -4201,6 +4235,7 @@ def reliability_investigation(incident_id: str, project_id: str):
 
 
 @app.get("/v1/reliability/learning")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def reliability_learning(project_id: str):
     """RB-11 learning panel: false-alarm rate, fix-success rate, tuned signatures, few-shot size."""
     with begin(engine) as connection:
@@ -4214,6 +4249,7 @@ def reliability_learning(project_id: str):
 
 
 @app.post("/v1/reliability/meta-eval")
+@permit(P.RELIABILITY_READ, scope=Scope.org(), readonly_post=True)
 def reliability_meta_eval():
     """RB-14 — measure the measurer: detection precision/recall/F1 + RCA top-1 accuracy against
     the labeled synthetic corpus. Pure — writes nothing."""
@@ -4222,6 +4258,7 @@ def reliability_meta_eval():
 
 
 @app.post("/v1/oncall/preview")
+@permit(P.RELIABILITY_READ, scope=Scope.org(), readonly_post=True)
 def oncall_preview(payload: OncallPreviewRequest) -> dict[str, Any]:
     """RB-20 — format an oncall investigation card without posting (pure, no external effect)."""
     from .services import oncall_notify as oncall_notify_service
@@ -4245,6 +4282,7 @@ def oncall_preview(payload: OncallPreviewRequest) -> dict[str, Any]:
 
 
 @app.post("/v1/oncall/notify")
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def oncall_notify(payload: OncallNotifyRequest) -> dict[str, Any]:
     """RB-20 — post the investigation card to the configured oncall webhook.
 
@@ -4365,6 +4403,7 @@ def oncall_notify(payload: OncallNotifyRequest) -> dict[str, Any]:
 
 @app.post("/v1/reliability/incidents/{incident_id}/verify",
           response_model=ReliabilityVerifyResponse)
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def reliability_verify(
     incident_id: str, payload: ReliabilityVerifyRequest
 ) -> ReliabilityVerifyResponse:
@@ -4390,6 +4429,7 @@ def reliability_verify(
     "/v1/enterprise/identity-rollout-policies",
     response_model=EnterpriseIdentityRolloutPolicyListResponse,
 )
+@permit(P.IDENTITY_PROVIDER_READ, scope=Scope.org())
 def list_enterprise_identity_rollout_policies(
     project_id: str,
 ) -> EnterpriseIdentityRolloutPolicyListResponse:
@@ -4409,6 +4449,7 @@ def list_enterprise_identity_rollout_policies(
     response_model=EnterpriseIdentityRolloutPolicySummary,
     status_code=201,
 )
+@permit(P.IDENTITY_PROVIDER_MANAGE, scope=Scope.org())
 def upsert_enterprise_identity_rollout_policy(
     payload: EnterpriseIdentityRolloutPolicyUpsertRequest,
 ) -> EnterpriseIdentityRolloutPolicySummary:
@@ -4439,6 +4480,7 @@ def upsert_enterprise_identity_rollout_policy(
     "/v1/enterprise/identity-providers",
     response_model=EnterpriseIdentityProviderListResponse,
 )
+@permit(P.IDENTITY_PROVIDER_READ, scope=Scope.org())
 def list_enterprise_identity_providers(
     project_id: str,
 ) -> EnterpriseIdentityProviderListResponse:
@@ -4458,6 +4500,7 @@ def list_enterprise_identity_providers(
     response_model=EnterpriseIdentityProviderSummary,
     status_code=201,
 )
+@permit(P.IDENTITY_PROVIDER_MANAGE, scope=Scope.org())
 def upsert_enterprise_identity_provider(
     payload: EnterpriseIdentityProviderUpsertRequest,
 ) -> EnterpriseIdentityProviderSummary:
@@ -4505,6 +4548,7 @@ def upsert_enterprise_identity_provider(
     "/v1/enterprise/scim/groups",
     response_model=EnterpriseScimGroupListResponse,
 )
+@permit(P.IDENTITY_PROVIDER_READ, scope=Scope.org())
 def list_enterprise_scim_groups(project_id: str) -> EnterpriseScimGroupListResponse:
     with begin(engine) as connection:
         groups = enterprise.list_scim_groups(connection, project_id)
@@ -4519,6 +4563,7 @@ def list_enterprise_scim_groups(project_id: str) -> EnterpriseScimGroupListRespo
     response_model=EnterpriseScimGroupSummary,
     status_code=201,
 )
+@permit(P.IDENTITY_PROVIDER_MANAGE, scope=Scope.org())
 def upsert_enterprise_scim_group(
     payload: EnterpriseScimGroupUpsertRequest,
 ) -> EnterpriseScimGroupSummary:
@@ -4550,6 +4595,7 @@ def upsert_enterprise_scim_group(
     "/v1/enterprise/scim/users",
     response_model=EnterpriseScimUserListResponse,
 )
+@permit(P.IDENTITY_PROVIDER_READ, scope=Scope.org())
 def list_enterprise_scim_users(project_id: str) -> EnterpriseScimUserListResponse:
     with begin(engine) as connection:
         users = enterprise.list_scim_users(connection, project_id)
@@ -4564,6 +4610,7 @@ def list_enterprise_scim_users(project_id: str) -> EnterpriseScimUserListRespons
     response_model=EnterpriseScimUserSummary,
     status_code=201,
 )
+@permit(P.IDENTITY_PROVIDER_MANAGE, scope=Scope.org())
 def upsert_enterprise_scim_user(
     payload: EnterpriseScimUserUpsertRequest,
 ) -> EnterpriseScimUserSummary:
@@ -4594,6 +4641,7 @@ def upsert_enterprise_scim_user(
 
 
 @app.get("/scim/v2/{project_id}/Groups")
+@permit(P.SCIM_PROVISION)
 def scim_list_groups(
     project_id: str,
     request: Request,
@@ -4611,6 +4659,7 @@ def scim_list_groups(
 
 
 @app.post("/scim/v2/{project_id}/Groups", status_code=201)
+@permit(P.SCIM_PROVISION)
 async def scim_create_group(
     project_id: str,
     request: Request,
@@ -4641,6 +4690,7 @@ async def scim_create_group(
 
 
 @app.get("/scim/v2/{project_id}/Groups/{group_id}")
+@permit(P.SCIM_PROVISION)
 def scim_get_group(
     project_id: str,
     group_id: str,
@@ -4658,6 +4708,7 @@ def scim_get_group(
 
 
 @app.put("/scim/v2/{project_id}/Groups/{group_id}")
+@permit(P.SCIM_PROVISION)
 async def scim_replace_group(
     project_id: str,
     group_id: str,
@@ -4690,6 +4741,7 @@ async def scim_replace_group(
 
 
 @app.delete("/scim/v2/{project_id}/Groups/{group_id}", status_code=204)
+@permit(P.SCIM_PROVISION)
 def scim_delete_group(
     project_id: str,
     group_id: str,
@@ -4718,6 +4770,7 @@ def scim_delete_group(
 
 
 @app.get("/scim/v2/{project_id}/Users")
+@permit(P.SCIM_PROVISION)
 def scim_list_users(
     project_id: str,
     request: Request,
@@ -4739,6 +4792,7 @@ def scim_list_users(
 
 
 @app.post("/scim/v2/{project_id}/Users", status_code=201)
+@permit(P.SCIM_PROVISION)
 async def scim_create_user(
     project_id: str,
     request: Request,
@@ -4771,6 +4825,7 @@ async def scim_create_user(
 
 
 @app.get("/scim/v2/{project_id}/Users/{user_id}")
+@permit(P.SCIM_PROVISION)
 def scim_get_user(
     project_id: str,
     user_id: str,
@@ -4788,6 +4843,7 @@ def scim_get_user(
 
 
 @app.put("/scim/v2/{project_id}/Users/{user_id}")
+@permit(P.SCIM_PROVISION)
 async def scim_replace_user(
     project_id: str,
     user_id: str,
@@ -4822,6 +4878,7 @@ async def scim_replace_user(
 
 
 @app.delete("/scim/v2/{project_id}/Users/{user_id}", status_code=204)
+@permit(P.SCIM_PROVISION)
 def scim_delete_user(
     project_id: str,
     user_id: str,
@@ -4867,7 +4924,8 @@ def catalog_read_scope() -> tuple[bool, str]:
 
 
 @app.get("/v1/orgs")
-def list_orgs():
+@authenticated(note="SQL filters orgs to those with a project where the principal is an active project/org memb")
+def list_orgs(request: Request):
     """Organizations with a project this caller may read, for the org picker."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
@@ -4918,6 +4976,8 @@ def list_orgs():
             ),
             {"authenticated": authenticated, "principal": principal},
         ).mappings().all()
+        # IDENTITY (S2): only the caller's org, only projects it holds project:read in.
+        visible = _readable_projects(request, [r["project_id"] for r in rows])
         return {
             "items": [
                 {
@@ -4932,11 +4992,13 @@ def list_orgs():
                     "meeting_count": int(r["meeting_count"] or 0),
                 }
                 for r in rows
+                if visible is None or r["project_id"] in visible
             ]
         }
 
 
 @app.post("/v1/orgs", status_code=201)
+@permit(P.ORG_UPDATE, scope=Scope.org())
 def onboard_org_endpoint(payload: OrgOnboardBody):
     """Onboard a new organization: create org → workspace → project and seed it
     with the common defaults (budget policy, members, packs, agent modules,
@@ -5002,7 +5064,8 @@ def onboard_org_endpoint(payload: OrgOnboardBody):
 
 
 @app.get("/v1/projects", response_model=ProjectListResponse)
-def list_projects() -> ProjectListResponse:
+@authenticated(note="SQL filters projects to the principal's active project/org memberships (catalog_read_scope")
+def list_projects(request: Request) -> ProjectListResponse:
     authenticated, principal = catalog_read_scope()
     with begin(engine) as connection:
         rows = connection.execute(
@@ -5034,12 +5097,16 @@ def list_projects() -> ProjectListResponse:
             ),
             {"authenticated": authenticated, "principal": principal},
         ).mappings().all()
+        # IDENTITY (S2): only projects the caller holds project:read in (§6.7).
+        visible = _readable_projects(request, [str(row["id"]) for row in rows])
         return ProjectListResponse(
-            items=[project_summary_from_row(row) for row in rows]
+            items=[project_summary_from_row(row) for row in rows
+                   if visible is None or str(row["id"]) in visible]
         )
 
 
 @app.get("/v1/members", response_model=ProjectMemberListResponse)
+@permit(P.USER_READ, scope=Scope.org())
 def list_project_members(project_id: Optional[str] = None) -> ProjectMemberListResponse:
     project_id = resolve_list_project_id(project_id)
     with begin(engine) as connection:
@@ -5053,6 +5120,7 @@ def list_project_members(project_id: Optional[str] = None) -> ProjectMemberListR
 
 
 @app.get("/v1/members/{member_id}", response_model=ProjectMemberSummary)
+@permit(P.USER_READ, scope=Scope.org())
 def get_project_member(member_id: str, project_id: str) -> ProjectMemberSummary:
     with begin(engine) as connection:
         try:
@@ -5063,6 +5131,7 @@ def get_project_member(member_id: str, project_id: str) -> ProjectMemberSummary:
 
 
 @app.post("/v1/members", response_model=ProjectMemberSummary, status_code=201)
+@permit(P.ROLE_BINDING_ASSIGN, scope=Scope.project(body="project_id"))
 def upsert_project_member(
     payload: ProjectMemberUpsertRequest,
 ) -> ProjectMemberSummary:
@@ -5087,6 +5156,7 @@ def upsert_project_member(
 
 
 @app.get("/v1/org-members", response_model=OrgMemberListResponse)
+@permit(P.USER_READ, scope=Scope.org())
 def list_org_members(org_id: str, project_id: str, actor: str = "ceo") -> OrgMemberListResponse:
     with begin(engine) as connection:
         if not members.project_belongs_to_org(
@@ -5109,6 +5179,7 @@ def list_org_members(org_id: str, project_id: str, actor: str = "ceo") -> OrgMem
 
 
 @app.post("/v1/org-members", response_model=OrgMemberSummary, status_code=201)
+@permit(P.ROLE_BINDING_ASSIGN, scope=Scope.org())
 def upsert_org_member(payload: OrgMemberUpsertRequest) -> OrgMemberSummary:
     with begin(engine) as connection:
         if not members.project_belongs_to_org(
@@ -5135,6 +5206,7 @@ def upsert_org_member(payload: OrgMemberUpsertRequest) -> OrgMemberSummary:
 
 
 @app.get("/v1/break-glass/grants", response_model=BreakGlassGrantListResponse)
+@permit(P.ROLE_BINDING_READ, scope=Scope.org())
 def list_break_glass_grants(
     project_id: str,
     include_expired: bool = False,
@@ -5158,6 +5230,7 @@ def list_break_glass_grants(
     response_model=BreakGlassGrantSummary,
     status_code=201,
 )
+@permit(P.ROLE_BINDING_ASSIGN, scope=Scope.project(body="project_id"))
 def create_break_glass_grant(
     payload: BreakGlassGrantCreateRequest,
 ) -> BreakGlassGrantSummary:
@@ -5218,6 +5291,7 @@ def create_break_glass_grant(
     "/v1/break-glass/grants/{grant_id}/revoke",
     response_model=BreakGlassGrantSummary,
 )
+@permit(P.ROLE_BINDING_ASSIGN, scope=Scope.of("break_glass_grant", path="grant_id"))
 def revoke_break_glass_grant(
     grant_id: str,
     payload: BreakGlassGrantRevokeRequest,
@@ -5243,6 +5317,7 @@ def revoke_break_glass_grant(
 
 
 @app.post("/v1/pdf/render", response_model=PdfRenderResponse)
+@permit(P.ARTIFACT_READ, scope=Scope.org(), readonly_post=True)
 def render_pdf_document(payload: PdfRenderRequest) -> Any:
     """Render markdown to PDF bytes (reportlab). Default response is JSON with base64.
 
@@ -5278,6 +5353,7 @@ def render_pdf_document(payload: PdfRenderRequest) -> Any:
 
 
 @app.get("/v1/reports/summary")
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
 def report_summary(project_id: str):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
@@ -5286,6 +5362,7 @@ def report_summary(project_id: str):
 
 
 @app.get("/v1/agent-runs")
+@permit(P.WORKFLOW_RUN_READ, scope=Scope.project(query="project_id"))
 def list_agent_runs(project_id: str, limit: int = 50):
     """Agent tool-calling transcripts (which read tools the agent invoked to
     ground each plan), surfaced for the Run view."""
@@ -5381,6 +5458,7 @@ def _artifact_output_preview(content) -> str:
 
 
 @app.get("/v1/outputs")
+@permit(P.ARTIFACT_READ, scope=Scope.project(query="project_id"))
 def list_task_outputs(project_id: str):
     """Unified, linkable 'deliverables' for every task — aggregates the actual
     outputs a task produced from the three places they land: artifacts
@@ -5506,6 +5584,7 @@ def list_task_outputs(project_id: str):
 
 
 @app.post("/v1/agent-runs/{run_id}/resume")
+@permit(P.WORKER_LEASE)
 def resume_agent_run_endpoint(run_id: str, payload: open_bodies.ResumeAgentRunBody):
     payload = payload.payload()
     if not database_is_reachable(engine):
@@ -5540,6 +5619,7 @@ def resume_agent_run_endpoint(run_id: str, payload: open_bodies.ResumeAgentRunBo
     "/v1/event-subscriptions",
     response_model=EventSubscriptionListResponse,
 )
+@permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
 def list_event_subscription_routes(
     project_id: str, enabled_only: bool = False
 ) -> EventSubscriptionListResponse:
@@ -5559,6 +5639,7 @@ def list_event_subscription_routes(
     response_model=EventSubscriptionSummary,
     status_code=201,
 )
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def create_event_subscription_route(
     payload: EventSubscriptionCreateRequest,
 ) -> EventSubscriptionSummary:
@@ -5586,6 +5667,7 @@ def create_event_subscription_route(
     "/v1/event-subscriptions/{subscription_id}",
     response_model=EventSubscriptionSummary,
 )
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def update_event_subscription_route(
     subscription_id: str,
     payload: EventSubscriptionUpdateRequest,
@@ -5614,6 +5696,7 @@ def update_event_subscription_route(
 
 
 @app.delete("/v1/event-subscriptions/{subscription_id}", status_code=204)
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(query="project_id"))
 def delete_event_subscription_route(
     subscription_id: str,
     project_id: str,
@@ -5634,6 +5717,7 @@ def delete_event_subscription_route(
 
 
 @app.get("/v1/webhook-endpoints", response_model=WebhookEndpointListResponse)
+@permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
 def list_webhook_endpoints(project_id: str) -> WebhookEndpointListResponse:
     with begin(engine) as connection:
         return WebhookEndpointListResponse(
@@ -5647,6 +5731,7 @@ def list_webhook_endpoints(project_id: str) -> WebhookEndpointListResponse:
     response_model=WebhookEndpointSummary,
     status_code=201,
 )
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def create_webhook_endpoint(
     payload: WebhookEndpointCreateRequest,
 ) -> WebhookEndpointSummary:
@@ -5677,6 +5762,7 @@ def create_webhook_endpoint(
     "/v1/webhook-endpoints/{endpoint_id}",
     response_model=WebhookEndpointSummary,
 )
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def update_webhook_endpoint(
     endpoint_id: str,
     payload: WebhookEndpointUpdateRequest,
@@ -5708,6 +5794,7 @@ def update_webhook_endpoint(
 
 
 @app.delete("/v1/webhook-endpoints/{endpoint_id}", status_code=204)
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(query="project_id"))
 def delete_webhook_endpoint(
     endpoint_id: str,
     project_id: str,
@@ -5727,6 +5814,7 @@ def delete_webhook_endpoint(
     response_model=WebhookDeliverySummary,
     status_code=201,
 )
+@permit(P.COMMS_SEND, scope=Scope.project(body="project_id"))
 def queue_webhook_delivery(
     endpoint_id: str,
     payload: WebhookDeliveryCreateRequest,
@@ -5759,6 +5847,7 @@ def queue_webhook_delivery(
 
 
 @app.get("/v1/webhook-deliveries", response_model=WebhookDeliveryListResponse)
+@permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
 def list_webhook_deliveries(
     project_id: str, limit: int = 100
 ) -> WebhookDeliveryListResponse:
@@ -5775,6 +5864,7 @@ def list_webhook_deliveries(
     "/v1/webhook-deliveries/{delivery_id}/deliver",
     response_model=WebhookDeliverySummary,
 )
+@permit(P.WORKER_LEASE)
 def execute_webhook_delivery(
     delivery_id: str,
     payload: WebhookDeliveryExecuteRequest,
@@ -5801,6 +5891,7 @@ def execute_webhook_delivery(
     response_model=InboundWebhookResponse,
     status_code=202,
 )
+@public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.inbound_webhook_hmac)
 async def receive_inbound_webhook(
     source: str,
     request: Request,
@@ -5833,6 +5924,7 @@ async def receive_inbound_webhook(
 
 
 @app.post("/v1/webhooks/github", status_code=202)
+@public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.inbound_webhook_hmac)
 async def receive_github_webhook(request: Request):
     """Compatibility GitHub ingress with the community event allowlist."""
     raw_body = await request.body()
@@ -5865,6 +5957,7 @@ async def receive_github_webhook(request: Request):
 
 
 @app.post("/v1/webhooks/bitbucket", status_code=202)
+@public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.inbound_webhook_hmac)
 async def receive_bitbucket_webhook(request: Request):
     """Bitbucket ingress (BOSS-269): X-Hub-Signature verified, pullrequest:* normalized to the
     canonical PR shape (fulfilled = merged) — the Bitbucket analog of the GitHub webhook."""
@@ -5887,6 +5980,7 @@ async def receive_bitbucket_webhook(request: Request):
 
 
 @app.post("/v1/webhooks/plane", status_code=202)
+@public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.plane_webhook_hmac)
 async def receive_plane_webhook(request: Request):
     """Plane issue webhook → auto code-task (Phase 1). Auth-exempt but X-Plane-Signature verified;
     a boss:coding/boss:bug issue in a watched project auto-starts a gated code task. See
@@ -5910,6 +6004,7 @@ async def receive_plane_webhook(request: Request):
 
 
 @app.post("/v1/integrations/plane/sync")
+@permit(P.INTEGRATION_MANAGE, scope=Scope.of("code_task", body="run_id"))
 def plane_sync_endpoint(payload: open_bodies.PlaneSyncBody):
     """Plane status sync-back (Phase 2 #115 / Phase 4 #117): mirror a code-task lifecycle event onto
     its Plane ticket — PATCH the state + comment (PR link, failure, merged→Done). payload:
@@ -5969,6 +6064,7 @@ def plane_sync_endpoint(payload: open_bodies.PlaneSyncBody):
 
 
 @app.post("/v1/github/community/jobs/{job_id}/execute")
+@permit(P.WORKER_LEASE)
 def execute_github_community_job(
     job_id: str, payload: GitHubCommunityJobExecuteRequest
 ):
@@ -5988,6 +6084,7 @@ def execute_github_community_job(
 
 
 @app.get("/v1/mcp/servers")
+@permit(P.MCP_SERVER_READ, scope=Scope.project(query="project_id"))
 def list_mcp(project_id: str, check: Literal["none", "stale", "now"] = "none"):
     """Every registered server, with what the last probe found and what points at it.
 
@@ -6012,6 +6109,7 @@ def list_mcp(project_id: str, check: Literal["none", "stale", "now"] = "none"):
 
 
 @app.post("/v1/mcp/servers", status_code=201)
+@permit(P.MCP_SERVER_REVIEW, scope=Scope.project(body="project_id"))
 def register_mcp(payload: McpServerRegisterRequest):
     with begin(engine) as connection:
         try:
@@ -6043,6 +6141,7 @@ def register_mcp(payload: McpServerRegisterRequest):
 
 
 @app.post("/v1/mcp/servers/import", status_code=201)
+@permit(P.MCP_SERVER_REVIEW, scope=Scope.project(body="project_id"))
 def import_mcp_bundle(payload: CapabilityBundleImportRequest) -> dict:
     with begin(engine) as connection:
         try:
@@ -6062,6 +6161,7 @@ def import_mcp_bundle(payload: CapabilityBundleImportRequest) -> dict:
 
 
 @app.get("/v1/mcp/servers/{server_id}/export")
+@permit(P.MCP_SERVER_READ, scope=Scope.project(query="project_id"))
 def export_mcp_bundle(server_id: str, project_id: str, actor: str = "ceo"):
     with begin(engine) as connection:
         try:
@@ -6075,6 +6175,7 @@ def export_mcp_bundle(server_id: str, project_id: str, actor: str = "ceo"):
 
 
 @app.patch("/v1/mcp/servers/{server_id}")
+@permit(P.MCP_SERVER_REVIEW, scope=Scope.project(query="project_id"))
 def toggle_mcp(
     server_id: str,
     project_id: str,
@@ -6117,6 +6218,7 @@ def toggle_mcp(
 
 
 @app.delete("/v1/mcp/servers/{server_id}", status_code=204)
+@permit(P.MCP_SERVER_REVIEW, scope=Scope.project(query="project_id"))
 def remove_mcp(server_id: str, project_id: str, release_grants: bool = False):
     """Remove a server, refusing (409, naming them) while a custom step or skill calls it, or
     while an agent holds it unless `release_grants` says to take it off those agents too."""
@@ -6136,6 +6238,7 @@ def remove_mcp(server_id: str, project_id: str, release_grants: bool = False):
 
 
 @app.post("/v1/meetings/prd", response_model=MeetingProposeResponse, status_code=201)
+@permit(P.MEETING_CONVENE, scope=Scope.project(body="project_id"))
 def convene_prd_meeting(payload: MeetingProposeRequest):
     """Convene a multi-agent PRD meeting: a panel of role-agents debates, then
     synthesizes, then drafts — gated by a human approval before publish."""
@@ -6181,6 +6284,7 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
 
 
 @app.get("/v1/meeting-roles")
+@permit(P.MEETING_READ, scope=Scope.project(query="project_id"))
 def list_meeting_roles(project_id: str):
     """The org's AI role-agent catalog (the meeting template) — read from the DB,
     seeded from the baseline on first use, editable per organization."""
@@ -6196,6 +6300,7 @@ def list_meeting_roles(project_id: str):
 
 
 @app.post("/v1/meeting-roles", status_code=201)
+@permit(P.MEETING_CONFIGURE, scope=Scope.project(body="project_id"))
 def upsert_meeting_role_endpoint(payload: open_bodies.MeetingRoleUpsertBody):
     """Add or update a role-agent for an org's meeting template."""
     payload = payload.payload()
@@ -6226,6 +6331,7 @@ def upsert_meeting_role_endpoint(payload: open_bodies.MeetingRoleUpsertBody):
 
 
 @app.patch("/v1/meeting-roles/{role_key}")
+@permit(P.MEETING_CONFIGURE, scope=Scope.project(query="project_id"))
 def toggle_meeting_role_endpoint(role_key: str, project_id: str, enabled: bool,
                                  actor: str = "ceo"):
     if not database_is_reachable(engine):
@@ -6245,6 +6351,7 @@ def toggle_meeting_role_endpoint(role_key: str, project_id: str, enabled: bool,
 
 
 @app.delete("/v1/meeting-roles/{role_key}", status_code=204)
+@permit(P.MEETING_CONFIGURE, scope=Scope.project(query="project_id"))
 def delete_meeting_role_endpoint(role_key: str, project_id: str, actor: str = "ceo"):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
@@ -6263,6 +6370,7 @@ def delete_meeting_role_endpoint(role_key: str, project_id: str, actor: str = "c
 
 
 @app.get("/v1/meeting-rooms")
+@permit(P.MEETING_READ, scope=Scope.project(query="project_id"))
 def list_meeting_rooms(project_id: str, limit: int = 25, offset: int = 0,
                        task_id: Optional[str] = None):
     """Full meeting records for the Meeting Room: participants, each round's
@@ -6280,6 +6388,7 @@ def list_meeting_rooms(project_id: str, limit: int = 25, offset: int = 0,
 
 
 @app.get("/v1/meeting-rooms/{meeting_id}")
+@permit(P.MEETING_READ, scope=Scope.project(query="project_id"))
 def get_meeting_room(meeting_id: str, project_id: str):
     """One meeting record, shaped exactly like a /v1/meeting-rooms item — what a workflow's
     panel step and a deep link open, however long ago the meeting was held (the list is the
@@ -6295,6 +6404,7 @@ def get_meeting_room(meeting_id: str, project_id: str):
 
 
 @app.post("/v1/meetings/step")
+@permit(P.WORKER_LEASE)
 def run_meeting_step_endpoint(payload: open_bodies.MeetingStepBody):
     """Worker-invoked: advance a durable meeting by exactly ONE phase. Each step
     persists its result and enqueues the next step, so a crash/restart resumes
@@ -6321,6 +6431,7 @@ def run_meeting_step_endpoint(payload: open_bodies.MeetingStepBody):
 
 
 @app.post("/v1/code-tasks")
+@permit(P.CODE_TASK_CREATE, scope=Scope.project(body="project_id"))
 def start_code_task_endpoint(payload: CodeTaskStartBody):
     """Convene a durable coding task: clone -> agent edits + tests -> gated PR.
     Returns the run_id; a `code.task` worker picks it up and runs the pipeline.
@@ -6439,6 +6550,7 @@ def start_code_task_endpoint(payload: CodeTaskStartBody):
 
 
 @app.post("/v1/prd/decompose", status_code=201)
+@permit(P.CODE_TASK_CREATE, scope=Scope.project(body="project_id"))
 def decompose_prd_endpoint(payload: PrdDecomposeBody):
     """Autonomous PRD -> scoped coding tasks -> build. BOSS reads a PRD (or a feature directive),
     decomposes it into a SMALL ordered set of composable coding tasks, and runs them as ONE branch
@@ -6481,6 +6593,7 @@ def decompose_prd_endpoint(payload: PrdDecomposeBody):
 
 
 @app.post("/v1/web-app", status_code=201)
+@permit(P.CODE_TASK_CREATE, scope=Scope.project(body="project_id"))
 def build_web_app_endpoint(payload: WebAppBuildBody):
     """SINGLE-TASK web-app build — the robust path for a website. Seeds a deterministic
     Vite+React+TS+Tailwind scaffold (0 agent turns), then ONE governed task builds the whole app on
@@ -6506,6 +6619,7 @@ def build_web_app_endpoint(payload: WebAppBuildBody):
 
 
 @app.get("/v1/qa/benchmark-apps")
+@permit(P.ASSURANCE_READ, scope=Scope.org())
 def list_qa_benchmark_apps_endpoint(project_id: str = ""):
     """List pinned end-to-end application contracts used to evaluate BOSS itself.
 
@@ -6558,6 +6672,7 @@ def list_qa_benchmark_apps_endpoint(project_id: str = ""):
 
 
 @app.post("/v1/qa/benchmark-apps/{benchmark_id}/runs", status_code=201)
+@permit(P.ASSURANCE_RUN, scope=Scope.project(body="project_id"))
 def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: open_bodies.BenchmarkAppLaunchBody):
     """Launch one pinned QA benchmark through the normal budgeted code-task workflow."""
     payload = payload.payload()
@@ -6756,6 +6871,7 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: open_bodies.Benc
 
 
 @app.post("/v1/code-tasks/{run_id}/follow-up", status_code=201)
+@permit(P.CODE_TASK_STEER, scope=Scope.of("code_task", path="run_id"))
 def follow_up_code_task_endpoint(run_id: str, payload: CodeTaskFollowUpBody):
     """Ask for a change to an app that already exists, naming the run that built it.
 
@@ -6799,6 +6915,7 @@ def follow_up_code_task_endpoint(run_id: str, payload: CodeTaskFollowUpBody):
 
 
 @app.get("/v1/qa/benchmark-apps/runs/{run_id}/report")
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def qa_benchmark_app_report_endpoint(run_id: str):
     """Read the evidence-backed completion report for a benchmark run."""
     if not database_is_reachable(engine):
@@ -6824,6 +6941,7 @@ def qa_benchmark_app_report_endpoint(run_id: str):
 
 
 @app.get("/v1/qa/benchmark-apps/evaluations")
+@permit(P.ASSURANCE_READ, scope=Scope.project(query="project_id"))
 def list_qa_benchmark_evaluations(project_id: str, limit: int = 50):
     """List durable scorecard snapshots produced by the benchmark tuning sweep."""
     if limit < 1 or limit > 500:
@@ -6840,6 +6958,7 @@ def list_qa_benchmark_evaluations(project_id: str, limit: int = 50):
 
 
 @app.post("/v1/qa/benchmark-apps/tuning-sweep")
+@permit(P.ASSURANCE_RUN, scope=Scope.org())
 def sweep_qa_benchmark_evaluations(payload: dict | None = None):
     """Materialize changed terminal QA reports; safe for the worker's idle loop.
 
@@ -6880,6 +6999,7 @@ def sweep_qa_benchmark_evaluations(payload: dict | None = None):
     response_model=SelfImprovementProposalDetail,
     status_code=201,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def create_qa_benchmark_tuning_proposal(
     run_id: str,
     payload: QABenchmarkTuningProposalRequest,
@@ -6946,6 +7066,7 @@ def create_qa_benchmark_tuning_proposal(
 
 
 @app.get("/v1/improvement-programs")
+@permit(P.IMPROVEMENT_READ, scope=Scope.project(query="project_id"))
 def list_improvement_programs(project_id: str, limit: int = 50):
     """List durable feedback loops and their pinned baselines."""
     if limit < 1 or limit > 500:
@@ -6964,6 +7085,7 @@ def list_improvement_programs(project_id: str, limit: int = 50):
 
 
 @app.post("/v1/improvement-programs", status_code=201)
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def create_improvement_program(payload: ImprovementProgramCreateRequest):
     """Pin an observed QA baseline and deterministic comparison policy."""
     if not database_is_reachable(engine):
@@ -6997,6 +7119,7 @@ def create_improvement_program(payload: ImprovementProgramCreateRequest):
 
 
 @app.patch("/v1/improvement-programs/{program_id}")
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("improvement_program", path="program_id"))
 def update_improvement_program(
     program_id: str, payload: ImprovementProgramStatusRequest
 ):
@@ -7027,6 +7150,7 @@ def update_improvement_program(
 
 
 @app.get("/v1/improvement-programs/{program_id}/trials")
+@permit(P.IMPROVEMENT_READ, scope=Scope.of("improvement_program", path="program_id"))
 def list_improvement_trials(program_id: str, limit: int = 50):
     """List reproducible candidate comparisons for one feedback loop."""
     if limit < 1 or limit > 500:
@@ -7056,6 +7180,7 @@ def list_improvement_trials(program_id: str, limit: int = 50):
 
 
 @app.post("/v1/improvement-programs/{program_id}/trials", status_code=201)
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("improvement_program", path="program_id"))
 def create_improvement_trial(
     program_id: str, payload: ImprovementTrialCreateRequest
 ):
@@ -7095,6 +7220,7 @@ def create_improvement_trial(
     "/v1/improvement-programs/trials/{trial_id}/promote",
     status_code=201,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("improvement_trial", path="trial_id"))
 def promote_improvement_trial(
     trial_id: str, payload: ImprovementTrialActionRequest
 ):
@@ -7130,6 +7256,7 @@ def promote_improvement_trial(
 
 
 @app.post("/v1/improvement-programs/trials/{trial_id}/adopt-baseline")
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("improvement_trial", path="trial_id"))
 def adopt_improvement_trial_baseline(
     trial_id: str, payload: ImprovementTrialActionRequest
 ):
@@ -7158,6 +7285,7 @@ def adopt_improvement_trial_baseline(
 
 
 @app.get("/v1/pipeline-profiles")
+@permit(P.PIPELINE_READ, scope=Scope.project(query="project_id"))
 def list_pipeline_profiles_endpoint(project_id: str):
     """List the cost/rigor profiles available to a project: built-in presets plus any custom
     ones, with the project default marked."""
@@ -7170,6 +7298,7 @@ def list_pipeline_profiles_endpoint(project_id: str):
 
 
 @app.post("/v1/pipeline-profiles", status_code=201)
+@permit(P.PIPELINE_MANAGE, scope=Scope.project(body="project_id"))
 def create_pipeline_profile_endpoint(payload: open_bodies.PipelineProfileCreateBody):
     """Create/update a custom profile (enterprise edition only)."""
     payload = payload.payload()
@@ -7198,6 +7327,7 @@ def create_pipeline_profile_endpoint(payload: open_bodies.PipelineProfileCreateB
 
 
 @app.post("/v1/pipeline-profiles/default")
+@permit(P.PIPELINE_MANAGE, scope=Scope.project(body="project_id"))
 def set_pipeline_profile_default_endpoint(payload: open_bodies.PipelineProfileDefaultBody):
     """Set the project's default profile (a preset or a custom one)."""
     payload = payload.payload()
@@ -7216,6 +7346,7 @@ def set_pipeline_profile_default_endpoint(payload: open_bodies.PipelineProfileDe
 
 
 @app.post("/v1/code-tasks/step")
+@permit(P.WORKER_LEASE)
 def run_code_task_step_endpoint(payload: open_bodies.CodeTaskStepBody):
     """Worker-invoked: run one full code-task attempt. Safe to re-run after a
     crash — the PR receipt dedupe makes re-opening the PR a no-op."""
@@ -7242,6 +7373,7 @@ def run_code_task_step_endpoint(payload: open_bodies.CodeTaskStepBody):
 
 
 @app.post("/v1/investigations/{investigation_id}/run")
+@permit(P.WORKER_LEASE)
 def run_investigation_endpoint(investigation_id: str):
     """Worker-invoked: perform one investigation.
 
@@ -7292,6 +7424,7 @@ def _investigation_caller(investigation_id: str, request: Request) -> dict:
 
 
 @app.post("/v1/investigations/{investigation_id}/db")
+@public(reason=PublicReason.PER_INVESTIGATION_CALLBACK_TOKEN, verifier=_identity_verifiers.investigation_callback_token)
 def investigation_db_endpoint(investigation_id: str, payload: open_bodies.InvestigationDbBody, request: Request):
     """Legacy SQL callback; project-scoped investigations cannot run raw SQL."""
     payload = payload.payload()
@@ -7303,6 +7436,7 @@ def investigation_db_endpoint(investigation_id: str, payload: open_bodies.Invest
 
 
 @app.post("/v1/investigations/{investigation_id}/host")
+@public(reason=PublicReason.PER_INVESTIGATION_CALLBACK_TOKEN, verifier=_identity_verifiers.investigation_callback_token)
 def investigation_host_endpoint(investigation_id: str, payload: open_bodies.InvestigationHostBody, request: Request):
     """A command on a fleet host, with the fleet's own credential resolution."""
     payload = payload.payload()
@@ -7315,6 +7449,7 @@ def investigation_host_endpoint(investigation_id: str, payload: open_bodies.Inve
 
 
 @app.post("/v1/investigations/{investigation_id}/do")
+@public(reason=PublicReason.PER_INVESTIGATION_CALLBACK_TOKEN, verifier=_identity_verifiers.investigation_callback_token)
 def investigation_do_endpoint(investigation_id: str, payload: open_bodies.InvestigationOperationBody, request: Request):
     """One of BOSS's own operations, run exactly as a console button runs it."""
     payload = payload.payload()
@@ -7336,6 +7471,7 @@ def investigation_do_endpoint(investigation_id: str, payload: open_bodies.Invest
 
 
 @app.get("/v1/investigations")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def list_investigations_endpoint(project_id: str, limit: int = 10):
     """What BOSS has investigated, newest first — the console's window onto the deep work."""
     with begin(engine) as connection:
@@ -7350,6 +7486,7 @@ def list_investigations_endpoint(project_id: str, limit: int = 10):
 
 
 @app.post("/v1/code-tasks/{run_id}/steer")
+@permit(P.CODE_TASK_STEER, scope=Scope.of("code_task", path="run_id"))
 def code_task_steer_endpoint(run_id: str, payload: CodeTaskSteerBody):
     """Redirect a RUNNING task. The guidance is applied at the next stage boundary.
 
@@ -7392,6 +7529,7 @@ def code_task_steer_endpoint(run_id: str, payload: CodeTaskSteerBody):
 
 
 @app.get("/v1/code-tasks/{run_id}/live")
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def code_task_live_endpoint(run_id: str, limit: int = 40, fmt: str = "json"):
     """LIVE tool-level activity for a running task — what the agent is doing right now.
 
@@ -7408,6 +7546,7 @@ def code_task_live_endpoint(run_id: str, limit: int = 40, fmt: str = "json"):
 
 
 @app.get("/v1/code-tasks/{run_id}/retrospective")
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def run_retrospective_endpoint(run_id: str, project_id: str = "") -> dict:
     """What this run cost, delivered and lost for a member of its stored project."""
     from boss_engine.services.run_retrospective import assemble
@@ -7423,6 +7562,7 @@ def run_retrospective_endpoint(run_id: str, project_id: str = "") -> dict:
 
 
 @app.get("/v1/workflow-runs/{run_id}/report")
+@permit(P.WORKFLOW_RUN_READ, scope=Scope.of("workflow_run", path="run_id"))
 def workflow_run_report_endpoint(run_id: str, project_id: str = "") -> dict:
     """The whole workflow, end to end: research, panel, build — what each cost and who did it.
 
@@ -7451,6 +7591,7 @@ def workflow_run_report_endpoint(run_id: str, project_id: str = "") -> dict:
 
 
 @app.post("/v1/workflow-runs/{run_id}/report")
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.of("workflow_run", path="run_id"))
 def publish_workflow_run_report_endpoint(run_id: str, project_id: str = "") -> dict:
     """Keep the report as a document, so it can be downloaded, mailed, or filed.
 
@@ -7513,6 +7654,7 @@ def publish_workflow_run_report_endpoint(run_id: str, project_id: str = "") -> d
 
 
 @app.get("/v1/projects/{project_id}/preflight")
+@permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
 def project_preflight_endpoint(project_id: str) -> dict:
     """Should the next run start now, and what did the last one leave unresolved?
 
@@ -7526,6 +7668,7 @@ def project_preflight_endpoint(project_id: str) -> dict:
 
 
 @app.get("/v1/projects/{project_id}/host-advice")
+@permit(P.SYSTEM_READ, scope=Scope.org())
 def project_host_advice_endpoint(project_id: str) -> dict:
     """Whether to tell the person at the screen that their machine needs attention.
 
@@ -7537,6 +7680,7 @@ def project_host_advice_endpoint(project_id: str) -> dict:
 
 
 @app.post("/v1/self/host-stall")
+@permit(P.WORKER_LEASE)
 def record_host_stall_endpoint(payload: open_bodies.HostStallBody) -> dict:
     """Record that the MACHINE stopped scheduling BOSS for this long.
 
@@ -7565,6 +7709,7 @@ def record_host_stall_endpoint(payload: open_bodies.HostStallBody) -> dict:
 
 
 @app.post("/v1/code-tasks/{run_id}/redelivered")
+@permit(P.WORKER_LEASE)
 def code_task_redelivered_endpoint(run_id: str, payload: open_bodies.CodeTaskRedeliveredBody) -> dict:
     """Record that an attempt of this run is a REPLAY of interrupted work.
 
@@ -7618,6 +7763,7 @@ def code_task_redelivered_endpoint(run_id: str, payload: open_bodies.CodeTaskRed
 
 
 @app.get("/v1/code-tasks/{run_id}/activity")
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def code_task_activity_endpoint(run_id: str):
     """Per-stage model-call activity for a code task — the internal detail behind
     each phase (agent, model, latency, turns, retries, cost, ok/error). Written per call,
@@ -7666,6 +7812,7 @@ def code_task_activity_endpoint(run_id: str):
 
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/execute")
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"))
 def delivery_execute_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
     """Refuse direct connector execution until it has a governed receipt path."""
     if not database_is_reachable(engine):
@@ -7721,6 +7868,7 @@ def delivery_execute_endpoint(deployment_run_id: str, payload: Optional[dict] = 
 # Deployment targets — onboarding an app without hand-written SQL
 # --------------------------------------------------------------------------- #
 @app.get("/v1/deployment-targets", response_model=DeploymentTargetListResponse)
+@permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def list_deployment_targets_alias(project_id: str, limit: int = 50,
                                   offset: int = 0) -> DeploymentTargetListResponse:
     """List targets at the same path as create/update/delete.
@@ -7799,6 +7947,7 @@ def _deployment_target_write_actor(payload: Optional[dict]) -> str:
 
 
 @app.post("/v1/deployment-targets", status_code=201)
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(body="project_id"))
 def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
     """Register where an app is deployed. This is the whole of onboarding.
 
@@ -7934,6 +8083,7 @@ def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
 
 
 @app.patch("/v1/deployment-targets/{target_id}")
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"))
 def update_deployment_target_endpoint(target_id: str, payload: DeploymentTargetUpdateBody):
     """Change a target in place — port, domain, health check, status, auto-deploy."""
     payload = payload.payload()
@@ -8003,6 +8153,7 @@ def update_deployment_target_endpoint(target_id: str, payload: DeploymentTargetU
 
 
 @app.delete("/v1/deployment-targets/{target_id}", status_code=200)
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"))
 def retire_deployment_target_endpoint(target_id: str, actor: str):
     """Retire a target. Deliberately a status change, not a delete.
 
@@ -8031,6 +8182,7 @@ def retire_deployment_target_endpoint(target_id: str, actor: str):
 
 
 @app.post("/v1/deployment-targets/{target_id}/teardown")
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"))
 def teardown_deployment_target_endpoint(target_id: str, payload: DeploymentTargetTeardownBody):
     """Refuse direct host teardown until it uses the approved Resource Plane flow."""
     payload = payload.payload()
@@ -8078,6 +8230,7 @@ def teardown_deployment_target_endpoint(target_id: str, payload: DeploymentTarge
 
 
 @app.post("/v1/deployment-targets/{target_id}/purge")
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"))
 def purge_deployment_target_endpoint(target_id: str, payload: DeploymentTargetPurgeBody):
     """Refuse history erasure until an approved, recoverable purge flow exists."""
     payload = payload.payload()
@@ -8129,6 +8282,7 @@ def purge_deployment_target_endpoint(target_id: str, payload: DeploymentTargetPu
 
 
 @app.post("/v1/deployment-targets/{target_id}/bootstrap")
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"))
 def bootstrap_deployment_target_endpoint(target_id: str, payload: Optional[dict] = None):
     """Refuse direct SSH host writes until Resource Plane records the operation."""
     if not database_is_reachable(engine):
@@ -8205,6 +8359,7 @@ def _owned_secret_scope(connection, project_id: str, payload: dict) -> tuple[str
 
 
 @app.get("/v1/secrets")
+@permit(P.SECRET_READ_METADATA, scope=Scope.project(query="project_id"))
 def list_secrets_endpoint(project_id: str):
     """Secret METADATA: name, backend, kind, fingerprint, last4, status, what it is bound to.
 
@@ -8220,6 +8375,7 @@ def list_secrets_endpoint(project_id: str):
 
 
 @app.post("/v1/secrets", status_code=201)
+@permit(P.SECRET_MANAGE, scope=Scope.project(body="project_id"))
 def put_secret_endpoint(payload: SecretPutBody):
     """Upload a value: it is written THROUGH to the backend and not retained by BOSS."""
     payload = payload.payload()
@@ -8249,6 +8405,7 @@ def put_secret_endpoint(payload: SecretPutBody):
 
 
 @app.post("/v1/secrets/keypair", status_code=201)
+@permit(P.SECRET_MANAGE, scope=Scope.project(body="project_id"))
 def generate_keypair_endpoint(payload: SecretKeypairBody):
     """Generate a keypair. The private half goes to the backend; only the PUBLIC half returns."""
     payload = payload.payload()
@@ -8277,6 +8434,7 @@ def generate_keypair_endpoint(payload: SecretKeypairBody):
 
 
 @app.post("/v1/secrets/{secret_ref_id}/verify")
+@permit(P.SECRET_MANAGE, scope=Scope.of("secret_ref", path="secret_ref_id"))
 def verify_secret_endpoint(secret_ref_id: str, payload: Optional[dict] = None):
     """Prove the reference still resolves — a row saying 'active' proves only that nobody
     marked it otherwise."""
@@ -8297,6 +8455,7 @@ def verify_secret_endpoint(secret_ref_id: str, payload: Optional[dict] = None):
 
 
 @app.get("/v1/secrets/{secret_ref_id}")
+@permit(P.SECRET_READ_METADATA, scope=Scope.project(query="project_id"))
 def get_secret_metadata_endpoint(secret_ref_id: str, project_id: str):
     """Secret METADATA only for one ref (no values). Scoped by project_id."""
     if not database_is_reachable(engine):
@@ -8311,6 +8470,7 @@ def get_secret_metadata_endpoint(secret_ref_id: str, project_id: str):
 
 
 @app.post("/v1/deployment-targets/{target_id}/secrets")
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(body="project_id"))
 def bind_secret_endpoint(target_id: str, payload: TargetSecretBindBody):
     """Point one of a target's declared requirements at a stored secret."""
     payload = payload.payload()
@@ -8336,6 +8496,7 @@ def bind_secret_endpoint(target_id: str, payload: TargetSecretBindBody):
 # Observability — the collector/store/dashboards BOSS deploys beside the apps
 # --------------------------------------------------------------------------- #
 @app.get("/v1/delivery/defaults")
+@permit(P.DEPLOYMENT_READ, scope=Scope.org())
 def delivery_defaults_endpoint():
     """What BOSS will clone if you do not say otherwise.
 
@@ -8357,6 +8518,7 @@ def delivery_defaults_endpoint():
 
 
 @app.get("/v1/delivery/repos")
+@permit(P.REPOSITORY_READ, scope=Scope.org())
 def delivery_repos_endpoint(project_id: Optional[str] = None):
     """Repositories BOSS has built in or deployed from — so nobody types one from memory."""
     if not database_is_reachable(engine):
@@ -8369,6 +8531,7 @@ def delivery_repos_endpoint(project_id: Optional[str] = None):
 
 
 @app.get("/v1/delivery/repos/{owner}/{repo}/refs")
+@permit(P.REPOSITORY_READ, scope=Scope.org())
 def delivery_repo_refs_endpoint(owner: str, repo: str, project_id: Optional[str] = None):
     """Branches available to deploy, plus what BOSS has already shipped from this repo."""
     if not database_is_reachable(engine):
@@ -8387,6 +8550,7 @@ def delivery_repo_refs_endpoint(owner: str, repo: str, project_id: Optional[str]
 
 
 @app.get("/v1/delivery/repos/{owner}/{repo}/apps")
+@permit(P.REPOSITORY_READ, scope=Scope.org())
 def delivery_repo_apps_endpoint(
     owner: str, repo: str, ref: str = "", project_id: Optional[str] = None,
 ):
@@ -8407,6 +8571,7 @@ def delivery_repo_apps_endpoint(
 
 
 @app.get("/v1/observability/stack")
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
 def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] = None):
     """What the stack WOULD monitor, plus whether it is currently running.
 
@@ -8480,6 +8645,7 @@ def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] 
 
 
 @app.post("/v1/observability/stack/deploy")
+@permit(P.OBSERVABILITY_MANAGE, scope=Scope.of("deployment_target", body="host_target_id"))
 def deploy_observability_stack_endpoint(payload: ObservabilityStackDeployBody):
     """Render the collector/Prometheus/Grafana stack from the registry and put it on the host.
 
@@ -8536,6 +8702,7 @@ def deploy_observability_stack_endpoint(payload: ObservabilityStackDeployBody):
 
 
 @app.get("/v1/delivery/health")
+@permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def delivery_health_endpoint(project_id: str):
     """Health of everything BOSS has deployed for this project.
 
@@ -8550,6 +8717,7 @@ def delivery_health_endpoint(project_id: str):
 
 
 @app.get("/v1/shepherd/readiness")
+@permit(P.AUTOPILOT_READ, scope=Scope.org())
 def shepherd_readiness_endpoint(project_id: Optional[str] = None, days: int = 30):
     """Per watch class: what it judged, how often it was overruled, and whether to trust it.
 
@@ -8564,6 +8732,7 @@ def shepherd_readiness_endpoint(project_id: Optional[str] = None, days: int = 30
 
 
 @app.post("/v1/shepherd/watch")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.org())
 def shepherd_watch_endpoint(project_id: Optional[str] = None, dry_run: bool = False):
     """Look at everything currently RUNNING and deal with what is obviously wrong.
 
@@ -8582,6 +8751,7 @@ def shepherd_watch_endpoint(project_id: Optional[str] = None, dry_run: bool = Fa
 
 
 @app.post("/v1/delivery/health/sweep")
+@permit(P.SYSTEM_OPERATE, scope=Scope.org())
 def delivery_health_sweep_endpoint(project_id: Optional[str] = None):
     """Probe due targets now instead of waiting for the worker's idle sweep.
 
@@ -8648,6 +8818,7 @@ def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) ->
 
 
 @app.post("/v1/delivery/deploy")
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_target", body="target_id"))
 def delivery_deploy_endpoint(payload: ManualDeployBody):
     """Plan a governed deployment of a target at a chosen ref.
 
@@ -8779,6 +8950,7 @@ def delivery_deploy_endpoint(payload: ManualDeployBody):
 # which is the direction an operator asks for first: what runs on this box, and can it deploy?
 
 @app.get("/v1/deployment-hosts")
+@permit(P.HOST_READ, scope=Scope.project(query="project_id"))
 def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = False):
     """Every VM, with the apps riding on it and its last preflight verdict."""
     if not database_is_reachable(engine):
@@ -8833,6 +9005,7 @@ def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = Fals
 
 
 @app.patch("/v1/deployment-hosts/{host_id}")
+@permit(P.HOST_MANAGE, scope=Scope.of("deployment_host", path="host_id"))
 def update_deployment_host_endpoint(host_id: str, payload: DeploymentHostUpdateBody):
     """Change a registered host's connection details after the fact.
 
@@ -8880,6 +9053,7 @@ def update_deployment_host_endpoint(host_id: str, payload: DeploymentHostUpdateB
 
 
 @app.post("/v1/deployment-hosts")
+@permit(P.HOST_MANAGE, scope=Scope.project(body="project_id"))
 def register_deployment_host_endpoint(payload: DeploymentHostRegisterBody):
     """Record a VM. Touches nothing on the machine — status starts at `registered`.
 
@@ -8924,6 +9098,7 @@ def register_deployment_host_endpoint(payload: DeploymentHostRegisterBody):
 
 
 @app.post("/v1/deployment-hosts/{host_id}/key")
+@permit(P.HOST_MANAGE, scope=Scope.of("deployment_host", path="host_id"))
 def generate_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] = None):
     """Mint this host's keypair and return the public half plus the exact install line.
 
@@ -8985,6 +9160,7 @@ def generate_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] 
 
 
 @app.post("/v1/deployment-hosts/{host_id}/adopt-key")
+@permit(P.HOST_MANAGE, scope=Scope.of("deployment_host", path="host_id"))
 def adopt_deployment_host_key_endpoint(host_id: str, payload: DeploymentHostAdoptKeyBody):
     """PATH 1 — the customer brings a key that already works on the host.
 
@@ -9037,6 +9213,7 @@ def adopt_deployment_host_key_endpoint(host_id: str, payload: DeploymentHostAdop
 
 
 @app.post("/v1/deployment-hosts/{host_id}/install-key")
+@permit(P.HOST_MANAGE, scope=Scope.of("deployment_host", path="host_id"))
 def install_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] = None):
     """PATH 2 — BOSS generates its OWN key and installs it over the credential it already has.
 
@@ -9089,6 +9266,7 @@ def install_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] =
 
 
 @app.post("/v1/deployment-hosts/{host_id}/provision")
+@permit(P.HOST_MANAGE, scope=Scope.of("deployment_host", path="host_id"))
 def provision_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None):
     """Make a reachable host able to RUN a deployment — today that means docker.
 
@@ -9144,6 +9322,7 @@ def provision_deployment_host_endpoint(host_id: str, payload: Optional[dict] = N
 
 
 @app.post("/v1/deployment-hosts/{host_id}/verify")
+@permit(P.HOST_MANAGE, scope=Scope.of("deployment_host", path="host_id"))
 def verify_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None):
     """Actually connect. `verified` is evidence, not a checkbox.
 
@@ -9167,6 +9346,7 @@ def verify_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None
 
 
 @app.post("/v1/deployment-hosts/{host_id}/retire")
+@permit(P.HOST_MANAGE, scope=Scope.of("deployment_host", path="host_id"))
 def retire_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None):
     """Hand the host back the way BOSS found it, and stop scheduling on it.
 
@@ -9225,6 +9405,7 @@ def retire_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None
 
 
 @app.post("/v1/deployment-hosts/{host_id}/attach")
+@permit(P.HOST_MANAGE, scope=Scope.of("deployment_host", path="host_id"))
 def attach_target_to_host_endpoint(host_id: str, payload: DeploymentHostAttachBody):
     """Point an app at this host, deriving target_ref so the two cannot drift."""
     payload = payload.payload()
@@ -9250,6 +9431,7 @@ def attach_target_to_host_endpoint(host_id: str, payload: DeploymentHostAttachBo
 
 
 @app.post("/v1/deployment-hosts/backfill")
+@permit(P.HOST_MANAGE, scope=Scope.project(body="project_id"))
 def backfill_deployment_hosts_endpoint(payload: DeploymentHostBackfillBody):
     """Create one host per distinct target_ref and re-point existing targets at it.
 
@@ -9282,6 +9464,7 @@ def _stack_error(exc) -> HTTPException:
 
 
 @app.post("/v1/deployments/stack/targets", status_code=201)
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(body="project_id"))
 def create_stack_target_endpoint(payload: open_bodies.StackTargetCreateBody):
     """Where a stack deploys: a GitHub repository, on a verified fleet host."""
     payload = payload.payload()
@@ -9310,6 +9493,7 @@ def create_stack_target_endpoint(payload: open_bodies.StackTargetCreateBody):
 
 
 @app.post("/v1/deployments/stack/plan")
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
 def plan_stack_deployment_endpoint(payload: open_bodies.StackDeployPlanBody):
     """Plan repository@ref (branch, tag, commit or pull/N) onto a stack target.
 
@@ -9339,6 +9523,7 @@ def plan_stack_deployment_endpoint(payload: open_bodies.StackDeployPlanBody):
 
 
 @app.get("/v1/deployments/stack")
+@permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def list_stack_deployments_endpoint(project_id: str, target_id: Optional[str] = None,
                                     limit: int = 50):
     """Stack deployments, newest first — what the console's deploy history reads."""
@@ -9353,6 +9538,7 @@ def list_stack_deployments_endpoint(project_id: str, target_id: Optional[str] = 
 
 
 @app.get("/v1/deployments/stack/{deployment_id}")
+@permit(P.DEPLOYMENT_READ, scope=Scope.of("stack_deployment", path="deployment_id"))
 def get_stack_deployment_endpoint(deployment_id: str):
     """One deployment: its steps as they run, the redacted log tail, and the verdict."""
     if not database_is_reachable(engine):
@@ -9368,6 +9554,7 @@ def get_stack_deployment_endpoint(deployment_id: str):
 
 
 @app.post("/v1/deployments/stack/{deployment_id}/rollback")
+@permit(P.DEPLOYMENT_ROLLBACK, scope=Scope.of("stack_deployment", path="deployment_id"))
 def rollback_stack_deployment_endpoint(deployment_id: str,
                                        payload: open_bodies.StackDeployRollbackBody):
     """Plan a NEW governed deployment of the previous healthy commit on the same target."""
@@ -9393,6 +9580,7 @@ def rollback_stack_deployment_endpoint(deployment_id: str,
 
 
 @app.post("/v1/deployments/stack/{deployment_id}/execute")
+@permit(P.WORKER_LEASE)
 def execute_stack_deployment_endpoint(deployment_id: str,
                                       payload: open_bodies.StackDeployExecuteBody):
     """The worker hands its leased `deployment.stack_apply` job here. Fenced by the lease; the
@@ -9407,6 +9595,7 @@ def execute_stack_deployment_endpoint(deployment_id: str,
 
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/apply")
+@permit(P.WORKER_LEASE)
 def apply_host_deployment_endpoint(deployment_run_id: str,
                                    payload: open_bodies.StackDeployExecuteBody):
     """The worker hands its leased `deployment.host_apply` job here. Fenced by the lease; the
@@ -9437,6 +9626,7 @@ def _planned_next_action(planned: dict) -> dict:
 
 
 @app.post("/v1/deployment-targets/{target_id}/auto-deploy")
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"))
 def set_auto_deploy_endpoint(target_id: str, payload: AutoDeployBody):
     """Turn deploy-on-merge on/off, or pause it.
 
@@ -9490,6 +9680,7 @@ def set_auto_deploy_endpoint(target_id: str, payload: AutoDeployBody):
 
 
 @app.get("/v1/delivery/deployments")
+@permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def list_deployment_runs_endpoint(project_id: str, limit: int = 10):
     """Recent DEPLOYMENTS, newest first.
 
@@ -9527,6 +9718,7 @@ def list_deployment_runs_endpoint(project_id: str, limit: int = 10):
 
 
 @app.get("/v1/delivery/deployments/{deployment_run_id}")
+@permit(P.DEPLOYMENT_READ, scope=Scope.of("deployment_run", path="deployment_run_id"))
 def get_deployment_run_endpoint(deployment_run_id: str):
     """Live progress of one deployment: steps, timings, logs, outcome.
 
@@ -9587,6 +9779,7 @@ def get_deployment_run_endpoint(deployment_run_id: str):
 
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/redeploy")
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"))
 def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
     """Plan the same target again as a NEW deployment run.
 
@@ -9646,6 +9839,7 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
 
 
 @app.post("/v1/deployments/{deployment_run_id}/promote")
+@permit(P.DEPLOYMENT_PRODUCTION, scope=Scope.of("deployment_run", path="deployment_run_id"))
 def promote_deployment_endpoint(deployment_run_id: str, payload: DeploymentPromoteBody):
     """Promote a SUCCEEDED staging deployment to production — the second human gate.
 
@@ -9744,6 +9938,7 @@ def promote_deployment_endpoint(deployment_run_id: str, payload: DeploymentPromo
 
 
 @app.get("/v1/delivery/targets/{target_id}/preflight")
+@permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def delivery_preflight_endpoint(target_id: str, project_id: str):
     """Is this target deployable right now, and if not exactly what is missing?
 
@@ -9764,6 +9959,7 @@ def delivery_preflight_endpoint(target_id: str, project_id: str):
 
 
 @app.get("/v1/delivery/pipeline")
+@permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def delivery_pipeline_endpoint(project_id: str, limit: int = 25):
     """Code task -> PR -> deployment -> health, assembled in ONE query pass.
 
@@ -9784,6 +9980,7 @@ def delivery_pipeline_endpoint(project_id: str, limit: int = 25):
 
 
 @app.get("/v1/shepherd/overview")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def shepherd_overview_endpoint(project_id: str, limit: int = 40):
     """Everything the Task Shepherd console renders: reasoning, ledger, escalations, spend.
 
@@ -9832,6 +10029,7 @@ def shepherd_overview_endpoint(project_id: str, limit: int = 40):
 
 
 @app.post("/v1/shepherd/propose")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.of("code_task", body="run_id"))
 def shepherd_propose_endpoint(payload: open_bodies.ShepherdProposeBody):
     """Run one reasoning step against a run. Read-only: proposes, never acts."""
     payload = payload.payload()
@@ -9842,6 +10040,7 @@ def shepherd_propose_endpoint(payload: open_bodies.ShepherdProposeBody):
 
 
 @app.post("/v1/shepherd/sweep")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def shepherd_sweep_endpoint(payload: open_bodies.ShepherdSweepBody):
     """Propose for every run that ended without a PR and has no open escalation."""
     payload = payload.payload()
@@ -9853,6 +10052,7 @@ def shepherd_sweep_endpoint(payload: open_bodies.ShepherdSweepBody):
 
 
 @app.post("/v1/shepherd/autopilot")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def shepherd_autopilot_endpoint(payload: open_bodies.ShepherdAutopilotBody):
     """Propose AND apply every remedy the confirmation gate says needs no human.
 
@@ -9870,6 +10070,7 @@ def shepherd_autopilot_endpoint(payload: open_bodies.ShepherdAutopilotBody):
 
 
 @app.post("/v1/shepherd/escalations/{escalation_id}/answer")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.of("shepherd_escalation", path="escalation_id"))
 def shepherd_answer_endpoint(escalation_id: str, payload: open_bodies.ShepherdAnswerBody):
     """Answer a shepherd's question. The answer is provenance, not just a state change."""
     payload = payload.payload()
@@ -9887,6 +10088,7 @@ def shepherd_answer_endpoint(escalation_id: str, payload: open_bodies.ShepherdAn
 
 
 @app.post("/v1/code-tasks/{run_id}/retry")
+@permit(P.CODE_TASK_RETRY, scope=Scope.of("code_task", path="run_id"))
 def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     """Resume a failed/blocked code task as a new attempt in the same lineage, carrying its prior
     findings forward so the agent fixes the identified issues instead of regenerating from scratch."""
@@ -9931,6 +10133,7 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
 
 
 @app.get("/v1/code-tasks/{run_id}/feedback")
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def get_code_task_feedback_endpoint(run_id: str):
     from .services.feedback_agent import get_feedback_thread
     with begin(engine) as connection:
@@ -9942,6 +10145,7 @@ def get_code_task_feedback_endpoint(run_id: str):
 
 
 @app.post("/v1/code-tasks/{run_id}/feedback")
+@permit(P.CODE_TASK_STEER, scope=Scope.of("code_task", path="run_id"))
 def submit_code_task_feedback_endpoint(run_id: str, payload: CodeTaskFeedbackBody):
     """Ask/clarify/structure iteration feedback; never dispatch without confirmation."""
     payload = payload.payload()
@@ -9964,6 +10168,7 @@ def submit_code_task_feedback_endpoint(run_id: str, payload: CodeTaskFeedbackBod
 
 
 @app.post("/v1/feedback-threads/{thread_id}/confirm")
+@permit(P.CODE_TASK_STEER, scope=Scope.of("feedback_thread", path="thread_id"))
 def confirm_code_task_feedback_endpoint(thread_id: str, payload: Optional[dict] = None):
     from .services.feedback_agent import confirm_feedback
     actor = str((payload or {}).get("actor") or "operator")
@@ -9983,6 +10188,7 @@ def confirm_code_task_feedback_endpoint(thread_id: str, payload: Optional[dict] 
 
 
 @app.post("/v1/code-tasks/{run_id}/override")
+@permit(P.CODE_TASK_OVERRIDE, scope=Scope.of("code_task", path="run_id"))
 def override_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     """Human gate override: waive the named failed gate(s) + open the PR from the preserved diff
     (no re-run). Gates not waived still block; the PR keeps its own merge-gate Decision."""
@@ -10016,6 +10222,7 @@ def override_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
 
 
 @app.post("/v1/code-tasks/{run_id}/deploy")
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("code_task", path="run_id"))
 def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     """Deploy a sandbox-built app to a customer's own host (governed SSH-host path).
 
@@ -10132,6 +10339,7 @@ def assert_run_is_deployable(run: dict) -> None:
 
 
 @app.post("/v1/code-tasks/{run_id}/setup-deployment")
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("code_task", path="run_id"))
 def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.CodeTaskSetupDeploymentBody):
     """Point an app at a verified host — the missing link between the Factory and the fleet.
 
@@ -10399,6 +10607,7 @@ def _admit_code_task_deployment_read(endpoint):
 
 @app.get("/v1/code-tasks/{run_id}/deployments")
 @_admit_code_task_deployment_read
+@permit(P.DEPLOYMENT_READ, scope=Scope.of("code_task", path="run_id"))
 def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
                                        app_name: Optional[str] = None):
     """What this code task actually SHIPPED, if anything.
@@ -10513,6 +10722,7 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
 
 
 @app.post("/v1/code-tasks/{run_id}/preview")
+@permit(P.PREVIEW_MANAGE, scope=Scope.of("code_task", path="run_id"))
 def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
     """Preview a built app from retained rootfs, Docker, or a managed host process."""
     if not database_is_reachable(engine):
@@ -10563,6 +10773,7 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
 
 
 @app.get("/v1/previews")
+@permit(P.PREVIEW_READ, scope=Scope.org())
 def list_previews_endpoint(project_id: Optional[str] = None, limit: int = 50):
     """List app previews for a project (reaps expired ones)."""
     project_id = resolve_list_project_id(project_id)
@@ -10576,6 +10787,7 @@ def list_previews_endpoint(project_id: Optional[str] = None, limit: int = 50):
 
 
 @app.get("/v1/previews/{preview_id}/logs")
+@permit(P.PREVIEW_READ, scope=Scope.of("app_preview", path="preview_id"))
 def preview_logs_endpoint(preview_id: str, stream: bool = True):
     """Tail classified preview startup logs; SSE clients receive live updates."""
     from .services.preview_service import preview_log_snapshot, stream_preview_logs
@@ -10595,6 +10807,7 @@ def preview_logs_endpoint(preview_id: str, stream: bool = True):
 
 
 @app.post("/v1/previews/{preview_id}/feedback")
+@public(reason=PublicReason.PREVIEW_CAPABILITY_URL, verifier=_identity_verifiers.preview_feedback_capability)
 def submit_preview_feedback_endpoint(preview_id: str, payload: open_bodies.PreviewFeedbackBody):
     """Capability-gated capture from the injected preview overlay (proposal only)."""
     payload = payload.payload()
@@ -10606,6 +10819,7 @@ def submit_preview_feedback_endpoint(preview_id: str, payload: open_bodies.Previ
 
 
 @app.post("/v1/previews/{preview_id}/smoke")
+@permit(P.PREVIEW_MANAGE, scope=Scope.of("app_preview", path="preview_id"))
 def smoke_preview_endpoint(preview_id: str, payload: Optional[dict] = None):
     """Tier-3 smoke canary: assert the live preview actually works (key routes), record a receipt."""
     if not database_is_reachable(engine):
@@ -10631,6 +10845,7 @@ def smoke_preview_endpoint(preview_id: str, payload: Optional[dict] = None):
 
 @app.api_route("/v1/previews/{preview_id}/web", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 @app.api_route("/v1/previews/{preview_id}/web/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+@public(reason=PublicReason.PREVIEW_CAPABILITY_URL, verifier=_identity_verifiers.preview_capability)
 async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
     """Browser-facing reverse proxy to a running preview's loopback port — lets a preview be opened
     over the api's tailnet route (the preview's 127.0.0.1 port isn't reachable directly). Auth-exempt
@@ -10649,14 +10864,12 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
 
 @app.websocket("/v1/previews/{preview_id}/web/")
 @app.websocket("/v1/previews/{preview_id}/web/{path:path}")
+@public(reason=PublicReason.PREVIEW_CAPABILITY_URL, verifier=_identity_verifiers.preview_running)
 async def preview_websocket_proxy(websocket: WebSocket, preview_id: str, path: str = ""):
     """Bidirectional WebSocket proxy for SPA/live-preview development servers."""
     await websocket.accept()
-    with begin(engine) as connection:
-        row = connection.execute(text(
-            "SELECT url,status,mode FROM app_previews WHERE id=:id"
-        ), {"id": preview_id}).mappings().first()
-    if row is None or row["status"] != "running" or not row["url"]:
+    row = _identity_verifiers.preview_running(engine, preview_id)   # the capability (@public)
+    if row is None:
         await websocket.close(code=4404, reason="preview not running")
         return
     base = str(row["url"]).rstrip("/")
@@ -10696,6 +10909,7 @@ async def preview_websocket_proxy(websocket: WebSocket, preview_id: str, path: s
 
 
 @app.get("/v1/previews/{preview_id}/gate")
+@permit(P.PREVIEW_READ, scope=Scope.of("app_preview", path="preview_id"))
 def preview_gate_endpoint(preview_id: str):
     """What will approving this preview actually do?
 
@@ -10716,6 +10930,7 @@ def preview_gate_endpoint(preview_id: str):
 
 
 @app.post("/v1/previews/{preview_id}/approve")
+@permit(P.PREVIEW_APPROVE, scope=Scope.of("app_preview", path="preview_id"))
 def approve_preview_endpoint(preview_id: str, payload: open_bodies.PreviewApproveBody):
     """Approve what the preview shows — the single human gate on the path to live.
 
@@ -10783,6 +10998,7 @@ def approve_preview_endpoint(preview_id: str, payload: open_bodies.PreviewApprov
 
 
 @app.post("/v1/previews/{preview_id}/stop")
+@permit(P.PREVIEW_MANAGE, scope=Scope.of("app_preview", path="preview_id"))
 def stop_preview_endpoint(preview_id: str, payload: Optional[dict] = None):
     """Tear down a running preview."""
     if not database_is_reachable(engine):
@@ -10894,6 +11110,7 @@ def summarise_run_for_list(run: dict) -> dict:
 
 
 @app.post("/v1/jobs/{job_id}/cancel")
+@permit(P.JOB_CONTROL, scope=Scope.of("job", path="job_id"))
 def cancel_job_endpoint(job_id: str, payload: Optional[dict] = None):
     """Cancel a job that has not started yet.
 
@@ -10924,6 +11141,7 @@ def cancel_job_endpoint(job_id: str, payload: Optional[dict] = None):
 
 
 @app.post("/v1/code-tasks/{run_id}/origin")
+@permit(P.CODE_TASK_STEER, scope=Scope.of("code_task", path="run_id"))
 def set_code_task_origin_endpoint(run_id: str, payload: open_bodies.CodeTaskOriginBody):
     """Record where a run came from, so the console can show its Research/Spec history.
 
@@ -10974,6 +11192,7 @@ def set_code_task_origin_endpoint(run_id: str, payload: open_bodies.CodeTaskOrig
 
 
 @app.get("/v1/code-tasks")
+@permit(P.CODE_TASK_READ, scope=Scope.org())
 def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50,
                              exclude_internal: bool = False):
     """List code-task runs for a project (newest first) for the Code Tasks view.
@@ -11005,6 +11224,7 @@ def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50,
 
 
 @app.get("/v1/code-tasks/{run_id}")
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def get_code_task_endpoint(run_id: str):
     """Fetch a single code-task run (status, phase, diff summary, tests, PR, decision)."""
     if not database_is_reachable(engine):
@@ -11020,6 +11240,7 @@ def get_code_task_endpoint(run_id: str):
 
 
 @app.get("/v1/bakeoff/{batch_id}/report")
+@permit(P.ASSURANCE_READ, scope=Scope.of("bakeoff_batch", path="batch_id"))
 def bakeoff_report_endpoint(batch_id: str):
     """Aggregate a VAG bake-off batch (spec §8) server-side: gate pass-rate, retries,
     wall-clock, $/verified-outcome and false-pass per model config, from
@@ -11047,6 +11268,7 @@ def bakeoff_report_endpoint(batch_id: str):
 
 
 @app.post("/v1/verifier-meta-eval")
+@permit(P.ASSURANCE_RUN, scope=Scope.org())
 def verifier_meta_eval_endpoint(payload: Optional[dict] = None):
     """VAG #105: meta-eval the verifier. Run the adversarial reviewer over the labeled
     bugged/clean corpus and gate on recall (bugs caught) + false-fail rate (clean code
@@ -11080,6 +11302,7 @@ def verifier_meta_eval_endpoint(payload: Optional[dict] = None):
 
 
 @app.post("/v1/verifier-ratchet/capture")
+@permit(P.ASSURANCE_RUN, scope=Scope.of("code_task", body="run_id"))
 def verifier_ratchet_capture_endpoint(payload: open_bodies.VerifierRatchetCaptureBody):
     """VAG #107: capture a code-task run as a labeled verifier-meta-eval corpus item — the
     growing "ratchet" of human↔gate disagreements. Overrides auto-capture as CLEAN; use this to
@@ -11104,6 +11327,7 @@ def verifier_ratchet_capture_endpoint(payload: open_bodies.VerifierRatchetCaptur
 
 
 @app.post("/v1/mutation-gate")
+@permit(P.HOST_EXEC, scope=Scope.org())
 def mutation_gate_endpoint(payload: open_bodies.MutationGateBody):
     """VAG #106: mutation-gate the frozen tests. Plants deterministic AST mutations in `target_file`
     and requires the tests to KILL them — a surviving mutant is a bug-class the suite can't catch.
@@ -11128,6 +11352,7 @@ def mutation_gate_endpoint(payload: open_bodies.MutationGateBody):
 
 
 @app.post("/v1/independence-check")
+@permit(P.ASSURANCE_READ, scope=Scope.org(), readonly_post=True)
 def independence_check_endpoint(payload: Optional[dict] = None):
     """VAG #110: check generator/verifier independence. With `builder` + `verifiers`, assess those;
     with no payload, audit BOSS's CURRENT config (builder vs review engine). payload:
@@ -11146,6 +11371,7 @@ def independence_check_endpoint(payload: Optional[dict] = None):
 
 
 @app.post("/v1/repair-policy")
+@permit(P.POLICY_READ, scope=Scope.org(), readonly_post=True)
 def repair_policy_endpoint(payload: Optional[dict] = None):
     """VAG #109: budget-variable repair. With `attempt` + `spent_usd_micros`, decide the next repair
     action (stop / retry-cheap / escalate-to-strong); otherwise return the up-front plan (how deep the
@@ -11176,6 +11402,7 @@ def repair_policy_endpoint(payload: Optional[dict] = None):
 
 
 @app.post("/v1/scaffold")
+@permit(P.CODE_TASK_READ, scope=Scope.org(), readonly_post=True)
 def scaffold_endpoint(payload: Optional[dict] = None):
     """APP-1 (#91): framework-aware scaffolding. Returns a deterministic, buildable baseline project
     (Vite+React+TS+Tailwind + shadcn-style primitives + a design-system token layer + web verification
@@ -11190,6 +11417,7 @@ def scaffold_endpoint(payload: Optional[dict] = None):
 
 
 @app.post("/v1/visual-gate")
+@permit(P.ASSURANCE_READ, scope=Scope.org(), readonly_post=True)
 def visual_gate_endpoint(payload: open_bodies.VisualGateBody):
     """APP-4 (#94): judge render evidence against the deterministic visual/UX rubric — renders without
     an error overlay, has real (non-placeholder) content, has visual hierarchy, no mobile overflow.
@@ -11201,6 +11429,7 @@ def visual_gate_endpoint(payload: open_bodies.VisualGateBody):
 
 
 @app.post("/v1/design-routing")
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.org(), readonly_post=True)
 def design_routing_endpoint(payload: Optional[dict] = None):
     """APP-6 (#96): hybrid frontier+OSS routing for the design axis. With `step`, resolve its tier +
     engine (design axis → frontier, fill-in → cheap OSS); otherwise return the design-pass budget plan
@@ -11225,6 +11454,7 @@ def design_routing_endpoint(payload: Optional[dict] = None):
 
 
 @app.post("/v1/concurrency-load")
+@permit(P.SYSTEM_OPERATE, scope=Scope.org())
 def concurrency_load_endpoint(payload: Optional[dict] = None):
     """#103: drive N concurrent tasks and report throughput / latency / saturation for the Go-services
     concurrency layer. Defaults to a **stub** runner (simulated task, **zero model cost**). payload:
@@ -11259,6 +11489,7 @@ def concurrency_load_endpoint(payload: Optional[dict] = None):
 
 # --- Discovery pipeline: research-driven outcome discovery -------------------
 @app.post("/v1/discoveries")
+@permit(P.DISCOVERY_CREATE, scope=Scope.org())
 def start_discovery_endpoint(payload: open_bodies.DiscoveryStartBody):
     """Kick off a Discovery run: research a seed (idea/problem/signal) via web search and
     produce a cited dossier + candidate outcomes. Returns run_id; progress polls discovery_runs."""
@@ -11284,6 +11515,7 @@ def start_discovery_endpoint(payload: open_bodies.DiscoveryStartBody):
 
 
 @app.post("/v1/discoveries/{run_id}/execute")
+@permit(P.WORKER_LEASE)
 def execute_discovery_endpoint(run_id: str, payload: open_bodies.DiscoveryExecuteBody):
     """The worker hands a leased `discovery.run` job here: the research agent (the Claude CLI)
     lives in this container. Each stage spends under the job's lease, with its own
@@ -11299,6 +11531,7 @@ def execute_discovery_endpoint(run_id: str, payload: open_bodies.DiscoveryExecut
 
 
 @app.get("/v1/discoveries")
+@permit(P.DISCOVERY_READ, scope=Scope.project(query="project_id"))
 def list_discoveries_endpoint(project_id: str, limit: int = 50, offset: int = 0):
     """List discovery runs for a project (newest first) for the Discovery view. `offset` pages
     past the first `limit` (Research's "Show more")."""
@@ -11311,6 +11544,7 @@ def list_discoveries_endpoint(project_id: str, limit: int = 50, offset: int = 0)
 
 
 @app.get("/v1/discoveries/{run_id}")
+@permit(P.DISCOVERY_READ, scope=Scope.of("discovery_run", path="run_id"))
 def get_discovery_endpoint(run_id: str):
     """Fetch a single discovery run (status, phase, dossier, candidate outcomes, gate)."""
     if not database_is_reachable(engine):
@@ -11325,6 +11559,7 @@ def get_discovery_endpoint(run_id: str):
 
 
 @app.post("/v1/discoveries/{run_id}/promote")
+@permit(P.DISCOVERY_CREATE, scope=Scope.of("discovery_run", path="run_id"))
 def promote_discovery_outcome_endpoint(run_id: str, payload: open_bodies.DiscoveryPromoteBody):
     """Close the loop: turn a chosen candidate outcome into an Initiative + convene a PRD meeting
     seeded with the outcome and the dossier evidence. Returns the meeting task_id."""
@@ -11418,6 +11653,7 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: open_bodies.Discove
 
 
 @app.post("/v1/discoveries/{run_id}/deepen")
+@permit(P.DISCOVERY_CREATE, scope=Scope.of("discovery_run", path="run_id"))
 def deepen_discovery_endpoint(run_id: str, payload: Optional[dict] = None):
     """Spawn a deeper second pass on a discovery's seed: a multi-source parallel scout sweep
     (competitor/pain/demand/timing) for a richer, more-cited dossier. Returns the new run_id."""
@@ -11477,6 +11713,7 @@ def require_sandbox_actor(connection, sandbox_id: str, actor: str) -> str:
 
 
 @app.get("/v1/sandboxes")
+@permit(P.SANDBOX_READ, scope=Scope.org())
 def list_sandboxes_endpoint():
     """The connected micro-VM host + the inspectable (retained) VMs. A failed or
     incomplete code task leaves its rootfs held ~2h; those show here for root-cause.
@@ -11534,6 +11771,7 @@ def list_sandboxes_endpoint():
 
 
 @app.get("/v1/sandboxes/helpers")
+@permit(P.SANDBOX_READ, scope=Scope.org())
 def sandbox_helpers_endpoint():
     """The governed helper-command allowlist (runnable without break-glass)."""
     from .services import sandbox_console
@@ -11551,6 +11789,7 @@ def sandbox_helpers_endpoint():
 
 
 @app.get("/v1/sandboxes/{sandbox_id}/tree")
+@permit(P.SANDBOX_READ, scope=Scope.of("sandbox", path="sandbox_id"))
 def sandbox_tree_endpoint(sandbox_id: str):
     from .services import sandbox_console
     from .services.sandbox_provider import SandboxPlaneError
@@ -11571,6 +11810,7 @@ def sandbox_tree_endpoint(sandbox_id: str):
 
 
 @app.get("/v1/sandboxes/{sandbox_id}/file")
+@permit(P.SANDBOX_READ, scope=Scope.of("sandbox", path="sandbox_id"))
 def sandbox_file_endpoint(sandbox_id: str, path: str, actor: str = "operator"):
     """Read a tracked file from a sandbox working tree — audited."""
     from .services import sandbox_console
@@ -11592,6 +11832,7 @@ def sandbox_file_endpoint(sandbox_id: str, path: str, actor: str = "operator"):
 
 
 @app.post("/v1/sandboxes/{sandbox_id}/exec")
+@permit(P.SANDBOX_EXEC, scope=Scope.of("sandbox", path="sandbox_id"))
 def sandbox_exec_endpoint(sandbox_id: str, payload: open_bodies.SandboxExecBody):
     """Run a command in a sandbox. Allowlisted helpers run freely; a raw shell
     (break_glass=true) requires a reason and emits an elevated audit event.
@@ -11620,6 +11861,7 @@ def sandbox_exec_endpoint(sandbox_id: str, payload: open_bodies.SandboxExecBody)
 
 
 @app.get("/v1/sandboxes/{sandbox_id}/stats")
+@permit(P.SANDBOX_READ, scope=Scope.of("sandbox", path="sandbox_id"))
 def sandbox_stats_endpoint(sandbox_id: str):
     """Per-sandbox resource telemetry (CPU/mem/io, OOM, limits) for operators."""
     from .services import sandbox_console
@@ -11629,6 +11871,7 @@ def sandbox_stats_endpoint(sandbox_id: str):
 
 
 @app.get("/v1/sandboxes/{sandbox_id}/logs")
+@permit(P.SANDBOX_READ, scope=Scope.of("sandbox", path="sandbox_id"))
 def sandbox_logs_endpoint(sandbox_id: str):
     """Guest serial console + code-agent log from a retained micro-VM (root-cause)."""
     from .services import sandbox_console
@@ -11650,6 +11893,7 @@ def sandbox_logs_endpoint(sandbox_id: str):
 
 
 @app.post("/v1/sandboxes/{sandbox_id}/preserve")
+@permit(P.SANDBOX_MANAGE, scope=Scope.of("sandbox", path="sandbox_id"))
 def sandbox_preserve_endpoint(sandbox_id: str, payload: open_bodies.SandboxPreserveBody):
     """Refuse host retention until its cost and external effect are governed."""
     payload = payload.payload()
@@ -11670,6 +11914,7 @@ def sandbox_preserve_endpoint(sandbox_id: str, payload: open_bodies.SandboxPrese
 
 
 @app.delete("/v1/sandboxes/{sandbox_id}")
+@permit(P.SANDBOX_MANAGE, scope=Scope.of("sandbox", path="sandbox_id"))
 def sandbox_destroy_endpoint(sandbox_id: str):
     actor = current_api_principal.get() or "operator"
     with begin(engine) as connection:
@@ -11742,6 +11987,7 @@ SERVICE_APPROVAL_GATES = [
 
 
 @app.get("/v1/approval-rules")
+@permit(P.DECISION_READ, scope=Scope.project(query="project_id"))
 def list_approval_rules(project_id: str):
     """The full set of rules that determine what requires human approval: the
     autonomy threshold, every tool/skill/MCP capability's risk tier (auto vs
@@ -11805,6 +12051,7 @@ def list_approval_rules(project_id: str):
 
 
 @app.get("/v1/capabilities")
+@permit(P.SKILL_READ, scope=Scope.project(query="project_id"))
 def list_capabilities(project_id: str):
     """The full capability catalog an agent can use: BOSS's native tools (read +
     write, with risk tiers) and every registered MCP server with its live tools.
@@ -11855,6 +12102,7 @@ def list_capabilities(project_id: str):
 
 
 @app.get("/v1/status", response_model=StatusResponse)
+@permit(P.SYSTEM_READ, scope=Scope.project(query="project_id"))
 def status(project_id: str) -> StatusResponse:
     if not database_is_reachable(engine):
         return StatusResponse(
@@ -11930,6 +12178,7 @@ def status(project_id: str) -> StatusResponse:
 
 
 @app.post("/v1/metatron/query", response_model=MetatronQueryResponse)
+@permit(P.SYSTEM_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def metatron_query(payload: MetatronQueryRequest, request: Request) -> MetatronQueryResponse:
     # Rate limit high-cost Metatron path (P2). Early, before any DB/LLM work.
     _enforce_high_cost_rate_limit(
@@ -11952,6 +12201,7 @@ def metatron_query(payload: MetatronQueryRequest, request: Request) -> MetatronQ
 
 
 @app.post("/v1/commands/propose", response_model=CommandProposeResponse, status_code=201)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def propose_command(payload: CommandProposeRequest, request: Request) -> CommandProposeResponse:
     # Rate limit high-cost command propose path (P2). Before perm check + work.
     _enforce_high_cost_rate_limit(
@@ -12055,6 +12305,7 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
 
 
 @app.post("/v1/engine/agent/action", response_model=AgentActionRunResponse)
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"))
 def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentActionRunResponse:
     """Execute one action the operator ACCEPTED by clicking its button.
 
@@ -12133,6 +12384,7 @@ def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentA
 
 
 @app.post("/v1/engine/agent/chat", response_model=AgentChatResponse)
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"))
 def engine_agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatResponse:
     """The BOSS chat interface — one engine-native agent: routes intents, persists
     threads, gates confirmations, and answers questions grounded in live engine
@@ -12141,6 +12393,7 @@ def engine_agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatR
 
 
 @app.post("/v1/agent/chat", response_model=AgentChatResponse, deprecated=True)
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"))
 def agent_chat(payload: AgentChatRequest, request: Request, response: Response) -> AgentChatResponse:
     """DEPRECATED alias of POST /v1/engine/agent/chat — identical behavior. Kept so
     existing callers keep working; migrate to the engine endpoint."""
@@ -12150,6 +12403,7 @@ def agent_chat(payload: AgentChatRequest, request: Request, response: Response) 
 
 
 @app.get("/v1/agent/briefing")
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(query="project_id"))
 def agent_briefing_endpoint(project_id: str):
     """Everything in the factory that wants a person, with what each failure means.
 
@@ -12169,6 +12423,7 @@ def agent_briefing_endpoint(project_id: str):
 
 
 @app.get("/v1/agent/threads")
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(query="project_id"))
 def list_agent_threads_endpoint(project_id: str, actor: str, since_days: int = 7):
     """Recent chat threads (default last 7 days) for the console's history + resume."""
     with begin(engine) as connection:
@@ -12181,6 +12436,7 @@ def list_agent_threads_endpoint(project_id: str, actor: str, since_days: int = 7
 
 
 @app.get("/v1/projects/{project_id}/repositories")
+@permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"))
 def project_repositories_endpoint(project_id: str):
     """The repositories this project can build in, primary first.
 
@@ -12208,6 +12464,7 @@ def project_repositories_endpoint(project_id: str):
 
 
 @app.post("/v1/agent/threads/{thread_id}/clear")
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(query="project_id"))
 def clear_agent_thread_endpoint(thread_id: str, project_id: str, actor: str):
     """Start one conversation again, leaving every other conversation alone.
 
@@ -12244,6 +12501,7 @@ def clear_agent_thread_endpoint(thread_id: str, project_id: str, actor: str):
 
 
 @app.post("/v1/agent/wakeups/tick")
+@permit(P.SYSTEM_OPERATE, scope=Scope.org())
 def agent_wakeups_tick(payload: open_bodies.AgentWakeupsTickBody) -> dict:
     """Wake every monitor and schedule whose time has come.
 
@@ -12261,6 +12519,7 @@ def agent_wakeups_tick(payload: open_bodies.AgentWakeupsTickBody) -> dict:
 
 
 @app.get("/v1/agent/wakeups")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def list_agent_wakeups(project_id: str, active_only: bool = True) -> dict:
     """What is watching or scheduled here, and when each next wakes."""
     from boss_engine.services.agent_wakeups import list_wakeups
@@ -12272,6 +12531,7 @@ def list_agent_wakeups(project_id: str, active_only: bool = True) -> dict:
 
 
 @app.get("/v1/memory")
+@permit(P.MEMORY_READ, scope=Scope.project(query="project_id"))
 def list_memory_endpoint(
     project_id: str, actor: str = "", include_proposed: bool = True,
 ) -> dict:
@@ -12302,6 +12562,7 @@ def list_memory_endpoint(
 
 
 @app.post("/v1/memory/{memory_id}/review")
+@permit(P.MEMORY_MANAGE, scope=Scope.project(body="project_id"))
 def review_memory_endpoint(memory_id: str, payload: open_bodies.MemoryReviewBody) -> dict:
     """Let a proposed rule bind, or refuse it. The gate that makes lessons safe."""
     payload = payload.payload()
@@ -12322,6 +12583,7 @@ def review_memory_endpoint(memory_id: str, payload: open_bodies.MemoryReviewBody
 
 
 @app.post("/v1/memory/{memory_id}/forget")
+@permit(P.MEMORY_MANAGE, scope=Scope.project(body="project_id"))
 def forget_memory_endpoint(memory_id: str, payload: open_bodies.MemoryForgetBody) -> dict:
     """Retire a memory that is wrong or no longer true. Retired, never deleted."""
     payload = payload.payload()
@@ -12359,6 +12621,7 @@ def require_agent_thread_reader(connection, thread_id: str) -> str:
 
 
 @app.get("/v1/agent/threads/{thread_id}/ledger")
+@permit(P.ASSISTANT_CHAT, scope=Scope.of("agent_thread", path="thread_id"))
 def thread_ledger_endpoint(thread_id: str) -> dict:
     """Where this session had got to — goal, phase, next step, what was already rejected.
 
@@ -12377,6 +12640,7 @@ def thread_ledger_endpoint(thread_id: str) -> dict:
 
 
 @app.post("/v1/agent/threads/ensure")
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"))
 def ensure_agent_thread_endpoint(payload: open_bodies.AgentThreadEnsureBody, request: Request) -> dict:
     """A thread id BEFORE the first message, so progress can be watched from the first second.
 
@@ -12417,6 +12681,7 @@ def ensure_agent_thread_endpoint(payload: open_bodies.AgentThreadEnsureBody, req
 
 
 @app.get("/v1/agent/threads/{thread_id}/progress")
+@permit(P.ASSISTANT_CHAT, scope=Scope.of("agent_thread", path="thread_id"))
 def agent_thread_progress_endpoint(thread_id: str, since: int = 0):
     """What BOSS is doing in this thread right now.
 
@@ -12458,6 +12723,7 @@ def agent_thread_progress_endpoint(thread_id: str, since: int = 0):
 
 
 @app.get("/v1/agent/role-starters")
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(query="project_id"))
 def agent_role_starters_endpoint(project_id: str, role: str):
     """Questions worth asking THIS role, grounded in what it has actually seen here.
 
@@ -12472,6 +12738,7 @@ def agent_role_starters_endpoint(project_id: str, role: str):
 
 
 @app.get("/v1/agent/threads/{thread_id}/messages")
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(query="project_id"))
 def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: str):
     """Full message history for one chat thread (to restore a conversation)."""
     with begin(engine) as connection:
@@ -12526,6 +12793,7 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
 
 
 @app.get("/v1/tasks", response_model=TaskListResponse)
+@permit(P.WORK_ITEM_READ, scope=Scope.org())
 def list_tasks(
     project_id: Optional[str] = None, limit: int = 50, offset: int = 0
 ) -> TaskListResponse:
@@ -12576,6 +12844,7 @@ def list_tasks(
 
 
 @app.delete("/v1/tasks/{task_id}")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(query="project_id"))
 def archive_task_endpoint(task_id: str, project_id: str, actor: str):
     """Archive a task (soft delete) — hide it from lists/rails without breaking child rows (plans,
     code tasks reference it). Used to clear junk/mis-created tasks.
@@ -12613,6 +12882,7 @@ def archive_task_endpoint(task_id: str, project_id: str, actor: str):
 
 
 @app.post("/v1/tasks", response_model=TaskSummary, status_code=201)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_task(payload: TaskCreateRequest) -> TaskSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -12663,6 +12933,7 @@ def create_task(payload: TaskCreateRequest) -> TaskSummary:
 
 
 @app.get("/v1/departments", response_model=DepartmentListResponse)
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def list_departments(project_id: str, limit: int = 50, offset: int = 0) -> DepartmentListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
@@ -12680,6 +12951,7 @@ def list_departments(project_id: str, limit: int = 50, offset: int = 0) -> Depar
 
 
 @app.post("/v1/departments", response_model=DepartmentSummary, status_code=201)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_department(payload: DepartmentCreateRequest) -> DepartmentSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -12700,6 +12972,7 @@ def create_department(payload: DepartmentCreateRequest) -> DepartmentSummary:
 
 
 @app.get("/v1/kpis", response_model=KpiListResponse)
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def list_kpis(
     project_id: str, limit: int = 50, offset: int = 0
 ) -> KpiListResponse:
@@ -12722,6 +12995,7 @@ def list_kpis(
 
 
 @app.post("/v1/kpis", response_model=KpiSummary, status_code=201)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_kpi(payload: KpiCreateRequest) -> KpiSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -12749,6 +13023,7 @@ def create_kpi(payload: KpiCreateRequest) -> KpiSummary:
 
 
 @app.get("/v1/policies", response_model=PolicyRecordListResponse)
+@permit(P.POLICY_READ, scope=Scope.project(query="project_id"))
 def list_policy_records(project_id: str, limit: int = 50, offset: int = 0) -> PolicyRecordListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
@@ -12766,6 +13041,7 @@ def list_policy_records(project_id: str, limit: int = 50, offset: int = 0) -> Po
 
 
 @app.post("/v1/policies", response_model=PolicyRecordSummary, status_code=201)
+@permit(P.POLICY_MANAGE, scope=Scope.project(body="project_id"))
 def create_policy_record(
     payload: PolicyRecordCreateRequest,
 ) -> PolicyRecordSummary:
@@ -12789,6 +13065,7 @@ def create_policy_record(
 
 
 @app.get("/v1/plans", response_model=PlanListResponse)
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def list_plans(project_id: str, limit: int = 50, offset: int = 0) -> PlanListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
@@ -12806,6 +13083,7 @@ def list_plans(project_id: str, limit: int = 50, offset: int = 0) -> PlanListRes
 
 
 @app.post("/v1/plans", response_model=PlanSummary, status_code=201)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_plan(payload: PlanCreateRequest) -> PlanSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -12830,6 +13108,7 @@ def create_plan(payload: PlanCreateRequest) -> PlanSummary:
 
 
 @app.post("/v1/plans/{plan_id}/dispatch")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def dispatch_plan(plan_id: str, payload: PlanDispatchRequest) -> dict:
     """Turn a plan's phases into sequenced, executable child tasks (plan → task/job engine)."""
     with begin(engine) as connection:
@@ -12846,6 +13125,7 @@ def dispatch_plan(plan_id: str, payload: PlanDispatchRequest) -> dict:
 
 
 @app.post("/v1/orchestration/next-move/execute")
+@permit(P.WORKER_LEASE)
 def execute_orchestrator_next_move(
     payload: OrchestratorNextMoveExecuteRequest,
 ) -> dict[str, Any]:
@@ -12875,6 +13155,7 @@ def execute_orchestrator_next_move(
 
 
 @app.get("/v1/meetings", response_model=MeetingListResponse)
+@permit(P.MEETING_READ, scope=Scope.project(query="project_id"))
 def list_meetings(project_id: str, limit: int = 50, offset: int = 0) -> MeetingListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
@@ -12892,6 +13173,7 @@ def list_meetings(project_id: str, limit: int = 50, offset: int = 0) -> MeetingL
 
 
 @app.post("/v1/meetings", response_model=MeetingSummary, status_code=201)
+@permit(P.MEETING_CONVENE, scope=Scope.project(body="project_id"))
 def create_meeting(payload: MeetingCreateRequest) -> MeetingSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -12913,6 +13195,7 @@ def create_meeting(payload: MeetingCreateRequest) -> MeetingSummary:
 
 
 @app.post("/v1/meetings/{meeting_id}/run", response_model=MeetingSummary)
+@permit(P.MEETING_CONVENE, scope=Scope.of("meeting", path="meeting_id"))
 def run_meeting(meeting_id: str, payload: MeetingRunRequest) -> MeetingSummary:
     with begin(engine) as connection:
         row = connection.execute(
@@ -12977,6 +13260,7 @@ def run_meeting(meeting_id: str, payload: MeetingRunRequest) -> MeetingSummary:
 
 
 @app.post("/v1/meetings/tally")
+@permit(P.MEETING_READ, scope=Scope.org(), readonly_post=True)
 def tally_meeting_votes(payload: MeetingTallyRequest) -> dict:
     """Preview a vote tally under quorum/threshold rules (spec §D explicit vote phase)."""
     eligible = payload.eligible_count if payload.eligible_count is not None else len(payload.votes)
@@ -12990,6 +13274,7 @@ def tally_meeting_votes(payload: MeetingTallyRequest) -> dict:
 
 
 @app.post("/v1/meetings/sweep-stalled")
+@permit(P.SYSTEM_OPERATE, scope=Scope.org())
 def sweep_stalled_meetings(payload: MeetingSweepRequest) -> dict:
     """Fail out meeting runs stalled past their phase timeout, opening an incident Decision for each
     (spec §D phase timeouts / stall prevention)."""
@@ -12997,6 +13282,7 @@ def sweep_stalled_meetings(payload: MeetingSweepRequest) -> dict:
 
 
 @app.post("/v1/finops/reconcile-commitments", status_code=201)
+@permit(P.BUDGET_MANAGE, scope=Scope.project(body="project_id"))
 def reconcile_commitments(payload: CommitmentReconcileRequest) -> dict:
     """Reconcile active commitments vs actual usage → utilization + verdict + review decisions
     (spec §F InfraCommitment reconciler)."""
@@ -13006,11 +13292,13 @@ def reconcile_commitments(payload: CommitmentReconcileRequest) -> dict:
 
 
 @app.get("/v1/finops/commitment-reconciliations")
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def list_commitment_reconciliations(project_id: str, limit: int = 50) -> dict:
     return {"items": finops_reconciler.list_reconciliations(engine, project_id, limit)}
 
 
 @app.get("/v1/finops/summary", response_model=FinopsSummaryResponse)
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def finops_summary(project_id: str, days: int = 30) -> FinopsSummaryResponse:
     """BOSS-244 multi-dimension FinOps chart payload for Mission Control.
 
@@ -13027,6 +13315,7 @@ def finops_summary(project_id: str, days: int = 30) -> FinopsSummaryResponse:
 
 
 @app.post("/v1/finops/initiative-budget", status_code=201)
+@permit(P.BUDGET_MANAGE, scope=Scope.project(body="project_id"))
 def request_initiative_budget(payload: InitiativeBudgetRequest) -> dict:
     """Tier-2+ initiative budget approval: above the threshold it requires a human Decision
     (spec §F tier2+ initiative budget approval)."""
@@ -13043,6 +13332,7 @@ def request_initiative_budget(payload: InitiativeBudgetRequest) -> dict:
 
 
 @app.post("/v1/chaos/run", status_code=201)
+@permit(P.RELIABILITY_MANAGE, scope=Scope.project(body="project_id"))
 def chaos_run(payload: ChaosRunRequest) -> dict:
     """Inject a controlled fault (lease_reclaim / worker_crash / deadletter_storm) and record whether
     the system recovered/detected it (spec §F load + chaos testing)."""
@@ -13056,12 +13346,14 @@ def chaos_run(payload: ChaosRunRequest) -> dict:
 
 
 @app.get("/v1/chaos")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def chaos_list(project_id: str, limit: int = 20) -> dict:
     from .services import chaos
     return {"items": chaos.list_chaos_runs(engine, project_id, limit)}
 
 
 @app.get("/v1/dashboard")
+@permit(P.WORK_ITEM_READ, scope=Scope.org())
 def get_dashboard(project_id: Optional[str] = None) -> dict:
     """Consolidated real-time dashboard snapshot with a monotonic cursor (spec §F). Clients re-render
     only when the cursor advances."""
@@ -13071,6 +13363,7 @@ def get_dashboard(project_id: Optional[str] = None) -> dict:
 
 
 @app.get("/v1/dashboard/poll")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def poll_dashboard(project_id: str, cursor: Optional[str] = None, timeout_ms: int = 5000) -> dict:
     """Bounded long-poll: returns when the dashboard cursor advances past `cursor` or the timeout
     elapses (spec §F real-time without a fixed-interval refresh)."""
@@ -13080,6 +13373,7 @@ def poll_dashboard(project_id: str, cursor: Optional[str] = None, timeout_ms: in
 
 
 @app.get("/v1/factory/wip")
+@permit(P.CODE_TASK_READ, scope=Scope.org())
 def factory_wip(
     project_id: Optional[str] = None,
     wip_limit: int = factory_scale.DEFAULT_WIP_LIMIT,
@@ -13139,12 +13433,14 @@ def factory_wip(
 
 
 @app.post("/v1/factory/merge-check")
+@permit(P.CODE_TASK_READ, scope=Scope.org(), readonly_post=True)
 def factory_merge_check(payload: FactoryMergeCheckRequest) -> dict:
     """Preview the fail-closed quality gate + merge-confidence verdict (spec §E confidence-gated merge)."""
     return factory_scale.evaluate_gate(payload.checks, min_confidence=payload.min_confidence)
 
 
 @app.post("/v1/factory/quality-gate", status_code=201)
+@permit(P.CODE_TASK_OVERRIDE, scope=Scope.project(body="project_id"))
 def factory_quality_gate(payload: FactoryQualityGateRequest) -> dict:
     """Evaluate + persist a quality gate (explicit lint + CI-green, second-model cross-check,
     confidence-gated merge) and store a review-packet artifact (spec §E)."""
@@ -13163,6 +13459,7 @@ def factory_quality_gate(payload: FactoryQualityGateRequest) -> dict:
 
 
 @app.post("/v1/factory/chunk-plan")
+@permit(P.CODE_TASK_READ, scope=Scope.org(), readonly_post=True)
 def factory_chunk_plan(payload: FactoryChunkPlanRequest) -> dict:
     """Split a plan/spec into small, independently-shippable PR chunks (spec §E spec→chunk planner)."""
     return factory_scale.chunk_spec(
@@ -13173,6 +13470,7 @@ def factory_chunk_plan(payload: FactoryChunkPlanRequest) -> dict:
 
 
 @app.get("/v1/jobs", response_model=JobListResponse)
+@permit(P.JOB_READ, scope=Scope.org())
 def list_jobs(
     project_id: Optional[str] = None,
     status: Optional[str] = None,
@@ -13212,6 +13510,7 @@ def list_jobs(
 
 
 @app.get("/v1/jobs/{job_id}", response_model=JobSummary)
+@permit(P.JOB_READ, scope=Scope.of("job", path="job_id"))
 def get_job(job_id: str) -> JobSummary:
     with begin(engine) as connection:
         row = connection.execute(
@@ -13234,6 +13533,7 @@ def get_job(job_id: str) -> JobSummary:
 
 
 @app.get("/v1/tasks/{task_id}", response_model=TaskSummary)
+@permit(P.WORK_ITEM_READ, scope=Scope.of("task", path="task_id"))
 def get_task(task_id: str) -> TaskSummary:
     with begin(engine) as connection:
         row = connection.execute(
@@ -13543,6 +13843,7 @@ def advance_self_improvement_rollout(
 
 
 @app.get("/v1/health-snapshots", response_model=HealthSnapshotListResponse)
+@permit(P.SYSTEM_READ, scope=Scope.project(query="project_id"))
 def list_health_snapshots(
     project_id: str, limit: int = 25
 ) -> HealthSnapshotListResponse:
@@ -13561,6 +13862,7 @@ def list_health_snapshots(
     response_model=HealthSnapshotSummary,
     status_code=201,
 )
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def refresh_health_snapshot(
     payload: HealthSnapshotRefreshRequest,
 ) -> HealthSnapshotSummary:
@@ -13578,6 +13880,7 @@ def refresh_health_snapshot(
 
 
 @app.post("/v1/delivery/first-deploy")
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
 def create_deployment_endpoint(payload: FirstDeployBody = Body(...)) -> dict:
     """Plan a successful build's first deployment to an existing target.
 
@@ -13632,7 +13935,8 @@ def create_deployment_endpoint(payload: FirstDeployBody = Body(...)) -> dict:
 
 
 @app.get("/v1/console/command-center")
-def console_command_center_endpoint(project_id: str) -> dict:
+@permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
+def console_command_center_endpoint(project_id: str, request: Request) -> dict:
     """The Command Center: what is running, what needs the operator, how recent runs went.
 
     DEPRECATED: the console reads GET /v1/command-center/view since the bridge redesign; this is
@@ -13648,10 +13952,12 @@ def console_command_center_endpoint(project_id: str) -> dict:
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
         require_project_reader(connection, project_id)
-        return command_center.build(connection, settings, project_id)
+        body = command_center.build(connection, settings, project_id)
+    return _withhold_sections(request, project_id, body, "/v1/console/command-center")
 
 
 @app.post("/v1/command-center/clean-up")
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def command_center_clean_up_endpoint(payload: dict):
     """The Command Center's Clean up (the In flight card's old-builds row): closes the project's
     Shepherd questions older than a week — answered when their build already ended, and the
@@ -13671,6 +13977,7 @@ def command_center_clean_up_endpoint(payload: dict):
 
 
 @app.get("/v1/command-center/view")
+@permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
 def command_center_view_endpoint(project_id: str, request: Request, response: Response,
                                  tz: Optional[str] = None, viewer: Optional[str] = None):
     """The Command Center in one read (command-center spec §6.2): Agents › Live's board plus
@@ -13686,6 +13993,7 @@ def command_center_view_endpoint(project_id: str, request: Request, response: Re
         require_project_reader(connection, project_id)
         body = command_center_view.build(connection, settings, project_id, tz=tz,
                                          viewer=_acts_viewer(viewer))
+    body = _withhold_sections(request, project_id, body, "/v1/command-center/view")
     response.headers["Server-Timing"] = f"view;dur={(time.perf_counter() - started) * 1000:.1f}"
     if request.headers.get("if-none-match") == body["etag"]:
         return Response(status_code=304, headers={"ETag": body["etag"],
@@ -13696,7 +14004,8 @@ def command_center_view_endpoint(project_id: str, request: Request, response: Re
 
 
 @app.get("/v1/console/v2/overview")
-def console_v2_overview_endpoint(project_id: str, limit: int = 40) -> dict:
+@permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
+def console_v2_overview_endpoint(project_id: str, request: Request, limit: int = 40) -> dict:
     """Everything the v2 shell and Projects screen render — in ONE call.
 
     The v1 console issues 82 requests per render and shows nothing until the slowest answers;
@@ -13709,11 +14018,13 @@ def console_v2_overview_endpoint(project_id: str, limit: int = 40) -> dict:
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
-        return company_overview(connection, project_id, limit=max(1, min(int(limit), 100)))
+        body = company_overview(connection, project_id, limit=max(1, min(int(limit), 100)))
+    return _withhold_sections(request, project_id, body, "/v1/console/v2/overview")
 
 
 @app.get("/v1/console/v2/workspace")
-def console_v2_workspace_endpoint(project_id: str, app_id: str) -> dict:
+@permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
+def console_v2_workspace_endpoint(project_id: str, app_id: str, request: Request) -> dict:
     """One app's whole workspace in ONE call: its lineage, where it stands, what it cost.
 
     The v1 equivalent of this screen was assembled from the full 82-feed page render, so
@@ -13727,10 +14038,12 @@ def console_v2_workspace_endpoint(project_id: str, app_id: str) -> dict:
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
-        return project_workspace(connection, project_id, app_id)
+        body = project_workspace(connection, project_id, app_id)
+    return _withhold_sections(request, project_id, body, "/v1/console/v2/workspace")
 
 
 @app.get("/v1/console/v2/decisions")
+@permit(P.DECISION_READ, scope=Scope.project(query="project_id"))
 def console_v2_decisions_endpoint(project_id: str, limit: int = 60) -> dict:
     """Every gate waiting on a human, soonest-to-expire first.
 
@@ -13748,6 +14061,7 @@ def console_v2_decisions_endpoint(project_id: str, limit: int = 60) -> dict:
 
 
 @app.get("/v1/console/v2/panels")
+@permit(P.MEETING_READ, scope=Scope.project(query="project_id"))
 def console_v2_panels_endpoint(project_id: str, limit: int = 20) -> dict:
     """The panels debating something, and what they concluded.
 
@@ -13764,6 +14078,7 @@ def console_v2_panels_endpoint(project_id: str, limit: int = 20) -> dict:
 
 
 @app.get("/v1/console/v2/receipts")
+@permit(P.ACTIVITY_READ, scope=Scope.project(query="project_id"))
 def console_v2_receipts_endpoint(project_id: str, limit: int = 60, hours: int = 24) -> dict:
     """What BOSS actually did in the window, with the evidence attached.
 
@@ -13785,6 +14100,7 @@ def console_v2_receipts_endpoint(project_id: str, limit: int = 60, hours: int = 
 
 
 @app.get("/v1/console/v2/workforce")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def console_v2_workforce_endpoint(project_id: str, hours: int = 24) -> dict:
     """Every agent, what it is doing, and what it has cost.
 
@@ -13801,6 +14117,7 @@ def console_v2_workforce_endpoint(project_id: str, hours: int = 24) -> dict:
 
 
 @app.get("/v1/console/v2/agents/{role_key}")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def console_v2_agent_detail(role_key: str, project_id: str, hours: int = 720,
                             viewer: Optional[str] = None) -> dict:
     """One agent: every app it has worked on, its metrics, and the spec that governs it.
@@ -13820,6 +14137,7 @@ def console_v2_agent_detail(role_key: str, project_id: str, hours: int = 720,
 
 
 @app.get("/v1/projects/{project_id}/agents")
+@permit(P.AGENT_READ, scope=Scope.project(path="project_id"))
 def list_project_agents(project_id: str, app: str = "", defaults: int = 0,
                         workflow_key: str = "") -> dict:
     """Who is assigned to an app — or, with no app, every assignment in the project.
@@ -13864,6 +14182,7 @@ def list_project_agents(project_id: str, app: str = "", defaults: int = 0,
 
 
 @app.post("/v1/projects/{project_id}/agents")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(path="project_id"))
 def assign_project_agents(project_id: str, payload: ProjectAgentsBody = Body(...)) -> dict:
     """Put agents on an app, take them off, or seed the ones that would have run anyway."""
     payload = payload.payload()
@@ -13893,6 +14212,7 @@ def assign_project_agents(project_id: str, payload: ProjectAgentsBody = Body(...
 
 
 @app.get("/v1/console/v2/org")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def console_v2_org_endpoint(project_id: str, hours: int = 168) -> dict:
     """Who hands work to whom, counted.
 
@@ -13913,6 +14233,7 @@ def console_v2_org_endpoint(project_id: str, hours: int = 168) -> dict:
 
 
 @app.put("/v1/console/v2/org/{agent_id}")
+@permit(P.AGENT_UPDATE, scope=Scope.project(body="project_id"))
 def put_org_assignment(agent_id: str, payload: open_bodies.OrgAssignmentBody) -> dict:
     """Say where an agent sits: who it reports to, and what this team calls it."""
     payload = payload.payload()
@@ -13942,6 +14263,7 @@ def put_org_assignment(agent_id: str, payload: open_bodies.OrgAssignmentBody) ->
 
 
 @app.delete("/v1/console/v2/org/{agent_id}")
+@permit(P.AGENT_UPDATE, scope=Scope.project(query="project_id"))
 def delete_org_assignment(agent_id: str, project_id: str,
                           actor: str = "ceo") -> dict:
     """Hand this agent back to the observed chart."""
@@ -13960,6 +14282,7 @@ def delete_org_assignment(agent_id: str, project_id: str,
 
 
 @app.get("/v1/console/v2/workflows")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def console_v2_workflows_endpoint(project_id: str) -> dict:
     """The processes this company runs, and the stages inside them."""
     from boss_engine.services.console_v2_platform import workflows
@@ -13971,7 +14294,8 @@ def console_v2_workflows_endpoint(project_id: str) -> dict:
 
 
 @app.get("/v1/console/v2/infra")
-def console_v2_infra_endpoint(project_id: str) -> dict:
+@permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
+def console_v2_infra_endpoint(project_id: str, request: Request) -> dict:
     """Hosts, deployment targets, model spend and integrations.
 
     Fleet load is absent rather than invented: BOSS records host verification, not utilisation,
@@ -13982,11 +14306,13 @@ def console_v2_infra_endpoint(project_id: str) -> dict:
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
-        return infra(connection, project_id)
+        body = infra(connection, project_id)
+    return _withhold_sections(request, project_id, body, "/v1/console/v2/infra")
 
 
 @app.get("/v1/console/v2/settings")
-def console_v2_settings_endpoint(project_id: str) -> dict:
+@permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
+def console_v2_settings_endpoint(project_id: str, request: Request) -> dict:
     """What is configured -- and what this deployment simply does not have, with reasons.
 
     A settings screen that renders an empty SSO form implies SSO is configurable here and
@@ -13997,10 +14323,12 @@ def console_v2_settings_endpoint(project_id: str) -> dict:
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
-        return settings(connection, project_id)
+        body = settings(connection, project_id)
+    return _withhold_sections(request, project_id, body, "/v1/console/v2/settings")
 
 
 @app.get("/v1/console/v2/autonomy")
+@permit(P.AUTONOMY_READ, scope=Scope.project(query="project_id"))
 def console_v2_autonomy_get(project_id: str) -> dict:
     """The project's gate-autonomy policy. A project with no row is Supervised."""
     from boss_engine.services.autonomy import describe, load_policy
@@ -14012,6 +14340,7 @@ def console_v2_autonomy_get(project_id: str) -> dict:
 
 
 @app.post("/v1/console/v2/autonomy")
+@permit(P.APPROVAL_RULE_MANAGE, scope=Scope.project(body="project_id"))
 def console_v2_autonomy_set(payload: open_bodies.AutonomySetBody = Body(...)) -> dict:
     """Change the mode. Requires an actor, always.
 
@@ -14059,6 +14388,7 @@ def console_v2_autonomy_set(payload: open_bodies.AutonomySetBody = Body(...)) ->
 
 
 @app.post("/v1/console/v2/autonomy/apply")
+@permit(P.DECISION_APPROVE, scope=Scope.project(body="project_id"))
 def console_v2_autonomy_apply(payload: open_bodies.AutonomyApplyBody = Body(...)) -> dict:
     """Run the policy over the pending gates, and report the refusals as well as the approvals.
 
@@ -14097,6 +14427,7 @@ def console_v2_autonomy_apply(payload: open_bodies.AutonomyApplyBody = Body(...)
 
 
 @app.get("/v1/metrics/delivery")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def delivery_metrics_endpoint(project_id: str, days: int = 7) -> dict:
     """What this project actually shipped, in real counts.
 
@@ -14114,6 +14445,7 @@ def delivery_metrics_endpoint(project_id: str, days: int = 7) -> dict:
 
 
 @app.get("/v1/metrics/in-flight")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def in_flight_endpoint(project_id: str, limit: int = 8) -> dict:
     """Work started recently, and the console area that shows its current stage.
 
@@ -14131,6 +14463,7 @@ def in_flight_endpoint(project_id: str, limit: int = 8) -> dict:
     "/v1/coordination",
     response_model=CoordinationSnapshot,
 )
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def coordination_snapshot_endpoint(project_id: str) -> CoordinationSnapshot:
     """Current role assignments and recent work for one authorized project.
 
@@ -14150,6 +14483,7 @@ def coordination_snapshot_endpoint(project_id: str) -> CoordinationSnapshot:
 
 
 @app.get("/v1/self/diagnostics")
+@permit(P.SYSTEM_READ, scope=Scope.org())
 def self_diagnostics(preview_root: Optional[str] = None) -> dict:
     """What BOSS can see about the container it is itself running in.
 
@@ -14167,6 +14501,7 @@ def self_diagnostics(preview_root: Optional[str] = None) -> dict:
 
 
 @app.get("/v1/ops/queue", response_model=OpsQueueInspectionResponse)
+@permit(P.JOB_READ, scope=Scope.project(query="project_id"))
 def inspect_ops_queue(
     project_id: str,
     limit: int = 25,
@@ -14185,6 +14520,7 @@ def inspect_ops_queue(
 
 
 @app.post("/v1/ops/digests", response_model=OpsDigestResponse, status_code=201)
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def create_ops_digest(payload: OpsDigestRequest) -> OpsDigestResponse:
     with begin(engine) as connection:
         require_project_actor(
@@ -14204,6 +14540,7 @@ def create_ops_digest(payload: OpsDigestRequest) -> OpsDigestResponse:
 
 
 @app.get("/v1/artifacts", response_model=ArtifactListResponse)
+@permit(P.ARTIFACT_READ, scope=Scope.project(query="project_id"))
 def list_artifacts(project_id: str, limit: int = 25, offset: int = 0) -> ArtifactListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
@@ -14233,6 +14570,7 @@ def list_artifacts(project_id: str, limit: int = 25, offset: int = 0) -> Artifac
 
 
 @app.get("/v1/artifacts/{artifact_id}", response_model=ArtifactDetail)
+@permit(P.ARTIFACT_READ, scope=Scope.of("artifact", path="artifact_id"))
 def get_artifact(artifact_id: str) -> ArtifactDetail:
     with begin(engine) as connection:
         row = connection.execute(
@@ -14253,6 +14591,7 @@ def get_artifact(artifact_id: str) -> ArtifactDetail:
 
 
 @app.post("/v1/artifacts/{artifact_id}/rebuild")
+@permit(P.ARTIFACT_REBUILD, scope=Scope.project(body="project_id"))
 def rebuild_change_record(artifact_id: str, payload: open_bodies.ArtifactRebuildBody = Body(default_factory=open_bodies.ArtifactRebuildBody)) -> dict:
     """Recompose a change record from the run it came from.
 
@@ -14274,6 +14613,7 @@ def rebuild_change_record(artifact_id: str, payload: open_bodies.ArtifactRebuild
 
 
 @app.get("/v1/artifacts/{artifact_id}/media")
+@permit(P.ARTIFACT_READ, scope=Scope.of("artifact", path="artifact_id"))
 def get_artifact_media(artifact_id: str) -> Response:
     """The media file an artifact holds, so a rendered edit can be watched before it is published.
 
@@ -14316,6 +14656,7 @@ def get_artifact_media(artifact_id: str) -> Response:
 
 
 @app.get("/v1/artifacts/{artifact_id}/pdf")
+@permit(P.ARTIFACT_READ, scope=Scope.of("artifact", path="artifact_id"))
 def get_artifact_pdf(artifact_id: str) -> Response:
     """A document as a PDF anyone can open, mail, or put in a folder.
 
@@ -14360,6 +14701,7 @@ def get_artifact_pdf(artifact_id: str) -> Response:
 
 
 @app.get("/v1/roles", response_model=RoleListResponse)
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def list_roles(project_id: str) -> RoleListResponse:
     with begin(engine) as connection:
         roles = specpack.list_roles_for_project(connection, project_id)
@@ -14370,6 +14712,7 @@ def list_roles(project_id: str) -> RoleListResponse:
 
 
 @app.post("/v1/roles", response_model=RoleDetail, status_code=201)
+@permit(P.AGENT_UPDATE, scope=Scope.project(body="project_id"))
 def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
     """Register an agent role, or update one already registered.
 
@@ -14420,6 +14763,7 @@ def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
 
 
 @app.get("/v1/roles/{role_key}", response_model=RoleDetail)
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def get_role(role_key: str, project_id: str) -> RoleDetail:
     with begin(engine) as connection:
         try:
@@ -14430,6 +14774,7 @@ def get_role(role_key: str, project_id: str) -> RoleDetail:
 
 
 @app.get("/v1/roles/{role_key}/governance", response_model=RoleGovernanceDetail)
+@permit(P.AUTONOMY_READ, scope=Scope.project(query="project_id"))
 def get_role_governance(role_key: str, project_id: str) -> RoleGovernanceDetail:
     with begin(engine) as connection:
         try:
@@ -14443,6 +14788,7 @@ def get_role_governance(role_key: str, project_id: str) -> RoleGovernanceDetail:
     "/v1/roles/{role_key}/autonomy/check",
     response_model=RoleAutonomyCheckResponse,
 )
+@permit(P.AUTONOMY_MANAGE, scope=Scope.project(body="project_id"))
 def check_role_autonomy(
     role_key: str, request: RoleAutonomyCheckRequest
 ) -> RoleAutonomyCheckResponse:
@@ -14475,6 +14821,7 @@ def check_role_autonomy(
     "/v1/roles/{role_key}/scope/check",
     response_model=RoleScopeCheckResponse,
 )
+@permit(P.AUTONOMY_MANAGE, scope=Scope.project(body="project_id"))
 def check_role_scope(
     role_key: str, request: RoleScopeCheckRequest
 ) -> RoleScopeCheckResponse:
@@ -14507,6 +14854,7 @@ def check_role_scope(
     response_model=RoleGovernanceDetail,
     status_code=201,
 )
+@permit(P.AUTONOMY_MANAGE, scope=Scope.project(body="project_id"))
 def record_role_review(
     role_key: str, request: RoleReviewRequest
 ) -> RoleGovernanceDetail:
@@ -14539,6 +14887,7 @@ def record_role_review(
     response_model=RoleGovernanceDetail,
     status_code=201,
 )
+@permit(P.AUTONOMY_MANAGE, scope=Scope.project(body="project_id"))
 def evaluate_role_autonomy(
     role_key: str, request: AutonomyEvaluateRequest
 ) -> RoleGovernanceDetail:
@@ -14573,6 +14922,7 @@ def evaluate_role_autonomy(
     response_model=RoleTrustEvidenceResponse,
     status_code=201,
 )
+@permit(P.AUTONOMY_MANAGE, scope=Scope.project(body="project_id"))
 def record_role_trust_evidence(
     role_key: str, request: RoleTrustEvidenceRequest
 ) -> RoleTrustEvidenceResponse:
@@ -14602,6 +14952,7 @@ def record_role_trust_evidence(
 
 
 @app.get("/v1/packs", response_model=PackListResponse)
+@permit(P.PACK_READ, scope=Scope.project(query="project_id"))
 def list_packs(project_id: str) -> PackListResponse:
     with begin(engine) as connection:
         packs = specpack.list_packs_for_project(connection, project_id)
@@ -14612,6 +14963,7 @@ def list_packs(project_id: str) -> PackListResponse:
 
 
 @app.get("/v1/packs/{pack_id}", response_model=PackDetail)
+@permit(P.PACK_READ, scope=Scope.project(query="project_id"))
 def get_pack(pack_id: str, project_id: str) -> PackDetail:
     with begin(engine) as connection:
         try:
@@ -14622,6 +14974,7 @@ def get_pack(pack_id: str, project_id: str) -> PackDetail:
 
 
 @app.post("/v1/packs/install", response_model=PackDetail, status_code=201)
+@permit(P.PACK_INSTALL, scope=Scope.project(body="project_id"))
 def install_pack(payload: PackInstallRequest) -> PackDetail:
     with begin(engine) as connection:
         try:
@@ -14645,6 +14998,7 @@ def install_pack(payload: PackInstallRequest) -> PackDetail:
 
 
 @app.post("/v1/packs/import", response_model=PackDetail, status_code=201)
+@permit(P.PACK_INSTALL, scope=Scope.project(body="project_id"))
 def import_pack(payload: PackImportRequest) -> PackDetail:
     with begin(engine) as connection:
         try:
@@ -14666,6 +15020,7 @@ def import_pack(payload: PackImportRequest) -> PackDetail:
 
 
 @app.get("/v1/packs/{pack_id}/export")
+@permit(P.PACK_READ, scope=Scope.project(query="project_id"))
 def export_pack(pack_id: str, project_id: str) -> Response:
     with begin(engine) as connection:
         try:
@@ -14684,6 +15039,7 @@ def export_pack(pack_id: str, project_id: str) -> Response:
 
 
 @app.get("/v1/agent-modules", response_model=AgentModuleListResponse)
+@permit(P.PACK_READ, scope=Scope.project(query="project_id"))
 def list_agent_modules(project_id: str) -> AgentModuleListResponse:
     with begin(engine) as connection:
         modules = specpack.list_agent_modules_for_project(connection, project_id)
@@ -14694,6 +15050,7 @@ def list_agent_modules(project_id: str) -> AgentModuleListResponse:
 
 
 @app.get("/v1/agent-modules/{module_id}", response_model=AgentModuleDetail)
+@permit(P.PACK_READ, scope=Scope.project(query="project_id"))
 def get_agent_module(module_id: str, project_id: str) -> AgentModuleDetail:
     with begin(engine) as connection:
         try:
@@ -14711,6 +15068,7 @@ def get_agent_module(module_id: str, project_id: str) -> AgentModuleDetail:
     "/v1/agent-module-install-records",
     response_model=AgentModuleInstallRecordListResponse,
 )
+@permit(P.PACK_READ, scope=Scope.project(query="project_id"))
 def list_agent_module_install_records(
     project_id: str,
     module_id: Optional[str] = None,
@@ -14739,6 +15097,7 @@ def list_agent_module_install_records(
     response_model=AgentModuleDetail,
     status_code=201,
 )
+@permit(P.PACK_INSTALL, scope=Scope.project(body="project_id"))
 def install_agent_module(payload: AgentModuleInstallRequest) -> AgentModuleDetail:
     entitlement_error: Optional[str] = None
     module: Optional[dict] = None
@@ -14772,6 +15131,7 @@ def install_agent_module(payload: AgentModuleInstallRequest) -> AgentModuleDetai
     "/v1/agent-modules/{module_id}/uninstall",
     response_model=AgentModuleDetail,
 )
+@permit(P.PACK_INSTALL, scope=Scope.project(body="project_id"))
 def uninstall_agent_module(
     module_id: str,
     payload: AgentModuleLifecycleRequest,
@@ -14802,6 +15162,7 @@ def uninstall_agent_module(
     "/v1/agent-modules/{module_id}/rollback",
     response_model=AgentModuleDetail,
 )
+@permit(P.PACK_INSTALL, scope=Scope.project(body="project_id"))
 def rollback_agent_module(
     module_id: str,
     payload: AgentModuleLifecycleRequest,
@@ -14831,6 +15192,7 @@ def rollback_agent_module(
 
 
 @app.post("/v1/agent-runtime/resolve", response_model=AgentRuntimeResolveResponse)
+@permit(P.PACK_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def resolve_agent_runtime(
     payload: AgentRuntimeResolveRequest,
 ) -> AgentRuntimeResolveResponse:
@@ -14858,6 +15220,7 @@ def resolve_agent_runtime(
 
 
 @app.get("/v1/toolchain/sources")
+@permit(P.SKILL_READ, scope=Scope.project(query="project_id"))
 def list_toolchain_sources(project_id: str, actor: str = "ceo") -> dict:
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "pack_manage")
@@ -14865,6 +15228,7 @@ def list_toolchain_sources(project_id: str, actor: str = "ceo") -> dict:
 
 
 @app.get("/v1/toolchain/imports")
+@permit(P.SKILL_READ, scope=Scope.project(query="project_id"))
 def list_toolchain_imports(
     project_id: str,
     actor: str = "ceo",
@@ -14880,6 +15244,7 @@ def list_toolchain_imports(
 
 
 @app.post("/v1/toolchain/imports/assess", status_code=201)
+@permit(P.SKILL_MANAGE, scope=Scope.project(body="project_id"))
 def assess_toolchain_snapshot(payload: ToolchainAssessRequest) -> dict:
     with begin(engine) as connection:
         try:
@@ -14899,6 +15264,7 @@ def assess_toolchain_snapshot(payload: ToolchainAssessRequest) -> dict:
 
 
 @app.post("/v1/toolchain/candidates/{candidate_id}/review")
+@permit(P.SKILL_MANAGE, scope=Scope.project(body="project_id"))
 def review_toolchain_candidate(
     candidate_id: str,
     payload: ToolchainCandidateReviewRequest,
@@ -14921,6 +15287,7 @@ def review_toolchain_candidate(
 
 
 @app.post("/v1/toolchain/commands/evaluate")
+@permit(P.ASSURANCE_RUN, scope=Scope.project(body="project_id"))
 def evaluate_toolchain_command(payload: ToolchainCommandGuardRequest) -> dict:
     with begin(engine) as connection:
         try:
@@ -14948,6 +15315,7 @@ def evaluate_toolchain_command(payload: ToolchainCommandGuardRequest) -> dict:
 
 
 @app.post("/v1/toolchain/context/pack")
+@permit(P.ASSURANCE_RUN, scope=Scope.project(body="project_id"))
 def pack_toolchain_context(payload: ToolchainContextPackRequest) -> dict:
     with begin(engine) as connection:
         try:
@@ -14982,6 +15350,7 @@ def pack_toolchain_context(payload: ToolchainContextPackRequest) -> dict:
 
 
 @app.get("/v1/knowledge/status")
+@permit(P.RELIABILITY_READ, scope=Scope.org())
 def knowledge_pack_status(project_id: Optional[str] = None) -> dict:
     """Lightweight knowledge packing availability (BOSS-356).
 
@@ -14994,6 +15363,7 @@ def knowledge_pack_status(project_id: Optional[str] = None) -> dict:
 
 
 @app.post("/v1/knowledge/pack-context")
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def knowledge_pack_context(payload: KnowledgePackContextRequest) -> dict:
     """Pack messages/context items under a token budget for operators and agents.
 
@@ -15046,6 +15416,7 @@ def knowledge_pack_context(payload: KnowledgePackContextRequest) -> dict:
 
 
 @app.get("/v1/knowledge/graph/nodes", response_model=KnowledgeGraphNodeListResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def knowledge_graph_list_nodes(
     project_id: str,
     kind: Optional[str] = None,
@@ -15084,6 +15455,7 @@ def knowledge_graph_list_nodes(
 
 
 @app.post("/v1/knowledge/graph/nodes", response_model=KnowledgeGraphNodeUpsertResponse)
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def knowledge_graph_upsert_node(
     payload: KnowledgeGraphNodeUpsertRequest,
 ) -> KnowledgeGraphNodeUpsertResponse:
@@ -15123,6 +15495,7 @@ def knowledge_graph_upsert_node(
 
 
 @app.post("/v1/knowledge/graph/edges", response_model=KnowledgeGraphEdgeUpsertResponse)
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def knowledge_graph_upsert_edge(
     payload: KnowledgeGraphEdgeUpsertRequest,
 ) -> KnowledgeGraphEdgeUpsertResponse:
@@ -15165,6 +15538,7 @@ def knowledge_graph_upsert_edge(
 
 
 @app.get("/v1/knowledge/graph/subgraph", response_model=KnowledgeGraphSubgraphResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def knowledge_graph_subgraph(
     project_id: str,
     kind: str,
@@ -15186,6 +15560,7 @@ def knowledge_graph_subgraph(
 
 
 @app.get("/v1/knowledge/graph/neighbors", response_model=KnowledgeGraphNeighborsResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def knowledge_graph_neighbors(
     project_id: str,
     node_id: Optional[str] = None,
@@ -15226,6 +15601,7 @@ def knowledge_graph_neighbors(
     "/v1/knowledge/graph/root-causes",
     response_model=KnowledgeGraphRootCauseResponse,
 )
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def knowledge_graph_record_root_cause(
     payload: KnowledgeGraphRootCauseRequest,
 ) -> KnowledgeGraphRootCauseResponse:
@@ -15256,6 +15632,7 @@ def knowledge_graph_record_root_cause(
     "/v1/knowledge/graph/known-causes",
     response_model=KnowledgeGraphKnownCausesResponse,
 )
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def knowledge_graph_known_causes(
     project_id: str,
     service: str,
@@ -15275,6 +15652,7 @@ def knowledge_graph_known_causes(
     "/v1/knowledge/graph/seed-from-infra",
     response_model=KnowledgeGraphSeedFromInfraResponse,
 )
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def knowledge_graph_seed_from_infra(
     payload: KnowledgeGraphSeedFromInfraRequest,
 ) -> KnowledgeGraphSeedFromInfraResponse:
@@ -15295,6 +15673,7 @@ def knowledge_graph_seed_from_infra(
 
 
 @app.get("/v1/knowledge/eval", response_model=KnowledgeRetrievalEvalResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def knowledge_retrieval_eval(
     project_id: str,
     threshold: float = Query(default=0.35, ge=0.0, le=1.0),
@@ -15317,6 +15696,7 @@ def knowledge_retrieval_eval(
 
 
 @app.get("/v1/skills", response_model=SkillListResponse)
+@permit(P.SKILL_READ, scope=Scope.org())
 def list_skills(project_id: Optional[str] = None) -> SkillListResponse:
     if project_id is None:
         skills = entitlements.list_skills()
@@ -15334,12 +15714,14 @@ def list_skills(project_id: Optional[str] = None) -> SkillListResponse:
 
 
 @app.get("/v1/skills/invocations")
+@permit(P.SKILL_READ, scope=Scope.project(query="project_id"))
 def list_skill_invocations(project_id: str, limit: int = 50) -> dict:
     with begin(engine) as connection:
         return {"items": skill_runtime.list_invocations(connection, project_id, limit)}
 
 
 @app.post("/v1/skills/import", status_code=201)
+@permit(P.SKILL_MANAGE, scope=Scope.project(body="project_id"))
 def import_skill_bundle(payload: CapabilityBundleImportRequest) -> dict:
     with begin(engine) as connection:
         try:
@@ -15360,6 +15742,7 @@ def import_skill_bundle(payload: CapabilityBundleImportRequest) -> dict:
 
 
 @app.get("/v1/skills/{skill_id}/export")
+@permit(P.SKILL_READ, scope=Scope.project(query="project_id"))
 def export_skill_bundle(skill_id: str, project_id: str, actor: str = "ceo"):
     with begin(engine) as connection:
         try:
@@ -15463,18 +15846,21 @@ def _set_project_skill_state(
 
 
 @app.post("/v1/skills/{skill_id}/enable")
+@permit(P.SKILL_MANAGE, scope=Scope.project(body="project_id"))
 def enable_project_skill(skill_id: str, payload: SkillToggleRequest) -> dict:
     with begin(engine) as connection:
         return _set_project_skill_state(connection, skill_id, payload, enabled=True)
 
 
 @app.post("/v1/skills/{skill_id}/disable")
+@permit(P.SKILL_MANAGE, scope=Scope.project(body="project_id"))
 def disable_project_skill(skill_id: str, payload: SkillToggleRequest) -> dict:
     with begin(engine) as connection:
         return _set_project_skill_state(connection, skill_id, payload, enabled=False)
 
 
 @app.post("/v1/skills/{skill_id}/invoke", status_code=201)
+@permit(P.SKILL_INVOKE, scope=Scope.project(body="project_id"))
 def invoke_skill(skill_id: str, payload: SkillInvokeRequest) -> dict:
     """Run API mock mode or lease-owned worker real mode through one governance gauntlet."""
     with begin(engine) as connection:
@@ -15546,6 +15932,7 @@ def invoke_skill(skill_id: str, payload: SkillInvokeRequest) -> dict:
 
 
 @app.get("/v1/model-adapters", response_model=ModelAdapterListResponse)
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.org())
 def list_model_adapters() -> ModelAdapterListResponse:
     return ModelAdapterListResponse(
         items=[
@@ -15556,6 +15943,7 @@ def list_model_adapters() -> ModelAdapterListResponse:
 
 
 @app.get("/v1/entitlement-pools", response_model=EntitlementPoolListResponse)
+@permit(P.ENTITLEMENT_READ, scope=Scope.project(query="project_id"))
 def list_entitlement_pools(project_id: str) -> EntitlementPoolListResponse:
     with begin(engine) as connection:
         items = entitlements.list_entitlement_pools(connection, project_id)
@@ -15569,6 +15957,7 @@ def list_entitlement_pools(project_id: str) -> EntitlementPoolListResponse:
     "/v1/entitlement-pools/{pool_id}/probe",
     response_model=EntitlementPoolProbeResponse,
 )
+@permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def probe_entitlement_pool(
     pool_id: str,
     payload: EntitlementPoolProbeRequest,
@@ -15607,6 +15996,7 @@ def probe_entitlement_pool(
     "/v1/model-route-decisions",
     response_model=ModelRouteDecisionListResponse,
 )
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
 def list_model_route_decisions(
     project_id: str,
     limit: int = 25,
@@ -15660,6 +16050,7 @@ def list_model_route_decisions(
     "/v1/model-route-decisions/simulate",
     response_model=ModelRouteDecisionSimulateResponse,
 )
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def simulate_model_route_decision(
     payload: ModelRouteDecisionSimulateRequest,
 ) -> ModelRouteDecisionSimulateResponse:
@@ -15695,6 +16086,7 @@ def simulate_model_route_decision(
     "/v1/entitlements/sources/{source_id}/credential-ref",
     response_model=EntitlementSourceSummary,
 )
+@permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def bind_model_credential_ref(
     source_id: str, payload: ModelCredentialBindRequest
 ) -> EntitlementSourceSummary:
@@ -15720,6 +16112,7 @@ def bind_model_credential_ref(
     response_model=ModelCredentialWriteSummary,
     status_code=201,
 )
+@permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def upload_model_credential(
     source_id: str, payload: ModelCredentialUploadRequest
 ) -> ModelCredentialWriteSummary:
@@ -15756,6 +16149,7 @@ def upload_model_credential(
     response_model=ModelGatewayLeaseAcquireResponse,
     status_code=201,
 )
+@permit(P.WORKER_LEASE)
 def acquire_model_gateway_lease(
     payload: ModelGatewayLeaseAcquireRequest,
 ) -> ModelGatewayLeaseAcquireResponse:
@@ -15781,6 +16175,7 @@ def acquire_model_gateway_lease(
     "/v1/model-gateway/leases",
     response_model=ModelGatewayLeaseListResponse,
 )
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
 def list_model_gateway_leases(
     project_id: str,
     status: Optional[str] = None,
@@ -15810,6 +16205,7 @@ def list_model_gateway_leases(
     "/v1/model-gateway/invocations",
     response_model=ModelGatewayInvocationListResponse,
 )
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
 def list_model_gateway_invocations(
     project_id: str,
     lease_id: Optional[str] = None,
@@ -15837,6 +16233,7 @@ def list_model_gateway_invocations(
     "/v1/model-gateway/usage",
     response_model=ModelGatewayUsageResponse,
 )
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
 def get_model_gateway_usage(
     project_id: str,
     days: int = 30,
@@ -15859,6 +16256,7 @@ def get_model_gateway_usage(
     "/v1/model-gateway/leases/reap",
     response_model=ModelGatewayLeaseReapResponse,
 )
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def reap_model_gateway_leases(
     payload: ModelGatewayLeaseReapRequest,
 ) -> ModelGatewayLeaseReapResponse:
@@ -15877,6 +16275,7 @@ def reap_model_gateway_leases(
     "/v1/model-gateway/leases/{lease_id}/heartbeat",
     response_model=ModelGatewayLeaseSummary,
 )
+@permit(P.WORKER_LEASE)
 def heartbeat_model_gateway_lease(
     lease_id: str, payload: ModelGatewayLeaseHeartbeatRequest
 ) -> ModelGatewayLeaseSummary:
@@ -15898,6 +16297,7 @@ def heartbeat_model_gateway_lease(
     response_model=ModelGatewayInvocationStartResponse,
     status_code=201,
 )
+@permit(P.WORKER_LEASE)
 def start_model_gateway_invocation(
     lease_id: str, payload: ModelGatewayInvocationStartRequest
 ) -> ModelGatewayInvocationStartResponse:
@@ -15920,6 +16320,7 @@ def start_model_gateway_invocation(
     "/v1/model-gateway/leases/{lease_id}/invocations/{invocation_id}/settle",
     response_model=ModelGatewayInvocationSummary,
 )
+@permit(P.WORKER_LEASE)
 def settle_model_gateway_invocation(
     lease_id: str,
     invocation_id: str,
@@ -15945,6 +16346,7 @@ def settle_model_gateway_invocation(
     "/v1/model-gateway/leases/{lease_id}/release",
     response_model=ModelGatewayLeaseSummary,
 )
+@permit(P.WORKER_LEASE)
 def release_model_gateway_lease(
     lease_id: str, payload: ModelGatewayLeaseReleaseRequest
 ) -> ModelGatewayLeaseSummary:
@@ -15974,6 +16376,7 @@ def release_model_gateway_lease(
 #
 # These endpoints are about the DEFINITION — the authored object — so they say so.
 @app.get("/v1/skill-definitions")
+@permit(P.SKILL_READ, scope=Scope.project(query="project_id"))
 def list_skill_definitions(project_id: str) -> dict:
     """Every skill this project has authored, with whether it forces an approval, what uses it
     (`references`: the custom steps that run it and the agents that hold it) and what the
@@ -16003,6 +16406,7 @@ def list_skill_definitions(project_id: str) -> dict:
 
 
 @app.post("/v1/skill-definitions", status_code=201)
+@permit(P.SKILL_MANAGE, scope=Scope.project(body="project_id"))
 def save_skill_definition(payload: open_bodies.SkillDefinitionSaveBody) -> dict:
     """Author or replace one skill. Idempotent on (project, skill_key).
 
@@ -16047,6 +16451,7 @@ def save_skill_definition(payload: open_bodies.SkillDefinitionSaveBody) -> dict:
 
 
 @app.patch("/v1/skill-definitions/{skill_key}")
+@permit(P.SKILL_MANAGE, scope=Scope.project(body="project_id"))
 def switch_skill_definition(
     skill_key: str, payload: open_bodies.SkillDefinitionSwitchBody,
 ) -> dict:
@@ -16080,6 +16485,7 @@ def switch_skill_definition(
 
 
 @app.put("/v1/channels/{provider}/client")
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def save_channel_oauth_client(provider: str, payload: open_bodies.ChannelOAuthClientBody) -> dict:
     """Store THIS PROJECT's own Google OAuth client.
 
@@ -16113,6 +16519,7 @@ def save_channel_oauth_client(provider: str, payload: open_bodies.ChannelOAuthCl
 
 
 @app.get("/v1/channels/{provider}/client")
+@permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
 def channel_oauth_client_status(provider: str, project_id: str) -> dict:
     """Whether a client is configured, and the redirect URI to register with Google.
 
@@ -16136,6 +16543,7 @@ def channel_oauth_client_status(provider: str, project_id: str) -> dict:
 
 
 @app.post("/v1/channels/{provider}/connect", status_code=201)
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def start_channel_connection(provider: str, payload: open_bodies.ChannelConnectBody) -> dict:
     """Begin an OAuth connection. Returns the URL to send the operator to.
 
@@ -16164,6 +16572,7 @@ def start_channel_connection(provider: str, payload: open_bodies.ChannelConnectB
 
 
 @app.get("/v1/channels/{provider}/callback")
+@public(reason=PublicReason.OAUTH_STATE_BOUND_CALLBACK, verifier=_identity_verifiers.channel_oauth_state)
 def finish_channel_connection(
     provider: str,
     code: str = "",
@@ -16220,6 +16629,7 @@ def finish_channel_connection(
 
 
 @app.get("/v1/channels")
+@permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
 def list_channel_connections(project_id: str) -> dict:
     """Connected channels. Never returns a credential — only whether one is bound."""
     with begin(engine) as connection:
@@ -16279,6 +16689,7 @@ def list_channel_connections(project_id: str) -> dict:
 
 
 @app.delete("/v1/channels/{provider}")
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(query="project_id"))
 def disconnect_channel(
     provider: str,
     project_id: str,
@@ -16308,6 +16719,7 @@ def disconnect_channel(
 
 
 @app.post("/v1/role-skills/sync")
+@permit(P.AGENT_ABILITY_ASSIGN, scope=Scope.project(body="project_id"))
 def sync_project_role_skills(payload: ProjectBody) -> dict:
     """Give every installed agent the skills its role spec says it may use.
 
@@ -16334,6 +16746,7 @@ def sync_project_role_skills(payload: ProjectBody) -> dict:
 
 
 @app.get("/v1/role-skills")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def list_role_skill_assignments(project_id: str) -> dict:
     """Every agent-holds-skill assignment in the project.
 
@@ -16347,6 +16760,7 @@ def list_role_skill_assignments(project_id: str) -> dict:
 
 
 @app.post("/v1/role-skills", status_code=201)
+@permit(P.AGENT_ABILITY_ASSIGN, scope=Scope.project(body="project_id"))
 def assign_role_skill(payload: RoleSkillBody) -> dict:
     """Give one skill to one agent.
 
@@ -16374,6 +16788,7 @@ def assign_role_skill(payload: RoleSkillBody) -> dict:
 
 
 @app.delete("/v1/role-skills")
+@permit(P.AGENT_ABILITY_ASSIGN, scope=Scope.project(query="project_id"))
 def unassign_role_skill(
     project_id: str,
     role_key: str,
@@ -16395,6 +16810,7 @@ def unassign_role_skill(
 
 
 @app.delete("/v1/skill-definitions/{skill_key}")
+@permit(P.SKILL_MANAGE, scope=Scope.project(query="project_id"))
 def delete_skill_definition(
     skill_key: str, project_id: str, actor: str = "executive_console",
     release_grants: bool = False,
@@ -16450,6 +16866,7 @@ def _setup_failure(error) -> HTTPException:
 
 
 @app.get("/v1/setup/status")
+@permit(P.SETUP_READ, scope=Scope.project(query="project_id"))
 def setup_status_endpoint(project_id: str, response: Response) -> dict:
     """DEPRECATED: GET /v1/setup. The same view, plus the old `steps` list."""
     from .services.setup_service import setup_status
@@ -16464,6 +16881,7 @@ def setup_status_endpoint(project_id: str, response: Response) -> dict:
 
 
 @app.get("/v1/setup/model-providers")
+@permit(P.SETUP_READ, scope=Scope.org())
 def setup_model_providers(response: Response) -> dict:
     """DEPRECATED: `catalogue` in GET /v1/setup."""
     from .services.setup_service import provider_catalogue
@@ -16473,6 +16891,7 @@ def setup_model_providers(response: Response) -> dict:
 
 
 @app.get("/v1/setup/coding-agents")
+@permit(P.SETUP_READ, scope=Scope.org())
 def setup_coding_agents(response: Response, project_id: str = "") -> dict:
     """DEPRECATED: `detected` in GET /v1/setup. Which coding-agent CLIs this machine has, what
     each still needs, and which were recorded as connected."""
@@ -16508,6 +16927,7 @@ def setup_coding_agents(response: Response, project_id: str = "") -> dict:
 
 
 @app.post("/v1/setup/coding-agents/credential", status_code=201)
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def setup_store_coding_agent_credential(payload: open_bodies.CodingAgentCredentialBody,
                                         response: Response) -> dict:
     """DEPRECATED: POST /v1/setup/models with `credential` (stores and proves in one press).
@@ -16547,6 +16967,7 @@ def setup_store_coding_agent_credential(payload: open_bodies.CodingAgentCredenti
 
 
 @app.get("/v1/setup/decision-model")
+@permit(P.SETUP_READ, scope=Scope.project(query="project_id"))
 def setup_decision_model_status(project_id: str, response: Response) -> dict:
     """DEPRECATED: the `decisions` job in GET /v1/setup. Which model answers typed decisions,
     and whether a Jev key is held — never the key."""
@@ -16562,6 +16983,7 @@ def setup_decision_model_status(project_id: str, response: Response) -> dict:
 
 
 @app.post("/v1/setup/decision-model/key", status_code=201)
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def setup_store_decision_key(payload: DecisionModelKeyBody, response: Response) -> dict:
     """DEPRECATED: POST /v1/setup/decisions/key. A TypeSafe key, proved with one governed
     decision before it is stored; storing it switches this project's decisions to Jev."""
@@ -16602,6 +17024,7 @@ def _store_decision_key(project_id: str, actor: str, api_key: str, accept: bool)
 
 
 @app.post("/v1/setup/decisions/key")
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def setup_decisions_key(payload: DecisionModelKeyBody) -> dict:
     """Decisions › TypeSafe Jev › Add key: proved with one governed decision, then stored.
     Answers with the Repo and models view."""
@@ -16617,6 +17040,7 @@ def setup_decisions_key(payload: DecisionModelKeyBody) -> dict:
 
 
 @app.post("/v1/setup/coding-agents/connect", status_code=201)
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def setup_connect_coding_agent(payload: open_bodies.CodingAgentConnectBody,
                                response: Response) -> dict:
     """DEPRECATED: POST /v1/setup/models {kind: "subscription"}. Records a subscription signed
@@ -16643,6 +17067,7 @@ def setup_connect_coding_agent(payload: open_bodies.CodingAgentConnectBody,
 
 
 @app.post("/v1/setup/model", status_code=201)
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def setup_model_endpoint(payload: open_bodies.ModelSetupBody, response: Response) -> dict:
     """DEPRECATED: POST /v1/setup/models. Stores a model key after one governed completion
     proves it — in every edition, reserved against the budget and receipted."""
@@ -16680,6 +17105,7 @@ def setup_model_endpoint(payload: open_bodies.ModelSetupBody, response: Response
 
 
 @app.get("/v1/entitlements/sources", response_model=EntitlementSourceListResponse)
+@permit(P.ENTITLEMENT_READ, scope=Scope.project(query="project_id"))
 def list_entitlement_sources(project_id: str) -> EntitlementSourceListResponse:
     with begin(engine) as connection:
         items = entitlements.list_sources(connection, project_id)
@@ -16693,6 +17119,7 @@ def list_entitlement_sources(project_id: str) -> EntitlementSourceListResponse:
     "/v1/entitlement-connection-sessions",
     response_model=EntitlementConnectionSessionListResponse,
 )
+@permit(P.ENTITLEMENT_READ, scope=Scope.project(query="project_id"))
 def list_entitlement_connection_sessions(
     project_id: str,
     source_id: Optional[str] = None,
@@ -16721,6 +17148,7 @@ def list_entitlement_connection_sessions(
     response_model=EntitlementSourceSummary,
     status_code=201,
 )
+@permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def upsert_entitlement_source(
     payload: EntitlementSourceUpsertRequest,
 ) -> EntitlementSourceSummary:
@@ -16744,6 +17172,7 @@ def upsert_entitlement_source(
     response_model=EntitlementConnectionSessionSummary,
     status_code=201,
 )
+@permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def create_entitlement_connection_session(
     source_id: str,
     payload: EntitlementConnectionSessionCreateRequest,
@@ -16776,6 +17205,7 @@ def create_entitlement_connection_session(
     "/v1/entitlements/sources/{source_id}/connect",
     response_model=EntitlementSourceSummary,
 )
+@permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def connect_entitlement_source(
     source_id: str,
     payload: EntitlementSourceConnectRequest,
@@ -16810,6 +17240,7 @@ def connect_entitlement_source(
     "/v1/entitlement-connection-sessions/{session_id}/complete",
     response_model=EntitlementConnectionSessionCompleteResponse,
 )
+@permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def complete_entitlement_connection_session(
     session_id: str,
     payload: EntitlementConnectionSessionCompleteRequest,
@@ -16852,6 +17283,7 @@ def complete_entitlement_connection_session(
     "/v1/entitlements/sources/{source_id}/disconnect",
     response_model=EntitlementSourceSummary,
 )
+@permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def disconnect_entitlement_source(
     source_id: str,
     payload: EntitlementSourceDisconnectRequest,
@@ -16877,6 +17309,7 @@ def disconnect_entitlement_source(
 
 
 @app.post("/v1/router/preview", response_model=RoutingPreviewResponse)
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def preview_route(payload: RoutingPreviewRequest) -> RoutingPreviewResponse:
     with begin(engine) as connection:
         try:
@@ -16904,6 +17337,7 @@ def preview_route(payload: RoutingPreviewRequest) -> RoutingPreviewResponse:
 
 
 @app.get("/v1/router/logs", response_model=RoutingLogListResponse)
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
 def list_routing_logs(project_id: str, limit: int = 25) -> RoutingLogListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
@@ -16916,6 +17350,7 @@ def list_routing_logs(project_id: str, limit: int = 25) -> RoutingLogListRespons
 
 
 @app.get("/v1/secret-refs", response_model=SecretRefListResponse)
+@permit(P.SECRET_READ_METADATA, scope=Scope.project(query="project_id"))
 def list_secret_refs(
     project_id: str,
     provider: Optional[str] = None,
@@ -16944,6 +17379,7 @@ def list_secret_refs(
 
 
 @app.post("/v1/secret-refs", response_model=SecretRefSummary, status_code=201)
+@permit(P.SECRET_MANAGE, scope=Scope.project(body="project_id"))
 def create_secret_ref(payload: SecretRefCreateRequest) -> SecretRefSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -16974,6 +17410,7 @@ def create_secret_ref(payload: SecretRefCreateRequest) -> SecretRefSummary:
 
 
 @app.get("/v1/secret-refs/{secret_ref_id}", response_model=SecretRefSummary)
+@permit(P.SECRET_READ_METADATA, scope=Scope.project(query="project_id"))
 def get_secret_ref(secret_ref_id: str, project_id: str) -> SecretRefSummary:
     with begin(engine) as connection:
         try:
@@ -16984,6 +17421,7 @@ def get_secret_ref(secret_ref_id: str, project_id: str) -> SecretRefSummary:
 
 
 @app.patch("/v1/secret-refs/{secret_ref_id}", response_model=SecretRefSummary)
+@permit(P.SECRET_MANAGE, scope=Scope.project(body="project_id"))
 def update_secret_ref(
     secret_ref_id: str, payload: SecretRefUpdateRequest
 ) -> SecretRefSummary:
@@ -17013,6 +17451,7 @@ def update_secret_ref(
 
 
 @app.delete("/v1/secret-refs/{secret_ref_id}", status_code=204)
+@permit(P.SECRET_MANAGE, scope=Scope.project(query="project_id"))
 def delete_secret_ref(
     secret_ref_id: str,
     project_id: str,
@@ -17041,6 +17480,7 @@ def delete_secret_ref(
     "/v1/github/connections",
     response_model=GitHubConnectionListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_connections(project_id: str) -> GitHubConnectionListResponse:
     with begin(engine) as connection:
         return GitHubConnectionListResponse(
@@ -17059,6 +17499,7 @@ def list_github_connections(project_id: str) -> GitHubConnectionListResponse:
     response_model=GitHubConnectionSummary,
     status_code=201,
 )
+@permit(P.GITHUB_CONNECT, scope=Scope.project(body="project_id"))
 def create_github_connection(
     payload: GitHubConnectionCreateRequest,
 ) -> GitHubConnectionSummary:
@@ -17093,6 +17534,7 @@ def create_github_connection(
     response_model=GitHubEasyConnectResponse,
     status_code=201,
 )
+@permit(P.GITHUB_CONNECT, scope=Scope.project(body="project_id"))
 def easy_connect_github_to_project(
     payload: GitHubEasyConnectRequest,
 ) -> GitHubEasyConnectResponse:
@@ -17157,6 +17599,7 @@ def easy_connect_github_to_project(
     "/v1/github/connections/{connection_id}/repositories",
     response_model=GitHubAccessibleRepositoryListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_connection_repositories(
     connection_id: str,
     project_id: str,
@@ -17196,6 +17639,7 @@ def list_github_connection_repositories(
     "/v1/github/connections/{connection_id}",
     response_model=GitHubConnectionSummary,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def get_github_connection(
     connection_id: str,
     project_id: str,
@@ -17241,6 +17685,7 @@ def _transition_github_connection(
     "/v1/github/connections/{connection_id}/enable",
     response_model=GitHubConnectionSummary,
 )
+@permit(P.GITHUB_MANAGE, scope=Scope.project(body="project_id"))
 def enable_github_connection(
     connection_id: str,
     payload: GitHubConnectionLifecycleRequest,
@@ -17252,6 +17697,7 @@ def enable_github_connection(
     "/v1/github/connections/{connection_id}/disable",
     response_model=GitHubConnectionSummary,
 )
+@permit(P.GITHUB_MANAGE, scope=Scope.project(body="project_id"))
 def disable_github_connection(
     connection_id: str,
     payload: GitHubConnectionLifecycleRequest,
@@ -17263,6 +17709,7 @@ def disable_github_connection(
     "/v1/github/connections/{connection_id}/revoke",
     response_model=GitHubConnectionSummary,
 )
+@permit(P.GITHUB_MANAGE, scope=Scope.project(body="project_id"))
 def revoke_github_connection(
     connection_id: str,
     payload: GitHubConnectionLifecycleRequest,
@@ -17271,6 +17718,7 @@ def revoke_github_connection(
 
 
 @app.get("/v1/github/repository-activity")
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def github_repository_activity(project_id: str, days: int = 30):
     """What BOSS DID in each repo — runs, PRs opened/merged, success + first-pass rates,
     median time-to-PR, spend and $/PR, plus recent runs. Powers the GitHub area's KPIs,
@@ -17290,6 +17738,7 @@ def github_repository_activity(project_id: str, days: int = 30):
     "/v1/github/repository-bindings",
     response_model=GitHubRepositoryBindingListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_repository_bindings(
     project_id: str,
     connection_id: Optional[str] = None,
@@ -17313,6 +17762,7 @@ def list_github_repository_bindings(
     response_model=GitHubRepositoryBindingSummary,
     status_code=201,
 )
+@permit(P.REPOSITORY_REGISTER, scope=Scope.project(body="project_id"))
 def create_github_repository_binding(
     payload: GitHubRepositoryBindingCreateRequest,
 ) -> GitHubRepositoryBindingSummary:
@@ -17345,6 +17795,7 @@ def create_github_repository_binding(
     "/v1/github/repository-bindings/{binding_id}",
     response_model=GitHubRepositoryBindingSummary,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def get_github_repository_binding(
     binding_id: str,
     project_id: str,
@@ -17363,6 +17814,7 @@ def get_github_repository_binding(
     "/v1/github/repository-bindings/{binding_id}",
     response_model=GitHubRepositoryBindingSummary,
 )
+@permit(P.REPOSITORY_MANAGE, scope=Scope.project(body="project_id"))
 def update_github_repository_binding(
     binding_id: str,
     payload: GitHubRepositoryBindingUpdateRequest,
@@ -17399,6 +17851,7 @@ def update_github_repository_binding(
     "/v1/github/connections/{connection_id}/test",
     response_model=GitHubConnectionTestResponse,
 )
+@permit(P.GITHUB_MANAGE, scope=Scope.project(body="project_id"))
 def test_github_connection(
     connection_id: str,
     payload: GitHubConnectionTestRequest,
@@ -17442,6 +17895,7 @@ def test_github_connection(
     "/v1/github/branch-policies",
     response_model=GitHubBranchPolicyListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_branch_policies(
     project_id: str,
     repository_binding_id: Optional[str] = None,
@@ -17467,6 +17921,7 @@ def list_github_branch_policies(
     response_model=GitHubBranchPolicySummary,
     status_code=201,
 )
+@permit(P.GITHUB_MANAGE, scope=Scope.project(body="project_id"))
 def create_github_branch_policy(
     payload: GitHubBranchPolicyCreateRequest,
 ) -> GitHubBranchPolicySummary:
@@ -17508,6 +17963,7 @@ def create_github_branch_policy(
     "/v1/github/branch-policies/{policy_id}",
     response_model=GitHubBranchPolicySummary,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def get_github_branch_policy(
     policy_id: str,
     project_id: str,
@@ -17524,6 +17980,7 @@ def get_github_branch_policy(
     "/v1/github/branch-policies/{policy_id}",
     response_model=GitHubBranchPolicySummary,
 )
+@permit(P.GITHUB_MANAGE, scope=Scope.project(body="project_id"))
 def revise_github_branch_policy(
     policy_id: str,
     payload: GitHubBranchPolicyUpdateRequest,
@@ -17557,6 +18014,7 @@ def revise_github_branch_policy(
     "/v1/github/branch-policies/{policy_id}/evaluate",
     response_model=GitHubBranchPolicyEvaluationResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def evaluate_github_branch_policy(
     policy_id: str,
     payload: GitHubBranchPolicyEvaluateRequest,
@@ -17583,6 +18041,7 @@ def evaluate_github_branch_policy(
     "/v1/github/branch-snapshots",
     response_model=GitHubBranchSnapshotListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_branch_snapshots(
     project_id: str,
     repository_binding_id: Optional[str] = None,
@@ -17607,6 +18066,7 @@ def list_github_branch_snapshots(
     "/v1/github/branch-snapshots/capture",
     response_model=GitHubBranchSnapshotCaptureResponse,
 )
+@permit(P.GITHUB_SYNC, scope=Scope.project(body="project_id"))
 def capture_github_branch_snapshot(
     payload: GitHubBranchSnapshotCaptureRequest,
 ) -> GitHubBranchSnapshotCaptureResponse:
@@ -17650,6 +18110,7 @@ def capture_github_branch_snapshot(
     "/v1/github/branch-snapshots/{snapshot_id}",
     response_model=GitHubBranchSnapshotSummary,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def get_github_branch_snapshot(
     snapshot_id: str,
     project_id: str,
@@ -17668,6 +18129,7 @@ def get_github_branch_snapshot(
     "/v1/github/branch-leases",
     response_model=GitHubBranchLeaseListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_branch_leases(
     project_id: str,
     repository_binding_id: Optional[str] = None,
@@ -17697,6 +18159,7 @@ def list_github_branch_leases(
     response_model=GitHubBranchLeaseAcquireResponse,
     status_code=201,
 )
+@permit(P.GITHUB_SYNC, scope=Scope.project(body="project_id"))
 def acquire_github_branch_lease(
     payload: GitHubBranchLeaseAcquireRequest,
 ) -> GitHubBranchLeaseAcquireResponse:
@@ -17740,6 +18203,7 @@ def acquire_github_branch_lease(
     "/v1/github/branch-leases/{lease_id}",
     response_model=GitHubBranchLeaseSummary,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def get_github_branch_lease(
     lease_id: str,
     project_id: str,
@@ -17756,6 +18220,7 @@ def get_github_branch_lease(
     "/v1/github/branch-leases/{lease_id}/heartbeat",
     response_model=GitHubBranchLeaseSummary,
 )
+@permit(P.GITHUB_SYNC, scope=Scope.project(body="project_id"))
 def heartbeat_github_branch_lease(
     lease_id: str,
     payload: GitHubBranchLeaseHeartbeatRequest,
@@ -17792,6 +18257,7 @@ def heartbeat_github_branch_lease(
     "/v1/github/branch-leases/{lease_id}/release",
     response_model=GitHubBranchLeaseSummary,
 )
+@permit(P.GITHUB_SYNC, scope=Scope.project(body="project_id"))
 def release_github_branch_lease(
     lease_id: str,
     payload: GitHubBranchLeaseReleaseRequest,
@@ -17828,6 +18294,7 @@ def release_github_branch_lease(
     "/v1/github/branch-leases/{lease_id}/reclaim",
     response_model=GitHubBranchLeaseSummary,
 )
+@permit(P.GITHUB_SYNC, scope=Scope.project(body="project_id"))
 def reclaim_github_branch_lease(
     lease_id: str,
     payload: GitHubBranchLeaseReclaimRequest,
@@ -17858,6 +18325,7 @@ def reclaim_github_branch_lease(
     "/v1/github/code-sync-runs",
     response_model=GitHubCodeSyncRunListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_code_sync_runs(
     project_id: str,
     repository_binding_id: Optional[str] = None,
@@ -17885,6 +18353,7 @@ def list_github_code_sync_runs(
     response_model=GitHubCodeSyncRunSummary,
     status_code=201,
 )
+@permit(P.GITHUB_SYNC, scope=Scope.project(body="project_id"))
 def plan_github_code_sync(
     payload: GitHubCodeSyncPlanRequest,
 ) -> GitHubCodeSyncRunSummary:
@@ -17924,6 +18393,7 @@ def plan_github_code_sync(
     "/v1/github/code-sync-runs/{sync_run_id}",
     response_model=GitHubCodeSyncRunSummary,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def get_github_code_sync_run(
     sync_run_id: str,
     project_id: str,
@@ -17940,6 +18410,7 @@ def get_github_code_sync_run(
     "/v1/github/code-sync-runs/{sync_run_id}/apply",
     response_model=GitHubCodeSyncRunSummary,
 )
+@permit(P.WORKER_LEASE)
 def apply_github_code_sync(
     sync_run_id: str,
     payload: GitHubCodeSyncApplyRequest,
@@ -17983,6 +18454,7 @@ def apply_github_code_sync(
     "/v1/github/conflict-sets",
     response_model=GitHubConflictSetListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_conflict_sets(
     project_id: str,
     status: Optional[str] = None,
@@ -18007,6 +18479,7 @@ def list_github_conflict_sets(
     "/v1/github/conflict-sets/{conflict_set_id}",
     response_model=GitHubConflictSetSummary,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def get_github_conflict_set(
     conflict_set_id: str,
     project_id: str,
@@ -18025,6 +18498,7 @@ def get_github_conflict_set(
     "/v1/github/resolution-plans",
     response_model=GitHubResolutionPlanListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_resolution_plans(
     project_id: str,
     conflict_set_id: Optional[str] = None,
@@ -18050,6 +18524,7 @@ def list_github_resolution_plans(
     response_model=GitHubResolutionPlanSummary,
     status_code=201,
 )
+@permit(P.GITHUB_SYNC, scope=Scope.project(body="project_id"))
 def create_github_resolution_plan(
     conflict_set_id: str,
     payload: GitHubResolutionPlanCreateRequest,
@@ -18081,6 +18556,7 @@ def create_github_resolution_plan(
     "/v1/github/resolution-plans/{plan_id}",
     response_model=GitHubResolutionPlanSummary,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def get_github_resolution_plan(
     plan_id: str,
     project_id: str,
@@ -18099,6 +18575,7 @@ def get_github_resolution_plan(
     "/v1/github/resolution-plans/{plan_id}/approve",
     response_model=GitHubResolutionPlanSummary,
 )
+@permit(P.GITHUB_MERGE, scope=Scope.project(body="project_id"))
 def approve_github_resolution_plan(
     plan_id: str,
     payload: GitHubResolutionPlanApproveRequest,
@@ -18130,6 +18607,7 @@ def approve_github_resolution_plan(
     "/v1/github/resolution-plans/{plan_id}/apply",
     response_model=GitHubResolutionApplyResponse,
 )
+@permit(P.WORKER_LEASE)
 def apply_github_resolution_plan(
     plan_id: str,
     payload: GitHubResolutionPlanApplyRequest,
@@ -18179,6 +18657,7 @@ def apply_github_resolution_plan(
     "/v1/github/merge-authorizations",
     response_model=GitHubMergeAuthorizationListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_merge_authorizations(
     project_id: str,
     repository_binding_id: Optional[str] = None,
@@ -18208,6 +18687,7 @@ def list_github_merge_authorizations(
     response_model=GitHubMergeAuthorizationSummary,
     status_code=201,
 )
+@permit(P.GITHUB_SYNC, scope=Scope.project(body="project_id"))
 def create_github_merge_authorization(
     payload: GitHubMergeAuthorizationCreateRequest,
 ) -> GitHubMergeAuthorizationSummary:
@@ -18253,6 +18733,7 @@ def create_github_merge_authorization(
     "/v1/github/merge-authorizations/{authorization_id}",
     response_model=GitHubMergeAuthorizationSummary,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def get_github_merge_authorization(
     authorization_id: str,
     project_id: str,
@@ -18271,6 +18752,7 @@ def get_github_merge_authorization(
     "/v1/github/merge-authorizations/{authorization_id}/authorize",
     response_model=GitHubMergeAuthorizationSummary,
 )
+@permit(P.GITHUB_MERGE, scope=Scope.project(body="project_id"))
 def authorize_github_merge(
     authorization_id: str,
     payload: GitHubMergeAuthorizationApproveRequest,
@@ -18306,6 +18788,7 @@ def authorize_github_merge(
     "/v1/github/merge-authorizations/{authorization_id}/enqueue",
     response_model=GitHubMergeAuthorizationSummary,
 )
+@permit(P.GITHUB_MERGE, scope=Scope.project(body="project_id"))
 def enqueue_github_merge(
     authorization_id: str,
     payload: GitHubMergeAuthorizationEnqueueRequest,
@@ -18335,6 +18818,7 @@ def enqueue_github_merge(
     "/v1/github/merge-authorizations/{authorization_id}/apply",
     response_model=GitHubMergeAuthorizationSummary,
 )
+@permit(P.WORKER_LEASE)
 def apply_github_merge(
     authorization_id: str,
     payload: GitHubMergeAuthorizationApplyRequest,
@@ -18378,6 +18862,7 @@ def apply_github_merge(
     "/v1/github/reconciliation-runs",
     response_model=GitHubReconciliationRunListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_reconciliation_runs(
     project_id: str,
     repository_binding_id: Optional[str] = None,
@@ -18405,6 +18890,7 @@ def list_github_reconciliation_runs(
     response_model=GitHubReconciliationPollResponse,
     status_code=201,
 )
+@permit(P.GITHUB_SYNC, scope=Scope.project(body="project_id"))
 def schedule_github_reconciliation_poll(
     payload: GitHubReconciliationPollRequest,
 ) -> GitHubReconciliationPollResponse:
@@ -18445,6 +18931,7 @@ def schedule_github_reconciliation_poll(
     "/v1/github/reconciliation-runs/{run_id}",
     response_model=GitHubReconciliationRunSummary,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def get_github_reconciliation_run(
     run_id: str,
     project_id: str,
@@ -18461,6 +18948,7 @@ def get_github_reconciliation_run(
     "/v1/github/reconciliation-runs/{run_id}/execute",
     response_model=GitHubReconciliationExecuteResponse,
 )
+@permit(P.WORKER_LEASE)
 def execute_github_reconciliation_run(
     run_id: str,
     payload: GitHubReconciliationExecuteRequest,
@@ -18497,6 +18985,7 @@ def execute_github_reconciliation_run(
     response_model=GitHubReconciliationRunSummary,
     status_code=201,
 )
+@permit(P.GITHUB_SYNC, scope=Scope.project(body="project_id"))
 def repair_github_reconciliation_run(
     run_id: str,
     payload: GitHubReconciliationRepairRequest,
@@ -18531,6 +19020,7 @@ def repair_github_reconciliation_run(
     "/v1/github/reconciliation-signals",
     response_model=GitHubReconciliationSignalListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_reconciliation_signals(
     project_id: str,
     repository_binding_id: Optional[str] = None,
@@ -18557,6 +19047,7 @@ def list_github_reconciliation_signals(
     "/v1/github/repository-ref-states",
     response_model=GitHubRepositoryRefStateListResponse,
 )
+@permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
 def list_github_repository_ref_states(
     project_id: str,
     repository_binding_id: Optional[str] = None,
@@ -18578,6 +19069,7 @@ def list_github_repository_ref_states(
 
 
 @app.get("/v1/provider-definitions", response_model=ProviderDefinitionListResponse)
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.org())
 def list_provider_definitions() -> ProviderDefinitionListResponse:
     """List static provider catalog definitions (auth methods, capabilities, adapter status)."""
     return ProviderDefinitionListResponse(
@@ -18589,6 +19081,7 @@ def list_provider_definitions() -> ProviderDefinitionListResponse:
 
 
 @app.get("/v1/providers", response_model=ProviderAccountListResponse)
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
 def list_provider_accounts(project_id: str) -> ProviderAccountListResponse:
     with begin(engine) as connection:
         items = resource_plane.list_provider_accounts(connection, project_id)
@@ -18599,6 +19092,7 @@ def list_provider_accounts(project_id: str) -> ProviderAccountListResponse:
 
 
 @app.post("/v1/providers", response_model=ProviderAccountSummary, status_code=201)
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def create_provider_account(
     payload: ProviderAccountCreateRequest,
 ) -> ProviderAccountSummary:
@@ -18635,6 +19129,7 @@ def create_provider_account(
     "/v1/providers/{provider_account_id}",
     response_model=ProviderAccountSummary,
 )
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
 def get_provider_account(
     provider_account_id: str,
     project_id: str,
@@ -18653,6 +19148,7 @@ def get_provider_account(
     "/v1/providers/{provider_account_id}",
     response_model=ProviderAccountSummary,
 )
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def update_provider_account(
     provider_account_id: str,
     payload: ProviderAccountUpdateRequest,
@@ -18717,6 +19213,7 @@ def _transition_provider_account(
     "/v1/providers/{provider_account_id}/enable",
     response_model=ProviderAccountSummary,
 )
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def enable_provider_account(
     provider_account_id: str,
     payload: ProviderAccountLifecycleRequest,
@@ -18728,6 +19225,7 @@ def enable_provider_account(
     "/v1/providers/{provider_account_id}/disable",
     response_model=ProviderAccountSummary,
 )
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def disable_provider_account(
     provider_account_id: str,
     payload: ProviderAccountLifecycleRequest,
@@ -18739,6 +19237,7 @@ def disable_provider_account(
     "/v1/providers/{provider_account_id}/revoke",
     response_model=ProviderAccountSummary,
 )
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def revoke_provider_account(
     provider_account_id: str,
     payload: ProviderAccountLifecycleRequest,
@@ -18750,6 +19249,7 @@ def revoke_provider_account(
     "/v1/providers/{provider_account_id}/rotate",
     response_model=ProviderCredentialRotationResponse,
 )
+@permit(P.MODEL_PROVIDER_ROTATE, scope=Scope.project(body="project_id"))
 def rotate_provider_credentials(
     provider_account_id: str,
     payload: ProviderCredentialRotateRequest,
@@ -18788,6 +19288,7 @@ def rotate_provider_credentials(
 
 
 @app.post("/v1/providers/{provider_account_id}/test", response_model=ProviderConnectionTestResponse)
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(query="project_id"))
 def test_provider_account(
     provider_account_id: str,
     project_id: str,
@@ -18815,6 +19316,7 @@ def test_provider_account(
 
 
 @app.get("/v1/resources", response_model=ExternalResourceListResponse)
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def list_external_resources(
     project_id: str,
     provider: Optional[str] = None,
@@ -18844,6 +19346,7 @@ def list_external_resources(
 
 
 @app.get("/v1/resource-topology", response_model=ResourceTopologyGraphResponse)
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def get_resource_topology(
     project_id: str,
     provider: Optional[str] = None,
@@ -18873,6 +19376,7 @@ def get_resource_topology(
     "/v1/resource-topology/edges",
     response_model=ResourceTopologyEdgeMutationResponse,
 )
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def upsert_resource_topology_edge(
     payload: ResourceTopologyEdgeUpsertRequest,
 ) -> ResourceTopologyEdgeMutationResponse:
@@ -18910,6 +19414,7 @@ def upsert_resource_topology_edge(
     "/v1/resource-topology/edges/{edge_id}",
     response_model=ResourceTopologyEdgeMutationResponse,
 )
+@permit(P.INFRA_PROVISION, scope=Scope.project(query="project_id"))
 def delete_resource_topology_edge(
     edge_id: str,
     project_id: str,
@@ -18944,6 +19449,7 @@ def delete_resource_topology_edge(
     "/v1/resource-topology/infer",
     response_model=ResourceTopologyInferResponse,
 )
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def infer_resource_topology(
     payload: ResourceTopologyInferRequest,
 ) -> ResourceTopologyInferResponse:
@@ -18974,6 +19480,7 @@ def infer_resource_topology(
 
 
 @app.post("/v1/resources/sync", response_model=ResourceSyncResponse)
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def sync_external_resources(payload: ResourceSyncRequest, request: Request) -> ResourceSyncResponse:
     # Rate limit high-cost provider sync path (P2 per review). Early gate.
     _enforce_high_cost_rate_limit(
@@ -19005,6 +19512,7 @@ def sync_external_resources(payload: ResourceSyncRequest, request: Request) -> R
 
 
 @app.get("/v1/costs", response_model=CostEventListResponse)
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def list_provider_costs(project_id: str, limit: int = 100, offset: int = 0) -> CostEventListResponse:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
@@ -19021,6 +19529,7 @@ def list_provider_costs(project_id: str, limit: int = 100, offset: int = 0) -> C
 
 
 @app.get("/v1/cost-anomalies", response_model=CostAnomalyListResponse)
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def list_provider_cost_anomalies(
     project_id: str,
     limit: int = 100,
@@ -19041,6 +19550,7 @@ def list_provider_cost_anomalies(
 
 
 @app.get("/v1/changesets", response_model=ChangeSetListResponse)
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def list_changesets(
     project_id: str,
     status: Optional[str] = None,
@@ -19062,6 +19572,7 @@ def list_changesets(
 
 
 @app.post("/v1/changesets", response_model=ChangeSetSummary, status_code=201)
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def create_changeset(payload: ChangeSetCreateRequest) -> ChangeSetSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -19093,6 +19604,7 @@ def create_changeset(payload: ChangeSetCreateRequest) -> ChangeSetSummary:
 
 
 @app.post("/v1/changesets/{changeset_id}/approve", response_model=ChangeSetSummary)
+@permit(P.CHANGESET_APPROVE, scope=Scope.of("changeset", path="changeset_id"))
 def approve_changeset(
     changeset_id: str,
     payload: ChangeSetApproveRequest,
@@ -19143,6 +19655,7 @@ def approve_changeset(
 
 
 @app.post("/v1/changesets/{changeset_id}/apply", response_model=ChangeSetApplyResponse)
+@permit(P.CHANGESET_APPROVE, scope=Scope.of("changeset", path="changeset_id"))
 def apply_changeset(
     changeset_id: str,
     payload: ChangeSetApplyRequest,
@@ -19181,6 +19694,7 @@ def apply_changeset(
     "/v1/changesets/{changeset_id}/terraform-export",
     response_model=TerraformExportResponse,
 )
+@permit(P.INFRA_PROVISION, scope=Scope.of("changeset", path="changeset_id"))
 def export_changeset_terraform(
     changeset_id: str,
     payload: TerraformExportRequest,
@@ -19269,6 +19783,7 @@ def export_changeset_terraform(
     "/v1/changesets/{changeset_id}/terraform-export",
     response_model=TerraformExportArtifactResponse,
 )
+@permit(P.INFRA_READ, scope=Scope.of("changeset", path="changeset_id"))
 def get_changeset_terraform_export(
     changeset_id: str,
 ) -> TerraformExportArtifactResponse:
@@ -19378,6 +19893,7 @@ def terraform_drift_reconcile(
 
 
 @app.post("/v1/iac/detect", response_model=IacDetectResponse)
+@permit(P.INFRA_READ, scope=Scope.org(), readonly_post=True)
 def detect_iac_change(payload: IacDetectRequest) -> IacDetectResponse:
     """Detect IaC files and/or whether a code task is an IaC-authoring task (no tools run)."""
     file_map = payload.files if isinstance(payload.files, dict) else None
@@ -19402,6 +19918,7 @@ def detect_iac_change(payload: IacDetectRequest) -> IacDetectResponse:
 
 
 @app.post("/v1/iac/verify", response_model=IacVerifyResponse)
+@permit(P.INFRA_PROVISION, scope=Scope.org())
 def run_iac_verify(payload: IacVerifyRequest) -> IacVerifyResponse:
     """Run the credential-scrubbed IaC verification lane on an operator-supplied file map.
 
@@ -19436,6 +19953,7 @@ def run_iac_verify(payload: IacVerifyRequest) -> IacVerifyResponse:
 
 
 @app.post("/v1/iac/plan", response_model=IacVerifyResponse)
+@permit(P.INFRA_PROVISION, scope=Scope.org())
 def run_iac_plan(payload: IacVerifyRequest) -> IacVerifyResponse:
     """Plan-oriented IaC lane entrypoint (same credential-free lane as /v1/iac/verify).
 
@@ -19446,6 +19964,7 @@ def run_iac_plan(payload: IacVerifyRequest) -> IacVerifyResponse:
 
 
 @app.get("/v1/resource-receipts", response_model=ResourceReceiptListResponse)
+@permit(P.ACTIVITY_READ, scope=Scope.project(query="project_id"))
 def list_resource_receipts(
     project_id: str,
     limit: int = 100,
@@ -19471,6 +19990,7 @@ def list_resource_receipts(
 
 
 @app.get("/v1/worker-pools", response_model=WorkerPoolListResponse)
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def list_worker_pools(project_id: str) -> WorkerPoolListResponse:
     with begin(engine) as connection:
         items = resource_plane.list_worker_pools(connection, project_id)
@@ -19481,6 +20001,7 @@ def list_worker_pools(project_id: str) -> WorkerPoolListResponse:
 
 
 @app.post("/v1/worker-pools", response_model=WorkerPoolSummary, status_code=201)
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def upsert_worker_pool(payload: WorkerPoolUpsertRequest) -> WorkerPoolSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -19512,6 +20033,7 @@ def upsert_worker_pool(payload: WorkerPoolUpsertRequest) -> WorkerPoolSummary:
 
 
 @app.get("/v1/autoscaler/plans", response_model=ScalePlanListResponse)
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def list_scale_plans(project_id: str, limit: int = 50) -> ScalePlanListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
@@ -19528,6 +20050,7 @@ def list_scale_plans(project_id: str, limit: int = 50) -> ScalePlanListResponse:
 
 
 @app.post("/v1/autoscaler/plans", response_model=ScalePlanRunResponse)
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def run_autoscaler_plan(payload: ScalePlanRunRequest) -> ScalePlanRunResponse:
     with begin(engine) as connection:
         require_project_actor(
@@ -19563,6 +20086,7 @@ def run_autoscaler_plan(payload: ScalePlanRunRequest) -> ScalePlanRunResponse:
 
 
 @app.get("/v1/elastic/status")
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def get_elastic_status(project_id: str) -> dict:
     """Elastic fabric overview: pools, instances, per-provider usage."""
     with begin(engine) as connection:
@@ -19570,6 +20094,7 @@ def get_elastic_status(project_id: str) -> dict:
 
 
 @app.post("/v1/elastic/capacity", status_code=201)
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def request_elastic_capacity(payload: open_bodies.ElasticCapacityBody) -> dict:
     """Agents/projects request elastic worker capacity against a pool."""
     payload = payload.payload()
@@ -19608,6 +20133,7 @@ def request_elastic_capacity(payload: open_bodies.ElasticCapacityBody) -> dict:
 
 
 @app.post("/v1/elastic/pools/{worker_pool_id}/reconcile")
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def reconcile_elastic_pool(worker_pool_id: str, payload: open_bodies.ElasticReconcileBody) -> dict:
     """Materialize desired pool capacity (local/container now; cloud via ChangeSet)."""
     payload = payload.payload()
@@ -19636,6 +20162,7 @@ def reconcile_elastic_pool(worker_pool_id: str, payload: open_bodies.ElasticReco
 
 
 @app.get("/v1/elastic/instances")
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def list_elastic_instances(
     project_id: str,
     worker_pool_id: Optional[str] = None,
@@ -19658,6 +20185,7 @@ def list_elastic_instances(
 
 
 @app.post("/v1/elastic/instances/{instance_id}/heartbeat")
+@permit(P.WORKER_LEASE)
 def heartbeat_elastic_instance(instance_id: str, payload: open_bodies.ElasticHeartbeatBody) -> dict:
     payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
@@ -19682,6 +20210,7 @@ def heartbeat_elastic_instance(instance_id: str, payload: open_bodies.ElasticHea
 
 
 @app.post("/v1/elastic/instances/{instance_id}/terminate")
+@permit(P.INFRA_TERMINATE, scope=Scope.project(body="project_id"))
 def terminate_elastic_instance(instance_id: str, payload: open_bodies.ElasticTerminateBody) -> dict:
     payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
@@ -19706,6 +20235,7 @@ def terminate_elastic_instance(instance_id: str, payload: open_bodies.ElasticTer
 
 
 @app.get("/v1/provider-usage")
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
 def list_provider_usage(
     project_id: str,
     provider: Optional[str] = None,
@@ -19729,6 +20259,7 @@ def list_provider_usage(
 
 
 @app.get("/v1/provider-usage/summary")
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
 def provider_usage_summary(
     project_id: str, provider: Optional[str] = None
 ) -> dict:
@@ -19740,6 +20271,7 @@ def provider_usage_summary(
 
 
 @app.post("/v1/provider-usage/ingest", status_code=201)
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def ingest_provider_usage(payload: ProviderUsageIngestBody) -> dict:
     """Record a usage event (control plane or adapter instrumentation)."""
     payload = payload.payload()
@@ -19783,6 +20315,7 @@ def ingest_provider_usage(payload: ProviderUsageIngestBody) -> dict:
 
 
 @app.post("/v1/provider-usage/sync")
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def sync_provider_usage(payload: ProviderUsageSyncBody) -> dict:
     """Sync inventory/billing for a provider account and mirror costs into usage ledger."""
     payload = payload.payload()
@@ -19815,6 +20348,7 @@ def sync_provider_usage(payload: ProviderUsageSyncBody) -> dict:
 
 
 @app.get("/v1/multi-cloud/catalog")
+@permit(P.INFRA_READ, scope=Scope.org())
 def get_multi_cloud_catalog(
     category: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -19831,6 +20365,7 @@ def get_multi_cloud_catalog(
 
 
 @app.get("/v1/multi-cloud/providers/{provider_key}")
+@permit(P.INFRA_READ, scope=Scope.org())
 def get_multi_cloud_provider(provider_key: str) -> dict[str, Any]:
     try:
         entry = multi_cloud_provider_entry(provider_key)
@@ -19852,6 +20387,7 @@ def get_multi_cloud_provider(provider_key: str) -> dict[str, Any]:
 
 
 @app.get("/v1/multi-cloud/skills")
+@permit(P.INFRA_READ, scope=Scope.org())
 def list_multi_cloud_skills() -> dict[str, Any]:
     catalog = multi_cloud_catalog()
     return {
@@ -19861,6 +20397,7 @@ def list_multi_cloud_skills() -> dict[str, Any]:
 
 
 @app.post("/v1/multi-cloud/skills/describe")
+@permit(P.INFRA_READ, scope=Scope.org(), readonly_post=True)
 def describe_multi_cloud_skills(
     payload: MultiCloudSkillDescribeRequest,
 ) -> dict[str, Any]:
@@ -19971,6 +20508,7 @@ def describe_multi_cloud_skills(
 
 
 @app.post("/v1/resource-janitor/run", response_model=ResourceJanitorRunResponse)
+@permit(P.INFRA_TERMINATE, scope=Scope.project(body="project_id"))
 def run_resource_janitor(payload: ResourceJanitorRunRequest) -> ResourceJanitorRunResponse:
     with begin(engine) as connection:
         require_project_actor(
@@ -20016,6 +20554,7 @@ def run_resource_janitor(payload: ResourceJanitorRunRequest) -> ResourceJanitorR
 
 
 @app.get("/v1/deployments", response_model=DeploymentTargetListResponse)
+@permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def list_deployment_targets(project_id: str, limit: int = 50, offset: int = 0) -> DeploymentTargetListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
@@ -20032,6 +20571,7 @@ def list_deployment_targets(project_id: str, limit: int = 50, offset: int = 0) -
 
 
 @app.post("/v1/deployments", response_model=DeploymentTargetSummary, status_code=201)
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(body="project_id"))
 def create_deployment_target(
     payload: DeploymentTargetCreateRequest,
 ) -> DeploymentTargetSummary:
@@ -20068,6 +20608,7 @@ def create_deployment_target(
     "/v1/deployment-environment-policies",
     response_model=DeploymentEnvironmentPolicyListResponse,
 )
+@permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def list_deployment_environment_policies(
     project_id: str,
     limit: int = 50,
@@ -20097,6 +20638,7 @@ def list_deployment_environment_policies(
     response_model=DeploymentEnvironmentPolicySummary,
     status_code=201,
 )
+@permit(P.POLICY_MANAGE, scope=Scope.project(body="project_id"))
 def upsert_deployment_environment_policy(
     payload: DeploymentEnvironmentPolicyUpsertRequest,
 ) -> DeploymentEnvironmentPolicySummary:
@@ -20129,6 +20671,7 @@ def upsert_deployment_environment_policy(
 
 
 @app.get("/v1/deployment-runs", response_model=DeploymentRunListResponse)
+@permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def list_deployment_runs(
     project_id: str,
     limit: int = 50,
@@ -20148,6 +20691,7 @@ def list_deployment_runs(
 
 
 @app.post("/v1/deployment-runs", response_model=DeploymentRunSummary, status_code=201)
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
 def create_deployment_run(
     payload: DeploymentRunCreateRequest,
 ) -> DeploymentRunSummary:
@@ -20178,6 +20722,7 @@ def create_deployment_run(
     "/v1/deployment-runs/{deployment_run_id}/health-check",
     response_model=DeploymentRunHealthCheckResponse,
 )
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"))
 def run_deployment_health_check(
     deployment_run_id: str,
     payload: DeploymentRunHealthCheckRequest,
@@ -20211,6 +20756,7 @@ def run_deployment_health_check(
     "/v1/deployment-runs/{deployment_run_id}/rollout/start",
     response_model=DeploymentRolloutSummary,
 )
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"))
 def start_deployment_rollout(
     deployment_run_id: str,
     payload: DeploymentRolloutStartRequest,
@@ -20238,6 +20784,7 @@ def start_deployment_rollout(
     "/v1/deployment-runs/{deployment_run_id}/rollout/advance",
     response_model=DeploymentRolloutSummary,
 )
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_run", path="deployment_run_id"))
 def advance_deployment_rollout(
     deployment_run_id: str,
     payload: DeploymentRolloutAdvanceRequest,
@@ -20264,6 +20811,7 @@ def advance_deployment_rollout(
     "/v1/deployment-runs/{deployment_run_id}/rollout/rollback",
     response_model=DeploymentRolloutSummary,
 )
+@permit(P.DEPLOYMENT_ROLLBACK, scope=Scope.of("deployment_run", path="deployment_run_id"))
 def rollback_deployment_rollout(
     deployment_run_id: str,
     payload: DeploymentRolloutRollbackRequest,
@@ -20301,6 +20849,7 @@ def rollback_deployment_rollout(
     "/v1/deployment-promotions",
     response_model=DeploymentPromotionListResponse,
 )
+@permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def list_deployment_promotions(
     project_id: str,
     limit: int = 50,
@@ -20321,6 +20870,7 @@ def list_deployment_promotions(
     "/v1/deployment-promotions/{promotion_id}",
     response_model=DeploymentPromotionSummary,
 )
+@permit(P.DEPLOYMENT_READ, scope=Scope.of("deployment_promotion", path="promotion_id"))
 def get_deployment_promotion(promotion_id: str) -> DeploymentPromotionSummary:
     with begin(engine) as connection:
         row = connection.execute(
@@ -20342,6 +20892,7 @@ def get_deployment_promotion(promotion_id: str) -> DeploymentPromotionSummary:
     response_model=DeploymentPromotionSummary,
     status_code=201,
 )
+@permit(P.DEPLOYMENT_PRODUCTION, scope=Scope.project(body="project_id"))
 def create_deployment_promotion(
     payload: DeploymentPromotionStartRequest,
 ) -> DeploymentPromotionSummary:
@@ -20379,6 +20930,7 @@ def create_deployment_promotion(
     "/v1/deployment-promotions/{promotion_id}/advance",
     response_model=DeploymentPromotionSummary,
 )
+@permit(P.DEPLOYMENT_PRODUCTION, scope=Scope.of("deployment_promotion", path="promotion_id"))
 def advance_deployment_promotion(
     promotion_id: str,
     payload: DeploymentPromotionAdvanceRequest,
@@ -20406,6 +20958,7 @@ def advance_deployment_promotion(
 
 
 @app.get("/v1/provider-health", response_model=ProviderHealthListResponse)
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
 def list_provider_health(
     project_id: str,
     provider_account_id: Optional[str] = None,
@@ -20434,6 +20987,7 @@ def list_provider_health(
 
 
 @app.get("/v1/drift-reports", response_model=DriftReportListResponse)
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def list_drift_reports(
     project_id: str,
     limit: int = 100,
@@ -20459,6 +21013,7 @@ def list_drift_reports(
 
 
 @app.get("/v1/reconciliation-runs", response_model=ReconciliationRunListResponse)
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def list_reconciliation_runs(
     project_id: str,
     limit: int = 100,
@@ -20484,6 +21039,7 @@ def list_reconciliation_runs(
 
 
 @app.get("/v1/comms/policies", response_model=CommsChannelPolicyListResponse)
+@permit(P.COMMS_READ, scope=Scope.project(query="project_id"))
 def list_comms_channel_policies(
     project_id: str,
 ) -> CommsChannelPolicyListResponse:
@@ -20500,6 +21056,7 @@ def list_comms_channel_policies(
     response_model=CommsChannelPolicySummary,
     status_code=201,
 )
+@permit(P.COMMS_MANAGE, scope=Scope.project(body="project_id"))
 def upsert_comms_channel_policy(
     payload: CommsChannelPolicyUpsertRequest,
 ) -> CommsChannelPolicySummary:
@@ -20527,6 +21084,7 @@ def upsert_comms_channel_policy(
 
 
 @app.get("/v1/comms/outbox", response_model=OutboxMessageListResponse)
+@permit(P.COMMS_READ, scope=Scope.project(query="project_id"))
 def list_outbox_messages(
     project_id: str, limit: int = 50, offset: int = 0
 ) -> OutboxMessageListResponse:
@@ -20546,6 +21104,7 @@ def list_outbox_messages(
 
 
 @app.post("/v1/comms/outbox", response_model=OutboxMessageSummary, status_code=201)
+@permit(P.COMMS_SEND, scope=Scope.project(body="project_id"))
 def create_outbox_message(payload: OutboxMessageCreateRequest) -> OutboxMessageSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -20568,6 +21127,7 @@ def create_outbox_message(payload: OutboxMessageCreateRequest) -> OutboxMessageS
 
 
 @app.post("/v1/comms/outbox/{message_id}/queue", response_model=JobSummary, status_code=201)
+@permit(P.COMMS_SEND, scope=Scope.project(body="project_id"))
 def queue_outbox_delivery(message_id: str, payload: OutboxQueueRequest) -> JobSummary:
     with begin(engine) as connection:
         try:
@@ -20596,6 +21156,7 @@ def queue_outbox_delivery(message_id: str, payload: OutboxQueueRequest) -> JobSu
 
 
 @app.post("/v1/comms/outbox/{message_id}/deliver", response_model=OutboxDeliveryResponse)
+@permit(P.COMMS_SEND, scope=Scope.project(body="project_id"))
 def deliver_outbox_message(
     message_id: str, payload: OutboxQueueRequest
 ) -> OutboxDeliveryResponse:
@@ -20623,6 +21184,7 @@ def deliver_outbox_message(
 
 
 @app.get("/v1/comms/inbox", response_model=InboxMessageListResponse)
+@permit(P.COMMS_READ, scope=Scope.project(query="project_id"))
 def list_inbox_messages(
     project_id: str, limit: int = 50, offset: int = 0
 ) -> InboxMessageListResponse:
@@ -20642,6 +21204,7 @@ def list_inbox_messages(
 
 
 @app.get("/v1/comms/inbox/ack-state")
+@permit(P.COMMS_READ, scope=Scope.project(query="project_id"))
 def list_inbox_ack_state(project_id: str, limit: int = 50, pending_only: bool = False) -> dict:
     """The no-silent-drops ledger: every inbound's acknowledgment state + transition history.
     pending_only=true surfaces any inbound that has not yet reached a terminal ack (spec §D)."""
@@ -20657,6 +21220,7 @@ def list_inbox_ack_state(project_id: str, limit: int = 50, pending_only: bool = 
 
 
 @app.post("/v1/comms/slack/render")
+@permit(P.COMMS_READ, scope=Scope.org(), readonly_post=True)
 def render_slack_message(payload: SlackRenderRequest) -> dict:
     """Render a Slack message with persona prefix/signature and resolve the department channel
     (spec §D Slack per-department channels + persona rendering)."""
@@ -20672,6 +21236,7 @@ def render_slack_message(payload: SlackRenderRequest) -> dict:
 
 
 @app.post("/v1/comms/slack/digest")
+@permit(P.COMMS_SEND, scope=Scope.project(body="project_id"))
 def batch_slack_digests(payload: SlackDigestBatchRequest) -> dict:
     """Collapse draft Slack outbox messages into one digest per channel (spec §D digest batching)."""
     with begin(engine) as connection:
@@ -20688,6 +21253,7 @@ def batch_slack_digests(payload: SlackDigestBatchRequest) -> dict:
 
 
 @app.post("/v1/comms/inbox/ingest", response_model=InboxMessageSummary, status_code=201)
+@permit(P.COMMS_MANAGE, scope=Scope.project(body="project_id"))
 def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -20796,6 +21362,7 @@ def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSumm
 
 
 @app.post("/v1/docs/update", response_model=JobSummary, status_code=201)
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def enqueue_docs_update(payload: DocsUpdateRequest) -> JobSummary:
     """Manually enqueue the same bounded job used by completion-event triggers."""
     with begin(engine) as connection:
@@ -20822,6 +21389,7 @@ def enqueue_docs_update(payload: DocsUpdateRequest) -> JobSummary:
 
 
 @app.post("/v1/docs/update/execute")
+@permit(P.WORKER_LEASE)
 def execute_docs_update(payload: DocsUpdateExecuteRequest) -> dict[str, Any]:
     """Worker-only execution boundary for a leased ``docs.update`` job."""
     require_worker_principal()
@@ -20866,6 +21434,7 @@ def _job_effect_permission(kind: str) -> Optional[str]:
 
 
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_job(payload: JobCreateRequest) -> JobSummary:
     with begin(engine) as connection:
         actor = current_api_principal.get() or "ceo"
@@ -20928,6 +21497,7 @@ def create_job(payload: JobCreateRequest) -> JobSummary:
 
 
 @app.post("/v1/bootstrap/seed")
+@permit(P.OWNER_ASSIGN, scope=Scope.org())
 def bootstrap_seed(actor: str = "ceo") -> dict[str, str]:
     if not settings.bootstrap_seed_api_enabled:
         record_policy_denial(
@@ -20967,6 +21537,7 @@ def bootstrap_seed(actor: str = "ceo") -> dict[str, str]:
 
 
 @app.get("/v1/budget/allocations", response_model=BudgetAllocationListResponse)
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def list_budget_allocations(project_id: str) -> BudgetAllocationListResponse:
     with begin(engine) as connection:
         allocations = budget.list_allocations(connection, project_id)
@@ -20984,6 +21555,7 @@ def list_budget_allocations(project_id: str) -> BudgetAllocationListResponse:
     response_model=BudgetAllocationSummary,
     status_code=201,
 )
+@permit(P.BUDGET_MANAGE, scope=Scope.project(body="project_id"))
 def create_budget_allocation(
     payload: BudgetAllocationCreateRequest,
 ) -> BudgetAllocationSummary:
@@ -21030,6 +21602,7 @@ def create_budget_allocation(
 
 
 @app.get("/v1/budget/insights")
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def budget_insights(project_id: str):
     """BOSS-280 P2 — automated cost insights: deterministic top-cost-saves generated from the
     real spend ledger (llm_calls). Each insight names the money and the one capturing action."""
@@ -21039,6 +21612,7 @@ def budget_insights(project_id: str):
 
 
 @app.get("/v1/llm-calls", response_model=LlmCallListResponse)
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
 def list_project_llm_calls(
     project_id: str = Query(...),
     stage: Optional[str] = None,
@@ -21093,6 +21667,7 @@ def list_project_llm_calls(
 
 
 @app.get("/v1/llm-calls/summary", response_model=LlmCallSummaryResponse)
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
 def summarize_project_llm_calls(
     project_id: str = Query(...),
     group_by: str = Query("stage", pattern="^(stage|role|model|engine)$"),
@@ -21117,6 +21692,7 @@ def summarize_project_llm_calls(
 
 
 @app.get("/v1/budget/status", response_model=BudgetStatusResponse)
+@permit(P.BUDGET_READ, scope=Scope.project(query="scope_id"))
 def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
     if scope_type != "project":
         raise HTTPException(status_code=400, detail="Only project scope is supported.")
@@ -21162,6 +21738,7 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
 
 
 @app.get("/v1/settings")
+@permit(P.SETTINGS_READ, scope=Scope.project(query="project_id"))
 def get_project_settings(project_id: str) -> dict:
     """The knobs, what each is worth now, and where that value came from.
 
@@ -21227,6 +21804,7 @@ def get_project_settings(project_id: str) -> dict:
 
 
 @app.put("/v1/settings/{key}")
+@permit(P.SETTINGS_UPDATE, scope=Scope.project(body="project_id"))
 def put_project_setting(key: str, payload: ProjectSettingBody, request: Request) -> dict:
     """Set one knob, or hand it back to the deployment default by sending no value.
     An `If-Match` (the knob's version from GET /v1/govern) refuses a stale edit with 412."""
@@ -21284,6 +21862,7 @@ def put_project_setting(key: str, payload: ProjectSettingBody, request: Request)
 
 
 @app.post("/v1/budget/set_intensity")
+@permit(P.BUDGET_MANAGE, scope=Scope.project(body="scope_id"))
 def budget_set_intensity(payload: BudgetSetIntensityRequest, request: Request) -> dict:
     """Pace (operational intensity, 0-100) → spend caps and scaling limits.
     An `If-Match` (the budget policy's version from GET /v1/govern) refuses a stale edit."""
@@ -21303,6 +21882,7 @@ def budget_set_intensity(payload: BudgetSetIntensityRequest, request: Request) -
 
 
 @app.post("/v1/canaries/run")
+@permit(P.ASSURANCE_RUN, scope=Scope.project(body="project_id"))
 def canaries_run(payload: CanaryRunRequest) -> dict:
     """Run the canary suite (exactly-once / no-drop / job-lifecycle / budget) and persist results."""
     from .services import canaries as canaries_svc
@@ -21310,12 +21890,14 @@ def canaries_run(payload: CanaryRunRequest) -> dict:
 
 
 @app.get("/v1/canaries")
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
 def canaries_list(project_id: str, limit: int = 20) -> dict:
     from .services import canaries as canaries_svc
     return {"items": canaries_svc.list_canary_runs(engine, project_id, limit)}
 
 
 @app.post("/v1/evals/run")
+@permit(P.ASSURANCE_RUN, scope=Scope.project(body="project_id"))
 def evals_run(payload: EvalRunRequest) -> dict:
     """Run the eval-harness regression suite (routing / policy / factory-gate / autonomy-ladder)
     and persist results. Gates self-improvement rollouts (spec §C)."""
@@ -21325,12 +21907,14 @@ def evals_run(payload: EvalRunRequest) -> dict:
 
 
 @app.get("/v1/evals")
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
 def evals_list(project_id: str, limit: int = 20) -> dict:
     from .services import eval_harness
     return {"items": eval_harness.list_eval_runs(engine, project_id, limit)}
 
 
 @app.post("/v1/provider-health/poll")
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def provider_health_poll(payload: ProviderHealthPollRequest) -> dict:
     """Poll model-lane provider health and persist snapshots into provider_health.
 
@@ -21342,6 +21926,7 @@ def provider_health_poll(payload: ProviderHealthPollRequest) -> dict:
 
 
 @app.post("/v1/router/rationale", status_code=201)
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def router_rationale(payload: RouterRationaleRequest) -> dict:
     """Persist the router's decision (selected lane + ranked fallback chain + rejected sources)
     as a durable `router_rationale` artifact — the structured 'why this lane' (spec §C)."""
@@ -21363,6 +21948,7 @@ def router_rationale(payload: RouterRationaleRequest) -> dict:
 
 
 @app.post("/v1/anomalies/scan")
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def anomalies_scan(payload: AnomalyScanRequest) -> dict:
     """Scan for operational cost anomalies (retry storms, spend spikes) → incident + auto-lite."""
     from .services import anomaly_detector
@@ -21370,6 +21956,7 @@ def anomalies_scan(payload: AnomalyScanRequest) -> dict:
 
 
 @app.get("/v1/trace")
+@permit(P.OBSERVABILITY_READ, scope=Scope.of("code_task", query="run_id"))
 def trace_run(run_id: str) -> dict:
     """Reconstruct a code-task run's full timeline — the run + its fail-closed quality gate + every
     event referencing it (jobs, model/tool calls, receipts, decisions). The 'why did we do that'
@@ -21408,6 +21995,7 @@ def trace_run(run_id: str) -> dict:
 
 
 @app.get("/v1/policy-evals")
+@permit(P.POLICY_READ, scope=Scope.project(query="project_id"))
 def policy_evals_list(project_id: str, limit: int = 50, decision: Optional[str] = None) -> dict:
     """The policy-evaluation audit trail (allow/deny/defer at every enforcement boundary)."""
     clause = "AND decision = :decision" if decision else ""
@@ -21429,6 +22017,7 @@ def policy_evals_list(project_id: str, limit: int = 50, decision: Optional[str] 
 
 
 @app.get("/v1/budget/forecast", response_model=BudgetForecastResponse)
+@permit(P.BUDGET_READ, scope=Scope.project(query="scope_id"))
 def budget_forecast(
     scope_type: str,
     scope_id: str,
@@ -21446,6 +22035,7 @@ def budget_forecast(
 
 
 @app.post("/v1/budget/quote", response_model=BudgetQuoteResponse)
+@permit(P.BUDGET_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def quote_budget(payload: BudgetQuoteRequest) -> BudgetQuoteResponse:
     with begin(engine) as connection:
         result = budget.quote(
@@ -21459,6 +22049,7 @@ def quote_budget(payload: BudgetQuoteRequest) -> BudgetQuoteResponse:
 
 
 @app.post("/v1/budget/reserve", response_model=BudgetReserveResponse, status_code=201)
+@permit(P.SPEND_RESERVE)
 def reserve_budget(payload: BudgetReserveRequest) -> BudgetReserveResponse:
     with begin(engine) as connection:
         actor = current_api_principal.get() or "ceo"
@@ -21477,6 +22068,7 @@ def reserve_budget(payload: BudgetReserveRequest) -> BudgetReserveResponse:
 
 
 @app.post("/v1/budget/release", response_model=BudgetReleaseResponse)
+@permit(P.SPEND_RESERVE)
 def release_budget(payload: BudgetReleaseRequest) -> BudgetReleaseResponse:
     with begin(engine) as connection:
         actor = current_api_principal.get() or "ceo"
@@ -21491,6 +22083,7 @@ def release_budget(payload: BudgetReleaseRequest) -> BudgetReleaseResponse:
 
 
 @app.post("/v1/budget/consume", response_model=BudgetConsumeResponse)
+@permit(P.SPEND_RESERVE)
 def consume_budget(payload: BudgetConsumeRequest) -> BudgetConsumeResponse:
     with begin(engine) as connection:
         require_project_actor(
@@ -21557,6 +22150,7 @@ def require_worker_principal() -> None:
 
 
 @app.post("/v1/worker/poll", response_model=WorkerPollResponse)
+@permit(P.WORKER_LEASE)
 def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
     require_worker_principal()
     with begin(engine) as connection:
@@ -21572,6 +22166,7 @@ def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
 
 
 @app.post("/v1/workers/register")
+@permit(P.WORKER_LEASE)
 def register_worker(payload: WorkerRegistrationRequest) -> dict[str, Any]:
     with begin(engine) as connection:
         require_project_actor(connection, payload.project_id, payload.actor, "command_submit")
@@ -21582,6 +22177,7 @@ def register_worker(payload: WorkerRegistrationRequest) -> dict[str, Any]:
 
 
 @app.get("/v1/workers")
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def list_workers(project_id: str) -> dict[str, Any]:
     with begin(engine) as connection:
         require_project_reader(connection, project_id)
@@ -21589,6 +22185,7 @@ def list_workers(project_id: str) -> dict[str, Any]:
 
 
 @app.post("/v1/worker/heartbeat", response_model=WorkerHeartbeatResponse)
+@permit(P.WORKER_LEASE)
 def worker_heartbeat(payload: WorkerHeartbeatRequest) -> WorkerHeartbeatResponse:
     require_worker_principal()
     with begin(engine) as connection:
@@ -21607,6 +22204,7 @@ def worker_heartbeat(payload: WorkerHeartbeatRequest) -> WorkerHeartbeatResponse
 
 
 @app.post("/v1/worker/complete", response_model=WorkerCompleteResponse)
+@permit(P.WORKER_LEASE)
 def worker_complete(payload: WorkerCompleteRequest) -> WorkerCompleteResponse:
     require_worker_principal()
     with begin(engine) as connection:
@@ -21624,6 +22222,7 @@ def worker_complete(payload: WorkerCompleteRequest) -> WorkerCompleteResponse:
 
 
 @app.post("/v1/worker/fail", response_model=WorkerFailResponse)
+@permit(P.WORKER_LEASE)
 def worker_fail(payload: WorkerFailRequest) -> WorkerFailResponse:
     require_worker_principal()
     with begin(engine) as connection:
@@ -21643,6 +22242,7 @@ def worker_fail(payload: WorkerFailRequest) -> WorkerFailResponse:
 
 
 @app.get("/v1/decisions/inbox", response_model=DecisionInboxResponse)
+@permit(P.DECISION_READ, scope=Scope.project(query="project_id"))
 def decision_inbox(
     project_id: str, limit: Optional[int] = None, offset: int = 0
 ) -> DecisionInboxResponse:
@@ -21692,6 +22292,7 @@ def decision_inbox(
 
 
 @app.get("/v1/decisions/{decision_id}", response_model=DecisionCard)
+@permit(P.DECISION_READ, scope=Scope.of("decision", path="decision_id"))
 def get_decision(decision_id: str, project_id: Optional[str] = None) -> DecisionCard:
     with begin(engine) as connection:
         params: dict[str, Any] = {"decision_id": decision_id}
@@ -21722,6 +22323,7 @@ def get_decision(decision_id: str, project_id: Optional[str] = None) -> Decision
 
 
 @app.post("/v1/decisions/digests", response_model=DecisionDigestResponse, status_code=201)
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def create_decision_digest(payload: DecisionDigestRequest) -> DecisionDigestResponse:
     with begin(engine) as connection:
         require_project_actor(
@@ -21769,6 +22371,7 @@ def create_decision_digest(payload: DecisionDigestRequest) -> DecisionDigestResp
 
 
 @app.post("/v1/decisions/{decision_id}/approve", response_model=DecisionCard)
+@permit(P.DECISION_APPROVE, scope=Scope.of("decision", path="decision_id"))
 def approve_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
@@ -21806,6 +22409,7 @@ def approve_decision(
 
 
 @app.post("/v1/decisions/{decision_id}/reject", response_model=DecisionCard)
+@permit(P.DECISION_APPROVE, scope=Scope.of("decision", path="decision_id"))
 def reject_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
@@ -21834,6 +22438,7 @@ def reject_decision(
 
 
 @app.post("/v1/decisions/{decision_id}/revise", response_model=DecisionCard)
+@permit(P.DECISION_APPROVE, scope=Scope.of("decision", path="decision_id"))
 def revise_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
@@ -21864,6 +22469,7 @@ def revise_decision(
 
 
 @app.post("/v1/decisions/{decision_id}/delegate", response_model=DecisionCard)
+@permit(P.DECISION_DELEGATE, scope=Scope.of("decision", path="decision_id"))
 def delegate_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
@@ -21894,6 +22500,7 @@ def delegate_decision(
 
 
 @app.post("/v1/decisions/{decision_id}/execute", response_model=DecisionCard)
+@permit(P.DECISION_EXECUTE, scope=Scope.of("decision", path="decision_id"))
 def execute_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
@@ -21925,6 +22532,7 @@ def execute_decision(
 
 
 @app.post("/v1/openai/plans", response_model=OpenAIPlanResponse)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_openai_plan(payload: OpenAIPlanRequest) -> OpenAIPlanResponse:
     with begin(engine) as connection:
         try:
@@ -21945,6 +22553,7 @@ def create_openai_plan(payload: OpenAIPlanRequest) -> OpenAIPlanResponse:
 
 
 @app.post("/v1/software-factory/proposals", response_model=PullRequestProposalResponse)
+@permit(P.CODE_TASK_CREATE, scope=Scope.project(body="project_id"))
 def create_pull_request_proposal(
     payload: PullRequestProposalRequest,
 ) -> PullRequestProposalResponse:
@@ -21976,6 +22585,7 @@ def create_pull_request_proposal(
     "/v1/pipeline-config/proposals",
     response_model=CIConfigProposalResponse,
 )
+@permit(P.PIPELINE_MANAGE, scope=Scope.project(body="project_id"))
 def propose_ci_config(
     payload: CIConfigProposalRequest,
 ) -> CIConfigProposalResponse:
@@ -22036,6 +22646,7 @@ def propose_ci_config(
 
 
 @app.post("/v1/software-factory/merges", response_model=PullRequestMergeResponse)
+@permit(P.GITHUB_MERGE, scope=Scope.project(body="project_id"))
 def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResponse:
     with begin(engine) as connection:
         require_project_actor(
@@ -22063,6 +22674,7 @@ def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResp
 @app.post(
     "/v1/software-factory/deployments", response_model=SandboxDeploymentResponse
 )
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
 def create_sandbox_deployment(
     payload: SandboxDeploymentRequest,
 ) -> SandboxDeploymentResponse:
@@ -22094,6 +22706,7 @@ def create_sandbox_deployment(
     "/v1/software-factory/rollouts",
     response_model=DeploymentRolloutListResponse,
 )
+@permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def list_deployment_rollouts(
     project_id: str = Query(...),
     limit: int = Query(default=20, ge=1, le=100),
@@ -22111,6 +22724,7 @@ def list_deployment_rollouts(
     response_model=InfraProvisionReviewResponse,
     status_code=201,
 )
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def request_infra_provision_review(
     payload: InfraProvisionReviewRequest,
 ) -> InfraProvisionReviewResponse:
@@ -22141,6 +22755,7 @@ def request_infra_provision_review(
 
 
 @app.post("/v1/infra/droplets", response_model=InfraProvisionResponse)
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def create_infra_droplet(payload: InfraProvisionRequest) -> InfraProvisionResponse:
     with begin(engine) as connection:
         require_project_actor(
@@ -22169,6 +22784,7 @@ def create_infra_droplet(payload: InfraProvisionRequest) -> InfraProvisionRespon
 
 
 @app.post("/v1/infra/droplets/queue", response_model=JobSummary, status_code=201)
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def queue_infra_droplet(payload: InfraProvisionJobRequest) -> JobSummary:
     with begin(engine) as connection:
         try:
@@ -22201,6 +22817,7 @@ def queue_infra_droplet(payload: InfraProvisionJobRequest) -> JobSummary:
 
 
 @app.get("/v1/infra/resources", response_model=InfraResourceListResponse)
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def list_infra_resources(
     project_id: str = Query(...),
     limit: int = Query(default=20, ge=1, le=200),
@@ -22217,6 +22834,7 @@ def list_infra_resources(
     "/v1/infra/resources/{resource_id}/terminate",
     response_model=InfraTerminationResponse,
 )
+@permit(P.INFRA_TERMINATE, scope=Scope.project(body="project_id"))
 def terminate_infra_resource(
     resource_id: str, payload: InfraTerminationRequest
 ) -> InfraTerminationResponse:
@@ -22248,6 +22866,7 @@ def terminate_infra_resource(
     response_model=JobSummary,
     status_code=201,
 )
+@permit(P.INFRA_TERMINATE, scope=Scope.project(body="project_id"))
 def queue_infra_resource_termination(
     resource_id: str, payload: InfraTerminationJobRequest
 ) -> JobSummary:
@@ -22277,6 +22896,7 @@ def queue_infra_resource_termination(
 
 
 @app.post("/v1/infra/janitor/run", response_model=InfraJanitorRunResponse)
+@permit(P.INFRA_TERMINATE, scope=Scope.project(body="project_id"))
 def run_infra_janitor(payload: InfraJanitorRunRequest) -> InfraJanitorRunResponse:
     with begin(engine) as connection:
         require_project_actor(
@@ -22295,6 +22915,7 @@ def run_infra_janitor(payload: InfraJanitorRunRequest) -> InfraJanitorRunRespons
 
 
 @app.post("/v1/software-factory/proposals/queue", response_model=JobSummary, status_code=201)
+@permit(P.CODE_TASK_CREATE, scope=Scope.project(body="project_id"))
 def queue_pull_request_proposal(
     payload: PullRequestProposalJobRequest,
 ) -> JobSummary:
@@ -22333,6 +22954,7 @@ def queue_pull_request_proposal(
 
 
 @app.post("/v1/software-factory/merges/queue", response_model=JobSummary, status_code=201)
+@permit(P.GITHUB_MERGE, scope=Scope.project(body="project_id"))
 def queue_pull_request_merge(
     payload: PullRequestMergeJobRequest,
 ) -> JobSummary:
@@ -22366,6 +22988,7 @@ def queue_pull_request_merge(
     response_model=JobSummary,
     status_code=201,
 )
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
 def queue_sandbox_deployment(payload: SandboxDeploymentJobRequest) -> JobSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -22394,6 +23017,7 @@ def queue_sandbox_deployment(payload: SandboxDeploymentJobRequest) -> JobSummary
 
 
 @app.get("/v1/events", response_model=EventFeedResponse)
+@permit(P.ACTIVITY_READ, scope=Scope.org())
 def event_feed(
     project_id: Optional[str] = None, limit: int = 50, offset: int = 0
 ) -> EventFeedResponse:
@@ -22422,6 +23046,7 @@ def event_feed(
 
 
 @app.get("/v1/deadletters", response_model=DeadletterListResponse)
+@permit(P.JOB_READ, scope=Scope.project(query="project_id"))
 def list_deadletters(
     project_id: str, limit: int = 50, offset: int = 0
 ) -> DeadletterListResponse:
@@ -22474,6 +23099,7 @@ def list_deadletters(
     "/v1/deadletters/classify",
     response_model=DeadletterClassifyResponse,
 )
+@permit(P.DEADLETTER_MANAGE, scope=Scope.project(body="project_id"))
 def classify_open_deadletters(
     payload: DeadletterClassifyRequest,
 ) -> DeadletterClassifyResponse:
@@ -22500,6 +23126,7 @@ def classify_open_deadletters(
     "/v1/deadletters/{deadletter_id}/incident",
     response_model=DeadletterIncidentResponse,
 )
+@permit(P.DEADLETTER_MANAGE, scope=Scope.of("deadletter", path="deadletter_id"))
 def create_deadletter_incident(
     deadletter_id: str, payload: DeadletterIncidentRequest
 ) -> DeadletterIncidentResponse:
@@ -22539,6 +23166,7 @@ def create_deadletter_incident(
     "/v1/deadletters/{deadletter_id}/requeue",
     response_model=DeadletterRequeueResponse,
 )
+@permit(P.DEADLETTER_MANAGE, scope=Scope.of("deadletter", path="deadletter_id"))
 def requeue_deadletter_job(
     deadletter_id: str, payload: DeadletterRequeueRequest
 ) -> DeadletterRequeueResponse:
@@ -22574,6 +23202,7 @@ def requeue_deadletter_job(
 
 
 @app.get("/v1/receipts", response_model=ReceiptListResponse)
+@permit(P.ACTIVITY_READ, scope=Scope.project(query="project_id"))
 def list_receipts(
     project_id: str, limit: int = 50, offset: int = 0
 ) -> ReceiptListResponse:
@@ -22593,6 +23222,7 @@ def list_receipts(
 
 
 @app.get("/v1/receipts/{dedupe_key}", response_model=ReceiptResponse)
+@permit(P.ACTIVITY_READ, scope=Scope.of("receipt", path="dedupe_key"))
 def get_receipt(dedupe_key: str) -> ReceiptResponse:
     with begin(engine) as connection:
         receipt = receipts.get_by_id_or_dedupe_key(
@@ -22605,6 +23235,7 @@ def get_receipt(dedupe_key: str) -> ReceiptResponse:
 
 
 @app.get("/v1/change-journal", response_model=ChangeJournalResponse)
+@permit(P.ACTIVITY_READ, scope=Scope.project(query="project_id"))
 def list_change_journal(
     project_id: str, limit: int = 25, offset: int = 0
 ) -> ChangeJournalResponse:
@@ -22620,6 +23251,7 @@ def list_change_journal(
 
 
 @app.get("/v1/change-journal/{artifact_id}", response_model=ChangeJournalDetail)
+@permit(P.ACTIVITY_READ, scope=Scope.project(query="project_id"))
 def get_change_journal_item(artifact_id: str, project_id: str) -> ChangeJournalDetail:
     with begin(engine) as connection:
         try:
@@ -22630,6 +23262,7 @@ def get_change_journal_item(artifact_id: str, project_id: str) -> ChangeJournalD
 
 
 @app.get("/v1/audit/summary", response_model=AuditSummaryResponse)
+@permit(P.ACTIVITY_READ, scope=Scope.project(query="project_id"))
 def summarize_audit_trail(project_id: str, actor: str = "ceo") -> AuditSummaryResponse:
     """The eight counts the console's audit panel shows, without the 192 MB export.
 
@@ -22652,6 +23285,7 @@ def summarize_audit_trail(project_id: str, actor: str = "ceo") -> AuditSummaryRe
 
 
 @app.get("/v1/audit/export", response_model=AuditExportResponse)
+@permit(P.ACTIVITY_EXPORT, scope=Scope.project(query="project_id"))
 def export_audit_trail(
     project_id: str,
     task_id: Optional[str] = None,
@@ -22713,6 +23347,7 @@ def export_audit_trail(
 
 
 @app.post("/v1/audit/replay-bundles", response_model=ReplayBundleResponse, status_code=201)
+@permit(P.ACTIVITY_EXPORT, scope=Scope.project(body="project_id"))
 def create_replay_bundle(payload: ReplayBundleRequest) -> ReplayBundleResponse:
     with begin(engine) as connection:
         try:
@@ -22748,6 +23383,7 @@ def create_replay_bundle(payload: ReplayBundleRequest) -> ReplayBundleResponse:
     response_model=ComplianceEvidenceBundleResponse,
     status_code=201,
 )
+@permit(P.ACTIVITY_EXPORT, scope=Scope.project(body="project_id"))
 def create_compliance_evidence_bundle(
     payload: ComplianceEvidenceBundleRequest,
 ) -> ComplianceEvidenceBundleResponse:
@@ -22814,6 +23450,7 @@ def raise_workflow_error(error: workflow_runtime.WorkflowError) -> None:
 # ── Email setup ───────────────────────────────────────────────────────────────
 
 @app.get("/v1/email/config")
+@permit(P.COMMS_READ, scope=Scope.project(query="project_id"))
 def get_email_config(project_id: str, actor: str = "executive_console") -> dict:
     """How this project sends email. Never returns the password — only whether one is set."""
     from boss_engine.services import email_config
@@ -22824,6 +23461,7 @@ def get_email_config(project_id: str, actor: str = "executive_console") -> dict:
 
 
 @app.post("/v1/email/config")
+@permit(P.COMMS_MANAGE, scope=Scope.project(body="project_id"))
 def set_email_config(payload: open_bodies.EmailConfigBody) -> dict:
     """Configure SMTP. The password goes to the secret backend, not into the row."""
     payload = payload.payload()
@@ -22854,6 +23492,7 @@ def set_email_config(payload: open_bodies.EmailConfigBody) -> dict:
 
 
 @app.post("/v1/email/test")
+@permit(P.COMMS_MANAGE, scope=Scope.project(body="project_id"))
 def test_email_config(payload: EmailTestRequest) -> dict:
     """Send a test through the governed outbox, with a receipt and a budget reservation."""
     from boss_engine.services import email_config
@@ -22971,6 +23610,7 @@ def test_email_config(payload: EmailTestRequest) -> dict:
 
 
 @app.get("/v1/delivery-workflows/schedules")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def list_workflow_schedules(project_id: str, actor: str = "executive_console") -> dict:
     from boss_engine.services import workflow_schedules as schedules
 
@@ -22980,6 +23620,7 @@ def list_workflow_schedules(project_id: str, actor: str = "executive_console") -
 
 
 @app.post("/v1/delivery-workflows/schedules", status_code=201)
+@permit(P.WORKFLOW_SCHEDULE_MANAGE, scope=Scope.project(body="project_id"))
 def create_workflow_schedule(payload: WorkflowScheduleBody) -> dict:
     payload = payload.payload()
     from boss_engine.services import workflow_schedules as schedules
@@ -23054,6 +23695,7 @@ def create_workflow_schedule(payload: WorkflowScheduleBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/schedules/{schedule_id}/enabled")
+@permit(P.WORKFLOW_SCHEDULE_MANAGE, scope=Scope.project(body="project_id"))
 def set_workflow_schedule_enabled(schedule_id: str, payload: WorkflowScheduleEnabledBody) -> dict:
     payload = payload.payload()
     from boss_engine.services import workflow_schedules as schedules
@@ -23075,6 +23717,7 @@ def set_workflow_schedule_enabled(schedule_id: str, payload: WorkflowScheduleEna
 
 
 @app.delete("/v1/delivery-workflows/schedules/{schedule_id}")
+@permit(P.WORKFLOW_SCHEDULE_MANAGE, scope=Scope.project(query="project_id"))
 def delete_workflow_schedule(schedule_id: str, project_id: str,
                              actor: str = "executive_console") -> dict:
     from boss_engine.services import workflow_schedules as schedules
@@ -23087,6 +23730,7 @@ def delete_workflow_schedule(schedule_id: str, project_id: str,
 
 
 @app.post("/v1/delivery-workflows/schedules/tick")
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def tick_workflow_schedules(payload: open_bodies.WorkflowSchedulesTickBody) -> dict:
     """Start whatever is due. Called by the worker on its ordinary poll.
 
@@ -23109,6 +23753,7 @@ def tick_workflow_schedules(payload: open_bodies.WorkflowSchedulesTickBody) -> d
 
 
 @app.get("/v1/delivery-workflows/capabilities")
+@permit(P.WORKFLOW_READ, scope=Scope.org())
 def list_delivery_capabilities(project_id: str | None = None) -> dict:
     """What a step can be. Feeds the builder palette and documents the risk floor."""
     from boss_engine.services.workflow_capabilities import (
@@ -23163,6 +23808,7 @@ def list_delivery_capabilities(project_id: str | None = None) -> dict:
 
 
 @app.get("/v1/delivery-workflows/custom-steps")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def list_delivery_custom_steps(project_id: str) -> dict:
     """A project's own steps, plus everything it could bind a new one to.
 
@@ -23251,6 +23897,7 @@ def _authorize_delivery_target_input(
 
 
 @app.post("/v1/delivery-workflows/custom-steps")
+@permit(P.WORKFLOW_CREATE, scope=Scope.project(body="project_id"))
 def create_delivery_custom_step(payload: WorkflowCustomStepBody) -> dict:
     """Define a step. The risk tier is NOT accepted from the caller — it is resolved from
     whatever the step binds, which is what stops "custom step" being a way around the floor."""
@@ -23284,6 +23931,7 @@ def create_delivery_custom_step(payload: WorkflowCustomStepBody) -> dict:
 
 
 @app.patch("/v1/delivery-workflows/custom-steps/{step_key}")
+@permit(P.WORKFLOW_CREATE, scope=Scope.project(body="project_id"))
 def update_delivery_custom_step(step_key: str, payload: WorkflowCustomStepUpdateBody) -> dict:
     """Change a step that exists, keeping its key.
 
@@ -23318,6 +23966,7 @@ def update_delivery_custom_step(step_key: str, payload: WorkflowCustomStepUpdate
 
 
 @app.delete("/v1/delivery-workflows/custom-steps/{step_key}")
+@permit(P.WORKFLOW_CREATE, scope=Scope.project(query="project_id"))
 def delete_delivery_custom_step(step_key: str, project_id: str, actor: Optional[str] = None) -> dict:
     from boss_engine.services import workflow_custom_steps as custom_steps
 
@@ -23331,6 +23980,7 @@ def delete_delivery_custom_step(step_key: str, project_id: str, actor: Optional[
 
 
 @app.get("/v1/delivery-workflows/catalogue")
+@permit(P.WORKFLOW_READ, scope=Scope.org())
 def list_delivery_catalogue() -> dict:
     """The workflows BOSS ships, with what each will need from a project.
 
@@ -23346,6 +23996,7 @@ def list_delivery_catalogue() -> dict:
 
 
 @app.post("/v1/delivery-workflows/catalogue/install")
+@permit(P.WORKFLOW_INSTALL, scope=Scope.project(body="project_id"))
 def install_delivery_catalogue(payload: ProjectBody) -> dict:
     """Install the catalogue into a project. Idempotent — safe to call on every boot."""
     payload = payload.payload()
@@ -23361,6 +24012,7 @@ def install_delivery_catalogue(payload: ProjectBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/apply")
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
 def apply_delivery_workflow(payload: WorkflowApplyBody) -> dict:
     """Point a class of work at a workflow.
 
@@ -23527,6 +24179,7 @@ def apply_delivery_workflow(payload: WorkflowApplyBody) -> dict:
 
 
 @app.get("/v1/delivery-workflows/costs")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def get_delivery_workflow_costs(project_id: str) -> dict:
     """What a run of each workflow has cost in this project, as a 20th–80th percentile range,
     and `@change` for a quick change with no workflow. From recorded model calls only; a
@@ -23538,6 +24191,7 @@ def get_delivery_workflow_costs(project_id: str) -> dict:
 
 
 @app.get("/v1/delivery-workflows/asks")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def get_delivery_workflow_asks(project_id: str) -> dict:
     """Every time the operator will be asked, per workflow and per route (@quick, @spec), in
     run order: {step_id, label, kind: gate|spec|merge, who: you|boss}. The console shows this
@@ -23549,6 +24203,7 @@ def get_delivery_workflow_asks(project_id: str) -> dict:
 
 
 @app.get("/v1/delivery-workflows/runs")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
     """Live and recent delivery runs, each with where it has got to.
 
@@ -23883,6 +24538,7 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
 
 
 @app.get("/v1/delivery-workflows/{workflow_key}/plan")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def get_delivery_workflow_plan(
     workflow_key: str, project_id: str, version: Optional[int] = None
 ) -> dict:
@@ -23915,6 +24571,7 @@ def get_delivery_workflow_plan(
 
 
 @app.get("/v1/delivery-workflows/{workflow_key}/spec")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def get_delivery_workflow_spec(workflow_key: str, project_id: str,
                                version: Optional[int] = None) -> dict:
     """The steps a workflow currently has, plus what it was forked from.
@@ -24027,6 +24684,7 @@ def _free_workflow_key(connection, project_id: str, name: str) -> str:
 
 
 @app.post("/v1/delivery-workflows/create")
+@permit(P.WORKFLOW_CREATE, scope=Scope.project(body="project_id"))
 def create_delivery_workflow(payload: WorkflowCreateBody) -> dict:
     """A new workflow, from scratch.
 
@@ -24053,6 +24711,7 @@ def create_delivery_workflow(payload: WorkflowCreateBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/fork")
+@permit(P.WORKFLOW_CREATE, scope=Scope.project(body="project_id"))
 def fork_delivery_workflow(payload: WorkflowForkBody) -> dict:
     """Copy a workflow into one the customer owns and can edit.
 
@@ -24112,6 +24771,7 @@ def fork_delivery_workflow(payload: WorkflowForkBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/save")
+@permit(P.WORKFLOW_CREATE, scope=Scope.project(body="project_id"))
 def save_delivery_workflow(payload: WorkflowSaveBody) -> dict:
     """Publish a new version of a customer's own workflow.
 
@@ -24204,6 +24864,7 @@ def _editor_namespace(connection, project_id: str, definition_id: Optional[str])
 
 
 @app.post("/v1/delivery-workflows/check")
+@permit(P.WORKFLOW_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def check_delivery_workflow(payload: WorkflowCheckBody) -> dict:
     """Everything Save would refuse, without saving — and the plan in numbers.
 
@@ -24224,6 +24885,7 @@ def check_delivery_workflow(payload: WorkflowCheckBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/publish")
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
 def publish_delivery_workflow(payload: WorkflowPublishBody):
     """Save what the editor holds: the next version of your workflow, a new one, or your copy.
 
@@ -24271,6 +24933,7 @@ def publish_delivery_workflow(payload: WorkflowPublishBody):
 
 
 @app.patch("/v1/delivery-workflows/{definition_id}")
+@permit(P.WORKFLOW_CREATE, scope=Scope.project(body="project_id"))
 def rename_delivery_workflow(definition_id: str, payload: WorkflowRenameBody):
     """Rename one of your workflows, or change its description. Publishes no version."""
     payload = payload.payload()
@@ -24302,6 +24965,7 @@ def rename_delivery_workflow(definition_id: str, payload: WorkflowRenameBody):
 
 
 @app.post("/v1/delivery-workflows/wire")
+@permit(P.WORKFLOW_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def wire_delivery_workflow(payload: WorkflowWireBody) -> dict:
     """Connect each unset required input to the nearest earlier step that makes it, else to a
     start-form field of that name. Returns the wired spec and what was connected; writes nothing.
@@ -24322,6 +24986,7 @@ def wire_delivery_workflow(payload: WorkflowWireBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/draft")
+@permit(P.WORKFLOW_CREATE, scope=Scope.project(body="project_id"))
 def draft_delivery_workflow(payload: WorkflowDraftBody):
     """Steps drafted from a sentence by the project's model, for the operator to review.
 
@@ -24352,6 +25017,7 @@ def draft_delivery_workflow(payload: WorkflowDraftBody):
 
 
 @app.delete("/v1/delivery-workflows/runs/{run_id}")
+@permit(P.WORKFLOW_RUN_DELETE, scope=Scope.project(query="project_id"))
 def delete_delivery_workflow_run(run_id: str, project_id: str,
                                  actor: str = "operator") -> dict:
     """Remove a finished run from the console.
@@ -24373,6 +25039,7 @@ def delete_delivery_workflow_run(run_id: str, project_id: str,
 
 
 @app.delete("/v1/delivery-workflows/{definition_id}")
+@permit(P.WORKFLOW_DELETE, scope=Scope.project(query="project_id"))
 def delete_delivery_workflow(definition_id: str, project_id: str,
                              actor: Optional[str] = None) -> dict:
     """Remove one of the customer's own workflows.
@@ -24401,6 +25068,7 @@ def delete_delivery_workflow(definition_id: str, project_id: str,
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/retry-step")
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
 def retry_delivery_step(run_id: str, payload: WorkflowRetryStepBody) -> dict:
     """Put a failed or dead-lettered step back in the queue.
 
@@ -24429,6 +25097,7 @@ def retry_delivery_step(run_id: str, payload: WorkflowRetryStepBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/skip-step")
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
 def skip_delivery_step(run_id: str, payload: WorkflowSkipStepBody) -> dict:
     """Skip a failed step and let the run proceed — the operator's decision, recorded.
 
@@ -24461,6 +25130,7 @@ def skip_delivery_step(run_id: str, payload: WorkflowSkipStepBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/recheck")
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
 def recheck_delivery_run(run_id: str, payload: WorkflowRecheckBody) -> dict:
     """Re-test what stopped this run, and put back whatever can now proceed.
 
@@ -24488,6 +25158,7 @@ def recheck_delivery_run(run_id: str, payload: WorkflowRecheckBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/deploy-target")
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(body="project_id"))
 def prepare_delivery_deploy_target(run_id: str, payload: WorkflowDeployTargetBody) -> dict:
     """Give this run somewhere to ship to, and point its deploy step at it.
 
@@ -24671,6 +25342,7 @@ def prepare_delivery_deploy_target(run_id: str, payload: WorkflowDeployTargetBod
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/input")
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
 def set_delivery_run_input(run_id: str, payload: WorkflowRunInputBody) -> dict:
     """Set a value the remaining steps will read — the deployment target, most of all.
 
@@ -24725,6 +25397,7 @@ def set_delivery_run_input(run_id: str, payload: WorkflowRunInputBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/start")
+@permit(P.WORKFLOW_RUN_START, scope=Scope.project(body="project_id"))
 def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
     """Launch a piece of work on a workflow."""
     payload = payload.payload()
@@ -25004,6 +25677,7 @@ def _delivery_readiness_or_409(
 
 
 @app.get("/v1/delivery-workflows/{workflow_key}/readiness")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def get_delivery_workflow_readiness(workflow_key: str, project_id: str,
                                     input: Optional[str] = None) -> dict:
     """What this workflow needs from this project, each item checked, with the fix.
@@ -25030,6 +25704,7 @@ def get_delivery_workflow_readiness(workflow_key: str, project_id: str,
 
 
 @app.get("/v1/delivery-workflows")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def list_delivery_workflows(project_id: str, include_retired: bool = False) -> dict:
     with begin(engine) as connection:
         return {
@@ -25043,6 +25718,7 @@ def list_delivery_workflows(project_id: str, include_retired: bool = False) -> d
 
 
 @app.post("/v1/delivery-workflows/run-capabilities")
+@permit(P.WORKER_LEASE)
 def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) -> dict:
     """Advance every product workflow that has work ready.
 
@@ -25074,6 +25750,7 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
 
 
 @app.get("/v1/workflows", response_model=WorkflowDefinitionListResponse)
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def list_workflow_definitions(
     project_id: str, include_retired: bool = False
 ) -> WorkflowDefinitionListResponse:
@@ -25087,6 +25764,7 @@ def list_workflow_definitions(
 
 
 @app.post("/v1/workflows", response_model=WorkflowDefinitionSummary, status_code=201)
+@permit(P.WORKFLOW_CREATE, scope=Scope.project(body="project_id"))
 def create_workflow_definition(
     payload: WorkflowDefinitionCreateRequest,
 ) -> WorkflowDefinitionSummary:
@@ -25117,6 +25795,7 @@ def create_workflow_definition(
 
 
 @app.get("/v1/workflows/{definition_id}", response_model=WorkflowDefinitionDetail)
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def get_workflow_definition(
     definition_id: str, project_id: str
 ) -> WorkflowDefinitionDetail:
@@ -25134,6 +25813,7 @@ def get_workflow_definition(
     response_model=WorkflowVersionSummary,
     status_code=201,
 )
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
 def publish_workflow_version(
     definition_id: str, payload: WorkflowVersionCreateRequest
 ) -> WorkflowVersionSummary:
@@ -25174,6 +25854,7 @@ def publish_workflow_version(
 
 
 @app.get("/v1/workflow-mappings", response_model=WorkflowMappingListResponse)
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def list_workflow_mappings(project_id: str) -> WorkflowMappingListResponse:
     with begin(engine) as connection:
         return WorkflowMappingListResponse(
@@ -25187,6 +25868,7 @@ def list_workflow_mappings(project_id: str) -> WorkflowMappingListResponse:
     response_model=WorkflowMappingSummary,
     status_code=201,
 )
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
 def create_workflow_mapping(payload: WorkflowMappingCreateRequest) -> WorkflowMappingSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -25211,6 +25893,7 @@ def create_workflow_mapping(payload: WorkflowMappingCreateRequest) -> WorkflowMa
 
 
 @app.post("/v1/workflow-mappings/{mapping_id}/repoint")
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
 def repoint_workflow_mapping(mapping_id: str, payload: ProjectBody) -> dict[str, Any]:
     """Point one mapping at its workflow's current version (workflows.repoint_mapping).
 
@@ -25233,6 +25916,7 @@ def repoint_workflow_mapping(mapping_id: str, payload: ProjectBody) -> dict[str,
 
 
 @app.post("/v1/workflow-mappings/resolve")
+@permit(P.WORKFLOW_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def resolve_workflow_mapping(payload: WorkflowMappingResolveRequest) -> dict[str, Any]:
     with begin(engine) as connection:
         require_project_actor(
@@ -25250,6 +25934,7 @@ def resolve_workflow_mapping(payload: WorkflowMappingResolveRequest) -> dict[str
 
 
 @app.get("/v1/workflow-runs", response_model=WorkflowRunListResponse)
+@permit(P.WORKFLOW_RUN_READ, scope=Scope.project(query="project_id"))
 def list_workflow_runs(
     project_id: str, status: Optional[str] = None, limit: int = 50
 ) -> WorkflowRunListResponse:
@@ -25266,6 +25951,7 @@ def list_workflow_runs(
 
 
 @app.post("/v1/workflow-runs", response_model=WorkflowRunSummary, status_code=201)
+@permit(P.WORKFLOW_RUN_START, scope=Scope.project(body="project_id"))
 def start_workflow_run(payload: WorkflowRunStartRequest) -> WorkflowRunSummary:
     with begin(engine) as connection:
         require_project_actor(
@@ -25305,6 +25991,7 @@ def start_workflow_run(payload: WorkflowRunStartRequest) -> WorkflowRunSummary:
 
 
 @app.get("/v1/workflow-runs/{run_id}", response_model=WorkflowRunDetail)
+@permit(P.WORKFLOW_RUN_READ, scope=Scope.project(query="project_id"))
 def get_workflow_run(run_id: str, project_id: str) -> WorkflowRunDetail:
     with begin(engine) as connection:
         stored_project = connection.execute(
@@ -25325,6 +26012,7 @@ def get_workflow_run(run_id: str, project_id: str) -> WorkflowRunDetail:
 
 
 @app.post("/v1/workflow-runs/{run_id}/advance", response_model=WorkflowRunDetail)
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
 def advance_workflow_run(
     run_id: str, payload: WorkflowRunActorRequest
 ) -> WorkflowRunDetail:
@@ -25341,6 +26029,7 @@ def advance_workflow_run(
 
 
 @app.post("/v1/workflow-runs/{run_id}/pause", response_model=WorkflowRunDetail)
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
 def pause_workflow_run(
     run_id: str, payload: WorkflowRunActorRequest
 ) -> WorkflowRunDetail:
@@ -25359,6 +26048,7 @@ def pause_workflow_run(
 
 
 @app.post("/v1/workflow-runs/{run_id}/resume", response_model=WorkflowRunDetail)
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
 def resume_workflow_run(
     run_id: str, payload: WorkflowRunActorRequest
 ) -> WorkflowRunDetail:
@@ -25377,6 +26067,7 @@ def resume_workflow_run(
 
 
 @app.post("/v1/workflow-runs/{run_id}/cancel", response_model=WorkflowRunDetail)
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
 def cancel_workflow_run(
     run_id: str, payload: WorkflowRunCancelRequest
 ) -> WorkflowRunDetail:
@@ -25403,6 +26094,7 @@ def cancel_workflow_run(
     "/v1/workflow-runs/{run_id}/steps/claim",
     response_model=Optional[WorkflowStepRunSummary],
 )
+@permit(P.WORKER_LEASE)
 def claim_workflow_step(
     run_id: str, payload: WorkflowStepClaimRequest
 ) -> Optional[WorkflowStepRunSummary]:
@@ -25427,6 +26119,7 @@ def claim_workflow_step(
     "/v1/workflow-step-runs/{step_run_id}/heartbeat",
     response_model=WorkflowStepRunSummary,
 )
+@permit(P.WORKER_LEASE)
 def heartbeat_workflow_step(
     step_run_id: str, payload: WorkflowStepHeartbeatRequest
 ) -> WorkflowStepRunSummary:
@@ -25452,6 +26145,7 @@ def heartbeat_workflow_step(
     "/v1/workflow-step-runs/{step_run_id}/complete",
     response_model=WorkflowStepRunSummary,
 )
+@permit(P.WORKER_LEASE)
 def complete_workflow_step(
     step_run_id: str, payload: WorkflowStepCompleteRequest
 ) -> WorkflowStepRunSummary:
@@ -25478,6 +26172,7 @@ def complete_workflow_step(
     "/v1/workflow-step-runs/{step_run_id}/fail",
     response_model=WorkflowStepRunSummary,
 )
+@permit(P.WORKER_LEASE)
 def fail_workflow_step(
     step_run_id: str, payload: WorkflowStepFailRequest
 ) -> WorkflowStepRunSummary:
@@ -25502,6 +26197,7 @@ def fail_workflow_step(
 
 
 @app.post("/v1/workflow-runs/{run_id}/migrate", response_model=WorkflowRunDetail)
+@permit(P.WORKFLOW_RUN_COMPENSATE, scope=Scope.project(body="project_id"))
 def migrate_workflow_run(
     run_id: str, payload: WorkflowRunMigrateRequest
 ) -> WorkflowRunDetail:
@@ -25528,6 +26224,7 @@ def migrate_workflow_run(
     "/v1/workflow-runs/{run_id}/migrations/rollback",
     response_model=WorkflowRunDetail,
 )
+@permit(P.WORKFLOW_RUN_COMPENSATE, scope=Scope.project(body="project_id"))
 def rollback_workflow_migration(
     run_id: str, payload: WorkflowMigrationRollbackRequest
 ) -> WorkflowRunDetail:
@@ -25550,6 +26247,7 @@ def rollback_workflow_migration(
 
 
 @app.post("/v1/workflow-runs/{run_id}/compensate", response_model=WorkflowRunDetail)
+@permit(P.WORKFLOW_RUN_COMPENSATE, scope=Scope.project(body="project_id"))
 def compensate_workflow_run(
     run_id: str, payload: WorkflowCompensationBeginRequest
 ) -> WorkflowRunDetail:
@@ -25572,6 +26270,7 @@ def compensate_workflow_run(
 
 
 @app.post("/v1/workflow-runs/{run_id}/compensations/claim")
+@permit(P.WORKER_LEASE)
 def claim_workflow_compensation(
     run_id: str, payload: WorkflowCompensationClaimRequest
 ) -> Optional[dict[str, Any]]:
@@ -25592,6 +26291,7 @@ def claim_workflow_compensation(
 
 
 @app.post("/v1/workflow-compensation-runs/{compensation_id}/complete")
+@permit(P.WORKER_LEASE)
 def complete_workflow_compensation(
     compensation_id: str, payload: WorkflowCompensationCompleteRequest
 ) -> dict[str, Any]:
@@ -25612,6 +26312,7 @@ def complete_workflow_compensation(
 
 
 @app.post("/v1/workflow-compensation-runs/{compensation_id}/fail")
+@permit(P.WORKER_LEASE)
 def fail_workflow_compensation(
     compensation_id: str, payload: WorkflowCompensationFailRequest
 ) -> dict[str, Any]:
@@ -25637,6 +26338,7 @@ def _raise_work_orchestration_error(error: Exception) -> None:
 
 
 @app.get("/v1/work-orchestration/overview")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def get_work_orchestration_overview(
     project_id: str = Query(...),
 ) -> dict[str, Any]:
@@ -25654,6 +26356,7 @@ def get_work_orchestration_overview(
 
 
 @app.post("/v1/work-orchestration/items")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def upsert_ranked_work_item(
     payload: WorkItemUpsertRequest,
 ) -> dict[str, Any]:
@@ -25720,6 +26423,7 @@ def upsert_ranked_work_item(
 
 
 @app.post("/v1/work-orchestration/items/{work_item_id}/admission")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def evaluate_work_admission(
     work_item_id: str, payload: WorkAdmissionRequest
 ) -> dict[str, Any]:
@@ -25742,6 +26446,7 @@ def evaluate_work_admission(
 
 
 @app.post("/v1/work-orchestration/score-preview")
+@permit(P.WORK_ITEM_READ, scope=Scope.org(), readonly_post=True)
 def preview_work_score(payload: WorkScorePreviewRequest) -> dict[str, Any]:
     """Deterministic priority_score + value_density preview (no DB write)."""
     try:
@@ -25761,6 +26466,7 @@ def preview_work_score(payload: WorkScorePreviewRequest) -> dict[str, Any]:
 
 
 @app.post("/v1/work-orchestration/quotas")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def upsert_resource_quota(
     payload: ResourceQuotaUpsertRequest,
 ) -> dict[str, Any]:
@@ -25799,6 +26505,7 @@ def upsert_resource_quota(
 
 
 @app.post("/v1/work-orchestration/allocations/plan")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def plan_resource_allocations(
     payload: ResourceAllocationPlanRequest,
 ) -> dict[str, Any]:
@@ -25818,6 +26525,7 @@ def plan_resource_allocations(
 
 
 @app.get("/v1/work-trackers/catalog")
+@permit(P.INTEGRATION_READ, scope=Scope.org())
 def work_tracker_catalog() -> dict[str, Any]:
     """Selectable bug/work trackers (GitHub Issues, reusing the repo connection, is the default
     option — skills-mcp spec E10)."""
@@ -25828,6 +26536,7 @@ def work_tracker_catalog() -> dict[str, Any]:
 
 
 @app.get("/v1/work-trackers")
+@permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
 def list_work_trackers(project_id: str) -> dict[str, Any]:
     """Installed tracker providers for a project. None is the default until one is connected
     (skills-mcp spec E10), and then `default_provider_key` says which."""
@@ -25845,6 +26554,7 @@ def list_work_trackers(project_id: str) -> dict[str, Any]:
 
 
 @app.post("/v1/work-trackers/connect")
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def connect_work_tracker(payload: open_bodies.WorkTrackerConnectBody) -> dict[str, Any]:
     """Connect/configure a tracker (Jira, Linear, GitHub Issues, Azure DevOps, Plane)."""
     payload = payload.payload()
@@ -25876,6 +26586,7 @@ def connect_work_tracker(payload: open_bodies.WorkTrackerConnectBody) -> dict[st
 
 
 @app.post("/v1/work-trackers/set-default")
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def set_default_work_tracker(payload: open_bodies.WorkTrackerDefaultBody) -> dict[str, Any]:
     """Select the project default work tracker (Plane remains seed default)."""
     payload = payload.payload()
@@ -25900,6 +26611,7 @@ def set_default_work_tracker(payload: open_bodies.WorkTrackerDefaultBody) -> dic
 
 
 @app.post("/v1/work-trackers/test")
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def test_work_tracker(payload: open_bodies.WorkTrackerTestBody) -> dict[str, Any]:
     """Test connectivity for a configured tracker without creating issues."""
     payload = payload.payload()
@@ -25923,6 +26635,7 @@ def test_work_tracker(payload: open_bodies.WorkTrackerTestBody) -> dict[str, Any
 
 
 @app.post("/v1/work-orchestration/tracker-bindings")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def upsert_work_tracker_binding(
     payload: WorkTrackerBindingUpsertRequest,
 ) -> dict[str, Any]:
@@ -25961,6 +26674,7 @@ def upsert_work_tracker_binding(
 
 
 @app.post("/v1/work-orchestration/tracker-sync/execute")
+@permit(P.WORKER_LEASE)
 def execute_work_tracker_sync(
     payload: WorkTrackerSyncExecuteRequest,
 ) -> dict[str, Any]:
@@ -26091,6 +26805,7 @@ def execute_work_tracker_sync(
 
 
 @app.post("/v1/work-orchestration/bot-identities")
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def upsert_delivery_bot_identity(
     payload: DeliveryBotIdentityUpsertRequest,
 ) -> dict[str, Any]:
@@ -26117,6 +26832,7 @@ def upsert_delivery_bot_identity(
 
 
 @app.post("/v1/work-orchestration/status-channels")
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def upsert_delivery_status_channel(
     payload: DeliveryStatusChannelUpsertRequest,
 ) -> dict[str, Any]:
@@ -26145,6 +26861,7 @@ def upsert_delivery_status_channel(
 
 
 @app.post("/v1/work-orchestration/presence-events")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def record_delivery_presence_event(
     payload: DeliveryPresenceEventCreateRequest,
 ) -> dict[str, Any]:
@@ -26203,7 +26920,9 @@ def _raise_agent_studio_error(error: Exception) -> None:
 
 
 @app.get("/v1/agent-studio/catalog")
+@permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
 def get_agent_studio_catalog(
+    request: Request,
     project_id: str = Query(...),
 ) -> dict[str, Any]:
     with begin(engine) as connection:
@@ -26214,7 +26933,7 @@ def get_agent_studio_catalog(
             # Flows the older Studio filed under the system namespace are moved to the product
             # namespace once, at startup (adopt_operator_made_workflows_everywhere), not here:
             # a read must not write, and Workflow lists them too without Studio being opened.
-            return {
+            return _withhold_sections(request, project_id, {
                 "project_id": project_id,
                 "agents": agent_studio.list_agents(connection, project_id),
                 "panels": agent_studio.list_panels(connection, project_id),
@@ -26237,7 +26956,7 @@ def get_agent_studio_catalog(
                     "messages": a2a.list_messages(connection, project_id, limit=100),
                     "health": a2a.health(connection, project_id),
                 },
-            }
+            }, "/v1/agent-studio/catalog")
         except (AgentStudioSchemaMissingError, ProgrammingError) as error:
             from .routers.agent_studio_seed import _schema_http_error
 
@@ -26245,6 +26964,7 @@ def get_agent_studio_catalog(
 
 
 @app.post("/v1/agent-studio/catalog-smoke")
+@permit(P.AGENT_TEST, scope=Scope.project(body="project_id"))
 def run_agent_studio_catalog_smoke(
     payload: AgentStudioActorRequest,
 ) -> dict[str, Any]:
@@ -26269,6 +26989,7 @@ def run_agent_studio_catalog_smoke(
 
 
 @app.post("/v1/agent-studio/catalog/seed")
+@permit(P.AGENT_UPDATE, scope=Scope.project(body="project_id"))
 def seed_agent_studio_catalog(
     payload: AgentStudioActorRequest,
 ) -> dict[str, Any]:
@@ -26286,6 +27007,7 @@ def seed_agent_studio_catalog(
 
 
 @app.post("/v1/agent-studio/workflows/validate")
+@permit(P.WORKFLOW_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def validate_agent_studio_workflow(
     payload: WorkflowDraftValidateRequest,
 ) -> dict[str, Any]:
@@ -26325,6 +27047,7 @@ def validate_agent_studio_workflow(
 
 
 @app.get("/v1/agent-studio/agents")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def list_agent_definitions(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(engine) as connection:
         return {
@@ -26334,6 +27057,7 @@ def list_agent_definitions(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @app.post("/v1/agent-studio/agents")
+@permit(P.AGENT_CREATE, scope=Scope.project(body="project_id"))
 def create_agent_definition(
     payload: AgentDefinitionCreateRequest,
 ) -> dict[str, Any]:
@@ -26356,6 +27080,7 @@ def create_agent_definition(
 
 
 @app.post("/v1/agent-studio/agents/{agent_id}/versions")
+@permit(P.AGENT_CREATE, scope=Scope.project(body="project_id"))
 def create_agent_version(
     agent_id: str, payload: AgentVersionCreateRequest
 ) -> dict[str, Any]:
@@ -26387,6 +27112,7 @@ def create_agent_version(
 
 
 @app.post("/v1/agent-studio/agent-versions/{version_id}/validate")
+@permit(P.AGENT_TEST, scope=Scope.project(body="project_id"))
 def validate_agent_version(
     version_id: str, payload: AgentStudioActorRequest
 ) -> dict[str, Any]:
@@ -26403,6 +27129,7 @@ def validate_agent_version(
 
 
 @app.post("/v1/agent-studio/agent-versions/{version_id}/publish")
+@permit(P.AGENT_PUBLISH, scope=Scope.project(body="project_id"))
 def publish_agent_version(
     version_id: str, payload: AgentStudioActorRequest
 ) -> dict[str, Any]:
@@ -26419,6 +27146,7 @@ def publish_agent_version(
 
 
 @app.post("/v1/agent-studio/agent-versions/{version_id}/tests")
+@permit(P.AGENT_TEST, scope=Scope.project(body="project_id"))
 def run_agent_version_test(
     version_id: str, payload: AgentTestRunRequest
 ) -> dict[str, Any]:
@@ -26440,6 +27168,7 @@ def run_agent_version_test(
 
 
 @app.post("/v1/agent-studio/agent-versions/{version_id}/runs")
+@permit(P.AGENT_TEST, scope=Scope.project(body="project_id"))
 def run_agent_version(
     version_id: str, payload: AgentStudioRunRequest
 ) -> dict[str, Any]:
@@ -26464,6 +27193,7 @@ def run_agent_version(
 
 
 @app.get("/v1/agent-studio/panels")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def list_panel_definitions(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(engine) as connection:
         return {
@@ -26473,6 +27203,7 @@ def list_panel_definitions(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @app.post("/v1/agent-studio/panels")
+@permit(P.AGENT_CREATE, scope=Scope.project(body="project_id"))
 def create_panel_definition(
     payload: PanelDefinitionCreateRequest,
 ) -> dict[str, Any]:
@@ -26496,6 +27227,7 @@ def create_panel_definition(
 
 
 @app.post("/v1/agent-studio/panels/{panel_id}/versions")
+@permit(P.AGENT_CREATE, scope=Scope.project(body="project_id"))
 def create_panel_version(
     panel_id: str, payload: PanelVersionCreateRequest
 ) -> dict[str, Any]:
@@ -26526,6 +27258,7 @@ def create_panel_version(
 
 
 @app.post("/v1/agent-studio/panel-versions/{version_id}/publish")
+@permit(P.AGENT_PUBLISH, scope=Scope.project(body="project_id"))
 def publish_panel_version(
     version_id: str, payload: AgentStudioActorRequest
 ) -> dict[str, Any]:
@@ -26542,6 +27275,7 @@ def publish_panel_version(
 
 
 @app.post("/v1/agent-studio/panel-versions/{version_id}/runs")
+@permit(P.AGENT_TEST, scope=Scope.project(body="project_id"))
 def run_panel_version(
     version_id: str, payload: PanelRunRequest
 ) -> dict[str, Any]:
@@ -26566,6 +27300,7 @@ def run_panel_version(
 
 
 @app.get("/v1/a2a/channels")
+@permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
 def list_a2a_channels(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(engine) as connection:
         return {
@@ -26575,6 +27310,7 @@ def list_a2a_channels(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @app.post("/v1/a2a/channels")
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def create_a2a_channel(payload: A2AChannelCreateRequest) -> dict[str, Any]:
     with begin(engine) as connection:
         require_project_actor(
@@ -26598,6 +27334,7 @@ def create_a2a_channel(payload: A2AChannelCreateRequest) -> dict[str, Any]:
 
 
 @app.post("/v1/a2a/subscriptions")
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def create_a2a_subscription(
     payload: A2ASubscriptionCreateRequest,
 ) -> dict[str, Any]:
@@ -26625,6 +27362,7 @@ def create_a2a_subscription(
 
 
 @app.post("/v1/a2a/messages")
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def publish_a2a_message(payload: A2AMessagePublishRequest) -> dict[str, Any]:
     with begin(engine) as connection:
         require_project_actor(
@@ -26661,6 +27399,7 @@ def publish_a2a_message(payload: A2AMessagePublishRequest) -> dict[str, Any]:
 
 
 @app.get("/v1/a2a/messages")
+@permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
 def list_a2a_messages(
     project_id: str = Query(...),
     limit: int = Query(100, ge=1, le=500),
@@ -26681,6 +27420,7 @@ def list_a2a_messages(
 
 
 @app.post("/v1/a2a/messages/{message_id}/cancel")
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def cancel_a2a_message(
     message_id: str, payload: A2AMessageCancelRequest
 ) -> dict[str, Any]:
@@ -26701,6 +27441,7 @@ def cancel_a2a_message(
 
 
 @app.post("/v1/a2a/messages/{message_id}/replay", status_code=201)
+@permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
 def replay_a2a_message(
     message_id: str, payload: A2AMessageReplayRequest
 ) -> dict[str, Any]:
@@ -26723,6 +27464,7 @@ def replay_a2a_message(
 
 
 @app.post("/v1/a2a/messages/{message_id}/dispatch")
+@permit(P.WORKER_LEASE)
 def dispatch_a2a_message(
     message_id: str, payload: A2ADispatchRequest
 ) -> dict[str, Any]:
@@ -26753,6 +27495,7 @@ def dispatch_a2a_message(
 
 
 @app.post("/v1/a2a/poll")
+@permit(P.WORKER_LEASE)
 def poll_a2a(payload: A2APollRequest) -> dict[str, Any]:
     with begin(engine) as connection:
         require_project_actor(
@@ -26775,6 +27518,7 @@ def poll_a2a(payload: A2APollRequest) -> dict[str, Any]:
 
 
 @app.post("/v1/a2a/deliveries/{delivery_id}/acknowledge")
+@permit(P.WORKER_LEASE)
 def acknowledge_a2a_delivery(
     delivery_id: str, payload: A2AAcknowledgeRequest
 ) -> dict[str, Any]:
@@ -26796,12 +27540,14 @@ def acknowledge_a2a_delivery(
 
 
 @app.get("/v1/a2a/health")
+@permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
 def get_a2a_health(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(engine) as connection:
         return a2a.health(connection, project_id)
 
 
 @app.get("/v1/a2a/audit")
+@permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
 def get_a2a_audit(
     project_id: str = Query(...), limit: int = Query(100, ge=1, le=500)
 ) -> dict[str, Any]:
@@ -26815,6 +27561,7 @@ def get_a2a_audit(
 
 
 @app.get("/v1/provider-slos", response_model=ProviderSloListResponse)
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
 def list_provider_slos(
     project_id: str,
     provider: Optional[str] = None,
@@ -26845,6 +27592,7 @@ def list_provider_slos(
 
 
 @app.post("/v1/provider-slos", response_model=ProviderSloSummary, status_code=201)
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def upsert_provider_slo(payload: ProviderSloUpsertRequest) -> ProviderSloSummary:
     """Create or update a provider SLO definition (BOSS-241 depth)."""
     with begin(engine) as connection:
@@ -26868,6 +27616,7 @@ def upsert_provider_slo(payload: ProviderSloUpsertRequest) -> ProviderSloSummary
 
 
 @app.post("/v1/provider-slos/evaluate", response_model=ProviderSloEvaluateResponse)
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def evaluate_provider_slos(payload: ProviderSloEvaluateRequest) -> ProviderSloEvaluateResponse:
     """Evaluate one or all provider SLOs for a project.
 
@@ -26955,6 +27704,7 @@ def _find_feature_entry(
 
 
 @app.get("/v1/features", response_model=FeatureCatalogListResponse)
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def list_features(project_id: str = Query(...)) -> FeatureCatalogListResponse:
     """List project-scoped feature catalog entries (TRACEABILITY + emergent)."""
     with begin(engine) as connection:
@@ -26967,6 +27717,7 @@ def list_features(project_id: str = Query(...)) -> FeatureCatalogListResponse:
 
 
 @app.post("/v1/features/seed", response_model=FeatureSeedResponse)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def seed_features(payload: FeatureSeedRequest) -> FeatureSeedResponse:
     """Seed the feature catalog from ``docs/product/TRACEABILITY.md`` when present."""
     with begin(engine) as connection:
@@ -27007,6 +27758,7 @@ def seed_features(payload: FeatureSeedRequest) -> FeatureSeedResponse:
     response_model=FeatureCatalogEntrySummary,
     status_code=201,
 )
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def upsert_feature(payload: FeatureUpsertRequest) -> FeatureCatalogEntrySummary:
     """Create or update a feature catalog entry. Mutations require an actor."""
     with begin(engine) as connection:
@@ -27039,6 +27791,7 @@ def upsert_feature(payload: FeatureUpsertRequest) -> FeatureCatalogEntrySummary:
 
 
 @app.get("/v1/features/{label}", response_model=FeatureCatalogEntrySummary)
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def get_feature(label: str, project_id: str = Query(...)) -> FeatureCatalogEntrySummary:
     """Fetch one feature catalog entry by requirement label (or slug/id fallback)."""
     with begin(engine) as connection:
@@ -27055,6 +27808,7 @@ def get_feature(label: str, project_id: str = Query(...)) -> FeatureCatalogEntry
     "/v1/features/{label}/documented",
     response_model=FeatureCatalogEntrySummary,
 )
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def mark_feature_documented(
     label: str, payload: FeatureDocumentedRequest
 ) -> FeatureCatalogEntrySummary:
@@ -27086,6 +27840,7 @@ def mark_feature_documented(
 
 
 @app.get("/v1/capability-manifest", response_model=CapabilityManifestResponse)
+@permit(P.SKILL_READ, scope=Scope.org())
 def get_capability_manifest(
     project_id: Optional[str] = None,
 ) -> CapabilityManifestResponse:
@@ -27118,6 +27873,7 @@ def get_capability_manifest(
 
 
 @app.get("/v1/capability-manifest/table")
+@permit(P.SKILL_READ, scope=Scope.org())
 def get_capability_manifest_table(
     request: Request,
     project_id: Optional[str] = None,
@@ -27159,6 +27915,7 @@ def _learning_example_item(row: dict) -> LearningExampleItem:
 
 
 @app.post("/v1/learning/examples", response_model=LearningExampleRecordResponse, status_code=201)
+@permit(P.ASSURANCE_RUN, scope=Scope.project(body="project_id"))
 def learning_record_example(payload: LearningExampleRecordRequest) -> LearningExampleRecordResponse:
     """Append one labeled example into the LearningLoop corpus for an agent."""
     with begin(engine) as connection:
@@ -27189,6 +27946,7 @@ def learning_record_example(payload: LearningExampleRecordRequest) -> LearningEx
 
 
 @app.get("/v1/learning/corpus", response_model=LearningCorpusResponse)
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
 def learning_corpus(
     project_id: str = Query(..., min_length=1),
     agent: str = Query(..., min_length=1),
@@ -27221,6 +27979,7 @@ def learning_corpus(
 
 
 @app.get("/v1/learning/evaluate", response_model=LearningEvaluateResponse)
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
 def learning_evaluate(
     project_id: str = Query(..., min_length=1),
     agent: str = Query(..., min_length=1),
@@ -27246,6 +28005,7 @@ def learning_evaluate(
 
 
 @app.post("/v1/learning/suggest-tuning", response_model=LearningSuggestTuningResponse)
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def learning_suggest_tuning(payload: LearningSuggestTuningRequest) -> LearningSuggestTuningResponse:
     """Propose threshold raises and few-shot candidates from the LearningLoop corpus."""
     with begin(engine) as connection:
@@ -27268,6 +28028,7 @@ def learning_suggest_tuning(payload: LearningSuggestTuningRequest) -> LearningSu
 
 # ── IntentRouter (classify + route) ──────────────────────────────────────────
 @app.post("/v1/intent/classify", response_model=IntentClassifyResponse)
+@permit(P.ASSISTANT_CHAT, scope=Scope.org())
 def intent_classify(payload: IntentClassifyRequest) -> IntentClassifyResponse:
     """Deterministic intent classification without actuating any capability."""
     name, arguments = intent_router.classify_message(payload.message)
@@ -27281,6 +28042,7 @@ def intent_classify(payload: IntentClassifyRequest) -> IntentClassifyResponse:
 
 
 @app.post("/v1/intent/route", response_model=IntentRouteResponse)
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"))
 def intent_route(payload: IntentRouteRequest) -> IntentRouteResponse:
     """Route one chat turn through IntentRouter (capability-gated, may actuate)."""
     with begin(engine) as connection:
@@ -27312,6 +28074,7 @@ def intent_route(payload: IntentRouteRequest) -> IntentRouteResponse:
 
 # ── Telemetry connectors + change-correlation (direct HTTP, not reliability scan) ─
 @app.get("/v1/telemetry/connectors/catalog", response_model=TelemetryConnectorCatalogResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.org())
 def telemetry_connectors_catalog() -> TelemetryConnectorCatalogResponse:
     """List connector kinds BOSS can construct (prometheus/loki/grafana/…).
 
@@ -27332,6 +28095,7 @@ def telemetry_connectors_catalog() -> TelemetryConnectorCatalogResponse:
 
 
 @app.post("/v1/telemetry/query", response_model=TelemetryQueryResponse)
+@permit(P.RELIABILITY_MANAGE, scope=Scope.project(body="project_id"))
 def telemetry_query(payload: TelemetryQueryRequest) -> TelemetryQueryResponse:
     """Query a telemetry connector for metrics|logs|traces|alerts.
 
@@ -27369,6 +28133,7 @@ def telemetry_query(payload: TelemetryQueryRequest) -> TelemetryQueryResponse:
 
 
 @app.post("/v1/change-correlation/correlate", response_model=ChangeCorrelateResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def change_correlation_correlate(payload: ChangeCorrelateRequest) -> ChangeCorrelateResponse:
     """Rank recent deploys/PRs near an incident onset or service window (RB-17).
 
@@ -27407,6 +28172,7 @@ def change_correlation_correlate(payload: ChangeCorrelateRequest) -> ChangeCorre
     "/v1/model-gateway/rate-limits",
     response_model=ModelRateLimitsResponse,
 )
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.org())
 def get_model_gateway_rate_limits(
     project_id: Optional[str] = None,
 ) -> ModelRateLimitsResponse:
@@ -27429,6 +28195,7 @@ def get_model_gateway_rate_limits(
     "/v1/model-gateway/rate-limits/report",
     response_model=ModelRateLimitReportResponse,
 )
+@permit(P.SYSTEM_OPERATE, scope=Scope.org())
 def report_model_gateway_rate_limit(
     payload: ModelRateLimitReportRequest,
 ) -> ModelRateLimitReportResponse:
@@ -27460,6 +28227,7 @@ def report_model_gateway_rate_limit(
     "/v1/pipeline-adapters/catalog",
     response_model=PipelineAdapterCatalogResponse,
 )
+@permit(P.CICD_READ, scope=Scope.org())
 def get_pipeline_adapters_catalog() -> PipelineAdapterCatalogResponse:
     """Read-only discovery of pipeline adapter kinds/capabilities (no secrets)."""
     from boss_engine.services.pipeline_adapter import pipeline_adapter_catalog
@@ -27471,6 +28239,7 @@ def get_pipeline_adapters_catalog() -> PipelineAdapterCatalogResponse:
 
 
 @app.post("/v1/ci-config/generate", response_model=CIConfigGenerateResponse)
+@permit(P.CICD_MANAGE, scope=Scope.org())
 def ci_config_generate(payload: CIConfigGenerateRequest) -> CIConfigGenerateResponse:
     """Dry-run CI config generation — no PR, no provider write, no credentials.
 
@@ -27489,6 +28258,7 @@ def ci_config_generate(payload: CIConfigGenerateRequest) -> CIConfigGenerateResp
 
 
 @app.post("/v1/redaction/redact", response_model=RedactResponse)
+@permit(P.ASSURANCE_READ, scope=Scope.org(), readonly_post=True)
 def redaction_redact(payload: RedactRequest) -> RedactResponse:
     """Deterministic PII/secret redaction for data-boundary crossings."""
     from boss_engine.services.redaction import has_pii, redact
@@ -27503,6 +28273,7 @@ def redaction_redact(payload: RedactRequest) -> RedactResponse:
 
 
 @app.get("/v1/platform-standards", response_model=PlatformStandardsCatalogResponse)
+@permit(P.POLICY_READ, scope=Scope.org())
 def platform_standards_catalog(project_id: str = "") -> PlatformStandardsCatalogResponse:
     """List BOSS platform standards that agents must apply when building apps.
 
@@ -27547,6 +28318,7 @@ def platform_standards_catalog(project_id: str = "") -> PlatformStandardsCatalog
     "/v1/platform-standards/apply",
     response_model=PlatformStandardsApplyResponse,
 )
+@permit(P.POLICY_READ, scope=Scope.org(), readonly_post=True)
 def platform_standards_apply(
     payload: PlatformStandardsApplyRequest,
 ) -> PlatformStandardsApplyResponse:
@@ -27569,6 +28341,7 @@ def platform_standards_apply(
 
 
 @app.post("/v1/telemetry/mine", response_model=TelemetryMineResponse)
+@permit(P.RELIABILITY_READ, scope=Scope.org(), readonly_post=True)
 def telemetry_mine(payload: TelemetryMineRequest) -> TelemetryMineResponse:
     """Model-free log/metric distillation: templates + anomaly signals (RB-1/RB-3)."""
     from boss_engine.services.telemetry_mining import mine
@@ -27607,6 +28380,7 @@ def telemetry_mine(payload: TelemetryMineRequest) -> TelemetryMineResponse:
     "/v1/verification-target/profile",
     response_model=VerificationTargetProfileResponse,
 )
+@permit(P.ASSURANCE_READ, scope=Scope.org(), readonly_post=True)
 def verification_target_profile(
     payload: VerificationTargetProfileRequest,
 ) -> VerificationTargetProfileResponse:
@@ -27627,6 +28401,7 @@ def verification_target_profile(
 
 
 @app.get("/v1/aws/metal/types", response_model=AwsMetalTypesResponse)
+@permit(P.INFRA_READ, scope=Scope.org())
 def aws_metal_types(
     region: Optional[str] = Query(default=None),
 ) -> AwsMetalTypesResponse:
@@ -27643,6 +28418,7 @@ def aws_metal_types(
 
 
 @app.post("/v1/aws/metal/classify", response_model=AwsMetalClassifyResponse)
+@permit(P.INFRA_READ, scope=Scope.org(), readonly_post=True)
 def aws_metal_classify(
     payload: AwsMetalClassifyRequest,
 ) -> AwsMetalClassifyResponse:
@@ -27657,6 +28433,7 @@ def aws_metal_classify(
 
 
 @app.post("/v1/verifier-debate/run", response_model=VerifierDebateResponse)
+@permit(P.ASSURANCE_READ, scope=Scope.org(), readonly_post=True)
 def verifier_debate_run(payload: VerifierDebateRequest) -> VerifierDebateResponse:
     """Bounded generator↔verifier debate with scripted turns (zero model cost).
 
@@ -27712,6 +28489,7 @@ def verifier_debate_run(payload: VerifierDebateRequest) -> VerifierDebateRespons
 
 
 @app.post("/v1/design-prompts/product", response_model=DesignPromptResponse)
+@permit(P.ASSURANCE_READ, scope=Scope.org(), readonly_post=True)
 def design_prompts_product(payload: DesignPromptRequest) -> DesignPromptResponse:
     """Build product_design / design-axis prompt clauses for UI-bearing tasks."""
     from boss_engine.services.design_prompts import (
@@ -27831,6 +28609,7 @@ def _instructions_for(project_id: str, role_key: str, mode: str) -> list[dict[st
 
 
 @app.get("/v1/agents/identities")
+@permit(P.AGENT_PASSPORT_READ, scope=Scope.project(query="project_id"))
 def agent_identities_endpoint(project_id: str, request: Request):
     """Every agent's face and name, plus the alias table, for the one web resolver. ETag'd."""
     import hashlib
@@ -27850,6 +28629,7 @@ def agent_identities_endpoint(project_id: str, request: Request):
 
 
 @app.get("/v1/agents/{role_key}/passport")
+@permit(P.AGENT_PASSPORT_READ, scope=Scope.project(query="project_id"))
 def agent_passport_endpoint(role_key: str, project_id: str):
     from boss_engine.services import agent_identity
 
@@ -27862,6 +28642,7 @@ def agent_passport_endpoint(role_key: str, project_id: str):
 
 
 @app.post("/v1/agents/{role_key}/lifecycle")
+@permit(P.AGENT_LIFECYCLE, scope=Scope.project(body="project_id"))
 def agent_lifecycle_endpoint(role_key: str, body: AgentLifecycleBody):
     """Pause, resume or retire. The sponsor, or an owner (a CEO member), and nobody else."""
     from boss_engine.services import agent_identity
@@ -27886,6 +28667,7 @@ def agent_lifecycle_endpoint(role_key: str, body: AgentLifecycleBody):
 
 
 @app.get("/v1/agents/{role_key}/card")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def agent_card_endpoint(role_key: str, project_id: str):
     """A2A Agent Card v1.0 + x-boss. Unsigned; carries no repos, servers or costs."""
     from boss_engine.services import agent_identity
@@ -27899,6 +28681,7 @@ def agent_card_endpoint(role_key: str, project_id: str):
 
 
 @app.post("/v1/agents/{role_key}/persona/draft")
+@permit(P.AGENT_CREATE, scope=Scope.project(body="project_id"))
 def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody):
     """`Draft it`: one model call in the agent's own composed voice. Saves nothing."""
     from boss_engine.services import agent_voice
@@ -27931,6 +28714,7 @@ def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody):
 
 
 @app.post("/v1/agents/{role_key}/test")
+@permit(P.AGENT_TEST, scope=Scope.project(body="project_id"))
 def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
     """`Test`: a probe, answered through the agent's exact composed prompt, streamed as SSE.
 
@@ -28028,6 +28812,7 @@ def _acts_viewer(viewer: Optional[str]) -> Optional[str]:
 
 
 @app.get("/v1/agents/live")
+@permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
 def agents_live(project_id: str, request: Request, response: Response):
     """Who is working, in a panel, or waiting on you right now. ETag'd for a cheap 4s poll.
 
@@ -28051,10 +28836,13 @@ def agents_live(project_id: str, request: Request, response: Response):
         return Response(status_code=304, headers={"ETag": etag})
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "no-cache"
-    return {"project_id": project_id, "items": live["items"], "attention": attention}
+    return _withhold_sections(request, project_id,
+                              {"project_id": project_id, "items": live["items"], "attention": attention},
+                              "/v1/agents/live")
 
 
 @app.get("/v1/agents/live-board")
+@permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
 def agents_live_board_endpoint(project_id: str, request: Request, response: Response,
                                viewer: Optional[str] = None):
     """Agents › Live in one read: what needs you, what is moving, what got done, who is idle
@@ -28067,6 +28855,7 @@ def agents_live_board_endpoint(project_id: str, request: Request, response: Resp
         require_project_reader(connection, project_id)
         board = agents_live_board.build(connection, settings, project_id,
                                         viewer=_acts_viewer(viewer))
+    board = _withhold_sections(request, project_id, board, "/v1/agents/live-board")
     if request.headers.get("if-none-match") == board["etag"]:
         return Response(status_code=304, headers={"ETag": board["etag"]})
     response.headers["ETag"] = board["etag"]
@@ -28075,6 +28864,7 @@ def agents_live_board_endpoint(project_id: str, request: Request, response: Resp
 
 
 @app.get("/v1/agents/org-board")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def agents_org_board_endpoint(project_id: str, request: Request, response: Response,
                               days: int = 7, fresh: bool = False,
                               viewer: Optional[str] = None):
@@ -28096,6 +28886,7 @@ def agents_org_board_endpoint(project_id: str, request: Request, response: Respo
 
 
 @app.get("/v1/agents/org-board/handoffs")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def agents_org_board_handoffs(project_id: str, days: int = 7, source: str = "",
                               target: str = "", limit: int = 10):
     """The newest handoffs along one Organization edge (the Edge panel): `source` and `target`
@@ -28130,6 +28921,7 @@ def _etagged(request: Request, response: Response, body: dict):
 
 
 @app.get("/v1/factory/floor")
+@permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
 def factory_floor_endpoint(project_id: str, request: Request, response: Response,
                            viewer: Optional[str] = None):
     """What needs you, what is building, what shipped, what stopped (§6.2). ETag'd: the Floor
@@ -28140,10 +28932,12 @@ def factory_floor_endpoint(project_id: str, request: Request, response: Response
     with begin(engine) as connection:
         require_project_reader(connection, project_id)
         body = factory_view.floor(connection, settings, project_id, viewer=_acts_viewer(viewer))
-    return _etagged(request, response, jsonable_encoder(body))
+    body = _withhold_sections(request, project_id, jsonable_encoder(body), "/v1/factory/floor")
+    return _etagged(request, response, body)
 
 
 @app.get("/v1/factory/apps")
+@permit(P.CODE_TASK_READ, scope=Scope.project(query="project_id"))
 def factory_apps_endpoint(project_id: str, request: Request, response: Response,
                           viewer: Optional[str] = None):
     """Every app, where it runs, how it got there: one row per app, grouped by identity."""
@@ -28157,6 +28951,7 @@ def factory_apps_endpoint(project_id: str, request: Request, response: Response,
 
 
 @app.get("/v1/code-tasks/{run_id}/cockpit")
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def code_task_cockpit_endpoint(run_id: str, request: Request, response: Response,
                                project_id: Optional[str] = None, viewer: Optional[str] = None):
     """One build, whole: its state, its line of stations, its story and its outputs (§6.3).
@@ -28176,6 +28971,7 @@ def code_task_cockpit_endpoint(run_id: str, request: Request, response: Response
 
 
 @app.get("/v1/code-tasks/{run_id}/acts")
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def code_task_acts_endpoint(run_id: str, viewer: Optional[str] = None) -> dict:
     """A build's signed work, oldest first — for any build, inline ones included (§6.4)."""
     from boss_engine.services import agent_acts
@@ -28188,6 +28984,7 @@ def code_task_acts_endpoint(run_id: str, viewer: Optional[str] = None) -> dict:
 
 
 @app.get("/v1/code-tasks/{run_id}/chain")
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def code_task_chain_endpoint(run_id: str, viewer: Optional[str] = None) -> dict:
     """ONE BUILD'S chain, in the workflow run chain's shape (acts, totals, credits), so the
     cockpit's Credits credit this build's agents — not the workflow run around it."""
@@ -28203,6 +29000,7 @@ def code_task_chain_endpoint(run_id: str, viewer: Optional[str] = None) -> dict:
 
 
 @app.get("/v1/code-tasks/{run_id}/gates")
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def code_task_gates_endpoint(run_id: str) -> dict:
     """The build's latest quality gate: each gate with its one label and owner station."""
     from boss_engine.services import factory_view
@@ -28230,6 +29028,7 @@ def code_task_gates_endpoint(run_id: str) -> dict:
 
 
 @app.get("/v1/code-tasks/{run_id}/review-comments")
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def code_task_review_comments_endpoint(run_id: str, status: str = "all") -> dict:
     """Every review comment on a build — the panel's and people's — each once."""
     from boss_engine.services.code_task_service import load_code_task_run, review_comments_of
@@ -28251,6 +29050,7 @@ class ReviewCommentResolveBody(BaseModel):
 
 
 @app.post("/v1/code-tasks/{run_id}/review-comments/{comment_id}/resolve")
+@permit(P.CODE_TASK_STEER, scope=Scope.of("code_task", path="run_id"))
 def code_task_review_comment_resolve_endpoint(run_id: str, comment_id: str,
                                               payload: ReviewCommentResolveBody) -> dict:
     """Mark one comment addressed or dismissed. A dismissal is recorded, never erased."""
@@ -28278,6 +29078,7 @@ class CodeTaskCancelBody(BaseModel):
 
 
 @app.post("/v1/code-tasks/{run_id}/cancel")
+@permit(P.CODE_TASK_CANCEL, scope=Scope.of("code_task", path="run_id"))
 def code_task_cancel_endpoint(run_id: str, payload: CodeTaskCancelBody) -> dict:
     """Stop a build: the run, its queued job and its open acts together (§6.5). 409 when it
     already ended. Keeps the work so far; Retry resumes it."""
@@ -28305,6 +29106,7 @@ def code_task_cancel_endpoint(run_id: str, payload: CodeTaskCancelBody) -> dict:
 
 
 @app.get("/v1/agents/activity")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def agents_activity(project_id: str, cursor: Optional[str] = None, limit: int = 50,
                     kinds: Optional[str] = None, role: Optional[str] = None,
                     run: Optional[str] = None, parent: Optional[str] = None, days: int = 1,
@@ -28329,6 +29131,7 @@ def agents_activity(project_id: str, cursor: Optional[str] = None, limit: int = 
 
 
 @app.get("/v1/acts/{act_id}/tools")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def signed_act_tools(act_id: str, project_id: str, limit: int = 50) -> dict:
     """The tool calls under one act: name, ok, latency — never their content."""
     from boss_engine.services import agent_acts
@@ -28343,6 +29146,7 @@ def signed_act_tools(act_id: str, project_id: str, limit: int = 50) -> dict:
 
 
 @app.get("/v1/agents/{role_key}/acts")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def agent_acts_feed(role_key: str, project_id: str, kind: Optional[str] = None, days: int = 30,
                     cursor: Optional[str] = None, limit: int = 50,
                     viewer: Optional[str] = None) -> dict:
@@ -28362,6 +29166,7 @@ def agent_acts_feed(role_key: str, project_id: str, kind: Optional[str] = None, 
 
 
 @app.get("/v1/agents/{role_key}/lineage")
+@permit(P.AGENT_PASSPORT_READ, scope=Scope.project(query="project_id"))
 def agent_lineage(role_key: str, project_id: str, days: int = 30,
                   mode: str = "observed", viewer: Optional[str] = None) -> dict:
     """Who hands this agent work and who it hands work to (observed), or its declared line."""
@@ -28379,6 +29184,7 @@ def agent_lineage(role_key: str, project_id: str, days: int = 30,
 
 
 @app.get("/v1/workflow-runs/{run_id}/chain")
+@permit(P.WORKFLOW_RUN_READ, scope=Scope.project(query="project_id"))
 def workflow_run_chain(run_id: str, project_id: str, viewer: Optional[str] = None) -> dict:
     """A run's acts as one ordered tree, rooted at the person who started it, with Credits.
 
@@ -28401,6 +29207,7 @@ def workflow_run_chain(run_id: str, project_id: str, viewer: Optional[str] = Non
 
 
 @app.get("/v1/acts/{act_id}")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def get_signed_act(act_id: str, project_id: str, viewer: Optional[str] = None) -> dict:
     """One act: who, how, why, scope and cost, its last turns, receipt and children."""
     from boss_engine.services import agent_acts
@@ -28415,6 +29222,7 @@ def get_signed_act(act_id: str, project_id: str, viewer: Optional[str] = None) -
 
 
 @app.post("/v1/acts/backfill")
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def backfill_signed_acts(payload: ActsBackfillRequest) -> dict:
     """Reconstruct acts from work done before the ledger existed. Idempotent; every act it
     writes is marked reconstructed. The API boots this on its own (lifespan); this is for
@@ -28557,6 +29365,7 @@ def _converse_refused(error: "_converse.ConverseError") -> HTTPException:
 
 
 @app.get("/v1/conversations/presets")
+@permit(P.MEETING_READ, scope=Scope.project(query="project_id"))
 def conversation_presets(project_id: str, actor: Optional[str] = None) -> dict:
     """The room presets (each naming the seats this project lacks) and the agents a room can
     seat."""
@@ -28566,6 +29375,7 @@ def conversation_presets(project_id: str, actor: Optional[str] = None) -> dict:
 
 
 @app.get("/v1/conversations")
+@permit(P.MEETING_READ, scope=Scope.project(query="project_id"))
 def list_conversations_endpoint(project_id: str, actor: Optional[str] = None,
                                 kind: Optional[str] = None, limit: int = 20) -> dict:
     with begin(engine) as connection:
@@ -28578,6 +29388,7 @@ def list_conversations_endpoint(project_id: str, actor: Optional[str] = None,
 
 
 @app.post("/v1/conversations", status_code=201)
+@permit(P.MEETING_CONVENE, scope=Scope.project(body="project_id"))
 def create_conversation_endpoint(payload: ConversationCreateBody) -> dict:
     """Open a talk, a plan or a room. No model call."""
     with begin(engine) as connection:
@@ -28594,6 +29405,7 @@ def create_conversation_endpoint(payload: ConversationCreateBody) -> dict:
 
 
 @app.get("/v1/conversations/{conversation_id}")
+@permit(P.MEETING_READ, scope=Scope.project(query="project_id"))
 def get_conversation_endpoint(conversation_id: str, project_id: str,
                               actor: Optional[str] = None) -> dict:
     with begin(engine) as connection:
@@ -28622,6 +29434,7 @@ def _converse_stream(request: Request, project_id: str, claimed: Optional[str], 
 
 
 @app.post("/v1/conversations/{conversation_id}/turns")
+@permit(P.MEETING_CONVENE, scope=Scope.project(body="project_id"))
 def conversation_turn_endpoint(conversation_id: str, payload: ConversationTurnBody,
                                request: Request) -> StreamingResponse:
     """Say something; each addressed seat answers in turn (SSE: ConverseEvent)."""
@@ -28635,6 +29448,7 @@ def conversation_turn_endpoint(conversation_id: str, payload: ConversationTurnBo
 
 
 @app.post("/v1/conversations/{conversation_id}/summary")
+@permit(P.MEETING_CONVENE, scope=Scope.project(body="project_id"))
 def conversation_summary_endpoint(conversation_id: str, payload: open_bodies.ProjectBody,
                                   request: Request) -> StreamingResponse:
     """The room's lead sums it up: decisions, dissent and next actions (SSE)."""
@@ -28647,6 +29461,7 @@ def conversation_summary_endpoint(conversation_id: str, payload: open_bodies.Pro
 
 
 @app.post("/v1/conversations/{conversation_id}/propose")
+@permit(P.MEETING_CONVENE, scope=Scope.project(body="project_id"))
 def conversation_propose_endpoint(conversation_id: str, payload: open_bodies.ProjectBody,
                                   request: Request) -> StreamingResponse:
     """The plan as a card to review: workflow, directive, inputs, who runs each step (SSE)."""
@@ -28659,6 +29474,7 @@ def conversation_propose_endpoint(conversation_id: str, payload: open_bodies.Pro
 
 
 @app.post("/v1/conversations/{conversation_id}/start")
+@permit(P.WORKFLOW_RUN_START, scope=Scope.project(body="project_id"))
 def conversation_start_endpoint(conversation_id: str, payload: ConversationStartBody) -> dict:
     """The operator's press on a proposal: one run, through the composer's start door."""
     project_id = str(payload.project_id or "")
@@ -28676,6 +29492,7 @@ def conversation_start_endpoint(conversation_id: str, payload: ConversationStart
 
 
 @app.post("/v1/conversations/{conversation_id}/proposals/{proposal_id}/dismiss")
+@permit(P.MEETING_CONVENE, scope=Scope.project(body="project_id"))
 def conversation_dismiss_endpoint(conversation_id: str, proposal_id: str,
                                   payload: open_bodies.ProjectBody) -> dict:
     project_id = str(payload.project_id or "")
@@ -28690,6 +29507,7 @@ def conversation_dismiss_endpoint(conversation_id: str, proposal_id: str,
 
 
 @app.post("/v1/conversations/{conversation_id}/decisions")
+@permit(P.MEETING_CONVENE, scope=Scope.project(body="project_id"))
 def conversation_decision_endpoint(conversation_id: str,
                                    payload: ConversationDecisionBody) -> dict:
     """Open one of the room summary's `decision` next actions as a real decision."""
@@ -28707,6 +29525,7 @@ def conversation_decision_endpoint(conversation_id: str,
 
 
 @app.post("/v1/conversations/{conversation_id}/close")
+@permit(P.MEETING_CONVENE, scope=Scope.project(body="project_id"))
 def conversation_close_endpoint(conversation_id: str, payload: open_bodies.ProjectBody) -> dict:
     project_id = str(payload.project_id or "")
     with begin(engine) as connection:
@@ -28723,6 +29542,9 @@ def conversation_close_endpoint(conversation_id: str, payload: open_bodies.Proje
 from .routers.identity_me import build_identity_me_router  # noqa: E402
 
 app.include_router(build_identity_me_router())
+from .routers.identity_access import build_identity_access_router  # noqa: E402  (identity S2)
+
+app.include_router(build_identity_access_router(engine))
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

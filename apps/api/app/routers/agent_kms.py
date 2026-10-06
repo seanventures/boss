@@ -7,6 +7,7 @@ short-TTL leases to use material. List endpoints never return secret values.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -87,16 +88,19 @@ def _require_kms_operator(connection, project_id: str, actor: Optional[str]) -> 
 
 
 @router.get("/backends")
+@permit(P.SECRET_READ_METADATA, scope=Scope.org())
 def list_backends():
     return {"items": kms.backend_catalog(), "count": len(kms.backend_catalog())}
 
 
 @router.get("/health")
+@permit(P.SECRET_READ_METADATA, scope=Scope.org())
 def kms_health():
     return kms.health(get_settings())
 
 
 @router.post("/keys", status_code=201)
+@permit(P.KMS_KEY_MANAGE, scope=Scope.project(body="project_id"))
 def store_key(payload: StoreKeyRequest):
     settings = get_settings()
     try:
@@ -123,6 +127,7 @@ def store_key(payload: StoreKeyRequest):
 
 
 @router.get("/keys")
+@permit(P.SECRET_READ_METADATA, scope=Scope.project(query="project_id"))
 def list_keys(
     project_id: str = Query(...),
     agent_id: str = Query(...),
@@ -145,6 +150,7 @@ def list_keys(
 
 
 @router.get("/keys/{key_entry_id}")
+@permit(P.SECRET_READ_METADATA, scope=Scope.project(query="project_id"))
 def get_key(
     key_entry_id: str,
     project_id: str = Query(...),
@@ -166,6 +172,7 @@ def get_key(
 
 
 @router.post("/keys/{key_entry_id}/grant", status_code=201)
+@permit(P.KMS_KEY_MANAGE, scope=Scope.project(body="project_id"))
 def grant_key(key_entry_id: str, payload: GrantRequest):
     try:
         with begin(get_engine()) as connection:
@@ -187,6 +194,7 @@ def grant_key(key_entry_id: str, payload: GrantRequest):
 
 
 @router.delete("/keys/{key_entry_id}/grants/{grantee_agent}")
+@permit(P.KMS_KEY_MANAGE, scope=Scope.project(body="project_id"))
 def revoke_grant(key_entry_id: str, grantee_agent: str, payload: RevokeGrantRequest):
     try:
         with begin(get_engine()) as connection:
@@ -206,6 +214,7 @@ def revoke_grant(key_entry_id: str, grantee_agent: str, payload: RevokeGrantRequ
 
 
 @router.get("/keys/{key_entry_id}/grants")
+@permit(P.SECRET_READ_METADATA, scope=Scope.project(query="project_id"))
 def list_grants(
     key_entry_id: str,
     project_id: str = Query(...),
@@ -229,6 +238,7 @@ def list_grants(
 
 
 @router.post("/keys/{key_entry_id}/lease", status_code=201)
+@permit(P.SECRET_LEASE)
 def lease_key(key_entry_id: str, payload: LeaseRequest):
     settings = get_settings()
     try:
@@ -255,6 +265,7 @@ def lease_key(key_entry_id: str, payload: LeaseRequest):
 
 
 @router.post("/leases/{lease_id}/resolve")
+@permit(P.SECRET_LEASE)
 def resolve_lease(lease_id: str, payload: ResolveLeaseRequest):
     """Return secret material for an authorized active lease (counts against reveal limit)."""
     settings = get_settings()
@@ -278,6 +289,7 @@ def resolve_lease(lease_id: str, payload: ResolveLeaseRequest):
 
 
 @router.post("/leases/{lease_id}/revoke")
+@permit(P.KMS_KEY_MANAGE, scope=Scope.project(query="project_id"))
 def revoke_lease(
     lease_id: str,
     project_id: str = Query(...),

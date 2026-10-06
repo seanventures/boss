@@ -12,6 +12,7 @@ Domain logic lives in ``boss_engine.services.security_scan``.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -83,6 +84,7 @@ def _authorized_stored_run(run_id: str, *, manage: bool) -> dict:
 
 
 @router.get("/scanners")
+@permit(P.ASSURANCE_READ, scope=Scope.org())
 def list_scanners(include_planned: bool = Query(default=True)) -> dict:
     """Catalog of market-validated OSS scanners (+ Snyk BYO note)."""
     items = svc.list_scanners(include_planned=include_planned)
@@ -112,6 +114,7 @@ def list_scanners(include_planned: bool = Query(default=True)) -> dict:
 
 
 @router.post("/run")
+@permit(P.ASSURANCE_RUN, scope=Scope.project(body="project_id"))
 def run_scan(payload: SecurityScanRunRequest) -> dict:
     """Authorize the project request, then fail closed before any scanner effect.
 
@@ -146,12 +149,14 @@ def run_scan(payload: SecurityScanRunRequest) -> dict:
 
 
 @router.get("/latest")
+@permit(P.ASSURANCE_READ, scope=Scope.project(query="project_id"))
 def latest_scan(project_id: str = Query(..., description="Project scope")) -> dict:
     """Most recent scan for a project. Empty is honest 200 not_configured, not 404."""
     return svc.latest_run(project_id)
 
 
 @router.get("/runs")
+@permit(P.ASSURANCE_READ, scope=Scope.project(query="project_id"))
 def list_runs(
     project_id: str = Query(..., description="Project scope"),
     limit: int = Query(default=50, ge=1, le=500),
@@ -162,11 +167,13 @@ def list_runs(
 
 
 @router.get("/runs/{run_id}")
+@permit(P.ASSURANCE_READ, scope=Scope.of("security_scan_run", path="run_id"))
 def get_run(run_id: str) -> dict:
     return _authorized_stored_run(run_id, manage=False)
 
 
 @router.post("/runs/{run_id}/gate")
+@permit(P.ASSURANCE_RUN, scope=Scope.of("security_scan_run", path="run_id"))
 def evaluate_gate(run_id: str, payload: Optional[SecurityScanGateRequest] = None) -> dict:
     """Evaluate go/no-go for a prior run. Critical findings fail closed by default."""
     rec = _authorized_stored_run(run_id, manage=True)

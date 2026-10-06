@@ -9,6 +9,7 @@ Stream S1 owns this file.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -76,6 +77,7 @@ def build_infra_router(
         return etagged(request, response, jsonable_encoder(body))
 
     @router.get("/v1/infra/fleet")
+    @permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
     def infra_fleet(project_id: str, request: Request, response: Response,
                     viewer: Optional[str] = None):
         """Machines, what is placed on them, what is not placed, and what needs you (§4.3)."""
@@ -83,16 +85,19 @@ def build_infra_router(
             c, settings(), project_id.strip(), viewer=viewer_of(viewer)))
 
     @router.get("/v1/infra/hosts/{host_id}")
+    @permit(P.HOST_READ, scope=Scope.project(query="project_id"))
     def infra_host(host_id: str, project_id: str, request: Request, response: Response):
         return _read(project_id, request, response, lambda c: infra_view.host_detail(
             c, settings(), project_id.strip(), host_id))
 
     @router.get("/v1/infra/targets/{target_id}")
+    @permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
     def infra_target(target_id: str, project_id: str, request: Request, response: Response):
         return _read(project_id, request, response, lambda c: infra_view.target_detail(
             c, settings(), project_id.strip(), target_id))
 
     @router.get("/v1/infra/deploys")
+    @permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
     def infra_deploys(project_id: str, request: Request, response: Response,
                       state: Optional[str] = None, app: Optional[str] = None,
                       env: Optional[str] = None, cursor: Optional[str] = None, limit: int = 30,
@@ -102,16 +107,19 @@ def build_infra_router(
             limit=max(1, min(int(limit), 100)), viewer=viewer_of(viewer)))
 
     @router.get("/v1/infra/deploys/{ref}")
+    @permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
     def infra_deploy(ref: str, project_id: str, request: Request, response: Response):
         return _read(project_id, request, response, lambda c: infra_view.deploy_detail(
             c, settings(), project_id.strip(), ref))
 
     @router.get("/v1/infra/previews")
+    @permit(P.PREVIEW_READ, scope=Scope.project(query="project_id"))
     def infra_previews(project_id: str, request: Request, response: Response):
         return _read(project_id, request, response, lambda c: infra_view.preview_rows(
             c, settings(), project_id.strip()))
 
     @router.get("/v1/infra/cloud")
+    @permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
     def infra_cloud(project_id: str, request: Request, response: Response,
                     view: str = "accounts", viewer: Optional[str] = None,
                     provider: Optional[str] = None, account: Optional[str] = None,
@@ -160,6 +168,7 @@ def build_infra_router(
             raise HTTPException(status_code=409, detail=infra_view.PAUSED_IN_COMMUNITY)
 
     @router.post("/v1/infra/targets/{target_id}/deploy")
+    @permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
     def infra_target_deploy(target_id: str, body: TargetDeployBody):
         """One Deploy button, routed by the target's kind (§6.5): a stack target plans a stack
         deployment, an app target a delivery deploy, a cloud-account target a registry run.
@@ -212,6 +221,7 @@ def build_infra_router(
         return {"ref": f"delivery:{out.get('deployment_run_id')}", "kind": "delivery", **out}
 
     @router.post("/v1/infra/targets/{target_id}/move")
+    @permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(body="project_id"))
     def infra_target_move(target_id: str, body: TargetMoveBody):
         """Point an app at a machine (what POST /v1/deployment-hosts/{id}/attach does)."""
         from boss_engine.services.deployment_fleet import attach_target
@@ -293,12 +303,14 @@ def build_infra_router(
                 "result": ROLLBACK_PLANNED}
 
     @router.post("/v1/infra/deploys/{ref}/rollback")
+    @permit(P.DEPLOYMENT_ROLLBACK, scope=Scope.project(body="project_id"))
     def infra_deploy_rollback(ref: str, body: InfraBody):
         """Roll back by kind: a stack deploy plans the previous healthy commit (the existing
         stack rollback); a delivery deploy redeploys the target's previous good run."""
         return _rollback(reader_project(body.project_id), ref, body.actor)
 
     @router.post("/v1/infra/hosts/{host_id}/retire")
+    @permit(P.HOST_MANAGE, scope=Scope.project(body="project_id"))
     def infra_host_retire(host_id: str, body: HostRetireBody):
         """Retire a machine. The server checks the typed name too; then the existing retire
         path runs with the four options of the confirm sheet."""
@@ -328,6 +340,7 @@ def build_infra_router(
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.post("/v1/infra/previews/{preview_id}/restart")
+    @permit(P.PREVIEW_MANAGE, scope=Scope.project(body="project_id"))
     def infra_preview_restart(preview_id: str, body: InfraBody):
         """Restart a preview (operator decision §11.3): stop it, then start a fresh preview of
         the same build on the same substrate. Same permission as Stop."""
@@ -365,6 +378,7 @@ def build_infra_router(
                 "preview": started}
 
     @router.post("/v1/infra/attention/act")
+    @permit(P.DEPLOYMENT_ROLLBACK, scope=Scope.project(body="project_id"))
     def infra_attention_act(body: AttentionActBody):
         """Press an infra card's answer: `rollback` (deploy_failed), `reverify`
         (host_unreachable) or `open` (any; returns `{open}`, the console href)."""

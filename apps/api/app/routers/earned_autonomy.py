@@ -7,6 +7,7 @@ read and exposes the pure schedule-preference ranking used under budget pressure
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -41,6 +42,7 @@ class SchedulePreferenceRequest(BaseModel):
     "/v1/roles/{role_key}/autonomy/score",
     response_model=AutonomyScoreResponse,
 )
+@permit(P.AUTONOMY_READ, scope=Scope.project(query="project_id"))
 def get_autonomy_score(
     role_key: str,
     project_id: str = Query(...),
@@ -61,6 +63,7 @@ def get_autonomy_score(
 
 
 @router.post("/v1/work-orchestration/schedule-preference")
+@permit(P.WORK_ITEM_READ, scope=Scope.org(), readonly_post=True)
 def schedule_preference(payload: SchedulePreferenceRequest) -> dict[str, Any]:
     """G3 — pure ranking of work by priority or value density under budget state.
 

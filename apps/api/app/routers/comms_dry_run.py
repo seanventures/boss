@@ -6,6 +6,7 @@ without touching ``main.py``.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -36,6 +37,7 @@ class OutboxDryRunResponse(BaseModel):
     "/v1/comms/outbox/{message_id}/dry-run",
     response_model=OutboxDryRunResponse,
 )
+@permit(P.COMMS_SEND, scope=Scope.project(body="project_id"))
 def dry_run_outbox_message(
     message_id: str, payload: OutboxDryRunRequest
 ) -> OutboxDryRunResponse:

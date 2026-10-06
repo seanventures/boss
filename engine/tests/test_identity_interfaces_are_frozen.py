@@ -245,9 +245,6 @@ def test_secrets_do_not_appear_in_reprs():
 STUBS = [
     (lambda: authn.authenticate(None), "S1"),
     (lambda: authn.parse_api_key("boss_pat_x"), "S1"),
-    (lambda: authz.check(None, "settings:read", ResolvedScope.org_level("o")), "S2"),
-    (lambda: authz.effective_permissions(ALICE, ResolvedScope.org_level("o")), "S2"),
-    (lambda: authz.explain("usr_alice", "settings:read", ResolvedScope.org_level("o")), "S2"),
     (lambda: delegation.exchange_token(None, htm="POST", htu="/", db=None), "S3"),
     (lambda: delegation.revoke_cascade(delegation.CascadeTrigger.GRANT_REVOKED, "dlg_1",
                                        actor=None, reason="", db=None), "S3"),

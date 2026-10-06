@@ -8,6 +8,7 @@ Also mounts ``POST /v1/agent-studio/seed`` so the shorter path is not a 404.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -41,6 +42,7 @@ class SeedCatalogRequest(BaseModel):
 
 
 @router.get("/v1/agent-studio/templates")
+@permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def list_agent_templates(project_id: str) -> dict[str, Any]:
     """Catalog cards for Org Chart; installation is separate from execution."""
     service = AgentStudioService(get_settings())
@@ -70,6 +72,7 @@ def list_agent_templates(project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/agent-studio/templates/{template_id}/install")
+@permit(P.AGENT_PUBLISH, scope=Scope.project(body="project_id"))
 def install_agent_template(
     template_id: str, payload: SeedCatalogRequest
 ) -> dict[str, Any]:
@@ -267,6 +270,7 @@ def _seed_catalog(payload: SeedCatalogRequest) -> dict[str, Any]:
 
 
 @router.post("/v1/agent-studio/seed")
+@permit(P.AGENT_PUBLISH, scope=Scope.project(body="project_id"))
 def seed_agent_studio_catalog_alias(payload: SeedCatalogRequest) -> dict[str, Any]:
     """Alias for operators who hit ``/v1/agent-studio/seed`` instead of catalog/seed."""
     return _seed_catalog(payload)

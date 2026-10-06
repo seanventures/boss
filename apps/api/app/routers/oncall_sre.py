@@ -4,6 +4,7 @@ Mounted at ``/v1/oncall-sre`` (distinct from RB-20 ``/v1/oncall`` notify cards).
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -99,6 +100,7 @@ class GraphLink(ActorBody):
 
 # ── schedules ────────────────────────────────────────────────────────────────
 @router.get("/schedules")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def list_schedules(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(_engine()) as connection:
         items = _svc().list_schedules(connection, project_id)
@@ -106,6 +108,7 @@ def list_schedules(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @router.post("/schedules", status_code=201)
+@permit(P.RELIABILITY_MANAGE, scope=Scope.project(body="project_id"))
 def create_schedule(payload: ScheduleCreate) -> dict[str, Any]:
     with begin(_engine()) as connection:
         _require_actor(connection, payload.project_id, payload.actor)
@@ -125,6 +128,7 @@ def create_schedule(payload: ScheduleCreate) -> dict[str, Any]:
 
 
 @router.get("/schedules/{schedule_id}")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def get_schedule(schedule_id: str, project_id: str = Query(...)) -> dict[str, Any]:
     with begin(_engine()) as connection:
         row = _svc().get_schedule(connection, project_id, schedule_id)
@@ -135,6 +139,7 @@ def get_schedule(schedule_id: str, project_id: str = Query(...)) -> dict[str, An
 
 # ── policies ─────────────────────────────────────────────────────────────────
 @router.get("/policies")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def list_policies(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(_engine()) as connection:
         items = _svc().list_policies(connection, project_id)
@@ -142,6 +147,7 @@ def list_policies(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @router.post("/policies", status_code=201)
+@permit(P.RELIABILITY_MANAGE, scope=Scope.project(body="project_id"))
 def create_policy(payload: PolicyCreate) -> dict[str, Any]:
     with begin(_engine()) as connection:
         _require_actor(connection, payload.project_id, payload.actor)
@@ -160,6 +166,7 @@ def create_policy(payload: PolicyCreate) -> dict[str, Any]:
 
 
 @router.get("/policies/{policy_id}")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def get_policy(policy_id: str, project_id: str = Query(...)) -> dict[str, Any]:
     with begin(_engine()) as connection:
         row = _svc().get_policy(connection, project_id, policy_id)
@@ -170,6 +177,7 @@ def get_policy(policy_id: str, project_id: str = Query(...)) -> dict[str, Any]:
 
 # ── pages / incidents ────────────────────────────────────────────────────────
 @router.get("/pages")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def list_pages(
     project_id: str = Query(...),
     status: Optional[str] = Query(None),
@@ -181,6 +189,7 @@ def list_pages(
 
 
 @router.post("/incidents/{incident_id}/page")
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def page_incident(incident_id: str, payload: PageCreate) -> dict[str, Any]:
     """Page from a reliability incident id, or open a synthetic page for that id."""
     with begin(_engine()) as connection:
@@ -212,6 +221,7 @@ def page_incident(incident_id: str, payload: PageCreate) -> dict[str, Any]:
 
 
 @router.post("/pages")
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def open_page(payload: PageCreate) -> dict[str, Any]:
     """Open a synthetic or reliability-linked page without path incident id."""
     with begin(_engine()) as connection:
@@ -238,6 +248,7 @@ def open_page(payload: PageCreate) -> dict[str, Any]:
 
 
 @router.post("/incidents/{page_id}/ack")
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def ack_page(page_id: str, payload: PageAction) -> dict[str, Any]:
     with begin(_engine()) as connection:
         _require_actor(connection, payload.project_id, payload.actor)
@@ -252,6 +263,7 @@ def ack_page(page_id: str, payload: PageAction) -> dict[str, Any]:
 
 
 @router.post("/incidents/{page_id}/resolve")
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def resolve_page(page_id: str, payload: PageAction) -> dict[str, Any]:
     with begin(_engine()) as connection:
         _require_actor(connection, payload.project_id, payload.actor)
@@ -266,12 +278,14 @@ def resolve_page(page_id: str, payload: PageAction) -> dict[str, Any]:
 
 
 @router.get("/status")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def oncall_status(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(_engine()) as connection:
         return _svc().status(connection, project_id)
 
 
 @router.post("/from-reliability")
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def from_reliability(payload: FromReliability) -> dict[str, Any]:
     with begin(_engine()) as connection:
         _require_actor(connection, payload.project_id, payload.actor)
@@ -291,6 +305,7 @@ def from_reliability(payload: FromReliability) -> dict[str, Any]:
 
 
 @router.post("/graph/link")
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def graph_link(payload: GraphLink) -> dict[str, Any]:
     with begin(_engine()) as connection:
         _require_actor(connection, payload.project_id, payload.actor)
@@ -310,6 +325,7 @@ def graph_link(payload: GraphLink) -> dict[str, Any]:
 
 
 @router.get("/adapters")
+@permit(P.RELIABILITY_READ, scope=Scope.org())
 def list_adapters() -> dict[str, Any]:
     from boss_engine.services.oncall_sre import adapter_credential
 
