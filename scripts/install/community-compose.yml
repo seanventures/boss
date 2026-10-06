@@ -119,7 +119,8 @@ services:
       # DO_NOT_TRACK=1 in .env turns every send off, the heartbeat included.
       BOSS_TELEMETRY: ${BOSS_TELEMETRY:-}
       DO_NOT_TRACK: ${DO_NOT_TRACK:-}
-      BOSS_TELEMETRY_URL: ${BOSS_TELEMETRY_URL:-https://boss-api.local.sean.network/v1/telemetry/ingest}
+      # No default collector: empty means nothing is sent (set one here or in Govern › Sharing).
+      BOSS_TELEMETRY_URL: ${BOSS_TELEMETRY_URL:-}
       BOSS_INSTALL_METHOD: ${BOSS_INSTALL_METHOD:-compose}
       BOSS_REQUIRE_API_AUTH: ${BOSS_REQUIRE_API_AUTH:-true}
       BOSS_API_KEY: ${BOSS_API_KEY}

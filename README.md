@@ -235,7 +235,7 @@ Deleting data takes a separate confirmation. See [upgrade, backup, and restore](
 
 ## What BOSS sends home
 
-**A daily heartbeat, on by default.** Once a day, one small request says only that this install is alive: a random install id, the BOSS version and edition, the install method, OS and CPU type, days since install (as a range), and whether any work ran in the last 24 hours. Nothing else.
+**A daily heartbeat, on by default, once a collector is set.** No collector is set in this release, so nothing is sent until you set one (`BOSS_TELEMETRY_URL`, or in Govern › Sharing); a later release names a public one. Once a day, one small request says only that this install is alive: a random install id, the BOSS version and edition, the install method, OS and CPU type, days since install (as a range), and whether any work ran in the last 24 hours. Nothing else.
 
 **"Improve BOSS", off by default.** If you turn it on (at the end of setup, or in Govern › Sharing), the same daily request also carries how runs turned out, your ratings and which features you use, as names, counts and ranges. Never your code, prompts, briefs, file or repo names, or secrets.
 

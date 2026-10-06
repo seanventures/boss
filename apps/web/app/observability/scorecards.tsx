@@ -17,14 +17,14 @@
 import React, { useState } from "react";
 
 import {
-  improveWrite, polledImprove,
+  HARNESS_NAMES, improveWrite, polledImprove,
   type Experiment, type ExperimentsView, type ScoreRow, type ScorecardsView,
 } from "../../lib/improve";
 import { usePolledRead } from "../../lib/log-stream";
 import { useConsoleLive } from "../../lib/console-live";
 import { showToast } from "../client-forms";
 import type { ObsTabProps } from "./obs-home";
-import { Empty, Skeleton, ZoneHead, useUrlState, writeUrl } from "../infra/kit";
+import { Empty, Sheet, Skeleton, ZoneHead, useUrlState, writeUrl } from "../infra/kit";
 import "../improve/improve.css";
 
 const KINDS = [
@@ -142,7 +142,7 @@ function Scores({ projectId, actor, u }: { projectId: string; actor: string; u: 
               </div>
               {v.rows.map((r: ScoreRow) => (
                 <div className="im-tr" role="row" key={r.key} data-testid="sc-row">
-                  <span className="im-key" role="cell" data-user-text="" title={r.key}>{r.key}</span>
+                  <span className="im-key" role="cell" data-user-text="" title={r.label ?? r.key}>{r.label ?? r.key}</span>
                   <span role="cell">{r.n}</span>
                   <span role="cell"><ScoreBar score={r.score} sd={r.sd} /></span>
                   <span role="cell">{pct(r.done)}</span><span role="cell">{pct(r.merged)}</span>
@@ -196,9 +196,54 @@ const STOP: Record<string, string> = {
   stopped_by_operator: "Stopped by a person",
 };
 
+function PromoteSheet({ e, arm, projectId, actor, onClose, onDone }: {
+  e: Experiment; arm: "a" | "b"; projectId: string; actor: string; onClose: () => void; onDone: () => void;
+}) {
+  const plan = e.promote?.[arm];
+  const [anyway, setAnyway] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const go = async () => {
+    setBusy(true);
+    const r = await improveWrite("experiment_promote", { project_id: projectId, actor, id: e.id, arm, anyway });
+    setBusy(false);
+    if (r.ok) { showToast("success", "Winner promoted"); onDone(); onClose(); }
+    else setError(r.status === 403 ? "You can't change this" : r.error);
+  };
+  const ready = Boolean(plan?.enough) || anyway;
+  return (
+    <Sheet title={`Promote arm ${arm.toUpperCase()}`} testId="sc-promote-sheet" onClose={onClose}>
+      <div className="im-share">
+        <span className="im-check" data-testid="sc-promote-change">
+          <b>{plan?.label ?? e.knob_label}</b>
+          <span data-user-text="">{String(plan?.from ?? "default")} → {String(plan?.to ?? "")}</span>
+        </span>
+        <span className="im-muted">This project&apos;s setting · in Govern changes</span>
+        {plan && !plan.enough ? (
+          <>
+            <span className="im-err" role="status" data-testid="sc-promote-short" title={plan.why_not}>Not enough evidence</span>
+            <label className="im-muted">
+              <input type="checkbox" checked={anyway} onChange={(ev) => setAnyway(ev.target.checked)}
+                     data-testid="sc-promote-anyway" /> Promote anyway
+            </label>
+          </>
+        ) : null}
+        <span className="im-actions">
+          <button type="button" className="ag-btn ag-btn-primary" disabled={busy || !ready}
+                  data-testid="sc-promote-yes" onClick={() => void go()}>{busy ? "Promoting…" : "Promote"}</button>
+          <button type="button" className="ag-btn" onClick={onClose}>Cancel</button>
+          {error ? <span className="im-err" role="alert" title={error}>Not promoted</span> : null}
+        </span>
+      </div>
+    </Sheet>
+  );
+}
+
 function ExperimentCard({ e, projectId, actor, onChange }: { e: Experiment; projectId: string; actor: string; onChange: () => void }) {
   const [busy, setBusy] = useState("");
+  const [promoting, setPromoting] = useState<"a" | "b" | null>(null);
   const act = async (op: "experiment_stop" | "experiment_promote", arm?: "a" | "b") => {
+    if (op === "experiment_promote") { setPromoting(arm ?? "a"); return; }
     setBusy(arm ?? "stop");
     const r = await improveWrite(op, { project_id: projectId, actor, id: e.id, arm });
     setBusy("");
@@ -225,7 +270,7 @@ function ExperimentCard({ e, projectId, actor, onChange }: { e: Experiment; proj
           return (
             <div key={arm} className="im-arm" data-winner={winner ? "" : undefined} data-testid={`sc-arm-${arm}`}>
               <span className="im-arm-k">ARM {arm.toUpperCase()}{arm === "b" ? ` · ${Math.round(e.split_b * 100)}%` : ""}</span>
-              <span className="im-arm-v" title={e.knob_label}>{String(arm === "a" ? e.arm_a : e.arm_b)}</span>
+              <span className="im-arm-v" title={e.knob_label}>{(arm === "a" ? e.arm_a_label : e.arm_b_label) ?? String(arm === "a" ? e.arm_a : e.arm_b)}</span>
               <span className="im-arm-facts">
                 <span title="Finished units">n {a.n}</span>
                 <span title="Mean score ± one standard deviation">{num(a.mean)} ± {num(a.sd)}</span>
@@ -243,6 +288,8 @@ function ExperimentCard({ e, projectId, actor, onChange }: { e: Experiment; proj
         })}
       </div>
       <DiffChart e={e} />
+      {promoting ? <PromoteSheet e={e} arm={promoting} projectId={projectId} actor={actor}
+                                 onClose={() => setPromoting(null)} onDone={onChange} /> : null}
     </article>
   );
 }
@@ -269,15 +316,22 @@ function NewExperiment({ view, projectId, actor, onDone }: { view: ExperimentsVi
   };
   const armInput = (k: "arm_a" | "arm_b", label: string) => knob?.choices ? (
     <label>{label}<select value={f[k]} onChange={set(k)} data-testid={`sc-new-${k}`}>
-      {knob.choices.map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
+      {knob.choices.map((c) => <option key={c} value={c}>{HARNESS_NAMES[c] ?? c}</option>)}</select></label>
   ) : (
     <label>{label}<input type="number" min={knob?.min ?? 0} max={knob?.max ?? 5} value={f[k]} onChange={set(k)} data-testid={`sc-new-${k}`} /></label>
   );
   return (
     <form className="im-form" onSubmit={submit} data-testid="sc-new">
       <label title="Builds run as this agent, or inside runs of this workflow">Target
-        <select value={f.target_kind} onChange={set("target_kind")}><option value="role">Role</option><option value="workflow">Workflow</option></select></label>
-      <label>Key<input value={f.target_key} onChange={set("target_key")} data-testid="sc-new-key" spellCheck={false} /></label>
+        <select value={f.target_kind} onChange={(ev) => {
+          const kind = ev.target.value as "role" | "workflow";
+          setF({ ...f, target_kind: kind, target_key: view.targets?.[kind]?.[0]?.key ?? "" });
+        }}><option value="role">Agent</option><option value="workflow">Workflow</option></select></label>
+      <label>{f.target_kind === "role" ? "Agent" : "Workflow"}
+        <select value={f.target_key} onChange={set("target_key")} data-testid="sc-new-key">
+          {(view.targets?.[f.target_kind as "role" | "workflow"] ?? [{ key: f.target_key, name: f.target_key }])
+            .map((t) => <option key={t.key} value={t.key}>{t.name}</option>)}
+        </select></label>
       <label title="Only settings that never change what needs approval">Vary
         <select value={f.knob} onChange={(e) => {
           const k = view.knobs.find((x) => x.key === e.target.value);

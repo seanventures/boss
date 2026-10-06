@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useState } from "react";
 
-import { improveWrite, readImprove } from "../../lib/improve";
+import { improveWrite, isSharing, readImprove, type SharingView } from "../../lib/improve";
 import { showToast } from "../client-forms";
 import { Sheet } from "../infra/kit";
 import "./improve.css";
@@ -21,9 +21,14 @@ export function ShareRunSheet({ projectId, actor, unitKind, unitId, onClose }: {
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // NOTHING LEAVES WHEN SHARING IS OFF OR NO COLLECTOR IS SET (P2): the reason, not a button.
+  const [stop, setStop] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
+    void readImprove<SharingView>("sharing", { project_id: projectId }).then((got) => {
+      if (live && got.ok && !got.notModified && isSharing(got.data)) setStop(got.data.blocked ?? null);
+    });
     void readImprove<{ bundle: string; masked: Record<string, number> }>("share_bundle", {
       project_id: projectId, unit_kind: unitKind, unit_id: unitId, actor,
     }).then((got) => {
@@ -48,8 +53,16 @@ export function ShareRunSheet({ projectId, actor, unitKind, unitId, onClose }: {
   return (
     <Sheet title="Share this run" testId="share-run" onClose={onClose}>
       <div className="im-share">
-        <span className="im-muted" title="Secrets, emails and similar are masked before you see this. Edit anything else out.">
-          {masked ? `${masked} masked · edit before sending` : "Edit before sending"}
+        {stop ? (
+          <span className="im-lock" role="status" data-testid="share-run-blocked">
+            <b>Can&apos;t send</b><span className="gv-muted">{stop}</span>
+          </span>
+        ) : null}
+        <span className="im-check" role="note" data-testid="share-run-check">
+          <b>Check for anything private</b>
+          <span className="im-muted" title="Secrets, emails, hosts, URLs, file paths, repositories and names are masked. Edit anything else out.">
+            {masked ? `${masked} masked` : "Nothing masked"} · edit below
+          </span>
         </span>
         {bundle === null && !error ? <span className="im-muted" aria-busy="true">Loading…</span> : null}
         {bundle !== null ? (
@@ -59,7 +72,7 @@ export function ShareRunSheet({ projectId, actor, unitKind, unitId, onClose }: {
         <textarea className="im-share-note" value={note} onChange={(e) => setNote(e.target.value)}
                   aria-label="A note for the BOSS project" placeholder="What went wrong?" data-testid="share-run-note" />
         <span className="im-actions">
-          <button type="button" className="ag-btn ag-btn-primary" disabled={busy || bundle === null || !bundle.trim()}
+          <button type="button" className="ag-btn ag-btn-primary" disabled={busy || Boolean(stop) || bundle === null || !bundle.trim()}
                   data-testid="share-run-send" title="Sent once, now. Not part of Improve BOSS."
                   onClick={() => void send()}>{busy ? "Sending…" : "Send"}</button>
           <button type="button" className="ag-btn" onClick={onClose}>Cancel</button>

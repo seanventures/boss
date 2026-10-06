@@ -155,8 +155,14 @@ def test_promote_is_one_press_and_lands_in_the_change_log(engine, client):
     assert _experiment(client).status_code == 422  # one per target and knob
     listed = client.get(f"/v1/experiments?project_id={project()}").json()
     assert listed["items"][0]["compare"]["label"] == "Too close to call"
+    # No units yet: refused with the reason, unless the operator ticks "Promote anyway".
+    short = client.post(f"/v1/experiments/{eid}/promote",
+                        json={"project_id": project(), "actor": "ceo", "arm": "b"})
+    assert short.status_code == 409 and "Not enough evidence" in short.text
+    assert listed["items"][0]["promote"]["b"]["to"] == "Codex"
+    assert listed["items"][0]["promote"]["b"]["enough"] is False
     p = client.post(f"/v1/experiments/{eid}/promote",
-                    json={"project_id": project(), "actor": "ceo", "arm": "b"})
+                    json={"project_id": project(), "actor": "ceo", "arm": "b", "anyway": True})
     assert p.status_code == 200, p.text
     assert p.json()["status"] == "promoted" and p.json()["promoted_arm"] == "b"
     with engine.begin() as c:

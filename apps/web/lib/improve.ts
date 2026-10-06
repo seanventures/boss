@@ -61,26 +61,27 @@ export function improveHref(view: string, params: Record<string, string>): strin
 
 // ------------------------------------------------------------------------------------- types
 
-export type Switch = { on: boolean; by: string | null; at: string | null; label: string; default: boolean; asked: boolean };
+export type Switch = { on: boolean; by: string | null; by_name?: string | null; at: string | null; label: string; default: boolean; asked: boolean };
 export type Weight = { key: string; label: string; value: number; default: number };
 export type SendRow = { id: string; day: string; kind: string; status: string; bytes_raw: number; bytes_gz: number;
   batch_days: string[]; aggregated: Record<string, unknown>; http_status: number | null; error: string | null;
   cut_at: string; sent_at: string | null };
 export type SharingView = {
   switches: { improve: Switch; heartbeat: Switch; collector: Switch };
-  env_disabled: string | null; install_id: string; url: string; next_due_at: string | null;
+  env_disabled: string | null; blocked?: string | null; install_id: string; url: string;
+  url_source?: "env" | "govern" | "none"; retired_waiting?: number; next_due_at: string | null;
   last_attempt_at: string | null; sends: SendRow[]; unsent_batches: number;
   score: { version: string; weights: Weight[] }; heartbeat_fields: string[];
 };
 export type PreviewView = {
   pending: null | { id: string; day: string; cut_at: string; bytes_raw: number; bytes_gz: number;
     aggregated: Record<string, unknown>; batch_days: string[]; sha256: string; json: Record<string, unknown> };
-  why_not: string | null; next_due_at: string | null;
+  why_not: string | null; blocked?: string | null; next_due_at: string | null;
 };
-export type ScoreRow = { key: string; n: number; score: number | null; sd: number | null; done: number | null;
+export type ScoreRow = { key: string; label?: string; n: number; score: number | null; sd: number | null; done: number | null;
   merged: number | null; cost_usd: number | null; turns: number | null; steers: number | null; rounds: number | null };
 export type CostingRow = { unit_kind: string; unit_id: string; why: string; title: string; score: number | null;
-  steers: number; rounds: number; cost_usd: number; role_key: string | null; state: string;
+  steers: number; rounds: number; cost_usd: number; role_key: string | null; role_name?: string | null; state: string;
   error_class: string | null; ended_at: string | null; href: string };
 export type ScorecardsView = {
   group: string; win: string; kind: string; score_version: string; weights: Weight[];
@@ -90,12 +91,14 @@ export type ScorecardsView = {
 export type Arm = { n: number; mean: number | null; sd: number | null; cost_usd: number; gate_fail: number | null; assigned: number };
 export type Experiment = {
   id: string; name: string; target_kind: string; target_key: string; knob: string; knob_label: string;
-  arm_a: unknown; arm_b: unknown; split_b: number; target_units: number; arm_cost_cap_usd: number;
+  arm_a: unknown; arm_b: unknown; arm_a_label?: string; arm_b_label?: string; split_b: number; target_units: number; arm_cost_cap_usd: number;
   status: string; stop_reason: string | null; capped_arms: string[]; promoted_arm: string | null;
   arms: { a: Arm; b: Arm };
+  promote?: Record<"a" | "b", { setting: string; label: string; from: unknown; to: unknown; enough: boolean; why_not: string }> | null;
   compare: { verdict: string; diff: number | null; low: number | null; high: number | null; label: string; why: string };
 };
 export type ExperimentsView = { items: Experiment[];
+  targets?: { role: { key: string; name: string }[]; workflow: { key: string; name: string }[] };
   knobs: { key: string; label: string; kind: string; choices: string[] | null; min: number | null; max: number | null }[] };
 export type PromptsView = { ask_open: boolean; asks_left_today: number; checkin_due: boolean;
   mine: Record<string, { rating: string | null; chips: string[] }>;
@@ -109,9 +112,24 @@ export type CollectorView = {
   scale: Record<string, { at_least: number; dist: KeyN[] }>;
   ship: { rated: number; yes: number; with_changes: number; no: number; rate: number | null };
   chips: KeyN[]; funnel: KeyN[]; checkin: KeyN[];
-  by: Record<string, { key: string; n: number; score: number | null; merged: number | null }[]>;
+  by: Record<string, { key: string; name?: string; n: number; score: number | null; merged: number | null }[]>;
+  held_back?: number;
   errors: KeyN[]; installer: null;
 };
+
+/** What the console calls a harness (never its key). */
+export const HARNESS_NAMES: Record<string, string> = {
+  claude_code: "Claude Code", codex: "Codex", native: "BOSS native", openai: "OpenAI API", azure: "Azure OpenAI",
+  openrouter: "OpenRouter", groq: "Groq", deepseek: "DeepSeek", ollama: "Ollama", vllm: "vLLM", grok: "Grok",
+  cursor: "Cursor", gemini: "Gemini", echo: "Echo",
+};
+
+/** A time and date in the reader's locale: "Mon 5 Oct, 18:20". */
+export function stamp(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
 
 /** Words for the person: chips and ratings as the console says them (≤ 3 words each). */
 export const CHIP_WORDS: Record<string, string> = {

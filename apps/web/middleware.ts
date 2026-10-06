@@ -6,7 +6,7 @@ import {
   sessionCookieName, validSession,
 } from "./lib/console-session";
 import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
-import { resolveLegacyArea } from "./app/legacy-areas";
+import { consoleParams } from "./app/legacy-areas";
 
 /**
  * Lift a server action's press into a request header.
@@ -92,11 +92,27 @@ export async function middleware(request: NextRequest) {
 function legacyRedirect(request: NextRequest): NextResponse | null {
   if (request.method !== "GET" || request.nextUrl.pathname !== "/") return null;
   if (request.headers.get("rsc") || request.headers.get("next-action")) return null;
-  const legacy = resolveLegacyArea(request.nextUrl.searchParams);
-  if (!legacy) return null;
+  const meant = consoleParams(request.nextUrl.searchParams);
+  if (!meant.changed) return null;
+  // AN ABSOLUTE LOCATION, ON THE BROWSER'S OWN ORIGIN. Next's middleware adapter parses a
+  // redirect's Location with `new NextURL(location)` and NO base: a relative `/?area=budget`
+  // throws "Invalid URL" and every alias answered 500 (goldeneye, `?area=govern`). The origin is
+  // the public one when the console sits behind a proxy, never the internal listener's.
   return new NextResponse(null, {
-    status: 307, headers: { Location: `/?${legacy}`, "Cache-Control": "no-store" },
+    status: 307,
+    headers: { Location: `${browserOrigin(request)}/?${meant.params}`, "Cache-Control": "no-store" },
   });
+}
+
+/** The origin the browser used: the configured public one, else what the proxy forwarded, else
+ *  the Host header (a local tunnel), else the request's own. */
+export function browserOrigin(request: NextRequest): string {
+  const configured = (process.env.BOSS_CONSOLE_PUBLIC_ORIGIN || "").replace(/\/+$/, "");
+  if (configured) return configured;
+  const host = request.headers.get("x-forwarded-host") || request.headers.get("host");
+  const proto = (request.headers.get("x-forwarded-proto") || request.nextUrl.protocol.replace(":", "") || "http")
+    .split(",")[0].trim();
+  return host ? `${proto}://${host.split(",")[0].trim()}` : request.nextUrl.origin;
 }
 
 /** A request that may reach the console: still never a cross-site write. */

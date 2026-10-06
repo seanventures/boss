@@ -27,11 +27,13 @@ export function newImprove() {
   return {
     calls: [] as ImproveCall[],
     status: 0,
+    rotateOld: undefined as string | undefined,
     sharing: {
       switches: { improve: sw(false, false, "Improve BOSS", false), heartbeat: sw(true, false, "Daily heartbeat", true),
                   collector: sw(false, false, "Collector mode", false) },
-      env_disabled: null as string | null, install_id: "bi_abcdefghijklmnopqrstuvwxyz",
-      url: "https://boss-api.local.sean.network/v1/telemetry/ingest",
+      env_disabled: null as string | null, blocked: null as string | null,
+      install_id: "bi_abcdefghijklmnopqrstuvwxyz", retired_waiting: 0,
+      url: "https://collector.example.com/v1/telemetry/ingest", url_source: "govern" as "env" | "govern" | "none",
       next_due_at: new Date(Date.now() + 8 * 3600_000).toISOString(), last_attempt_at: null,
       sends: [
         { id: "tms_1", day: "2026-10-05", kind: "daily", status: "sent", bytes_raw: 812, bytes_gz: 431, batch_days: [],
@@ -62,13 +64,18 @@ export function newImprove() {
     } as Json,
     experiments: {
       items: [{
-        id: "exp_1", name: "software_engineer: claude_code vs codex", target_kind: "role", target_key: "software_engineer",
+        id: "exp_1", name: "Software Engineer: Claude Code vs Codex", target_kind: "role", target_key: "software_engineer",
         knob: "harness", knob_label: "Harness", arm_a: "claude_code", arm_b: "codex", split_b: 0.5, target_units: 20,
         arm_cost_cap_usd: 25, status: "running", stop_reason: null, capped_arms: [], promoted_arm: null,
+        arm_a_label: "Claude Code", arm_b_label: "Codex",
+        promote: { a: { setting: "code_agent_engine", label: "Harness", from: "Claude Code", to: "Claude Code", value: "claude_code", enough: false, why_not: "too close to call" },
+                   b: { setting: "code_agent_engine", label: "Harness", from: "Claude Code", to: "Codex", value: "codex", enough: false, why_not: "too close to call" } },
         arms: { a: { n: 6, mean: 0.72, sd: 0.1, cost_usd: 8.2, gate_fail: 0.1, assigned: 7 },
                 b: { n: 5, mean: 0.81, sd: 0.08, cost_usd: 6.1, gate_fail: 0, assigned: 6 } },
         compare: { verdict: "too_close", diff: 0.09, low: -0.02, high: 0.2, label: "Too close to call", why: "95% interval of B − A" },
       }],
+      targets: { role: [{ key: "software_engineer", name: "Software Engineer" }, { key: "backend_engineer", name: "Backend Engineer" }],
+                 workflow: [{ key: "standard_product_delivery", name: "Standard Product Delivery" }] },
       knobs: [{ key: "harness", label: "Harness", kind: "harness", choices: ["claude_code", "codex"], min: null, max: null },
               { key: "review_rounds", label: "Review rounds", kind: "int", choices: null, min: 0, max: 5 }],
     } as Json,
@@ -131,6 +138,11 @@ export function fakeImproveApi(f: FakeImprove, rest?: (input: unknown, init?: Re
       return Response.json(f.sharing);
     }
     if (call.op === "forget") return Response.json({ deleted: true, status: 200, error: null });
+    if (call.op === "rotate") return Response.json({ ...f.sharing, rotated: { old: f.rotateOld ?? "deleted" } });
+    if (call.op === "collector_url") {
+      f.sharing.url = String(call.body?.url ?? ""); f.sharing.blocked = f.sharing.url ? null : "No collector set";
+      return Response.json(f.sharing);
+    }
     if (call.op === "feedback") return Response.json({ id: "pfb_1", rating: call.body?.rating, chips: call.body?.chips ?? [] });
     return Response.json({ ok: true });
   });

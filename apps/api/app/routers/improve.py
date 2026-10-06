@@ -31,6 +31,8 @@ class SharingBody(Body):
     switch: Optional[str] = None
     on: Optional[bool] = None
     weights: Optional[dict[str, float]] = None
+    #: The collector's ingest URL ("" clears it). Refused while BOSS_TELEMETRY_URL sets it.
+    url: Optional[str] = None
 
 
 class ExperimentBody(Body):
@@ -47,6 +49,8 @@ class ExperimentBody(Body):
 
 class PromoteBody(Body):
     arm: str
+    #: The operator's tick: promote although the evidence is short (defect 3).
+    anyway: bool = False
 
 
 class FeedbackBody(Body):
@@ -76,11 +80,67 @@ class ShareRunBody(Body):
     note: Optional[str] = None
 
 
-def _client_ip(request: Request) -> str:
-    """For the in-memory rate-limit bucket only (hashed, never stored). Behind a proxy the
-    first X-Forwarded-For hop; a forged one only moves the caller to another bucket."""
-    fwd = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    return fwd or (request.client.host if request.client else "")
+def client_ip(peer: str, forwarded: str, trusted: str) -> str:
+    """The address a rate limit counts (hashed, held an hour in memory, never stored). The REAL
+    peer, unless the peer is a trusted proxy: then the right-most X-Forwarded-For hop that is not
+    itself a trusted proxy. A client cannot choose its bucket by sending X-Forwarded-For — a hop
+    it wrote sits LEFT of the one its first proxy appended."""
+    import ipaddress
+
+    nets = []
+    for cidr in (trusted or "").split(","):
+        try:
+            nets.append(ipaddress.ip_network(cidr.strip(), strict=False))
+        except ValueError:
+            continue
+
+    def is_trusted(addr: str) -> bool:
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            return False
+        return any(ip in n for n in nets)
+
+    chain = [h.strip() for h in (forwarded or "").split(",") if h.strip()] + [peer or ""]
+    for hop in reversed(chain):
+        if not is_trusted(hop):
+            return hop
+    return chain[0]
+
+
+async def read_capped(request: Request, cap: int) -> bytes:
+    """The body, streamed and refused the moment it passes `cap` — never read whole first. A
+    150 MB chunked POST costs at most `cap` plus one chunk of memory."""
+    from boss_engine.services.improve_collector import CollectorError
+
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > cap:
+        raise CollectorError(413, "too_large")
+    buf = bytearray()
+    async for chunk in request.stream():
+        buf += chunk
+        if len(buf) > cap:
+            raise CollectorError(413, "too_large")
+    return bytes(buf)
+
+
+class _NoAddressForTelemetry:
+    """P5: the API's access log names no client address for the collector's routes. Uvicorn's
+    access record is (client, method, path, http version, status); the client becomes "-"."""
+
+    def filter(self, record) -> bool:  # logging.Filter protocol
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and str(args[2]).startswith("/v1/telemetry/"):
+            record.args = ("-",) + tuple(args[1:])
+        return True
+
+
+def install_access_log_filter() -> None:
+    import logging
+
+    log = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _NoAddressForTelemetry) for f in log.filters):
+        log.addFilter(_NoAddressForTelemetry())
 
 
 def build_improve_router(
@@ -96,6 +156,7 @@ def build_improve_router(
                                       person_feedback, scorecards)
 
     router = APIRouter(tags=["improve"])
+    install_access_log_filter()
 
     def _reader(project_id: str) -> str:
         pid = (project_id or "").strip()
@@ -170,9 +231,11 @@ def build_improve_router(
             actor = require_write_actor(c, pid, payload.actor, "providerops_manage")
             try:
                 return experiments.promote(c, project_id=pid, eid=experiment_id,
-                                           arm=payload.arm, actor=actor)
+                                           arm=payload.arm, actor=actor, anyway=payload.anyway)
             except LookupError as error:
                 raise HTTPException(status_code=404, detail=str(error)) from error
+            except experiments.NotEnoughEvidence as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             except (experiments.ExperimentError, ValueError) as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -233,6 +296,8 @@ def build_improve_router(
                 return person_feedback.checkin(
                     c, project_id=pid, actor=who, answer=payload.answer, line=payload.line,
                     share_line=payload.share_line, dismiss=payload.dismiss)
+            except person_feedback.CheckinTooSoon as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             except person_feedback.FeedbackError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -257,6 +322,11 @@ def build_improve_router(
                                             project_id=pid)
                 if payload.weights is not None:
                     scorecards.set_weights(c, payload.weights, actor, pid)
+                if payload.url is not None:
+                    if improve_boss.endpoint(c, settings())[1] == "env":
+                        raise HTTPException(status_code=409,
+                                            detail="Set by BOSS_TELEMETRY_URL in this install's environment.")
+                    improve_boss.set_endpoint(c, payload.url, actor=actor, project_id=pid)
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
             return improve_boss.sharing_view(c, settings())
@@ -291,20 +361,30 @@ def build_improve_router(
             "Content-Disposition": 'attachment; filename="boss-improve-batch.json"',
             "Cache-Control": "no-store"})
 
+    def _sendable(c) -> None:
+        """409 with the reason when nothing may leave (env off, or no collector): P2."""
+        why = improve_boss.blocked(c, settings())
+        if why:
+            raise HTTPException(status_code=409, detail={"code": "sharing_blocked", "message": why})
+
     @router.post("/v1/telemetry/rotate")
     def rotate_install_id(payload: Body) -> dict:
+        """A new id. The old id's data is deleted at the collector first when it can be; if not,
+        the old id is kept to delete later, and the answer says so (`old`)."""
         pid = _reader(payload.project_id)
         with begin(engine) as c:
             actor = require_write_actor(c, pid, payload.actor, "providerops_manage")
-            improve_boss.rotate(c, actor=actor, project_id=pid)
-            return improve_boss.sharing_view(c, settings())
+        got = improve_boss.rotate(engine, settings(), actor=actor, project_id=pid)
+        with begin(engine) as c:
+            return {**improve_boss.sharing_view(c, settings()), "rotated": got}
 
     @router.post("/v1/telemetry/forget")
     def forget_sent(payload: Body) -> dict:
-        """Delete what was sent: a signed request to the collector, then a new install id."""
+        """Delete what was sent: a signed request per id this install used, then a new id."""
         pid = _reader(payload.project_id)
         with begin(engine) as c:
             actor = require_write_actor(c, pid, payload.actor, "providerops_manage")
+            _sendable(c)
         return improve_boss.forget(engine, settings(), actor=actor, project_id=pid)
 
     @router.get("/v1/telemetry/share-bundle")
@@ -326,6 +406,7 @@ def build_improve_router(
         pid = _reader(payload.project_id)
         with begin(engine) as c:
             require_write_actor(c, pid, payload.actor, "providerops_manage")
+            _sendable(c)
         got = improve_boss.share_send(engine, settings(), bundle=payload.bundle,
                                       note=payload.note or "")
         if not got.get("sent"):
@@ -375,12 +456,13 @@ def build_improve_router(
 
         if not await run_in_threadpool(_on):
             return JSONResponse(status_code=404, content={"detail": "not_found"})
-        # Refuse an oversized body from its declared length before reading it.
-        declared = request.headers.get("content-length")
-        if declared and declared.isdigit() and int(declared) > cap:
-            return JSONResponse(status_code=413, content={"detail": "too_large"})
-        body = await request.body()
-        ip = _client_ip(request)
+        try:
+            body = await read_capped(request, cap)
+        except improve_collector.CollectorError as error:
+            return JSONResponse(status_code=error.status, content={"detail": error.code})
+        ip = client_ip(request.client.host if request.client else "",
+                       request.headers.get("x-forwarded-for") or "",
+                       str(getattr(settings(), "trusted_proxies", "") or ""))
 
         def _work() -> dict:
             payload = improve_collector.unpack(body, request.headers.get("content-encoding"),
