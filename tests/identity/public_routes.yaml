@@ -1,0 +1,101 @@
+# EVERY PUBLIC ROUTE (IDENTITY.md §6.3, §15.4 R1): reason + the function that protects it.
+# Reviewed by hand; test_identity_authz_public_routes.py holds it equal to the app.
+DELETE /v1/previews/{preview_id}/web:
+  reason: preview_capability_url
+  verifier: boss_engine.services.preview_service:proxy_preview
+DELETE /v1/previews/{preview_id}/web/{path:path}:
+  reason: preview_capability_url
+  verifier: boss_engine.services.preview_service:proxy_preview
+GET /docs:
+  reason: api_description
+  verifier: null
+GET /docs/oauth2-redirect:
+  reason: api_description
+  verifier: null
+GET /health:
+  reason: liveness
+  verifier: null
+GET /openapi.json:
+  reason: api_description
+  verifier: null
+GET /redoc:
+  reason: api_description
+  verifier: null
+GET /saml/v2/{project_id}/metadata:
+  reason: saml_signed_assertion
+  verifier: boss_engine.services.saml:SamlAuthenticator.verify_response
+GET /v1/channels/{provider}/callback:
+  reason: oauth_state_bound_callback
+  verifier: boss_engine.services.channel_oauth:complete
+GET /v1/previews/{preview_id}/web:
+  reason: preview_capability_url
+  verifier: boss_engine.services.preview_service:proxy_preview
+GET /v1/previews/{preview_id}/web/{path:path}:
+  reason: preview_capability_url
+  verifier: boss_engine.services.preview_service:proxy_preview
+PATCH /v1/previews/{preview_id}/web:
+  reason: preview_capability_url
+  verifier: boss_engine.services.preview_service:proxy_preview
+PATCH /v1/previews/{preview_id}/web/{path:path}:
+  reason: preview_capability_url
+  verifier: boss_engine.services.preview_service:proxy_preview
+POST /saml/v2/{project_id}/acs:
+  reason: saml_signed_assertion
+  verifier: boss_engine.services.saml:SamlAuthenticator.verify_response
+POST /v1/hardware/agents/enroll:
+  reason: auth_endpoint
+  verifier: apps.api.app.hardware_api:enroll_agent
+POST /v1/investigations/{investigation_id}/db:
+  reason: per_investigation_callback_token
+  verifier: boss_engine.services.debug_session:authorise
+POST /v1/investigations/{investigation_id}/do:
+  reason: per_investigation_callback_token
+  verifier: boss_engine.services.debug_session:authorise
+POST /v1/investigations/{investigation_id}/host:
+  reason: per_investigation_callback_token
+  verifier: boss_engine.services.debug_session:authorise
+POST /v1/previews/{preview_id}/feedback:
+  reason: preview_capability_url
+  verifier: boss_engine.services.feedback_agent:submit_preview_feedback
+POST /v1/previews/{preview_id}/web:
+  reason: preview_capability_url
+  verifier: boss_engine.services.preview_service:proxy_preview
+POST /v1/previews/{preview_id}/web/{path:path}:
+  reason: preview_capability_url
+  verifier: boss_engine.services.preview_service:proxy_preview
+POST /v1/reliability/alert:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.reliability:ReliabilityService.verify_alert_signature
+POST /v1/telemetry/delete:
+  reason: collector_signed
+  verifier: boss_engine.services.improve_collector:delete
+POST /v1/telemetry/ingest:
+  reason: collector_signed
+  verifier: boss_engine.services.improve_collector:ingest
+POST /v1/telemetry/share:
+  reason: collector_signed
+  verifier: boss_engine.services.improve_collector:share
+POST /v1/webhooks/bitbucket:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.webhooks:InboundWebhookService.ingest
+POST /v1/webhooks/github:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.webhooks:InboundWebhookService.ingest
+POST /v1/webhooks/inbound/{source}:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.webhooks:InboundWebhookService.ingest
+POST /v1/webhooks/plane:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.plane_webhooks:PlaneWebhookService.verify_signature
+PUT /v1/previews/{preview_id}/web:
+  reason: preview_capability_url
+  verifier: boss_engine.services.preview_service:proxy_preview
+PUT /v1/previews/{preview_id}/web/{path:path}:
+  reason: preview_capability_url
+  verifier: boss_engine.services.preview_service:proxy_preview
+WS /v1/previews/{preview_id}/web/:
+  reason: preview_capability_url
+  verifier: apps.api.app.identity_verifiers:preview_running
+WS /v1/previews/{preview_id}/web/{path:path}:
+  reason: preview_capability_url
+  verifier: apps.api.app.identity_verifiers:preview_running

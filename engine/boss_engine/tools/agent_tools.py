@@ -40,8 +40,7 @@ def register_agent_tools(reg: ToolRegistry) -> None:
             "project_id": {"type": "string"},
         }, ["agent", "skill"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="agent_ability:assign")
     def assign_skill_to_agent(ctx, *, project_id, actor, args) -> dict[str, Any]:
         skills = services_module("skill_definitions")
         agents = services_module("agents")
@@ -118,8 +117,7 @@ def register_agent_tools(reg: ToolRegistry) -> None:
         # at first, which let the chat model give any agent any registered server on its own;
         # now the model proposes it and an operator's click runs it. Taking a server back goes
         # through the same button, which costs one click and keeps the tool one tool.
-        reversibility="grants_authority",
-    )
+        reversibility="grants_authority", permission="agent_ability:assign")
     def assign_mcp_to_agent(ctx, *, project_id, actor, args) -> dict[str, Any]:
         agents = services_module("agents")
         pid = args.get("project_id") or project_id

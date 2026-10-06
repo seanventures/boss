@@ -132,6 +132,16 @@ def list_roles(db: Any, org_id: str) -> list[dict]:
     return [_present(db, dict(r)) for r in rows]
 
 
+def version(db: Any, org_id: str, role_id: str, number: int) -> dict:
+    get_role(db, org_id, role_id)
+    row = db.execute(text("SELECT version, permissions, changed_by, changed_at FROM "
+                          "identity_access_role_versions WHERE role_id = :r AND version = :v"),
+                     {"r": role_id, "v": int(number)}).mappings().first()
+    if row is None:
+        raise AccessError(404, "not_found")
+    return dict(row)
+
+
 def versions(db: Any, org_id: str, role_id: str) -> list[dict]:
     get_role(db, org_id, role_id)
     rows = db.execute(text("SELECT version, permissions, changed_by, changed_at FROM "

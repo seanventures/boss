@@ -18,6 +18,7 @@ Also exposes (no clash with existing KG routes):
 from __future__ import annotations
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from apps.api.app import identity_verifiers as _identity_verifiers  # noqa: E402  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -83,6 +84,8 @@ def observability_suite_status(
     engine = get_engine(settings)
     svc = ObservabilitySuiteService(settings)
     with begin(engine) as connection:
+        _identity_verifiers.require_in_project(connection, "deployment_targets", host_target_id,
+                                               project_id)
         return svc.status(
             connection,
             project_id,

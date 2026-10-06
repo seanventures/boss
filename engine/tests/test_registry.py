@@ -247,7 +247,7 @@ def test_read_only_schema_excludes_writes():
 
 def test_invoke_normalizes_result_and_defaults():
     reg = ToolRegistry()
-    reg.register(ToolSpec("echo", "echo", {"type": "object"}, lambda ctx, **k: {"v": k["args"].get("x")}))
+    reg.register(ToolSpec("echo", "echo", {"type": "object"}, lambda ctx, **k: {"v": k["args"].get("x")}, permission="system:read"))
     out = reg.invoke("echo", None, project_id="p", actor="a", args={"x": 7})
     assert out == {"v": 7, "ok": True, "tool": "echo"}
 
@@ -258,7 +258,7 @@ def test_invoke_wraps_handler_exception():
     def boom(ctx, **k):
         raise ValueError("nope")
 
-    reg.register(ToolSpec("boom", "boom", {"type": "object"}, boom))
+    reg.register(ToolSpec("boom", "boom", {"type": "object"}, boom, permission="system:read"))
     out = reg.invoke("boom", None, project_id="p", actor="a", args={})
     assert out["ok"] is False and "ValueError" in out["error"]
 
@@ -272,7 +272,7 @@ def test_write_tools_fail_closed_without_a_durable_workspace():
         called = True
         return {"created": True}
 
-    reg.register(ToolSpec("create_work", "write", {"type": "object"}, write, kind="write"))
+    reg.register(ToolSpec("create_work", "write", {"type": "object"}, write, kind="write", permission="system:read"))
     ctx = type("CatalogOnlyContext", (), {"durable_workspace_configured": False})()
 
     out = reg.invoke("create_work", ctx, project_id="p", actor="a", args={})
@@ -292,9 +292,9 @@ def test_unknown_tool_raises():
 
 def test_duplicate_registration_rejected():
     reg = ToolRegistry()
-    reg.register(ToolSpec("t", "d", {"type": "object"}, lambda ctx, **k: {}))
+    reg.register(ToolSpec("t", "d", {"type": "object"}, lambda ctx, **k: {}, permission="system:read"))
     with pytest.raises(ValueError):
-        reg.register(ToolSpec("t", "d", {"type": "object"}, lambda ctx, **k: {}))
+        reg.register(ToolSpec("t", "d", {"type": "object"}, lambda ctx, **k: {}, permission="system:read"))
 
 
 def test_discuss_read_registry_exposes_scoped_reads_and_hides_project_override():

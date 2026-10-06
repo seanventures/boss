@@ -55,3 +55,23 @@ def preview_running(engine: Any, preview_id: str) -> Optional[dict[str, Any]]:
     if row is None or row["status"] != "running" or not row["url"]:
         return None
     return {"url": str(row["url"]), "mode": row["mode"]}
+
+
+def require_in_project(connection: Any, table: str, object_id: Optional[str], project_id: str) -> None:
+    """IDENTITY (S2): an object a request names alongside a project must belong to that project,
+    or the request is answered 404 — so a permission held in one project never reaches another
+    project's object (or its credentials). `table` is a module constant, never request data."""
+    if not object_id:
+        return
+    if table not in _CONFINABLE:
+        raise ValueError(f"not a confinable table: {table}")
+    found = connection.execute(text(f"SELECT 1 FROM {table} WHERE id = :i AND project_id = :p"),
+                               {"i": object_id, "p": project_id}).first()
+    if found is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="not_found")
+
+
+_CONFINABLE = frozenset({"deployment_targets", "agent_threads", "decisions", "code_task_runs",
+                         "shepherd_escalations"})

@@ -158,8 +158,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "Snapshot of everything happening in a project: counts of running/queued "
         "code tasks, discovery runs, meetings, background jobs and live previews. "
         "The go-to answer for 'what's running / how busy is BOSS right now?'.",
-        _obj({"project_id": {"type": "string", "description": "override the default project"}}),
-    )
+        _obj({"project_id": {"type": "string", "description": "override the default project"}}), permission="project:read")
     def project_status(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         with ctx.begin() as c:
@@ -195,8 +194,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "list_code_tasks",
         "Recent coding-agent task runs (newest first) with status, phase, title and "
         "PR link. Use to answer 'show me the builds / what happened to task X'.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
-    )
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="code_task:read")
     def list_code_tasks(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         limit = int(args.get("limit") or 25)
@@ -208,8 +206,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "get_code_task",
         "Full detail for one code-task run by id (crun_…): status, phase, PR url, "
         "gates, and the failure reason if it failed.",
-        _obj({"run_id": {"type": "string"}}, ["run_id"]),
-    )
+        _obj({"run_id": {"type": "string"}}, ["run_id"]), permission="code_task:read")
     def get_code_task(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         with ctx.begin() as c:
@@ -237,8 +234,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "Everything actively running in the background right now — running code "
         "tasks and non-terminal jobs — with how long each has been going. Answers "
         "'how many tasks are running in the background?'.",
-        _obj({"project_id": {"type": "string"}}),
-    )
+        _obj({"project_id": {"type": "string"}}), permission="job:read")
     def list_running_work(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         with ctx.begin() as c:
@@ -262,8 +258,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "list_discovery",
         "Recent research/discovery runs (outcome discovery dossiers) with status.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
-    )
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="discovery:read")
     def list_discovery(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         with ctx.begin() as c:
@@ -273,8 +268,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "list_meetings",
         "Recent multi-agent PRD meeting runs with status and directive.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
-    )
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="meeting:read")
     def list_meetings(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         limit = int(args.get("limit") or 25)
@@ -306,8 +300,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "`read_preview_log` for the full startup log, then "
         "repair: an app-side fault is fixed with extend_code_task or steer_code_task on the "
         "run, and start_preview tries again.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
-    )
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="preview:read")
     def list_previews(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         # list_previews already publicizes: url/open_url are gateway paths, not loopback.
@@ -347,8 +340,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "run_id, then start_preview again.",
         _obj({"preview_id": {"type": "string", "description": "prev_…"},
               "project_id": {"type": "string"}},
-             ["preview_id"]),
-    )
+             ["preview_id"]), permission="preview:read")
     def read_preview_log(ctx, *, project_id, actor, args):
         from ..services.preview_service import preview_log_snapshot
 
@@ -383,8 +375,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "The live preview URL(s) for one code-task run (crun_…), if any preview is "
         "running — and for the failed attempts, why each failed. Answers 'preview this task / "
         "give me the link' and 'why will this app not come up'.",
-        _obj({"run_id": {"type": "string"}, "project_id": {"type": "string"}}, ["run_id"]),
-    )
+        _obj({"run_id": {"type": "string"}, "project_id": {"type": "string"}}, ["run_id"]), permission="preview:read")
     def get_task_preview(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         run_id = args["run_id"]
@@ -415,8 +406,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "State of the sandbox/microVM execution fleet: the configured build "
         "substrate, the sandbox agent URL and its reachability, plus any held "
         "sandboxes still attached to running previews/tasks.",
-        _obj({}),
-    )
+        _obj({}), permission="sandbox:read")
     def microvm_status(ctx, *, project_id, actor, args):
         s = ctx.settings
         provider = getattr(s, "governed_sandbox_provider", None)
@@ -463,8 +453,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 "max_rows": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
             },
             ["sql"],
-        ),
-    )
+        ), permission="host:exec")
     def query_db(ctx, *, project_id, actor, args):
         if _community_raw_sql_disabled(ctx.settings):
             return {"ok": False, "error": "Unrestricted SQL reads are unavailable in Community. "
@@ -520,8 +509,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "The machines this project can deploy onto: name, address, architecture, status "
         "(registered/verified/degraded/retired), port budget and when each was last checked. "
         "Use for 'what hosts do we have', 'is <host> healthy', 'where can this ship'.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
-    )
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="host:read")
     def list_deployment_hosts(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         limit = int(args.get("limit") or 25)
@@ -544,8 +532,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "findings and problems — plus the apps currently deployed onto it. Accepts the host "
         "id, its name, or its IP address. Use before recommending anything be shipped there.",
         _obj({"host": {"type": "string", "description": "host id, name or address"},
-              "project_id": {"type": "string"}}, ["host"]),
-    )
+              "project_id": {"type": "string"}}, ["host"]), permission="host:read")
     def describe_deployment_host(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         needle = str(args.get("host") or "").strip()
@@ -605,8 +592,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "list_deployments",
         "Recent deployment runs: app, environment, target, commit, status and when. "
         "Use for 'what shipped', 'did the last deploy succeed', 'what is on <host> now'.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
-    )
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="deployment:read")
     def list_deployments(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         limit = int(args.get("limit") or 25)
@@ -818,8 +804,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["title", "instructions"],
         ),
         kind="write",
-        reversibility="costs_money",
-    )
+        reversibility="costs_money", permission="code_task:create")
     def create_code_task(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         cts = services_module("code_task_service")
@@ -928,8 +913,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["run_id", "instructions"],
         ),
         kind="write",
-        reversibility="costs_money",
-    )
+        reversibility="costs_money", permission="code_task:retry")
     def extend_code_task(ctx, *, project_id, actor, args):
         cts = services_module("code_task_service")
         result = cts.retry_code_task(
@@ -980,8 +964,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["run_id"],
         ),
         kind="write",
-        reversibility="costs_money",
-    )
+        reversibility="costs_money", permission="code_task:retry")
     def retry_code_task(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         with ctx.begin() as c:
@@ -1012,8 +995,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["seed"],
         ),
         kind="write",
-        reversibility="costs_money",
-    )
+        reversibility="costs_money", permission="discovery:create")
     def create_discovery(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         ds = services_module("discovery_service")
@@ -1090,8 +1072,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["workflow_key", "name", "steps"],
         ),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="workflow:publish")
     def draft_workflow(ctx, *, project_id, actor, args):
         wf = services_module("workflows")
         caps = services_module("workflow_capabilities")
@@ -1199,8 +1180,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         _obj({"workflow_key": {"type": "string"}, "project_id": {"type": "string"}},
              ["workflow_key"]),
         kind="write",
-        reversibility="destroys_work",
-    )
+        reversibility="destroys_work", permission="workflow:delete")
     def delete_workflow(ctx, *, project_id, actor, args):
         # THE CONSOLE'S DELETE, not a second one. This deleted the definition row outright,
         # which fails on any workflow that has ever run (runs have no cascade) and would have
@@ -1257,8 +1237,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["step_key", "label"],
         ),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="workflow:create")
     def draft_custom_step(ctx, *, project_id, actor, args):
         # BOTH BINDINGS, AND EVERY SKILL. This accepted only a skill the project had AUTHORED,
         # so the chat could not place a skill BOSS ships, and could not bind an MCP tool at all
@@ -1376,8 +1355,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["skill_key", "label", "behaviour_kind"],
         ),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="skill:manage")
     def draft_skill(ctx, *, project_id, actor, args):
         skills = services_module("skill_definitions")
         pid = args.get("project_id") or project_id
@@ -1421,8 +1399,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         "it produces, which agent answers for it, and whether it always requires a person. Read "
         "this before drafting a workflow — a step that asks for an input nothing produces is "
         "the most common way a draft fails to publish.",
-        _obj({}),
-    )
+        _obj({}), permission="workflow:read")
     def list_capabilities(ctx, *, project_id, actor, args):
         caps = services_module("workflow_capabilities")
         return {"capabilities": [
@@ -1438,8 +1415,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         "what each needs, its risk tier, whether it forces an approval, and whether it can run "
         "right now (and why not). A skill is what an agent is given and what a custom workflow "
         "step runs.",
-        _obj({"project_id": {"type": "string"}}),
-    )
+        _obj({"project_id": {"type": "string"}}), permission="skill:read")
     def list_skills(ctx, *, project_id, actor, args):
         # EVERYTHING THIS PROJECT CAN RUN, not only what it wrote — and from THE ONE CATALOGUE
         # (skill_catalogue), so the agent's answer is the same one the runtime and the builder
@@ -1508,8 +1484,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         _obj({"check": {"type": "boolean",
                         "description": "ask each server again now instead of using the last "
                                        "answer (up to a minute old)"},
-              "project_id": {"type": "string"}}),
-    )
+              "project_id": {"type": "string"}}), permission="mcp_server:read")
     def list_mcp_servers(ctx, *, project_id, actor, args):
         registry = services_module("mcp_registry")
         pid = args.get("project_id") or project_id
@@ -1544,8 +1519,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["name", "url"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="mcp_server:register")
     def register_mcp_server(ctx, *, project_id, actor, args):
         registry = services_module("mcp_registry")
         pid = args.get("project_id") or project_id
@@ -1638,8 +1612,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["directive", "workflow_key"],
         ),
         kind="write",
-        reversibility="costs_money",
-    )
+        reversibility="costs_money", permission="workflow_run:start")
     def start_workflow(ctx, *, project_id, actor, args):
         from uuid import uuid4
 
@@ -1770,8 +1743,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["directive"],
         ),
         kind="write",
-        reversibility="costs_money",
-    )
+        reversibility="costs_money", permission="meeting:convene")
     def request_meeting(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         ms = services_module("meeting_service")
@@ -1846,8 +1818,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ["run_id"],
         ),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="preview:manage")
     def start_preview(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         with ctx.begin() as c:
@@ -1995,8 +1966,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "force": {"type": "boolean", "description": "stop it even if running"}},
              required=["job_id", "reason"]),
         kind="write",
-        reversibility="destroys_work",
-    )
+        reversibility="destroys_work", permission="job:control")
     def cancel_job(ctx, *, project_id, actor, args):
         from ..services.jobs import JobLeaseService
         with ctx.begin() as c:
@@ -2020,8 +1990,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                               "description": "confirm an intentionally unqualified UPDATE/DELETE"}},
              required=["sql", "reason"]),
         kind="write",
-        reversibility="destroys_work",
-    )
+        reversibility="destroys_work", permission="host:exec")
     def write_db(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
         from ..services.core import emit_event
@@ -2071,8 +2040,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "reason": {"type": "string", "description": "why — recorded on the deployment"}},
              required=["run_id"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="deployment:create")
     def redeploy(ctx, *, project_id, actor, args):
         from ..services.shepherd_service import _act_on_deployment, redeploy_latest_deployment
         reason = args.get("reason") or "operator asked BOSS to retry the deployment"
@@ -2111,8 +2079,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "target_id": {"type": "string", "description": "optional exact deptgt_ to use"}},
              required=["run_id", "environment"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="deployment:create")
     def deploy_app(ctx, *, project_id, actor, args):
         from ..services.delivery_pipeline import deploy_build
         return deploy_build(
@@ -2146,8 +2113,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                        "description": "optional; leave unset and a free one is chosen"}},
              required=["app_name"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="deployment_target:manage")
     def create_deployment_target(ctx, *, project_id, actor, args):
         from ..services.deployment_fleet import create_deployment_target as _create
 
@@ -2166,8 +2132,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "anything. Read-only. Run this first when a deployment failed with a connection or "
         "health error, so a redeploy is not aimed at a host that is down.",
         _obj({"run_id": {"type": "string"}}, required=["run_id"]),
-        kind="read",
-    )
+        kind="read", permission="deployment:read")
     def preflight_deployment_target(ctx, *, project_id, actor, args):
         from ..services.shepherd_service import _act_on_deployment
         return {"run_id": args["run_id"],
@@ -2195,8 +2160,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "why": {"type": "string",
                       "description": "one line: what it will do and what it costs"}},
              required=["tool", "label"]),
-        kind="read",
-    )
+        kind="read", permission="decision:read")
     def propose_action(ctx, *, project_id, actor, args):
         """Records an offer. Executing it is the operator's click, not this call."""
         name = ToolRegistry.canonical_tool_name(str(args.get("tool") or ""))
@@ -2239,8 +2203,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         # A READ OF GITHUB THAT RECORDS WHAT IT SAW. It asks GitHub one question and updates
         # the connection's test state; running it again simply asks again, which is the whole
         # point of it existing.
-        reversibility="safe",
-    )
+        reversibility="safe", permission="setup:manage")
     def test_github_access(ctx, *, project_id, actor, args):
         # WHY THIS IS A TOOL. Asked why a connection failed, the agent diagnosed it correctly
         # and then said "open BOSS's GitHub view, select the repository, and click Test
@@ -2299,8 +2262,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         kind="write",
         # UNDONE BY SETTING IT BACK, or by sending an empty value to return to the deployment
         # default. It starts nothing and spends nothing; the next run reads the new value.
-        reversibility="safe",
-    )
+        reversibility="safe", permission="settings:update")
     def set_project_setting(ctx, *, project_id, actor, args):
         from ..services import project_settings as ps
 
@@ -2336,8 +2298,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "rejected, or 'the check failed'. Read-only; never calls GitHub or a provider and "
         "never returns a credential.",
         _obj({}),
-        kind="read",
-    )
+        kind="read", permission="setup:read")
     def diagnose_setup(ctx, *, project_id, actor, args):
         # ONE SOURCE WITH THE PAGE. This assembled its own picture from setup_status, raw
         # github_connections rows and CLI detection, so the chat and Repo and models could
@@ -2384,8 +2345,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "running, because load-per-core says whether anything is actually contending. "
         "Read-only; it touches no docker socket.",
         _obj({}),
-        kind="read",
-    )
+        kind="read", permission="system:read")
     def inspect_self(ctx, *, project_id, actor, args):
         from ..services.self_observability import self_snapshot
         return self_snapshot()
@@ -2404,8 +2364,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "reason": {"type": "string"}},
              required=["job_id", "band", "reason"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="job:control")
     def set_job_priority(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
         from ..services.jobs import (
@@ -2434,8 +2393,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "progress, not an error, so nothing shows up as failed. Returns each waiting job with "
         "how long it has waited, plus whatever is currently holding a worker slot.",
         _obj({"minutes": {"type": "integer",
-                          "description": "how long queued counts as starved (default 10)"}}),
-    )
+                          "description": "how long queued counts as starved (default 10)"}}), permission="job:read")
     def find_starved_work(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
         threshold = int(args.get("minutes") or 10)
@@ -2477,8 +2435,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "task_id": {"type": "string"}},
              required=["run_id", "kind"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="code_task:steer")
     def link_run_origin(ctx, *, project_id, actor, args):
         import json as _json
 
@@ -2507,8 +2464,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "queued far longer than anything is running, decisions pending past their deadline. "
         "Use this to answer 'what is inconsistent right now' instead of waiting for someone "
         "to notice a stuck card.",
-        _obj({}),
-    )
+        _obj({}), permission="system:read")
     def consistency_report(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
         live_job = ("NOT EXISTS (SELECT 1 FROM jobs j WHERE j.payload->>'run_id' = r.id "
@@ -2572,8 +2528,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "dry_run is true.",
         _obj({"dry_run": {"type": "boolean", "description": "default true"}}),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="code_task:cancel")
     def close_orphaned_runs(ctx, *, project_id, actor, args):
         from ..ports import sql as _s
         dry = args.get("dry_run")
@@ -2609,8 +2564,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                        "default": "pending"},
             "limit": _LIMIT,
             "project_id": {"type": "string"},
-        }),
-    )
+        }), permission="decision:read")
     def list_decisions(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         status = args.get("status") or "pending"
@@ -2644,8 +2598,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             ["decision_id", "action", "note"],
         ),
         kind="write",
-        reversibility="irreversible",
-    )
+        reversibility="irreversible", permission="decision:approve")
     def decide(ctx, *, project_id, actor, args):
         action = args["action"]
         if action not in _DECISION_ACTIONS:
@@ -2677,8 +2630,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "forever with nothing driving it.",
         _obj({"run_id": {"type": "string"}, "reason": {"type": "string"}}, ["run_id"]),
         kind="write",
-        reversibility="destroys_work",
-    )
+        reversibility="destroys_work", permission="code_task:cancel")
     def cancel_code_task(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         reason = args.get("reason") or "cancelled via MCP"
@@ -2707,8 +2659,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             ["run_id", "waive_gates"],
         ),
         kind="write",
-        reversibility="destroys_work",
-    )
+        reversibility="destroys_work", permission="code_task:override")
     def waive_gates(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         with ctx.begin() as c:
@@ -2740,8 +2691,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             ["run_id", "message"],
         ),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="code_task:steer")
     def send_feedback(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         with ctx.begin() as c:
@@ -2764,8 +2714,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "start_preview.",
         _obj({"preview_id": {"type": "string"}}, ["preview_id"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="preview:manage")
     def stop_preview(ctx, *, project_id, actor, args):
         preview_id = args["preview_id"]
         with ctx.begin() as c:
@@ -2789,8 +2738,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                            "description": "what to do differently, in plain terms"}},
              ["run_id", "guidance"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="code_task:steer")
     def steer_code_task(ctx, *, project_id, actor, args):
         import json as _json
         from datetime import datetime, timezone
@@ -2824,8 +2772,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "machine and signed in. A subscription has no credential to paste — the CLI holds its "
         "own OAuth session — so this is how BOSS finds one. Reports the exact next command "
         "for anything not ready yet.",
-        _obj({}, []),
-    )
+        _obj({}, []), permission="setup:read")
     def detect_coding_agents(ctx, *, project_id, actor, args):
         from ..services.setup_service import list_coding_agents
 
@@ -2846,8 +2793,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                         "description": "run one real turn before recording it (recommended)"}},
              ["provider"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="model_provider:manage")
     def connect_coding_agent(ctx, *, project_id, actor, args):
         from ..services.setup_service import SetupError, connect_coding_agent as _connect
 
@@ -2880,8 +2826,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
               "dimension": {"type": "string", "enum": ["vendor", "transport"],
                             "default": "vendor",
                             "description": "vendor = whose model; transport = whose endpoint"}},
-             []),
-    )
+             []), permission="model_provider:read")
     def provider_audit(ctx, *, project_id, actor, args):
         from ..services.provider_audit import audit_project
 
@@ -2899,8 +2844,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "Every coding harness BOSS can drive — API lanes and CLI agents — with what each "
         "needs and whether a governed code task has actually completed on it. `verified: "
         "false` means wired but unproven, not broken.",
-        _obj({}, []),
-    )
+        _obj({}, []), permission="setup:read")
     def list_harnesses(ctx, *, project_id, actor, args):
         from ..services.harness_registry import available_harnesses
 
@@ -2928,8 +2872,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                                           "follow-up work"}},
              ["run_id", "path", "line", "body"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="code_task:steer")
     def add_review_comment(ctx, *, project_id, actor, args):
         import json as _json
         from ..services.core import make_id
@@ -2972,8 +2915,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         _obj({"run_id": {"type": "string"},
               "status": {"type": "string", "enum": ["open", "addressed", "dismissed", "all"],
                          "default": "all"}},
-             ["run_id"]),
-    )
+             ["run_id"]), permission="code_task:read")
     def list_review_comments(ctx, *, project_id, actor, args):
         cts = services_module("code_task_service")
         want = (args.get("status") or "all").lower()
@@ -3000,8 +2942,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
               "note": {"type": "string", "description": "why, for a dismissal"}},
              ["run_id", "comment_id", "status"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="code_task:steer")
     def resolve_review_comment(ctx, *, project_id, actor, args):
         cts = services_module("code_task_service")
         run_id = args["run_id"]
@@ -3024,8 +2965,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
               "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 40},
               "as_text": {"type": "boolean", "default": True,
                           "description": "terminal-style lines (default) or structured JSON"}},
-             ["run_id"]),
-    )
+             ["run_id"]), permission="code_task:read")
     def watch_code_task(ctx, *, project_id, actor, args):
         rid = args["run_id"]
         with ctx.begin() as c:
@@ -3042,8 +2982,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "Per-LLM-call activity for a code-task run: stage, model, tokens, cost, "
         "latency, retries, turns and errors. The answer to 'WHY did this phase fail "
         "or take so long / what did it cost?'.",
-        _obj({"run_id": {"type": "string"}, "limit": _LIMIT}, ["run_id"]),
-    )
+        _obj({"run_id": {"type": "string"}, "limit": _LIMIT}, ["run_id"]), permission="code_task:read")
     def get_run_activity(ctx, *, project_id, actor, args):
         run_id = args["run_id"]
         limit = int(args.get("limit") or 100)
@@ -3088,8 +3027,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                          "description": "code task run id (crun_...) or meeting run id (mrun_...); "
                                         "omit to use the run this conversation is scoped to"},
               "app": {"type": "string",
-                      "description": "app/run title instead of an id, e.g. 'UnitFlip'"}}),
-    )
+                      "description": "app/run title instead of an id, e.g. 'UnitFlip'"}}), permission="workflow:read")
     def read_spec(ctx, *, project_id, actor, args):
         """The spec, from wherever this app's spec actually landed.
 
@@ -3216,8 +3154,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "almost always the answer), cost per stage, repair attempts, turns and the test "
         "verdict. Use this for 'why did this take 152m', 'what went wrong', 'why so "
         "expensive'.",
-        _obj({"run_id": {"type": "string"}}, ["run_id"]),
-    )
+        _obj({"run_id": {"type": "string"}}, ["run_id"]), permission="code_task:read")
     def explain_run(ctx, *, project_id, actor, args):
         """The wall-clock answer, which `get_run_activity` cannot give.
 
@@ -3309,8 +3246,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "What BOSS has spent: total and per-run USD over a recent window, newest "
         "first. Use before launching expensive work, or to explain a spend spike.",
         _obj({"days": {"type": "integer", "minimum": 1, "maximum": 90, "default": 7},
-              "limit": _LIMIT, "project_id": {"type": "string"}}),
-    )
+              "limit": _LIMIT, "project_id": {"type": "string"}}), permission="budget:read")
     def get_costs(ctx, *, project_id, actor, args):
         # Session project is the fence. args.project_id is stripped by MCP HTTP and
         # the discuss-path pin; never fall back to a model-supplied override here
@@ -3387,8 +3323,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "Every repository registered to this project, with the health of the connection "
         "that owns it. Use before starting work to pick the right repo — BOSS is "
         "multi-repo; do NOT assume one global default.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
-    )
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="repository:read")
     def list_repositories(ctx, *, project_id, actor, args):
         rr = services_module("repo_registry")
         pid = args.get("project_id") or project_id
@@ -3407,8 +3342,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "first-pass rates, median time-to-PR, spend and $/PR, plus the recent runs. "
         "The answer to 'how is BOSS performing in my repository?'.",
         _obj({"days": {"type": "integer", "minimum": 1, "maximum": 365, "default": 30},
-              "project_id": {"type": "string"}}),
-    )
+              "project_id": {"type": "string"}}), permission="github:read")
     def repo_activity(ctx, *, project_id, actor, args):
         rr = services_module("repo_registry")
         pid = args.get("project_id") or project_id
@@ -3438,8 +3372,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             ["connection_id", "repository"],
         ),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="repository:register")
     def register_repository(ctx, *, project_id, actor, args):
         gc = services_module("github_connections")
         svc = gc.GitHubConnectionService(ctx.settings)
@@ -3460,8 +3393,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "GitHub connections for this project: the credentialed accounts/installations "
         "repositories are bound to, with status and any missing permissions. Secrets are "
         "never returned — only the reference and its health.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
-    )
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="github:read")
     def list_github_connections(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         with ctx.begin() as c:
@@ -3482,8 +3414,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         "get_meeting",
         "Full detail for one PRD meeting run (mrun_…): status, phase, directive, the "
         "panel roles and the linked decision. Read this BEFORE approving its PRD.",
-        _obj({"meeting_id": {"type": "string"}}, ["meeting_id"]),
-    )
+        _obj({"meeting_id": {"type": "string"}}, ["meeting_id"]), permission="meeting:read")
     def get_meeting(ctx, *, project_id, actor, args):
         with ctx.begin() as c:
             row = c.execute(
@@ -4123,8 +4054,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                       "description": "allow it to CHANGE the host, not just look"}},
              required=["question"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="host:exec")
     def investigate(ctx, *, project_id, actor, args):
         from ..services.debug_session import open_investigation
 
@@ -4175,8 +4105,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         "next', 'how are we doing' — instead of assembling the same picture from six separate "
         "lookups. Read-only.",
         _obj({}),
-        kind="read",
-    )
+        kind="read", permission="assistant:chat")
     def factory_briefing(ctx, *, project_id, actor, args):
         from ..services.factory_briefing import factory_briefing as _briefing
 
@@ -4196,8 +4125,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                           "description": "omit for the active version"},
               "project_id": {"type": "string"}},
              ["workflow_key"]),
-        kind="read",
-    )
+        kind="read", permission="workflow:read")
     def describe_workflow(ctx, *, project_id, actor, args):
         from ..services.workflow_explain import WorkflowExplainError, explain_version
 
@@ -4232,8 +4160,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["check", "until"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="autopilot:operate")
     def watch(ctx, *, project_id, actor, args):
         """The answer to "keep an eye on this", which BOSS simply did not have.
 
@@ -4276,8 +4203,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["prompt", "at_time"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="autopilot:operate")
     def schedule_work(ctx, *, project_id, actor, args):
         from ..services.agent_wakeups import WakeupError, schedule as _schedule
 
@@ -4306,8 +4232,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "reason": {"type": "string"},
               "project_id": {"type": "string"}}),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="autopilot:operate")
     def stop_watching(ctx, *, project_id, actor, args):
         from ..services.agent_wakeups import WakeupError, stop
 
@@ -4343,8 +4268,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         "it next wakes, which cycle it is on, and what the last one found.",
         _obj({"all": {"type": "boolean", "description": "include stopped and finished ones"},
               "project_id": {"type": "string"}}),
-        kind="read",
-    )
+        kind="read", permission="autopilot:read")
     def list_watches(ctx, *, project_id, actor, args):
         from ..services.agent_wakeups import list_wakeups
 
@@ -4373,8 +4297,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["kind", "body"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="memory:manage")
     def remember(ctx, *, project_id, actor, args):
         """The write half of the memory plane.
 
@@ -4421,8 +4344,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "include_proposed": {"type": "boolean",
                                    "description": "also show what is awaiting review"},
               "project_id": {"type": "string"}}),
-        kind="read",
-    )
+        kind="read", permission="memory:read")
     def recall(ctx, *, project_id, actor, args):
         from ..services.agent_memory import recall as _recall
 
@@ -4444,8 +4366,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         _obj({"memory_id": {"type": "string"}, "project_id": {"type": "string"}},
              ["memory_id"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="memory:manage")
     def forget(ctx, *, project_id, actor, args):
         from ..services.agent_memory import MemoryError_, forget as _forget
 
@@ -4480,8 +4401,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                                           "stops being re-injected into later turns"},
               "project_id": {"type": "string"}}),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="assistant:chat")
     def update_ledger(ctx, *, project_id, actor, args):
         """The session's own memory of itself.
 
@@ -4534,8 +4454,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["run_id", "step_id"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="workflow_run:control")
     def retry_workflow_step(ctx, *, project_id, actor, args):
         """The recovery the agent could diagnose and could not perform.
 
@@ -4605,8 +4524,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["run_id", "step_id", "reason"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="workflow_run:control")
     def skip_workflow_step(ctx, *, project_id, actor, args):
         """The agent's half of "Skip and proceed".
 
@@ -4655,8 +4573,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         _obj({"run_id": {"type": "string", "description": "the wfr_... to describe"},
               "project_id": {"type": "string"}},
              ["run_id"]),
-        kind="read",
-    )
+        kind="read", permission="workflow_run:read")
     def describe_workflow_run(ctx, *, project_id, actor, args):
         """A workflow run, and the way out of it.
 
@@ -4782,8 +4699,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                           "description": "false to report without changing anything"}},
              required=["run_id"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="workflow_run:control")
     def recheck_workflow_run(ctx, *, project_id, actor, args):
         from ..services import workflows as _workflows
         from ..services.workflow_recheck import recheck_run
@@ -4804,8 +4720,7 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         "conversation — while it is still running, say so and answer with what you have.",
         _obj({"investigation_id": {"type": "string",
                                    "description": "optional — defaults to the latest"}}),
-        kind="read",
-    )
+        kind="read", permission="reliability:read")
     def get_investigation(ctx, *, project_id, actor, args):
         from ..services.debug_session import get_investigation as _get
 
@@ -4827,8 +4742,7 @@ def _register_system_health_tools(reg: ToolRegistry) -> None:
         "doctor's open findings with the options each offers, and what BOSS fixed on its own. "
         "Read this before blaming a slow or failed build on BOSS.",
         _obj({"project_id": {"type": "string"}}),
-        kind="read",
-    )
+        kind="read", permission="system:read")
     def system_health(ctx, *, project_id, actor, args):
         from ..services import admission, system_doctor
 
@@ -4851,8 +4765,7 @@ def _register_system_health_tools(reg: ToolRegistry) -> None:
              ["finding_id", "option"]),
         kind="write",
         # Some options pause or cancel a build: never pressed on a guess.
-        reversibility="destroys_work",
-    )
+        reversibility="destroys_work", permission="system:operate")
     def system_doctor_act(ctx, *, project_id, actor, args):
         from ..services import system_doctor
 
@@ -4888,8 +4801,7 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
         _obj({"run_id": {"type": "string", "description": "the code-task run (crun_...)"},
               "project_id": {"type": "string"}},
              ["run_id"]),
-        kind="read",
-    )
+        kind="read", permission="code_task:read")
     def diagnose_run(ctx, *, project_id, actor, args):
         run_id = str(args.get("run_id") or "").strip()
         pid = project_id
@@ -5061,8 +4973,7 @@ def _register_port_tools(reg: ToolRegistry) -> None:
               "count": {"type": "integer", "description": "how many to report (default 3)"},
               "project_id": {"type": "string"}},
              ["host"]),
-        kind="read",
-    )
+        kind="read", permission="host:read")
     def find_free_port(ctx, *, project_id, actor, args):
         import socket
 
@@ -5151,8 +5062,7 @@ def _register_run_turn_tools(reg: ToolRegistry) -> None:
               "stage": {"type": "string", "description": "only this stage, e.g. implement"},
               "project_id": {"type": "string"}},
              ["run_id"]),
-        kind="read",
-    )
+        kind="read", permission="code_task:read")
     def read_run_turns(ctx, *, project_id, actor, args):
         run_id = str(args.get("run_id") or "").strip()
         if not run_id:
@@ -5252,8 +5162,7 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
         "has mandated, with who mandated each and why. Read before proposing a new one — a "
         "second rule saying the same thing teaches agents that standards are noise.",
         _obj({"project_id": {"type": "string"}}),
-        kind="read",
-    )
+        kind="read", permission="policy:read")
     def list_standards(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         with ctx.begin() as c:
@@ -5306,8 +5215,7 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["key", "title", "body", "rationale"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="policy:manage")
     def mandate_standard(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         key = str(args.get("key") or "").strip()
@@ -5368,8 +5276,7 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
                         "description": "ports to probe"},
               "project_id": {"type": "string"}},
              ["host", "ports"]),
-        kind="read",
-    )
+        kind="read", permission="host:read")
     def check_port_exposure(ctx, *, project_id, actor, args):
         import socket
 
@@ -5456,8 +5363,7 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
               "limit": _LIMIT,
               "project_id": {"type": "string"}},
              ["role"]),
-        kind="read",
-    )
+        kind="read", permission="meeting:read")
     def recall_role_experience(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         wanted = str(args.get("role") or "").strip()
@@ -5546,8 +5452,7 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
               "limit": _LIMIT,
               "project_id": {"type": "string"}},
              []),
-        kind="read",
-    )
+        kind="read", permission="activity:read")
     def my_recent_work(ctx, *, project_id, actor, args):
         from ..services.agent_acts import my_recent_work as recent, resolve_role
 
@@ -5568,8 +5473,7 @@ def _register_role_experience_tools(reg: ToolRegistry) -> None:
         "agent definition carries. Read this before answering as a role, so the answer comes "
         "from that role's actual remit rather than a guess at what the title implies.",
         _obj({"role": {"type": "string"}, "project_id": {"type": "string"}}, ["role"]),
-        kind="read",
-    )
+        kind="read", permission="agent:read")
     def describe_role(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         wanted = str(args.get("role") or "").strip()
@@ -5744,8 +5648,7 @@ def _register_deployment_target_tools(reg: ToolRegistry) -> None:
         _obj({"app_name": {"type": "string", "description": "the app, e.g. HookWatch"},
               "target_id": {"type": "string", "description": "or the target directly"},
               "project_id": {"type": "string"}}),
-        kind="read",
-    )
+        kind="read", permission="deployment:read")
     def describe_deployment_target(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         where, params = "project_id = :p", {"p": pid}
@@ -5821,8 +5724,7 @@ def _register_deployment_target_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["target_id"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="deployment_target:manage")
     def retarget_app(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         target_id = str(args["target_id"])
@@ -5911,8 +5813,7 @@ def _register_image_tools(reg: ToolRegistry) -> None:
                                        "one"}},
              ["prompt", "path"]),
         kind="write",
-        reversibility="costs_money",
-    )
+        reversibility="costs_money", permission="artifact:rebuild")
     def generate_image(ctx, *, project_id, actor, args):
         import base64
         import urllib.error
@@ -6022,8 +5923,7 @@ def _register_app_identity_tools(reg: ToolRegistry) -> None:
         "run's title NORMALISES to, so it catches the splits punctuation caused ('X.' vs "
         "'X-Y'). Read-only. Use before merge_apps, and whenever a customer says they see "
         "the same app twice.",
-        _obj({"project_id": {"type": "string"}}),
-    )
+        _obj({"project_id": {"type": "string"}}), permission="code_task:read")
     def find_split_apps(ctx, *, project_id, actor, args):
         from ..services.naming import identity_key, project_name
 
@@ -6082,8 +5982,7 @@ def _register_app_identity_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["keep_app_id", "merge_app_ids"]),
         kind="write",
-        reversibility="safe",
-    )
+        reversibility="safe", permission="code_task:steer")
     def merge_apps(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         keep = str(args.get("keep_app_id") or "").strip()
@@ -6146,8 +6045,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "path": {"type": "string", "description": "optional subdir, e.g. engine/"},
               "glob": {"type": "string", "description": "optional filename filter, e.g. *.py"},
               "limit": _LIMIT},
-             ["pattern"]),
-    )
+             ["pattern"]), permission="repository:read")
     def search_code(ctx, *, project_id, actor, args):
         import fnmatch as _fn
 
@@ -6209,8 +6107,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "ref": {"type": "string", "description": "explicit branch/tag/sha"},
               "path": {"type": "string", "description": "optional subdir, e.g. server/"},
               "glob": {"type": "string", "description": "optional filter, e.g. *.ts"},
-              "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 200}}),
-    )
+              "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 200}}), permission="repository:read")
     def list_source(ctx, *, project_id, actor, args):
         """WHAT IS IN THIS APP — the question every investigation starts from.
 
@@ -6268,8 +6165,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "ref": {"type": "string", "description": "explicit branch/tag/sha"},
               "start": {"type": "integer", "minimum": 1},
               "end": {"type": "integer", "minimum": 1}},
-             ["file"]),
-    )
+             ["file"]), permission="repository:read")
     def read_code(ctx, *, project_id, actor, args):
         repo, ref, err = _resolve_source(ctx, args, project_id=project_id)
         if err:
@@ -6300,8 +6196,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "database logs, never shared service log files.",
         _obj({"service": {"type": "string", "enum": ["api", "worker", "web"]},
               "pattern": {"type": "string", "description": "optional regex filter"},
-              "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 120}}),
-    )
+              "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 120}}), permission="observability:read")
     def read_logs(ctx, *, project_id, actor, args):
         service = (args.get("service") or "api").lower()
         limit = int(args.get("limit") or 120)
@@ -6386,8 +6281,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "schema when troubleshooting; use project-scoped read tools for data. Raw SQL "
         "is unavailable from project-pinned chat.",
         _obj({"table": {"type": "string", "description": "optional: one table's columns"},
-              "like": {"type": "string", "description": "optional name filter, e.g. deployment"}}),
-    )
+              "like": {"type": "string", "description": "optional name filter, e.g. deployment"}}), permission="system:read")
     def describe_schema(ctx, *, project_id, actor, args):
         table = (args.get("table") or "").strip()
         like = (args.get("like") or "").strip()
@@ -6426,8 +6320,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         _obj({"host": {"type": "string", "description": "host name or id from the fleet"},
               "command": {"type": "string",
                           "description": "e.g. 'docker ps', 'df -h', 'docker logs --tail 50 app'"}},
-             ["host", "command"]),
-    )
+             ["host", "command"]), permission="host:exec")
     def inspect_host(ctx, *, project_id, actor, args):
         command, error = _inspect_host_command(args.get("command"))
         if error:
@@ -6479,8 +6372,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "repo": {"type": "string", "description": "owner/repo; defaults to the target"},
               "with_diff": {"type": "boolean", "default": False},
               "project_id": {"type": "string"}},
-             ["pull_request"]),
-    )
+             ["pull_request"]), permission="github:read")
     def read_pull_request(ctx, *, project_id, actor, args):
         """The agent could describe a task and not see what it shipped.
 
@@ -6596,8 +6488,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "timeout_s": {"type": "integer", "minimum": 5, "maximum": 600, "default": 120}},
              ["host", "command"]),
         kind="write",
-        reversibility="irreversible",
-    )
+        reversibility="irreversible", permission="host:exec")
     def run_on_host(ctx, *, project_id, actor, args):
         """A shell on the operator's own machine, off by default and always recorded.
 
@@ -6704,8 +6595,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "bound to the current project and a network policy.",
         _obj({"url": {"type": "string"},
               "timeout_s": {"type": "integer", "minimum": 1, "maximum": 30, "default": 10}},
-             ["url"]),
-    )
+             ["url"]), permission="observability:manage")
     def http_probe(ctx, *, project_id, actor, args):
         import time as _time
         import urllib.error as _uerr
@@ -6750,8 +6640,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
               "file": {"type": "string", "description": "optional path to scope the log"},
               "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
               "search": {"type": "string",
-                         "description": "optional: commits touching this string"}}),
-    )
+                         "description": "optional: commits touching this string"}}), permission="repository:read")
     def git_history(ctx, *, project_id, actor, args):
         repo, ref, err = _resolve_source(ctx, args, project_id=project_id)
         if err:
@@ -6816,8 +6705,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "BOSS's EFFECTIVE runtime configuration — feature flags, model routing, engine "
         "selection, limits. Answers 'why did it behave that way' when the code branches "
         "on a setting. Secret VALUES are never returned, only whether each is set.",
-        _obj({"like": {"type": "string", "description": "optional name filter, e.g. sandbox"}}),
-    )
+        _obj({"like": {"type": "string", "description": "optional name filter, e.g. sandbox"}}), permission="settings:read")
     def get_config(ctx, *, project_id, actor, args):
         like = (args.get("like") or "").lower().strip()
         # A name-based rule, so a setting added later is redacted BY DEFAULT rather than
@@ -7128,6 +7016,9 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
                 description=spec.description,
                 parameters=parameters,
                 handler=_pin(),
+                # IDENTITY: the rebuilt spec keeps its permission, or the gate would see none.
+                permission=spec.permission,
+                inherits_route_permission=spec.inherits_route_permission,
                 # Preserve the real kind. Stamping every admitted spec "read" made the
                 # operational writes look like reads to anything that inspects the registry —
                 # an audit, a gate, a future policy. A tool that changes state must say so.
