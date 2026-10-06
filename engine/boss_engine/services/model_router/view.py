@@ -174,4 +174,6 @@ def routing_view(connection: Any, settings: Any, project_id: str) -> dict[str, A
         "pins": {job: {"engine": e, "model": m, "label": engine_label(e) + (f" · {m}" if m else "")}
                  for job, (e, m) in snap.job_pins.items()},
         "week": _week(connection, project_id),
+        "hard_pins": list(policy.hard_pins),
+        "frontier_allows_local": policy.frontier_allows_local,
     }

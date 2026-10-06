@@ -174,17 +174,26 @@ version. It contains:
 - **`classifier`**: backend (`auto`, `jev`, `rules`, `model`), the timeouts, the model threshold
   and the three criteria texts.
 
-**Pins** are the operator's explicit choices and always win. In order:
+**Pins** come in two strengths (Decision 5). In order:
 
-1. **A task pin:** `model_config` on the task. Spend-cap failover and experiments write this, so
-   both keep working unchanged.
-2. **An agent pin:** the Agent Studio model policy.
+1. **A task pin (hard):** `model_config` on the task. Spend-cap failover and experiments write
+   this, so both keep working unchanged.
+2. **An agent pin (hard), read in Fixed mode too:** the Agent Studio model policy.
    - `pinned` → that engine and model;
-   - `local` → only local sources are allowed;
+   - `local` → only local sources, ever. With none connected, the call is **refused in words**
+     ("No local model connected — connect one or change this agent's policy"), in chat and builds;
    - `router` → routed like any step, with the role's floors.
-3. **A job pin:** today's *Who does what* rows. A job set to a source *and* a model is a hard pin.
-   A job set to a source only (say *Build → Claude Code*) pins the source and lets the tier choose
-   that source's model: Haiku, Sonnet or Opus.
+3. **A job preference (soft):** today's *Who does what* rows, migrated. On Smart a job's choice
+   picks the source and model *within* the tier — but a floor raises it ("Floor raised your pin:
+   haiku → opus"), and headroom rules and exhaustion can still move it.
+4. **A job pin marked *Always* (hard):** the explicit "Always use, even when limited" choice, with
+   a visible warning. Even then a floor raises the model on that source.
+5. **A profile's step pin (soft):** a profile that names a model for a step (`implement:
+   claude_code:sonnet`) is a preference within the tier; one that names a Frontier-class model
+   (`review_code: claude_code:opus`) is a Frontier floor, classified by tier, not by string.
+
+A pinned or session model is always recorded at **its own** tier, so a record never shows a tier
+that disagrees with the model that ran.
 
 ### (c) Source selection: which source takes the tier *now*
 
@@ -192,8 +201,9 @@ Selection walks the tier's list and takes the first target that is all of the fo
 
 - connected;
 - allowed;
-- not failing (`working`);
-- not exhausted (provider-limit capacity);
+- not failing (`working`, or tripped in the **circuit breaker** in the last minutes);
+- not exhausted (its account's windows, or a provider-limit capacity);
+- not metered while the **budget is spent** (red);
 - not displaced by a headroom rule.
 
 **Headroom.** Every subscription source has a headroom state:
@@ -202,20 +212,24 @@ Selection walks the tier's list and takes the first target that is all of the fo
 |---|---|
 | plenty | over 40% of the weekly window left |
 | tight | 15–40% left, or the CLI reported `allowed_warning` |
-| near limit | under 15% left |
+| near limit | under 15% left (left again only at 20%: hysteresis, so 15% does not flap) |
 | exhausted | a limit message or a `rejected` status, until its reset time |
 
 Headroom is learned from three signals, best first:
 
 1. **What the CLI reports.** Claude Code's `stream-json` emits a `rate_limit_event` on each call,
-   with per-window utilisation and a reset time (five-hour, seven-day, seven-day Opus). BOSS's
-   stream parser now keeps it, and telemetry folds it into the source's `observed_capacity`.
-2. **Limit messages and their reset times.** These are the CLI's own words:
-   - *"You've hit your weekly limit · resets Mon 12:00am"*;
-   - *"…session limit · resets 3:45pm"*;
-   - *"…Opus limit…"*;
-   - the monthly spend limit.
-   `provider_limits` recognises all four and parses the reset time.
+   with per-window utilisation and a reset time (five-hour, seven-day, seven-day Opus). Units are
+   explicit: `utilization` is a fraction (0.86), `used_percentage` a percent (86). BOSS's stream
+   parser keeps it, and telemetry folds it into the **account's** windows — written only when a
+   window's state changes (or at most every five minutes).
+2. **Limit messages and their reset times.** One parser, with a corpus test of real messages
+   (`test_model_router_limits.py`):
+   - Claude: *"You've hit your weekly limit · resets Mon 12:00am"*, *"Weekly limit reached ∙
+     resets Oct 13, 10am"*, *"5-hour/Session limit reached…"*, *"Opus weekly limit reached…"*,
+     *"You've hit your limit · resets 3pm (TZ)"*, *"…resets Oct 13 at 10am
+     (America/Los_Angeles)"*, the legacy *"usage limit reached|<epoch>"*, the monthly spend limit;
+   - a 429 with `Retry-After` (a one-minute window), OpenAI's quota and TPM messages, Codex's
+     *"try again at Sep 22nd, 2026 10:06 PM"*.
 3. **An estimate from calls.** This is the API-equivalent value of included calls in the trailing
    window, divided by a weekly allowance. The allowance is learned: when a weekly limit is hit,
    whatever was used since the last reset becomes the allowance. The operator can also set it.
@@ -231,11 +245,26 @@ the remaining headroom is kept for the work that needs it. Frontier work leaves 
 only when the subscription is *exhausted*, and then it goes to the next Frontier target. Opus has
 its own window: an *Opus limit* makes Opus exhausted while Sonnet and Haiku stay available.
 
-**Nothing is stranded.** If every target of a tier is unavailable, selection takes the following,
-in order:
+**Limit state is live and account-wide.** Windows live per **subscription account**
+(`subscription_accounts`: a stored key's secret ref, a hash prefix of the install token, or the
+host's CLI login), so one project hitting the weekly limit is known to every project on that
+login, and the learned allowance is the account's. A later **successful** call clears the
+rejected windows it proves wrong (a Sonnet success clears the week, not Opus's window).
 
-1. the same tier on any other connected source with a default model for it;
-2. the least-bad target, so the failure that follows names a real source rather than "no model".
+**Nothing is stranded.**
+
+1. **At call time:** a 5xx, a timeout, a refused connection or a limit trips the source's
+   **circuit breaker** for a short time, and the *same* step retries at once on the next source in
+   its tier (a failed call has no session to preserve). A weekly limit reached mid-build reroutes
+   the stage automatically — no manual retry.
+2. **At a boundary:** the same tier on any other connected source with a default model for it.
+3. **Sticky sessions** (a chat thread, an agent run) keep their model only while its source can
+   run; an exhausted or failing source starts a new session elsewhere.
+4. **Where nothing may run, a refusal in words:** Frontier goes subscription Frontier → metered
+   Frontier (OpenRouter Opus) → *"No Frontier model can take this now…"* — never silently a local
+   model, unless the operator allowed local for Frontier. A Local-only agent never leaves its
+   allow-list. With the **budget spent**, nothing new is metered: the subscription's lower tier
+   within the floors, else *"Waiting for budget or limit reset"*.
 
 ### (d) Escalation: start low, move up on evidence
 
@@ -286,8 +315,15 @@ is the A/B LangChain ran by hand, as a product feature.
 - **`route()`** is pure computation over the snapshot and the classifier cache. With no network,
   measured p95 is well under 1 ms (`test_model_router_overhead.py` asserts p95 < 5 ms on 5,000
   routes, a ceiling that leaves CI room).
+- **Fixed mode loads a lite snapshot** (the connected sources only): no policy seeding, no
+  headroom, no budget, no pins.
 - **Network on the hot path** is only the optional classifier (Jev 800 ms, cheap model 6 s), each
-  with its own timeout and the rules' answer as fallback.
+  with its own timeout, its own thread (a hung call never queues the next route), and the rules'
+  answer as fallback. A timeout is cached for two minutes, and a timed-out Jev is skipped for one,
+  so the stages of a build do not each wait again.
+- **Headroom writes only on change:** a `rate_limit_event` per call is written when a window's
+  state moves (status, a 5-point move, a new reset) or at most every five minutes, and snapshots
+  are dropped only when a state actually changed.
 - **One write per boundary,** the `model_routes` row. Model calls inside the boundary add nothing:
   `route_id` rides the context they already carry.
 
@@ -324,7 +360,8 @@ is the A/B LangChain ran by hand, as a product feature.
 | What an install had | What it becomes | Changes anything on Fixed? |
 |---|---|---|
 | No routing settings | `model_routing_mode` unset → **Fixed**; no `model_routing_policies` row (the policy is seeded on read) | No |
-| *Who does what* job choices (`code_agent_engine`, `code_review_engine`, `chat_llm_engine`, their models) | The same rows, shown under **Pin a job**; on Smart they are pins (engine-only = keep the tier's model on that source) | No |
+| *Who does what* job choices (`code_agent_engine`, `code_review_engine`, `chat_llm_engine`, their models) | The same rows, shown under **Pin a job** (Fixed) / **Prefer for a job** (Smart). On Smart they are preferences: floors raise them, headroom and exhaustion can move them; tick *Always* to make one hard | No |
+| Classifier or limit messages | `provider_limits` reads the one limit parser (Decision 18) | Yes, on purpose: more limit phrasings mark a source exhausted, with its reset |
 | Hard problems / Routine work lanes (`code_agent_strong_*`, `code_agent_low_cost_*`) | Seed the Frontier and Balanced tiers when Smart is first used | No |
 | Default pipeline profile (`pipeline_profiles.is_default`) | The **Floors** preset; choosing a preset also sets the default profile | No (it *is* the profile) |
 | A task's `profile` override | Fixed: as before. Smart: the profile's floors are added to the project's for that build | No |
@@ -333,16 +370,17 @@ is the A/B LangChain ran by hand, as a product feature.
 | `?area=pipeline` bookmarks | Land on Setup › Model routing; the page's Factory scale card moved to Operations | — |
 
 Schema (all additive, applied by `ensure_schema`): `model_routing_policies`, `model_routes`,
-`provider_model_catalog`, `llm_calls.route_id`, `run_scorecards.route_mode / route_tier /
+`provider_model_catalog`, `subscription_accounts`, `llm_calls.route_id`, `run_scorecards.route_mode / route_tier /
 routing`. Settings: `BOSS_MODEL_ROUTING_MODE` (default `fixed`), `BOSS_ROUTER_JEV_LIVE`
 (default off, for when BOSS-451 lifts).
 
 ### Where headroom is read from
 
-A subscription connected in Setup carries its windows on its own entitlement row. One
-connected through the environment (`CLAUDE_CODE_OAUTH_TOKEN`) has no connection row; telemetry
-records its windows on the catalogue row that spends for it (`anthropic_claude_code`), and the
-snapshot reads them from there.
+Windows live per subscription **account** in `subscription_accounts`, keyed by the credential
+that spends: `<engine>:ref:<secret_ref_id>` for a key stored in Setup, `<engine>:tok:<hash
+prefix>` for the install's `CLAUDE_CODE_OAUTH_TOKEN` (the token itself is never stored), or
+`<engine>:install` for a CLI logged in on the host. Every project spending on the same account
+reads the same windows. The estimate from calls is still per project (see Deferred).
 
 ## Realistic examples
 
@@ -398,12 +436,14 @@ from Monday to Sunday:
 4. **Floors are the policy primitive, and profiles become floor presets.** "Adversarial review ≥
    Frontier" is how the operator thinks. A profile's `strong` steps are exactly its floors, so
    `lean`, `balanced`, `strict` and `vag` keep their meaning without a second vocabulary.
-5. **Pins always win, and pin only what they name.** A job pinned to a source keeps the tier's
-   choice of model on that source. A pinned model is fixed. An agent's `local` policy restricts
-   sources rather than naming one.
-6. **Frontier work is never moved by a headroom rule, only by exhaustion.** Moving Fast and
-   Balanced work off the subscription early is what keeps headroom for the work that needs it.
-   Moving Frontier work early would defeat the purpose.
+5. **Migrated job pins are preferences; a hard pin is an explicit choice; floors beat both.**
+   *(Revised after the independent test.)* A "Who does what" row picks the source and model
+   within the tier, and headroom and exhaustion can still move it — otherwise a pin silently
+   strands work on an exhausted subscription. "Always use, even when limited" is the only hard
+   job pin, and the console warns beside it. A floor raises any job pin ("Floor raised your pin").
+6. **Frontier work is never moved by a headroom rule, only by exhaustion — and never silently to a
+   local model.** *(Revised.)* Frontier goes subscription → metered Frontier → a refusal in words,
+   unless the operator allowed local for Frontier.
 7. **Headroom trusts the CLI's own numbers first.** Claude Code reports utilisation and reset
    times per window. The estimate from calls is a fallback, and its allowance is learned from the
    first limit hit rather than guessed from a plan name.
@@ -425,7 +465,32 @@ from Monday to Sunday:
     catalogue with prices (`/api/v1/models`), cached for six hours in-process and in the database.
     Those prices feed `price_for_model`, so OpenRouter costs stop being estimates.
 13. **"Smart vs Fixed" is an experiment knob.** The router's own value is measured on the same
-    score as every other harness change, not asserted.
+    score as every other harness change, not asserted. The Smart arm on a Fixed project gets the
+    full Smart snapshot, headroom included.
+14. **Limit state is live and account-wide; nothing is stranded.** *(New.)* Windows are pooled per
+    subscription account; a success clears what it disproves; a call-time failure trips a circuit
+    breaker and the same step retries on the next source; sticky sessions break when their
+    source cannot run.
+15. **Local means local.** *(New.)* A Local-only agent, or an allow-list with nothing connected in
+    it, refuses in words rather than falling back to the cloud — in chat and builds, in Fixed mode
+    too.
+16. **A spent budget means no new metered spend.** *(New.)* With the budget red, the router keeps
+    work on included sources (the subscription's lower tier within the floors) or waits, in
+    words; it never moves work to OpenRouter.
+17. **Sensitive work has a minimum no classifier can lower.** *(New.)* Auth/OAuth, secrets,
+    passwords, production databases, migrations, payments and security set Frontier for work (and
+    Balanced for a chat answer). Jev or a model may raise it, never lower it, and a stated
+    `risk_tier: 0` does not override the words.
+18. **One limit parser, with a corpus.** *(New.)* Every phrasing seen from Claude, Codex and
+    OpenAI-compatible APIs goes through `headroom.windows_from_limit_message`. **This changes Fixed
+    mode on purpose:** `provider_limits.classify_limit` now uses the same parser, so a Fixed
+    install also marks a source exhausted (with its reset) for *"Weekly limit reached ∙ …"*, a 429
+    with Retry-After and the other corpus messages — but still not for a one-family limit (Opus).
+19. **Headroom has hysteresis, and validation is explicit.** *(New.)* Near limit is entered under
+    15% and left at 20%; a policy value out of range is refused with its field, never clamped.
+20. **OpenRouter defaults have a quality floor.** *(New.)* Tier suggestions come from a curated
+    list per tier with a minimum context (Fast is a good small coder, not a 3B model), and a
+    non-Frontier model is refused as the Frontier tier, with the reason.
 
 ## UI
 

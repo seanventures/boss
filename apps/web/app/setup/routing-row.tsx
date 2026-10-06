@@ -232,13 +232,23 @@ function Meter({ h }: { h: Routing["headroom"][number] }) {
   );
 }
 
-function Headroom({ routing }: { routing: Routing }) {
+function Headroom({ routing, metersOnly = false }: { routing: Routing; metersOnly?: boolean }) {
   const { save, busy } = useSave();
+  const refocus = useRefocus();
   const rule: HeadroomRule | undefined = routing.headroom_rules[0];
   const subs = routing.headroom;
   const targets = routing.sources.filter((s) => s.kind !== "subscription");
   if (!subs.length) return null;
-  const refocus = useRefocus();
+  if (metersOnly) {
+    // Fixed mode moves nothing, but how much of each subscription is left is still worth
+    // seeing — it is the same account the operator's own work spends.
+    return (
+      <div className="mr-section" data-testid="mr-headroom">
+        <span className="mr-sub" title="How much of each subscription's window is left.">Headroom</span>
+        {subs.map((h) => <Meter key={h.engine} h={h} />)}
+      </div>
+    );
+  }
   const write = (next: HeadroomRule | null) => save({ headroom: next ? [next] : [] }, "Headroom");
   const draft: HeadroomRule = rule ?? {
     source: subs[0].engine, when: "near_limit", tiers: ["fast", "balanced"],
@@ -361,18 +371,45 @@ function Week({ routing }: { routing: Routing }) {
   );
 }
 
-function Pins({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+const HARD_JOBS = new Set(["build", "review", "chat"]);
+const PREFER_TIP = "Smart treats a pin as a preference: floors raise it, limits can move it.";
+const ALWAYS_TIP = "Always this model, even near or past its limit. Work may wait.";
+
+function Pins({ open, onToggle, routing }: {
+  open: boolean; onToggle: () => void; routing?: Routing | null;
+}) {
   const { view } = useBoard();
+  const { save, busy } = useSave();
   const pinned = view.jobs.filter((j) => j.choice).length;
+  const smart = routing?.mode === "smart";
+  const hard = new Set(routing?.hard_pins ?? []);
   return (
     <div className="mr-section" data-testid="mr-pins">
       <button type="button" className="su-link su-more" aria-expanded={open} data-testid="su-more-jobs"
-              onClick={onToggle} title="Jobs pinned here win over the router.">
-        Pin a job<CaretRight size={12} className={open ? "su-rot" : undefined} aria-hidden="true" />
-        {pinned ? <span className="su-faint"> · {pinned} pinned</span> : null}
+              onClick={onToggle} title={smart ? PREFER_TIP : "Which model does each job."}>
+        {smart ? "Prefer for a job" : "Pin a job"}
+        <CaretRight size={12} className={open ? "su-rot" : undefined} aria-hidden="true" />
+        {pinned ? <span className="su-faint"> · {pinned} {smart ? "preferred" : "pinned"}</span> : null}
       </button>
       {open ? (
-        <div className="su-jobs">{view.jobs.map((job) => <JobLine key={job.job} job={job} />)}</div>
+        <div className="su-jobs">
+          {view.jobs.map((job) => (
+            <div key={job.job} className="mr-pin">
+              <JobLine job={job} />
+              {smart && job.choice && HARD_JOBS.has(job.job) ? (
+                <label className="su-consent mr-always" title={ALWAYS_TIP} data-tip={ALWAYS_TIP}>
+                  <input type="checkbox" checked={hard.has(job.job)} aria-busy={busy || undefined}
+                         data-testid={`mr-always-${job.job}`}
+                         onChange={(e) => void save({ hard_pins: e.target.checked
+                           ? [...hard, job.job] : [...hard].filter((j) => j !== job.job) },
+                           e.target.checked ? `Always ${job.label}` : `Prefer ${job.label}`)} />
+                  Always
+                  {hard.has(job.job) ? <span className="su-chip su-chip-metered" role="note">Even when limited</span> : null}
+                </label>
+              ) : null}
+            </div>
+          ))}
+        </div>
       ) : null}
     </div>
   );
@@ -412,7 +449,8 @@ export const RoutingRow = forwardRef<HTMLElement, { mode: string; focused: boole
                 focused={focused} tip="Which model runs each piece of work.">
         {!routing ? (
           // An API without the router: the jobs, as overrides, and nothing else.
-          <Pins open={pins ?? focused} onToggle={() => setPins((v) => !(v ?? focused))} />
+          <Pins open={pins ?? focused} onToggle={() => setPins((v) => !(v ?? focused))}
+                routing={routing} />
         ) : collapsed ? (
           <div className="su-line" data-testid="mr-collapsed">
             <Summary routing={routing} />
@@ -443,9 +481,9 @@ export const RoutingRow = forwardRef<HTMLElement, { mode: string; focused: boole
               </div>
             ) : null}
             <Floors routing={routing} smart={smart} />
-            {smart ? <Headroom routing={routing} /> : null}
+            <Headroom routing={routing} metersOnly={!smart} />
             {smart ? <Classifier routing={routing} /> : null}
-            <Pins open={pins ?? (focused || !smart)}
+            <Pins routing={routing} open={pins ?? (focused || !smart)}
                   onToggle={() => setPins((v) => !(v ?? (focused || !smart)))} />
             <Week routing={routing} />
           </div>
