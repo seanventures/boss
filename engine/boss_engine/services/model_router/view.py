@@ -20,7 +20,9 @@ from .tiers import STEP_LABELS, TIER_LABELS, TIERS
 #: An estimate, and labelled one: a subscription's real price is flat.
 REFERENCE_PRICE = {"fast": (1.0, 5.0), "balanced": (3.0, 15.0), "frontier": (5.0, 25.0)}
 
-PRESETS = (("lean", "Lean"), ("balanced", "Balanced"), ("strict", "Strict"), ("vag", "VAG"))
+#: The profiles' names as presets. Not "Balanced" (a tier on the same row) nor "VAG" (jargon).
+PRESETS = (("lean", "Lean"), ("balanced", "Standard"), ("strict", "Strict"),
+           ("vag", "Verify-heavy"))
 
 #: Steps an operator can put a floor on, in pipeline order.
 FLOOR_STEPS = ("spec", "plan", "write_tests", "implement", "review_code", "security_check",
@@ -42,6 +44,11 @@ def _options(engine: str, info: dict[str, Any], policy: RoutingPolicy) -> list[O
         pass
     models.extend(m for m in (ENGINE_TIER_MODELS.get(engine) or {}).values() if m)
     if engine == "openrouter":
+        # The tier defaults stay offered whatever the catalogue holds, so replacing one never
+        # makes it unchoosable again.
+        from .policy import OPENROUTER_FALLBACK_MODELS
+
+        models.extend(OPENROUTER_FALLBACK_MODELS.values())
         try:
             from ..openrouter_catalog import cached
 

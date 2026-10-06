@@ -65,13 +65,14 @@ describe("Model routing", () => {
                                    policy: { mode: "fixed" }, version: 3 }]);
   });
 
-  it("a tier's model keeps its fallback, never twice", async () => {
+  it("a tier's model keeps its fallback: picking the fallback swaps them", async () => {
     const api = fakeApi(board());
     mounted = await mountBoard(board());
     await choose(q(document.body, "mr-tier-select-fast"), "openrouter::deepseek/deepseek-chat");
-    // The fallback was the same target: it is not listed twice.
+    // The new first was the fallback: the two swap, so neither is lost or listed twice.
     expect(writes(api)[0].policy).toEqual({ tiers: { fast: [
-      { engine: "openrouter", model: "deepseek/deepseek-chat" }] } });
+      { engine: "openrouter", model: "deepseek/deepseek-chat" },
+      { engine: "claude_code", model: "haiku" }] } });
     await choose(q(document.body, "mr-tier-fallback-frontier"), "openrouter::anthropic/claude-opus-4.1");
     expect(writes(api)[1].policy).toEqual({ tiers: { frontier: [
       { engine: "claude_code", model: "opus" },
@@ -112,6 +113,19 @@ describe("Model routing", () => {
     expect(q(document.body, "mr-headroom")).toBeNull();
     expect(q(document.body, "su-job-build")).not.toBeNull();
     expect(q(document.body, "mr-preset")).not.toBeNull();
+  });
+
+  it("saving never disables the pressed control (keyboard focus stays on it)", async () => {
+    const api = fakeApi(board());
+    api.hold = true;
+    mounted = await mountBoard(board());
+    const fixed = q(document.body, "mr-mode-fixed") as HTMLButtonElement;
+    fixed.focus();
+    await click(fixed);
+    expect(fixed.disabled).toBe(false);
+    expect(document.activeElement).toBe(fixed);
+    api.release();
+    await flush();
   });
 
   it("focus=routing lands on the row with the jobs open", async () => {

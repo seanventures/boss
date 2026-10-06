@@ -8638,8 +8638,14 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 }
 
 /* "Why this model" (app/why-this-model.tsx): a route's tier, source · model, and its reasons. */
-.wm { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
-.wm-step { color: var(--muted); font-size: 0.8125rem; min-width: 120px; }
+/* One row per stage: step | tier | source · model (+ flags) | Why — columns that line up. */
+.wm {
+  display: grid; grid-template-columns: 130px auto minmax(0, 1fr) auto; align-items: center;
+  gap: 4px 8px; min-width: 0;
+}
+.wm:not(:has(.wm-step)) { display: inline-flex; flex-wrap: wrap; }
+.wm-step { color: var(--muted); font-size: 0.8125rem; }
+.wm-main { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .wm-tier {
   display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px;
   border: 1px solid var(--border-strong); color: var(--ink); font: 700 0.6875rem/1 var(--sans);
@@ -8655,12 +8661,13 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 }
 .wm-why-btn:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
 .wm-why {
-  flex-basis: 100%; margin: 4px 0 0; padding: 8px 10px 8px 26px; border: 1px solid var(--accent-line);
+  grid-column: 1 / -1; flex-basis: 100%; margin: 4px 0 0; padding: 8px 10px 8px 26px; border: 1px solid var(--accent-line);
   border-radius: var(--r); background: var(--surface-2); color: var(--ink-soft); font-size: 0.8125rem;
 }
 .wm-why li + li { margin-top: 2px; }
 .wm-list { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 @media (max-width: 639px) {
-  .wm-step { min-width: 0; flex-basis: 100%; }
+  .wm { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .wm-step { grid-column: 1 / -1; }
   .wm-why-btn { min-height: 44px; min-width: 44px; }
 }
