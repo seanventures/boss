@@ -7410,7 +7410,7 @@ CREATE UNLOGGED TABLE IF NOT EXISTS identity_rate_limits (
 CREATE TABLE IF NOT EXISTS identity_access_requests (
   id                     TEXT PRIMARY KEY,                 -- acr_…
   org_id                 TEXT NOT NULL REFERENCES orgs(id),
-  requester_principal_id TEXT NOT NULL REFERENCES identity_principals(id),
+  requester_principal_id TEXT NOT NULL REFERENCES identity_principals(id) ON DELETE CASCADE,
   permission_key         TEXT NOT NULL REFERENCES identity_permissions(key),
   project_id             TEXT,                             -- NULL = org scope
   reason                 TEXT,
