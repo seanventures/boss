@@ -79,3 +79,33 @@ def test_in_shadow_a_session_without_a_legacy_seat_is_still_refused_by_the_legac
     assert client.get("/v1/identity/me").status_code == 200       # identity routes: always enforced
     listed = client.get("/v1/dashboard", params={"project_id": "boss-dogfood"})
     assert listed.status_code in (403, 404)
+
+
+def test_removing_the_last_owner_on_any_path_is_a_409_never_a_500(world, engine):
+    """The SCIM group that carries the only Owner binding is deleted: the deferred last-Owner
+    trigger refuses the commit, and the API answers a conflict (SCIM-shaped on SCIM routes)."""
+    from sqlalchemy import text
+
+    from apps.api.tests.identity_s1_world import make_scim_key, mark_claimed, org_id
+    from boss_engine.identity import users
+
+    key = make_scim_key(engine)
+    owner = make_user(engine, "only-owner@example.test", role=None)
+    client = fresh_client()
+    res = client.post("/scim/v2/Groups", headers={"Authorization": f"Bearer {key}"},
+                      json={"displayName": "Owners", "externalId": "okta-owners",
+                            "members": [{"value": owner}]})
+    assert res.status_code == 201, res.text
+    gid = res.json()["id"]
+    with engine.begin() as db:
+        users.add_binding(db, org_id=org_id(db), subject_id=gid, subject_type="group",
+                          role_key="owner", granted_by="test")
+    with engine.begin() as db:   # the group is the ONLY Owner reach (make_scim_key made another)
+        db.execute(text("DELETE FROM identity_role_bindings WHERE role_id = 'arl_owner' AND "
+                        "NOT (subject_type = 'group' AND subject_id = :g)"), {"g": gid})
+    mark_claimed(engine)
+    refused = client.delete(f"/scim/v2/Groups/{gid}", headers={"Authorization": f"Bearer {key}"})
+    assert refused.status_code == 409, refused.text
+    assert "Owner" in refused.text
+    with engine.begin() as db:   # nothing was removed
+        assert db.execute(text("SELECT 1 FROM identity_groups WHERE id = :g"), {"g": gid}).first()
