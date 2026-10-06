@@ -40,6 +40,8 @@ HEADERS = {"Origin": ORIGIN, "Sec-Fetch-Site": "same-origin"}
 STRONG = "violet-otter-harbour-1987"
 SECRET_KEY_RE = re.compile(r"token|secret|password|code|assertion|credential", re.I)
 IDENTITY_TABLES_CHILD_FIRST = [
+    # S3's delegation grants name a person: other suites' run tokens leave them behind
+    "identity_delegation_grant_permissions", "identity_delegation_grants",
     "identity_recovery_codes", "identity_totp", "identity_webauthn_credentials",
     "identity_user_identities", "identity_provider_group_mappings", "identity_providers",
     "identity_auth_challenges", "identity_sessions", "identity_invitations", "identity_group_members",
