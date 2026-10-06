@@ -98,7 +98,9 @@ CODE_TASK_PERMISSIONS = frozenset({"code_task:read", "code_task:steer", "reposit
 #
 # A workflow run's authority is decided ONCE, at start, by the person starting it (or, for a
 # schedule, by the standing grant its creator linked to it). It is recorded server-side on the run
-# (`workflow_runs.policy_snapshot._identity`, stripped from anything a caller sends), and every job,
+# (`workflow_runs.on_behalf_of / grant_id / authority_org_id / authority_run_id`; rows written before
+# those columns carry `policy_snapshot._identity`, read as a fallback only; a caller-sent
+# `_identity` is always stripped), and every job,
 # build and sub-agent the worker starts for that run carries it — re-verified at every read: the
 # grant must be live, belong to the person, and (if task-bound) be bound to this run.
 
@@ -249,11 +251,34 @@ def require_for_workflow(db: Any, *, project_id: str, spec: Any, input_data: Any
 
 
 def record_on_run(snapshot: Any, acting: Optional[Acting]) -> dict[str, Any]:
-    """The policy snapshot to INSERT: the caller's, minus any identity, plus the server's."""
-    out = strip_identity(dict(snapshot or {}))
-    if acting is not None:
-        out[IDENTITY_KEY] = acting.to_json()
-    return out
+    """The policy snapshot to INSERT: the caller's, minus any identity. The authority itself goes
+    in the run's columns (`authority_columns`), never in this caller-shaped JSON."""
+    del acting
+    return strip_identity(dict(snapshot or {}))
+
+
+def authority_columns(acting: Optional[Acting]) -> dict[str, Any]:
+    """The workflow_runs identity columns for `acting` (all NULL: no authority recorded)."""
+    if acting is None:
+        return {"on_behalf_of": None, "grant_id": None, "authority_org_id": None, "authority_run_id": None}
+    return {"on_behalf_of": acting.principal_id, "grant_id": acting.grant_id,
+            "authority_org_id": acting.org_id or None, "authority_run_id": acting.run_id}
+
+
+def recorded_authority(db: Any, workflow_run_id: str) -> Optional[Acting]:
+    """The run's columns; `policy_snapshot._identity` only for a run recorded before them."""
+    from sqlalchemy import text
+
+    row = db.execute(text("SELECT on_behalf_of, grant_id, authority_org_id, authority_run_id, policy_snapshot "
+                          "FROM workflow_runs WHERE id = :i"), {"i": workflow_run_id}).mappings().first()
+    if row is None:
+        return None
+    if row["on_behalf_of"]:
+        return Acting(principal_id=row["on_behalf_of"], org_id=row["authority_org_id"] or "",
+                      grant_id=row["grant_id"], run_id=row["authority_run_id"])
+    snap = row["policy_snapshot"]
+    data = snap.get(IDENTITY_KEY) if isinstance(snap, dict) else None
+    return Acting.from_json(data) if data else None
 
 
 def acting_for_workflow_run(db: Any, workflow_run_id: Optional[str]) -> Optional[Acting]:
@@ -267,11 +292,9 @@ def acting_for_workflow_run(db: Any, workflow_run_id: Optional[str]) -> Optional
         return None
     if not db.execute(text("SELECT to_regclass('workflow_runs') IS NOT NULL")).scalar():
         return None
-    snap = db.execute(text("SELECT policy_snapshot FROM workflow_runs WHERE id = :i"), {"i": workflow_run_id}).scalar()
-    data = (snap or {}).get(IDENTITY_KEY) if isinstance(snap, dict) else None
-    if not data:
+    acting = recorded_authority(db, workflow_run_id)
+    if acting is None or not acting.grant_id:
         return None
-    acting = Acting.from_json(data)
     g = grants.load(acting.grant_id, db=db)
     if g is None or g.user_principal_id != acting.principal_id or not grants.is_live(g):
         return None
@@ -282,8 +305,9 @@ def acting_for_workflow_run(db: Any, workflow_run_id: Optional[str]) -> Optional
 
 def require_for_schedule(db: Any, *, project_id: str, spec: Any, input_data: Any, name: str) -> Optional[dict[str, Any]]:
     """A schedule runs unattended, so it needs a STANDING grant from the person creating it that
-    covers the workflow. Returns the link to store on the schedule, None when identity does not
-    apply, or raises ConsentRequired (scope "schedule", standing durations only)."""
+    covers the workflow. Returns the link to store on the schedule (its `on_behalf_of` and
+    `grant_id` columns), None when identity does not apply, or raises ConsentRequired (scope
+    "schedule", standing durations only)."""
     from . import grants, lineage
 
     ctx = lineage.current_context()
@@ -305,6 +329,17 @@ def require_for_schedule(db: Any, *, project_id: str, spec: Any, input_data: Any
     return {"on_behalf_of": ctx.principal.id, "org_id": ctx.principal.org_id, "grant_id": g.id}
 
 
+def schedule_link(schedule_row: Any) -> Optional[dict[str, Any]]:
+    """The schedule's grant link: its `on_behalf_of` / `grant_id` columns, or `input._identity`
+    for a schedule saved before those columns existed."""
+    row = dict(schedule_row)
+    if row.get("on_behalf_of"):
+        return {"on_behalf_of": row["on_behalf_of"], "grant_id": row.get("grant_id")}
+    data = row.get("input") if isinstance(row.get("input"), dict) else {}
+    link = data.get(IDENTITY_KEY)
+    return dict(link) if isinstance(link, dict) and link else None
+
+
 def schedule_acting(db: Any, schedule_row: Any) -> Optional[Acting]:
     """At every firing: the schedule's linked grant must still be live, standing and its creator's.
     Raises AuthorityLost (the caller pauses the schedule: "Renew authority"). None: an unlinked
@@ -312,8 +347,7 @@ def schedule_acting(db: Any, schedule_row: Any) -> Optional[Acting]:
     from . import grants
     from .lineage import _enforced
 
-    data = schedule_row["input"] if isinstance(schedule_row["input"], dict) else {}
-    link = data.get(IDENTITY_KEY)
+    link = schedule_link(schedule_row)
     if not link:
         if _enforced():
             raise AuthorityLost("schedule_has_no_grant")

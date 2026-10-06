@@ -85,6 +85,9 @@ system_principals:
   - id: sys_host_cli
     access_role: none
     replaces: "nothing; the actor of host-shell recovery (boss identity recover-owner)"
+  - id: sys_egress
+    access_role: none
+    replaces: "BOSS_EGRESS_SERVICE_KEY (the egress proxy's shared key; it authenticates to /v1/identity/introspect with a boss_sak_ key of its own)"
 
 # Agent Passport ceiling presets (IDENTITY_PERMISSIONS.md §4). Delegable permissions only.
 passport_presets:

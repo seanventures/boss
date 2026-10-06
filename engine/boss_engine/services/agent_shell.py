@@ -96,6 +96,7 @@ def ensure_workspace(
     branch: str,
     clone_url: str,
     force: bool = False,
+    git_env: Optional[dict] = None,
 ) -> tuple[Optional[Path], Optional[str]]:
     """A shallow checkout of the app's branch, reused across turns.
 
@@ -110,9 +111,12 @@ def ensure_workspace(
     if (path / ".git").is_dir():
         return path, None
     path.parent.mkdir(parents=True, exist_ok=True)
+    # `git_env` (repo_host.GitAccess.environ()) carries the credential to git's own process
+    # only; the URL is then credential-free and nothing lands in `.git/config` or argv.
     result = owned_process.run(
         ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(path)],
         capture_output=True, text=True, timeout=180,
+        **({"env": git_env} if git_env is not None else {}),
     )
     if result.returncode != 0:
         detail = (result.stderr or "").strip()[-300:]

@@ -355,15 +355,12 @@ def close_shim_socket(run_id: str) -> None:
 
 
 def _acting_of_job(engine: Any, job_id: Optional[str]) -> Any:
-    from sqlalchemy import text
-
     from . import lineage
 
     if not job_id:
         return None
     with engine.begin() as db:
-        payload = db.execute(text("SELECT payload FROM jobs WHERE id = :j"), {"j": job_id}).scalar()
-    return lineage.acting_for_job({"payload": payload or {}})
+        return lineage.acting_for_job_id(db, job_id)
 
 
 def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner: str, repo: str,
@@ -398,6 +395,49 @@ def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner
     return shim, egress_access(shim, owner=owner, repo=repo)
 
 
+@contextlib.contextmanager
+def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Optional[str],
+                token: Any = "", role_key: Optional[str] = None) -> Iterator[Any]:
+    """How BOSS-side code (an agent's shell workspace, the read tools' clones, a preview or deploy
+    workdir) runs git against a repo, as a `repo_host.GitAccess`.
+
+    With the egress proxy on and a delegated principal in context (a person's grant, or a run
+    acting under one), the clone goes through boss-egress under a short run of its own (the
+    run's agent for that person: run_<…>/git:<id>), and no GitHub token exists on this side; a
+    refused authority raises, it never falls back to the shared token. Otherwise the legacy token
+    (`token`, a string or a callable) is used — carried in git's environment only, never in the
+    URL, argv or the checkout's `.git/config`, so the code that later runs in that directory can
+    never read it."""
+    from . import lineage
+    from ..services.repo_host import GitAccess, git_access, git_config_env
+
+    acting = lineage.current()
+    kind = (host or "github").strip().lower()
+    if kind == "github" and engine is not None and egress_enabled() and acting is not None and acting.grant_id:
+        shim = None
+        with engine.begin() as db:
+            agent_id = (acting.chain[-1].split("#", 1)[0] if acting.chain
+                        else agent_for_role(db, project_id, role_key or "forge"))
+            if agent_id:
+                rid = _nested_run_id(acting, "git", secrets.token_hex(6))
+                shim = start_run(subject_for(acting, db=db),
+                                 RunStart(run_id=rid, agent_id=agent_id, project_id=project_id,
+                                          repos=(f"{owner}/{repo}",),
+                                          scope=frozenset({"repository:read", "github:read"})),
+                                 grant_id=acting.grant_id, db=db, audiences=(AUD_API,))
+        if shim is not None:
+            access = egress_access(shim, owner=owner, repo=repo)
+            try:
+                yield GitAccess(access.clone_url, git_config_env(access.git_config), via="egress")
+            finally:
+                close_shim_socket(shim.run_id)
+                with engine.begin() as db:
+                    end_run(shim.run_id, db=db, org_id=acting.org_id)
+            return
+    raw = token() if callable(token) else token
+    yield git_access(kind, owner, repo, raw or "")
+
+
 def finish_code_task_run(engine: Any, shim: Shim, *, org_id: str) -> None:
     close_shim_socket(shim.run_id)
     with engine.begin() as db:
@@ -406,29 +446,70 @@ def finish_code_task_run(engine: Any, shim: Shim, *, org_id: str) -> None:
 
 # ---- in-process runs (agent loops, workflow steps) ------------------------------------------------------
 
+def _adoptable(ambient: Any, recorded: Any) -> bool:
+    """May this code act on a RECORDED authority (a job's, a workflow run's) instead of the ambient
+    one? Only when nobody else is acting here: no ambient principal, a system principal (the
+    worker calling in to run leased work), or the same person. A person's request never borrows
+    another person's recorded grant."""
+    if ambient is None:
+        return True
+    return str(ambient.principal_id).startswith("sys_") or (
+        ambient.principal_id == recorded.principal_id and ambient.org_id in ("", recorded.org_id))
+
+
+def _nested_run_id(acting: Any, kind: str, entity_id: str) -> str:
+    from . import cascade
+
+    own = cascade.run_id(kind, entity_id)                  # validates kind and entity
+    parent = acting.run_id or ""
+    if parent.startswith("run_") and cascade.parse_run_id(parent) is not None:
+        return f"{parent}/{own[len('run_'):]}"            # run_wf:W/step:build — a child of the run
+    return own
+
+
 @contextlib.contextmanager
 def delegated(engine: Any, *, kind: str, entity_id: str, project_id: Optional[str], role_key: Optional[str],
-              scope: frozenset[str], base_url: str = "") -> Iterator[Optional[AuthContext]]:
+              scope: frozenset[str], base_url: str = "", acting: Any = None,
+              job_id: Optional[str] = None) -> Iterator[Optional[AuthContext]]:
     """Run a block of in-process agent work under a delegated principal: a run token for the
-    ambient person's grant (from the verified request or job), bound to an in-process shim key,
-    installed as the acting context so every tool call is decided against person ∩ ceilings ∩
-    grant ∩ task, and every job it enqueues carries the chain. Without a verified principal and
-    grant this yields None and changes nothing (the legacy path)."""
-    from . import cascade, lineage, tokens as tok
+    person's grant, bound to an in-process shim key, installed as the acting context AND as the
+    tool-call identity (CURRENT_TOOL_AUTH), so every tool call is decided against person ∩
+    ceilings ∩ grant ∩ task, and every job it enqueues carries the chain.
 
-    acting = lineage.current()
-    if acting is None or not acting.grant_id or acting.chain:
-        yield None                                          # nothing delegated, or already inside a run
+    Whose grant: the ambient one (a verified request or job context), or a RECORDED one — `acting`
+    (a workflow run's authority) or the job `job_id` was leased from — when nobody else is acting
+    here (`_adoptable`: the worker calling in, or the same person). A recorded run's work nests
+    under its run id (`run_wf:W/<kind>:<entity>`), so revoking the run's grant halts it too.
+    Without a verified principal and grant this yields None and changes nothing (legacy path);
+    already inside a delegated run, it keeps that run."""
+    from . import lineage, tokens as tok
+
+    ambient = lineage.current()
+    if ambient is not None and ambient.chain:
+        yield None                                          # already inside a run
         return
-    run = cascade.run_id(kind, entity_id)
+    chosen = ambient
+    recorded = acting
+    if recorded is None and job_id and (ambient is None or not ambient.grant_id):
+        with engine.begin() as db:
+            recorded = lineage.acting_for_job_id(db, job_id)
+    if recorded is not None:
+        if recorded.chain or not _adoptable(ambient, recorded):
+            yield None
+            return
+        chosen = recorded
+    if chosen is None or not chosen.grant_id:
+        yield None                                          # nothing delegated
+        return
+    run = _nested_run_id(chosen, kind, entity_id)
     with engine.begin() as db:
         agent_id = agent_for_role(db, project_id, role_key)
         if not agent_id:
             yield None
             return
-        shim = start_run(subject_for(acting, db=db),
+        shim = start_run(subject_for(chosen, db=db),
                          RunStart(run_id=run, agent_id=agent_id, project_id=project_id, scope=scope),
-                         grant_id=acting.grant_id, db=db, audiences=(AUD_API,))
+                         grant_id=chosen.grant_id, db=db, audiences=(AUD_API,))
         url = (base_url or tok.issuer()) + "/internal/run"
         claims = tok.verify_run_token(shim.tokens[AUD_API].access_token, audience=AUD_API,
                                       dpop_proof=shim.authorization(AUD_API, "POST", url)["DPoP"],
@@ -439,7 +520,24 @@ def delegated(engine: Any, *, kind: str, entity_id: str, project_id: Optional[st
             yield ctx
     finally:
         with engine.begin() as db:
-            end_run(run, db=db, org_id=acting.org_id)
+            end_run(run, db=db, org_id=chosen.org_id)
+
+
+@contextlib.contextmanager
+def on_behalf(engine: Any, acting: Any) -> Iterator[Optional[AuthContext]]:
+    """In-process work under a RECORDED authority with no agent to delegate to (a built-in tool
+    step of a person's workflow run): the person's live principal decides the tool calls (never
+    the worker's), and jobs carry the recorded Acting. Yields None (nothing changes) when the
+    authority cannot be adopted here; raises TokenError when its person is no longer active."""
+    from . import lineage
+
+    if acting is None or not _adoptable(lineage.current(), acting):
+        yield None
+        return
+    with engine.begin() as db:
+        ctx = subject_for(acting, db=db)
+    with lineage.acting(acting, tool_auth=ctx):
+        yield ctx
 
 
 class ToolRefused(PermissionError):

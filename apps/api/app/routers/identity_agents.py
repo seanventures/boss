@@ -242,16 +242,27 @@ def build_identity_agents_router() -> APIRouter:
                             headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
     @router.post("/v1/identity/introspect")
-    @public(reason=PublicReason.AUTH_ENDPOINT, verifier=tokens.egress_service_key_ok)
+    @public(reason=PublicReason.AUTH_ENDPOINT, verifier=tokens.egress_caller_ok)
     async def introspect(request: Request):
-        # Never public in effect: only the egress proxy's service credential may ask (A40).
-        if not tokens.egress_service_key_ok(request.headers.get("x-boss-egress-key")):
-            return _err("unauthenticated", 401)
+        # Never public in effect: only the egress service may ask (A40) — as sys_egress with its
+        # boss_sak_ key, or with the legacy BOSS_EGRESS_SERVICE_KEY shared key.
+        from starlette.concurrency import run_in_threadpool
+
         form = dict(await request.form()) if not request.headers.get("content-type", "").startswith(
             "application/json") else await request.json()
-        with _engine().begin() as db:
-            return JSONResponse(tokens.introspect(str(form.get("token", "")), db=db),
-                                headers={"Cache-Control": "no-store"})
+
+        def run():
+            with _engine().begin() as db:
+                if not tokens.egress_caller_ok(request.headers.get("authorization"),
+                                               request.headers.get("x-boss-egress-key"), db=db,
+                                               ip=request.client.host if request.client else None):
+                    return None
+                return tokens.introspect(str(form.get("token", "")), db=db)
+
+        answer = await run_in_threadpool(run)
+        if answer is None:
+            return _err("unauthenticated", 401)
+        return JSONResponse(answer, headers={"Cache-Control": "no-store"})
 
     @router.post("/v1/identity/spawn")
     @authenticated()

@@ -2785,12 +2785,14 @@ def start_run(
             INSERT INTO workflow_runs (
                 id, project_id, workflow_definition_id, workflow_version_id,
                 workflow_mapping_id, parent_run_id, root_run_id, actor, status,
-                input, context, policy_snapshot, dedupe_key
+                input, context, policy_snapshot, dedupe_key,
+                on_behalf_of, grant_id, authority_org_id, authority_run_id
             ) VALUES (
                 :id, :project_id, :definition_id, :version_id, :mapping_id,
                 :parent_run_id, :root_run_id, :actor, 'validating',
                 CAST(:input AS JSONB), CAST(:context AS JSONB),
-                CAST(:policy AS JSONB), :dedupe_key
+                CAST(:policy AS JSONB), :dedupe_key,
+                :on_behalf_of, :grant_id, :authority_org_id, :authority_run_id
             )
             ON CONFLICT DO NOTHING
             """
@@ -2808,6 +2810,7 @@ def start_run(
             "context": json.dumps({}),
             "policy": json.dumps(policy_snapshot or {}),
             "dedupe_key": dedupe_key,
+            **_consent.authority_columns(identity_acting),
         },
     )
     if not inserted.rowcount:

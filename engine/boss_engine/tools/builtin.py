@@ -3876,35 +3876,41 @@ def _repo_root(settings: Any, repo: str,
     dest = _os.path.join(_REPO_CACHE, f"{owner}__{short}" + (f"__{slug}" if slug else ""))
     try:
         _os.makedirs(_REPO_CACHE, exist_ok=True)
-        from ..services.repo_host import clone_url_for
+        from ..services.repo_host import git_access
 
-        url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+        # The checkout is what the read tools hand an agent: the token rides in git's
+        # environment only, never in the URL or `.git/config` (IDENTITY.md §7.10).
+        access = git_access(getattr(settings, "target_repo_host", "github") or "github",
                             owner, short,
                             token or (getattr(settings, "github_token", "") or ""))
+        url, genv = access.url, access.environ()
         if _os.path.isdir(_os.path.join(dest, ".git")):
+            # A cache made before this kept the token in its remote URL: rewrite it.
+            _subprocess.run(["git", "-C", dest, "remote", "set-url", "origin", url],
+                            capture_output=True, timeout=30)
             # Refresh, but never fail the read because the network is down — a slightly
             # stale checkout answers most questions; no checkout answers none.
             _subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin"]
                             + ([ref] if ref else []),
-                            capture_output=True, timeout=120)
+                            capture_output=True, timeout=120, env=genv)
             _subprocess.run(["git", "-C", dest, "reset", "--hard",
                              "FETCH_HEAD" if ref else "origin/HEAD"],
                             capture_output=True, timeout=60)
         else:
             out = _subprocess.run(
                 ["git", "clone", "--depth", "1"] + (["--branch", ref] if ref else [])
-                + [url, dest], capture_output=True, text=True, timeout=300)
+                + [url, dest], capture_output=True, text=True, timeout=300, env=genv)
             if out.returncode != 0:
                 # A ref that is a SHA, or a tag, cannot be cloned with --branch. Fall back to a
                 # plain clone and fetch it, so "ref" means any ref rather than "branch only".
                 if ref:
                     plain = _subprocess.run(["git", "clone", "--depth", "1", url, dest],
-                                            capture_output=True, text=True, timeout=300)
+                                            capture_output=True, text=True, timeout=300, env=genv)
                     if plain.returncode != 0:
                         return None, f"clone failed: {(plain.stderr or '')[-200:]}"
                     got = _subprocess.run(["git", "-C", dest, "fetch", "--depth", "1",
                                            "origin", ref], capture_output=True, text=True,
-                                          timeout=120)
+                                          timeout=120, env=genv)
                     if got.returncode != 0:
                         return None, (f"no such ref {ref!r} in {owner}/{short} "
                                       f"({(got.stderr or '').strip()[-160:]})")
@@ -3955,14 +3961,14 @@ def _source_for_run(ctx: Any, run_id: str, *, project_id: str) -> tuple[
     candidates = [f"boss/code/{run_id}", str(spec.get("base_branch") or "").strip()]
     settings = getattr(ctx, "settings", None)
     try:
-        from ..services.repo_host import clone_url_for
+        from ..services.repo_host import git_access
 
-        url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+        access = git_access(getattr(settings, "target_repo_host", "github") or "github",
                             owner or (getattr(settings, "target_github_owner", "") or ""),
                             short, getattr(settings, "github_token", "") or "")
         for candidate in [c for c in candidates if c]:
-            probe = _subprocess.run(["git", "ls-remote", "--heads", url, candidate],
-                                    capture_output=True, text=True, timeout=60)
+            probe = _subprocess.run(["git", "ls-remote", "--heads", access.url, candidate],
+                                    capture_output=True, text=True, timeout=60, env=access.environ())
             if probe.returncode == 0 and (probe.stdout or "").strip():
                 return repo, candidate, None
     except Exception:  # noqa: BLE001 — fall through to the default branch

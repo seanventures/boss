@@ -11,8 +11,9 @@
     NotOnOrAfter with 60 s skew; each assertion id is spent once (replay cache, A67).
   - Identity: (IdP entityID, NameID).
 
-Schema note: identity_providers has no IdP SSO URL column; for a SAML provider `client_id` holds
-it (IDENTITY_BUILD.md §7 amendment request S1-SAML).
+Schema (amendment S1-5): the IdP SSO URL is `identity_providers.saml_sso_url` and the MFA
+AuthnContextClassRef set is `trusted_authn_contexts` (NULL: MFA_CONTEXTS). A provider saved before
+those columns has its SSO URL in `client_id`, still read as a fallback (`Provider.sso_url`).
 """
 from __future__ import annotations
 
@@ -56,6 +57,12 @@ MFA_CONTEXTS = frozenset({
 })
 
 
+def trusted_mfa_contexts(provider: Provider) -> frozenset[str]:
+    """The AuthnContextClassRef values this provider's assertions may vouch MFA with."""
+    configured = frozenset(c.strip() for c in (provider.trusted_authn_contexts or ()) if c and c.strip())
+    return configured or MFA_CONTEXTS
+
+
 def acs_url(origin: str) -> str:
     return f"{origin}/saml/v2/acs"
 
@@ -80,7 +87,7 @@ def metadata(origin: str, entity_id: Optional[str] = None) -> str:
 def start(db: Any, provider: Provider, *, origin: str) -> StartedFlow:
     from .sessions import set_cookie_header
 
-    sso_url = provider.client_id or ""
+    sso_url = provider.sso_url or ""
     if provider.protocol != "saml" or not sso_url.startswith("https://") or not provider.issuer:
         raise SsoError("provider_misconfigured")
     request_id = "_" + random_token(nbytes=20).replace("-", "a").replace("_", "b")
@@ -242,7 +249,8 @@ def consume_response(db: Any, *, saml_response: str, preauth: Optional[str], ori
     name = next((attrs[k][0] for k in NAME_ATTRIBUTES if attrs.get(k)), None)
     groups = tuple(attrs.get(provider.groups_claim, ())) if provider.groups_claim else ()
     ctx_ref = assertion.find(f"{{{SAML}}}AuthnStatement/{{{SAML}}}AuthnContext/{{{SAML}}}AuthnContextClassRef")
-    mfa = bool(provider.trust_idp_mfa and ctx_ref is not None and (ctx_ref.text or "").strip() in MFA_CONTEXTS)
+    mfa = bool(provider.trust_idp_mfa and ctx_ref is not None
+               and (ctx_ref.text or "").strip() in trusted_mfa_contexts(provider))
     # An enterprise IdP's signed assertion vouches for the email it names.
     return SamlResult(provider, FederatedIdentity(
         issuer=provider.issuer or "", subject=name_id.text.strip(), email=email,

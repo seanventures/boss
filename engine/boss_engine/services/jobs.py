@@ -139,17 +139,22 @@ def enqueue_job(
 
     Every job carries WHO it is for (IDENTITY.md §7.14, R8): ``on_behalf_of`` (an
     ``identity.lineage.Acting``) or the ambient acting context, stamped into the payload as
-    ``_identity`` {on_behalf_of, grant_id, chain, run_id}. The worker's own identity never
-    authorizes an effect. Under BOSS_AUTHZ_MODE=enforce a job with no principal fails closed here.
+    ``_identity`` {on_behalf_of, grant_id, chain, run_id} and written to the row's
+    ``on_behalf_of`` / ``grant_id`` / ``chain`` / ``on_behalf_system`` columns. The worker's own
+    identity never authorizes an effect. Work enqueued outside any request (a system thread, a
+    webhook) is stamped as BOSS's own (``sys_worker``, system), never left unattributed.
     """
     from boss_engine.identity import lineage as _identity_lineage
 
-    if on_behalf_of is None and _identity_lineage.current() is None and (payload or {}).get("workflow_run_id"):
-        # Work the worker queues for a workflow run carries that run's recorded authority.
+    ambient = _identity_lineage.current()
+    nobody_else = ambient is None or (str(ambient.principal_id).startswith("sys_") and not ambient.grant_id)
+    if on_behalf_of is None and nobody_else and (payload or {}).get("workflow_run_id"):
+        # Work the worker (or a system thread) queues for a workflow run carries that run's
+        # recorded authority, not the worker's: a person's request keeps its own.
         from boss_engine.identity import consent as _identity_consent
 
         on_behalf_of = _identity_consent.acting_for_workflow_run(connection, str(payload["workflow_run_id"]))
-    job_payload = _identity_lineage.stamp_job(dict(payload or {}), on_behalf_of)
+    job_payload, identity_columns = _identity_lineage.stamp_job_row(payload, on_behalf_of)
     boundary = resolve_job_data_boundary(
         connection, task_id, job_payload, data_boundary
     )
@@ -191,14 +196,14 @@ def enqueue_job(
                 id, project_id, task_id, work_item_id, tracker_binding_id,
                 allocation_id, kind, priority, priority_score, workload_class,
                 resource_units, status, payload, data_boundary, max_attempts,
-                attempt, run_after, dedupe_key
+                attempt, run_after, dedupe_key, on_behalf_of, grant_id, chain, on_behalf_system
             )
             VALUES (
                 :id, :project_id, :task_id, :work_item_id, :tracker_binding_id,
                 :allocation_id, :kind, :priority, :priority_score,
                 :workload_class, :resource_units, 'queued',
                 CAST(:payload AS JSONB), :data_boundary, :max_attempts,
-                0, :run_after, :dedupe_key
+                0, :run_after, :dedupe_key, :on_behalf_of, :grant_id, CAST(:chain AS JSONB), :on_behalf_system
             )
             ON CONFLICT (project_id, dedupe_key)
               WHERE dedupe_key IS NOT NULL
@@ -226,6 +231,7 @@ def enqueue_job(
             "max_attempts": max_attempts,
             "run_after": run_after,
             "dedupe_key": dedupe_key,
+            **identity_columns,
         },
     ).mappings().first()
     created = row is not None

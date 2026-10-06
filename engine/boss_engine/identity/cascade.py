@@ -145,8 +145,10 @@ def _schedules_for(db: Any, grant_ids: list[str]) -> list[str]:
 
     if not grant_ids or not _table_exists(db, "workflow_schedules"):
         return []
-    return list(db.execute(text("SELECT id FROM workflow_schedules WHERE enabled "
-                                "AND input->'_identity'->>'grant_id' = ANY(:g)"), {"g": grant_ids}).scalars().all())
+    # The schedule's grant_id column; input._identity only for schedules saved before it.
+    return list(db.execute(text("SELECT id FROM workflow_schedules WHERE enabled AND (grant_id = ANY(:g) OR "
+                                "(on_behalf_of IS NULL AND input->'_identity'->>'grant_id' = ANY(:g)))"),
+                           {"g": grant_ids}).scalars().all())
 
 
 def _workflow_runs_for(db: Any, grant_ids: list[str]) -> list[str]:
@@ -157,7 +159,8 @@ def _workflow_runs_for(db: Any, grant_ids: list[str]) -> list[str]:
     if not grant_ids or not _table_exists(db, "workflow_runs"):
         return []
     rows = db.execute(text(
-        "SELECT id FROM workflow_runs WHERE policy_snapshot->'_identity'->>'grant_id' = ANY(:g) AND status NOT IN "
+        "SELECT id FROM workflow_runs WHERE (grant_id = ANY(:g) OR (on_behalf_of IS NULL AND "
+        "policy_snapshot->'_identity'->>'grant_id' = ANY(:g))) AND status NOT IN "
         "('completed','failed','deadlettered','cancelled','compensated','paused')"), {"g": grant_ids}).scalars().all()
     return [f"run_wf:{r}" for r in rows]
 
@@ -167,8 +170,10 @@ def _queued_jobs_for(db: Any, grant_ids: list[str]) -> list[str]:
 
     if not grant_ids or not _table_exists(db, "jobs"):
         return []
-    return list(db.execute(text("SELECT id FROM jobs WHERE status = 'queued' "
-                                "AND payload->'_identity'->>'grant_id' = ANY(:g)"), {"g": grant_ids}).scalars().all())
+    # The row's grant_id column; payload._identity only for rows written before the column.
+    return list(db.execute(text("SELECT id FROM jobs WHERE status = 'queued' AND (grant_id = ANY(:g) OR "
+                                "(on_behalf_of IS NULL AND payload->'_identity'->>'grant_id' = ANY(:g)))"),
+                           {"g": grant_ids}).scalars().all())
 
 
 def _egress_for(db: Any, run_ids: list[str]) -> int:

@@ -530,9 +530,12 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
     # THE TOKEN IS PASSED IN, resolved by the caller where a database connection exists.
     # Reading settings.github_token here made this an anonymous clone on every install whose
     # repository was connected through the wizard — see github_connections.github_token_for.
-    from .repo_host import clone_url_for  # BOSS-267: host-aware clone
-    url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+    # The app's own build (npm ci, its scripts) then runs in this checkout, so the token rides
+    # in git's environment only — never in the URL or `.git/config` (IDENTITY.md §7.10).
+    from .repo_host import git_access  # BOSS-267: host-aware clone
+    access = git_access(getattr(settings, "target_repo_host", "github") or "github",
                         owner, repo, token or "")
+    url, genv = access.url, access.environ()
     work = Path(tempfile.mkdtemp(prefix="boss-deploy-"))
     if ref:
         # An explicit ref WINS over the code task's branch. Those disagree the moment the PR
@@ -554,13 +557,13 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
         # use. Falling back to a shallow history of the default branch lets git resolve the
         # short sha LOCALLY, where abbreviations are meaningful.
         direct = owned_process.run(["git", "-C", str(work), "fetch", "--depth", "1", "origin", ref],
-                                capture_output=True, text=True, timeout=180)
+                                capture_output=True, text=True, timeout=180, env=genv)
         if direct.returncode == 0:
             owned_process.run(["git", "-C", str(work), "checkout", "-q", "FETCH_HEAD"],
                            capture_output=True, text=True, timeout=60, check=True)
         else:
             owned_process.run(["git", "-C", str(work), "fetch", "--depth", "200", "origin"],
-                           capture_output=True, text=True, timeout=300, check=True)
+                           capture_output=True, text=True, timeout=300, check=True, env=genv)
             checked = owned_process.run(["git", "-C", str(work), "checkout", "-q", ref],
                                      capture_output=True, text=True, timeout=60)
             if checked.returncode != 0:
@@ -570,7 +573,7 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
                     f"{(checked.stderr or direct.stderr or '').strip()[:200]}")
     else:
         owned_process.run(["git", "clone", "--depth", "1", "--branch", branch, url, str(work)],
-                       capture_output=True, text=True, timeout=180, check=True)
+                       capture_output=True, text=True, timeout=180, check=True, env=genv)
     # Read here, where the clone definitely still has its .git directory. Every return path
     # below carries this value out, so no caller has to know which ones discard the clone.
     sha = _head_sha(work)

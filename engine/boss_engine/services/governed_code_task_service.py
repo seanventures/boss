@@ -2102,6 +2102,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             {"s": execution_substrate, "id": run_id},
         )
     mv = MicroVMProvider(settings) if use_microvm else None
+    guest_egress: dict[str, Any] = {}     # the egress clone access, once the identity run starts
+    identity_run = None
     guest_vm_ids: list[str] = []          # for release-on-success / retain-on-failure
     accumulated: dict[str, str] = {}      # path -> content committed so far (the PR diff)
     guest_base = base_branch              # advances to work_branch once commits exist
@@ -2127,6 +2129,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "token": token, "timeout": settings.code_agent_timeout_seconds,
             "max_turns": int(getattr(settings, "code_agent_guest_max_turns", 120) or 120),
         }
+        if guest_egress.get("spec"):
+            # The guest's shim holds the per-run egress credential; no GitHub token is sent.
+            guest_spec["egress"] = guest_egress["spec"]
         if _app_id:
             guest_spec["app_root"] = _app_id
         with _transaction(engine) as c:
@@ -2600,12 +2605,31 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     review_sandbox = None
     command_container = None  # BOSS-410, only when the docker command runtime is selected
     cost = 0
+    # IDENTITY (docs/product/IDENTITY.md §7.9-§7.10), the same rule as the ungoverned path: with
+    # the egress proxy on and a verified principal + grant on this build, every clone (the work
+    # sandbox, the review clone, each guest stage) goes through boss-egress and holds NO GitHub
+    # token. A refused authority fails the build; it never falls back to the shared token.
+    from boss_engine.identity import runs as identity_runs
+
+    try:
+        identity_run = identity_runs.start_code_task_run(
+            engine, task_run_id=run_id, project_id=project_id, owner=owner, repo=repo,
+            role_key=spec.get("role_key"), job_id=job_id)
+    except Exception as exc:  # noqa: BLE001 — refused authority fails the build, never widens
+        raise RuntimeError(f"authority refused: {getattr(exc, 'reason', None) or type(exc).__name__}") from exc
+    egress_access = identity_run[1] if identity_run is not None else None
+    if identity_run is not None:
+        token = ""
+        guest_egress["spec"] = {"clone_url": egress_access.clone_url,
+                                "git_config": [list(kv) for kv in egress_access.git_config
+                                               if kv[0] != "credential.helper"],
+                                "credential": identity_run[0].egress_credential}
     try:
         sandbox = provider.acquire(task_id=run_id, tenant_id=project_id)
         with _transaction(engine) as c:
             _phase(c, "provisioning")
         sandbox.provision(owner, repo, base_branch=base_branch,
-                          work_branch=work_branch, token=token)
+                          work_branch=work_branch, token=token, egress=egress_access)
         root = sandbox.path
         # BOSS-410: with the docker command runtime selected, agent-authored commands run in
         # a network-less container with the workspace bind-mounted, rather than as a
@@ -3592,7 +3616,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 review_sandbox = provider.acquire(task_id=f"{run_id}-review",
                                                   tenant_id=project_id)
                 review_sandbox.provision(owner, repo, base_branch=guest_base,
-                                         work_branch=work_branch, token=token)
+                                         work_branch=work_branch, token=token, egress=egress_access)
                 review_root = review_sandbox.path
 
             # Pre-resolve routes on the MAIN thread (the agent cache is not locked); the
@@ -5092,3 +5116,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             sandbox.teardown()
         if review_sandbox is not None:
             review_sandbox.teardown()
+        if identity_run is not None:
+            # Run end: its tokens, egress credential, "this build only" grant and GitHub
+            # installation tokens all end with it.
+            from .code_task_service import _identity_org
+
+            identity_runs.finish_code_task_run(engine, identity_run[0], org_id=_identity_org(engine, project_id))
