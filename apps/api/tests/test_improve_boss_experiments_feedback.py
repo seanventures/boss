@@ -21,8 +21,10 @@ def test_an_arm_never_touches_what_needs_approval(engine):
     from boss_engine.services import experiments
 
     assert not (experiments.ARM_SPEC_KEYS & experiments.APPROVAL_KEYS)
+    # model_routing_mode (Smart vs Fixed, docs/product/MODEL_ROUTER.md) changes which model
+    # runs a step; floors, gates, risk and approvals are untouched by it.
     assert {k["setting"] for k in experiments.ARM_KNOBS.values()} <= {
-        "code_agent_engine", "code_review_inrun_max_rounds"}
+        "code_agent_engine", "code_review_inrun_max_rounds", "model_routing_mode"}
     reset_state(engine)
     with engine.begin() as c:
         experiments.create(c, project_id=project(), actor="ceo", name="", target_kind="role",
