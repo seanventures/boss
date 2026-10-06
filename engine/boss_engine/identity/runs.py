@@ -255,12 +255,13 @@ def agent_for_role(db: Any, project_id: Optional[str], role_key: Optional[str]) 
         return None
     if not db.execute(text("SELECT to_regclass('roles') IS NOT NULL")).scalar():
         return None
-    try:
+    has_project = db.execute(text("SELECT 1 FROM information_schema.columns WHERE table_name = 'roles' "
+                                  "AND column_name = 'project_id'")).scalar()
+    if has_project:
         return db.execute(text("SELECT agent_id FROM roles WHERE role_key = :r AND agent_id IS NOT NULL "
                                "ORDER BY (project_id = :p) DESC LIMIT 1"), {"r": role_key, "p": project_id}).scalar()
-    except Exception:  # noqa: BLE001 — a roles table without project_id
-        return db.execute(text("SELECT agent_id FROM roles WHERE role_key = :r AND agent_id IS NOT NULL LIMIT 1"),
-                          {"r": role_key}).scalar()
+    return db.execute(text("SELECT agent_id FROM roles WHERE role_key = :r AND agent_id IS NOT NULL LIMIT 1"),
+                      {"r": role_key}).scalar()
 
 
 @dataclass(frozen=True)
@@ -353,14 +354,30 @@ def close_shim_socket(run_id: str) -> None:
             pass
 
 
+def _acting_of_job(engine: Any, job_id: Optional[str]) -> Any:
+    from sqlalchemy import text
+
+    from . import lineage
+
+    if not job_id:
+        return None
+    with engine.begin() as db:
+        payload = db.execute(text("SELECT payload FROM jobs WHERE id = :j"), {"j": job_id}).scalar()
+    return lineage.acting_for_job({"payload": payload or {}})
+
+
 def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner: str, repo: str,
-                        role_key: Optional[str], acting: Any = None) -> Optional[tuple[Shim, CloneAccess]]:
+                        role_key: Optional[str], acting: Any = None,
+                        job_id: Optional[str] = None) -> Optional[tuple[Shim, CloneAccess]]:
     """Wire a code task to its delegated principal: a run token for the person's grant, an egress
-    credential, and the clone access. None (the legacy path) when egress is off or the task carries
+    credential, and the clone access. The principal is the ambient one, else the one stamped on the
+    job that created the build (R8). None (the legacy path) when egress is off or the build carries
     no verified principal — the caller then keeps today's behaviour, which posture reports."""
     from . import lineage
 
-    acting = acting or lineage.current()
+    if not egress_enabled():
+        return None
+    acting = acting or lineage.current() or _acting_of_job(engine, job_id)
     if not egress_enabled() or acting is None or not acting.grant_id:
         return None
     with engine.begin() as db:

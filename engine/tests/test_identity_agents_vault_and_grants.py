@@ -348,3 +348,18 @@ def test_autonomous_mode_runs_as_the_agent_within_its_own_bindings_and_ceiling(e
         c.execute(text("UPDATE identity_agent_passports SET autonomous = false WHERE agent_id = :a"), {"a": env.forge})
         assert not tokens.decide(claims, "code_task:read", None, db=c).allowed
     assert AUD_API in shim.tokens
+
+
+def test_the_passport_upgrade_never_creates_an_agent_without_an_accountable_person(env):
+    with env.db() as c:
+        c.execute(text("INSERT INTO workspaces VALUES ('ws1', 'org_boss')"))
+        c.execute(text("INSERT INTO projects VALUES ('prj_web', 'ws1')"))
+        c.execute(text("INSERT INTO identity_legacy_mappings (org_id, legacy_kind, legacy_ref, principal_id) "
+                       "VALUES ('org_boss', 'member_id', 'ceo', :u)"), {"u": env.alice})
+        c.execute(text("INSERT INTO roles (id, role_key, agent_id, project_id, display_name, sponsor) VALUES "
+                       "('r1','helm','agt_helm0000001','prj_web','Helm','ceo'), "
+                       "('r2','quill','agt_quill000001','prj_web','Quill','someone_unmapped')"))
+        out = passports.upgrade_from_roles(org_id="org_boss", db=c)
+        assert out == {"agt_helm0000001": "created", "agt_quill000001": "skipped: no accountable person"}
+        helm = passports.get("agt_helm0000001", db=c)
+        assert helm.sponsor_principal_id == env.alice and helm.ceiling_preset == "builder"
