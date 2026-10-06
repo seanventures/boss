@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -343,11 +344,13 @@ def build_governance_router(
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.get("/v1/assurance/overview")
+    @permit(P.ASSURANCE_READ, scope=Scope.project(query="project_id"))
     def assurance_overview(project_id: str = Query(...)) -> dict[str, Any]:
         with begin(engine) as connection:
             return assurance.overview(connection, project_id)
 
     @router.get("/v1/assurance/metrics")
+    @permit(P.ASSURANCE_READ, scope=Scope.project(query="project_id"))
     def list_metrics(project_id: str = Query(...)) -> dict[str, Any]:
         with begin(engine) as connection:
             return {
@@ -356,6 +359,7 @@ def build_governance_router(
             }
 
     @router.post("/v1/assurance/metrics", status_code=201)
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def create_metric(payload: MetricCreateRequest) -> dict[str, Any]:
         return mutate(
             payload,
@@ -366,6 +370,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/metrics/schedule")
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def schedule_metrics(payload: MetricScheduleRequest) -> dict[str, Any]:
         return mutate(
             payload,
@@ -376,6 +381,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/metrics/{metric_id}/observations", status_code=201)
+    @permit(P.WORKER_LEASE)
     def record_observation(
         metric_id: str, payload: MetricObservationRequest
     ) -> dict[str, Any]:
@@ -386,6 +392,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/metrics/{metric_id}/baseline")
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def change_baseline(
         metric_id: str, payload: MetricBaselineRequest
     ) -> dict[str, Any]:
@@ -398,6 +405,7 @@ def build_governance_router(
         )
 
     @router.get("/v1/assurance/conclusions")
+    @permit(P.ASSURANCE_READ, scope=Scope.project(query="project_id"))
     def list_conclusions(project_id: str = Query(...)) -> dict[str, Any]:
         with begin(engine) as connection:
             return {
@@ -406,6 +414,7 @@ def build_governance_router(
             }
 
     @router.post("/v1/assurance/conclusions", status_code=201)
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def create_conclusion(payload: ConclusionCreateRequest) -> dict[str, Any]:
         return mutate(
             payload,
@@ -416,6 +425,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/publication-guard")
+    @permit(P.ASSURANCE_RUN, scope=Scope.project(body="project_id"))
     def publication_guard(payload: PublicationGuardRequest) -> dict[str, Any]:
         return worker(
             lambda connection: assurance.scan_publication(
@@ -424,6 +434,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/conclusions/{conclusion_id}/reopen")
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def reopen_conclusion(
         conclusion_id: str, payload: ConclusionReopenRequest
     ) -> dict[str, Any]:
@@ -436,6 +447,7 @@ def build_governance_router(
         )
 
     @router.get("/v1/assurance/cases")
+    @permit(P.ASSURANCE_READ, scope=Scope.project(query="project_id"))
     def list_cases(project_id: str = Query(...)) -> dict[str, Any]:
         with begin(engine) as connection:
             return {
@@ -444,6 +456,7 @@ def build_governance_router(
             }
 
     @router.post("/v1/assurance/cases", status_code=201)
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def create_case(payload: AssuranceCaseCreateRequest) -> dict[str, Any]:
         return mutate(
             payload,
@@ -454,6 +467,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/claims", status_code=201)
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def create_claim(payload: ClaimCreateRequest) -> dict[str, Any]:
         return mutate(
             payload,
@@ -464,6 +478,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/evidence", status_code=201)
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def create_evidence(payload: EvidenceCreateRequest) -> dict[str, Any]:
         return mutate(
             payload,
@@ -474,6 +489,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/evidence/{evidence_id}/invalidate")
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def invalidate_evidence(
         evidence_id: str, payload: EvidenceInvalidateRequest
     ) -> dict[str, Any]:
@@ -486,6 +502,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/claims/{claim_id}/evaluate")
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def evaluate_claim(claim_id: str, payload: ClaimEvaluateRequest) -> dict[str, Any]:
         return mutate(
             payload,
@@ -496,6 +513,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/cases/{case_id}/evaluate")
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def evaluate_case(case_id: str, payload: CaseEvaluateRequest) -> dict[str, Any]:
         return mutate(
             payload,
@@ -506,6 +524,7 @@ def build_governance_router(
         )
 
     @router.get("/v1/assurance/surfaces")
+    @permit(P.ASSURANCE_READ, scope=Scope.project(query="project_id"))
     def list_surfaces(project_id: str = Query(...)) -> dict[str, Any]:
         with begin(engine) as connection:
             return {
@@ -514,6 +533,7 @@ def build_governance_router(
             }
 
     @router.post("/v1/assurance/surfaces/acquire")
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def acquire_surface(payload: SurfaceAcquireRequest) -> dict[str, Any]:
         return mutate(
             payload,
@@ -524,6 +544,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/surfaces/{ownership_id}/transfer")
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def transfer_surface(
         ownership_id: str, payload: SurfaceTransferRequest
     ) -> dict[str, Any]:
@@ -536,6 +557,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/surfaces/preflight")
+    @permit(P.ASSURANCE_RUN, scope=Scope.project(body="project_id"))
     def preflight_surface(payload: SurfacePreflightRequest) -> dict[str, Any]:
         return worker(
             lambda connection: assurance.preflight_surface(
@@ -544,6 +566,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/verification-policies", status_code=201)
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def create_verification_policy(
         payload: VerificationPolicyCreateRequest,
     ) -> dict[str, Any]:
@@ -556,6 +579,7 @@ def build_governance_router(
         )
 
     @router.get("/v1/assurance/verification-runs")
+    @permit(P.ASSURANCE_READ, scope=Scope.project(query="project_id"))
     def list_verification_runs(project_id: str = Query(...)) -> dict[str, Any]:
         with begin(engine) as connection:
             return {
@@ -564,6 +588,7 @@ def build_governance_router(
             }
 
     @router.post("/v1/assurance/verification-runs", status_code=201)
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def schedule_verification(payload: VerificationScheduleRequest) -> dict[str, Any]:
         return mutate(
             payload,
@@ -574,6 +599,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/verification-runs/schedule-due")
+    @permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
     def schedule_due_verifications(
         payload: VerificationScheduleDueRequest,
     ) -> dict[str, Any]:
@@ -586,6 +612,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/assurance/verification-runs/{run_id}/complete")
+    @permit(P.WORKER_LEASE)
     def complete_verification(
         run_id: str, payload: VerificationCompleteRequest
     ) -> dict[str, Any]:
@@ -596,6 +623,7 @@ def build_governance_router(
         )
 
     @router.get("/v1/integration-registry/definitions")
+    @permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
     def list_integration_definitions(project_id: str = Query(...)) -> dict[str, Any]:
         with begin(engine) as connection:
             return {
@@ -604,6 +632,7 @@ def build_governance_router(
             }
 
     @router.post("/v1/integration-registry/definitions", status_code=201)
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
     def create_integration_definition(
         payload: IntegrationDefinitionCreateRequest,
     ) -> dict[str, Any]:
@@ -616,6 +645,7 @@ def build_governance_router(
         )
 
     @router.get("/v1/integration-registry/connections")
+    @permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
     def list_integration_connections(project_id: str = Query(...)) -> dict[str, Any]:
         with begin(engine) as connection:
             return {
@@ -624,6 +654,7 @@ def build_governance_router(
             }
 
     @router.post("/v1/integration-registry/connections", status_code=201)
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
     def create_integration_connection(
         payload: IntegrationConnectionCreateRequest,
     ) -> dict[str, Any]:
@@ -636,6 +667,7 @@ def build_governance_router(
         )
 
     @router.patch("/v1/integration-registry/connections/{connection_id}")
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))
     def update_integration_connection(
         connection_id: str, payload: IntegrationConnectionUpdateRequest
     ) -> dict[str, Any]:
@@ -648,6 +680,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/integration-registry/resolve")
+    @permit(P.WORKFLOW_RUN_START, scope=Scope.project(body="project_id"))
     def resolve_capability(payload: CapabilityResolveRequest) -> dict[str, Any]:
         with begin(engine) as connection:
             require_actor(
@@ -663,6 +696,7 @@ def build_governance_router(
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.get("/v1/integration-registry/resolutions")
+    @permit(P.INTEGRATION_READ, scope=Scope.project(query="project_id"))
     def list_capability_resolutions(
         project_id: str = Query(...), limit: int = Query(100, ge=1, le=500)
     ) -> dict[str, Any]:
@@ -673,6 +707,7 @@ def build_governance_router(
             }
 
     @router.get("/v1/agent-groups")
+    @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
     def list_agent_groups(project_id: str = Query(...)) -> dict[str, Any]:
         with begin(engine) as connection:
             return {
@@ -681,6 +716,7 @@ def build_governance_router(
             }
 
     @router.post("/v1/agent-groups", status_code=201)
+    @permit(P.AGENT_PUBLISH, scope=Scope.project(body="project_id"))
     def create_agent_group(payload: AgentGroupCreateRequest) -> dict[str, Any]:
         return mutate(
             payload,
@@ -689,6 +725,7 @@ def build_governance_router(
         )
 
     @router.get("/v1/agent-groups/runs")
+    @permit(P.WORKFLOW_RUN_READ, scope=Scope.project(query="project_id"))
     def list_agent_group_runs(project_id: str = Query(...)) -> dict[str, Any]:
         with begin(engine) as connection:
             return {
@@ -697,6 +734,7 @@ def build_governance_router(
             }
 
     @router.post("/v1/agent-groups/runs", status_code=201)
+    @permit(P.WORKFLOW_RUN_START, scope=Scope.project(body="project_id"))
     def create_agent_group_run(payload: AgentGroupRunCreateRequest) -> dict[str, Any]:
         return mutate(
             payload,
@@ -705,6 +743,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/agent-groups/runs/{run_id}/members/{member_key}/complete")
+    @permit(P.WORKER_LEASE)
     def complete_agent_group_member(
         run_id: str, member_key: str, payload: AgentGroupMemberCompleteRequest
     ) -> dict[str, Any]:
@@ -715,6 +754,7 @@ def build_governance_router(
         )
 
     @router.post("/v1/agent-groups/runs/{run_id}/finalize")
+    @permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
     def finalize_agent_group_run(
         run_id: str, payload: AgentGroupFinalizeRequest
     ) -> dict[str, Any]:

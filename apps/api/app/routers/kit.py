@@ -9,6 +9,7 @@ Mounted from main.py with the auth helpers injected, so this module does not imp
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Optional
@@ -122,6 +123,7 @@ def build_kit_router(
             pass
 
     @router.get("/v1/kit")
+    @permit(P.SKILL_READ, scope=Scope.project(query="project_id"))
     def get_kit(project_id: str, check: str = "stale") -> dict[str, Any]:
         with begin(engine) as connection:
             require_reader(connection, project_id)
@@ -131,6 +133,7 @@ def build_kit_router(
             return kit.kit_view(connection, settings(), project_id)
 
     @router.get("/v1/kit/{ability}")
+    @permit(P.SKILL_READ, scope=Scope.project(query="project_id"))
     def get_ability(ability: str, project_id: str) -> dict[str, Any]:
         with begin(engine) as connection:
             require_reader(connection, project_id)
@@ -141,6 +144,7 @@ def build_kit_router(
                 raise
 
     @router.post("/v1/kit/{ability}/connect")
+    @permit(P.SKILL_MANAGE, scope=Scope.project(body="project_id"))
     def connect(ability: str, body: ConnectBody) -> dict[str, Any]:
         """Save & test: the ENTERED values are tested first and stored only if the test passes;
         a failure answers 422 {field, message} and writes nothing."""
@@ -158,6 +162,7 @@ def build_kit_router(
             return kit.ability_view(connection, settings(), body.project_id, ability)
 
     @router.delete("/v1/kit/{ability}/connection")
+    @permit(P.SKILL_MANAGE, scope=Scope.project(query="project_id"))
     def disconnect(ability: str, project_id: str, actor: Optional[str] = None
                    ) -> dict[str, Any]:
         spec = _ability(project_id, ability)
@@ -177,6 +182,7 @@ def build_kit_router(
         return outcome
 
     @router.post("/v1/kit/{ability}/test")
+    @permit(P.SKILL_INVOKE, scope=Scope.project(body="project_id"))
     def test(ability: str, body: KitBody) -> dict[str, Any]:
         actor = _writer(body)
         outcome = _run_test(body.project_id, _ability(body.project_id, ability), actor)
@@ -186,6 +192,7 @@ def build_kit_router(
                                                 ability)}
 
     @router.post("/v1/kit/test-all")
+    @permit(P.SKILL_INVOKE, scope=Scope.project(body="project_id"))
     def test_all(body: KitBody) -> dict[str, Any]:
         """Re-run every connection test now, four at a time."""
         actor = _writer(body)
@@ -202,6 +209,7 @@ def build_kit_router(
                     "kit": kit.kit_view(connection, settings(), body.project_id)}
 
     @router.post("/v1/kit/{ability}/try")
+    @permit(P.SKILL_INVOKE, scope=Scope.project(body="project_id"))
     def try_it(ability: str, body: TryBody) -> dict[str, Any]:
         """One read-only call through BOSS's receipted path, as BOSS. Tier 0 only."""
         actor = _writer(body)
@@ -224,6 +232,7 @@ def build_kit_router(
             return {"ok": False, "preview": _said(error), "receipt_id": None}
 
     @router.put("/v1/kit/{ability}/holders")
+    @permit(P.AGENT_ABILITY_ASSIGN, scope=Scope.project(body="project_id"))
     def put_holders(ability: str, body: HoldersBody) -> dict[str, Any]:
         with begin(engine) as connection:
             actor = require_write_actor(connection, body.project_id, body.actor, "pack_manage")
@@ -235,6 +244,7 @@ def build_kit_router(
                 raise
 
     @router.post("/v1/kit/{ability}/policy")
+    @permit(P.SKILL_MANAGE, scope=Scope.project(body="project_id"))
     def set_policy(ability: str, body: PolicyBody) -> dict[str, Any]:
         with begin(engine) as connection:
             actor = require_write_actor(connection, body.project_id, body.actor, "pack_manage")
@@ -246,6 +256,7 @@ def build_kit_router(
                 raise
 
     @router.post("/v1/kit/{ability}/enabled")
+    @permit(P.SKILL_MANAGE, scope=Scope.project(body="project_id"))
     def set_enabled(ability: str, body: EnabledBody) -> dict[str, Any]:
         with begin(engine) as connection:
             actor = require_write_actor(connection, body.project_id, body.actor, "pack_manage")
@@ -257,6 +268,7 @@ def build_kit_router(
                 raise
 
     @router.post("/v1/kit/recommended")
+    @permit(P.AGENT_ABILITY_ASSIGN, scope=Scope.project(body="project_id"))
     def recommended(body: RecommendedBody) -> dict[str, Any]:
         with begin(engine) as connection:
             actor = require_write_actor(connection, body.project_id, body.actor, "pack_manage")
@@ -264,6 +276,7 @@ def build_kit_router(
                                          roles=body.roles)
 
     @router.post("/v1/kit/test-crew")
+    @permit(P.SKILL_INVOKE, scope=Scope.project(body="project_id"))
     def test_crew(body: CrewBody) -> dict[str, Any]:
         """Every Ready ability's test, then for each Essential: can an agent use it now?
 
@@ -320,6 +333,7 @@ def build_kit_router(
 
     # ----------------------------------------------------------------- MCP additions
     @router.post("/v1/mcp/servers/test")
+    @permit(P.MCP_SERVER_REGISTER, scope=Scope.project(body="project_id"))
     def test_mcp(body: McpTestBody) -> dict[str, Any]:
         """Test a URL and sign-in as TYPED. Stores nothing (Save & test, then register)."""
         from boss_engine.services.mcp_registry import test_entered
@@ -334,6 +348,7 @@ def build_kit_router(
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.post("/v1/mcp/servers/{server_id}/review")
+    @permit(P.MCP_SERVER_REVIEW, scope=Scope.project(body="project_id"))
     def review(server_id: str, body: KitBody) -> dict[str, Any]:
         from boss_engine.services.mcp_registry import review_mcp_server
 
@@ -345,6 +360,7 @@ def build_kit_router(
         return row
 
     @router.post("/v1/mcp/servers/{server_id}/policy")
+    @permit(P.MCP_SERVER_REVIEW, scope=Scope.project(body="project_id"))
     def server_tool_policy(server_id: str, body: ToolPolicyBody) -> dict[str, Any]:
         """Allow / Ask / Off for one tool of one server (the Library's MCP drawer). 409 below
         the floor: a tool that changes the world always asks a person."""
@@ -361,6 +377,7 @@ def build_kit_router(
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.get("/v1/mcp/catalogue")
+    @permit(P.MCP_SERVER_READ, scope=Scope.org())
     def catalogue(project_id: Optional[str] = None) -> dict[str, Any]:
         items = kit_connections.catalogue(settings())
         if project_id:
@@ -375,6 +392,7 @@ def build_kit_router(
         return {"items": items}
 
     @router.post("/v1/mcp/catalogue/{key}")
+    @permit(P.MCP_SERVER_REVIEW, scope=Scope.project(body="project_id"))
     def add_from_catalogue(key: str, body: CatalogueAddBody) -> dict[str, Any]:
         """Add a curated server: test it with the token typed, register it only on a pass."""
         from boss_engine.services.mcp_registry import record_reachability, test_entered

@@ -1,6 +1,7 @@
 """Captain coordination HTTP — roster, staffing plan, coordinate."""
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -39,12 +40,14 @@ def _require_captain_actor(
 
 
 @router.get("/v1/captain/roster")
+@permit(P.AUTOPILOT_READ, scope=Scope.org())
 def captain_roster() -> dict[str, Any]:
     """Catalog of agents the captain may staff. Not a scorecard."""
     return {"agents": roster()}
 
 
 @router.get("/v1/captain/plan")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def captain_plan(project_id: str, run_id: str) -> dict[str, Any]:
     if not project_id.strip() or not run_id.strip():
         raise HTTPException(status_code=422, detail="project_id and run_id are required")
@@ -53,6 +56,7 @@ def captain_plan(project_id: str, run_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/captain/coordinate")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def captain_coordinate(payload: CoordinateRequest) -> dict[str, Any]:
     """Staff in-flight work, persist now-assignments, convene panels as needed."""
     if not payload.project_id.strip():
@@ -101,6 +105,7 @@ def _playbooks():
 
 
 @router.get("/v1/captain/playbooks")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def list_playbooks(project_id: str) -> dict[str, Any]:
     if not project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
@@ -110,6 +115,7 @@ def list_playbooks(project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/captain/playbooks/compile")
+@permit(P.AUTOPILOT_CONFIGURE, scope=Scope.org())
 def compile_playbook_endpoint(payload: open_bodies.CaptainPlaybookCompileBody) -> dict[str, Any]:
     payload = payload.payload()
     from boss_engine.services.captain_playbook import compile_playbook
@@ -122,6 +128,7 @@ def compile_playbook_endpoint(payload: open_bodies.CaptainPlaybookCompileBody) -
 
 
 @router.post("/v1/captain/playbooks", status_code=201)
+@permit(P.AUTOPILOT_CONFIGURE, scope=Scope.project(body="project_id"))
 def save_playbook(payload: PlaybookSaveRequest) -> dict[str, Any]:
     from boss_engine.services.captain_playbook import compile_playbook
 
@@ -153,6 +160,7 @@ def save_playbook(payload: PlaybookSaveRequest) -> dict[str, Any]:
 
 
 @router.post("/v1/captain/playbooks/{playbook_key}/start", status_code=201)
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def start_playbook(playbook_key: str, payload: PlaybookStartRequest) -> dict[str, Any]:
     if not payload.project_id.strip() or not payload.prd.strip():
         raise HTTPException(status_code=422, detail="project_id and prd are required")
@@ -179,6 +187,7 @@ def start_playbook(playbook_key: str, payload: PlaybookStartRequest) -> dict[str
 
 
 @router.post("/v1/captain/playbooks/{playbook_key}/loop")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def loop_playbook(playbook_key: str, payload: PlaybookLoopRequest) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")

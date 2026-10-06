@@ -5,6 +5,7 @@ read-only over ``llm_calls``; policies are the only writes. No external model ca
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -52,6 +53,7 @@ class RecommendationsRequest(BaseModel):
 
 
 @router.get("/scorecard")
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
 def get_scorecard(
     project_id: str = Query(...),
     window_hours: Optional[int] = Query(None, ge=1, le=24 * 90),
@@ -72,6 +74,7 @@ def get_scorecard(
 
 
 @router.get("/policies")
+@permit(P.POLICY_READ, scope=Scope.project(query="project_id"))
 def get_policies(project_id: str = Query(...)) -> dict[str, Any]:
     """Token budget policies per project/stage (defaults + stored overrides)."""
     try:
@@ -87,6 +90,7 @@ def get_policies(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @router.put("/policies")
+@permit(P.POLICY_MANAGE, scope=Scope.project(body="project_id"))
 def put_policies(payload: PoliciesPutRequest, request: Request) -> dict[str, Any]:
     """Upsert token budget policies for a project.
 
@@ -122,6 +126,7 @@ def put_policies(payload: PoliciesPutRequest, request: Request) -> dict[str, Any
 
 
 @router.post("/estimate")
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.org(), readonly_post=True)
 def post_estimate(payload: EstimateRequest) -> dict[str, Any]:
     """Estimate tokens for messages (chars/4) + compress suggestions. No model call."""
     try:
@@ -134,6 +139,7 @@ def post_estimate(payload: EstimateRequest) -> dict[str, Any]:
 
 
 @router.post("/recommendations")
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def post_recommendations(payload: RecommendationsRequest) -> dict[str, Any]:
     """Deterministic recommendations extending cost_insights with token rules."""
     try:
@@ -166,6 +172,7 @@ def post_recommendations(payload: RecommendationsRequest) -> dict[str, Any]:
 
 
 @router.get("/consumption")
+@permit(P.BUDGET_READ, scope=Scope.project(query="project_id"))
 def get_consumption(
     project_id: str = Query(...),
     window_hours: int = Query(24, ge=1, le=24 * 90),
@@ -210,6 +217,7 @@ def get_consumption(
 
 
 @router.get("/routing")
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.org())
 def get_routing(
     profile_name: Optional[str] = Query(None),
 ) -> dict[str, Any]:

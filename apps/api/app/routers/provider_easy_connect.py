@@ -6,6 +6,7 @@ account. The raw secret is never stored in Postgres and is never returned.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -118,6 +119,7 @@ def _unavailable_http_error(error: BaseException) -> HTTPException:
         503: {"description": "Vault or schema unavailable"},
     },
 )
+@permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def easy_connect_provider(payload: ProviderEasyConnectRequest) -> dict[str, Any]:
     from apps.api.app.main import require_project_actor, resource_plane
 

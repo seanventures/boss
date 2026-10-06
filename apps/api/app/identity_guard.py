@@ -56,8 +56,14 @@ _legacy_member: Callable[[], Optional[str]] = lambda: None  # noqa: E731
 _legacy_method: Callable[[], Optional[str]] = lambda: None  # noqa: E731
 
 #: Framework routes (Starlette's /openapi.json, /docs, /redoc) have no endpoint function to carry a
-#: decorator; S2 declares them here by path. Phase 0 leaves them undeclared.
-FRAMEWORK_DECLARATIONS: dict[str, Access] = {}
+#: decorator; S2 declares them here by path. The API description is public: BOSS is open source,
+#: the document names routes and shapes, never data (PublicReason.API_DESCRIPTION, amendment A1).
+from boss_engine.identity.declarations import Public, PublicReason  # noqa: E402
+
+FRAMEWORK_DECLARATIONS: dict[str, Access] = {
+    path: Public(reason=PublicReason.API_DESCRIPTION, verifier=None)
+    for path in ("/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc")
+}
 
 
 class AccessRefused(Exception):

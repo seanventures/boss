@@ -1,6 +1,7 @@
 """Focused always-on agents — builder + duty loop HTTP surface."""
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -50,6 +51,7 @@ def _require(connection, project_id: str, actor: str) -> None:
 
 
 @router.get("/v1/focused-agents")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def list_focused_agents(project_id: str) -> dict[str, Any]:
     if not project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
@@ -61,6 +63,7 @@ def list_focused_agents(project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/focused-agents", status_code=201)
+@permit(P.AUTOPILOT_CONFIGURE, scope=Scope.project(body="project_id"))
 def create_focused_agent(payload: CreateFocusedAgentRequest) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
@@ -85,6 +88,7 @@ def create_focused_agent(payload: CreateFocusedAgentRequest) -> dict[str, Any]:
 
 
 @router.get("/v1/focused-agents/{agent_id}")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def get_focused_agent(agent_id: str, project_id: str) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         try:
@@ -94,6 +98,7 @@ def get_focused_agent(agent_id: str, project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/focused-agents/{agent_id}/wake")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def wake_focused_agent(agent_id: str, payload: FocusedAgentActorRequest) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         _require(connection, payload.project_id, payload.actor)
@@ -110,6 +115,7 @@ def wake_focused_agent(agent_id: str, payload: FocusedAgentActorRequest) -> dict
 
 
 @router.post("/v1/focused-agents/{agent_id}/pause")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def pause_focused_agent(agent_id: str, payload: FocusedAgentActorRequest) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         _require(connection, payload.project_id, payload.actor)
@@ -126,6 +132,7 @@ def pause_focused_agent(agent_id: str, payload: FocusedAgentActorRequest) -> dic
 
 
 @router.post("/v1/focused-agents/{agent_id}/activate")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def activate_focused_agent(agent_id: str, payload: FocusedAgentActorRequest) -> dict[str, Any]:
     with begin(get_engine()) as connection:
         _require(connection, payload.project_id, payload.actor)
@@ -142,6 +149,7 @@ def activate_focused_agent(agent_id: str, payload: FocusedAgentActorRequest) -> 
 
 
 @router.post("/v1/focused-agents/tick-all")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def tick_all_focused_agents(payload: TickAllRequest) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")

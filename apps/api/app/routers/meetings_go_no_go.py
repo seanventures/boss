@@ -5,6 +5,7 @@ worker job, never reserves budget. Parallel to ``POST /v1/meetings/standup``.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -34,6 +35,7 @@ def _require_actor(connection: Any, project_id: str, actor: str, permission: str
 
 
 @router.post("/v1/meetings/go-no-go", status_code=201)
+@permit(P.MEETING_CONVENE, scope=Scope.project(body="project_id"))
 def create_and_run_go_no_go(payload: GoNoGoMeetingRequest) -> dict[str, Any]:
     """Convene a typed go/no-go meeting and complete it with the no-spend fixture.
 

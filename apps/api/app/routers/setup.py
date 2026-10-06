@@ -8,6 +8,7 @@ Mounted from main.py with the auth helpers injected, so this module does not imp
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -45,6 +46,7 @@ def build_setup_router(
             return view(connection, project_id)
 
     @router.get("/v1/setup", response_model=SetupView, response_model_by_alias=True)
+    @permit(P.SETUP_READ, scope=Scope.project(query="project_id"))
     def get_setup(project_id: str) -> dict[str, Any]:
         """Repo and models, decided once on the server. Never touches the network."""
         with begin(engine) as connection:
@@ -52,6 +54,7 @@ def build_setup_router(
             return view(connection, project_id)
 
     @router.post("/v1/setup/checks", response_model=SetupView, response_model_by_alias=True)
+    @permit(P.SETUP_MANAGE, scope=Scope.project(body="project_id"))
     def post_checks(body: ChecksBody) -> dict[str, Any]:
         """Prove things now and record when: GitHub's three probes, one question per model."""
         actor = actor_for(body.actor)
@@ -66,6 +69,7 @@ def build_setup_router(
         return fresh_view(body.project_id)
 
     @router.post("/v1/setup/repository/token")
+    @permit(P.GITHUB_CONNECT, scope=Scope.project(body="project_id"))
     def post_repository_token(body: RepositoryTokenBody) -> dict[str, Any]:
         """Check a pasted GitHub token, keep it, and list the repositories it can see."""
         actor = actor_for(body.actor)
@@ -81,6 +85,7 @@ def build_setup_router(
         raise AssertionError("unreachable")
 
     @router.get("/v1/setup/repository/repos")
+    @permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
     def get_repository_repos(project_id: str, connection_id: str) -> dict[str, Any]:
         """`+ Add repo`: what the stored token can see. Asks GitHub; the view never does."""
         with begin(engine) as connection:
@@ -94,6 +99,7 @@ def build_setup_router(
 
     @router.post("/v1/setup/repository/select", response_model=SetupView,
                  response_model_by_alias=True)
+    @permit(P.REPOSITORY_REGISTER, scope=Scope.project(body="project_id"))
     def post_repository_select(body: RepositorySelectBody) -> dict[str, Any]:
         """Bind a repository from the picker, then run its three checks."""
         actor = actor_for(body.actor)
@@ -113,6 +119,7 @@ def build_setup_router(
 
     @router.post("/v1/setup/repository/{binding_id}/default", response_model=SetupView,
                  response_model_by_alias=True)
+    @permit(P.REPOSITORY_MANAGE, scope=Scope.project(query="project_id"))
     def post_repository_default(binding_id: str, project_id: str,
                                 actor: Optional[str] = None) -> dict[str, Any]:
         who = actor_for(actor)
@@ -123,6 +130,7 @@ def build_setup_router(
 
     @router.delete("/v1/setup/repository/{binding_id}", response_model=SetupView,
                    response_model_by_alias=True)
+    @permit(P.REPOSITORY_MANAGE, scope=Scope.project(query="project_id"))
     def delete_repository(binding_id: str, project_id: str,
                           actor: Optional[str] = None) -> dict[str, Any]:
         who = actor_for(actor)
@@ -135,6 +143,7 @@ def build_setup_router(
         return fresh_view(project_id)
 
     @router.post("/v1/setup/models", response_model=SetupView, response_model_by_alias=True)
+    @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
     def post_models(body: ModelConnectBody) -> dict[str, Any]:
         """Store a model credential and prove it: one budgeted, receipted question."""
         actor = actor_for(body.actor)
@@ -156,6 +165,7 @@ def build_setup_router(
 
     @router.post("/v1/setup/models/{source_id}/model", response_model=SetupView,
                  response_model_by_alias=True)
+    @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
     def post_source_model(source_id: str, body: SourceModelBody) -> dict[str, Any]:
         actor = actor_for(body.actor)
         with begin(engine) as connection:
@@ -169,6 +179,7 @@ def build_setup_router(
 
     @router.delete("/v1/setup/models/{source_id}", response_model=SetupView,
                    response_model_by_alias=True)
+    @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(query="project_id"))
     def delete_model(source_id: str, project_id: str, confirm: bool = False,
                      actor: Optional[str] = None) -> dict[str, Any]:
         who = actor_for(actor)
@@ -182,6 +193,7 @@ def build_setup_router(
         return fresh_view(project_id)
 
     @router.get("/v1/setup/models/{provider}/catalogue")
+    @permit(P.SETUP_READ, scope=Scope.project(query="project_id"))
     def get_model_catalogue(provider: str, project_id: str, source_id: str = "",
                             base_url: str = "") -> dict[str, Any]:
         """The provider's own model list, with the key this project stored for it."""
@@ -193,6 +205,7 @@ def build_setup_router(
         return {"models": names}
 
     @router.post("/v1/setup/models/{provider}/catalogue")
+    @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
     def post_model_catalogue(provider: str, body: ModelConnectBody) -> dict[str, Any]:
         """The same list for a key that was just pasted and is not stored yet. A POST, so the
         key never travels in a URL."""
@@ -205,6 +218,7 @@ def build_setup_router(
         return {"models": names}
 
     @router.put("/v1/setup/jobs/{job}", response_model=SetupView, response_model_by_alias=True)
+    @permit(P.SETUP_MANAGE, scope=Scope.project(body="project_id"))
     def put_job(job: str, body: JobBody) -> dict[str, Any]:
         """Engine and model for one job, written together — or back to Auto."""
         actor = actor_for(body.actor)
@@ -219,6 +233,7 @@ def build_setup_router(
         return fresh_view(body.project_id)
 
     @router.put("/v1/setup/budget", response_model=SetupView, response_model_by_alias=True)
+    @permit(P.BUDGET_MANAGE, scope=Scope.project(body="project_id"))
     def put_budget(body: BudgetBody, request: Request) -> dict[str, Any]:
         """The monthly cap — the same setting Govern edits, through this same write. Govern
         sends `via: govern` and an `If-Match`; a stale edit is refused with 412."""
@@ -240,6 +255,7 @@ def build_setup_router(
         return fresh_view(body.project_id)
 
     @router.post("/v1/setup/try", response_model=SetupView, response_model_by_alias=True)
+    @permit(P.WORKFLOW_RUN_START, scope=Scope.project(body="project_id"))
     def post_try(body: TryBody) -> dict[str, Any]:
         """Try it: one sentence becomes a governed build on the default repository and a PR."""
         actor = actor_for(body.actor)

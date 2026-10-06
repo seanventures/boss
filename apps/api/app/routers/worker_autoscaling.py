@@ -11,6 +11,7 @@ Prefix: /v1/worker-autoscaling
 
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any
 
 from boss_engine.config import get_settings
@@ -92,6 +93,7 @@ class ApplyRequest(BaseModel):
 
 
 @router.get("/policies")
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def list_policies(project_id: str = Query(...)) -> dict[str, Any]:
     svc = _service()
     try:
@@ -119,6 +121,7 @@ def list_policies(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @router.put("/policies")
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def upsert_policy(payload: PolicyUpsertRequest) -> dict[str, Any]:
     svc = _service()
     with begin(get_engine()) as connection:
@@ -145,6 +148,7 @@ def upsert_policy(payload: PolicyUpsertRequest) -> dict[str, Any]:
 
 
 @router.post("/evaluate")
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def evaluate(payload: EvaluateRequest) -> dict[str, Any]:
     svc = _service()
     with begin(get_engine()) as connection:
@@ -162,6 +166,7 @@ def evaluate(payload: EvaluateRequest) -> dict[str, Any]:
 
 
 @router.post("/apply")
+@permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def apply(payload: ApplyRequest) -> dict[str, Any]:
     """Evaluate + request elastic capacity (simulated/real per fabric gates)."""
     svc = _service()
@@ -199,6 +204,7 @@ def apply(payload: ApplyRequest) -> dict[str, Any]:
 
 
 @router.get("/status")
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def status(project_id: str = Query(...)) -> dict[str, Any]:
     svc = _service()
     try:
@@ -232,6 +238,7 @@ def status(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @router.get("/history")
+@permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
 def history(
     project_id: str = Query(...),
     pool_key: str | None = None,

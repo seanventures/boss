@@ -6,6 +6,7 @@ Dry-run first. No live cloud writes. Live poll stays on pipeline_adapter.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -91,12 +92,14 @@ class CICDRecordRunRequest(BaseModel):
 
 
 @router.get("/catalog")
+@permit(P.CICD_READ, scope=Scope.org())
 def get_catalog() -> dict[str, Any]:
     """Multi-vendor CI/CD catalog (templates + adapter capability hints)."""
     return cicd.catalog()
 
 
 @router.post("/generate")
+@permit(P.CICD_MANAGE, scope=Scope.org())
 def post_generate(payload: CICDGenerateRequest) -> dict[str, Any]:
     """Dry-run CI config generation for vendor + language (+ optional framework)."""
     try:
@@ -110,12 +113,14 @@ def post_generate(payload: CICDGenerateRequest) -> dict[str, Any]:
 
 
 @router.post("/validate")
+@permit(P.CICD_MANAGE, scope=Scope.org())
 def post_validate(payload: CICDValidateRequest) -> dict[str, Any]:
     """Structure-level YAML (or Jenkinsfile) validation — no cloud calls."""
     return cicd.validate_yaml_structure(payload.yaml, vendor=payload.vendor)
 
 
 @router.post("/runs")
+@permit(P.CICD_MANAGE, scope=Scope.project(body="project_id"))
 def post_record_run(payload: CICDRecordRunRequest) -> dict[str, Any]:
     """Record a pipeline-run provenance entry (BOSS-side ledger)."""
     try:
@@ -140,6 +145,7 @@ def post_record_run(payload: CICDRecordRunRequest) -> dict[str, Any]:
 
 
 @router.get("/runs")
+@permit(P.CICD_READ, scope=Scope.project(query="project_id"))
 def get_runs(
     project_id: str = Query(..., min_length=1),
     limit: int = Query(default=50, ge=1, le=200),
@@ -157,6 +163,7 @@ def get_runs(
 
 
 @router.get("/status")
+@permit(P.CICD_READ, scope=Scope.project(query="project_id"))
 def get_status(
     project_id: str = Query(..., min_length=1),
 ) -> dict[str, Any]:

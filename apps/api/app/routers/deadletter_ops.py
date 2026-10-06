@@ -5,6 +5,7 @@ This router adds first-class remediations so every operator action is durable.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -62,6 +63,7 @@ def _project_for_deadletter(connection: Any, deadletter_id: str) -> str:
 
 
 @router.get("/v1/deadletters/remediations")
+@permit(P.JOB_READ, scope=Scope.project(query="project_id"))
 def list_deadletter_remediations(
     project_id: str = Query(...),
     deadletter_id: Optional[str] = Query(default=None),
@@ -81,6 +83,7 @@ def list_deadletter_remediations(
 
 
 @router.post("/v1/deadletters/{deadletter_id}/remediations", status_code=201)
+@permit(P.DEADLETTER_MANAGE, scope=Scope.of("deadletter", path="deadletter_id"))
 def create_deadletter_remediation(
     deadletter_id: str, payload: RemediationCreateRequest
 ) -> dict[str, Any]:
@@ -114,6 +117,7 @@ def create_deadletter_remediation(
 
 
 @router.post("/v1/deadletters/{deadletter_id}/retry")
+@permit(P.DEADLETTER_MANAGE, scope=Scope.of("deadletter", path="deadletter_id"))
 def retry_deadletter(
     deadletter_id: str, payload: RemediationRetryRequest
 ) -> dict[str, Any]:
