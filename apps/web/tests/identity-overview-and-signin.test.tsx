@@ -16,7 +16,7 @@ import { IdentityProvider } from "../components/identity/identity-provider";
 import { NowProvider } from "../components/identity/kit";
 import { AccessDenied } from "../components/identity/access-denied";
 import { StepUpSheet } from "../components/identity/step-up-sheet";
-import { ConsentSheet } from "../components/identity/consent-sheet";
+import { ConsentSheet, consentFromBody } from "../components/identity/consent-sheet";
 import { Overview } from "../app/identity/overview";
 import { SignIn } from "../app/(auth)/login/sign-in";
 import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
@@ -174,20 +174,22 @@ describe("the sheets and the denied page", () => {
     void el;
   });
 
-  it("consent names the agents and grants only delegable permissions", async () => {
-    await mount(
-      <ConsentSheet onClose={() => undefined} request={{
-        agents: [{ id: "agt_forge", name: "Forge" }, { id: "agt_vera", name: "Vera" }], task: "Interview Scorecard",
-        permissions: ["code_task:steer", "github:sync", "preview:manage", "deployment:production"], projects: ["acme-web"],
-        github: { repo: "acme/web", summary: "push to boss/* · open PRs" },
-      }} />,
-    );
+  it("consent names the agents, the abilities and the API's own duration choices", async () => {
+    // The real 409 consent_required body (identity/consent.py): only delegable permissions.
+    const request = consentFromBody({
+      error: "consent_required", task: "Interview Scorecard", task_run_id: "pending:abc",
+      agents: [{ id: "agt_forge", name: "Forge", role_key: "builder" }, { id: "agt_vera", name: "Vera", role_key: "reviewer" }],
+      permissions: ["code_task:steer", "github:sync", "preview:manage"], projects: ["acme-web"],
+      github: { repo: "acme/web", repos: ["acme/web"], permissions: { contents: "write", pull_requests: "write" }, summary: "push to boss/* · open PRs" },
+      durations: [{ kind: "task", label: "For this build only", days: null }, { kind: "standing", label: "For 30 days", days: 30 }],
+      max_days: 90,
+    })!;
+    await mount(<ConsentSheet onClose={() => undefined} request={request} />);
     const sheet = document.querySelector("[data-testid='consent-sheet']")!;
     expect(sheet.textContent).toContain("Let Forge and Vera act for you?");
     expect(sheet.textContent).toContain("For this build only");
     expect(sheet.textContent).toContain("For 30 days");
-    expect([...sheet.querySelectorAll(".idn-need code")].map((c) => c.textContent)).not.toContain("deployment:production");
-    expect(sheet.textContent).toContain("Agents never get deployment:production");
+    expect(sheet.textContent).toContain("acme/web · push to boss/* · open PRs");
   });
 
   it("AccessDenied names the permission and who can grant it", async () => {

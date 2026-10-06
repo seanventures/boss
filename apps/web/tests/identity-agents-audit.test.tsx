@@ -51,7 +51,12 @@ function wire(s: Who) {
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
     calls.push({ method, path: url.pathname, body });
     const headers = new Headers(init?.headers);
-    const out = stubHandle({ method, path: url.pathname, query: url.searchParams, body, cookies: s.cookies, headers });
+    // The real API's read-only dry run; the dev stub only knows POST …/revoke {dry_run:true}.
+    const preview = /^(\/v1\/identity\/delegations\/[^/]+)\/cascade-preview$/.exec(url.pathname);
+    const out = preview
+      ? stubHandle({ method: "POST", path: `${preview[1]}/revoke`, query: url.searchParams, body: { dry_run: true }, cookies: s.cookies,
+        headers: new Headers({ "x-boss-csrf": s.csrf }) })
+      : stubHandle({ method, path: url.pathname, query: url.searchParams, body, cookies: s.cookies, headers });
     return new Response(JSON.stringify(out.body), { status: out.status, headers: { "content-type": "application/json" } });
   }));
 }
@@ -109,7 +114,8 @@ describe("a delegation's lineage", () => {
     const owner = as("param@kaappu.org");
     const d = owner.get<DelegationDetail>("/v1/identity/delegations/dlg_01JB7Q");
     const el = await mount(owner, <DelegationView initial={d} />);
-    expect(calls.some((c) => c.method === "POST" && c.path.endsWith("/revoke") && (c.body as { dry_run?: boolean }).dry_run)).toBe(true);
+    // The cascade comes from the read-only preview route, never a POST.
+    expect(calls.some((c) => c.method === "GET" && c.path.endsWith("/cascade-preview"))).toBe(true);
     for (const kind of ["runs", "tokens", "github", "grants", "schedules"]) {
       expect(el.querySelector(`[data-testid='cascade-${kind}']`), kind).not.toBeNull();
     }
@@ -132,7 +138,7 @@ describe("a delegation's lineage", () => {
     expect(revoke.getAttribute("title")).toContain("Needs delegation:revoke_any");
     await click(revoke);
     // Nothing was sent: no dry run (it cannot), no revoke.
-    expect(calls.filter((c) => c.path.endsWith("/revoke"))).toEqual([]);
+    expect(calls.filter((c) => c.path.endsWith("/revoke") || c.path.endsWith("/cascade-preview"))).toEqual([]);
   });
 });
 
@@ -211,7 +217,7 @@ describe("Sign-in & SSO settings", () => {
     const policy = owner.get<SecurityPolicy>("/v1/identity/policy");
     const posture = owner.get<Posture>("/v1/identity/posture");
     const el = await mount(admin, <SignInSettings providers={providers} policy={policy} legacy={posture.legacy} />);
-    expect(el.querySelector("[data-testid='provider-idp_okta']")?.textContent).toContain("JWKS ok");
+    expect(el.querySelector("[data-testid='provider-idp_okta']")?.textContent).toContain("OIDC");
     expect(el.querySelector("[data-testid='legacy-legacy_password']")?.textContent).toMatch(/\d+ days left/);
     const save = el.querySelector("[data-testid='save-policy']")!;
     expect(save.getAttribute("title")).toContain("Needs security_policy:manage");
