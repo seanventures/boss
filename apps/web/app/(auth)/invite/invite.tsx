@@ -2,17 +2,47 @@
 
 /**
  * ACCEPT AN INVITATION (IDENTITY.md §4.8 3, §9.7): who invited you, to what, with which access;
- * then SSO (binding that verified identity to this invitation only) or a name and password.
- * Second factor next. A used or expired invitation says so, and nothing else.
+ * then SSO (an IdP-verified email that matches the invitation accepts it) or a name and
+ * password. Second factor next. A used or expired invitation says so, and nothing else.
+ *
+ * THE TOKEN NEVER RIDES A URL TO THE API. The link is `/invite#t=<token>`: the fragment never
+ * reaches a server or an access log, it is wiped from the address bar at once, and the token
+ * goes to the API only in a POST body (/v1/auth/invitations/preview and /accept).
  */
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Key, UserPlus } from "@phosphor-icons/react";
 
-import { idPost } from "../../../../lib/identity/api";
-import type { AuthOptions } from "../../../../lib/identity/types";
-import type { InvitationPreview } from "../../../../lib/identity/types-auth";
-import { AuthStage, Live, Logo } from "../../auth-parts";
-import { sayAuth } from "../../auth-flow";
+import { IdentityError, idPost } from "../../../lib/identity/api";
+import type { AuthOptions, SignInStep } from "../../../lib/identity/types";
+import type { InvitationPreview } from "../../../lib/identity/types-auth";
+import { AuthStage, Live, Logo, fragmentToken } from "../auth-parts";
+import { sayAuth } from "../auth-flow";
+
+/** Read the fragment once, preview the invitation, then hand over to InviteAccept. */
+export function InviteLanding({ options }: { options: AuthOptions }) {
+  const [state, setState] = useState<{ kind: "checking" } | { kind: "ready"; token: string; invitation: InvitationPreview | null }>({ kind: "checking" });
+  const once = useRef(false);
+  useEffect(() => {
+    if (once.current) return;
+    once.current = true;
+    const token = fragmentToken();
+    try { window.history.replaceState(null, "", window.location.pathname); } catch { /* keep going */ }
+    if (!token) { setState({ kind: "ready", token: "", invitation: null }); return; }
+    idPost<InvitationPreview>("/v1/auth/invitations/preview", { token })
+      .then((invitation) => setState({ kind: "ready", token, invitation }))
+      .catch(() => setState({ kind: "ready", token, invitation: null }));
+  }, []);
+  if (state.kind === "checking") {
+    return (
+      <AuthStage label="Invitation">
+        <Logo host={options.host} />
+        <h1>Opening your invitation…</h1>
+        <Live text="Opening your invitation" />
+      </AuthStage>
+    );
+  }
+  return <InviteAccept token={state.token} invitation={state.invitation} options={options} />;
+}
 
 export function InviteAccept({ token, invitation, options }: { token: string; invitation: InvitationPreview | null; options: AuthOptions }) {
   const [name, setName] = useState("");
@@ -38,11 +68,11 @@ export function InviteAccept({ token, invitation, options }: { token: string; in
     setBusy(true);
     setError(null);
     try {
-      await idPost(`/v1/auth/invitations/${encodeURIComponent(token)}/accept`, { name: name.trim(), password });
+      const step = await idPost<SignInStep>("/v1/auth/invitations/accept", { token, name: name.trim(), password });
       setPassword("");
-      window.location.assign("/enrol?next=%2F");
+      window.location.assign(step?.next === "done" ? "/" : "/enrol?next=%2F");
     } catch (e) {
-      setError(sayAuth(e));
+      setError(e instanceof IdentityError && e.code === "invitation_invalid" ? "This invitation no longer works" : sayAuth(e));
       setBusy(false);
     }
   };
@@ -59,7 +89,8 @@ export function InviteAccept({ token, invitation, options }: { token: string; in
         <>
           <div className="idn-provs">
             {invitation.sso.map((p) => (
-              <a key={p.id} className="idn-pv full" href={`/v1/auth/sso/${encodeURIComponent(p.id)}/start?invitation=${encodeURIComponent(token)}`}>
+              <a key={p.id} className="idn-pv full" href={`/v1/auth/sso/${encodeURIComponent(p.id)}/start`}
+                title={`Sign in at ${p.name} as ${invitation.email}; that verified email accepts this invitation`}>
                 <Key size={15} aria-hidden /> Continue with {p.name}
               </a>
             ))}

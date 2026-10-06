@@ -4,7 +4,7 @@
  * IdentityError the UI can act on — open the step-up sheet, name the missing permission —
  * instead of a generic failure.
  */
-import { CSRF_HEADER } from "./contract";
+import { CSRF_HEADER, ME_PATH } from "./contract";
 import { isPermission, type Permission } from "./permissions.gen";
 import { apiWrite, type WriteMethod } from "../api-write";
 
@@ -65,10 +65,42 @@ export function errorSentence(status: number, code: string, permission?: unknown
 let csrfToken = "";
 /** Set by IdentityProvider from /v1/identity/me; sent on every write. */
 export function setCsrfToken(token: string): void { csrfToken = token; }
+export function currentCsrfToken(): string { return csrfToken; }
 
 const WRITE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+/**
+ * THE TOKEN FOLLOWS THE SESSION. The CSRF token is an HMAC of the session id, and the API rotates
+ * the session on step-up, on enrolling a passkey and on confirming an authenticator (S1) without
+ * sending a new token. A write refused `403 csrf_failed` therefore re-reads the token from
+ * /v1/identity/me (same-origin only) and is sent once more — the refusal happened before the API
+ * did anything, so the retry is the first time it runs.
+ */
+async function refreshCsrf(): Promise<boolean> {
+  try {
+    const res = await fetch(ME_PATH, { headers: { Accept: "application/json" }, credentials: "same-origin", cache: "no-store" });
+    if (!res.ok) return false;
+    const token = String(((await res.json()) as { csrf_token?: unknown }).csrf_token ?? "");
+    if (!token || token === csrfToken) return false;
+    csrfToken = token;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function idFetch<T>(method: string, path: string, body?: unknown, init: { signal?: AbortSignal } = {}): Promise<T> {
+  try {
+    return await idFetchOnce<T>(method, path, body, init);
+  } catch (e) {
+    if (e instanceof IdentityError && e.status === 403 && e.code === "csrf_failed" && WRITE.has(method) && await refreshCsrf()) {
+      return idFetchOnce<T>(method, path, body, init);
+    }
+    throw e;
+  }
+}
+
+async function idFetchOnce<T>(method: string, path: string, body?: unknown, init: { signal?: AbortSignal } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (WRITE.has(method) && csrfToken) headers[CSRF_HEADER] = csrfToken;

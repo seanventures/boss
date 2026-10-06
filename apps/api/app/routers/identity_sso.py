@@ -43,6 +43,8 @@ def _redirect(origin: str, answer: Answer) -> Response:
         target = f"{origin}/signin?step=mfa"
     elif nxt == "linked":
         target = f"{origin}/account?linked=1"
+    elif nxt == "enrol":   # signed in, but an MFA-required role has no factor yet
+        target = f"{origin}/enrol"
     else:
         code = str(answer.body.get("error") or "sso_failed")
         safe = code if code.replace("_", "").isalnum() and len(code) <= 40 else "sso_failed"

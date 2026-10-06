@@ -33,9 +33,17 @@ type Stage =
 const WORDS: Record<string, string> = {
   invalid_credentials: "Wrong email or password",
   invalid_code: "That code didn't work",
+  code_invalid: "That code didn't work",
   rate_limited: "Too many tries — wait a minute",
+  busy: "Busy — try again in a moment",
   account_disabled: "This account is disabled. Ask an admin.",
   identity_unavailable: "BOSS can't be reached",
+  sso_required: "Your organisation signs in with single sign-on only.",
+  second_factor_required: "Your role needs a second factor. Sign in with your password.",
+  mfa_challenge_invalid: "That sign-in expired. Start again.",
+  passkey_failed: "That passkey didn't work",
+  passkey_unavailable: "Passkeys aren't set up on this BOSS yet",
+  insecure_origin: "Open BOSS over its HTTPS address",
 };
 
 function say(e: unknown): string {
@@ -47,19 +55,27 @@ function say(e: unknown): string {
   return "That didn't work";
 }
 
-export function SignIn({ options, next }: { options: AuthOptions; next: string }) {
+/**
+ * `initialStep`: single sign-on came back needing a second factor (`/signin?step=mfa`; the
+ * pre-auth cookie holds the rest). `notice`: why single sign-on did not finish
+ * (`/signin?error=<code>`), already in words.
+ */
+export function SignIn({ options, next, initialStep = null, notice = null }: {
+  options: AuthOptions; next: string; initialStep?: SignInStep | null; notice?: string | null;
+}) {
   const [method, setMethod] = useState<Method>("password");
-  const [stage, setStage] = useState<Stage>({ kind: "start" });
+  const [stage, setStage] = useState<Stage>(initialStep ? { kind: "mfa", step: initialStep } : { kind: "start" });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(notice);
   const [resendIn, setResendIn] = useState(0);
   const [hasPasskeys, setHasPasskeys] = useState(true);
   const target = safeNextClient(next);
 
-  useEffect(() => { setHasPasskeys(webauthnAvailable()); }, []);
+  // The API offers passkeys only once a public origin is bound (S1 `passkey`); the stub omits it.
+  useEffect(() => { setHasPasskeys(webauthnAvailable() && options.passkey !== false); }, [options.passkey]);
   useEffect(() => {
     if (resendIn <= 0) return;
     const t = window.setTimeout(() => setResendIn((n) => n - 1), 1000);
@@ -70,18 +86,23 @@ export function SignIn({ options, next }: { options: AuthOptions; next: string }
     setCode("");
     if (step.next === "done") { setStage({ kind: "done" }); window.location.assign(target); return; }
     if (step.next === "enrol") { window.location.assign(`/enrol?next=${encodeURIComponent(target)}`); return; }
-    setStage(step.methods.includes("totp") ? { kind: "mfa", step } : { kind: "passkey", purpose: "mfa", step });
+    const methods = step.methods ?? [];
+    setStage(methods.includes("totp") || !methods.includes("passkey") ? { kind: "mfa", step } : { kind: "passkey", purpose: "mfa", step });
   };
 
   const run = async (call: () => Promise<void>) => {
     setBusy(true);
     setError(null);
-    try { await call(); } catch (e) { setError(say(e)); } finally { setBusy(false); }
+    try { await call(); } catch (e) {
+      setError(say(e));
+      // The pre-auth step expired: the second factor can no longer finish this sign-in.
+      if (e instanceof IdentityError && e.code === "mfa_challenge_invalid") { setStage({ kind: "start" }); setCode(""); }
+    } finally { setBusy(false); }
   };
 
   const passkey = (purpose: "login" | "mfa", step?: SignInStep) => run(async () => {
     setStage({ kind: "passkey", purpose, step });
-    const opts = await idPost<AssertionOptions>("/v1/auth/webauthn/options", { purpose });
+    const opts = await idPost<Wrapped<AssertionOptions>>("/v1/auth/webauthn/options", { purpose });
     const credential = await getAssertion(opts);
     after(await idPost<SignInStep>("/v1/auth/webauthn/verify", { purpose, credential }));
   });

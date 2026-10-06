@@ -36,7 +36,7 @@ export function StepUpSheet({ reason, me, onDone }: { reason: string; me: MeResp
   };
 
   const withPasskey = () => finish(async () => {
-    const options = await idPost<AssertionOptions>("/v1/auth/webauthn/options", { purpose: "step_up" });
+    const options = await idPost<Wrapped<AssertionOptions>>("/v1/auth/webauthn/options", { purpose: "step_up" });
     const credential = await getAssertion(options);
     await idPost("/v1/auth/webauthn/verify", { purpose: "step_up", credential });
   });

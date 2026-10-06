@@ -40,7 +40,7 @@ describe("no session", () => {
     expect(await r.json()).toEqual({ error: "unauthenticated" });
   });
 
-  it.each(["/login", "/claim", "/invite/inv_abc", "/signin/link", "/reset", "/signup", "/boss-mark.png",
+  it.each(["/login", "/claim", "/invite", "/signin", "/signin/link", "/reset", "/signup", "/boss-mark.png",
     "/v1/auth/options", "/v1/auth/login", "/v1/auth/webauthn/options", "/v1/auth/sso/idp_okta/start"])("public %s passes", async (path) => {
     const r = await middleware(remote(path, { method: path.startsWith("/v1/auth/") && path !== "/v1/auth/options" && !path.includes("/sso/") ? "POST" : "GET",
       headers: { origin: ORIGIN } }));

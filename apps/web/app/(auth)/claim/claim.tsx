@@ -17,7 +17,7 @@ import { Fingerprint, ShieldCheck, Warning } from "@phosphor-icons/react";
 
 import { idPost } from "../../../lib/identity/api";
 import type { AuthOptions } from "../../../lib/identity/types";
-import type { RecoveryCodes } from "../../../lib/identity/types-auth";
+import { codesOf, type RecoveryCodes } from "../../../lib/identity/types-auth";
 import { webauthnAvailable } from "../../../lib/identity/webauthn";
 import { AuthStage, Live, Logo, fragmentToken } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
@@ -86,9 +86,9 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     || (network && !originOk) || (fallback && password.length < 12);
   const ready = name.trim() && email.includes("@") && !proofMissing;
 
-  const showCodes = async () => {
-    const r = await idPost<RecoveryCodes>("/v1/identity/me/recovery-codes", {});
-    setCodes(r.codes);
+  /** The codes issued with the first factor; only when there were none, ask for a set. */
+  const showCodes = async (issued: string[] = []) => {
+    setCodes(issued.length ? issued : codesOf(await idPost<RecoveryCodes>("/v1/identity/me/recovery-codes", {})));
     setStage("codes");
   };
 
@@ -98,8 +98,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     try {
       if (fallback) { setStage("totp"); return; }
       setStage("passkey");
-      await registerPasskey();
-      await showCodes();
+      await showCodes(await registerPasskey());
     } catch (e) {
       setError(sayAuth(e));
     } finally {
@@ -143,7 +142,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         <h1>Add an authenticator</h1>
         <p className="idn-s" data-copy="prose">This browser has no passkeys. Scan the code with an authenticator app, then enter the 6 digits it shows.</p>
         <div className="idn-note" data-copy="prose"><Warning size={15} aria-hidden /> Posture will show &ldquo;No passkey on the only Owner&rdquo; until you add one.</div>
-        <TotpStep onDone={() => { showCodes().catch((e) => setError(sayAuth(e))); }} />
+        <TotpStep onDone={(issued) => { showCodes(issued).catch((e) => setError(sayAuth(e))); }} />
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
       </AuthStage>
     );

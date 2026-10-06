@@ -48,12 +48,29 @@ function toB64u(buffer: ArrayBuffer | null | undefined): B64 | null {
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/**
+ * The API answers `{"publicKey": {...}}` (S1, the WebAuthn JSON shape navigator.credentials
+ * takes); the stub answered the bare options. Both are accepted, so every caller passes the
+ * API's answer through untouched.
+ */
+export type Wrapped<T> = T | { publicKey: T };
+export function unwrapOptions<T>(given: Wrapped<T>): T {
+  return given && typeof given === "object" && "publicKey" in given && (given as { publicKey?: unknown }).publicKey
+    ? (given as { publicKey: T }).publicKey
+    : given as T;
+}
+
+function extensions(pk: PublicKeyCredential): Record<string, unknown> {
+  try { return (pk.getClientExtensionResults?.() ?? {}) as Record<string, unknown>; } catch { return {}; }
+}
+
 export class PasskeyCancelled extends Error {
   constructor() { super("passkey_cancelled"); this.name = "PasskeyCancelled"; }
 }
 
 /** Ask the device for a passkey assertion. Throws PasskeyCancelled when the person backs out. */
-export async function getAssertion(options: AssertionOptions): Promise<Record<string, unknown>> {
+export async function getAssertion(given: Wrapped<AssertionOptions>): Promise<Record<string, unknown>> {
+  const options = unwrapOptions(given);
   if (options.stub) return { stub: true };
   if (!webauthnAvailable()) throw new Error("webauthn_unavailable");
   let cred: Credential | null;
@@ -80,11 +97,13 @@ export async function getAssertion(options: AssertionOptions): Promise<Record<st
       clientDataJSON: toB64u(r.clientDataJSON), authenticatorData: toB64u(r.authenticatorData),
       signature: toB64u(r.signature), userHandle: toB64u(r.userHandle),
     },
+    clientExtensionResults: extensions(pk), authenticatorAttachment: pk.authenticatorAttachment ?? null,
   };
 }
 
 /** Register a new passkey on this device. */
-export async function createCredential(options: RegistrationOptions): Promise<Record<string, unknown>> {
+export async function createCredential(given: Wrapped<RegistrationOptions>): Promise<Record<string, unknown>> {
+  const options = unwrapOptions(given);
   if (options.stub) return { stub: true };
   if (!webauthnAvailable()) throw new Error("webauthn_unavailable");
   let cred: Credential | null;
@@ -107,5 +126,6 @@ export async function createCredential(options: RegistrationOptions): Promise<Re
   return {
     id: pk.id, rawId: toB64u(pk.rawId), type: pk.type,
     response: { clientDataJSON: toB64u(r.clientDataJSON), attestationObject: toB64u(r.attestationObject), transports: r.getTransports?.() ?? [] },
+    clientExtensionResults: extensions(pk), authenticatorAttachment: pk.authenticatorAttachment ?? null,
   };
 }

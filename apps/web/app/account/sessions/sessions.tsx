@@ -10,20 +10,24 @@ import { DeviceMobile, Desktop, SignOut } from "@phosphor-icons/react";
 
 import { IdentityError, idDelete, idGet } from "../../../lib/identity/api";
 import type { SessionRow } from "../../../lib/identity/types";
+import { toSessionRows } from "../../../lib/identity/adapt-session";
 import { useGuardedCall } from "../../../components/identity/identity-provider";
 import { Ago, ErrorLine, Pill } from "../../../components/identity/kit";
 import { showToast } from "../../client-forms";
 
 const METHOD: Record<string, string> = { pwd: "password", totp: "TOTP", passkey: "passkey", recovery_code: "recovery code", magic_link: "email link", email_code: "email code" };
 export function methodWords(methods: string[]): string {
-  return methods.map((m) => (m.startsWith("sso:") ? `${m.slice(4).replace(/^\w/, (c) => c.toUpperCase())} SSO` : METHOD[m] ?? m)).join(" + ");
+  // `sso:<provider id>` (S1): the id is not a name, so it reads "SSO" unless it is a word.
+  return methods.map((m) => (m.startsWith("sso:")
+    ? (/^[a-z]+$/i.test(m.slice(4)) ? `${m.slice(4).replace(/^\w/, (c) => c.toUpperCase())} SSO` : "SSO")
+    : METHOD[m] ?? m)).join(" + ");
 }
 
 export function MySessions({ sessions: initial }: { sessions: SessionRow[] }) {
   const [sessions, setSessions] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const guarded = useGuardedCall();
-  const reload = async () => setSessions((await idGet<{ sessions: SessionRow[] }>("/v1/identity/me/sessions")).sessions);
+  const reload = async () => setSessions(toSessionRows((await idGet<{ sessions: unknown[] }>("/v1/identity/me/sessions")).sessions));
   const end = (call: () => Promise<unknown>, toast: string) => {
     setError(null);
     guarded("Ending sessions signs those browsers out.", call)
