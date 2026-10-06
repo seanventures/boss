@@ -52,6 +52,32 @@ export function isStrippedHeader(name: string): boolean {
   return HOP.has(n) || IDENTITY_HEADER.test(n);
 }
 
+/**
+ * A PREVIEW IS A CAPABILITY URL, NOT A SESSION (IDENTITY.md §4.1). `/v1/previews/<id>/web/…`
+ * (and the overlay's `/feedback`) serve someone else's app on the console's origin. The id is
+ * the credential; nothing the person holds is ever sent there — no identity cookie, no CSRF
+ * token, no network-trust marker — and nothing the previewed app answers may set a cookie on the
+ * console's origin. The API sandboxes every answer (CSP `sandbox` without allow-same-origin).
+ */
+export const PREVIEW_CAPABILITY_PATH = /^\/v1\/previews\/[^/]+\/(?:web(?:\/.*)?|feedback\/?)$/;
+
+export function isPreviewCapabilityPath(pathname: string): boolean {
+  return PREVIEW_CAPABILITY_PATH.test(pathname);
+}
+
+/**
+ * A request from a context that must not speak for the person: a sandboxed (opaque-origin)
+ * document such as a preview — `Origin: null` — or a cross-site fetch that is not a navigation.
+ * Top-level navigations (an IdP's redirect back, a SAML form POST) are not this: they keep their
+ * cookies. A sandboxed preview's `fetch('/v1/identity/me')` is, and it gets no session.
+ */
+export function untrustedBrowserContext(headers: Headers): boolean {
+  if ((headers.get("origin") ?? "").trim().toLowerCase() === "null") return true;
+  const site = (headers.get("sec-fetch-site") ?? "").toLowerCase();
+  const mode = (headers.get("sec-fetch-mode") ?? "").toLowerCase();
+  return site === "cross-site" && mode !== "navigate";
+}
+
 /** Only the identity cookies, re-serialised. Any other cookie on the console's origin stays home. */
 export function identityCookieHeader(cookieHeader: string | null | undefined, opts: { stub?: boolean } = {}): string {
   if (!cookieHeader) return "";
@@ -108,14 +134,28 @@ export async function resolveForwardedIdentity(write: boolean): Promise<Forwarde
 const WRITES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
+ * Set by the /v1 proxy on a call that must speak for NOBODY (a preview's capability URL, a
+ * sandboxed or cross-site caller). The server-side fetch wrapper (server-fetch.ts) would
+ * otherwise re-attach the person's cookie and CSRF from the incoming request. It can only take
+ * identity away — a client-sent copy is stripped like every X-Boss-* header before the proxy
+ * sets its own — and it never reaches the API.
+ */
+export const SPEAKS_FOR_NOBODY_HEADER = "x-boss-speaks-for-nobody";
+
+/**
  * Headers for a server-side call to the API: the caller's own, minus anything that could name a
  * principal, plus the signed-in person's cookie (and CSRF on writes).
  */
 export async function withForwardedIdentity(method: string, given: HeadersInit | undefined): Promise<Headers> {
   const out = new Headers();
-  new Headers(given).forEach((value, name) => {
+  const asked = new Headers(given);
+  asked.forEach((value, name) => {
     if (!isStrippedHeader(name)) out.set(name, value);
   });
+  if (asked.has(SPEAKS_FOR_NOBODY_HEADER)) {
+    out.delete(CSRF_HEADER_LC);
+    return out;
+  }
   const marker = consoleAuthMarker();
   if (marker) out.set(CONSOLE_AUTH_HEADER_LC, marker);
   const write = WRITES.has(method.toUpperCase());
