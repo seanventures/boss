@@ -36,6 +36,8 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
         "description": "Sessions, OIDC/SAML, SCIM, API keys, members, roles.",
         "prefixes": [
             "/v1/auth",
+            "/v1/identity/",
+            "/.well-known/boss-jwks",
             "/v1/members",
             "/v1/roles",
             "/v1/org-members",

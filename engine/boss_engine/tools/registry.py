@@ -66,6 +66,20 @@ class ToolSpec:
     #: API-backed tools use the API's durable control plane. Native engine
     #: writes still require the local Postgres workspace.
     requires_durable_workspace: bool = True
+    #: THE CATALOGUE PERMISSION THIS TOOL NEEDS (docs/product/IDENTITY.md §6.4). Checked against
+    #: packages/identity/catalogue.yaml when the spec is built, so a misspelt key fails at import.
+    #: Optional only until stream S2 declares every tool (tests/identity/undeclared_mcp_tools.txt
+    #: is the shrinking list); then it becomes required.
+    permission: Optional[str] = None
+    #: True for the API-surface tools: each one calls an API route, whose own declaration is
+    #: checked when the call is dispatched, so the tool cannot drift from the route.
+    inherits_route_permission: bool = False
+
+    def __post_init__(self) -> None:
+        if self.permission is not None:
+            from ..identity.catalogue import require_known
+
+            require_known(self.permission)
 
     @property
     def self_executable(self) -> bool:
@@ -115,6 +129,7 @@ class ToolRegistry:
         *,
         kind: ToolKind = "read",
         reversibility: Optional[Reversibility] = None,
+        permission: Optional[str] = None,
     ) -> Callable[[ToolHandler], ToolHandler]:
         """Decorator form: @registry.tool("list_x", "…", {...}, kind="read")."""
 
@@ -131,6 +146,7 @@ class ToolRegistry:
                     # say so on purpose, so the default can never quietly cover a new
                     # destructive tool.
                     reversibility=reversibility or "safe",
+                    permission=permission,
                 )
             )
             return fn
@@ -250,6 +266,11 @@ class ToolRegistry:
                     + " — so it runs only when an operator clicks it."
                 ),
             }
+        # IDENTITY, PHASE 0: record a call to an undeclared tool (shadow). Stream S2 replaces this
+        # with authz.check(ctx, spec.permission, scope) before the handler runs (IDENTITY.md §6.4).
+        from ..identity.enforcement import shadow_tool_call
+
+        shadow_tool_call(name, spec.permission, inherits_route=spec.inherits_route_permission)
         try:
             result = spec.handler(ctx, project_id=project_id, actor=actor, args=safe_args)
         except ToolError:

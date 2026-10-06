@@ -420,6 +420,13 @@ class Settings(BaseSettings):
         default=None, alias="BOSS_EMAIL_FROM_NAME"
     )
     require_api_auth: bool = Field(default=False, alias="BOSS_REQUIRE_API_AUTH")
+    # BOSS IDENTITY ENFORCEMENT (docs/product/IDENTITY.md §6.6, IDENTITY_BUILD.md §2.4).
+    # off | shadow | enforce. Shadow evaluates every route and records what it WOULD deny.
+    authz_mode: str = Field(default="shadow", alias="BOSS_AUTHZ_MODE")
+    # Per-router override during the rollout: "setup=enforce,github=shadow".
+    authz_router_modes: str = Field(default="", alias="BOSS_AUTHZ_ROUTER_MODES")
+    # warn | fail. Undeclared routes at boot: warn (default in shadow) or refuse to start.
+    authz_coverage: str = Field(default="", alias="BOSS_AUTHZ_COVERAGE")
     bootstrap_seed_api_enabled: bool = Field(
         default=False,
         alias="BOSS_BOOTSTRAP_SEED_API_ENABLED",

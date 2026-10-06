@@ -13,7 +13,7 @@ from collections import defaultdict, deque
 from typing import Any, Literal, Optional
 from urllib.parse import parse_qs
 
-from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -1480,7 +1480,16 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="BOSS Control Plane", version="0.2.1", lifespan=lifespan)
+# THE IDENTITY ENFORCEMENT POINT (docs/product/IDENTITY.md §6.6). An app-level dependency is copied
+# onto every route the app and every included router registers, so no route can opt out. Phase 0
+# runs it in shadow mode: it records what it WOULD deny and refuses nothing (identity_guard.py).
+from . import identity_guard  # noqa: E402
+
+app = FastAPI(title="BOSS Control Plane", version="0.2.1", lifespan=lifespan,
+              dependencies=[Depends(identity_guard.enforce_access)])
+identity_guard.install(app)
+identity_guard.configure(legacy_member=current_api_principal.get,
+                         legacy_method=current_auth_method.get)
 # COMPRESSED JSON (infra-observability spec §6.8; operator decision 2026-10-04). The console's
 # view endpoints are polled and some are large by nature: the Pulse at 50 apps × 96 cells is
 # ~63 KB of JSON and ~1.2 KB gzipped. Starlette's GZip skips `text/event-stream` (preview logs,
@@ -28710,8 +28719,18 @@ def conversation_close_endpoint(conversation_id: str, payload: open_bodies.Proje
 # --- end agent world: converse ---
 
 
+# IDENTITY API (docs/product/IDENTITY.md §10). Always enforced: router keys starting `identity`.
+from .routers.identity_me import build_identity_me_router  # noqa: E402
+
+app.include_router(build_identity_me_router())
+
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)
+
+# BOOT-TIME COVERAGE CHECK (IDENTITY.md §6.3, D5): every route must declare @permit, @public or
+# @authenticated. Under BOSS_AUTHZ_COVERAGE=fail (the default once BOSS_AUTHZ_MODE=enforce) an
+# undeclared route stops the API from starting; in shadow it is listed in the boot log.
+identity_guard.check_app_coverage(app)
 
 
 # FastAPI gives a multi-method route one ID for all of its methods. The public

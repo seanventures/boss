@@ -1,0 +1,38 @@
+# CONSOLE AREAS WITHOUT AN ACCESS DECLARATION (apps/web/lib/identity/areas.ts). A SHRINKING LIST.
+# Stream S2 removes a line when it declares that area; nothing may ever be added. When the list is
+# empty, delete this file and make AREA_ACCESS a total Record (IDENTITY_BUILD.md §4, S2).
+activity
+agent
+ai-sre
+assurance
+budget
+capabilities
+code_tasks
+comms
+components
+dashboard
+decisions
+delivery
+delivery_workflows
+discovery
+enterprise
+foundations
+github
+infra
+meetings
+monitoring
+observability
+ops
+org
+overview
+pipeline
+portfolio
+processes
+reliability
+reports
+sandboxes
+setup
+shepherd
+skills
+work
+workforce
