@@ -217,6 +217,16 @@ def build_me_response(db: Any, ctx: AuthContext) -> MeResponse:
 
 
 
+def cross_context(headers: Any) -> bool:
+    """A browser request from a sandboxed (opaque-origin) document or a cross-site fetch. Such a
+    caller — a previewed app's script on the console's origin — must never be handed the CSRF
+    token, even if a cookie reached us: the token is only for the console's own pages."""
+    if (headers.get("origin") or "").strip().lower() == "null":
+        return True
+    return (headers.get("sec-fetch-site") or "").lower() == "cross-site" and \
+        (headers.get("sec-fetch-mode") or "").lower() != "navigate"
+
+
 def build_identity_me_router() -> APIRouter:
     router = APIRouter(tags=["identity"])
 
@@ -226,7 +236,10 @@ def build_identity_me_router() -> APIRouter:
         try:
             with begin() as db:
                 me = build_me_response(db, current_context(request, db))
-            return JSONResponse(me.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
+            body = me.model_dump(mode="json")
+            if cross_context(request.headers):
+                body["csrf_token"] = ""
+            return JSONResponse(body, headers={"Cache-Control": "no-store"})
         except AuthnError as exc:
             return refusal(exc)
 

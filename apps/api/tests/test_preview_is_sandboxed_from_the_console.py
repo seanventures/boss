@@ -57,3 +57,14 @@ def test_the_feedback_overlay_answer_is_sandboxed(client):
     )
     # Whatever the capture decides for a fixture preview, the answer is isolated.
     _assert_sandboxed(answer)
+
+
+def test_me_never_hands_its_csrf_token_to_a_sandboxed_or_cross_site_caller():
+    from apps.api.app.routers.identity_me import cross_context
+
+    assert cross_context({"origin": "null"})
+    assert cross_context({"sec-fetch-site": "cross-site", "sec-fetch-mode": "cors"})
+    # The console's own pages, server-side calls, and an IdP's redirect back are not.
+    assert not cross_context({"sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", "origin": "https://boss.example"})
+    assert not cross_context({})
+    assert not cross_context({"sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate"})
