@@ -110,7 +110,9 @@ describe("Model routing", () => {
     fakeApi(view);
     mounted = await mountBoard(view);
     expect(q(document.body, "mr-tier-fast")).toBeNull();
-    expect(q(document.body, "mr-headroom")).toBeNull();
+    // Headroom is shown in Fixed too (the meter), but nothing moves: no rule.
+    expect(q(document.body, "mr-headroom-claude_code")).not.toBeNull();
+    expect(q(document.body, "mr-rule")).toBeNull();
     expect(q(document.body, "su-job-build")).not.toBeNull();
     expect(q(document.body, "mr-preset")).not.toBeNull();
   });
@@ -141,6 +143,17 @@ describe("Model routing", () => {
     expect(document.activeElement).toBe(q(document.body, "mr-floor-add"));
     await click(q(document.body, "mr-floor-x-0"));
     expect(document.activeElement?.getAttribute("data-testid")).toBe("mr-floor-x-0");
+  });
+
+  it("on Smart a job pin is a preference, and Always is an explicit choice", async () => {
+    const api = fakeApi(board());
+    mounted = await mountBoard(board());
+    await click(q(document.body, "su-more-jobs"));
+    expect(q(document.body, "su-more-jobs")?.textContent).toContain("Prefer for a job");
+    const always = q(document.body, "mr-always-review") as HTMLInputElement;
+    expect(always).not.toBeNull();
+    await click(always);
+    expect(writes(api).at(-1)?.policy).toEqual({ hard_pins: ["review"] });
   });
 
   it("focus=routing lands on the row with the jobs open", async () => {

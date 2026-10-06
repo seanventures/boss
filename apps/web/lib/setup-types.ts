@@ -136,6 +136,9 @@ export type Routing = {
   sources: { engine: string; label: string; kind: string; working: boolean;
              models: (string | null)[] }[];
   pins: Record<string, { engine: string; model: string | null; label: string }>;
+  /** Jobs whose pin is "Always use, even when limited"; any other pin is a preference. */
+  hard_pins?: string[];
+  frontier_allows_local?: boolean;
   week: { routes: number; smart_routes: number; tiers: Record<Tier, number>;
           escalations: number; moved: number; saved_usd: number };
 };

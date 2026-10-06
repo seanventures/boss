@@ -541,3 +541,10 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .mr-tier select, .mr-fallback select { text-overflow: ellipsis; padding-right: 24px; }
 .mr-criteria summary { padding: 4px 0; }
 @media (max-width: 720px) { .mr-criteria summary { padding: 12px 0; } }
+.mr-pin { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.mr-always { font-size: 0.8125rem; color: var(--muted); }
+.mr-always input, .mr-section .su-consent input { width: 18px; height: 18px; }
+@media (max-width: 720px) {
+  .mr-always, .mr-section .su-consent { min-height: 44px; padding-right: 8px; }
+  .mr-always input, .mr-section .su-consent input { width: 24px; height: 24px; }
+}
