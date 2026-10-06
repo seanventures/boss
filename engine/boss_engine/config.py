@@ -1444,13 +1444,28 @@ class Settings(BaseSettings):
     #: 32 bytes, base64: the HMAC key for CSRF tokens and hashed rate-limit identifiers. When
     #: unset it is derived from the vault master key; with neither, a per-process key is used.
     identity_server_key: str = Field(default="", alias="BOSS_IDENTITY_SERVER_KEY")
-    #: The legacy shared console password, read ONLY as the claim credential of an existing
-    #: install (§4.11) — compared in constant time, never stored or logged.
-    #: (Same field and alias as stream S5's legacy block: keep one copy when the two merge.)
-    legacy_console_password: str = Field(default="", alias="BOSS_CONSOLE_PASSWORD")
     #: Optional enterprise passkey AAGUID allowlist (comma-separated UUIDs). Empty = any.
     webauthn_aaguid_allowlist: str = Field(default="", alias="BOSS_WEBAUTHN_AAGUIDS")
     # --- end identity stream S1 -------------------------------------------------------------
+    # --- BOSS IDENTITY · stream S5 (audit, migration, legacy bridges; IDENTITY.md §8, §12) ---
+    # The shared console key the console sends today. The legacy bridge maps it to
+    # sys_legacy_console until 30 days after the first Owner is claimed (D25, M5). Never logged.
+    legacy_console_api_key: str = Field(default="", alias="BOSS_API_KEY")
+    # The shared console password: the claim credential before the first Owner (S1 §4.11,
+    # compared in constant time), then usr_legacy_shared with the Operator role for 30 days
+    # (D25). Never stored or logged. (One copy for S1 and S5.)
+    legacy_console_password: str = Field(default="", alias="BOSS_CONSOLE_PASSWORD")
+    # `network` on a network-trusted install (shared-server): the network bridge (D27). The console
+    # can also say so per request from a trusted proxy (X-Boss-Console-Auth: network).
+    legacy_console_auth: str = Field(default="", alias="BOSS_CONSOLE_AUTH")
+    # HMAC key for identifiers of failed sign-ins (A79). Unset: a per-process random key, so an
+    # identifier is never stored in plaintext, at the cost of correlation across restarts.
+    identity_hmac_key: str = Field(default="", alias="BOSS_IDENTITY_HMAC_KEY")
+    # Security-event retention (prune keeps a checkpoint, §8.1) and the shadow ledger flush.
+    identity_audit_retention_days: int = Field(
+        default=400, alias="BOSS_IDENTITY_AUDIT_RETENTION_DAYS")
+    identity_shadow_flush_seconds: int = Field(
+        default=60, alias="BOSS_IDENTITY_SHADOW_FLUSH_SECONDS")
 
     @property
     def repo_root(self) -> Path:

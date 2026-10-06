@@ -251,9 +251,6 @@ STUBS = [
                                        actor=None, reason="", db=None), "S3"),
     (lambda: vault.get_credential(vault.ConnectionRef("github", "usr_alice"),
                                   vault.CredentialPurpose.GITHUB_RUN, ctx=None, db=None), "S3"),
-    (lambda: audit.record(None, db=None), "S5"),
-    (lambda: legacy.bridge(None), "S5"),
-    (lambda: policy.get_policy("org_boss", db=None), "S5"),
 ]
 
 

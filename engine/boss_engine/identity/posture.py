@@ -1,0 +1,236 @@
+"""Identity posture (IDENTITY.md §9.1) and the console-wide banners the API owns (MeBanner).
+Owned by stream S5. Read-only: nothing here changes state.
+
+Six checks, each {key, status: ok|warn|critical, summary, count, fix}:
+  mfa_coverage, stale_api_keys, risky_delegations, legacy_credentials, orphans, audit_chain.
+`legacy_credentials` carries one row per legacy path with its principal, use count, last use and
+the countdown to its cutoff, so "every legacy path shows in posture with counts and a countdown".
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+from .legacy import (
+    LEGACY_SHARED_PRINCIPAL,
+    NETWORK_OPERATOR_PRINCIPAL,
+    LegacyKind,
+    is_bridge_principal,
+)
+
+COUNTDOWN_BANNER_DAYS = 14
+OWNER_RECOVERED_BANNER_DAYS = 7
+STALE_KEY_DAYS = 30
+NETWORK_BANNER = "Anyone who can reach this BOSS acts as the operator. Claim it to finish setup."
+
+
+def _sql(statement: str):
+    from sqlalchemy import text
+    return text(statement)
+
+
+def _iso(value: Optional[datetime]) -> Optional[str]:
+    return value.isoformat() if value else None
+
+
+def legacy_paths(org_id: str, *, db: Any, now: Optional[datetime] = None) -> list[dict[str, Any]]:
+    now = now or datetime.now(timezone.utc)
+    rows = db.execute(_sql(
+        "SELECT m.legacy_kind, m.legacy_ref, m.principal_id, m.access_role_key, m.retire_after, "
+        "m.first_used_at, m.last_used_at, m.use_count, m.retired_at, p.display_name, p.status "
+        "FROM identity_legacy_mappings m JOIN identity_principals p ON p.id = m.principal_id "
+        "WHERE m.org_id = :o AND m.legacy_kind <> 'member_id' ORDER BY m.legacy_kind, "
+        "m.legacy_ref"), {"o": org_id}).mappings().all()
+    out = []
+    for r in rows:
+        days_left = None
+        if r["retire_after"] is not None and r["retired_at"] is None:
+            days_left = max(0, (r["retire_after"] - now).days)
+        if r["retired_at"] is not None:
+            status = "ok"
+        elif r["legacy_kind"] == "network_mode":
+            status = "critical"     # §4.12: anyone who can reach it acts as someone; always red
+        elif r["legacy_kind"] == "console_api_key" and r["retire_after"] is None:
+            status = "critical"
+        elif days_left is not None and days_left <= COUNTDOWN_BANNER_DAYS:
+            status = "critical"
+        else:
+            status = "warn"
+        out.append({
+            "kind": r["legacy_kind"],
+            "ref": r["legacy_ref"],      # a name, a member id or a key's public id; never a secret
+            "principal_id": r["principal_id"], "principal": r["display_name"],
+            "principal_status": r["status"], "role": r["access_role_key"],
+            "use_count": int(r["use_count"] or 0), "first_used_at": _iso(r["first_used_at"]),
+            "last_used_at": _iso(r["last_used_at"]), "retire_after": _iso(r["retire_after"]),
+            "days_left": days_left, "retired_at": _iso(r["retired_at"]), "status": status,
+        })
+    return out
+
+
+def _check(key: str, status: str, summary: str, count: int, fix: str) -> dict[str, Any]:
+    return {"key": key, "status": status, "summary": summary, "count": count, "fix": fix}
+
+
+def _scalar(db: Any, statement: str, params: dict[str, Any]) -> int:
+    try:
+        with db.begin_nested():
+            return int(db.execute(_sql(statement), params).scalar() or 0)
+    except Exception:  # noqa: BLE001 — a missing optional table is "nothing to report"
+        return 0
+
+
+def posture(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dict[str, Any]:
+    from . import audit, migration
+
+    now = now or datetime.now(timezone.utc)
+    checks = []
+
+    # 1. MFA coverage for the roles that require it
+    rows = db.execute(_sql(
+        "SELECT DISTINCT p.id, ar.key AS role FROM identity_principals p JOIN "
+        "identity_role_bindings b ON b.subject_type = 'principal' AND b.subject_id = p.id JOIN "
+        "identity_access_roles ar ON ar.id = b.role_id WHERE p.org_id = :o AND p.kind = 'user' "
+        "AND p.status = 'active' AND NOT p.network_bound AND ar.key IN ('owner','admin','auditor') "
+        "AND (b.expires_at IS NULL OR b.expires_at > :now)"), {"o": org_id, "now": now}).all()
+    people = {pid for pid, _ in rows if not is_bridge_principal(pid)}
+    enrolled = set()
+    if people:
+        enrolled = {r[0] for r in db.execute(_sql(
+            "SELECT principal_id FROM identity_totp WHERE principal_id = ANY(:ids) UNION "
+            "SELECT principal_id FROM identity_webauthn_credentials WHERE principal_id = "
+            "ANY(:ids)"), {"ids": sorted(people)}).all()}
+    missing = len(people - enrolled)
+    owners_with_passkey = _scalar(db, (
+        "SELECT count(DISTINCT w.principal_id) FROM identity_webauthn_credentials w JOIN "
+        "identity_role_bindings b ON b.subject_id = w.principal_id AND b.role_id = 'arl_owner'"),
+        {})
+    checks.append({**_check(
+        "mfa_coverage", "critical" if missing else "ok",
+        f"{len(people) - missing} of {len(people)} Owners, Admins and Auditors have MFA"
+        + ("" if owners_with_passkey or not people else "; no passkey on any Owner"),
+        missing, "Ask them to enrol a passkey or TOTP (My account › Security)."),
+        "total": len(people)})
+
+    # 2. stale API keys
+    stale = _scalar(db, (
+        "SELECT count(*) FROM identity_api_credentials c JOIN identity_principals p ON "
+        "p.id = c.principal_id WHERE p.org_id = :o AND c.revoked_at IS NULL AND c.kind <> "
+        "'legacy_env' AND ((c.last_used_at IS NULL AND c.created_at < :old) OR c.last_used_at < "
+        ":old OR (c.expires_at IS NOT NULL AND c.expires_at < :soon))"),
+        {"o": org_id, "old": now - timedelta(days=STALE_KEY_DAYS),
+         "soon": now + timedelta(days=14)})
+    checks.append(_check("stale_api_keys", "warn" if stale else "ok",
+                         f"{stale} API keys unused for {STALE_KEY_DAYS} days or expiring soon",
+                         stale, "Revoke the ones nobody uses; rotate the rest."))
+
+    # 3. risky delegations
+    risky = _scalar(db, (
+        "SELECT count(*) FROM identity_delegation_grants WHERE org_id = :o AND status = 'active' "
+        "AND (expires_at IS NULL OR last_used_at < :idle)"),
+        {"o": org_id, "idle": now - timedelta(days=30)})
+    checks.append(_check("risky_delegations", "warn" if risky else "ok",
+                         f"{risky} delegations with no expiry or idle for 30 days", risky,
+                         "Review them in Identity › Agents."))
+
+    # 4. legacy credentials still in use
+    paths = legacy_paths(org_id, db=db, now=now)
+    live = [p for p in paths if p["retired_at"] is None and (p["use_count"] or p["kind"] in (
+        "network_mode", "console_api_key", "shared_password"))]
+    pats = _scalar(db, "SELECT count(*) FROM github_connections WHERE status <> 'revoked' AND "
+                       "auth_method = 'personal_access_token'", {})
+    worst = "critical" if any(p["status"] == "critical" for p in live) else (
+        "warn" if live or pats else "ok")
+    summary = ", ".join(f"{p['kind']} ({p['use_count']} uses"
+                        + (f", {p['days_left']} days left" if p["days_left"] is not None else "")
+                        + ")" for p in live) or "none"
+    if pats:
+        summary += f"; {pats} classic GitHub PATs"
+    checks.append({**_check("legacy_credentials", worst, f"Legacy credentials in use: {summary}",
+                            len(live) + pats, "Invite people, move keys to service accounts, "
+                            "then retire the shared paths."), "paths": paths})
+
+    # 5. orphaned service accounts (no active owner) and agents without a passport
+    orphans = _scalar(db, (
+        "SELECT count(*) FROM identity_service_accounts s JOIN identity_principals sp ON "
+        "sp.id = s.principal_id WHERE sp.org_id = :o AND sp.status = 'active' AND NOT EXISTS ("
+        "SELECT 1 FROM identity_principals op WHERE op.id = ANY(s.owner_principal_ids) AND "
+        "op.status = 'active')"), {"o": org_id})
+    no_sponsor = _scalar(db, (
+        "SELECT count(*) FROM identity_principals p WHERE p.org_id = :o AND p.kind = 'agent' AND "
+        "p.status = 'active' AND NOT EXISTS (SELECT 1 FROM identity_agent_passports a WHERE "
+        "a.agent_id = p.id)"), {"o": org_id})
+    checks.append(_check("orphans", "warn" if orphans or no_sponsor else "ok",
+                         f"{orphans} service accounts without an active owner; {no_sponsor} "
+                         "agents without a sponsor", orphans + no_sponsor,
+                         "Give each an owner or sponsor, or disable it."))
+
+    # 6. the audit chain
+    verified = audit.last_verified(org_id, db=db)
+    if verified is None:
+        status, text = "warn", "The audit chain has not been verified yet"
+    elif not verified["ok"]:
+        status, text = "critical", f"The audit chain FAILED verification at {_iso(verified['at'])}"
+    elif verified["at"] < now - timedelta(days=2):
+        status, text = "warn", f"The audit chain was last verified at {_iso(verified['at'])}"
+    else:
+        status, text = "ok", f"The audit chain verified at {_iso(verified['at'])}"
+    checks.append({**_check("audit_chain", status, text, 0, "Verify it in Identity › Audit."),
+                   "verified_at": _iso(verified["at"]) if verified else None})
+
+    claimed = migration.claimed_at(db, org_id)
+    return {"org_id": org_id, "generated_at": now.isoformat(), "claimed_at": _iso(claimed),
+            "status": "critical" if any(c["status"] == "critical" for c in checks) else (
+                "warn" if any(c["status"] == "warn" for c in checks) else "ok"),
+            "checks": checks}
+
+
+def banners(ctx: Any, *, db: Any, now: Optional[datetime] = None) -> list[dict[str, Any]]:
+    """MeBanner dicts for this request's principal (S1 puts them in GET /v1/identity/me)."""
+    from . import migration
+
+    now = now or datetime.now(timezone.utc)
+    org_id = ctx.principal.org_id
+    out: list[dict[str, Any]] = []
+    claimed = migration.claimed_at(db, org_id)
+    if ctx.principal.id == NETWORK_OPERATOR_PRINCIPAL or ctx.legacy == LegacyKind.NETWORK_MODE:
+        m = migration.mapping(db, org_id, LegacyKind.NETWORK_MODE, "BOSS_CONSOLE_AUTH=network")
+        if claimed is None:
+            out.append({"kind": "network_bridge", "message": NETWORK_BANNER, "until": None})
+        else:
+            until = m["retire_after"] if m else None
+            out.append({"kind": "network_bridge", "until": until,
+                        "message": "This network sign-in ends "
+                                   + (f"on {until.date().isoformat()}" if until else "soon")
+                                   + ". Sign in with your own account."})
+    if ctx.principal.id == LEGACY_SHARED_PRINCIPAL or ctx.legacy == LegacyKind.SHARED_PASSWORD:
+        m = migration.mapping(db, org_id, LegacyKind.SHARED_PASSWORD, "BOSS_CONSOLE_PASSWORD")
+        until = m["retire_after"] if m else None
+        if until and until - now <= timedelta(days=COUNTDOWN_BANNER_DAYS):
+            out.append({"kind": "legacy_password", "until": until,
+                        "message": f"The shared password stops working in "
+                                   f"{max(0, (until - now).days)} days. "
+                                   "Ask an Owner to invite you."})
+    if ctx.legacy in (LegacyKind.CONSOLE_API_KEY, LegacyKind.ENV_API_KEY):
+        m = migration.mapping(db, org_id, LegacyKind.CONSOLE_API_KEY, "BOSS_API_KEY")
+        until = m["retire_after"] if m else None
+        if until and until - now <= timedelta(days=COUNTDOWN_BANNER_DAYS):
+            out.append({"kind": "legacy_api_key", "until": until,
+                        "message": "The shared API key stops working soon. Switch to a personal "
+                                   "or service-account key."})
+    recovered = db.execute(_sql(
+        "SELECT ts FROM identity_security_events WHERE org_id = :o AND event_type = "
+        "'owner.recovered_by_host' AND ts > :since ORDER BY seq DESC LIMIT 1"),
+        {"o": org_id, "since": now - timedelta(days=OWNER_RECOVERED_BANNER_DAYS)}).first()
+    if recovered and _holds_owner(db, ctx.principal.id, now):
+        out.append({"kind": "owner_recovered", "until": recovered[0] + timedelta(
+            days=OWNER_RECOVERED_BANNER_DAYS), "message": "An Owner account was recovered from "
+                    "the host shell. Check Identity › Audit."})
+    return out
+
+
+def _holds_owner(db: Any, principal_id: str, now: datetime) -> bool:
+    return db.execute(_sql(
+        "SELECT 1 FROM identity_role_bindings WHERE subject_type = 'principal' AND subject_id = :p "
+        "AND role_id = 'arl_owner' AND (expires_at IS NULL OR expires_at > :now)"),
+        {"p": principal_id, "now": now}).first() is not None

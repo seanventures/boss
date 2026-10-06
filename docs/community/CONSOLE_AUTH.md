@@ -2,6 +2,9 @@
 
 Mission Control is the web console for your self-hosted BOSS install. This page explains how owner sign-in works, how to reach the console from another computer, and what a TLS proxy must do before you expose it on a hostname.
 
+!!! note "Named accounts"
+    From this release, each person signs in with their own account, and the shared password becomes the credential you use once to claim the install. [Upgrade to named accounts](IDENTITY_UPGRADE.md) explains the claim and when the shared password stops working.
+
 ## How sign-in works
 
 A single owner password signs you in, and all of the owner's projects appear in the project picker.
