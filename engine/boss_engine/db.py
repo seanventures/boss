@@ -469,7 +469,11 @@ def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
         raw_connection.commit()
 
         failures: list[str] = []
-        statements = split_statements(sql)
+        # The identity catalogue seed (db/identity_seed.sql, GENERATED from
+        # packages/identity/catalogue.yaml) runs right after the schema that defines its tables.
+        seed_path = resolved.schema_path.with_name("identity_seed.sql")
+        seed_sql = seed_path.read_text(encoding="utf-8") if seed_path.exists() else ""
+        statements = split_statements(sql) + split_statements(seed_sql)
         with raw_connection.cursor() as cursor:
             for stmt in statements:
                 try:

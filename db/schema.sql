@@ -6943,3 +6943,625 @@ ALTER TABLE tm_installs ADD COLUMN IF NOT EXISTS suspicious BOOLEAN NOT NULL DEF
 -- A shared run carries its install's secret hash, so an id that only ever shared a run can still
 -- be deleted (re-check item 2).
 ALTER TABLE tm_shares ADD COLUMN IF NOT EXISTS secret_hash TEXT;
+
+-- =================================================================================================
+-- BOSS IDENTITY (docs/product/IDENTITY.md §11; frozen in Phase 0, docs/product/IDENTITY_BUILD.md).
+-- Every table is identity_-prefixed so nothing collides with the AGENT `roles` table, and every
+-- row is scoped by org_id (one org per install in v1, D24). Additive only. The catalogue rows
+-- (identity_permissions, built-in identity_access_roles) are seeded by db/identity_seed.sql, which
+-- is GENERATED from packages/identity/catalogue.yaml and applied right after this file.
+-- No email is stored in a case-sensitive unique column: uniqueness is on lower(email).
+-- No secret is stored in plaintext: credentials are hashes (SHA-256 for 256-bit tokens, argon2id
+-- PHC for passwords and recovery codes) or vault ciphertext (identity_vault_items).
+-- =================================================================================================
+
+CREATE TABLE IF NOT EXISTS identity_principals (
+  id                TEXT PRIMARY KEY,                    -- usr_ / sva_ / agt_ / sys_
+  org_id            TEXT NOT NULL REFERENCES orgs(id),
+  kind              TEXT NOT NULL CHECK (kind IN ('user','service_account','agent','system')),
+  status            TEXT NOT NULL CHECK (status IN ('pending','active','disabled','suspended','revoked')),
+  display_name      TEXT NOT NULL,
+  network_bound     BOOLEAN NOT NULL DEFAULT false,      -- the network-mode migration bridge principal
+  legacy_member_ids TEXT[] NOT NULL DEFAULT '{}',        -- 'ceo','executive_console',... for history
+  created_by        TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  status_changed_at TIMESTAMPTZ,
+  status_changed_by TEXT,
+  status_reason     TEXT
+);
+CREATE INDEX IF NOT EXISTS identity_principals_org_kind ON identity_principals (org_id, kind, status);
+
+CREATE TABLE IF NOT EXISTS identity_users (
+  principal_id        TEXT PRIMARY KEY REFERENCES identity_principals(id),
+  email               TEXT NOT NULL,
+  email_verified_at   TIMESTAMPTZ,
+  password_hash       TEXT,                              -- argon2id PHC; NULL = no password
+  password_changed_at TIMESTAMPTZ,
+  mfa_required        BOOLEAN NOT NULL DEFAULT false,    -- per-user override; role policy also applies
+  self_signed_up      BOOLEAN NOT NULL DEFAULT false,    -- created by self sign-up (off by default)
+  last_login_at       TIMESTAMPTZ,
+  avatar_seed         TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS identity_users_email ON identity_users (lower(email));
+
+CREATE TABLE IF NOT EXISTS identity_user_identities (    -- SSO and social links, by (issuer, subject)
+  id            TEXT PRIMARY KEY,
+  principal_id  TEXT NOT NULL REFERENCES identity_principals(id),
+  provider_id   TEXT NOT NULL,
+  issuer        TEXT NOT NULL,
+  subject       TEXT NOT NULL,
+  email_at_link TEXT,                                    -- display only; NEVER used to link
+  linked_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at  TIMESTAMPTZ,
+  UNIQUE (issuer, subject)
+);
+CREATE INDEX IF NOT EXISTS identity_user_identities_principal ON identity_user_identities (principal_id);
+
+CREATE TABLE IF NOT EXISTS identity_providers (           -- OIDC / SAML / OAuth sign-in providers
+  id                         TEXT PRIMARY KEY,          -- idp_
+  org_id                     TEXT NOT NULL REFERENCES orgs(id),
+  protocol                   TEXT NOT NULL CHECK (protocol IN ('oidc','saml','oauth2')),
+  preset                     TEXT NOT NULL DEFAULT 'generic', -- google|github|microsoft|apple|okta|entra|keycloak|generic
+  name                       TEXT NOT NULL,
+  issuer                     TEXT,                      -- OIDC issuer / SAML IdP entityID
+  client_id                  TEXT,
+  client_secret_vault_item_id TEXT,                     -- secret lives in the vault
+  scopes                     TEXT[] NOT NULL DEFAULT '{}',
+  allowed_algs               TEXT[] NOT NULL DEFAULT '{RS256,ES256,EdDSA}',
+  saml_sp_entity_id          TEXT,
+  saml_certificates          TEXT[] NOT NULL DEFAULT '{}', -- PEM, up to two for rollover
+  domains                    TEXT[] NOT NULL DEFAULT '{}',
+  jit_mode                   TEXT NOT NULL DEFAULT 'off' CHECK (jit_mode IN ('off','domain')),
+  trust_idp_mfa              BOOLEAN NOT NULL DEFAULT false,
+  enforce_sso                BOOLEAN NOT NULL DEFAULT false,
+  groups_claim               TEXT,
+  status                     TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+  imported_from              TEXT,                      -- enterprise_identity_providers.id (migration)
+  created_by                 TEXT,
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS identity_provider_group_mappings (
+  provider_id    TEXT NOT NULL REFERENCES identity_providers(id) ON DELETE CASCADE,
+  external_group TEXT NOT NULL,
+  group_id       TEXT NOT NULL,
+  PRIMARY KEY (provider_id, external_group)
+);
+
+CREATE TABLE IF NOT EXISTS identity_totp (
+  principal_id  TEXT PRIMARY KEY REFERENCES identity_principals(id),
+  vault_item_id TEXT NOT NULL,                           -- the secret is vault ciphertext, AAD-bound
+  last_step     BIGINT NOT NULL DEFAULT 0,               -- replay guard
+  enrolled_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS identity_webauthn_credentials (
+  id              TEXT PRIMARY KEY,                      -- pky_
+  principal_id    TEXT NOT NULL REFERENCES identity_principals(id),
+  credential_id   BYTEA NOT NULL UNIQUE,
+  public_key      BYTEA NOT NULL,
+  sign_count      BIGINT NOT NULL DEFAULT 0,
+  aaguid          UUID,
+  transports      TEXT[],
+  backup_eligible BOOLEAN,
+  backup_state    BOOLEAN,
+  name            TEXT NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS identity_webauthn_principal ON identity_webauthn_credentials (principal_id);
+
+CREATE TABLE IF NOT EXISTS identity_recovery_codes (
+  id           TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL REFERENCES identity_principals(id),
+  code_hash    TEXT NOT NULL,                            -- argon2id (small profile)
+  used_at      TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS identity_recovery_codes_principal ON identity_recovery_codes (principal_id) WHERE used_at IS NULL;
+
+-- Every short-lived, single-use secret of a sign-in flow. Only its hash is stored; each is bound to
+-- the pre-auth (state) cookie of the browser that asked for it (binding_hash).
+CREATE TABLE IF NOT EXISTS identity_auth_challenges (
+  id_hash      TEXT PRIMARY KEY,
+  kind         TEXT NOT NULL CHECK (kind IN ('preauth','mfa','webauthn','step_up','oidc_state',
+                 'saml_request','password_reset','invitation','setup','magic_link','email_code',
+                 'self_signup_verify')),
+  principal_id TEXT,
+  binding_hash TEXT,
+  payload_enc  BYTEA,                                    -- nonce / PKCE verifier / request id, encrypted
+  attempts     INT NOT NULL DEFAULT 0,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at   TIMESTAMPTZ NOT NULL,
+  consumed_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS identity_auth_challenges_expiry ON identity_auth_challenges (expires_at);
+
+CREATE TABLE IF NOT EXISTS identity_sessions (
+  id                  TEXT PRIMARY KEY,                  -- ses_ (public id; never the token)
+  token_hash          TEXT NOT NULL UNIQUE,              -- SHA-256 of the bss_ token
+  principal_id        TEXT NOT NULL REFERENCES identity_principals(id),
+  auth_methods        TEXT[] NOT NULL,                   -- pwd, totp, passkey, sso:<provider>, magic_link, email_code, legacy_password, network
+  mfa_at              TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  idle_expires_at     TIMESTAMPTZ NOT NULL,
+  absolute_expires_at TIMESTAMPTZ NOT NULL,
+  ip                  INET,
+  user_agent          TEXT,
+  device_id_hash      TEXT,
+  revoked_at          TIMESTAMPTZ,
+  revoked_by          TEXT,
+  revoked_reason      TEXT,
+  replaced_by         TEXT
+);
+CREATE INDEX IF NOT EXISTS identity_sessions_live ON identity_sessions (principal_id) WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS identity_invitations (
+  id                    TEXT PRIMARY KEY,                -- inv_
+  org_id                TEXT NOT NULL REFERENCES orgs(id),
+  email                 TEXT NOT NULL,
+  token_hash            TEXT NOT NULL UNIQUE,
+  bindings              JSONB NOT NULL DEFAULT '[]',     -- [{role_key, scope_type, scope_id}]
+  group_ids             TEXT[] NOT NULL DEFAULT '{}',
+  invited_by            TEXT NOT NULL,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at            TIMESTAMPTZ NOT NULL,
+  accepted_at           TIMESTAMPTZ,
+  accepted_principal_id TEXT,
+  revoked_at            TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS identity_groups (
+  id          TEXT PRIMARY KEY,                          -- grp_
+  org_id      TEXT NOT NULL REFERENCES orgs(id),
+  key         TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  description TEXT,
+  source      TEXT NOT NULL CHECK (source IN ('manual','scim','oidc')),
+  external_id TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, key)
+);
+CREATE TABLE IF NOT EXISTS identity_group_members (
+  group_id     TEXT NOT NULL REFERENCES identity_groups(id),
+  principal_id TEXT NOT NULL REFERENCES identity_principals(id),
+  source       TEXT NOT NULL CHECK (source IN ('manual','scim','oidc')),
+  added_by     TEXT,
+  added_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (group_id, principal_id)
+);
+CREATE INDEX IF NOT EXISTS identity_group_members_principal ON identity_group_members (principal_id);
+
+CREATE TABLE IF NOT EXISTS identity_permissions (        -- seeded from the catalogue; never written otherwise
+  key               TEXT PRIMARY KEY CHECK (key ~ '^[a-z][a-z_]*:[a-z][a-z_]*$'),
+  resource          TEXT NOT NULL,
+  action            TEXT NOT NULL,
+  title             TEXT NOT NULL,
+  description       TEXT NOT NULL,
+  category          TEXT NOT NULL,
+  scope_kind        TEXT NOT NULL CHECK (scope_kind IN ('org','project')),
+  step_up           BOOLEAN NOT NULL,
+  delegable         BOOLEAN NOT NULL,
+  critical          BOOLEAN NOT NULL,
+  system_only       BOOLEAN NOT NULL,
+  readonly_post     BOOLEAN NOT NULL DEFAULT false,
+  catalogue_version INT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS identity_access_roles (
+  id              TEXT PRIMARY KEY,                      -- arl_<key> for built-ins
+  org_id          TEXT,                                  -- NULL = built-in
+  key             TEXT NOT NULL,
+  name            TEXT NOT NULL,
+  description     TEXT NOT NULL DEFAULT '',
+  builtin         BOOLEAN NOT NULL,
+  system          BOOLEAN NOT NULL DEFAULT false,
+  bindable_scopes TEXT[] NOT NULL,
+  mfa_required    BOOLEAN NOT NULL DEFAULT false,
+  version         INT NOT NULL DEFAULT 1,
+  cloned_from     TEXT,
+  created_by      TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, key)
+);
+CREATE TABLE IF NOT EXISTS identity_access_role_permissions (
+  role_id        TEXT NOT NULL REFERENCES identity_access_roles(id) ON DELETE CASCADE,
+  permission_key TEXT NOT NULL REFERENCES identity_permissions(key),
+  PRIMARY KEY (role_id, permission_key)
+);
+CREATE TABLE IF NOT EXISTS identity_access_role_versions (
+  role_id     TEXT NOT NULL,
+  version     INT NOT NULL,
+  permissions TEXT[] NOT NULL,
+  changed_by  TEXT NOT NULL,
+  changed_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (role_id, version)
+);
+CREATE TABLE IF NOT EXISTS identity_role_bindings (
+  id           TEXT PRIMARY KEY,                         -- rbd_
+  org_id       TEXT NOT NULL REFERENCES orgs(id),
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('principal','group')),
+  subject_id   TEXT NOT NULL,
+  role_id      TEXT NOT NULL REFERENCES identity_access_roles(id),
+  scope_type   TEXT NOT NULL CHECK (scope_type IN ('org','project')),
+  scope_id     TEXT NOT NULL,                            -- org id or project id
+  granted_by   TEXT NOT NULL,
+  granted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at   TIMESTAMPTZ,                              -- break-glass bindings are time-boxed
+  reason       TEXT,
+  UNIQUE (subject_type, subject_id, role_id, scope_type, scope_id)
+);
+CREATE INDEX IF NOT EXISTS identity_role_bindings_subject ON identity_role_bindings (subject_type, subject_id);
+CREATE INDEX IF NOT EXISTS identity_role_bindings_role ON identity_role_bindings (org_id, role_id);
+
+CREATE TABLE IF NOT EXISTS identity_approval_seats (       -- governance seats (ceo, cao, ...) -> people
+  org_id       TEXT NOT NULL REFERENCES orgs(id),
+  seat_key     TEXT NOT NULL,
+  principal_id TEXT NOT NULL REFERENCES identity_principals(id),
+  assigned_by  TEXT NOT NULL,
+  assigned_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (org_id, seat_key, principal_id)
+);
+
+CREATE TABLE IF NOT EXISTS identity_service_accounts (
+  principal_id        TEXT PRIMARY KEY REFERENCES identity_principals(id),
+  description         TEXT,
+  owner_principal_ids TEXT[] NOT NULL CHECK (cardinality(owner_principal_ids) >= 1)
+);
+
+-- API keys: boss_pat_ / boss_sak_ / boss_scim_ (prefix + 32 random bytes + CRC32 checksum, §5.1).
+-- Only SHA-256(token) is stored; no part of the key is ever stored or shown after creation.
+CREATE TABLE IF NOT EXISTS identity_api_credentials (
+  id           TEXT PRIMARY KEY,                         -- key_<random public id>
+  principal_id TEXT NOT NULL REFERENCES identity_principals(id),
+  kind         TEXT NOT NULL CHECK (kind IN ('pat','sak','scim','legacy_env')),
+  name         TEXT NOT NULL,
+  token_hash   TEXT NOT NULL UNIQUE,
+  scopes       TEXT[] NOT NULL,                          -- catalogue permissions; effective = owner's live set ∩ scopes
+  project_ids  TEXT[],
+  cidrs        CIDR[],
+  expires_at   TIMESTAMPTZ,
+  created_by   TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at TIMESTAMPTZ,
+  last_used_ip INET,
+  last_used_ua TEXT,
+  rotated_from TEXT,
+  grace_until  TIMESTAMPTZ,
+  suspended_at TIMESTAMPTZ,
+  revoked_at   TIMESTAMPTZ,
+  revoked_by   TEXT
+);
+CREATE INDEX IF NOT EXISTS identity_api_credentials_principal ON identity_api_credentials (principal_id);
+
+CREATE TABLE IF NOT EXISTS identity_agent_passports (
+  agent_id             TEXT PRIMARY KEY REFERENCES identity_principals(id), -- = roles.agent_id
+  role_key             TEXT NOT NULL,
+  sponsor_principal_id TEXT NOT NULL,
+  ceiling_preset       TEXT,
+  version              INT NOT NULL DEFAULT 1,
+  can_spawn            BOOLEAN NOT NULL DEFAULT false,
+  allowed_children     TEXT[] NOT NULL DEFAULT '{}',
+  max_depth            INT NOT NULL DEFAULT 3 CHECK (max_depth BETWEEN 0 AND 5),
+  autonomous           BOOLEAN NOT NULL DEFAULT false,
+  external_ceiling     JSONB NOT NULL DEFAULT '{}',
+  reissued_from        TEXT,
+  sealed_fingerprint   TEXT,
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS identity_agent_ceilings (
+  agent_id       TEXT NOT NULL REFERENCES identity_agent_passports(agent_id),
+  permission_key TEXT NOT NULL REFERENCES identity_permissions(key),   -- trigger: must be delegable
+  PRIMARY KEY (agent_id, permission_key)
+);
+
+CREATE TABLE IF NOT EXISTS identity_delegation_grants (
+  id                  TEXT PRIMARY KEY,                  -- dlg_
+  org_id              TEXT NOT NULL REFERENCES orgs(id),
+  user_principal_id   TEXT NOT NULL REFERENCES identity_principals(id),
+  agent_ids           TEXT[] NOT NULL,                   -- the may_act analogue
+  project_ids         TEXT[] NOT NULL,
+  resources           JSONB NOT NULL DEFAULT '{}',       -- {github: {repos: [...], contents: write, ...}}
+  allow_subdelegation BOOLEAN NOT NULL DEFAULT false,
+  allowed_children    TEXT[] NOT NULL DEFAULT '{}',
+  max_depth           INT NOT NULL DEFAULT 3 CHECK (max_depth BETWEEN 0 AND 5),
+  task_run_id         TEXT,                              -- set = task-bound ("this build only")
+  purpose             TEXT,
+  parent_grant_id     TEXT,
+  status              TEXT NOT NULL CHECK (status IN ('active','suspended','revoked','expired')),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at          TIMESTAMPTZ,
+  last_used_at        TIMESTAMPTZ,
+  revoked_at          TIMESTAMPTZ,
+  revoked_by          TEXT,
+  revoke_reason       TEXT
+);
+CREATE INDEX IF NOT EXISTS identity_delegation_grants_user ON identity_delegation_grants (user_principal_id, status);
+CREATE TABLE IF NOT EXISTS identity_delegation_grant_permissions (
+  grant_id       TEXT NOT NULL REFERENCES identity_delegation_grants(id),
+  permission_key TEXT NOT NULL REFERENCES identity_permissions(key),   -- trigger: must be delegable
+  PRIMARY KEY (grant_id, permission_key)
+);
+
+-- One row per minted run token (never the token): the jti ledger that revocation and lineage walk.
+CREATE TABLE IF NOT EXISTS identity_run_credentials (
+  jti                  TEXT PRIMARY KEY,                 -- rt_
+  parent_jti           TEXT,
+  org_id               TEXT NOT NULL,
+  run_id               TEXT NOT NULL,
+  grant_id             TEXT,
+  subject_principal_id TEXT NOT NULL,
+  mode                 TEXT NOT NULL CHECK (mode IN ('obo','autonomous')),
+  chain                JSONB NOT NULL,                   -- ["agt_atlas#run_8811","agt_forge#run_8812"]
+  depth                INT NOT NULL,
+  aud                  TEXT NOT NULL CHECK (aud IN ('boss:api','boss:mcp','boss:egress','boss:token')),
+  scope_hash           TEXT NOT NULL,
+  cnf_jkt              TEXT NOT NULL,
+  issued_at            TIMESTAMPTZ NOT NULL,
+  expires_at           TIMESTAMPTZ NOT NULL,
+  revoked_at           TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS identity_run_credentials_run ON identity_run_credentials (run_id);
+CREATE INDEX IF NOT EXISTS identity_run_credentials_grant ON identity_run_credentials (grant_id) WHERE grant_id IS NOT NULL;
+CREATE UNLOGGED TABLE IF NOT EXISTS identity_dpop_replay (  -- DPoP proof jti cache (A42)
+  jkt        TEXT NOT NULL,
+  jti        TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (jkt, jti)
+);
+
+CREATE TABLE IF NOT EXISTS identity_egress_credentials (  -- boss_egr_ per-run sandbox credential, hash only
+  id         TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  run_id     TEXT NOT NULL,
+  sandbox_id TEXT NOT NULL,
+  jti        TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS identity_egress_log (
+  id            BIGSERIAL,
+  ts            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  org_id        TEXT NOT NULL,
+  run_id        TEXT NOT NULL,
+  jti           TEXT,
+  chain         JSONB,
+  provider      TEXT NOT NULL,
+  method        TEXT NOT NULL,
+  path_template TEXT NOT NULL,
+  status        INT,
+  bytes_out     BIGINT,
+  bytes_in      BIGINT,
+  decision      TEXT NOT NULL CHECK (decision IN ('allowed','denied')),
+  deny_reason   TEXT,
+  PRIMARY KEY (id, ts)
+) PARTITION BY RANGE (ts);
+CREATE TABLE IF NOT EXISTS identity_egress_log_default PARTITION OF identity_egress_log DEFAULT;
+
+-- The vault: envelope encryption. Each row has its own DEK (wrapped by the KEK named in kek_id);
+-- AAD = item_id || owner_principal_id || provider || kind, so a ciphertext moved to another row
+-- fails to decrypt. Only boss_engine/identity/vault.py decrypts.
+CREATE TABLE IF NOT EXISTS identity_vault_keks (
+  kek_id     TEXT PRIMARY KEY,
+  kcv        BYTEA NOT NULL,                             -- key check value; boot refuses on mismatch
+  source     TEXT NOT NULL,                              -- file | env | kms:<provider>
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  retired_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS identity_vault_items (
+  id                 TEXT PRIMARY KEY,                   -- vlt_
+  org_id             TEXT NOT NULL REFERENCES orgs(id),
+  owner_principal_id TEXT,                               -- NULL = org-level (GitHub App key)
+  kind               TEXT NOT NULL CHECK (kind IN ('oauth_user','app_private_key','provider_credential',
+                       'oidc_client_secret','totp_secret','signing_key','legacy_pat')),
+  provider           TEXT,
+  provider_subject   TEXT,
+  connection_name    TEXT,
+  granted_scopes     TEXT[],
+  dek_wrapped        BYTEA NOT NULL,
+  kek_id             TEXT NOT NULL,
+  secret_enc         BYTEA NOT NULL,
+  secret_nonce       BYTEA NOT NULL,
+  refresh_enc        BYTEA,
+  refresh_nonce      BYTEA,
+  access_expires_at  TIMESTAMPTZ,
+  refresh_expires_at TIMESTAMPTZ,
+  status             TEXT NOT NULL CHECK (status IN ('active','needs_reauth','revoked')),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at       TIMESTAMPTZ,
+  last_refreshed_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS identity_vault_items_owner ON identity_vault_items (owner_principal_id, provider);
+
+CREATE TABLE IF NOT EXISTS identity_signing_keys (        -- JWKS for run and actor tokens; two published at a time
+  kid                   TEXT PRIMARY KEY,
+  family                TEXT NOT NULL CHECK (family IN ('run','actor')),
+  alg                   TEXT NOT NULL CHECK (alg = 'EdDSA'),
+  public_jwk            JSONB NOT NULL,
+  private_vault_item_id TEXT NOT NULL,
+  status                TEXT NOT NULL CHECK (status IN ('next','active','retiring','retired')),
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  activated_at          TIMESTAMPTZ,
+  retire_after          TIMESTAMPTZ
+);
+
+-- Per-org policy (MFA by role, sessions, self sign-up, email sign-in, delegation limits, legacy
+-- cutoff, ...) and the identity epoch every mutation bumps (cache invalidation, §6.6).
+CREATE TABLE IF NOT EXISTS identity_settings (
+  org_id     TEXT PRIMARY KEY REFERENCES orgs(id),
+  policy     JSONB NOT NULL DEFAULT '{}',
+  epoch      BIGINT NOT NULL DEFAULT 0,
+  updated_by TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNLOGGED TABLE IF NOT EXISTS identity_rate_limits (
+  bucket       TEXT NOT NULL,
+  key_hash     TEXT NOT NULL,                            -- HMAC(server key, lowercased identifier)
+  window_start TIMESTAMPTZ NOT NULL,
+  count        INT NOT NULL,
+  PRIMARY KEY (bucket, key_hash, window_start)
+);
+
+-- Legacy credential and identity paths, each mapped to a real principal (§12). One row per path
+-- in use; last_used_at/use_count feed the "legacy credentials still in use" posture item and the
+-- 30-day retirement countdown (operator decision 1).
+CREATE TABLE IF NOT EXISTS identity_legacy_mappings (
+  org_id          TEXT NOT NULL REFERENCES orgs(id),
+  legacy_kind     TEXT NOT NULL CHECK (legacy_kind IN ('member_id','shared_password','console_api_key',
+                    'env_api_key','network_mode','claimed_actor','scim_bearer','oidc_bearer')),
+  legacy_ref      TEXT NOT NULL,                         -- member id, or an HMAC of a key; never a secret
+  principal_id    TEXT NOT NULL REFERENCES identity_principals(id),
+  access_role_key TEXT,                                  -- role the legacy path maps to (operator by default)
+  retire_after    TIMESTAMPTZ,                           -- the path stops working after this
+  first_used_at   TIMESTAMPTZ,
+  last_used_at    TIMESTAMPTZ,
+  use_count       BIGINT NOT NULL DEFAULT 0,
+  retired_at      TIMESTAMPTZ,
+  PRIMARY KEY (org_id, legacy_kind, legacy_ref)
+);
+
+-- Shadow-mode decisions, AGGREGATED (one row per route x permission x reason x principal kind per
+-- day), so shadow mode never floods the hash-chained security log (amendment A5).
+CREATE TABLE IF NOT EXISTS identity_authz_shadow (
+  day            DATE NOT NULL,
+  router_key     TEXT NOT NULL,
+  method         TEXT NOT NULL,
+  path_template  TEXT NOT NULL,
+  permission     TEXT NOT NULL DEFAULT '',
+  reason         TEXT NOT NULL,
+  principal_kind TEXT NOT NULL DEFAULT '',
+  count          BIGINT NOT NULL DEFAULT 0,
+  first_seen     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sample_request TEXT,
+  PRIMARY KEY (day, router_key, method, path_template, permission, reason, principal_kind)
+);
+
+-- The security event log: append-only, hash-chained per org (§8). hash = SHA-256(prev_hash ||
+-- canonical_json(row minus id, hash)). Written in the same transaction as the change it describes.
+CREATE TABLE IF NOT EXISTS identity_security_events (
+  id                 BIGSERIAL PRIMARY KEY,
+  org_id             TEXT NOT NULL,
+  seq                BIGINT NOT NULL,
+  ts                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+  stream             TEXT NOT NULL CHECK (stream IN ('security','lineage')),
+  event_type         TEXT NOT NULL,
+  outcome            TEXT NOT NULL CHECK (outcome IN ('success','failure','denied','info')),
+  actor_principal_id TEXT,
+  actor_kind         TEXT,
+  on_behalf_of       TEXT,
+  grant_id           TEXT,
+  chain              JSONB,
+  token_jti          TEXT,
+  credential_id      TEXT,
+  session_ref        TEXT,                               -- the session's public id, never its token
+  target_type        TEXT,
+  target_id          TEXT,
+  permission         TEXT,
+  scope              TEXT,
+  ip                 INET,
+  user_agent         TEXT,
+  request_id         TEXT,
+  details            JSONB NOT NULL DEFAULT '{}',
+  prev_hash          BYTEA NOT NULL,
+  hash               BYTEA NOT NULL,
+  UNIQUE (org_id, seq)
+);
+CREATE INDEX IF NOT EXISTS identity_security_events_ts ON identity_security_events (org_id, ts DESC);
+CREATE INDEX IF NOT EXISTS identity_security_events_actor ON identity_security_events (org_id, actor_principal_id, ts DESC);
+CREATE INDEX IF NOT EXISTS identity_security_events_grant ON identity_security_events (org_id, grant_id) WHERE grant_id IS NOT NULL;
+
+-- Append-only: UPDATE always raises; DELETE raises unless the audited prune path set
+-- boss.identity_audit_prune = 'on' for its own transaction (it writes a checkpoint event first).
+CREATE OR REPLACE FUNCTION identity_security_events_append_only() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' AND current_setting('boss.identity_audit_prune', true) = 'on' THEN
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION 'identity_security_events is append-only (%)', TG_OP USING ERRCODE = 'P0001';
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_security_events_append_only'
+                 AND tgrelid = 'identity_security_events'::regclass) THEN
+    CREATE TRIGGER identity_security_events_append_only BEFORE UPDATE OR DELETE
+      ON identity_security_events FOR EACH ROW EXECUTE FUNCTION identity_security_events_append_only();
+  END IF;
+END $$;
+
+-- Ceilings and grants hold delegable permissions only (D12): a second, independent check.
+CREATE OR REPLACE FUNCTION identity_require_delegable() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM identity_permissions WHERE key = NEW.permission_key AND delegable) THEN
+    RAISE EXCEPTION 'identity: % is not delegable', NEW.permission_key USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_agent_ceilings_delegable'
+                 AND tgrelid = 'identity_agent_ceilings'::regclass) THEN
+    CREATE TRIGGER identity_agent_ceilings_delegable BEFORE INSERT OR UPDATE
+      ON identity_agent_ceilings FOR EACH ROW EXECUTE FUNCTION identity_require_delegable();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_grant_permissions_delegable'
+                 AND tgrelid = 'identity_delegation_grant_permissions'::regclass) THEN
+    CREATE TRIGGER identity_grant_permissions_delegable BEFORE INSERT OR UPDATE
+      ON identity_delegation_grant_permissions FOR EACH ROW EXECUTE FUNCTION identity_require_delegable();
+  END IF;
+END $$;
+
+-- Last-Owner protection (§6.12): deferred to commit, so two concurrent demotions cannot both land.
+-- Fires only when a change REMOVES Owner reach (an owner binding deleted or retargeted, or an active
+-- owner leaving `active`), so it never blocks an install that has not claimed its first Owner yet.
+CREATE OR REPLACE FUNCTION identity_assert_an_owner_remains() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+  v_org TEXT;
+BEGIN
+  IF TG_TABLE_NAME = 'identity_role_bindings' THEN
+    IF OLD.role_id <> 'arl_owner' THEN RETURN NULL; END IF;
+    IF TG_OP = 'UPDATE' AND NEW.role_id = 'arl_owner' AND NEW.subject_id = OLD.subject_id
+       AND NEW.scope_type = OLD.scope_type AND NEW.expires_at IS NOT DISTINCT FROM OLD.expires_at THEN
+      RETURN NULL;
+    END IF;
+    v_org := OLD.org_id;
+  ELSE
+    IF OLD.status <> 'active' OR NEW.status = 'active' THEN RETURN NULL; END IF;
+    v_org := OLD.org_id;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM identity_role_bindings b
+    JOIN identity_principals p
+      ON (b.subject_type = 'principal' AND p.id = b.subject_id)
+      OR (b.subject_type = 'group' AND p.id IN (SELECT m.principal_id FROM identity_group_members m
+                                                WHERE m.group_id = b.subject_id))
+    WHERE b.org_id = v_org AND b.role_id = 'arl_owner' AND b.scope_type = 'org'
+      AND (b.expires_at IS NULL OR b.expires_at > now())
+      AND p.kind = 'user' AND p.status = 'active' AND NOT p.network_bound
+  ) AND EXISTS (
+    -- an org that never had a real Owner (pre-claim) is not protected yet
+    SELECT 1 FROM identity_security_events e WHERE e.org_id = v_org AND e.event_type = 'bootstrap.claimed'
+  ) THEN
+    RAISE EXCEPTION 'identity_last_owner: org % would have no active Owner', v_org USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NULL;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_last_owner_bindings'
+                 AND tgrelid = 'identity_role_bindings'::regclass) THEN
+    CREATE CONSTRAINT TRIGGER identity_last_owner_bindings AFTER UPDATE OR DELETE
+      ON identity_role_bindings DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION identity_assert_an_owner_remains();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_last_owner_principals'
+                 AND tgrelid = 'identity_principals'::regclass) THEN
+    CREATE CONSTRAINT TRIGGER identity_last_owner_principals AFTER UPDATE OF status
+      ON identity_principals DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION identity_assert_an_owner_remains();
+  END IF;
+END $$;
+-- ================================ end BOSS IDENTITY ===============================================

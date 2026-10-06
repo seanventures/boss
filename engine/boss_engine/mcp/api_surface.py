@@ -870,14 +870,14 @@ def register_api_tools(
         }),
         guarded(lambda ctx, *, project_id, actor, args: surface.find(read_only=read_only, **{
             key: args[key] for key in ("query", "domain", "method", "limit", "offset") if key in args
-        })), kind="read",
+        })), kind="read", permission="system:read",
     ))
     registry.register(ToolSpec(
         "api_describe_operation", "Show the exact input schema and policy status for one BOSS API operation alias.",
         _object_schema({"operation": {"type": "string"}}, ["operation"]),
         guarded(lambda ctx, *, project_id, actor, args: surface.describe(
             str(args.get("operation") or ""), read_only=read_only)),
-        kind="read",
+        kind="read", permission="system:read",
     ))
     call_schema = _object_schema({
         "operation": {"type": "string", "description": "Stable alias from api_find_operations"},
@@ -911,12 +911,12 @@ def register_api_tools(
                               confirmation_id=args.get("confirmation_id"))
     registry.register(ToolSpec(
         "api_read_operation", "Read one schema-allowlisted BOSS API operation using the session project and explicitly bound API principal.",
-        call_schema, guarded(call_read), kind="read",
+        call_schema, guarded(call_read), kind="read", inherits_route_permission=True,
     ))
     registry.register(ToolSpec(
         "api_write_operation", "Write through one schema-allowlisted BOSS API operation; API authorization, policy, budgets, approvals, and receipts still apply.",
         call_schema, guarded(call_write), kind="write", reversibility="costs_money",
-        requires_durable_workspace=False,
+        requires_durable_workspace=False, inherits_route_permission=True,
     ))
     if not read_only:
         registry.register(ToolSpec(
@@ -924,6 +924,7 @@ def register_api_tools(
             "Propose one exact sensitive API request for a separate human CEO to review; this does not execute the action.",
             call_schema, guarded(request_confirmation), kind="write",
             reversibility="safe", requires_durable_workspace=False,
+            inherits_route_permission=True,
         ))
     for op in surface.operations.values():
         if not domains or (op.domain not in domains and "all" not in domains):
@@ -952,5 +953,5 @@ def register_api_tools(
             handler=guarded(handler),
             kind="write" if op.write else "read",
             reversibility="costs_money" if op.write else "safe",
-            requires_durable_workspace=False,
+            requires_durable_workspace=False, inherits_route_permission=True,
         ))

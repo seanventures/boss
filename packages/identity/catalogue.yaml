@@ -1,0 +1,1258 @@
+# THE BOSS IDENTITY CATALOGUE: the one source of truth for every permission and built-in access role.
+#
+# Spec: docs/product/IDENTITY.md §6.2. Frozen in Phase 0 (docs/product/IDENTITY_BUILD.md): a change
+# to this file is a code change, reviewed as one, and its regenerated outputs are committed with it.
+#
+# Regenerate after any edit:
+#     python -m boss_engine.identity.codegen          (from the repo root, PYTHONPATH=engine)
+# It writes, and engine/tests/test_identity_catalogue_is_generated.py fails when any is stale:
+#     engine/boss_engine/identity/permissions_gen.py   Permission StrEnum + metadata + role sets
+#     apps/web/lib/identity/permissions.gen.ts         the TypeScript literal union (no `${string}`)
+#     db/identity_seed.sql                             identity_permissions + built-in access roles
+#     docs/product/IDENTITY_CATALOGUE.md               the published role x permission table
+#
+# Rules (enforced by the generator; it refuses to write on any violation):
+#   - key is `resource:action`, ^[a-z][a-z_]*:[a-z][a-z_]*$, unique. No wildcards anywhere.
+#   - `roles` is the ONLY place built-in role membership is defined.
+#   - flags are a closed set; a flag absent is false:
+#       step_up      the session must have passed MFA in the last 10 minutes (spec §4.6)
+#       delegable    may appear in a Passport ceiling, a delegation grant or a run token (§7)
+#       critical     red in the role editor, typed confirmation to grant; implies step_up;
+#                    never held by viewer or auditor; allows are always audited
+#       system_only  held only by the fixed system roles; never by a human role
+#       readonly_post  a POST that changes nothing (exempt from the read-only-GET test, §15.4 R5)
+#   - scope: `org` means the permission only takes effect from an ORG binding. A role bound at a
+#     project still carries it, inert there; a custom role made only of org permissions cannot be
+#     bound at project scope (IDENTITY.md §6.7, amendment A3).
+#   - critical permissions are never delegable; passport presets hold only delegable permissions.
+
+version: 1
+
+access_roles:
+  - key: owner
+    name: Owner
+    description: Everything a human can hold. At least one active Owner always exists.
+    bindable_scopes: [org]
+    mfa_required: true
+  - key: admin
+    name: Admin
+    description: "Runs the install: people, roles, agents, connections, infra, policy."
+    bindable_scopes: [org, project]
+    mfa_required: true
+  - key: operator
+    name: Operator
+    description: "Does the work: builds, workflows, panels, research, approvals within their seat, previews, non-production deploys. Lets agents act for them."
+    bindable_scopes: [org, project]
+    mfa_required: false
+  - key: viewer
+    name: Viewer
+    description: Reads every non-sensitive page.
+    bindable_scopes: [org, project]
+    mfa_required: false
+  - key: auditor
+    name: Auditor
+    description: "Viewer plus the security audit log, identity configuration (read), sessions, keys and grants metadata."
+    bindable_scopes: [org]
+    mfa_required: true
+  # Fixed system roles. Never editable, never bindable by a person, held only by system principals.
+  - key: system_worker
+    name: System worker
+    description: "The worker protocol: lease, heartbeat and complete jobs; reserve spend; lease secrets for a running step."
+    bindable_scopes: [org]
+    system: true
+  - key: system_collector
+    name: System collector
+    description: Collector machine telemetry ingest.
+    bindable_scopes: [org]
+    system: true
+  - key: system_scim
+    name: System SCIM
+    description: SCIM 2.0 provisioning for one identity provider.
+    bindable_scopes: [org]
+    system: true
+
+# Built-in system principals (IDENTITY.md §3). `access_role` is their fixed role; `none` holds nothing.
+system_principals:
+  - id: sys_worker
+    access_role: system_worker
+    replaces: "BOSS_WORKER_PRINCIPAL and the shared key on worker protocols"
+  - id: sys_collector
+    access_role: system_collector
+    replaces: collector machine POSTs
+  - id: sys_scim
+    access_role: system_scim
+    replaces: "BOSS_ENTERPRISE_SCIM_BEARER_TOKENS (one principal per provider: sys_scim_<provider>)"
+  - id: sys_host_cli
+    access_role: none
+    replaces: "nothing; the actor of host-shell recovery (boss identity recover-owner)"
+
+# Agent Passport ceiling presets (IDENTITY_PERMISSIONS.md §4). Delegable permissions only.
+passport_presets:
+  - key: builder
+    name: Builder
+    agents: [forge, strata, prism, helm]
+    permissions: [code_task:read, code_task:create, code_task:steer, code_task:retry, repository:read,
+                  github:read, github:sync, preview:read, preview:manage, artifact:read, artifact:rebuild,
+                  workflow:read, workflow_run:read, skill:read, skill:invoke, memory:read, memory:manage,
+                  spend:reserve, secret:lease, sandbox:read]
+    external_ceiling: {github: {contents: write, pull_requests: write, push_refs: "boss/*"}}
+  - key: reviewer
+    name: Reviewer
+    agents: [vera, rook, sentry, weave, muse]
+    permissions: [code_task:read, code_task:steer, repository:read, github:read, preview:read,
+                  artifact:read, assurance:read, assurance:run, workflow_run:read, skill:read,
+                  skill:invoke, memory:read, spend:reserve]
+    external_ceiling: {github: {contents: read, pull_requests: write}}
+  - key: planner
+    name: Planner
+    agents: [juno, atlas, keystone, rally, vector, cadence]
+    permissions: [code_task:read, code_task:create, meeting:read, meeting:convene, discovery:read,
+                  discovery:create, workflow:read, workflow:create, workflow_run:read, workflow_run:start,
+                  work_item:read, work_item:manage, decision:read, memory:read, memory:manage, spend:reserve]
+    external_ceiling: {github: {contents: read, issues: write}}
+  - key: operator_agent
+    name: Operator agent
+    agents: [harbor, pilot, bedrock, relay, beacon]
+    permissions: [deployment:read, deployment:create, host:read, infra:read, observability:read,
+                  reliability:read, reliability:respond, preview:read, preview:manage, workflow_run:read,
+                  workflow_run:control, spend:reserve, secret:lease]
+    external_ceiling: {}
+  - key: analyst
+    name: Analyst
+    agents: [ledger, meter, conduit, sweep]
+    permissions: [budget:read, model_provider:read, infra:read, observability:read, activity:read,
+                  spend:reserve]
+    external_ceiling: {}
+  - key: writer
+    name: Writer and publisher
+    agents: [quill, herald, splice]
+    permissions: [artifact:read, artifact:rebuild, discovery:read, comms:read, comms:send, memory:read,
+                  spend:reserve]
+    external_ceiling: {}
+  - key: guardian
+    name: Guardian
+    agents: [warden, vault, halo]
+    permissions: [agent:read, agent_passport:read, activity:read, policy:read, secret:read_metadata]
+    external_ceiling: {}
+
+categories:
+
+  # ---- Identity and access -----------------------------------------------------------------------
+  - category: "Identity and access"
+    permissions:
+      - key: directory:read
+        title: "View the directory"
+        description: "See the names, avatars and kinds of people, groups and agents (no security detail)."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: org
+        flags: [delegable]
+      - key: user:read
+        title: "View people"
+        description: "List people and open a profile: roles, groups, MFA status, sessions, effective access."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: []
+      - key: user:invite
+        title: "Invite people"
+        description: "Invite a person by email or create a local account."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up]
+      - key: user:update
+        title: "Edit people"
+        description: "Edit a person's name, email and profile fields."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up]
+      - key: user:disable
+        title: "Disable people"
+        description: "Disable or re-enable a person. Disabling revokes their sessions and suspends their grants."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
+      - key: user:delete
+        title: "Delete people"
+        description: "Erase a disabled person. Their audit history stays, as a tombstone."
+        roles: [owner]
+        scope: org
+        flags: [step_up, critical]
+      - key: user:reset_mfa
+        title: "Reset a person's MFA"
+        description: "Remove a person's MFA factors and issue a one-time recovery link."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
+      - key: user:revoke_sessions
+        title: "Sign a person out everywhere"
+        description: "Sign a person out of every device."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up]
+      - key: group:read
+        title: "View groups"
+        description: "List groups and their members."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: []
+      - key: group:manage
+        title: "Manage groups"
+        description: "Create, rename and delete groups."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up]
+      - key: group:manage_members
+        title: "Manage group members"
+        description: "Add and remove group members (manual groups only; IdP groups are read-only)."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up]
+      - key: access_role:read
+        title: "View access roles"
+        description: "See access roles and their permissions."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: org
+        flags: []
+      - key: access_role:manage
+        title: "Manage access roles"
+        description: "Create, edit, clone and delete custom access roles. Never more than you hold."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
+      - key: role_binding:read
+        title: "View role bindings"
+        description: "See who holds which access role, where."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: []
+      - key: role_binding:assign
+        title: "Assign access roles"
+        description: "Grant or remove an access role for a person, group, service account or agent. Never more than you hold."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: owner:assign
+        title: "Assign Owners"
+        description: "Make someone an Owner, or remove an Owner. The last Owner can never be removed."
+        roles: [owner]
+        scope: org
+        flags: [step_up, critical]
+      - key: service_account:read
+        title: "View service accounts"
+        description: "List service accounts, their owners and their keys' metadata."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: []
+      - key: service_account:manage
+        title: "Manage service accounts"
+        description: "Create, edit, disable and delete service accounts."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
+      - key: service_account_key:manage
+        title: "Manage service account keys"
+        description: "Create, rotate and revoke a service account's API keys."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
+      - key: api_key:manage_own
+        title: "Manage your own API keys"
+        description: "Create, rotate and revoke your own personal API keys, within your own access."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: org
+        flags: [step_up]
+      - key: api_key:read
+        title: "View API keys"
+        description: "See every API key's metadata: owner, scopes, last use, expiry. Never the key."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: []
+      - key: api_key:revoke
+        title: "Revoke API keys"
+        description: "Revoke anyone's API key."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
+      - key: session:read
+        title: "View sessions"
+        description: "See everyone's active sessions: device, place, sign-in method."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: []
+      - key: session:revoke
+        title: "Revoke sessions"
+        description: "End anyone's session."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up]
+      - key: agent_passport:read
+        title: "View agent Passports"
+        description: "Open an agent's Passport: sponsor, ceiling, lineage, status."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: agent_passport:manage
+        title: "Manage agent Passports"
+        description: "Change an agent's ceiling, sponsor, spawn rules and depth limit."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
+      - key: agent_passport:suspend
+        title: "Suspend agents"
+        description: "Suspend or resume an agent. Suspending stops its runs at their next call."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up]
+      - key: agent_passport:revoke
+        title: "Revoke agents"
+        description: "Revoke an agent for good. Cascades to its grants, tokens and descendants."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
+      - key: delegation:grant
+        title: "Let agents act for you"
+        description: "Let an agent act for you, inside your own access and the agent's ceiling."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [step_up]
+      - key: delegation:read_all
+        title: "View all delegations"
+        description: "See every delegation grant in the org, and its lineage."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: []
+      - key: delegation:revoke_any
+        title: "Revoke any delegation"
+        description: "Revoke anyone's delegation grant (cascades to runs and sub-agents)."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
+      - key: connection:use_own
+        title: "Connect your own accounts"
+        description: "Link your own external accounts (GitHub, Google) into the vault for your agents to use."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [step_up]
+      - key: connection:read_all
+        title: "View all external connections"
+        description: "See every vaulted external connection's metadata."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: []
+      - key: connection:revoke_any
+        title: "Revoke any external connection"
+        description: "Disconnect anyone's external connection, and revoke it at the provider."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
+      - key: identity_provider:read
+        title: "View identity providers"
+        description: "See SSO providers (OIDC, SAML), SCIM and their status."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: []
+      - key: identity_provider:manage
+        title: "Manage identity providers"
+        description: "Add, change and remove SSO providers and SCIM tokens; enforce SSO."
+        roles: [owner]
+        scope: org
+        flags: [step_up, critical]
+      - key: security_policy:read
+        title: "View the security policy"
+        description: "See the sign-in, MFA, session and delegation policy."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: []
+      - key: security_policy:manage
+        title: "Manage the security policy"
+        description: "Change the sign-in, MFA, session and delegation policy."
+        roles: [owner]
+        scope: org
+        flags: [step_up, critical]
+      - key: audit:read
+        title: "View the security audit log"
+        description: "Read the security audit log."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: []
+      - key: audit:export
+        title: "Export and verify the security audit log"
+        description: "Export the security audit log and verify its hash chain."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: [step_up]
+      - key: scim:provision
+        title: "Provision over SCIM"
+        description: "Provision users and groups over SCIM 2.0."
+        roles: [system_scim]
+        scope: org
+        flags: [system_only]
+
+  # ---- Org and projects --------------------------------------------------------------------------
+  - category: "Org and projects"
+    permissions:
+      - key: org:read
+        title: "View the org"
+        description: "See the org's name and settings."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: org
+        flags: []
+      - key: org:update
+        title: "Edit the org"
+        description: "Rename the org and change org-wide settings."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up]
+      - key: org:delete
+        title: "Delete the org"
+        description: "Delete the org and everything in it."
+        roles: [owner]
+        scope: org
+        flags: [step_up, critical]
+      - key: project:read
+        title: "View projects"
+        description: "See a project and its settings."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: project:create
+        title: "Create projects"
+        description: "Create a project."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up]
+      - key: project:update
+        title: "Edit projects"
+        description: "Change a project's settings (builds at once, defaults, preflight)."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: project:delete
+        title: "Delete projects"
+        description: "Delete a project."
+        roles: [owner]
+        scope: org
+        flags: [step_up, critical]
+      - key: settings:read
+        title: "View settings"
+        description: "Read BOSS settings (non-secret values)."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: []
+      - key: settings:update
+        title: "Edit settings"
+        description: "Change BOSS settings."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+
+  # ---- Factory and code --------------------------------------------------------------------------
+  - category: "Factory and code"
+    permissions:
+      - key: code_task:read
+        title: "View builds"
+        description: "See builds, their activity, gates, chain, live view and retrospective."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: code_task:create
+        title: "Start builds"
+        description: "Start a build."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: code_task:steer
+        title: "Steer builds"
+        description: "Steer, follow up, comment on and resolve review comments on a build."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: code_task:cancel
+        title: "Cancel builds"
+        description: "Cancel a build (throws away work in flight)."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
+      - key: code_task:retry
+        title: "Retry builds"
+        description: "Retry or extend a build (spends budget)."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: code_task:override
+        title: "Override build gates"
+        description: "Override or waive a build's quality gates."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: repository:read
+        title: "View repositories"
+        description: "See registered repositories and their health."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: repository:register
+        title: "Register repositories"
+        description: "Register a repository with BOSS."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: repository:manage
+        title: "Manage repositories"
+        description: "Change or remove repository bindings and the default repo."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: github:read
+        title: "View GitHub"
+        description: "See GitHub connections, branches, leases, sync and merge state."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: github:connect
+        title: "Connect GitHub"
+        description: "Connect a GitHub App or account to the org."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: github:manage
+        title: "Manage GitHub connections"
+        description: "Enable, disable, test and revoke GitHub connections; edit branch policies."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: github:sync
+        title: "Sync with GitHub"
+        description: "Plan code sync, reconciliation and conflict resolution."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: github:merge
+        title: "Authorize merges"
+        description: "Authorize a merge into a protected branch."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [step_up]
+      - key: preview:read
+        title: "View previews"
+        description: "See live previews and their logs and gates."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: preview:manage
+        title: "Manage previews"
+        description: "Start, stop, restart and smoke-test previews."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: preview:approve
+        title: "Approve previews"
+        description: "Approve a preview or leave preview feedback."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
+      - key: artifact:read
+        title: "View artifacts"
+        description: "Open artifacts, media and PDFs."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: artifact:rebuild
+        title: "Rebuild artifacts"
+        description: "Rebuild an artifact."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+
+  # ---- Workflows and work ------------------------------------------------------------------------
+  - category: "Workflows and work"
+    permissions:
+      - key: workflow:read
+        title: "View workflows"
+        description: "See workflow definitions, specs, plans, readiness and costs."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: workflow:create
+        title: "Create workflows"
+        description: "Draft, save, fork and wire workflows and custom steps."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: workflow:publish
+        title: "Publish workflows"
+        description: "Publish a workflow version so it can run."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [step_up]
+      - key: workflow:install
+        title: "Install workflows"
+        description: "Install a workflow from the catalogue."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
+      - key: workflow:delete
+        title: "Delete workflows"
+        description: "Delete a workflow definition."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: workflow_run:read
+        title: "View workflow runs"
+        description: "See workflow runs, steps, reports and chains."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: workflow_run:start
+        title: "Start workflow runs"
+        description: "Start a workflow run."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: workflow_run:control
+        title: "Control workflow runs"
+        description: "Pause, resume, retry, skip, recheck, give input to and cancel runs."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: workflow_run:compensate
+        title: "Compensate workflow runs"
+        description: "Compensate or migrate a run (undo its effects)."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: workflow_run:delete
+        title: "Delete workflow runs"
+        description: "Delete a run."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: workflow_schedule:manage
+        title: "Manage workflow schedules"
+        description: "Create, enable, disable and delete workflow schedules."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
+      - key: meeting:read
+        title: "View panels"
+        description: "See panels, minutes, evidence and conversations."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: meeting:convene
+        title: "Convene panels"
+        description: "Convene a panel (PRD, go/no-go, stand-up) or a conversation."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: meeting:configure
+        title: "Configure panel seats"
+        description: "Change who sits at the table (meeting roles)."
+        roles: [owner, admin]
+        scope: project
+        flags: []
+      - key: discovery:read
+        title: "View research"
+        description: "Read research dossiers."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: discovery:create
+        title: "Start research"
+        description: "Start, deepen and promote research."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: work_item:read
+        title: "View work items"
+        description: "See the task board, work plane, allocation, releases and plans."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: work_item:manage
+        title: "Manage work items"
+        description: "Create and change tasks, initiatives, cycles, releases, quotas and plans."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: job:read
+        title: "View jobs"
+        description: "See background jobs and the queue."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: []
+      - key: job:control
+        title: "Control jobs"
+        description: "Cancel and reprioritise jobs."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
+      - key: deadletter:manage
+        title: "Manage dead letters"
+        description: "Retry, requeue and remediate dead letters."
+        roles: [owner, admin]
+        scope: project
+        flags: []
+      - key: assistant:chat
+        title: "Chat with the BOSS Agent"
+        description: "Talk to the BOSS Agent and the chat agents."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
+      - key: autopilot:read
+        title: "View autopilot"
+        description: "See captain, shepherd, process-manager and focused-agent reasoning."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: []
+      - key: autopilot:operate
+        title: "Operate autopilot"
+        description: "Start, wake, pause and tick the captain, shepherd and focused agents."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
+      - key: autopilot:configure
+        title: "Configure autopilot"
+        description: "Compile playbooks and change autopilot behaviour."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: memory:read
+        title: "View memory"
+        description: "Read what BOSS remembers."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: memory:manage
+        title: "Manage memory"
+        description: "Review and forget memories."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: feedback:submit
+        title: "Send feedback"
+        description: "Send feedback and check-ins."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+
+  # ---- Approvals ---------------------------------------------------------------------------------
+  - category: "Approvals"
+    permissions:
+      - key: decision:read
+        title: "View decisions"
+        description: "See the approvals inbox and decision detail."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: decision:approve
+        title: "Approve decisions"
+        description: "Approve or reject a decision, within the risk tier your seat allows. Humans only."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [step_up]
+      - key: decision:delegate
+        title: "Delegate decisions"
+        description: "Hand a decision to another person."
+        roles: [owner, admin]
+        scope: project
+        flags: []
+      - key: decision:execute
+        title: "Execute decisions"
+        description: "Execute an approved decision."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
+      - key: approval_rule:manage
+        title: "Manage approval rules"
+        description: "Change approval rules and risk-tier seats."
+        roles: [owner]
+        scope: project
+        flags: [step_up, critical]
+
+  # ---- Agents ------------------------------------------------------------------------------------
+  - category: "Agents"
+    permissions:
+      - key: agent:read
+        title: "View agents"
+        description: "See agents, their cards, prompts, instructions, versions and activity."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: agent:create
+        title: "Create agents"
+        description: "Draft a new agent or a new agent version."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
+      - key: agent:update
+        title: "Edit agents"
+        description: "Edit an agent's persona, instructions and modules."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: agent:publish
+        title: "Publish agents"
+        description: "Publish an agent or panel version so it can take work."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: agent:lifecycle
+        title: "Manage agent lifecycle"
+        description: "Pause, retire and re-seal agents."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: agent:test
+        title: "Test agents"
+        description: "Run an agent's tests or a sandboxed trial."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: agent_ability:assign
+        title: "Give agents skills and MCP servers"
+        description: "Give an agent a skill or an MCP server (grants authority)."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: autonomy:read
+        title: "View agent autonomy"
+        description: "See earned-autonomy scores and trust evidence."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: []
+      - key: autonomy:manage
+        title: "Manage agent autonomy"
+        description: "Raise or lower an agent's autonomy; record trust evidence."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: skill:read
+        title: "View skills"
+        description: "See skills, definitions, invocations and the Kit."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: skill:manage
+        title: "Manage skills"
+        description: "Import, enable, disable and edit skills; connect Kit abilities."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: skill:invoke
+        title: "Invoke skills"
+        description: "Invoke a skill or try a Kit ability."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: mcp_server:read
+        title: "View MCP servers"
+        description: "See MCP servers and the MCP catalogue."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: mcp_server:register
+        title: "Register MCP servers"
+        description: "Register an MCP server (lands switched off and unreviewed)."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
+      - key: mcp_server:review
+        title: "Review MCP servers"
+        description: "Review, enable and set the policy of an MCP server."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: pack:read
+        title: "View packs"
+        description: "See packs and agent modules."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: []
+      - key: pack:install
+        title: "Install packs"
+        description: "Install, roll back and uninstall packs and agent modules."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+
+  # ---- Deploy and infra --------------------------------------------------------------------------
+  - category: "Deploy and infra"
+    permissions:
+      - key: deployment:read
+        title: "View deployments"
+        description: "See deployments, runs, promotions, targets and the pipeline."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: deployment:create
+        title: "Create deployments"
+        description: "Deploy to a non-production target."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: deployment:production
+        title: "Deploy to production"
+        description: "Deploy or promote to a production target."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: deployment:rollback
+        title: "Roll back deployments"
+        description: "Roll back a deployment."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [step_up]
+      - key: deployment_target:manage
+        title: "Manage deployment targets"
+        description: "Create, change, bootstrap, purge and tear down targets and their secrets."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: host:read
+        title: "View hosts"
+        description: "See deployment hosts and their capacity."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: host:manage
+        title: "Manage hosts"
+        description: "Provision, attach, verify, re-key and retire hosts."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: host:exec
+        title: "Run commands on hosts"
+        description: "Run commands on a host or in an investigation shell."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: sandbox:read
+        title: "View sandboxes"
+        description: "See sandboxes, their files, logs and stats."
+        roles: [owner, admin, operator, viewer]
+        scope: project
+        flags: [delegable]
+      - key: sandbox:exec
+        title: "Run commands in sandboxes"
+        description: "Execute a command in a sandbox."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: sandbox:manage
+        title: "Manage sandboxes"
+        description: "Preserve and delete sandboxes."
+        roles: [owner, admin]
+        scope: project
+        flags: []
+      - key: infra:read
+        title: "View infrastructure"
+        description: "See cloud, fleet, resources, topology and drift."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: infra:provision
+        title: "Provision infrastructure"
+        description: "Provision capacity: droplets, elastic pools, IaC apply."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: infra:terminate
+        title: "Terminate infrastructure"
+        description: "Terminate resources and run the janitor."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: cloud_account:manage
+        title: "Manage cloud accounts"
+        description: "Link and unlink cloud accounts."
+        roles: [owner]
+        scope: org
+        flags: [step_up, critical]
+      - key: changeset:approve
+        title: "Approve infra changesets"
+        description: "Approve and apply an infrastructure changeset."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: cicd:read
+        title: "View CI/CD"
+        description: "See CI/CD catalogue and status."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: []
+      - key: cicd:manage
+        title: "Manage CI/CD"
+        description: "Generate, validate and run CI/CD pipelines."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
+
+  # ---- Models, spend and policy ------------------------------------------------------------------
+  - category: "Models, spend and policy"
+    permissions:
+      - key: setup:read
+        title: "View setup"
+        description: "See the Repo and models checklist."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: []
+      - key: setup:manage
+        title: "Manage setup"
+        description: "Choose the repo, models and coding agents during setup."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: model_provider:read
+        title: "View model providers"
+        description: "See model sources, providers, usage, health and SLOs."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: model_provider:manage
+        title: "Manage model providers"
+        description: "Add, enable, disable, test and remove model providers."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: model_provider:rotate
+        title: "Rotate model provider credentials"
+        description: "Rotate a provider's credential."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: entitlement:read
+        title: "View entitlements"
+        description: "See entitlements and pools."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: []
+      - key: entitlement:manage
+        title: "Manage entitlements"
+        description: "Connect entitlement sources and their credentials."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: budget:read
+        title: "View budgets"
+        description: "See budget status, forecasts, spend and FinOps."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: budget:manage
+        title: "Manage budgets"
+        description: "Set caps, intensity and initiative budgets."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: spend:reserve
+        title: "Reserve spend"
+        description: "Reserve, consume and release budget for work (runtime only)."
+        roles: [system_worker]
+        scope: project
+        flags: [delegable, system_only]
+      - key: policy:read
+        title: "View policies"
+        description: "See safety, standards, concurrency, token and environment policies."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: policy:manage
+        title: "Manage policies"
+        description: "Change safety, standards, concurrency, token and environment policies."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: pipeline:read
+        title: "View the coding pipeline"
+        description: "See coding-pipeline profiles and adapters."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: []
+      - key: pipeline:manage
+        title: "Manage the coding pipeline"
+        description: "Change coding-pipeline profiles and propose pipeline config."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+
+  # ---- Secrets and integrations ------------------------------------------------------------------
+  - category: "Secrets and integrations"
+    permissions:
+      - key: secret:read_metadata
+        title: "View secret metadata"
+        description: "See secret references: name, backend, status. Never the value."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: secret:manage
+        title: "Manage secrets"
+        description: "Create and verify secrets and key pairs."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: kms_key:manage
+        title: "Manage KMS keys"
+        description: "Create KMS keys and grant or revoke agent access."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: secret:lease
+        title: "Lease secrets"
+        description: "Lease a secret for a running step (runtime only)."
+        roles: [system_worker]
+        scope: project
+        flags: [delegable, system_only]
+      - key: integration:read
+        title: "View integrations"
+        description: "See integrations, work trackers, channels, webhooks and subscriptions."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: integration:manage
+        title: "Manage integrations"
+        description: "Connect and change integrations, trackers, channels, webhooks and subscriptions."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: comms:read
+        title: "View comms"
+        description: "See the comms inbox, outbox and policies."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: comms:send
+        title: "Send messages"
+        description: "Queue and deliver an outbound message."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: comms:manage
+        title: "Manage comms"
+        description: "Change comms policies and email configuration."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+
+  # ---- Operations and assurance ------------------------------------------------------------------
+  - category: "Operations and assurance"
+    permissions:
+      - key: system:read
+        title: "View the system"
+        description: "See health, status, diagnostics, the API catalogue and the edition."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: system:operate
+        title: "Operate the system"
+        description: "Run System Doctor actions, sweeps, ticks, backfills and refreshes."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: observability:read
+        title: "View observability"
+        description: "See apps, models, sources, LLM calls, traces and metrics."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: observability:manage
+        title: "Manage observability"
+        description: "Deploy the observability stack and probe apps."
+        roles: [owner, admin]
+        scope: project
+        flags: []
+      - key: reliability:read
+        title: "View reliability"
+        description: "See incidents, pages, on-call, the knowledge graph and AI SRE."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: reliability:respond
+        title: "Respond to incidents"
+        description: "Acknowledge, diagnose, remediate and post-mortem incidents; run runbooks."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: reliability:manage
+        title: "Manage reliability"
+        description: "Change on-call policies, sources, schedules; run chaos."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: assurance:read
+        title: "View assurance"
+        description: "See assurance cases, gates and security scans."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: assurance:manage
+        title: "Manage assurance"
+        description: "Add claims, evidence, policies; evaluate and transfer surfaces."
+        roles: [owner, admin]
+        scope: project
+        flags: []
+      - key: assurance:run
+        title: "Run assurance checks"
+        description: "Run security scans, evals, benchmarks and verification gates."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: improvement:read
+        title: "View improvements"
+        description: "See self-improvement proposals, programs and experiments."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: []
+      - key: improvement:manage
+        title: "Manage improvements"
+        description: "Canary, roll out, promote and roll back improvements and experiments."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: activity:read
+        title: "View the activity log"
+        description: "Read the activity log, events, receipts and change journal."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: activity:export
+        title: "Export the activity log"
+        description: "Export the activity log and replay bundles."
+        roles: [owner, admin, auditor]
+        scope: project
+        flags: [step_up]
+      - key: activity:prune
+        title: "Prune the activity log"
+        description: "Prune activity past retention."
+        roles: [owner]
+        scope: org
+        flags: [step_up, critical]
+      - key: telemetry:read
+        title: "View telemetry"
+        description: "See the telemetry collector and what is shared."
+        roles: [owner, admin, auditor]
+        scope: project
+        flags: []
+      - key: telemetry:share
+        title: "Share telemetry"
+        description: "Share telemetry bundles outside this install."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
+      - key: telemetry:manage
+        title: "Manage telemetry"
+        description: "Rotate, forget and delete telemetry."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]
+      - key: telemetry:ingest
+        title: "Ingest telemetry"
+        description: "Send collector telemetry (machine only)."
+        roles: [system_collector]
+        scope: project
+        flags: [system_only]
+      - key: worker:lease
+        title: "Lease worker jobs"
+        description: "Poll, heartbeat and complete leased jobs (worker protocol)."
+        roles: [system_worker]
+        scope: project
+        flags: [system_only]
