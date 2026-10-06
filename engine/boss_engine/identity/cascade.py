@@ -185,6 +185,20 @@ def _egress_for(db: Any, run_ids: list[str]) -> int:
                                "AND revoked_at IS NULL"), {"r": run_ids}).scalar_one())
 
 
+def _running_builds_for(db: Any, where: str, params: dict[str, Any]) -> list[str]:
+    """Code tasks a LEASED job is running under the dying authority (`run_ct:<crun>`). A build that
+    took the legacy repo path minted no run token of its own, so the token ledger alone missed it
+    and it ran to completion after the revoke (integration walk)."""
+    from sqlalchemy import text
+
+    if not _table_exists(db, "jobs"):
+        return []
+    rows = db.execute(text(
+        "SELECT coalesce(payload->>'code_task_run_id', payload->>'run_id') FROM jobs "
+        f"WHERE status IN ('running', 'leased') AND kind = 'code.task' AND {where}"), params).scalars().all()
+    return [f"run_ct:{r}" for r in rows if r and str(r).startswith("crun_")]
+
+
 def _plan(trigger: CascadeTrigger, target: str, db: Any) -> dict[str, Any]:
     """What the cascade WOULD touch. Shared by the preview and the real run."""
     from sqlalchemy import text
@@ -203,7 +217,8 @@ def _plan(trigger: CascadeTrigger, target: str, db: Any) -> dict[str, Any]:
             plan["revoke_grants"] = [g for g in family if g != target]
         all_ids = [target] + family
         plan["jtis"], plan["runs"] = _active_runs(db, "grant_id = ANY(:g)", {"g": all_ids})
-        plan["runs"] = sorted(set(plan["runs"]) | set(_workflow_runs_for(db, all_ids)))
+        plan["runs"] = sorted(set(plan["runs"]) | set(_workflow_runs_for(db, all_ids))
+                              | set(_running_builds_for(db, "grant_id = ANY(:g)", {"g": all_ids})))
         plan["jobs"] = _queued_jobs_for(db, all_ids)
         plan["schedules"] = _schedules_for(db, all_ids)
     elif trigger in (CascadeTrigger.PERSON_DISABLED, CascadeTrigger.PERSON_DELETED):
@@ -213,6 +228,7 @@ def _plan(trigger: CascadeTrigger, target: str, db: Any) -> dict[str, Any]:
         else:
             plan["suspend_grants"] = _grants_where(db, "user_principal_id = :u AND status = 'active'", {"u": target})
         plan["jtis"], plan["runs"] = _active_runs(db, "subject_principal_id = :u", {"u": target})
+        plan["runs"] = sorted(set(plan["runs"]) | set(_running_builds_for(db, "on_behalf_of = :u", {"u": target})))
         plan["schedules"] = _schedules_for(db, mine)
         if _table_exists(db, "identity_sessions"):
             plan["sessions"] = int(db.execute(text("SELECT count(*) FROM identity_sessions WHERE principal_id = :u "
