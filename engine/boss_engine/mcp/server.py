@@ -22,10 +22,11 @@ tools/call.
 # annotations FastAPI would see the string "Request", fail to resolve it in
 # module globals, silently treat the parameter as a query param, and 422 every
 # JSON-RPC POST. Evaluating annotations at def-time keeps the lazy import valid.
+import contextvars
 import json
 import hmac
 import sys
-from typing import Any, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from .. import __version__
 from ..tools import ToolRegistry, build_default_registry
@@ -55,6 +56,42 @@ SERVER_INSTRUCTIONS = (
 )
 
 
+#: The identity the HTTP transport authenticated for the request being handled (an AuthContext).
+_REQUEST_AUTH: contextvars.ContextVar[Any] = contextvars.ContextVar("boss_mcp_request_auth", default=None)
+#: An HTTP request the transport admitted WITHOUT an identity (the legacy shared token): its tool
+#: calls carry none, and never fall back to the stdio session identity.
+_NO_IDENTITY = object()
+
+
+def _is_boss_credential(token: str) -> bool:
+    """A credential BOSS identity verifies itself: an API key (boss_pat_/boss_sak_) or a run token."""
+    from ..identity.authn import parse_api_key
+
+    return parse_api_key(token) is not None or (token.startswith("eyJ") and token.count(".") == 2)
+
+
+def authenticate_transport(headers: Mapping[str, str], *, method: str = "POST", path: str = "/mcp",
+                           client_ip: Optional[str] = None) -> Any:
+    """The verified identity of an MCP caller, from what its TRANSPORT presented (an
+    `Authorization` bearer: a BOSS API key, or a DPoP-bound run token with its `DPoP` proof).
+    None when it presented no BOSS credential or one that does not verify — the identity gate
+    then refuses the call under enforce. Never read from a tool argument; never the legacy
+    network/shared-key bridges (an MCP session is not a console request)."""
+    lowered = {str(k).lower(): str(v) for k, v in headers.items()}
+    scheme, _, token = lowered.get("authorization", "").partition(" ")
+    token = token.strip()
+    if scheme.lower() not in ("bearer", "dpop") or not token or not _is_boss_credential(token):
+        return None
+    from ..identity import authn
+
+    creds = authn.RequestCredentials(method=method, path=path, headers=lowered, cookies={},
+                                     client_ip=client_ip, peer_ip=client_ip)
+    try:
+        return authn.authenticate(creds)
+    except Exception:  # noqa: BLE001 — an unverifiable credential is no identity (fail closed)
+        return None
+
+
 class MCPServer:
     """Bridges MCP JSON-RPC calls onto the engine tool registry.
 
@@ -74,8 +111,13 @@ class MCPServer:
         http_token: Optional[str] = None,
         api_surface: Any = None,
         api_domains: Optional[set[str]] = None,
+        identity: Optional[Callable[[], Any]] = None,
     ):
+        """`identity` returns the verified caller identity for one call (stdio: the session's
+        BOSS API key, re-checked live on every call). The HTTP transport authenticates each
+        request's bearer instead."""
         self.ctx = ctx
+        self.identity = identity
         self.project_id = project_id
         self.actor = actor
         self.registry = registry or build_default_registry()
@@ -186,15 +228,44 @@ class MCPServer:
                 {"ok": False, "error": f"tool '{name}' is not available ({reason})"},
                 is_error=True,
             ))
+        # WHO IS CALLING: the identity the transport authenticated, never a tool argument. Every
+        # tool call is decided as that caller (the registry's identity gate; fail closed under
+        # enforce when there is none), and jobs it enqueues carry it (R8).
+        auth = self._caller()
+        from ..tools.registry import CURRENT_TOOL_AUTH
+
+        tool_token = CURRENT_TOOL_AUTH.set(auth)
         try:
-            result = self.registry.invoke(
-                name, self.ctx, project_id=self.project_id, actor=self.actor, args=args
-            )
+            if auth is not None:
+                from ..identity import lineage
+
+                with lineage.acting(auth):
+                    result = self.registry.invoke(
+                        name, self.ctx, project_id=self.project_id, actor=self.actor, args=args, auth=auth)
+            else:
+                result = self.registry.invoke(
+                    name, self.ctx, project_id=self.project_id, actor=self.actor, args=args, auth=None)
         except Exception as exc:  # unknown tool etc.
             return _ok(rid, _tool_result(
                 {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, is_error=True
             ))
+        finally:
+            CURRENT_TOOL_AUTH.reset(tool_token)
         return _ok(rid, _tool_result(result, is_error=not result.get("ok", True)))
+
+    def _caller(self) -> Any:
+        """The verified identity for this call: the HTTP request's, else the session's."""
+        request_auth = _REQUEST_AUTH.get()
+        if request_auth is _NO_IDENTITY:
+            return None
+        if request_auth is not None:
+            return request_auth
+        if self.identity is None:
+            return None
+        try:
+            return self.identity()
+        except Exception:  # noqa: BLE001 — a credential that no longer verifies is no identity
+            return None
 
     # ---- transports ------------------------------------------------------
     def serve_stdio(self, *, stdin=None, stdout=None) -> None:
@@ -231,33 +302,51 @@ class MCPServer:
         app = FastAPI(title="boss-engine-mcp")
         server = self
 
-        def require_token(request: Request) -> None:
-            if not server.http_token:
-                return
+        async def admitted(request: Request) -> Any:
+            """Admit the request and return its verified identity. The legacy shared
+            BOSS_MCP_HTTP_TOKEN admits but identifies nobody (None), so its tool calls are refused
+            under enforce. A BOSS API key or run token is verified by identity, live; one that does
+            not verify is refused, never downgraded to anonymous."""
             authorization = request.headers.get("authorization", "")
             scheme, _, candidate = authorization.partition(" ")
-            if scheme.lower() != "bearer" or not hmac.compare_digest(
-                candidate, server.http_token
+            candidate = candidate.strip()
+            if server.http_token and scheme.lower() == "bearer" and hmac.compare_digest(
+                candidate.encode(), server.http_token.encode()
             ):
-                raise HTTPException(
-                    status_code=401,
-                    detail="MCP bearer token required",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
+                return None
+            if candidate and _is_boss_credential(candidate):
+                from starlette.concurrency import run_in_threadpool  # noqa: PLC0415
+
+                found = await run_in_threadpool(
+                    authenticate_transport, dict(request.headers), method=request.method,
+                    path=request.url.path, client_ip=request.client.host if request.client else None)
+                if found is not None:
+                    return found
+            elif not server.http_token:
+                return None
+            raise HTTPException(
+                status_code=401,
+                detail="MCP bearer token required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
         @app.post("/mcp")
         async def mcp(request: Request):  # type: ignore[no-redef]
-            require_token(request)
+            auth = await admitted(request)
             try:
                 body = await request.json()
             except json.JSONDecodeError:
                 return _err(None, -32700, "parse error")
-            resp = server.handle(body)
+            token = _REQUEST_AUTH.set(auth if auth is not None else _NO_IDENTITY)
+            try:
+                resp = server.handle(body)
+            finally:
+                _REQUEST_AUTH.reset(token)
             return resp if resp is not None else {"jsonrpc": "2.0", "result": {}}
 
         @app.get("/health")
         async def health(request: Request):  # type: ignore[no-redef]
-            require_token(request)
+            await admitted(request)
             return {"status": "ok", "server": SERVER_INFO["name"],
                     "tools": [t["name"] for t in server._tools()]}
 

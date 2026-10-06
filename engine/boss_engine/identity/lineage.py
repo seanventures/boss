@@ -156,15 +156,36 @@ def current_context() -> Optional[AuthContext]:
 
 
 @contextlib.contextmanager
-def acting(who: Acting | AuthContext) -> Iterator[Acting]:
+def acting(who: Acting | AuthContext, *, tool_auth: Optional[AuthContext] = None) -> Iterator[Acting]:
+    """Act for `who` in this block: jobs it enqueues carry it (R8), and — when `who` is a verified
+    AuthContext (a request's, or a delegated run's run-token context) — every tool call in the
+    block is decided as `who` (the registry's CURRENT_TOOL_AUTH), never as whoever called in
+    (e.g. the worker). `tool_auth` names that context explicitly when `who` is an Acting."""
     value = who if isinstance(who, Acting) else Acting.from_context(who)
     token = _ACTING.set(value)
     ctx_token = _CONTEXT.set(who if isinstance(who, AuthContext) else _CONTEXT.get())
+    decider = who if isinstance(who, AuthContext) else tool_auth
+    tool_token = _set_tool_auth(decider) if decider is not None else None
     try:
         yield value
     finally:
+        if tool_token is not None:
+            _reset_tool_auth(tool_token)
         _CONTEXT.reset(ctx_token)
         _ACTING.reset(token)
+
+
+def _set_tool_auth(ctx: AuthContext) -> Any:
+    try:
+        from ..tools.registry import CURRENT_TOOL_AUTH
+    except Exception:  # noqa: BLE001 — the tool layer is optional for identity-only callers
+        return None
+    return (CURRENT_TOOL_AUTH, CURRENT_TOOL_AUTH.set(ctx))
+
+
+def _reset_tool_auth(token: Any) -> None:
+    var, tok = token
+    var.reset(tok)
 
 
 def enter(ctx: AuthContext) -> None:

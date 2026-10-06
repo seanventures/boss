@@ -265,7 +265,7 @@ def authority_columns(acting: Optional[Acting]) -> dict[str, Any]:
             "authority_org_id": acting.org_id or None, "authority_run_id": acting.run_id}
 
 
-def _recorded_authority(db: Any, workflow_run_id: str) -> Optional[Acting]:
+def recorded_authority(db: Any, workflow_run_id: str) -> Optional[Acting]:
     """The run's columns; `policy_snapshot._identity` only for a run recorded before them."""
     from sqlalchemy import text
 
@@ -292,7 +292,7 @@ def acting_for_workflow_run(db: Any, workflow_run_id: Optional[str]) -> Optional
         return None
     if not db.execute(text("SELECT to_regclass('workflow_runs') IS NOT NULL")).scalar():
         return None
-    acting = _recorded_authority(db, workflow_run_id)
+    acting = recorded_authority(db, workflow_run_id)
     if acting is None or not acting.grant_id:
         return None
     g = grants.load(acting.grant_id, db=db)
