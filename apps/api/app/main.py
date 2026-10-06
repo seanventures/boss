@@ -1505,6 +1505,15 @@ async def lifespan(_: FastAPI):
             _org = _identity_migration.default_org(_connection)
             if _org:
                 _identity_signing_keys.provision(org_id=_org, db=_connection)
+                # Passports for every agent once the install has an Owner (idempotent; also
+                # repairs an empty ceiling an earlier upgrade left).
+                from boss_engine.identity import passports as _identity_passports
+                from boss_engine.identity import users as _identity_users
+
+                _owners = sorted(_identity_users.active_owner_ids(_connection, _org))
+                if _owners:
+                    _identity_passports.upgrade_from_roles(org_id=_org, db=_connection,
+                                                           default_sponsor=_owners[0])
         print(f"[identity] vault ready (key {_kek}); signing keys provisioned")
     except Exception as exc:  # noqa: BLE001 — the vault is refused, the API still serves
         print(f"[identity] VAULT NOT READY: {type(exc).__name__}: {exc}. Delegated runs, TOTP "
