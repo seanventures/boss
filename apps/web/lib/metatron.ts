@@ -79,9 +79,12 @@ export async function fetchMetatronCaptainSession(
   const pid = resolveProjectId(projectId);
   try {
     const { API_URL, authHeaders } = await import("./client");
-    const response = await fetch(
-      `${API_URL}/v1/metatron/session?project_id=${encodeURIComponent(pid)}&actor=${encodeURIComponent(actor)}`,
-      { headers: authHeaders(), cache: "no-store" },
+    const { apiWrite } = await import("./api-write");
+    const { loadPath } = await import("./writing-get");
+    // A writing GET (it opens the session): its POST twin, through the write path.
+    const response = await apiWrite(
+      loadPath(`${API_URL}/v1/metatron/session?project_id=${encodeURIComponent(pid)}&actor=${encodeURIComponent(actor)}`),
+      { method: "POST", headers: authHeaders(), cache: "no-store" },
     );
     if (!response.ok) {
       return {

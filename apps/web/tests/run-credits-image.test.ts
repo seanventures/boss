@@ -33,7 +33,8 @@ describe("the Credits image", () => {
     // IHDR: width and height, big-endian, at bytes 16-23.
     const view = new DataView(bytes.buffer);
     expect([view.getUint32(16), view.getUint32(20)]).toEqual([1200, 630]);
-    expect(asked[0]).toMatch(/\/v1\/workflow-runs\/wfr_1\/chain\?project_id=p1$/);
+    // A workflow run's chain is a writing GET: read by its POST twin (lib/writing-get.ts).
+    expect(asked[0]).toMatch(/\/v1\/workflow-runs\/wfr_1\/chain\/load\?project_id=p1$/);
   }, 60_000);
 
   it("credits a build from the build's own chain, not the run around it", async () => {

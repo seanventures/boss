@@ -115,7 +115,7 @@ describe("Replay last run", () => {
     await act(async () => { $('[data-testid="ag-replay"]')!.click(); });
     await settle();
     expect(stub.calls.some((c) => c.url === "/v1/delivery-workflows/runs?project_id=p1&limit=5")).toBe(true);
-    expect(stub.calls.filter((c) => c.url.includes("/chain")).map((c) => c.url)[0]).toBe("/v1/workflow-runs/wfr_1/chain?project_id=p1");
+    expect(stub.calls.filter((c) => c.url.includes("/chain")).map((c) => c.url)[0]).toBe("/v1/workflow-runs/wfr_1/chain/load?project_id=p1");
     expect($$(".ag-flow-agent[data-lit]").map((a) => a.dataset.role)).toEqual(["pm", "software_engineer", "qa"]);
   });
 

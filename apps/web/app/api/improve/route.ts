@@ -25,7 +25,9 @@ export async function GET(req: Request) {
   const etag = req.headers.get("if-none-match");
   if (etag) headers["If-None-Match"] = etag;
   try {
-    const r = await fetch(`${API_URL}${view.path(q)}`, { headers, cache: "no-store" });
+    const r = view.load
+      ? await apiWrite(`${API_URL}${view.path(q)}`, { method: "POST", headers, cache: "no-store" })
+      : await fetch(`${API_URL}${view.path(q)}`, { headers, cache: "no-store" });
     const out = new Headers({ "Cache-Control": "no-cache" });
     const tag = r.headers.get("etag");
     if (tag) out.set("ETag", tag);

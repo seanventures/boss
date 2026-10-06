@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { describeApiError } from "../../../lib/api-error";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite, type WriteMethod } from "../../../lib/api-write";
+import { loadPath } from "../../../lib/writing-get";
 
 /**
  * MCP servers for the Library (skills-mcp spec §5.5): list, the curated catalogue, test what was
@@ -51,7 +52,8 @@ export async function GET(req: Request) {
   }
   const check = ["none", "stale", "now"].includes(url.searchParams.get("check") ?? "")
     ? String(url.searchParams.get("check")) : "none";
-  return forward(`/v1/mcp/servers?project_id=${q(projectId)}&check=${check}`, { method: "GET" });
+  // A writing GET (it re-checks stale servers): its POST twin, through the write path.
+  return forward(loadPath(`/v1/mcp/servers?project_id=${q(projectId)}&check=${check}`), { method: "POST" });
 }
 
 const ACTIONS = ["test", "register", "update", "review", "delete", "catalogue_add", "role_tools",
