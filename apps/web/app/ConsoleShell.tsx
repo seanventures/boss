@@ -1078,6 +1078,7 @@ function ConsoleShellInner({
 
   return (
     <div className={`bx-shell${navOpen ? " nav-open" : ""}${railed ? " nav-docked" : ""}`}
+         data-route-mode={routeMode || undefined}
          data-rail-for-dock={railed && !docked ? "true" : undefined}>
       <a className="skip-link" href="#decision-inbox">Skip to decision inbox</a>
 
@@ -1370,7 +1371,7 @@ function ConsoleShellInner({
                aria-label="Refreshing data" data-testid="console-refreshing" />
         ) : null}
 
-        {settling && !routeMode ? (
+        {settling ? (
           <div className="bx-loading" role="status" aria-live="polite"
                data-testid="console-loading">
             <span className="bx-loading-bar" aria-hidden />
