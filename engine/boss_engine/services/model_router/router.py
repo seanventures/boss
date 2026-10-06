@@ -229,7 +229,7 @@ class Router:
                                      jev_state=snapshot.jev_state,
                                      model=snapshot.model_factory)
         tier = c.tier
-        judge = {"rules": "rules", "jev": "Jev", "model": "a Fast model"}.get(c.classifier,
+        judge = {"rules": "built-in rules", "jev": "Jev", "model": "a Fast model"}.get(c.classifier,
                                                                            c.classifier)
         source = f"{judge}, {round(c.confidence * 100)}% sure"
         why.append(f"Task: {c.reason} → {TIER_LABELS[c.tier]} ({source})"

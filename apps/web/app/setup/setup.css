@@ -538,3 +538,6 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) {
   .mr-seg button, .mr-chip, .mr-meter i { transition: none; }
 }
+.mr-tier select, .mr-fallback select { text-overflow: ellipsis; padding-right: 24px; }
+.mr-criteria summary { padding: 4px 0; }
+@media (max-width: 720px) { .mr-criteria summary { padding: 12px 0; } }

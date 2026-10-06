@@ -128,6 +128,21 @@ describe("Model routing", () => {
     await flush();
   });
 
+  it("a control that goes away hands focus to its neighbour, never to <body>", async () => {
+    fakeApi(board());
+    mounted = await mountBoard(board());
+    await click(q(document.body, "mr-floor-add"));
+    expect(document.activeElement).toBe(q(document.body, "mr-floor-step"));
+    await act(async () => {
+      q(document.body, "mr-floor-step")!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await flush();
+    expect(document.activeElement).toBe(q(document.body, "mr-floor-add"));
+    await click(q(document.body, "mr-floor-x-0"));
+    expect(document.activeElement?.getAttribute("data-testid")).toBe("mr-floor-x-0");
+  });
+
   it("focus=routing lands on the row with the jobs open", async () => {
     fakeApi(board());
     mounted = await mountBoard(board(), "?area=setup&focus=routing");
