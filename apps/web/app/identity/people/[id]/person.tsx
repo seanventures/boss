@@ -79,7 +79,7 @@ function Header({ person, roles, onSheet }: { person: Person; roles: AccessRole[
         <div className="idn-meta">
           <span><EnvelopeSimple size={14} aria-hidden /> <span data-copy="data">{p.email}</span></span>
           {p.sign_in.sso ? <span><LinkSimple size={14} aria-hidden /> {p.sign_in.sso} SSO linked</span> : null}
-          {p.last_seen_at ? <span><Clock size={14} aria-hidden /> Signed in <Ago iso={p.last_seen_at} />{p.last_seen_from ? `, ${p.last_seen_from}` : ""}</span> : <span><Clock size={14} aria-hidden /> Never signed in</span>}
+          {p.last_seen_at ? <span><Clock size={14} aria-hidden /> <span>Signed in <Ago iso={p.last_seen_at} />{p.last_seen_from ? `, ${p.last_seen_from}` : null}</span></span> : <span><Clock size={14} aria-hidden /> Never signed in</span>}
           <span><User size={14} aria-hidden /> Joined {shortDate(p.joined_at)}{p.joined_by ? ` by ${p.joined_by}` : ""}</span>
         </div>
         <div className="idn-roles">

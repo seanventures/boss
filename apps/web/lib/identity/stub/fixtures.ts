@@ -338,7 +338,7 @@ export function auditEvents(now: number): AuditEvent[] {
   const seq = 48_211;
   return rows.map((r, i) => {
     const { t, ...rest } = r;
-    const s = seq - i * (i < 3 ? 2 : 1);
+    const s = seq - (i < 3 ? i * 2 : i + 2);
     return {
       id: `sev_${s}`, seq: s, at: new Date(t).toISOString(), on_behalf_of: null, chain: [], grant_id: null, token_jti: null, run_id: null,
       why: [], raw: { event_type: rest.event_type, actor_principal_id: rest.actor.id, outcome: rest.outcome },

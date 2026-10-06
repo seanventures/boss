@@ -6,7 +6,7 @@
  * password, and the SSO identities linked to you. Every change here needs a fresh second factor:
  * the API answers step_up_required and the step-up sheet opens (useGuardedCall).
  */
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { DeviceMobile, Fingerprint, Key, LinkSimple, LockSimple, PencilSimple, Plus, ShieldCheck, Trash } from "@phosphor-icons/react";
 
 import { IdentityError, idDelete, idGet, idPatch, idPost } from "../../lib/identity/api";
@@ -44,6 +44,9 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
   const [error, setError] = useState<string | null>(null);
   const [pw, setPw] = useState({ current: "", next: "" });
   const [pwError, setPwError] = useState<string | null>(null);
+  // Known only in the browser: read after mount, so the server's first paint and hydration agree.
+  const [canPasskey, setCanPasskey] = useState(false);
+  useEffect(() => { setCanPasskey(webauthnAvailable()); }, []);
 
   const reload = async () => {
     const r = await idGet<{ factors: Factor[] }>("/v1/identity/me/factors");
@@ -115,7 +118,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
             </div>
           </div>
           <ErrorLine error={error} />
-          {webauthnAvailable() ? (
+          {canPasskey ? (
             <div className="idn-mf">
               <button type="button" className="idn-btn primary" disabled={busy} data-testid="add-passkey"
                 onClick={() => act("Adding a passkey changes how you sign in.", () => registerPasskey(), "Passkey added")}>
