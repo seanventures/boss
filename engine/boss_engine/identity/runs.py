@@ -384,7 +384,12 @@ def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner
         agent_id = agent_for_role(db, project_id, role_key or "forge")
         if not agent_id:
             return None
-        rid = acting.run_id if acting.run_id and acting.run_id.startswith("run_ct:") else f"run_ct:{task_run_id}"
+        if acting.run_id and acting.run_id.startswith("run_wf:"):
+            rid = f"{acting.run_id}/ct:{task_run_id}"        # a build inside a workflow run
+        elif acting.run_id and acting.run_id.startswith("run_ct:"):
+            rid = acting.run_id
+        else:
+            rid = f"run_ct:{task_run_id}"
         shim = start_run(subject_for(acting, db=db),
                          RunStart(run_id=rid, agent_id=agent_id, project_id=project_id, repos=(f"{owner}/{repo}",),
                                   scope=frozenset({"code_task:read", "code_task:steer", "repository:read",

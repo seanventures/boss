@@ -266,7 +266,11 @@ def create_grant(ctx: AuthContext, request: GrantRequest, *, db: Any) -> Delegat
     if request.allowed_children and not request.allow_subdelegation:
         raise GrantRefused("children_without_subdelegation", 422)
 
-    # Every named agent: an active Passport in this org; the permissions fit under its ceiling.
+    # Every named agent: an active Passport in this org. With ONE agent the permissions must fit
+    # under its ceiling; with several (a workflow's crew) each permission must fit under at least
+    # one named agent's ceiling — nothing is grantable that no named agent could ever use, and
+    # every hop is still narrowed to its OWN ceiling live (tokens.live_state).
+    ceilings: list[frozenset[str]] = []
     for agent_id in list(request.agent_ids) + list(request.allowed_children):
         p = passports.get(agent_id, db=db)
         if p is None and agent_id in request.allowed_children:
@@ -275,9 +279,15 @@ def create_grant(ctx: AuthContext, request: GrantRequest, *, db: Any) -> Delegat
             raise GrantRefused("unknown_agent", 404, {"agent": agent_id})
         if not p.active:
             raise GrantRefused("agent_inactive", 409, {"agent": agent_id})
-        if agent_id in request.agent_ids and not perms <= p.ceiling:
-            raise GrantRefused("exceeds_ceiling", 403, {"agent": agent_id,
-                                                       "permissions": sorted(perms - p.ceiling)})
+        if agent_id in request.agent_ids:
+            ceilings.append(p.ceiling)
+            if len(request.agent_ids) == 1 and not perms <= p.ceiling:
+                raise GrantRefused("exceeds_ceiling", 403, {"agent": agent_id,
+                                                           "permissions": sorted(perms - p.ceiling)})
+    unusable = perms - frozenset().union(*ceilings) if ceilings else perms
+    if unusable:
+        raise GrantRefused("exceeds_ceiling", 403, {"agent": ",".join(request.agent_ids),
+                                                   "permissions": sorted(unusable)})
     # ...and under the person's own live access at every project.
     for project_id in request.project_ids:
         missing = perms - person_live(db, live_person, project_id)
@@ -415,12 +425,15 @@ def extend_grant(ctx: AuthContext, grant_id: str, days: int, *, db: Any) -> Dele
         missing = g.permissions - person_live(db, person, project_id)
         if missing:
             raise GrantRefused("exceeds_your_access", 403, {"project": project_id, "permissions": sorted(missing)})
+    ceilings = []
     for agent_id in g.agent_ids:
         p = passports.get(agent_id, db=db)
         if p is None or not p.active:
             raise GrantRefused("agent_inactive", 409, {"agent": agent_id})
-        if not g.permissions <= p.ceiling:
-            raise GrantRefused("exceeds_ceiling", 403, {"agent": agent_id, "permissions": sorted(g.permissions - p.ceiling)})
+        ceilings.append(p.ceiling)
+    unusable = g.permissions - frozenset().union(*ceilings)
+    if unusable:
+        raise GrantRefused("exceeds_ceiling", 403, {"permissions": sorted(unusable)})
     new_exp = _now() + timedelta(days=days)
     db.execute(text("UPDATE identity_delegation_grants SET expires_at = :e WHERE id = :g"), {"e": new_exp, "g": g.id})
     event = "delegation.extended" if "delegation.extended" in audit.EVENT_TYPES else "delegation.created"
