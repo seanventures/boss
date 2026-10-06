@@ -200,7 +200,9 @@ def _agents(db: Any, project_id: str, role_keys: list[str]):
             upgraded = True
             org = _org_of_project(db, project_id)
             if org:
-                passports.upgrade_from_roles(org_id=org, db=db, default_sponsor=_first_owner(db, org))
+                # In its OWN transaction: the caller's is about to roll back on 409
+                # consent_required, and the Passports must outlive it for the grant to name them.
+                _upgrade_committed(db, org)
             p = passports.get(aid, db=db)
         if p is None:
             if aid and lineage._enforced():  # noqa: SLF001
@@ -208,6 +210,22 @@ def _agents(db: Any, project_id: str, role_keys: list[str]):
             return None
         out.append(p)
     return out
+
+
+def _upgrade_committed(db: Any, org: str) -> None:
+    from . import passports
+
+    try:
+        from ..db import get_engine
+
+        engine = get_engine()
+    except Exception:  # noqa: BLE001 — no process engine (tests): the caller's transaction
+        engine = None
+    if engine is None or getattr(db, "engine", None) is None or db.engine.url != engine.url:
+        passports.upgrade_from_roles(org_id=org, db=db, default_sponsor=_first_owner(db, org))
+        return
+    with engine.begin() as own:
+        passports.upgrade_from_roles(org_id=org, db=own, default_sponsor=_first_owner(own, org))
 
 
 def _org_of_project(db: Any, project_id: str) -> Optional[str]:
