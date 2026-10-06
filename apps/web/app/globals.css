@@ -8600,7 +8600,6 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   --viz-1: #2a78d6; --viz-2: #eb6834; --viz-3: #1baf7a; --viz-4: #eda100; --viz-5: #e87ba4;
   --viz-other: #9a9a96;
 }
-=======
 /* A command inside the host's advice: code, with its own Copy (never literal backticks). */
 .host-advice-code { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .host-advice-code code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.85em; padding: 1px 6px;
