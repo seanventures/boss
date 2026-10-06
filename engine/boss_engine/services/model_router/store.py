@@ -169,7 +169,21 @@ def save_policy(connection: Any, project_id: str, patch: Mapping[str, Any], *, a
     if expected_version is not None and int(expected_version) != current.version:
         raise PolicyConflict(current.version)
     body = {k: v for k, v in dict(patch).items() if k not in ("version",)}
+    preset = str(body.get("floor_preset") or "")
+    from ..pipeline_profiles import PROFILES
+
+    if preset in PROFILES and "floors" not in body:
+        # A PRESET IS A PROFILE (Decision 4): choosing one sets the Smart floors AND the
+        # project's default pipeline profile, which Fixed mode routes by — one control, one
+        # meaning, in both modes (the old Coding Pipeline page's picker).
+        from .policy import preset_floors
+
+        body["floors"] = [f.to_dict() for f in preset_floors(preset)]
     merged = from_dict(body, base=current)          # validates; raises PolicyError
+    if preset in PROFILES:
+        from ..pipeline_profile_service import set_default_profile
+
+        set_default_profile(connection, project_id, preset, actor)
     if "mode" in body:
         set_one(connection, project_id, MODE_KEY, merged.mode, actor=actor)
     document = merged.to_dict()
@@ -383,7 +397,7 @@ def route(connection: Any, settings: Any, request: RouteRequest, *,
     snap = snapshot(connection, settings, request.project_id)
     if request.sticky and request.unit_id and request.session_pin is None \
             and snap.policy.mode == "smart":
-        prior = last_route(connection, request.unit_id, request.step)
+        prior = last_route(connection, request.unit_id, request.step, request.ref)
         if prior and prior.get("engine"):
             from dataclasses import replace
 
@@ -435,14 +449,16 @@ def record(connection: Any, decision: RouteDecision) -> None:
         log.warning("model route record failed (non-fatal)", exc_info=True)
 
 
-def last_route(connection: Any, unit_id: str, step: str) -> Optional[dict[str, Any]]:
-    """The unit's last route for `step` — the one route lookup a resumed session makes."""
+def last_route(connection: Any, unit_id: str, step: str, ref: Optional[str] = None
+               ) -> Optional[dict[str, Any]]:
+    """The unit's last route for `step` (and `ref`) — the one lookup a resumed session makes."""
     try:
         with connection.begin_nested():
             row = connection.execute(
                 text("SELECT engine, model, tier FROM model_routes WHERE unit_id = :u "
-                     "AND step = :s AND mode = 'smart' ORDER BY created_at DESC LIMIT 1"),
-                {"u": unit_id, "s": step}).mappings().first()
+                     "AND step = :s AND COALESCE(ref, '') = :r AND mode = 'smart' "
+                     "ORDER BY created_at DESC LIMIT 1"),
+                {"u": unit_id, "s": step, "r": ref or ""}).mappings().first()
     except Exception:  # noqa: BLE001
         return None
     return dict(row) if row else None
@@ -483,6 +499,14 @@ def routes_for(connection: Any, unit_id: str) -> list[dict[str, Any]]:
             item["latency_ms"] = float(item["latency_ms"])
         if hasattr(item.get("created_at"), "isoformat"):
             item["created_at"] = item["created_at"].isoformat()
+        # Words for the console ("Why this model"): it renders, it does not look things up.
+        from .selection import engine_label
+        from .tiers import TIER_LABELS, step_label
+
+        name = engine_label(item.get("engine") or "") if item.get("engine") else "no model"
+        item["label"] = f"{name} · {item['model']}" if item.get("model") else name
+        item["step_label"] = step_label(str(item.get("step") or ""))
+        item["tier_label"] = TIER_LABELS.get(str(item.get("tier") or ""), item.get("tier"))
         out.append(item)
     return out
 

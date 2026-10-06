@@ -426,7 +426,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
                           onChange={(e) => setA("rulesText", e.target.value)} />
               </label>
               <div className="aq-row">
-                <label className="aw-field"><span>Model</span>
+                <label className="aw-field"><span>Model <HelpTip label="Model" text="Routed: the model router picks per task. Pinned: always this model. Local: local models only." /></span>
                   <select value={advanced.selectionMode} data-testid="aq-selection"
                           onChange={(e) => setA("selectionMode", e.target.value as Advanced["selectionMode"])}>
                     <option value="router">Routed</option>
@@ -435,7 +435,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
                   </select>
                 </label>
                 {advanced.selectionMode === "pinned" ? (
-                  <label className="aw-field"><span>Model id</span>
+                  <label className="aw-field"><span>Model id <HelpTip label="Model id" text="A model, or source:model — e.g. claude_code:opus, ollama:llama3.1." /></span>
                     <input value={advanced.pinnedModel} data-testid="aq-pinned-model"
                            onChange={(e) => setA("pinnedModel", e.target.value)} />
                   </label>

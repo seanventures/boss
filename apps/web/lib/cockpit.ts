@@ -6,6 +6,7 @@
  * maps none of its own. No percent, no ETA, no test counts (only commands are real), no hunks.
  */
 
+import { parseRoutes, type RouteRow } from "./model-routes";
 import { parseAttention, type AttentionItem } from "./agents-live-board";
 import {
   arr, num, obj, opt, parseOrigin, parseStation, roleOf, str, usePolled,
@@ -144,6 +145,8 @@ export type Cockpit = {
   story: StoryRow[];
   now: NowLine | null;
   outputs: CockpitOutputs;
+  /** The model router's decision per stage ("Why this model"). */
+  routes: RouteRow[];
 };
 
 // ── Parsers ─────────────────────────────────────────────────────────────────────────────────
@@ -321,6 +324,7 @@ export function parseCockpit(w: unknown): Cockpit {
     now: now && opt(now.tool) ? { actId: str(now.act_id), roleKey: roleOf(now.role_key), tool: str(now.tool),
                                    arg: opt(now.arg), at: str(now.at) } : null,
     outputs: parseOutputs(o.outputs),
+    routes: parseRoutes(o.routes),
   };
 }
 

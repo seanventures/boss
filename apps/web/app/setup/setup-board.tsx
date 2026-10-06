@@ -9,7 +9,7 @@
  * server decides every pill. While setup is unfinished the board runs as a stepper —
  * 1 Repository, 2 Model, 3 Try it — and after the first pull request it is a board.
  *
- * Deep links: `?area=setup&focus=repository|models|jobs|budget|try`, `&add=<provider>` opens Add a
+ * Deep links: `?area=setup&focus=repository|models|jobs|routing|budget|try` (routing = jobs), `&add=<provider>` opens Add a
  * model on that provider, `&source=<id>` opens that model's menu, legacy `step=github|model` maps
  * to focus. Rows whose last check is over a day old are re-checked in the background on open.
  */
@@ -23,11 +23,11 @@ import {
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BudgetRow } from "./budget-row";
 import { CapacityRow } from "./capacity-row";
-import { JobsRow } from "./jobs-row";
 import { ModelsRow } from "./models-row";
 import { BoardContext, toast } from "./parts";
 import { Dot, localView } from "./pill";
 import { RepositoryRow } from "./repository-row";
+import { RoutingRow } from "./routing-row";
 import { TryRow } from "./try-row";
 import { SharingAsk } from "../improve/sharing-ask";
 
@@ -207,7 +207,8 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
                    add={params.add} source={params.source}
                    onAddHandled={() => setParams((p) => ({ ...p, add: null }))} />
         <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
-        <JobsRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} />
+        {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
+        <RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} />
         <BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} />
         <TryRow ref={ref("try")} mode={rowMode(view, "try")} step={stepNumber(view, "try")}
                 focused={focus === "try"} />
