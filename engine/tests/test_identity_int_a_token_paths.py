@@ -156,3 +156,15 @@ def test_repo_access_goes_through_egress_under_a_delegated_principal(monkeypatch
     with runs.repo_access(env.engine, host="github", owner="acme", repo="web", project_id=env.project,
                           token=lambda: TOKEN) as access:
         assert access.via == "token" and TOKEN not in access.url
+
+
+def test_the_governed_code_task_clones_through_egress_like_the_ungoverned_one():
+    """Structural: the governed pipeline starts the build's identity run, hands every clone the
+    egress access (work sandbox, review clone, each guest stage) and blanks the token when it
+    applies, and ends the run with the build."""
+    source = (ROOT / "engine" / "boss_engine" / "services" / "governed_code_task_service.py").read_text()
+    assert "identity_runs.start_code_task_run(" in source and "identity_runs.finish_code_task_run(" in source
+    assert source.count("egress=egress_access") == 2                      # sandbox + review sandbox
+    assert 'guest_spec["egress"] = guest_egress["spec"]' in source
+    start = source.index("identity_run = identity_runs.start_code_task_run(")
+    assert 'token = ""' in source[start:start + 900]
