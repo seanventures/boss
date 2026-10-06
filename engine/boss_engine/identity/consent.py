@@ -174,18 +174,54 @@ def workflow_needs(db: Any, project_id: str, spec: Any, input_data: Any) -> tupl
     return roles, frozenset(perms), (_repos_for(db, project_id, input_data) if builds else [])
 
 
+class AgentWithoutPassport(Exception):
+    """A person started work whose agent has no Passport and none could be made: under enforce the
+    start is refused (409 `agent_without_passport`) rather than run without a delegation."""
+
+    def __init__(self, role_key: str):
+        super().__init__(role_key)
+        self.role_key = role_key
+
+
 def _agents(db: Any, project_id: str, role_keys: list[str]):
-    """Passports for the roles, or None when any is not a Passport yet (identity not seeded)."""
-    from . import passports, runs
+    """Passports for the roles. A role with an agent but no Passport yet (an agent made after the
+    claim, an install that never ran the upgrade) gets one now, sponsored by the role's own sponsor
+    or the org's Owner (passports.upgrade_from_roles). None only when identity does not apply
+    (no agent at all for a role); under enforce an agent that still has no Passport is refused —
+    work never silently runs outside delegation."""
+    from . import lineage, passports, runs
 
     out = []
+    upgraded = False
     for rk in role_keys:
         aid = runs.agent_for_role(db, project_id, rk)
         p = passports.get(aid, db=db) if aid else None
+        if p is None and aid and not upgraded:
+            upgraded = True
+            org = _org_of_project(db, project_id)
+            if org:
+                passports.upgrade_from_roles(org_id=org, db=db, default_sponsor=_first_owner(db, org))
+            p = passports.get(aid, db=db)
         if p is None:
+            if aid and lineage._enforced():  # noqa: SLF001
+                raise AgentWithoutPassport(rk)
             return None
         out.append(p)
     return out
+
+
+def _org_of_project(db: Any, project_id: str) -> Optional[str]:
+    from sqlalchemy import text
+
+    return db.execute(text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                           "WHERE p.id = :p"), {"p": project_id}).scalar()
+
+
+def _first_owner(db: Any, org_id: str) -> Optional[str]:
+    from . import users
+
+    owners = users.active_owner_ids(db, org_id)
+    return sorted(owners)[0] if owners else None
 
 
 def _consent_body(db: Any, *, ctx_person: str, org_id: str, agents, needed, project_id, repos, task: str,
