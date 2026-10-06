@@ -315,3 +315,85 @@ def commit_trailers(*, person_name: str, person_email: Optional[str], grant_id: 
     """`On-behalf-of: Alice <alice@acme.com>` and `Boss-Lineage: dlg_…/run_…` (§7.9)."""
     who = f"{person_name} <{person_email}>" if person_email else person_name
     return f"On-behalf-of: {who}\nBoss-Lineage: {grant_id or 'autonomous'}/{run_id}"
+
+
+# ---- connecting a person's own GitHub (user-to-server OAuth) ---------------------------------------------
+
+STATE_TTL_SECONDS = 600
+
+
+def _state_mac(payload: str) -> str:
+    import hashlib
+    import hmac
+
+    from . import vault
+
+    return jwks.b64u(hmac.new(vault.derived_key("oauth-state"), payload.encode(), hashlib.sha256).digest())
+
+
+def oauth_state(person_id: str, provider: str = "github", *, now: Optional[int] = None) -> str:
+    """Signed, expiring, single-use (checked at the callback), bound to the person who asked."""
+    import secrets as _secrets
+
+    now = int(time.time()) if now is None else now
+    payload = jwks.b64u(json.dumps({"p": person_id, "v": provider, "e": now + STATE_TTL_SECONDS,
+                                    "n": _secrets.token_urlsafe(12)}, separators=(",", ":")).encode())
+    return f"{payload}.{_state_mac(payload)}"
+
+
+def authorize_url(person_id: str, redirect_uri: str) -> str:
+    from urllib.parse import urlencode
+
+    cid = os.environ.get(CLIENT_ID_ENV)
+    if not cid:
+        raise GitHubRefused("provider_not_configured", 409)
+    q = urlencode({"client_id": cid, "redirect_uri": redirect_uri, "state": oauth_state(person_id),
+                   "allow_signup": "false"})
+    return f"https://github.com/login/oauth/authorize?{q}"
+
+
+def complete_oauth(*, person_id: str, org_id: str, code: str, state: str, redirect_uri: str, db: Any) -> str:
+    """Verify the state (signature, expiry, the SAME person, single use), exchange the code, store
+    the token and its rotating refresh in the vault. Returns the vault item id."""
+    import hmac
+    from urllib.parse import urlencode
+
+    from sqlalchemy import text
+
+    from . import audit, vault
+
+    try:
+        payload, mac = state.split(".", 1)
+        data = json.loads(jwks.b64u_decode(payload))
+    except Exception as exc:  # noqa: BLE001
+        raise GitHubRefused("bad_state", 400) from exc
+    if not hmac.compare_digest(mac, _state_mac(payload)) or data.get("p") != person_id or data.get("v") != "github":
+        raise GitHubRefused("bad_state", 400)
+    if int(data.get("e", 0)) < int(time.time()):
+        raise GitHubRefused("state_expired", 400)
+    fresh = db.execute(text("INSERT INTO identity_dpop_replay (jkt, jti, expires_at) VALUES ('oauth-state', :n, "
+                            "to_timestamp(:e)) ON CONFLICT DO NOTHING RETURNING 1"),
+                       {"n": str(data.get("n")), "e": int(data["e"])}).scalar()
+    if not fresh:
+        raise GitHubRefused("state_replayed", 400)
+    cid, secret = os.environ.get(CLIENT_ID_ENV), os.environ.get(CLIENT_SECRET_ENV)
+    if not cid or not secret:
+        raise GitHubRefused("provider_not_configured", 409)
+    body = urlencode({"client_id": cid, "client_secret": secret, "code": code, "redirect_uri": redirect_uri}).encode()
+    resp = TRANSPORT("POST", "https://github.com/login/oauth/access_token",
+                     {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}, body)
+    tok = resp.json() if resp.status == 200 else {}
+    if not tok or tok.get("error") or not tok.get("access_token"):
+        raise GitHubRefused("code_exchange_failed", 400)
+    me = _call("GET", "/user", token=str(tok["access_token"]))
+    login = (me.json() or {}).get("login") if me.status == 200 else None
+    item = vault.store(org_id=org_id, owner_principal_id=person_id, kind=vault.VaultItemKind.OAUTH_USER,
+                       provider="github", secret=str(tok["access_token"]), refresh=tok.get("refresh_token"),
+                       access_expires_at=(datetime.now(timezone.utc) + timedelta(seconds=int(tok["expires_in"])))
+                       if tok.get("expires_in") else None,
+                       provider_subject=login, connection_name="GitHub", db=db,
+                       granted_scopes=[s for s in str(tok.get("scope") or "").split(",") if s])
+    audit.record(audit.SecurityEvent(org_id=org_id, event_type="vault.connection.linked",
+                                     outcome=audit.Outcome.SUCCESS, actor_principal_id=person_id, actor_kind="user",
+                                     target_type="vault_item", target_id=item, details={"provider": "github"}), db=db)
+    return item

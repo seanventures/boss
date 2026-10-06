@@ -186,6 +186,13 @@ def reset_master_key_cache() -> None:
         _kek_cache = None
 
 
+def derived_key(label: str) -> bytes:
+    """A purpose-separated key derived from the KEK (HMAC-SHA256(KEK, "BOSS-DERIVED|" + label)), for
+    signing short-lived state such as an OAuth `state`. The KEK itself never leaves this module."""
+    _, key = _kek()
+    return hmac.new(key, b"BOSS-DERIVED|" + label.encode("utf-8"), hashlib.sha256).digest()
+
+
 def check_master_key(*, db: Any) -> str:
     """Boot check (A53). Registers the KEK's KCV on first use; refuses when vault rows or KEKs exist
     and none matches the configured key. Returns the kek id."""
