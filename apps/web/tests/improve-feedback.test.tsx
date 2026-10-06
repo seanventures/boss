@@ -114,6 +114,19 @@ describe("Share this run", () => {
   });
 });
 
+describe("Share this run when nothing may leave", () => {
+  it("says why, tells the person to check, and cannot send", async () => {
+    const f = newImprove();
+    f.sharing.blocked = "BOSS_TELEMETRY=off";
+    vi.stubGlobal("fetch", fakeImproveApi(f));
+    await mount(<ShareRunSheet projectId="p1" actor="ceo" unitKind="build" unitId="crun_9" onClose={() => {}} />);
+    await settle();
+    expect($("[data-testid=share-run-blocked]")!.textContent).toContain("BOSS_TELEMETRY=off");
+    expect($("[data-testid=share-run-check]")!.textContent).toContain("Check for anything private");
+    expect(($("[data-testid=share-run-send]") as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
 describe("the stylesheet", () => {
   const css = readFileSync(path.resolve(__dirname, "../app/improve/improve.css"), "utf8");
   it("is tokens only", () => {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, useTransition, useRef} from "react";
 
 import { landingAnswerArrived } from "../lib/chat-landing";
 import { Markdown } from "./markdown";
+import { RateIt } from "./improve/rate-it";
 import { notifyChanged } from "./changed";
 
 import {
@@ -1322,6 +1323,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                       quietly starts a build is the opposite of a surface for thinking. */}
                   <CitedActs ids={[...citedIds((m as { cited_acts?: unknown }).cited_acts), ...(citedHere[i] ?? [])]}
                              projectId={projectId} viewer={actor} speaker={dockAgent} />
+                  {/* One-tap thumbs on a finished answer (run scorecards: "Talk to BOSS answer"),
+                      keyed by the thread and the answer's place in it. Not on the answer still
+                      arriving. */}
+                  {threadId && m.content && !(busy && i === messages.length - 1) ? (
+                    <RateIt projectId={projectId} actor={actor} subject="answer"
+                            id={`chat:${threadId}:${i}`} testId="agent-message-rate" />
+                  ) : null}
                   {briefIn(m.content) ? (
                     <div className="agent-brief" data-testid="agent-brief">
                       <pre>{briefIn(m.content)}</pre>

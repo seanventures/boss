@@ -20,10 +20,12 @@ describe("landing", () => {
     expect(landingArea(undefined, null)).toBeNull();          // the API did not answer
   });
 
-  it("is applied before the shell renders, with the request's own parameters", () => {
+  it("is the area this render shows and the shell opens — rendered, not redirected", () => {
     const PAGE = codeOnly("app/page.tsx");
     expect(PAGE).toContain("landingArea(requestedArea, setupSummary)");
-    expect(PAGE).toContain('next.set("area", landing)');
+    expect(PAGE).toContain("requested: landing ?? shownArea");
+    expect(PAGE).toContain("initialArea={initialArea}");
+    expect(PAGE).not.toMatch(/\bredirect\(/);
   });
 });
 

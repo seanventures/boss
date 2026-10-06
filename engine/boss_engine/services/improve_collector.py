@@ -90,6 +90,10 @@ class _Window:
 
 IP_LIMIT = _Window(IP_PER_HOUR, 3600)
 INSTALL_LIMIT = _Window(INSTALL_PER_DAY, 86400)
+#: NEW install ids one address may introduce per day before the rest are marked suspicious and
+#: kept out of every count (the proof card cannot be inflated by minting ids).
+NEW_INSTALLS_PER_IP_DAY = 3
+NEW_INSTALL_LIMIT = _Window(NEW_INSTALLS_PER_IP_DAY, 86400)
 
 
 def ip_key(ip: str) -> str:
@@ -144,11 +148,14 @@ def ingest(connection, payload: Any, *, ip: str = "") -> dict[str, Any]:
         raise CollectorError(429, "rate_limited_install")
     hb = clean.get("heartbeat") or {}
     batches = clean.get("batches") or []
+    known = connection.execute(text("SELECT 1 FROM tm_installs WHERE install_id = :id"),
+                               {"id": install_id}).scalar()
+    suspicious = bool(not known and not NEW_INSTALL_LIMIT.allow(ip_key(ip)))
     ctx = (batches[-1].get("context") if batches else None) or {}
     connection.execute(text("""
         INSERT INTO tm_installs (install_id, secret_hash, first_seen_day, last_seen_day, version,
-                                 edition, install_method, os, arch, improve_on)
-        VALUES (:id, :h, :d, :d, :v, :e, :m, :os, :arch, :imp)
+                                 edition, install_method, os, arch, improve_on, suspicious)
+        VALUES (:id, :h, :d, :d, :v, :e, :m, :os, :arch, :imp, :sus)
         ON CONFLICT (install_id) DO UPDATE SET
           secret_hash = COALESCE(tm_installs.secret_hash, EXCLUDED.secret_hash),
           first_seen_day = LEAST(tm_installs.first_seen_day, EXCLUDED.first_seen_day),
@@ -162,7 +169,7 @@ def ingest(connection, payload: Any, *, ip: str = "") -> dict[str, Any]:
         {"id": install_id, "h": clean.get("secret_hash"), "d": day,
          "v": hb.get("version") or ctx.get("version"), "e": hb.get("edition") or ctx.get("edition"),
          "m": hb.get("install_method"), "os": hb.get("os"), "arch": hb.get("arch"),
-         "imp": bool(batches)})
+         "imp": bool(batches), "sus": suspicious})
     new = 0
     if hb:
         new += connection.execute(text("""
@@ -262,7 +269,10 @@ def retention(connection, *, now: Optional[datetime] = None) -> dict[str, int]:
 # The dashboard (Observability › Installs)
 # ------------------------------------------------------------------------------------------
 
-_SEEN = """(SELECT install_id, day FROM tm_heartbeats UNION SELECT install_id, day FROM tm_batches)"""
+#: Installs counted anywhere: never one marked suspicious (too many new ids from one address).
+_OK = "(SELECT install_id FROM tm_installs WHERE NOT suspicious)"
+_SEEN = (f"(SELECT install_id, day FROM tm_heartbeats WHERE install_id IN {_OK} "
+         f"UNION SELECT install_id, day FROM tm_batches WHERE install_id IN {_OK})")
 
 
 def _range_floor(label: str) -> int:
@@ -276,13 +286,14 @@ def dashboard(connection) -> dict[str, Any]:
         active[name] = int(connection.execute(text(
             f"SELECT COUNT(DISTINCT install_id) FROM {_SEEN} s WHERE day > :d"),
             {"d": today - timedelta(days=days)}).scalar() or 0)
-    total = int(connection.execute(text("SELECT COUNT(*) FROM tm_installs")).scalar() or 0)
+    total = int(connection.execute(text("SELECT COUNT(*) FROM tm_installs WHERE NOT suspicious")).scalar() or 0)
+    held = int(connection.execute(text("SELECT COUNT(*) FROM tm_installs WHERE suspicious")).scalar() or 0)
     new_weeks = [{"week": r[0].isoformat(), "n": int(r[1])} for r in connection.execute(text("""
         SELECT date_trunc('week', first_seen_day)::date AS w, COUNT(*) FROM tm_installs
-        WHERE first_seen_day > :d GROUP BY 1 ORDER BY 1"""), {"d": today - timedelta(weeks=12)}).all()]
+        WHERE first_seen_day > :d AND NOT suspicious GROUP BY 1 ORDER BY 1"""), {"d": today - timedelta(weeks=12)}).all()]
     cohorts_raw = connection.execute(text(f"""
         WITH c AS (SELECT install_id, date_trunc('week', first_seen_day)::date AS cohort
-                   FROM tm_installs WHERE first_seen_day > :d)
+                   FROM tm_installs WHERE first_seen_day > :d AND NOT suspicious)
         SELECT c.cohort, ((date_trunc('week', s.day)::date - c.cohort) / 7) AS k,
                COUNT(DISTINCT s.install_id) AS n
         FROM c JOIN {_SEEN} s ON s.install_id = c.install_id
@@ -298,22 +309,23 @@ def dashboard(connection) -> dict[str, Any]:
         SELECT COUNT(*) AS n,
                COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM {_SEEN} s WHERE s.install_id = i.install_id
                                 AND s.day >= i.first_seen_day + 30)) AS kept
-        FROM tm_installs i WHERE i.first_seen_day <= :d"""),
+        FROM tm_installs i WHERE i.first_seen_day <= :d AND NOT i.suspicious"""),
         {"d": today - timedelta(days=30)}).mappings().first() or {}
     kept_pct = (round(100 * int(eligible["kept"] or 0) / int(eligible["n"]))
                 if int(eligible.get("n") or 0) else None)
 
     def dist(column: str) -> list[dict[str, Any]]:
         return [{"key": r[0] or "unknown", "n": int(r[1])} for r in connection.execute(text(f"""
-            SELECT {column}, COUNT(*) FROM tm_installs WHERE last_seen_day > :d
+            SELECT {column}, COUNT(*) FROM tm_installs WHERE last_seen_day > :d AND NOT suspicious
             GROUP BY 1 ORDER BY 2 DESC LIMIT 12"""), {"d": today - timedelta(days=30)}).all()]
 
     # Opted-in installs: each one's newest batch in 30 days for state, every batch for flows.
-    latest = connection.execute(text("""
+    latest = connection.execute(text(f"""
         SELECT DISTINCT ON (install_id) install_id, body FROM tm_batches WHERE day > :d
+          AND install_id IN {_OK}
         ORDER BY install_id, day DESC"""), {"d": today - timedelta(days=30)}).mappings().all()
     flows = connection.execute(text(
-        "SELECT body FROM tm_batches WHERE day > :d ORDER BY day DESC LIMIT 5000"),
+        f"SELECT body FROM tm_batches WHERE day > :d AND install_id IN {_OK} ORDER BY day DESC LIMIT 5000"),
         {"d": today - timedelta(days=30)}).scalars().all()
     scale_dist: dict[str, collections.Counter] = {k: collections.Counter() for k in allow.SCALE_FIELDS}
     scale_floor: dict[str, int] = {k: 0 for k in allow.SCALE_FIELDS}
@@ -364,8 +376,19 @@ def dashboard(connection) -> dict[str, Any]:
                     g["scored"] += n
     rated = sum(ratings.values())
     by: dict[str, list[dict[str, Any]]] = {"harness": [], "model": [], "role_key": []}
+    from .scorecards import HARNESS_NAMES
+
+    roles = allow.builtin_role_names()
+
+    def name_of(dim: str, key: str) -> str:
+        if dim == "harness":
+            return HARNESS_NAMES.get(key, key.replace("_", " ").title())
+        if dim == "role_key":
+            return roles.get(key) or key.replace("_", " ").title()
+        return key
+
     for (dim, key), g in sorted(groups.items(), key=lambda kv: -kv[1]["n"]):
-        by[dim].append({"key": key, "n": int(g["n"]),
+        by[dim].append({"key": key, "name": name_of(dim, key), "n": int(g["n"]),
                         "score": round(g["score_sum"] / g["scored"], 3) if g["scored"] else None,
                         "merged": round(g["merged"] / g["n"], 3) if g["n"] else None})
     m = active["monthly"]
@@ -373,7 +396,7 @@ def dashboard(connection) -> dict[str, Any]:
              + (f", {kept_pct}% still active after 30 days" if kept_pct is not None else ""))
     return {
         "proof": proof,
-        "active": active, "total_installs": total, "kept_30d_pct": kept_pct,
+        "active": active, "total_installs": total, "kept_30d_pct": kept_pct, "held_back": held,
         "new_per_week": new_weeks, "cohorts": cohort_rows,
         "versions": dist("version"), "editions": dist("edition"), "os": dist("os"),
         "arch": dist("arch"), "methods": dist("install_method"),

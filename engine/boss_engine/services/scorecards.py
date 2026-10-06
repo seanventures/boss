@@ -46,6 +46,35 @@ WEIGHT_LABELS: dict[str, str] = {
     "steers_penalty": "Steers over median",
 }
 MEDIAN_WINDOW_DAYS = 90
+#: "What's costing you" lists a unit for its score only below this (defect 11).
+LOW_SCORE = 0.5
+#: What the console calls each harness (never its key on screen).
+HARNESS_NAMES = {"claude_code": "Claude Code", "codex": "Codex", "native": "BOSS native",
+                 "openai": "OpenAI API", "azure": "Azure OpenAI", "openrouter": "OpenRouter",
+                 "groq": "Groq", "deepseek": "DeepSeek", "ollama": "Ollama", "vllm": "vLLM",
+                 "grok": "Grok", "cursor": "Cursor", "gemini": "Gemini", "echo": "Echo"}
+
+
+def names_for(connection, project_id: str, group: str, keys: list[str]) -> dict[str, str]:
+    """What the console shows for a group's keys: an agent's or workflow's name, a harness's."""
+    keys = [k for k in keys if k and k != "—"]
+    if not keys:
+        return {}
+    if group == "harness":
+        return {k: HARNESS_NAMES.get(k, k.replace("_", " ").title()) for k in keys}
+    if group == "role":
+        rows = connection.execute(text(
+            "SELECT role_key, display_name FROM roles WHERE project_id = :p AND role_key = ANY(:k)"),
+            {"p": project_id, "k": keys}).all()
+        got = {r[0]: r[1] for r in rows if r[1]}
+        return {k: got.get(k) or k.replace("_", " ").title() for k in keys}
+    if group == "workflow":
+        rows = connection.execute(text(
+            "SELECT workflow_key, name FROM workflow_definitions WHERE project_id = :p "
+            "AND workflow_key = ANY(:k)"), {"p": project_id, "k": keys}).all()
+        got = {r[0]: r[1] for r in rows if r[1]}
+        return {k: got.get(k) or k.replace("_", " ").title() for k in keys}
+    return {k: k for k in keys}
 MEDIAN_MIN_ROWS = 5
 SWEEP_BATCH = 300
 RESCORE_BATCH = 2000
@@ -135,6 +164,8 @@ def set_weights(connection, new: Mapping[str, Any], actor: str, project_id: str)
                           "by": actor, "at": datetime.now(timezone.utc).isoformat()})})
     _log_change(connection, project_id, actor, "score_weights", "Score weights",
                 version, "1" if n <= 0 else f"1.{n}")
+    # Rescored NOW, every row, so the Scorecards view never shows an empty version (defect 4).
+    rescore(connection, limit=None)
     return {"weights": merged, "score_version": "1" if n <= 0 else f"1.{n}"}
 
 
@@ -339,9 +370,34 @@ def _read_code_task(connection, run_id: str) -> Optional[dict[str, Any]]:
         tests_total = tests_passed = None
     gp, gf = _j(r["gates_passed"], None), _j(r["gates_failed"], None)
     verdict = r["adversarial_verdict"]
+    # WHO BUILT IT, for every build (defect 8): the spec's agent, else the run's act, else the
+    # agent that took the implement stage — builds a workflow step made carry no spec role.
     role_key = spec.get("role_key") or connection.execute(text(
         "SELECT role_key FROM agent_acts WHERE code_task_run_id = :id AND kind = 'run' "
-        "AND role_key IS NOT NULL ORDER BY started_at LIMIT 1"), {"id": run_id}).scalar()
+        "AND role_key IS NOT NULL ORDER BY started_at LIMIT 1"), {"id": run_id}).scalar() \
+        or connection.execute(text(
+            "SELECT role_key FROM agent_turns WHERE code_task_run_id = :id AND role_key IS NOT NULL "
+            "AND stage = 'implement' LIMIT 1"), {"id": run_id}).scalar() \
+        or connection.execute(text(
+            "SELECT role FROM llm_calls WHERE code_task_run_id = :id AND role IS NOT NULL "
+            "AND stage = 'implement' LIMIT 1"), {"id": run_id}).scalar()
+    # AND WHICH WORKFLOW it was a step of: the run's key, version and whether it is ours.
+    wf = {}
+    wf_run = fc.get("workflow_run_id")
+    if wf_run:
+        got = connection.execute(text(
+            "SELECT d.workflow_key, d.is_catalogue, v.version FROM workflow_runs r "
+            "JOIN workflow_definitions d ON d.id = r.workflow_definition_id "
+            "JOIN workflow_versions v ON v.id = r.workflow_version_id WHERE r.id = :id"),
+            {"id": wf_run}).mappings().first()
+        if got:
+            from .improve_allowlist import builtin_keys
+
+            wf = {"workflow_key": got["workflow_key"], "workflow_version": _int(got["version"]),
+                  "workflow_builtin": bool(got["is_catalogue"])
+                  or got["workflow_key"] in builtin_keys()["workflows"]}
+    elif isinstance(fc.get("workflow"), dict) and fc["workflow"].get("workflow_key"):
+        wf = {"workflow_key": fc["workflow"]["workflow_key"]}
     rounds = connection.execute(text(
         "SELECT COUNT(*) FROM events WHERE entity_type = 'code_task_run' AND entity_id = :id "
         "AND event_type IN ('code_task.inrun_convergence_round', 'code_task.review_repair_round')"),
@@ -383,7 +439,7 @@ def _read_code_task(connection, run_id: str) -> Optional[dict[str, Any]]:
     steers = len(fc.get("applied_guidance") or []) + len(fc.get("pending_guidance") or [])
     return {
         "unit_kind": kind, "project_id": project_id,
-        "run_id": fc.get("workflow_run_id"),
+        "run_id": fc.get("workflow_run_id"), **wf,
         "step_key": None, "role_key": role_key,
         **_role_shape(connection, project_id, role_key),
         "harness": harness, "model": model, "provider": _provider(harness, model),
@@ -522,6 +578,10 @@ def _read_step(connection, step_run_id: str) -> Optional[dict[str, Any]]:
         return None
     terminal = _STEP_TERMINAL.get(str(s["status"]))
     if not terminal:
+        return None
+    # ONE RULE, live and backfill (defect 7): a step cancelled before it started did nothing to
+    # score — it gets no scorecard at all.
+    if s["status"] == "cancelled" and s["started_at"] is None:
         return None
     from .improve_allowlist import builtin_keys
 
@@ -826,7 +886,8 @@ _MISSING = {
                      "'workflow_run' AND s.unit_id = r.id) ORDER BY r.updated_at DESC LIMIT :n"),
     "step": ("SELECT s.id FROM workflow_step_runs s JOIN workflow_runs r ON r.id = s.workflow_run_id "
              "JOIN workflow_definitions d ON d.id = r.workflow_definition_id WHERE d.namespace = "
-             "'product' AND s.status IN ('succeeded','failed','deadlettered','cancelled') AND NOT "
+             "'product' AND s.status IN ('succeeded','failed','deadlettered','cancelled') "
+             "AND NOT (s.status = 'cancelled' AND s.started_at IS NULL) AND NOT "
              "EXISTS (SELECT 1 FROM run_scorecards c WHERE c.unit_kind = 'step' AND c.unit_id = "
              "s.id) ORDER BY s.updated_at DESC LIMIT :n"),
     "panel": ("SELECT m.id FROM meeting_runs m WHERE m.status IN ('completed','failed','cancelled') "
@@ -878,24 +939,48 @@ def late_outcomes(connection, *, limit: int = 200) -> int:
     return n
 
 
-def rescore(connection, *, limit: int = RESCORE_BATCH) -> int:
-    """Rows scored under other weights get this version's score, from their stored signals."""
+_SCORE_INPUTS = ("unit_kind", "unit_id", "terminal_state", "tests_passed", "tests_total",
+                 "gates_passed", "gates_failed", "review_approved", "existing_tests_intact",
+                 "approvals", "rejections", "prd_approved", "panel_agreed", "confidence",
+                 "pr_merged", "pr_reverted", "rolled_back", "deploy_healthy_24h", "over_median")
+
+
+def rescore(connection, *, limit: Optional[int] = RESCORE_BATCH) -> int:
+    """Rows scored under other weights get this version's score, from their stored signals.
+    Reads only the score's inputs and writes back in one statement per 2,000 rows."""
     w, version = weights(connection)
-    rows = connection.execute(text(
-        "SELECT * FROM run_scorecards WHERE score_version IS DISTINCT FROM :v LIMIT :n"),
-        {"v": version, "n": int(limit)}).mappings().all()
-    for r in rows:
-        card = dict(r)
-        card["over_median"] = _j(card.get("over_median"), {})
-        connection.execute(text(
-            "UPDATE run_scorecards SET score = :s, score_version = :v "
-            "WHERE unit_kind = :k AND unit_id = :id"),
-            {"s": score_of(card, w), "v": version, "k": r["unit_kind"], "id": r["unit_id"]})
-    return len(rows)
+    total = 0
+    while True:
+        rows = connection.execute(text(
+            f"SELECT {', '.join(_SCORE_INPUTS)} FROM run_scorecards "
+            "WHERE score_version IS DISTINCT FROM :v LIMIT :n"),
+            {"v": version, "n": RESCORE_BATCH}).mappings().all()
+        if not rows:
+            break
+        values = []
+        for r in rows:
+            card = dict(r)
+            card["over_median"] = _j(card.get("over_median"), {})
+            values.append({"k": r["unit_kind"], "id": r["unit_id"], "s": score_of(card, w)})
+        connection.execute(text("""
+            UPDATE run_scorecards AS t SET score = v.s, score_version = :v
+            FROM (SELECT x->>'k' AS k, x->>'id' AS id, (x->>'s')::numeric AS s
+                  FROM jsonb_array_elements(CAST(:rows AS JSONB)) AS x) AS v
+            WHERE t.unit_kind = v.k AND t.unit_id = v.id"""),
+            {"v": version, "rows": json.dumps(values)})
+        total += len(rows)
+        if limit is not None and total >= limit:
+            break
+    return total
 
 
 def maintain(connection) -> dict[str, Any]:
     """The tick's scorecard work, bounded per call."""
+    # Rows an earlier rule wrote for steps cancelled before they started go (defect 7).
+    connection.execute(text("""
+        DELETE FROM run_scorecards s USING workflow_step_runs w
+        WHERE s.unit_kind = 'step' AND s.unit_id = w.id AND w.status = 'cancelled'
+          AND w.started_at IS NULL"""))
     return {"swept": sweep(connection), "late": late_outcomes(connection),
             "rescored": rescore(connection)}
 
@@ -954,6 +1039,15 @@ def view(connection, project_id: str, *, group: str = "role", win: str = "30d",
     if kinds is None:
         raise ValueError(f"kind must be one of {', '.join(UNIT_KINDS)}")
     w, version = weights(connection)
+    # NEVER A BLANK VIEW (defect 4): if no row carries the current version yet, show the newest
+    # version that exists, and say which.
+    if not connection.execute(text(
+            "SELECT 1 FROM run_scorecards WHERE project_id = :p AND score_version = :v LIMIT 1"),
+            {"p": project_id, "v": version}).scalar():
+        newest = connection.execute(text(
+            "SELECT score_version FROM run_scorecards WHERE project_id = :p "
+            "ORDER BY computed_at DESC LIMIT 1"), {"p": project_id}).scalar()
+        version = newest or version
     base = ("FROM run_scorecards WHERE project_id = :p AND unit_kind = ANY(:k) "
             "AND score_version = :v AND ended_at > now() - make_interval(days => :d)")
     params = {"p": project_id, "k": kinds, "v": version, "d": days}
@@ -973,7 +1067,8 @@ def view(connection, project_id: str, *, group: str = "role", win: str = "30d",
     worst = connection.execute(text(f"""
         SELECT unit_kind, unit_id, run_id, score, steers, review_rounds_used, cost_usd, role_key,
                terminal_state, error_class, ended_at
-        {base} ORDER BY score ASC NULLS LAST, cost_usd DESC LIMIT 6"""), params).mappings().all()
+        {base} AND score < :low ORDER BY score ASC, cost_usd DESC LIMIT 6"""),
+        {**params, "low": LOW_SCORE}).mappings().all()
     steered = connection.execute(text(f"""
         SELECT unit_kind, unit_id, run_id, score, steers, review_rounds_used, cost_usd, role_key,
                terminal_state, error_class, ended_at
@@ -984,12 +1079,17 @@ def view(connection, project_id: str, *, group: str = "role", win: str = "30d",
         {base} AND review_rounds_used > 1 ORDER BY review_rounds_used DESC, score ASC LIMIT 4"""),
         params).mappings().all()
 
+    role_names = names_for(connection, project_id, "role",
+                           [r["role_key"] for r in list(worst) + list(steered) + list(rounds)])
+    row_names = names_for(connection, project_id, group, [r["key"] for r in rows])
+
     def item(r: Mapping[str, Any], why: str) -> dict[str, Any]:
         return {"unit_kind": r["unit_kind"], "unit_id": r["unit_id"], "why": why,
                 "title": _title(connection, r["unit_kind"], r["unit_id"]),
                 "score": float(r["score"]) if r["score"] is not None else None,
                 "steers": int(r["steers"] or 0), "rounds": int(r["review_rounds_used"] or 0),
                 "cost_usd": float(r["cost_usd"] or 0), "role_key": r["role_key"],
+                "role_name": role_names.get(r["role_key"]) if r["role_key"] else None,
                 "state": r["terminal_state"], "error_class": r["error_class"],
                 "ended_at": r["ended_at"], "href": _href(r["unit_kind"], r["unit_id"], r["run_id"])}
 
@@ -1013,7 +1113,7 @@ def view(connection, project_id: str, *, group: str = "role", win: str = "30d",
                   "cost_usd": num(total.get("cost"), 2), "done": num(total.get("done")),
                   "merged": num(total.get("merged")),
                   "backfilled": int(total.get("backfilled") or 0)},
-        "rows": [{"key": r["key"], "n": int(r["n"]), "score": num(r["score"]), "sd": num(r["sd"]),
+        "rows": [{"key": r["key"], "label": row_names.get(r["key"], r["key"]), "n": int(r["n"]), "score": num(r["score"]), "sd": num(r["sd"]),
                   "done": num(r["done"]), "merged": num(r["merged"]), "cost_usd": num(r["cost"], 2),
                   "turns": num(r["turns"], 1), "steers": num(r["steers"], 2),
                   "rounds": num(r["rounds"], 2)} for r in rows],

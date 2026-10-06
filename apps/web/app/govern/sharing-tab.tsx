@@ -18,7 +18,7 @@
 import React, { useEffect, useState } from "react";
 
 import {
-  ago, improveHref, improveWrite, isSharing, kb, polledImprove, readImprove,
+  ago, improveHref, improveWrite, isSharing, kb, polledImprove, readImprove, stamp,
   type PreviewView, type SendRow, type SharingView,
 } from "../../lib/improve";
 import { usePolledRead } from "../../lib/log-stream";
@@ -57,6 +57,8 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
   const [open, setOpen] = useState<{ id: string; json: unknown } | null>(null);
   const [confirmForget, setConfirmForget] = useState(false);
   const [weights, setWeights] = useState<Record<string, string>>({});
+  const [url, setUrl] = useState<string | null>(null);
+  const [rotated, setRotated] = useState("");
   const v = isSharing(read.data) ? read.data : null;
 
   const loadPreview = async () => {
@@ -89,8 +91,13 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
     setBusy("rotate");
     const r = await improveWrite("rotate", { project_id: projectId, actor });
     setBusy("");
-    if (r.ok) { showToast("success", "New install id"); read.reload(); void loadPreview(); }
-    else showToast("error", r.status === 403 ? "You can't change this" : "Not rotated");
+    if (!r.ok) { showToast("error", r.status === 403 ? "You can't change this" : "Not rotated"); return; }
+    // SAY WHAT HAPPENED TO THE OLD ID (P4): deleted, kept until its delete goes, or never sent.
+    const old = ((r.data as { rotated?: { old?: string } }).rotated ?? {}).old;
+    setRotated(old === "deleted" ? "Old id deleted at the collector"
+      : old === "kept" ? "Old id kept until its delete goes through" : "Old id never sent");
+    showToast("success", "New install id");
+    read.reload(); void loadPreview();
   };
   const forget = async () => {
     setBusy("forget");
@@ -99,6 +106,7 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
     setConfirmForget(false);
     const deleted = r.ok && (r.data as { deleted?: boolean }).deleted;
     showToast(deleted ? "success" : "error", deleted ? "Sent data deleted" : "Delete failed");
+    if (!deleted) setRotated("Not deleted yet · kept to retry");
     read.reload();
     void loadPreview();
   };
@@ -122,14 +130,23 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
   };
   const sw = v.switches;
   const p = preview?.pending;
+  const stop = v.blocked ?? null;
+  const saveUrl = async () => {
+    setBusy("url");
+    const r = await improveWrite("collector_url", { project_id: projectId, actor, url: (url ?? "").trim() });
+    setBusy("");
+    if (r.ok) { showToast("success", "Collector saved"); setUrl(null); read.reload(); void loadPreview(); }
+    else showToast("error", r.status === 403 ? "You can't change this" : "Not saved");
+  };
 
   return (
     <div className="im-sharing" data-testid="gv-sharing">
-      {locked ? (
+      {stop ? (
         <div className="im-lock" role="status" data-testid="gv-sharing-locked">
           <b>Nothing is sent</b>
-          <span className="gv-muted" title="Set in this install's environment. Remove it to share again.">
-            Off by {v.env_disabled}
+          <span className="gv-muted" title={locked ? "Set in this install's environment. Remove it to share again."
+            : "Set a collector below, or BOSS_TELEMETRY_URL. A release will name a public one."}>
+            {locked ? `Off by ${v.env_disabled}` : "No collector set"}
           </span>
         </div>
       ) : null}
@@ -142,7 +159,7 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
             <span className="im-row-what">
               <ConsentText />
               <span className="im-who" title="Recorded in Govern changes">
-                {sw.improve.asked ? `${sw.improve.on ? "On" : "Off"} · ${sw.improve.by ?? "—"} · ${ago(sw.improve.at)}` : "Off by default"}
+                {sw.improve.asked ? `${sw.improve.on ? "On" : "Off"} · ${sw.improve.by_name ?? "—"} · ${ago(sw.improve.at)}` : "Off by default"}
               </span>
             </span>
             <Toggle on={sw.improve.on && !locked} label="Improve BOSS" disabled={locked || busy !== ""}
@@ -153,11 +170,28 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
             <span className="im-row-what">
               <HeartbeatFields />
               <span className="im-who" title="Separate from Improve BOSS. On by default; this is the opt-out.">
-                {sw.heartbeat.asked ? `${sw.heartbeat.on ? "On" : "Off"} · ${sw.heartbeat.by ?? "—"} · ${ago(sw.heartbeat.at)}` : "On by default"}
+                {sw.heartbeat.asked ? `${sw.heartbeat.on ? "On" : "Off"} · ${sw.heartbeat.by_name ?? "—"} · ${ago(sw.heartbeat.at)}` : "On by default"}
               </span>
             </span>
             <Toggle on={sw.heartbeat.on && !locked} label="Daily heartbeat" disabled={locked || busy !== ""}
                     testId="gv-switch-heartbeat" onFlip={() => void flip("heartbeat", !sw.heartbeat.on)} />
+          </li>
+          <li className="im-row" data-testid="gv-sharing-url">
+            <span className="im-row-name">Send to</span>
+            <span className="im-row-what">
+              {v.url_source === "env" ? (
+                <span className="im-id" data-user-text="" title="Set by BOSS_TELEMETRY_URL in this install's environment">{v.url}</span>
+              ) : (
+                <input className="im-input" value={url ?? v.url ?? ""} placeholder="No collector set"
+                       aria-label="Collector URL" data-testid="gv-url" spellCheck={false}
+                       title="https://…/v1/telemetry/ingest. Empty sends nothing."
+                       onChange={(e) => setUrl(e.target.value)} />
+              )}
+            </span>
+            {v.url_source !== "env" ? (
+              <button type="button" className="ag-btn" disabled={busy !== "" || url === null || url === v.url}
+                      data-testid="gv-url-save" onClick={() => void saveUrl()}>Save</button>
+            ) : <span />}
           </li>
         </ul>
       </section>
@@ -172,7 +206,8 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
               <span className="im-payload-line">
                 <span title="Uncompressed JSON">{kb(p.bytes_raw)} JSON</span>
                 <span title={`Cut ${new Date(p.cut_at).toLocaleString()}. Later work goes in the next one.`}>Frozen {ago(p.cut_at)}</span>
-                {preview?.next_due_at ? <span title="A random time each day; one send a day at most">Sends ~{whenWords(preview.next_due_at)}</span> : null}
+                {preview?.next_due_at && !stop ? <span title="A random time each day; one send a day at most">Sends ~{whenWords(preview.next_due_at)}</span>
+                  : stop ? <span className="gv-value-note" title="It is shown and exportable; nothing goes out">Not sent · {locked ? "off" : "no collector"}</span> : null}
                 {Object.keys(p.aggregated ?? {}).length ? <span className="gv-value-note" title="Over the size cap or many runs: sent as counts">Aggregated</span> : null}
                 <span className="gv-spacer" />
                 <a className="ag-btn" href={improveHref("export", { project_id: projectId, actor })} download
@@ -201,7 +236,7 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
               return (
                 <li key={s.id}>
                   <div className="im-log-row" data-testid="gv-send">
-                    <span title={s.sent_at ? new Date(s.sent_at).toLocaleString() : undefined}>{s.day}</span>
+                    <span title={`Batch day ${s.day}`}>{stamp(s.sent_at ?? s.cut_at)}</span>
                     <span>{KIND[s.kind] ?? s.kind}</span>
                     <span className="im-status" data-tone={st.tone}
                           title={s.error ? `Error: ${s.error}` : s.http_status ? `HTTP ${s.http_status}` : undefined}>{st.word}</span>
@@ -231,11 +266,18 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
             <span className="im-actions">
               <button type="button" className="ag-btn" disabled={busy !== ""} data-testid="gv-rotate"
                       title="A new random id; the old one stops being used" onClick={() => void rotate()}>Rotate</button>
-              <button type="button" className="ag-btn" disabled={busy !== "" || locked} data-testid="gv-forget"
-                      title="Asks the collector to delete everything under this id, then rotates it"
+              <button type="button" className="ag-btn" disabled={busy !== "" || Boolean(stop)} data-testid="gv-forget"
+                      title={stop ? `Can't reach a collector: ${stop}` : "Deletes everything sent under every id this install used, then rotates"}
                       onClick={() => setConfirmForget(true)}>Delete what was sent</button>
             </span>
           </span>
+          {stop ? <span className="im-muted" data-testid="gv-forget-why">Delete needs a collector · {locked ? `off by ${v.env_disabled}` : "none set"}</span> : null}
+          {rotated ? <span className="im-muted" role="status" data-testid="gv-rotated">{rotated}</span> : null}
+          {(v.retired_waiting ?? 0) > 0 ? (
+            <span className="im-muted" data-testid="gv-retired" title="Their deletes are retried with the daily send">
+              {v.retired_waiting} old id{v.retired_waiting === 1 ? "" : "s"} awaiting delete
+            </span>
+          ) : null}
           {confirmForget ? (
             <span className="im-confirm" role="alertdialog" aria-label="Delete what was sent">
               <span>Delete everything sent?</span>

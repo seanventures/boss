@@ -12,7 +12,8 @@ from sqlalchemy import text
 from apps.api.app.config import get_settings
 
 STATE_KEYS = ("improve_boss", "improve_heartbeat", "improve_collector", "improve_identity",
-              "improve_schedule", "improve_maint", "score_weights")
+              "improve_schedule", "improve_maint", "score_weights", "improve_retired",
+              "improve_endpoint")
 
 
 def project() -> str:
@@ -57,6 +58,7 @@ def reset_state(engine) -> None:
 
     improve_collector.IP_LIMIT.reset()
     improve_collector.INSTALL_LIMIT.reset()
+    improve_collector.NEW_INSTALL_LIMIT.reset()
 
 
 def uid(prefix: str) -> str:

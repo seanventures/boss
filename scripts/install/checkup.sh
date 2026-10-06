@@ -208,13 +208,20 @@ else
 fi
 
 # 9. what this install tells the BOSS project (docs/product/RUN_SCORECARDS.md). Said plainly
-# every time: the heartbeat is on by default, so the opt-out is printed with it.
-_tel="$(env_value BOSS_TELEMETRY | tr '[:upper:]' '[:lower:]')"; _dnt="$(env_value DO_NOT_TRACK)"
-case "$_tel" in off|0|false|no|disabled) _tel=off ;; esac
-if [ "$_tel" = off ] || [ "$_dnt" = 1 ] || [ "$_dnt" = true ]; then
+# every time. The words are the engine's ONE list (improve_boss.TELEMETRY_OFF_WORDS and
+# DNT_ON_WORDS); test_the_off_words_are_one_list holds this case to it.
+_tel="$(env_value BOSS_TELEMETRY | tr '[:upper:]' '[:lower:]')"
+_dnt="$(env_value DO_NOT_TRACK | tr '[:upper:]' '[:lower:]')"
+_url="$(env_value BOSS_TELEMETRY_URL)"
+_off=0
+case "$_tel" in off|0|false|no|disabled|disable|none) _off=1 ;; esac
+case "$_dnt" in 1|true|yes|on) _off=1 ;; esac
+if [ "$_off" = 1 ]; then
   ok "sharing: off (BOSS_TELEMETRY=off or DO_NOT_TRACK=1) — nothing is sent"
+elif [ -z "$_url" ]; then
+  ok "sharing: no collector in .env — nothing is sent unless one is set in Govern › Sharing"
 else
-  ok "sharing: daily heartbeat on (id, version, OS, alive) — opt out in Govern › Sharing or BOSS_TELEMETRY=off"
+  ok "sharing: daily heartbeat to the collector in .env — opt out in Govern › Sharing or BOSS_TELEMETRY=off"
 fi
 
 printf "\n"
