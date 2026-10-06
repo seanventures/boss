@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { API_KEY, API_URL } from "../lib/client";
+import { API_URL } from "../lib/client";
 import { apiWrite, pressToken } from "../lib/api-write";
 import type { ActionResult } from "../lib/action-result";
 import { act } from "../lib/server-action";
@@ -11,7 +11,6 @@ async function post(path: string, body: Record<string, unknown>): Promise<void> 
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
     },
     body: JSON.stringify(body),
     cache: "no-store",

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { API_KEY, API_URL } from "../lib/client";
+import { API_URL } from "../lib/client";
 import type { AgentWizardSubmission } from "../lib/agent-wizard";
 import { apiWrite, pressToken } from "../lib/api-write";
 import { refusalFrom } from "../lib/start-refusal";
@@ -38,7 +38,6 @@ async function send(
       method,
       headers: {
         "Content-Type": "application/json",
-        ...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
       },
       body: JSON.stringify(body),
       cache: "no-store",
