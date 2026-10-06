@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { isStrippedHeader } from "../lib/identity/forward";
 import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";
@@ -162,10 +163,12 @@ describe("every console write goes through lib/api-write.ts", () => {
 
 describe("the key travels the whole way to the API", () => {
   it("the same-origin proxy forwards Idempotency-Key rather than stripping it", () => {
+    // The pass-through's one header rule (lib/identity/forward.ts): Authorization never goes
+    // through (the console holds no key), Idempotency-Key always does.
     const proxy = codeOnly("app/v1/[...path]/route.ts");
-    const stripped = /const STRIPPED = new Set\(\[([\s\S]*?)\]\)/.exec(proxy)?.[1] ?? "";
-    expect(stripped).toContain("authorization");
-    expect(stripped.toLowerCase()).not.toContain("idempotency");
+    expect(proxy).toMatch(/isStrippedHeader\(name\)/);
+    expect(isStrippedHeader("authorization")).toBe(true);
+    expect(isStrippedHeader("idempotency-key")).toBe(false);
   });
 
   it("the typed client sends its writes through the helper", () => {

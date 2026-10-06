@@ -6,6 +6,7 @@
  */
 import { CSRF_HEADER } from "./contract";
 import { isPermission, type Permission } from "./permissions.gen";
+import { apiWrite, type WriteMethod } from "../api-write";
 
 export type IdentityErrorCode =
   | "unauthenticated" | "step_up_required" | "forbidden" | "csrf_failed" | "not_found" | "invalid_credentials"
@@ -58,7 +59,11 @@ export async function idFetch<T>(method: string, path: string, body?: unknown, i
   if (WRITE.has(method) && csrfToken) headers[CSRF_HEADER] = csrfToken;
   let res: Response;
   try {
-    res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: "same-origin", cache: "no-store", signal: init.signal });
+    const payload = body === undefined ? undefined : JSON.stringify(body);
+    // A write is one press (lib/api-write.ts): an Idempotency-Key, and a double click sends once.
+    res = WRITE.has(method)
+      ? await apiWrite(path, { method: method as WriteMethod, headers, body: payload, credentials: "same-origin", cache: "no-store", signal: init.signal })
+      : await fetch(path, { headers, credentials: "same-origin", cache: "no-store", signal: init.signal });
   } catch {
     throw new IdentityError(0, "identity_unavailable");
   }
