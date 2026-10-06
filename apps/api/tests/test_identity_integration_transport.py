@@ -39,6 +39,8 @@ def api_auth_required(monkeypatch):
         monkeypatch.setattr(settings, "api_keys", "legacy-console-key-for-tests-0000000000")
         monkeypatch.setattr(settings, "api_key_principals",
                             "legacy-console-key-for-tests-0000000000:ceo")
+        monkeypatch.setattr(settings, "legacy_console_api_key",
+                            "legacy-console-key-for-tests-0000000000")
     yield get_settings()
 
 
@@ -109,3 +111,15 @@ def test_removing_the_last_owner_on_any_path_is_a_409_never_a_500(world, engine)
     assert "Owner" in refused.text
     with engine.begin() as db:   # nothing was removed
         assert db.execute(text("SELECT 1 FROM identity_groups WHERE id = :g"), {"g": gid}).first()
+
+
+def test_in_shadow_an_owner_acts_as_the_console_did_so_an_upgrade_changes_nothing(
+        world, engine, api_auth_required, monkeypatch):
+    """The console no longer carries the shared key; in shadow the legacy checks still decide, so
+    the Owner (and the shared-password / network bridge people) act as the member the console's
+    key acted as (ceo) — the console behaves as before until the routers are enforced."""
+    monkeypatch.setattr(api_auth_required, "authz_mode", "shadow")
+    make_user(engine, "olive@example.test", role="owner", name="Olive")
+    client = fresh_client()
+    assert sign_in(client, "olive@example.test").status_code == 200
+    assert client.get("/v1/dashboard", params={"project_id": "boss-dogfood"}).status_code == 200

@@ -1906,7 +1906,11 @@ async def _identity_transport(request: Request, call_next):
     if ctx is None:
         return JSONResponse(status_code=401, content={"error": "unauthenticated"},
                             headers={"WWW-Authenticate": "Bearer"})
-    principal_token = current_api_principal.set(identity_guard.legacy_member_for(ctx))
+    console_member = settings.api_key_principal_map.get(
+        getattr(settings, "legacy_console_api_key", "") or "") or None
+    member = await run_in_threadpool(identity_guard.legacy_member_for, ctx,
+                                     console_member=console_member)
+    principal_token = current_api_principal.set(member)
     authenticated_token = current_transport_authenticated.set(True)
     auth_method_token = current_auth_method.set("identity")
     try:

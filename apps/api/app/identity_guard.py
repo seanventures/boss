@@ -343,11 +343,38 @@ def _is_run_token(value: str) -> bool:
     return isinstance(header, dict) and header.get("typ") in (delegation.TYP_RUN, getattr(delegation, "TYP_ACTOR", "boss-actor+jwt"))
 
 
-def legacy_member_for(ctx: Any) -> str:
-    """The legacy member id the zone-L checks see for an identity principal: the seat it took over
-    at the claim ("ceo"), a legacy system principal's member, else the principal id itself (which
-    no legacy membership names, so legacy checks refuse it until its router is enforced)."""
+def legacy_member_for(ctx: Any, *, console_member: Optional[str] = None) -> str:
+    """The legacy member id the zone-L checks see for an identity principal (shadow mode, where
+    the legacy checks still decide):
+      - the seat it took over at the claim ("ceo");
+      - the shared-password and network-bridge principals, and an org Owner, act as the member the
+        console's own key acted as before identity (`console_member`, `ceo` on an install) —
+        "the console behaves exactly as today until the routers are enforced"; an Owner holds
+        every permission in the new model, so this widens nothing;
+      - anyone else: the principal id itself, which no legacy membership names, so the legacy
+        checks refuse it until its router is enforced (a new person never gains reach in shadow).
+    """
+    from boss_engine.identity import legacy as legacy_module
+
     principal = ctx.principal
     if principal.legacy_member_ids:
         return str(principal.legacy_member_ids[0])
+    if console_member and (
+            principal.id in (legacy_module.LEGACY_SHARED_PRINCIPAL,
+                             legacy_module.NETWORK_OPERATOR_PRINCIPAL)
+            or _is_org_owner(principal)):
+        return console_member
     return str(principal.id)
+
+
+def _is_org_owner(principal: Any) -> bool:
+    if getattr(principal, "kind", None) is None or principal.kind.value != "user":
+        return False
+    from boss_engine.db import begin
+    from boss_engine.identity import bindings
+
+    try:
+        with begin() as db:
+            return principal.id in bindings.active_owners(db, principal.org_id)
+    except Exception:  # noqa: BLE001 — unknown is not an Owner
+        return False

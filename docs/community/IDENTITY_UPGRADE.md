@@ -38,6 +38,13 @@ When you claim, you can take over a legacy member such as `ceo`. Old records the
 !!! note "No environment change, no log reading"
     On a network-trusted install the claim needs neither a setup link nor `BOSS_PUBLIC_URL`. The address you confirm becomes the passkey and CSRF origin. A `BOSS_PUBLIC_URL`, when set, takes precedence.
 
+!!! note "Safari and plain http://localhost"
+    Sign-in cookies are `__Host-` cookies, which are always `Secure`. Chrome, Edge and Firefox accept them on `http://localhost`; Safari does not, so on a laptop install sign in with another browser, or put the console behind HTTPS. Any install reached from another machine must use HTTPS anyway (see [Sign in to Mission Control](CONSOLE_AUTH.md)).
+
+## Back up the identity key
+
+Named accounts keep a few secrets encrypted at rest (authenticator-app secrets, connected GitHub accounts). Their key-encryption key is **not** in the database: a Compose install keeps it in the file `/var/lib/boss/identity/master.key` on the `boss_community_identity` volume, which the API creates on first start. Back that volume up with the database. Without it, people re-enrol their authenticator apps and reconnect GitHub; with a different key, BOSS refuses to start the vault rather than guess. To provide your own key instead, set `BOSS_MASTER_KEY_FILE` (or `BOSS_MASTER_KEY`, 32 bytes, base64) and `BOSS_MASTER_KEY_AUTOCREATE=0`.
+
 ## The 30-day window
 
 The cutoff counts from the moment you claim:
