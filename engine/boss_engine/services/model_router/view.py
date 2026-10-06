@@ -100,6 +100,21 @@ def _week(connection: Any, project_id: str) -> dict[str, Any]:
     return out
 
 
+def _presets(connection: Any, project_id: str) -> list[dict[str, str]]:
+    """The four built-in profiles, then this project's custom ones (Enterprise)."""
+    out = [{"name": n, "label": label} for n, label in PRESETS]
+    try:
+        from ..pipeline_profile_service import list_profiles
+
+        with connection.begin_nested():
+            for p in list_profiles(connection, project_id):
+                if p.get("custom"):
+                    out.append({"name": p["name"], "label": str(p.get("label") or p["name"])[:40]})
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 def routing_view(connection: Any, settings: Any, project_id: str) -> dict[str, Any]:
     snap = store.snapshot(connection, settings, project_id)
     policy = snap.policy
@@ -135,7 +150,7 @@ def routing_view(connection: Any, settings: Any, project_id: str) -> dict[str, A
         "floors": [{**f.to_dict(), "describe": f.describe(), "tier_label": TIER_LABELS[f.tier]}
                    for f in policy.floors],
         "floor_preset": policy.floor_preset,
-        "presets": [{"name": n, "label": label} for n, label in PRESETS],
+        "presets": _presets(connection, project_id),
         "floor_steps": [{"step": s, "label": STEP_LABELS.get(s, s)} for s in FLOOR_STEPS],
         "headroom": headroom,
         "headroom_rules": [r.to_dict() for r in policy.headroom],

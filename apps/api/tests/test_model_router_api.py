@@ -185,3 +185,22 @@ def test_smart_vs_fixed_is_an_experiment(engine):
                               finalize_ctx={})
     assert arms == {"fixed", "smart"} and exp["knob_label"] == "Model routing"
     assert "experiment" not in pinned
+
+
+def test_a_custom_profile_is_a_preset_and_an_unknown_one_is_refused(client, engine, monkeypatch):
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO pipeline_profiles (id, project_id, name, label, tier_floor, "
+                       "tier_cap, model_routing, caching, parallel_checks, created_by) VALUES "
+                       "('pprof_mr', :p, 'billing-heavy', 'Billing heavy', 1, 3, "
+                       "CAST(:m AS JSONB), true, true, 'ceo')"),
+                  {"p": PROJECT, "m": json.dumps({"default": "low_cost", "implement": "strong"})})
+    presets = [p["name"] for p in _routing(client)["presets"]]
+    assert presets[-1] == "billing-heavy"
+    saved = _put(client, {"floor_preset": "billing-heavy"})
+    assert saved.status_code == 200, saved.text
+    floors = saved.json()["routing"]["floors"]
+    assert {"match": {"step": "implement"}, "tier": "frontier"} in [
+        {"match": f["match"], "tier": f["tier"]} for f in floors]
+    assert _put(client, {"floor_preset": "nonsense"}).status_code == 422
