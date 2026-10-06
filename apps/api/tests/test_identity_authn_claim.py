@@ -260,3 +260,17 @@ def test_another_orgs_person_is_not_found(world, engine):
             db.execute(text("DELETE FROM identity_users WHERE principal_id = 'usr_other_org_s1'"))
             db.execute(text("DELETE FROM identity_principals WHERE id = 'usr_other_org_s1'"))
             db.execute(text("DELETE FROM orgs WHERE id = 'org_other_s1'"))
+
+
+def test_a_passkey_first_claim_needs_no_password(world, engine, capsys):
+    """Integration: the console's passkey path sends no password; the claim succeeds, the Owner
+    has no password to phish, and must enrol MFA (the passkey) next."""
+    token = _setup_token(capsys)
+    client = fresh_client()
+    res = client.post("/v1/auth/setup/claim", headers=HEADERS,
+                      json={"name": "Pat Key", "email": "pat@example.test", "setup_token": token})
+    assert res.status_code == 200, res.text
+    assert res.json()["mfa_enrolment_required"] is True
+    with engine.begin() as db:
+        assert db.execute(text("SELECT password_hash FROM identity_users WHERE lower(email) = "
+                               "'pat@example.test'")).scalar() is None
