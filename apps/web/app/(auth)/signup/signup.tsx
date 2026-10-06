@@ -71,6 +71,9 @@ export function SignUp({ host, org, enabled }: { host: string; org: string; enab
 /** `/signup/verify#t=…`: following the emailed link creates the person. */
 export function SignUpVerify({ host }: { host: string }) {
   const [state, setState] = useState<"checking" | "ok" | "failed">("checking");
+  // S1 signs the new person in on verify ({next: "enrol" | "done"}): go on to add a second
+  // factor rather than asking them to sign in again.
+  const [next, setNext] = useState<"enrol" | "done" | null>(null);
   const once = useRef(false);
   useEffect(() => {
     if (once.current) return;
@@ -78,7 +81,9 @@ export function SignUpVerify({ host }: { host: string }) {
     const token = fragmentToken();
     try { window.history.replaceState(null, "", window.location.pathname); } catch { /* fine */ }
     if (!token) { setState("failed"); return; }
-    idPost("/v1/auth/signup/verify", { token }).then(() => setState("ok")).catch(() => setState("failed"));
+    idPost<{ next?: string } | null>("/v1/auth/signup/verify", { token })
+      .then((r) => { setNext(r?.next === "enrol" || r?.next === "done" ? r.next : null); setState("ok"); })
+      .catch(() => setState("failed"));
   }, []);
   return (
     <AuthStage label="Verify email">
@@ -92,8 +97,17 @@ export function SignUpVerify({ host }: { host: string }) {
         <div className="idn-sent">
           <div className="idn-env" aria-hidden><ShieldCheck size={22} /></div>
           <h1>Your account is ready</h1>
-          <p className="idn-s" data-copy="prose">Sign in and add a passkey. An admin will give you access.</p>
-          <a className="idn-big p" href="/login">Sign in</a>
+          {next ? (
+            <>
+              <p className="idn-s" data-copy="prose">{next === "enrol" ? "Add a passkey next. An admin will give you access." : "You're signed in. An admin will give you access."}</p>
+              <a className="idn-big p" href={next === "enrol" ? "/enrol?next=%2F" : "/"}>{next === "enrol" ? "Add a passkey" : "Continue"}</a>
+            </>
+          ) : (
+            <>
+              <p className="idn-s" data-copy="prose">Sign in and add a passkey. An admin will give you access.</p>
+              <a className="idn-big p" href="/login">Sign in</a>
+            </>
+          )}
         </div>
       ) : (
         <>

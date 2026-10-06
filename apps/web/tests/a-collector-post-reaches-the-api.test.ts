@@ -55,8 +55,11 @@ describe("a collector POST from another install", () => {
   it("the /v1 proxy attaches no credential to them: no key exists, and no cookie is forwarded", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("../app/v1/[...path]/route.ts", import.meta.url), "utf8");
-    expect(src).toMatch(/forwardHeaders\(req, collector !== null\)/);
-    expect(src).toMatch(/const cookie = machine \? "" : identityCookieHeader\(/);
+    // A collector request speaks for the machine — never the person (the preview change made
+    // this a three-way decision: person | machine | nobody).
+    expect(src).toMatch(/speaksFor\(req, incoming\.pathname, collector !== null\)/);
+    expect(src).toMatch(/if \(machine\) return "machine";/);
+    expect(src).toMatch(/const cookie = speaks !== "person" \? "" : identityCookieHeader\(/);
     expect(src).not.toMatch(/set\("Authorization"/);
   });
 

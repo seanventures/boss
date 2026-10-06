@@ -28,4 +28,10 @@ describe("the identity stub", () => {
     vi.stubEnv("BOSS_IDENTITY_STUB", STUB_ENABLE_VALUE);
     expect(identityStubEnabled()).toBe(true);
   });
+
+  it("cannot be turned on in a production build, even with the exact value", () => {
+    vi.stubEnv("BOSS_IDENTITY_STUB", STUB_ENABLE_VALUE);
+    vi.stubEnv("NODE_ENV", "production");
+    expect(identityStubEnabled()).toBe(false);
+  });
 });

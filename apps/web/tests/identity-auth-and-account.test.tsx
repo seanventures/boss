@@ -17,7 +17,11 @@ import { NowProvider } from "../components/identity/kit";
 import { ClaimFlow } from "../app/(auth)/claim/claim";
 import { Enrol } from "../app/(auth)/enrol/enrol";
 import { RecoveryCodesView } from "../app/(auth)/recovery-codes";
-import { InviteAccept } from "../app/(auth)/invite/[token]/invite";
+import { InviteAccept, InviteLanding } from "../app/(auth)/invite/invite";
+import { SignIn } from "../app/(auth)/login/sign-in";
+import { ssoErrorWords } from "../app/(auth)/auth-flow";
+import { idPost, setCsrfToken } from "../lib/identity/api";
+import { toSessionRow } from "../lib/identity/adapt-session";
 import { MagicLinkLanding } from "../app/(auth)/signin/link/link";
 import { Reset } from "../app/(auth)/reset/reset";
 import { SignUp } from "../app/(auth)/signup/signup";
@@ -197,6 +201,54 @@ describe("Enrolment and recovery codes", () => {
   });
 });
 
+describe("The real API's shapes (S1)", () => {
+  it("a first passkey shows the recovery codes the API issued with it, and asks for no new set", async () => {
+    routes({
+      "GET /v1/identity/me": { body: { csrf_token: "csrf_1" } },
+      // S1 wraps the options as navigator.credentials takes them.
+      "POST /v1/identity/me/passkeys/options": { body: { publicKey: { stub: true, challenge: "x", rp: { name: "BOSS" }, user: { id: "dQ", name: "p", displayName: "P" }, pubKeyCredParams: [] } } },
+      "POST /v1/identity/me/passkeys": { status: 201, body: { id: "pk_1", recovery_codes: CODES } },
+      "POST /v1/identity/me/recovery-codes": { body: { recovery_codes: ["SHOULD-NOT-BE-ASKED"] } },
+    });
+    const el = await mount(<Enrol host="boss.acme.dev" next="/identity" who={null} />);
+    await click(el.querySelector("[data-testid='enrol-passkey']"));
+    expect(el.textContent).toContain(CODES[9]);
+    expect(calls.some((c) => c.url === "/v1/identity/me/recovery-codes")).toBe(false);
+  });
+
+  it("a write refused for a rotated session's CSRF token re-reads the token once and retries", async () => {
+    setCsrfToken("csrf_old");
+    let tries = 0;
+    routes({
+      "POST /v1/identity/me/recovery-codes": () => (++tries === 1 ? { status: 403, body: { error: "csrf_failed" } } : { body: { recovery_codes: CODES } }),
+      "GET /v1/identity/me": { body: { csrf_token: "csrf_new" } },
+    });
+    const sent: (string | null)[] = [];
+    const inner = globalThis.fetch as unknown as (u: string, i?: RequestInit) => Promise<Response>;
+    vi.stubGlobal("fetch", (u: string, i?: RequestInit) => { if (i?.method === "POST") sent.push(new Headers(i.headers).get("x-boss-csrf")); return inner(u, i); });
+    const r = await idPost<{ recovery_codes: string[] }>("/v1/identity/me/recovery-codes", {});
+    expect(r.recovery_codes).toEqual(CODES);
+    expect(sent).toEqual(["csrf_old", "csrf_new"]);
+  });
+
+  it("single sign-on coming back with ?step=mfa opens the code screen; ?error= says why in words", async () => {
+    const el = await mount(<SignIn options={options(null)} next="/" initialStep={{ next: "mfa", methods: ["totp", "passkey", "recovery"], who: null }} />);
+    expect(el.querySelector("h1")?.textContent).toBe("Enter your code");
+    act(() => root?.unmount());
+    const el2 = await mount(<SignIn options={options(null)} next="/" notice={ssoErrorWords("not_invited")} />);
+    expect(el2.querySelector("[role='alert'], .idn-err")?.textContent).toContain("Ask an admin to invite you");
+    expect(ssoErrorWords("saml_signature_invalid")).toContain("SAML");
+    expect(ssoErrorWords("weird_code")).toContain("didn't finish");
+    expect(ssoErrorWords(null)).toBeNull();
+  });
+
+  it("an API session row reads as a device, a client and when it started", () => {
+    const row = toSessionRow({ id: "ses_1", current: true, methods: ["pwd", "sso:idp_8f2"], created_at: "2026-10-06T10:00:00Z", last_seen_at: "2026-10-06T10:30:00Z",
+      ip: "10.0.0.2", user_agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1" });
+    expect(row).toMatchObject({ device: "phone", client: "Safari on iPhone", started_at: "2026-10-06T10:00:00Z", location: null });
+  });
+});
+
 describe("Invitations and email landings", () => {
   it("a used or expired invitation says so", async () => {
     const el = await mount(<InviteAccept token="expired" invitation={null} options={options(null)} />);
@@ -214,6 +266,34 @@ describe("Invitations and email landings", () => {
     type(el.querySelector("#inv-pw"), "a long enough phrase");
     expect(go.disabled).toBe(false);
     accessible(el);
+  });
+
+  it("the invitation token is read from the fragment and only ever sent in a POST body", async () => {
+    routes({
+      "POST /v1/auth/invitations/preview": (b) => ((b as { token?: string }).token === "tok_secret"
+        ? { body: { org: "Acme BOSS", inviter: "Priya Raman", email: "ana@acme.dev", roles: ["Operator"], expires_at: null, sso: [] } }
+        : { status: 404, body: { error: "not_found" } }),
+      "POST /v1/auth/invitations/accept": { body: { next: "enrol", methods: ["passkey", "totp"], who: null } },
+    });
+    window.history.replaceState(null, "", "/invite#t=tok_secret");
+    const el = await mount(<InviteLanding options={options(null)} />);
+    expect(el.querySelector("h1")?.textContent).toBe("Join Acme BOSS");
+    // The fragment is gone from the address bar, and no URL the console fetched carries it.
+    expect(window.location.hash).toBe("");
+    type(el.querySelector("#inv-name"), "Ana Costa");
+    type(el.querySelector("#inv-pw"), "a long enough phrase");
+    await click(el.querySelector("[data-testid='invite-accept']"));
+    expect(calls.map((c) => c.url)).toEqual(["/v1/auth/invitations/preview", "/v1/auth/invitations/accept"]);
+    for (const c of calls) expect(c.url).not.toContain("tok_secret");
+    expect(calls[1].body).toMatchObject({ token: "tok_secret", name: "Ana Costa" });
+  });
+
+  it("an invitation link without a token says it no longer works, without calling the API", async () => {
+    routes({});
+    window.history.replaceState(null, "", "/invite");
+    const el = await mount(<InviteLanding options={options(null)} />);
+    expect(el.querySelector("[data-testid='invite-expired']")).not.toBeNull();
+    expect(calls).toEqual([]);
   });
 
   it("a magic link opened without its token fails the same way every time", async () => {

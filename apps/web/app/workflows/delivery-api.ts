@@ -5,6 +5,7 @@
  * the same way: a start refused for what the project lacks carries the readiness checklist.
  */
 import { apiWrite } from "../../lib/api-write";
+import { askConsent, consentFromBody } from "../../lib/identity/consent";
 import type { Readiness } from "../workflow-readiness-ui";
 
 export async function get<T>(view: string, projectId: string): Promise<T | { error: string }> {
@@ -23,12 +24,22 @@ export /** POST one run action. `key` is the press's Idempotency-Key when a pres
  *  one (a background recheck) apiWrite mints its own and takes no press scope. */
 async function post(action: string, payload: Record<string, unknown>, key?: string) {
   try {
-    const r = await apiWrite("/api/delivery-workflows", {
+    const send = (k?: string) => apiWrite("/api/delivery-workflows", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, ...payload }),
-    }, { key });
-    const body = await r.json();
+    }, { key: k });
+    let r = await send(key);
+    let body = await r.json();
+    // NEEDS YOUR CONSENT (409 consent_required): ask, and once granted re-send the same start —
+    // with a fresh key, since the refused press's key would replay the refusal.
+    if (!r.ok) {
+      const asked = consentFromBody(body);
+      if (asked && await askConsent(asked)) {
+        r = await send(undefined);
+        body = await r.json();
+      }
+    }
     // A start refused for what the project lacks carries the checklist, so the form can draw it.
     return r.ok ? { ok: true as const, data: body }
       : { ok: false as const, error: body?.error,

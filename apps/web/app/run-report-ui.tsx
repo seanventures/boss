@@ -4,6 +4,7 @@ import { usd } from "../lib/money";
 import React, { useCallback, useEffect, useState } from "react";
 import { FilePdf, Hammer, Warning } from "@phosphor-icons/react";
 import { apiWrite } from "../lib/api-write";
+import { askConsent, consentFromBody } from "../lib/identity/consent";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
 
 /**
@@ -171,7 +172,7 @@ export function RunReportPanel(
       // path — panel, spec review, preview and a UX review — rather than the quick one.
       const workflowKey = items.some((n) => n.priority === "P1")
         ? "major_feature" : "minor_feature";
-      const res = await apiWrite("/api/delivery-workflows", {
+      const send = () => apiWrite("/api/delivery-workflows", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -190,7 +191,11 @@ export function RunReportPanel(
           ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
         }),
       });
-      const body = await res.json();
+      let res = await send();
+      let body = await res.json();
+      // Needs the person's consent first (409 consent_required): ask, then re-send the same start.
+      const asked = !res.ok ? consentFromBody(body) : null;
+      if (asked && await askConsent(asked)) { res = await send(); body = await res.json(); }
       const started = body?.run_id || body?.id || body?.run?.id;
       if (!started) {
         // CANNOT RUN HERE YET: the checklist and "Fix anyway", like every other start door.

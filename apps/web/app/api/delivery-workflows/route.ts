@@ -87,7 +87,7 @@ export async function GET(req: Request) {
         const raw = await r.text();
         let parsed: unknown;
         try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
-        return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
+        return NextResponse.json(refusal(r.status, parsed), { status: r.status });
       }
       return NextResponse.json(await r.json());
     } catch (e) {
@@ -116,6 +116,16 @@ export async function GET(req: Request) {
   } catch (e) {
     return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
   }
+}
+
+/**
+ * The API's refusal, as the console reads it. A start that needs the person's consent (409
+ * consent_required, IDENTITY.md §7.3) also keeps the API's whole body under `consent`, so the
+ * console can show the consent sheet and re-send the same start (lib/identity/consent.ts).
+ */
+function refusal(status: number, parsed: unknown) {
+  const consent = status === 409 && (parsed as { error?: unknown } | null)?.error === "consent_required";
+  return { ...refusalFrom(status, parsed), ...(consent ? { consent: parsed } : {}) };
 }
 
 const ACTIONS: Record<string, string> = {
@@ -155,7 +165,7 @@ async function proxyPost(path: string, payload: unknown) {
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
       // A REFUSAL CAN CARRY A CHECKLIST — flattened by the one shared helper (see it for why).
-      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
+      return NextResponse.json(refusal(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {
@@ -180,7 +190,7 @@ async function proxyWrite(method: "PATCH" | "DELETE", path: string, payload: unk
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
-      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
+      return NextResponse.json(refusal(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {
@@ -260,7 +270,7 @@ export async function POST(req: Request) {
       // The API's own message, forwarded verbatim. These are the sentences the builder shows
       // beside a step — "step 'd' is risk tier 2 and always requires a person" is the whole
       // point, and replacing it with "request failed" would waste it.
-      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
+      return NextResponse.json(refusal(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {
@@ -351,7 +361,7 @@ export async function DELETE(req: Request) {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
     if (!r.ok) {
-      return NextResponse.json(refusalFrom(r.status, parsed), { status: r.status });
+      return NextResponse.json(refusal(r.status, parsed), { status: r.status });
     }
     return NextResponse.json(parsed);
   } catch (e) {

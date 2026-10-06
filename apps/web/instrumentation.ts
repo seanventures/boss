@@ -29,6 +29,9 @@ export async function register(): Promise<void> {
   const csrfBySession = new Map<string, { token: string; at: number }>();
   forward.installIdentityResolver(async (writing) => {
     const incoming = await headers();
+    // A sandboxed (opaque-origin) or cross-site non-navigation caller speaks for nobody: a
+    // previewed app's script must never be given the person's session (lib/identity/forward.ts).
+    if (forward.untrustedBrowserContext(incoming)) return { cookie: "", csrf: null, origin: null };
     const stub = (await import("./lib/identity/stub/enabled")).identityStubEnabled();
     const cookie = forward.identityCookieHeader(incoming.get("cookie"), { stub });
     const origin = incoming.get("origin");

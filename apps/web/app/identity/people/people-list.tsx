@@ -55,7 +55,7 @@ function Select({ label, value, onChange, options }: {
   );
 }
 
-export function PeopleList({ people, roles }: { people: Person[]; roles: AccessRole[] }) {
+export function PeopleList({ people, roles, invited: invitedCount = null }: { people: Person[]; roles: AccessRole[]; invited?: number | null }) {
   const [f, setF] = useState<Filter>(NONE);
   const [inviting, setInviting] = useState(false);
   const router = useRouter();
@@ -67,7 +67,8 @@ export function PeopleList({ people, roles }: { people: Person[]; roles: AccessR
   }, [people]);
   const shown = filterPeople(people, f);
   const active = people.filter((p) => p.status === "active").length;
-  const invited = people.filter((p) => p.status === "pending").length;
+  // Open invitations are not people yet: the API lists them at /v1/identity/invitations.
+  const invited = invitedCount ?? people.filter((p) => p.status === "pending").length;
   const filtered = JSON.stringify(f) !== JSON.stringify(NONE);
 
   return (

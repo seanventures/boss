@@ -4,7 +4,7 @@
  */
 import type { Provider } from "./types";
 
-/** GET /v1/auth/invitations/{token} — public preview of an open invitation (404 when used/expired). */
+/** POST /v1/auth/invitations/preview {token} — public preview of an open invitation (404 when used/expired). The token travels in the body, never the URL. */
 export interface InvitationPreview {
   org: string;
   inviter: string;
@@ -21,9 +21,19 @@ export interface TotpEnrolment {
   qr_svg?: string | null;
 }
 
-/** POST /v1/identity/me/recovery-codes — the ten codes, shown ONCE. */
+/**
+ * POST /v1/identity/me/recovery-codes — the ten codes, shown ONCE. The API names them
+ * `recovery_codes` (and returns them with a person's FIRST factor, from POST /me/passkeys and
+ * /me/mfa/totp/confirm); the dev stub said `codes`. Read them with codesOf().
+ */
 export interface RecoveryCodes {
-  codes: string[];
+  recovery_codes?: string[];
+  codes?: string[];
+}
+
+export function codesOf(r: RecoveryCodes | null | undefined): string[] {
+  const list = r?.recovery_codes ?? r?.codes ?? [];
+  return Array.isArray(list) ? list.filter((c): c is string => typeof c === "string") : [];
 }
 
 /** GET /v1/identity/me/identities — linked SSO identities (never the subject in full). */

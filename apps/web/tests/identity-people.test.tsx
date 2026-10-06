@@ -21,6 +21,8 @@ import { PersonProfile, mergeEffective } from "../app/identity/people/[id]/perso
 import { PERSON_TABS, type PersonTab } from "../app/identity/people/[id]/tabs";
 import { GroupsList } from "../app/identity/groups/groups-list";
 import { GroupDetail, impactLine } from "../app/identity/groups/[id]/group";
+import { InviteSheet } from "../components/identity/invite-sheet";
+import { AccessDenied } from "../components/identity/access-denied";
 import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
 import { ROLE_PERMISSIONS } from "../lib/identity/permissions.gen";
 import * as F from "../lib/identity/stub/fixtures";
@@ -189,6 +191,48 @@ describe("a person's profile", () => {
     expect(rows.some((r) => r.textContent?.includes("Owner"))).toBe(false);
     const op = rows.find((r) => r.textContent?.startsWith("Operator"))!;
     expect(op.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("Add access sends the API's binding body: role id and subject type (project bindings to the project's route)", async () => {
+    const { el, fetchSpy } = await mount(<PersonProfile {...samProps("access")} />, "admin");
+    await act(async () => { (el.querySelector("[data-testid='person-add-access']") as HTMLButtonElement).click(); });
+    const sheet = document.querySelector("[data-testid='add-access-sheet']")!;
+    const op = [...sheet.querySelectorAll<HTMLButtonElement>("[role='radio'].idn-pick-row")].find((r) => r.textContent?.startsWith("Operator"))!;
+    await act(async () => { op.click(); });
+    await act(async () => { (sheet.querySelector("[data-testid='add-access-save']") as HTMLButtonElement).click(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    const call = (fetchSpy.mock.calls as unknown as [string, RequestInit][]).find(([, init]) => init?.method === "POST")!;
+    expect(call[0]).toBe("/v1/identity/role-bindings");
+    const operator = F.roles(NOW).find((r) => r.key === "operator")!;
+    expect(JSON.parse(String(call[1].body))).toEqual({ subject_type: "principal", subject_id: "usr_sam", role_id: operator.id });
+  });
+});
+
+describe("the invite sheet and the denied page, against the API's bodies", () => {
+  it("invites each email with its own POST (email, bindings, group_ids)", async () => {
+    const { el, fetchSpy } = await mount(<InviteSheet roles={F.roles(NOW)} onClose={() => undefined} />);
+    const box = el.ownerDocument.querySelector<HTMLTextAreaElement>("#invite-emails")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "ana@acme.dev, li@acme.dev");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { (el.ownerDocument.querySelector("[data-testid='invite-send']") as HTMLButtonElement).click(); });
+    for (let i = 0; i < 4; i += 1) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    const posts = (fetchSpy.mock.calls as unknown as [string, RequestInit][]).filter(([, init]) => init?.method === "POST");
+    expect(posts.map(([u]) => u)).toEqual(["/v1/identity/users", "/v1/identity/users"]);
+    expect(posts.map(([, init]) => JSON.parse(String(init.body)))).toEqual([
+      { email: "ana@acme.dev", bindings: [{ role_key: "operator", scope_type: "org" }], group_ids: [] },
+      { email: "li@acme.dev", bindings: [{ role_key: "operator", scope_type: "org" }], group_ids: [] },
+    ]);
+  });
+
+  it("asks for access with the API's fields only (permission, reason)", async () => {
+    const { el, fetchSpy } = await mount(<AccessDenied permission="audit:read" page="Audit" />, "viewer");
+    await act(async () => { (el.querySelector("[data-testid='request-access']") as HTMLButtonElement).click(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    const post = (fetchSpy.mock.calls as unknown as [string, RequestInit][]).find(([, init]) => init?.method === "POST")!;
+    expect(post[0]).toBe("/v1/identity/access-requests");
+    expect(JSON.parse(String(post[1].body))).toEqual({ permission: "audit:read", reason: "From Audit" });
   });
 });
 

@@ -9,8 +9,12 @@ import { AccountSecurity } from "./security";
 export const dynamic = "force-dynamic";
 
 /** My account › Security: passkeys, authenticator, recovery codes, password, linked sign-in. */
-export default async function AccountSecurityPage() {
+type Props = { searchParams: Promise<{ linked?: string; error?: string }> };
+
+export default async function AccountSecurityPage({ searchParams }: Props) {
   if (!(await pageAllowed("/account"))) return null;
+  // Back from linking a single sign-on account (identity_sso.py: `/account?linked=1`).
+  const { linked } = await searchParams;
   const [me, factors, identities, options] = await Promise.all([
     serverGet<MeResponse>(ME_PATH),
     serverGet<{ factors: Factor[] }>("/v1/identity/me/factors"),
@@ -23,6 +27,7 @@ export default async function AccountSecurityPage() {
       factors={factors.ok ? factors.data.factors : []}
       identities={identities.ok ? identities.data.identities : []}
       host={options.host}
+      linked={linked === "1"}
     />
   );
 }

@@ -10939,14 +10939,18 @@ def preview_logs_endpoint(preview_id: str, stream: bool = True):
 
 @app.post("/v1/previews/{preview_id}/feedback")
 @public(reason=PublicReason.PREVIEW_CAPABILITY_URL, verifier=_identity_verifiers.preview_feedback_capability)
-def submit_preview_feedback_endpoint(preview_id: str, payload: open_bodies.PreviewFeedbackBody):
+def submit_preview_feedback_endpoint(preview_id: str, payload: open_bodies.PreviewFeedbackBody,
+                                     response: Response):
     """Capability-gated capture from the injected preview overlay (proposal only)."""
+    from boss_engine.services.preview_service import preview_isolation_headers
+    isolation = preview_isolation_headers()   # the overlay runs in the sandboxed preview
+    response.headers.update(isolation)
     payload = payload.payload()
     from .services.feedback_agent import submit_preview_feedback
     try:
         return submit_preview_feedback(engine, preview_id, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc), headers=isolation)
 
 
 @app.post("/v1/previews/{preview_id}/smoke")
@@ -10981,8 +10985,11 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
     """Browser-facing reverse proxy to a running preview's loopback port — lets a preview be opened
     over the api's tailnet route (the preview's 127.0.0.1 port isn't reachable directly). Auth-exempt
     (gated by the unguessable preview id + TTL) — see require_transport_auth_for_v1."""
+    from boss_engine.services.preview_service import preview_isolation_headers
+    # ISOLATED, EVERY ANSWER (errors too): a sandbox CSP without allow-same-origin.
+    isolation = preview_isolation_headers()
     if not database_is_reachable(engine):
-        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.", headers=isolation)
     from .services.preview_service import proxy_preview
     body = await request.body()
     status, ctype, data, headers = proxy_preview(
@@ -10990,7 +10997,11 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
         body or None, request.headers.get("content-type"), settings.sandbox_token,
         incoming_headers=dict(request.headers),
     )
-    return Response(content=data, status_code=status, media_type=ctype, headers=headers)
+    # The previewed app's own CSP / CORS answers never replace the isolation.
+    headers = {k: v for k, v in (headers or {}).items()
+               if k.lower() not in {"content-security-policy", "access-control-allow-origin",
+                                    "access-control-allow-credentials"}}
+    return Response(content=data, status_code=status, media_type=ctype, headers={**headers, **isolation})
 
 
 @app.websocket("/v1/previews/{preview_id}/web/")

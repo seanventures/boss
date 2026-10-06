@@ -1,5 +1,8 @@
 import { API_URL } from "../../../lib/client";
-import { CONSOLE_AUTH_HEADER_LC, consoleAuthMarker, identityCookieHeader, isStrippedHeader } from "../../../lib/identity/forward";
+import {
+  CONSOLE_AUTH_HEADER_LC, CSRF_HEADER_LC, SPEAKS_FOR_NOBODY_HEADER, consoleAuthMarker, identityCookieHeader,
+  isPreviewCapabilityPath, isStrippedHeader, untrustedBrowserContext,
+} from "../../../lib/identity/forward";
 import { identityStubEnabled, isIdentityPath } from "../../../lib/identity/stub/enabled";
 import { answerFromStub } from "../../../lib/identity/server-fetch";
 import { collectorMachinePost, collectorPathOf } from "../../../lib/console-session";
@@ -34,8 +37,22 @@ import { clientHop, proxyHops } from "../../../lib/client-hop";
  */
 export const dynamic = "force-dynamic";
 
+/**
+ * Who a request may speak for: the person (their cookie), or nobody. Nobody for the collector's
+ * machine routes (another install), for a preview's capability URL, and for a request from a
+ * sandboxed or cross-site context (lib/identity/forward.ts) — a previewed app's script must never
+ * ride the operator's session to /v1/identity/me and read its CSRF token.
+ */
+type Speaks = "person" | "machine" | "nobody";
+
+function speaksFor(req: Request, pathname: string, machine: boolean): Speaks {
+  if (machine) return "machine";
+  if (isPreviewCapabilityPath(pathname) || untrustedBrowserContext(req.headers)) return "nobody";
+  return "person";
+}
+
 /** Never let the caller choose its own identity: only the person's cookie goes through. */
-function forwardHeaders(req: Request, machine: boolean): Headers {
+function forwardHeaders(req: Request, speaks: Speaks): Headers {
   const out = new Headers();
   req.headers.forEach((value, key) => {
     const name = key.toLowerCase();
@@ -44,15 +61,18 @@ function forwardHeaders(req: Request, machine: boolean): Headers {
   });
   // The identity cookies only — never the console's other cookies, and nothing at all for the
   // collector's machine routes, which speak for another install, never for this console.
-  const cookie = machine ? "" : identityCookieHeader(req.headers.get("cookie"), { stub: identityStubEnabled() });
+  const cookie = speaks !== "person" ? "" : identityCookieHeader(req.headers.get("cookie"), { stub: identityStubEnabled() });
   if (cookie) out.set("cookie", cookie);
-  if (machine) {
+  if (speaks !== "person") out.delete(CSRF_HEADER_LC);
+  // …and the server-side fetch wrapper must not put the person back (lib/identity/server-fetch).
+  if (speaks !== "person") out.set(SPEAKS_FOR_NOBODY_HEADER, "1");
+  if (speaks === "machine") {
     // A machine POST carries no browser origin, and must not be given one.
     out.delete("origin");
   }
   // A network-trusted console says so on every call of its own (S5's bridge); the client's copy,
   // if it sent one, was already stripped with every other X-Boss-* header.
-  const marker = machine ? null : consoleAuthMarker();
+  const marker = speaks !== "person" ? null : consoleAuthMarker();
   if (marker) out.set(CONSOLE_AUTH_HEADER_LC, marker);
   // THE CLIENT'S ADDRESS, NOT ITS CLAIM (re-check C). A client may send its own
   // X-Forwarded-For, and Next keeps it as is, so it is never forwarded unchanged: the console
@@ -70,7 +90,7 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
     // The identity stub (lib/identity/stub) answers in process while S1–S5 build the real routes.
     const method = req.method.toUpperCase();
     const text = method === "GET" || method === "HEAD" ? null : await req.text();
-    return answerFromStub(method, req.url, forwardHeaders(req, false), text);
+    return answerFromStub(method, req.url, forwardHeaders(req, speaksFor(req, pathname, false)), text);
   }
   if (!API_URL) {
     // Say which variable, on the side that can set it. A relative fetch here would loop back
@@ -122,7 +142,7 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
   try {
     upstream = await fetch(target, {
       method,
-      headers: forwardHeaders(req, collector !== null),
+      headers: forwardHeaders(req, speaksFor(req, incoming.pathname, collector !== null)),
       body: body as BodyInit | undefined,
       cache: "no-store",
       redirect: "manual",
@@ -141,13 +161,19 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
   // internal address, and an anonymous caller is owed nothing but the status and the JSON.
   const relayed = ["content-type", "cache-control", "etag", "content-disposition", "retry-after"];
   if (!collector) relayed.push("location");
+  // A preview's isolation travels with it: the API's sandbox CSP and its (credential-less) CORS
+  // answer must reach the browser, or the previewed app runs with the console's origin.
+  const preview = isPreviewCapabilityPath(incoming.pathname);
+  if (preview) relayed.push("content-security-policy", "access-control-allow-origin");
   for (const name of relayed) {
     const value = upstream.headers.get(name);
     if (value) headers.set(name, value);
   }
   // THE API OWNS THE SESSION COOKIE (§4.1): sign-in, MFA, step-up and sign-out set or clear it,
   // and the browser must receive exactly what the API said. Never for a collector request.
-  if (!collector) {
+  // Never for a preview either: a previewed app must not set (or overwrite) a cookie on the
+  // console's origin, least of all `__Host-boss_session`.
+  if (!collector && !preview) {
     for (const c of upstream.headers.getSetCookie?.() ?? []) headers.append("set-cookie", c);
   }
   // Streamed straight through: a proxy that buffers defeats SSE and long reads.
@@ -175,3 +201,23 @@ export const PUT = handler;
 export const PATCH = handler;
 export const DELETE = handler;
 export const HEAD = handler;
+
+/**
+ * A sandboxed preview has an opaque origin, so its JSON POST to its own backend (or the feedback
+ * overlay's) is cross-origin and preflighted. Answered here, for preview capability paths only,
+ * without credentials; every other path has no cross-origin callers to serve.
+ */
+export async function OPTIONS(req: Request): Promise<Response> {
+  if (!isPreviewCapabilityPath(new URL(req.url).pathname)) return new Response(null, { status: 405 });
+  const asked = req.headers.get("access-control-request-headers") ?? "";
+  // Never a credential header: the preview's capability URL carries none.
+  const allowed = asked.split(",").map((h) => h.trim()).filter((h) => h && !isStrippedHeader(h) && h.toLowerCase() !== CSRF_HEADER_LC);
+  const headers = new Headers({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE",
+    "Access-Control-Max-Age": "600",
+    "Cache-Control": "no-store",
+  });
+  if (allowed.length) headers.set("Access-Control-Allow-Headers", allowed.join(", "));
+  return new Response(null, { status: 204, headers });
+}

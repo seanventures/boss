@@ -12,7 +12,7 @@ import { DeviceMobile, Fingerprint, Key, LinkSimple, LockSimple, PencilSimple, P
 import { IdentityError, idDelete, idGet, idPatch, idPost } from "../../lib/identity/api";
 import type { MeResponse } from "../../lib/identity/contract";
 import type { Factor } from "../../lib/identity/types";
-import type { LinkedIdentity, RecoveryCodes } from "../../lib/identity/types-auth";
+import { codesOf, type LinkedIdentity, type RecoveryCodes } from "../../lib/identity/types-auth";
 import { webauthnAvailable } from "../../lib/identity/webauthn";
 import { useGuardedCall, useIdentity } from "../../components/identity/identity-provider";
 import { Ago, ErrorLine, Pill, Sheet } from "../../components/identity/kit";
@@ -30,8 +30,10 @@ const FACTOR_ICON: Record<Factor["kind"], React.ReactNode> = {
   recovery: <LockSimple size={16} aria-hidden />, sso: <LinkSimple size={16} aria-hidden />,
 };
 
-export function AccountSecurity({ me, factors: initialFactors, identities: initialIdentities, host }: {
+export function AccountSecurity({ me, factors: initialFactors, identities: initialIdentities, host, linked = false }: {
   me: MeResponse | null; factors: Factor[]; identities: LinkedIdentity[]; host: string;
+  /** Back from linking a single sign-on account (`/account?linked=1`). */
+  linked?: boolean;
 }) {
   const { refresh } = useIdentity();
   const guarded = useGuardedCall();
@@ -47,6 +49,11 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
   // Known only in the browser: read after mount, so the server's first paint and hydration agree.
   const [canPasskey, setCanPasskey] = useState(false);
   useEffect(() => { setCanPasskey(webauthnAvailable()); }, []);
+  useEffect(() => {
+    if (!linked) return;
+    showToast("success", "Single sign-on linked");
+    try { window.history.replaceState(null, "", window.location.pathname); } catch { /* keep going */ }
+  }, [linked]);
 
   const reload = async () => {
     const r = await idGet<{ factors: Factor[] }>("/v1/identity/me/factors");
@@ -113,7 +120,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
               <button type="button" className="idn-btn sm" data-testid="regen-codes"
                 onClick={() => act("New recovery codes replace the old ones.", async () => {
                   const r = await idPost<RecoveryCodes>("/v1/identity/me/recovery-codes", {});
-                  setCodes(r.codes);
+                  setCodes(codesOf(r));
                 }, "New codes made", () => setSheet("codes"))}>{left !== null && left < 3 ? "Make new codes" : "Regenerate"}</button>
             </div>
           </div>
@@ -121,7 +128,11 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
           {canPasskey ? (
             <div className="idn-mf">
               <button type="button" className="idn-btn primary" disabled={busy} data-testid="add-passkey"
-                onClick={() => act("Adding a passkey changes how you sign in.", () => registerPasskey(), "Passkey added")}>
+                onClick={() => {
+                  let issued: string[] = [];
+                  act("Adding a passkey changes how you sign in.", async () => { issued = await registerPasskey(); }, "Passkey added",
+                    () => { if (issued.length) { setCodes(issued); setSheet("codes"); } });
+                }}>
                 <Plus size={14} weight="bold" aria-hidden /> Add a passkey
               </button>
             </div>
@@ -164,6 +175,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
       <div className="idn-colr">
         <section className="idn-card" aria-labelledby="acc-sso-h">
           <div className="idn-card-h"><h2 id="acc-sso-h">Linked sign-in</h2><span className="idn-sub">SSO identities</span></div>
+          {linked ? <p className="idn-dim" role="status" data-testid="sso-linked" data-copy="prose">Linked. You can now sign in with it.</p> : null}
           {identities.length ? identities.map((i) => (
             <div key={i.id} className="idn-fac">
               <span className="idn-d" data-kind="sso"><Key size={16} aria-hidden /></span>
@@ -189,7 +201,10 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
       {sheet === "totp" ? (
         <Sheet title="Set up an authenticator" icon={<DeviceMobile size={18} aria-hidden />} onClose={() => setSheet(null)} testId="totp-sheet">
           <p className="idn-lede2" data-copy="prose">Scan the code with your app, then enter the 6 digits. The key is shown only now.</p>
-          <TotpStep onDone={() => { setSheet(null); reload().catch(() => undefined); showToast("success", "Authenticator on"); }} />
+          <TotpStep guard={guarded} onDone={(issued) => {
+            reload().catch(() => undefined); showToast("success", "Authenticator on");
+            if (issued.length) { setCodes(issued); setSheet("codes"); } else setSheet(null);
+          }} />
         </Sheet>
       ) : null}
       {sheet === "codes" && codes ? (

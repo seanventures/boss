@@ -9,7 +9,7 @@ import React, { useEffect, useState } from "react";
 import { CaretRight, DeviceMobile, Fingerprint } from "@phosphor-icons/react";
 
 import { idPost } from "../../../lib/identity/api";
-import type { RecoveryCodes } from "../../../lib/identity/types-auth";
+import { codesOf, type RecoveryCodes } from "../../../lib/identity/types-auth";
 import { webauthnAvailable } from "../../../lib/identity/webauthn";
 import { Face } from "../../../components/identity/kit";
 import { AuthStage, Live, Logo, safeNextClient } from "../auth-parts";
@@ -32,16 +32,16 @@ export function Enrol({ host, next, who }: { host: string; next: string; who: { 
     primeCsrf().catch(() => undefined);
   }, []);
 
-  const toCodes = async () => {
-    const r = await idPost<RecoveryCodes>("/v1/identity/me/recovery-codes", {});
-    setCodes(r.codes);
+  /** The codes issued with the first factor; only when there were none, ask for a set. */
+  const toCodes = async (issued: string[] = []) => {
+    setCodes(issued.length ? issued : codesOf(await idPost<RecoveryCodes>("/v1/identity/me/recovery-codes", {})));
     setStage("codes");
   };
 
   const withPasskey = async () => {
     setBusy(true);
     setError(null);
-    try { await registerPasskey(); await toCodes(); } catch (e) { setError(sayAuth(e)); } finally { setBusy(false); }
+    try { await toCodes(await registerPasskey()); } catch (e) { setError(sayAuth(e)); } finally { setBusy(false); }
   };
 
   if (stage === "codes" && codes) {
@@ -61,7 +61,7 @@ export function Enrol({ host, next, who }: { host: string; next: string; who: { 
         <Logo host={host} />
         <h1>Add an authenticator</h1>
         <p className="idn-s" data-copy="prose">Scan the code with your authenticator app, then enter the 6 digits it shows. The key is shown only now.</p>
-        <TotpStep onDone={() => { toCodes().catch((e) => setError(sayAuth(e))); }} />
+        <TotpStep onDone={(issued) => { toCodes(issued).catch((e) => setError(sayAuth(e))); }} />
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
         <div className="idn-alt">
           {passkeys ? <button type="button" onClick={() => { setStage("choose"); setError(null); }}><Fingerprint size={16} aria-hidden /> Use a passkey instead <CaretRight size={13} className="idn-chev" aria-hidden /></button> : null}

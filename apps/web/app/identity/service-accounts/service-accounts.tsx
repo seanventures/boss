@@ -15,7 +15,8 @@ import {
   ArrowsClockwise, Check, CheckCircle, Copy, GitBranch, Key, LockSimple, Plus, Prohibit, UsersThree, Warning, X,
 } from "@phosphor-icons/react";
 
-import { CanButton, useGuardedCall } from "../../../components/identity/identity-provider";
+import { CanButton, useGuardedCall, useIdentity } from "../../../components/identity/identity-provider";
+import { adaptBinding, adaptServiceAccount, roleIndex, type NameIndex } from "../../../lib/identity/adapt-people";
 import { Ago, ErrorLine, Face, Perm, RoleChip, Sheet, daysUntil, shortDate, useNow } from "../../../components/identity/kit";
 import { showToast } from "../../client-forms";
 import { IdentityError, idGet, idPatch, idPost } from "../../../lib/identity/api";
@@ -233,8 +234,31 @@ function KeyForm({ sa, held, noExpiryAllowed, maxDays, replacing, onCancel, onIs
   );
 }
 
-function NewAccount({ roles, onClose, onMade }: { roles: AccessRole[]; onClose: () => void; onMade: (sa: ServiceAccount) => void }) {
+/**
+ * The accounts again, joined as the server page joins them (lib/identity/directory.ts): keys from
+ * /service-accounts/{id}/keys, bindings from /role-bindings, owners named from what was shown.
+ */
+async function fetchServiceAccounts(roles: AccessRole[], shown: ServiceAccount[]): Promise<ServiceAccount[]> {
+  const [r, all] = await Promise.all([
+    idGet<{ service_accounts: unknown[] }>("/v1/identity/service-accounts"),
+    idGet<{ bindings: unknown[] }>("/v1/identity/role-bindings").catch(() => null),
+  ]);
+  const index = roleIndex(roles);
+  const bindings = all ? (all.bindings ?? []).map((b) => adaptBinding(b, index)) : null;
+  const names: NameIndex = new Map(shown.flatMap((s) => s.owners).map((o) => [o.id, { name: o.name, hue: o.hue }]));
+  return Promise.all((r.service_accounts ?? []).map(async (raw) => {
+    const id = String((raw as { id?: unknown }).id ?? "");
+    const keys = await idGet<{ keys: ApiKey[] }>(`/v1/identity/service-accounts/${encodeURIComponent(id)}/keys`).then((k) => k.keys).catch(() => undefined);
+    return adaptServiceAccount(raw, {
+      keys, names, roles,
+      bindings: bindings ? bindings.filter((b) => b.subject_id === id) : shown.find((s) => s.id === id)?.bindings,
+    });
+  }));
+}
+
+function NewAccount({ roles, onClose, onMade }: { roles: AccessRole[]; onClose: () => void; onMade: (sa: { id: string }) => void }) {
   const guarded = useGuardedCall();
+  const { me } = useIdentity();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [role, setRole] = useState("viewer");
@@ -249,7 +273,7 @@ function NewAccount({ roles, onClose, onMade }: { roles: AccessRole[]; onClose: 
       <div className="idn-field">
         <span className="idn-label" id="sa-role-l">Access role</span>
         <div className="idn-segs" role="radiogroup" aria-labelledby="sa-role-l">
-          {roles.filter((r) => r.key !== "owner").map((r) => (
+          {roles.filter((r) => r.key !== "owner" && !r.system).map((r) => (
             <button key={r.id} type="button" role="radio" aria-checked={role === r.key} aria-pressed={role === r.key} title={r.description}
               onClick={() => setRole(r.key)}><RoleChip roleKey={r.key} name={r.name} /></button>
           ))}
@@ -263,9 +287,17 @@ function NewAccount({ roles, onClose, onMade }: { roles: AccessRole[]; onClose: 
         <button type="button" className="idn-btn primary" disabled={!name.trim() || busy} onClick={async () => {
           setBusy(true); setError(null);
           try {
-            const sa = await guarded("A service account acts with its access role.", () =>
-              idPost<ServiceAccount>("/v1/identity/service-accounts", { name: name.trim(), description, role_key: role }));
-            onMade(sa);
+            // Created with you as its owner, then bound to the chosen role (two calls: the API
+            // binds no role on create). A retry after a step-up does not create a second one.
+            let made: { id: string } | null = null;
+            await guarded("A service account acts with its access role.", async () => {
+              made ??= await idPost<{ id: string }>("/v1/identity/service-accounts", {
+                name: name.trim(), description, owner_principal_ids: me ? [me.principal_id] : [],
+              });
+              const chosen = roles.find((r) => r.key === role);
+              if (chosen) await idPost("/v1/identity/role-bindings", { subject_type: "principal", subject_id: made.id, role_id: chosen.id });
+            });
+            onMade(made!);
           } catch (e) { setError(message(e, "Not created")); setBusy(false); }
         }}>{busy ? "Creating…" : "Create"}</button>
       </div>
@@ -303,8 +335,7 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
   }, [sa, roles]);
 
   const reload = async (id: string | null = current) => {
-    const r = await idGet<{ service_accounts: ServiceAccount[] }>("/v1/identity/service-accounts");
-    setList(r.service_accounts);
+    setList(await fetchServiceAccounts(roles, list));
     if (id) setCurrent(id);
   };
   const choose = (id: string) => {
@@ -356,7 +387,7 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
                 onClick={async () => {
                   try {
                     await guarded(`${sa.status === "disabled" ? "Enabling" : "Disabling"} ${sa.name} changes what its keys can do.`,
-                      () => idPost(`/v1/identity/service-accounts/${encodeURIComponent(sa.id)}/disable`, {}));
+                      () => idPost(`/v1/identity/service-accounts/${encodeURIComponent(sa.id)}/${sa.status === "disabled" ? "enable" : "disable"}`, {}));
                     await reload();
                     showToast("success", sa.status === "disabled" ? "Enabled" : "Disabled");
                   } catch (e) { setError(message(e, "Not changed")); }

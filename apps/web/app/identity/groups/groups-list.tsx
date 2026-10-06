@@ -32,7 +32,7 @@ export function GroupsList({ groups }: { groups: Group[] }) {
             </span>
             <span className="idn-row">
               <span className="idn-stack">{g.members.slice(0, 5).map((m) => <Face key={m.id} name={m.name} tone={m.hue} size={26} />)}</span>
-              <span className="idn-dim">{g.members.length} {g.members.length === 1 ? "member" : "members"}</span>
+              <span className="idn-dim">{g.member_count ?? g.members.length} {(g.member_count ?? g.members.length) === 1 ? "member" : "members"}</span>
             </span>
             <span className="idn-row">
               {g.bindings.map((b) => <RoleChip key={b.id} roleKey={b.role_key} name={b.role_name} scope={b.scope} />)}
