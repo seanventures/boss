@@ -188,6 +188,13 @@ def select(tier: str, policy: RoutingPolicy, sources: Mapping[str, SourceState],
             return False
         if tier == FRONTIER and s.kind == "local" and not policy.frontier_allows_local:
             return False
+        if tier == FRONTIER and s.kind != "local":
+            # A stand-in for Frontier work must be a Frontier-CLASS model, known by name — a
+            # metered key whose default model is unknown is not one.
+            from .policy import model_tier
+
+            if model_tier(s.engine, _model_on(policy, s.engine, tier)) != FRONTIER:
+                return False
         return (s.engine, _model_on(policy, s.engine, tier)) not in seen
 
     others = sorted((s for s in sources.values() if ok(s)),

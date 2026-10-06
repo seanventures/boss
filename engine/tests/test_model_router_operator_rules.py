@@ -367,3 +367,15 @@ def test_a_monthly_limit_is_half_open_after_a_while():
         now - timedelta(seconds=headroom.LIMIT_PROBE_S + 1)).isoformat()}}}
     assert headroom.assess("claude_code", fresh, thresholds=th, now=now).state == "exhausted"
     assert headroom.assess("claude_code", old, thresholds=th, now=now).state != "exhausted"
+
+
+def test_frontier_never_stands_in_on_a_model_it_cannot_name():
+    """OpenRouter failing, Claude exhausted, a metered OpenAI key with no named model: that key
+    is not a Frontier model, so the security seat refuses rather than running on it."""
+    s = snap(sources={"claude_code": claude(weekly_spent=True),
+                      "openrouter": metered("openrouter", working=False),
+                      "native": metered("native")})
+    d = go(b("security_check", OAUTH), s)
+    assert d.refused and "No Frontier model" in d.refusal
+    implement = go(b("implement", FEATURE), s)
+    assert implement.engine == "native" and implement.fallback
