@@ -100,24 +100,37 @@ def test_shadow_mode_refuses_nothing_and_records_what_it_would_deny(authz_mode):
     authz_mode("shadow")
     client = TestClient(_fixture_app())
     assert client.get("/undeclared").status_code == 200
-    assert client.get("/projects/p1/settings").status_code == 200   # authn not built yet: not evaluated
+    assert client.get("/projects/p1/settings").status_code == 200   # no credential at all
     with client.websocket_connect("/ws") as ws:
         assert ws.receive_text() == "hi"
     reasons = {(k.path_template, k.reason) for k in LEDGER.snapshot()}
     assert ("/undeclared", "undeclared_route") in reasons
-    assert ("/projects/{project_id}/settings", "not_evaluated") in reasons
+    # S5's legacy bridge answers for a request with no credential: unauthenticated (it was
+    # not_evaluated while authentication was a stub; the 503 path is pinned in the engine tests)
+    assert ("/projects/{project_id}/settings", "unauthenticated") in reasons
     assert ("/ws", "undeclared_route") in reasons
     assert not any(k.path_template == "/health" for k in LEDGER.snapshot())
 
 
-def test_enforce_mode_refuses_with_the_spec_error_body_and_fails_closed(authz_mode):
+def test_enforce_mode_refuses_with_the_spec_error_body_and_fails_closed(authz_mode,
+                                                                       monkeypatch):
     authz_mode("enforce")
     client = TestClient(_fixture_app())
     refused = client.get("/undeclared")
     assert refused.status_code == 403 and refused.json() == {"error": "forbidden"}
-    unavailable = client.get("/projects/p1/settings")
-    assert unavailable.status_code == 503 and unavailable.json() == {"error": "identity_unavailable"}
+    anonymous = client.get("/projects/p1/settings")
+    assert anonymous.status_code == 401 and anonymous.json() == {"error": "unauthenticated"}
     assert client.get("/health").status_code == 200
+    # a known principal whose decision cannot be made yet (S2's check is a stub): 503, not 200
+    from boss_engine.identity import AuthContext, AuthMethod, Principal, PrincipalKind, \
+        PrincipalStatus
+    bridged = AuthContext(Principal("sys_legacy_console", PrincipalKind.SYSTEM, "org_boss",
+                                    PrincipalStatus.ACTIVE, "Legacy console key"),
+                          AuthMethod.LEGACY_API_KEY, legacy="console_api_key")
+    monkeypatch.setattr(identity_guard.legacy, "bridge", lambda creds: bridged)
+    unavailable = client.get("/projects/p1/settings")
+    assert unavailable.status_code == 503
+    assert unavailable.json() == {"error": "identity_unavailable"}
 
 
 def test_off_turns_the_guard_off(authz_mode):
@@ -129,7 +142,7 @@ def test_off_turns_the_guard_off(authz_mode):
 def test_the_identity_api_is_enforced_even_in_shadow(authz_mode):
     authz_mode("shadow")
     response = TestClient(app).get("/v1/identity/me")
-    assert response.status_code == 503 and response.json() == {"error": "identity_unavailable"}
+    assert response.status_code == 401 and response.json() == {"error": "unauthenticated"}
 
 
 def test_the_boot_check_lists_undeclared_routes_and_refuses_to_boot_on_fail(authz_mode):

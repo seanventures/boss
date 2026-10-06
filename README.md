@@ -127,7 +127,7 @@ boss.example.com {
 
 On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once: copy `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` from the server (`ssh user@your-server sudo cat …`) and add it to each device's trusted roots — on a Mac, `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt`. Installed without `--console-origin`? [Add the address to a running install](docs/community/hostname.md#add-a-hostname-to-a-running-install).
 
-**4. Sign in** at your address with the password from `boss password`. BOSS opens on **Repo and models**: paste a GitHub token, connect a model, and open your first PR.
+**4. Claim and sign in** at your address. The first visit claims the install: the password from `boss password` proves you are the operator, then you create your own Owner account with a passkey. BOSS opens on **Repo and models**: paste a GitHub token, connect a model, and open your first PR. Upgrading an existing install? [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) explains the claim and the 30-day window for the shared password.
 
 Models found by the installer appear there already; `boss connect` does the same from a terminal. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
@@ -217,6 +217,7 @@ The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 | [Terminal and API](docs/community/TERMINAL_API.md) | Every Metatron command, plus one-shot JSON for scripts |
 | [MCP](docs/community/MCP.md) | Connecting agents, transports, and the human confirmation flow |
 | [Control surfaces](docs/community/CONTROL_SURFACES.md) | How the API, terminal, and MCP fit together |
+| [Identity administration](docs/community/IDENTITY_ADMIN.md) | The security audit log, posture, policy, and the move to enforcement |
 
 Everything else is linked from the [documentation home](docs/community/README.md).
 
