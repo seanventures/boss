@@ -125,6 +125,11 @@ services:
       # console's own container (`web`, resolved by name), never from the published port.
       BOSS_TRUSTED_PROXIES: ${BOSS_TRUSTED_PROXIES:-127.0.0.0/8,::1/128,web}
       BOSS_INSTALL_METHOD: ${BOSS_INSTALL_METHOD:-compose}
+      # IDENTITY (docs/product/IDENTITY.md §4.11, §4.3). The shared console password is the claim
+      # credential of an existing install, then usr_legacy_shared for 30 days (D25): the API must
+      # be able to check it. The public origin binds cookies, passkeys and every emailed link.
+      BOSS_CONSOLE_PASSWORD: ${BOSS_CONSOLE_PASSWORD:-}
+      BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
       BOSS_REQUIRE_API_AUTH: ${BOSS_REQUIRE_API_AUTH:-true}
       BOSS_API_KEY: ${BOSS_API_KEY}
       # The installer preserves operator-added keys and binds the dedicated

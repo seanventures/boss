@@ -243,8 +243,6 @@ def test_secrets_do_not_appear_in_reprs():
 # ---- the stubs say whose they are ------------------------------------------------------------------
 
 STUBS = [
-    (lambda: authn.authenticate(None), "S1"),
-    (lambda: authn.parse_api_key("boss_pat_x"), "S1"),
     (lambda: authz.check(None, "settings:read", ResolvedScope.org_level("o")), "S2"),
     (lambda: authz.effective_permissions(ALICE, ResolvedScope.org_level("o")), "S2"),
     (lambda: authz.explain("usr_alice", "settings:read", ResolvedScope.org_level("o")), "S2"),
@@ -256,8 +254,6 @@ STUBS = [
     (lambda: audit.record(None, db=None), "S5"),
     (lambda: legacy.bridge(None), "S5"),
     (lambda: policy.get_policy("org_boss", db=None), "S5"),
-    (lambda: http.fetch("GET", "https://example.com", purpose="test"), "S1"),
-    (lambda: ratelimit.hit("signin.ip", "1.2.3.4", limit=1, window_seconds=60, db=None), "S1"),
 ]
 
 
