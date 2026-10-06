@@ -277,20 +277,17 @@ export function delegations(now: number): Delegation[] {
   ];
 }
 
-export function providers(now: number): Provider[] {
+/** As S1's `_public_provider` answers them (apps/api/app/routers/identity_sso.py). */
+export function providers(_now: number): Provider[] {
+  const base = { client_id: null, saml_sso_url: null, has_client_secret: true, scopes: ["openid", "email", "profile"], allowed_algs: ["RS256"],
+    saml_sp_entity_id: null, saml_certificate_count: 0, trust_idp_mfa: false, enforce_sso: false, groups_claim: null, status: "active" as const };
   return [
-    { id: "idp_okta", name: "Acme SSO", kind: "oidc", preset: "okta", issuer: "https://acme.okta.com", status: "active",
-      jwks: { ok: true, checked_at: ago(now, 4 * MIN) }, domains: ["acme.dev"], jit: "domains", trust_idp_mfa: true, enforce_sso: false,
-      group_mappings: [{ idp_group: "eng-builders", group: "Builders" }, { idp_group: "finance", group: "Finance" }],
-      scim_keys: [{ id: "key_sc1m0k", created_at: ago(now, 120 * DAY), last_used_at: ago(now, 4 * MIN) }] },
-    { id: "idp_google", name: "Google", kind: "oidc", preset: "google", issuer: "https://accounts.google.com", status: "active",
-      jwks: { ok: true, checked_at: ago(now, 30 * MIN) }, domains: [], jit: "off", trust_idp_mfa: false, enforce_sso: false, group_mappings: [], scim_keys: [] },
-    { id: "idp_github", name: "GitHub", kind: "oauth2", preset: "github", issuer: "https://github.com", status: "active",
-      jwks: { ok: true, checked_at: null }, domains: [], jit: "off", trust_idp_mfa: false, enforce_sso: false, group_mappings: [], scim_keys: [] },
-    { id: "idp_microsoft", name: "Microsoft", kind: "oidc", preset: "microsoft", issuer: "https://login.microsoftonline.com/common/v2.0", status: "active",
-      jwks: { ok: true, checked_at: ago(now, HOUR) }, domains: [], jit: "off", trust_idp_mfa: false, enforce_sso: false, group_mappings: [], scim_keys: [] },
-    { id: "idp_apple", name: "Apple", kind: "oidc", preset: "apple", issuer: "https://appleid.apple.com", status: "active",
-      jwks: { ok: true, checked_at: ago(now, HOUR) }, domains: [], jit: "off", trust_idp_mfa: false, enforce_sso: false, group_mappings: [], scim_keys: [] },
+    { ...base, id: "idp_okta", name: "Acme SSO", protocol: "oidc", preset: "okta", issuer: "https://acme.okta.com", client_id: "0oa1acme",
+      domains: ["acme.dev"], jit_mode: "domain", trust_idp_mfa: true, groups_claim: "groups" },
+    { ...base, id: "idp_google", name: "Google", protocol: "oidc", preset: "google", issuer: "https://accounts.google.com", domains: [], jit_mode: "off" },
+    { ...base, id: "idp_github", name: "GitHub", protocol: "oauth2", preset: "github", issuer: "https://github.com", domains: [], jit_mode: "off" },
+    { ...base, id: "idp_microsoft", name: "Microsoft", protocol: "oidc", preset: "microsoft", issuer: "https://login.microsoftonline.com/common/v2.0", domains: [], jit_mode: "off" },
+    { ...base, id: "idp_apple", name: "Apple", protocol: "oidc", preset: "apple", issuer: "https://appleid.apple.com", domains: [], jit_mode: "off" },
   ];
 }
 

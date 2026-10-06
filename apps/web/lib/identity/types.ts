@@ -433,6 +433,8 @@ export interface AuthOptions {
   smtp: boolean;
   signup: boolean;
   legacy_password: boolean;
+  /** S1: passkeys work only once a public origin is bound; false hides "Sign in with a passkey". */
+  passkey?: boolean;
   claim: null | {
     path: "setup_token" | "legacy_password" | "network_bridge";
     origin: string | null;

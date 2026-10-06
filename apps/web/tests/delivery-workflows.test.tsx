@@ -90,7 +90,9 @@ describe("nothing is invented", () => {
     // REWRITTEN (review of the readiness change): the route forwarded `detail` by casting it to
     // a string, which forwarded the readiness OBJECT as `error` too. It now goes through the
     // shared helper, which keeps a sentence verbatim (and only a sentence) as `error`.
-    expect(ROUTE).toContain("refusalFrom(r.status, parsed)");
+    // The route's refusal() wraps the shared helper (and keeps a consent_required body, S3).
+    expect(ROUTE).toMatch(/refusal(From)?\(r\.status, parsed\)/);
+    expect(ROUTE).toContain("...refusalFrom(status, parsed)");
     // (A sentence keeps the editor's structured problems beside it — Workflow Studio.)
     expect(codeOnly("lib/start-refusal.ts"))
       .toContain("if (flat) return { error: flat, ...structured(body, d) };");
