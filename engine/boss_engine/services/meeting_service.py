@@ -1064,8 +1064,20 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
     # built on that source's own credential. This was the sixth pasted copy of it.
     from . import model_routing
 
+    # EACH PHASE IS A BOUNDARY, AND THE FACILITATOR IS NOT A PANELIST (model router): the
+    # synthesis and the PRD are judgment — Frontier by the default floor — while each seat's
+    # round argues one view. Panel rounds and the facilitator are routed separately.
+    from .model_router.router import RouteRequest
+
+    facilitating = phase in ("synthesis", "draft")
+    purpose = RouteRequest(
+        kind="panel", step="panel_facilitator" if facilitating else "panel_member",
+        project_id=run["project_id"], unit_id=run_id,
+        role="facilitator" if facilitating else None,
+        text=str(run.get("directive") or "")[:6000])
     with begin(engine) as c:
-        adapter = model_routing.project_chat_adapter(c, settings, run["project_id"])
+        adapter = model_routing.project_chat_adapter(c, settings, run["project_id"],
+                                                     purpose=purpose)
     add_cost = 0
     model = (run["usage"] or {}).get("model")
 

@@ -6933,3 +6933,64 @@ CREATE TABLE IF NOT EXISTS tm_rollups (
   value          NUMERIC NOT NULL,
   PRIMARY KEY (month, metric, dims)
 );
+
+-- ============================================================================================
+-- THE MODEL ROUTER (docs/product/MODEL_ROUTER.md). One policy document per project, one route
+-- record per decision at a boundary, the route id on every llm_calls row of that boundary, and
+-- OpenRouter's catalogue with prices. Names, tiers and reasons only: no prompts, no secrets.
+-- ============================================================================================
+CREATE TABLE IF NOT EXISTS model_routing_policies (
+  project_id   TEXT PRIMARY KEY,
+  policy       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  version      INTEGER NOT NULL DEFAULT 1,
+  updated_by   TEXT,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS model_routes (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT,
+  unit_kind         TEXT NOT NULL,     -- build_stage | workflow_step | agent | chat | decision | panel | research
+  unit_id           TEXT,              -- code task run, workflow run, thread or meeting
+  step              TEXT NOT NULL,
+  ref               TEXT,              -- the workflow step id / panel phase this route served
+  role              TEXT,
+  mode              TEXT NOT NULL,     -- fixed | smart
+  tier              TEXT,
+  classified_tier   TEXT,
+  classifier        TEXT,
+  confidence        NUMERIC,
+  engine            TEXT,
+  model             TEXT,
+  source_id         TEXT,
+  source_kind       TEXT,
+  rules             JSONB NOT NULL DEFAULT '[]'::jsonb,
+  why               JSONB NOT NULL DEFAULT '[]'::jsonb,
+  reason            TEXT,
+  escalation        TEXT,
+  escalation_signal TEXT,
+  fallback          BOOLEAN NOT NULL DEFAULT false,
+  moved_by_headroom BOOLEAN NOT NULL DEFAULT false,
+  budget_lite       BOOLEAN NOT NULL DEFAULT false,
+  latency_ms        NUMERIC,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS model_routes_unit ON model_routes (unit_id, created_at);
+CREATE INDEX IF NOT EXISTS model_routes_project ON model_routes (project_id, created_at DESC);
+
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS route_id TEXT;
+ALTER TABLE run_scorecards ADD COLUMN IF NOT EXISTS route_mode TEXT;
+ALTER TABLE run_scorecards ADD COLUMN IF NOT EXISTS route_tier TEXT;
+ALTER TABLE run_scorecards ADD COLUMN IF NOT EXISTS routing JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS provider_model_catalog (
+  provider                 TEXT NOT NULL,
+  model_id                 TEXT NOT NULL,
+  name                     TEXT,
+  prompt_usd_per_mtok      NUMERIC,
+  completion_usd_per_mtok  NUMERIC,
+  context_length           INTEGER,
+  tools                    BOOLEAN NOT NULL DEFAULT false,
+  fetched_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (provider, model_id)
+);

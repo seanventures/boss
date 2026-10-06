@@ -37,6 +37,11 @@ _EXHAUSTED = (
     "credit balance is too low",
     "exceeded your current quota",
     "too many requests",
+    # Claude Code's own words for its subscription windows ("You've hit your weekly limit ·
+    # resets Mon 12:00am"). An Opus or Sonnet limit is NOT here: it closes one model family,
+    # not the source, and the model router reads it as such (model_router.headroom).
+    "hit your weekly limit",
+    "hit your session limit",
 )
 
 #: "try again at Sep 22nd, 2026 10:06 PM" — codex's phrasing, and the most useful field in the
@@ -120,6 +125,17 @@ def classify_limit(error: Optional[str]) -> Optional[LimitSignal]:
         return None
 
     retry_at = _parse_retry_at(text)
+    if retry_at is None:
+        # "· resets Mon 12:00am" — Claude Code's phrasing, parsed where the router reads it.
+        try:
+            from .model_router.headroom import windows_from_limit_message
+
+            resets = [w["resets_at"] for k, w in windows_from_limit_message(text).items()
+                      if k in ("seven_day", "five_hour") and w.get("resets_at")]
+            if resets:
+                retry_at = datetime.fromisoformat(min(resets))
+        except Exception:  # noqa: BLE001
+            retry_at = None
     seconds_match = _RETRY_SECONDS.search(text)
     seconds = int(seconds_match.group("seconds")) if seconds_match else None
 

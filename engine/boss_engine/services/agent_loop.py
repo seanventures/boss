@@ -2023,7 +2023,14 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     #
     # AND EVERY TURN IS SPENT THROUGH THE BUDGET. The turns made no reservation and left no
     # receipt, so an agent step on a capped project spent past its cap and the cost was nowhere.
-    adapter = governed(project_chat_adapter(connection, settings, project_id),
+    #
+    # AND THE ROUTER PICKS IT, ONCE FOR THE RUN (docs/product/MODEL_ROUTER.md): an agent step
+    # is routed on its brief and its role, honours the agent's Agent Studio model policy
+    # (Routed / Pinned / Local), and keeps that model for every turn of the session.
+    adapter = governed(project_chat_adapter(connection, settings, project_id,
+                                            purpose=_agent_purpose(connection, run_id,
+                                                                   project_id, messages,
+                                                                   finalize_ctx)),
                        connection, settings, project_id,
                        skill_id="model.agent_turn", ref=run_id)
     mcp = MCPClient(settings)
@@ -2672,3 +2679,25 @@ def conversation_from_messages(messages: list[dict]) -> list[dict]:
                 }
             )
     return turns
+
+
+def _agent_purpose(connection, run_id: str, project_id: str, messages: Any,
+                   finalize_ctx: dict):
+    """What the router reads about an agent run: its brief (the first user message), its
+    role and that role's Agent Studio model policy. Sticky: a resumed run keeps its model."""
+    from .model_router.router import RouteRequest
+    from .model_router.store import agent_model_policy
+
+    step = finalize_ctx.get("agent_step") if isinstance(finalize_ctx.get("agent_step"),
+                                                         dict) else {}
+    role = step.get("role_key") or finalize_ctx.get("role_key") or None
+    brief = ""
+    for message in messages or []:
+        if isinstance(message, dict) and message.get("role") == "user":
+            content = message.get("content")
+            brief = content if isinstance(content, str) else json.dumps(content)[:4000]
+            break
+    return RouteRequest(kind="agent", step="agent", project_id=project_id, unit_id=run_id,
+                        role=role, text=str(brief)[:6000],
+                        agent_policy=agent_model_policy(connection, project_id, role),
+                        sticky=True)

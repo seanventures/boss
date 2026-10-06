@@ -917,6 +917,14 @@ class Settings(BaseSettings):
     # Cost/rigor dial for the governed pipeline: lean | balanced | strict (or a custom profile
     # name once the profiles API lands). Scales which steps run and which models run them.
     pipeline_profile: str = Field(default="balanced", alias="BOSS_PIPELINE_PROFILE")
+    # THE MODEL ROUTER (docs/product/MODEL_ROUTER.md). `fixed` routes exactly as before (profiles,
+    # job pins, the lanes); `smart` picks a tier per step from the task and a source with
+    # headroom. A project setting of the same name overrides this; Fixed is the default so an
+    # install changes nothing until someone switches.
+    model_routing_mode: str = Field(default="fixed", alias="BOSS_MODEL_ROUTING_MODE")
+    # Live Jev calls for routing stay off while BOSS-451's governance hold stands; this is the
+    # switch for when it lifts. Off: the router's rules classify (Jev shows as paused).
+    router_jev_live: bool = Field(default=False, alias="BOSS_ROUTER_JEV_LIVE")
     # Per-step model routing for the pipeline: low-cost steps (write tests, checks) can use a
     # smaller model; hard steps (implement, review) use the strong one. Empty => use the
     # engine's default model for every step (routing is a safe no-op until configured).

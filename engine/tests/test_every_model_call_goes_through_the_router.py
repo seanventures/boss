@@ -221,7 +221,7 @@ def test_the_agent_loop_takes_its_model_from_the_router(monkeypatch):
     class _Stop(Exception):
         pass
 
-    def router(connection, settings, project_id):
+    def router(connection, settings, project_id, purpose=None):
         asked["project"] = project_id
         raise _Stop
 

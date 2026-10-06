@@ -289,7 +289,9 @@ def connected_engines(
               capacity={"available": is_available(capacity),
                         "exhausted": bool(capacity.get("exhausted")),
                         "retry_at": capacity.get("retry_at"),
-                        "detail": capacity.get("detail") or ""},
+                        "detail": capacity.get("detail") or "",
+                        # The router's headroom reads the raw windows (model_router.headroom).
+                        "observed": capacity},
               saved_at=(row["updated_at"].isoformat()
                         if hasattr(row["updated_at"], "isoformat")
                         else str(row["updated_at"] or "")) or None)
@@ -303,7 +305,8 @@ def connected_engines(
               capacity={"available": is_available(capacity),
                         "exhausted": bool(capacity.get("exhausted")),
                         "retry_at": capacity.get("retry_at"),
-                        "detail": capacity.get("detail") or ""},
+                        "detail": capacity.get("detail") or "",
+                        "observed": capacity},
               saved_at=None)
     # And the environment, for an install that was set up before any of this existed.
     for engine, entry in environment_engines(settings).items():

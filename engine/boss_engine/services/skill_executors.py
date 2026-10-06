@@ -552,6 +552,7 @@ def execute_model_generate_code(
         # `llm_engine` ("auto" = OpenAI) and failed on a subscription-only install.
         message, usage = project_chat_adapter(
             context.connection, context.settings, context.project_id,
+            purpose=_route_purpose(context, "implement", user_prompt),
         ).create_chat_completion(
             [
                 {"role": "system", "content": system_prompt},
@@ -1495,6 +1496,7 @@ def execute_model_generate_text(
     system = str(inputs.get("system") or inputs.get("instructions") or "").strip()
     _ref, text_out, usage = project_chat_adapter(
         context.connection, context.settings, context.project_id,
+        purpose=_route_purpose(context, "writing", prompt),
     ).create_text_response(prompt, system_prompt=system)
     body = str(text_out or "").strip()
     if not body:
@@ -1563,7 +1565,8 @@ def execute_meeting_extract_actions(
     # OpenAI and an install on a Claude subscription fails with "OPENAI_API_KEY is not
     # configured".
     result = extract(
-        project_chat_adapter(context.connection, context.settings, context.project_id),
+        project_chat_adapter(context.connection, context.settings, context.project_id,
+                             purpose=_route_purpose(context, "writing", transcript)),
         transcript=transcript,
         context=str(inputs.get("context") or ""),
     )
@@ -2245,7 +2248,8 @@ def execute_video_plan_edit(
     from .model_routing import project_chat_adapter
 
     result = plan_from_instructions(
-        project_chat_adapter(context.connection, context.settings, context.project_id),
+        project_chat_adapter(context.connection, context.settings, context.project_id,
+                             purpose=_route_purpose(context, "writing", instructions)),
         instructions=instructions,
         house_style=str(inputs.get("house_style")
                         or house_style_for(context.connection, context.project_id)),
@@ -2468,3 +2472,16 @@ def execute_drive_import_video(
         "bytes": int(info.get("size") or 0),
         "drive_file_id": info.get("id"),
     }
+
+
+def _route_purpose(context: "SkillExecutorContext", step: str, text: Any):
+    """What the model router reads about a skill's model call (docs/product/MODEL_ROUTER.md):
+    the kind of step, the material, the workflow run and step it serves, and the caller."""
+    from .model_router.router import RouteRequest
+
+    about = context.approval_about or {}
+    return RouteRequest(kind="workflow_step", step=step, project_id=context.project_id,
+                        unit_id=about.get("workflow_run_id") or about.get("run_id")
+                        or context.created_by_job_id,
+                        ref=about.get("step_id"), role=context.caller or None,
+                        text=str(text or "")[:6000])
