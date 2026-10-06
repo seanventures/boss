@@ -1781,7 +1781,16 @@ def run_agent_loop(
     messages.append({"role": "user", "content": user_prompt})
     _save_run(connection, run_id, project_id, task_id, "running", messages, [], _zero_usage(), finalize_ctx or {}, step=0)
     emit_event(connection, project_id, "agent.run_started", "agent_loop", "agent_run", run_id, {"task_id": task_id})
-    return _drive_run(connection, settings, run_id, max_steps)
+    # IDENTITY (IDENTITY.md §7.2): with a verified person + grant in context, the loop runs as
+    # "<agent> for <person>" under a run token (person ∩ ceiling ∩ grant ∩ task), so its tool calls,
+    # jobs and egress are decided and attributed through that chain. Otherwise: unchanged.
+    from boss_engine.identity import catalogue as _identity_catalogue
+    from boss_engine.identity import runs as _identity_runs
+
+    with _identity_runs.delegated(connection.engine, kind="ag", entity_id=run_id, project_id=project_id,
+                                  role_key=(finalize_ctx or {}).get("role_key") or "atlas",
+                                  scope=_identity_catalogue.delegable()):
+        return _drive_run(connection, settings, run_id, max_steps)
 
 
 def _replace_deferred_tool_result(messages: list, result: dict) -> None:

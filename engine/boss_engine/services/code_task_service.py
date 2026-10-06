@@ -2031,6 +2031,16 @@ def _fail(
             "failure_class": failure_class, "reason_code": reason_code}
 
 
+def _identity_org(engine, project_id: str) -> str:
+    """The org a project belongs to (identity rows are org-scoped)."""
+    try:
+        with _transaction(engine) as c:
+            return str(c.execute(sql("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                                     "WHERE p.id = :p"), {"p": project_id}).scalar() or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def refused_reservation(engine, jobs, *, run_id: str, project_id: str, reservation: dict,
                         fencing_token: Optional[str]) -> dict:
     """THE ONE READING of a code task's refused budget reservation.
@@ -2226,8 +2236,23 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
                  "WHERE id=:id"),
             {"s": execution_substrate, "id": run_id},
         )
+    # IDENTITY (docs/product/IDENTITY.md §7.9-§7.10): with the egress proxy on and a verified
+    # principal + grant on this build, the sandbox clones through boss-egress and holds NO GitHub
+    # token. A refused authority is a refusal: it never falls back to the shared token above.
+    from boss_engine.identity import runs as identity_runs
+
+    identity_run = None
     sandbox = None
     try:
+        if repo_host_kind == "github":
+            try:
+                identity_run = identity_runs.start_code_task_run(
+                    engine, task_run_id=run_id, project_id=project_id, owner=owner, repo=repo,
+                    role_key=spec.get("role_key"))
+            except Exception as exc:  # noqa: BLE001 — refused authority fails the build, never widens
+                raise RuntimeError(f"authority refused: {getattr(exc, 'reason', None) or type(exc).__name__}") from exc
+            if identity_run is not None:
+                token = ""
         if hasattr(provider, "run_code_task"):
             with _transaction(engine) as c:
                 _set_phase(c, run_id, "coding")
@@ -2249,6 +2274,13 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
                 "token": token, "timeout": settings.code_agent_timeout_seconds,
                 "repo_host": repo_host_kind,
             }
+            if identity_run is not None:
+                # The guest's shim holds the per-run egress credential; git inside the VM goes
+                # through egress (guest support: git_config + shim). No GitHub token is sent.
+                guest_spec["egress"] = {"clone_url": identity_run[1].clone_url,
+                                        "git_config": [list(kv) for kv in identity_run[1].git_config
+                                                       if kv[0] != "credential.helper"],
+                                        "credential": identity_run[0].egress_credential}
             result = provider.run_code_task(guest_spec, tenant_id=project_id)
             # The guest reports ONE aggregate usage for its whole edit/test loop — record it
             # as a single llm_calls row so micro-VM runs still count toward $/verified-outcome
@@ -2265,7 +2297,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
                 _set_phase(c, run_id, "provisioning")
             sandbox.provision(owner, repo, base_branch=base_branch,
                               work_branch=work_branch, token=token,
-                              repo_host=repo_host_kind)
+                              repo_host=repo_host_kind,
+                              egress=identity_run[1] if identity_run is not None else None)
             with _transaction(engine) as c:
                 _set_phase(c, run_id, "coding")
             # VAG Phase 0: attribute the host agent's model calls to this run.
@@ -2402,3 +2435,7 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
         clear_llm_context()
         if sandbox is not None:
             sandbox.teardown()
+        if identity_run is not None:
+            # Run end: its tokens, egress credential, "this build only" grant and GitHub
+            # installation tokens all end with it.
+            identity_runs.finish_code_task_run(engine, identity_run[0], org_id=_identity_org(engine, project_id))
