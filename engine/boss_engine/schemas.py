@@ -1087,6 +1087,8 @@ class FactoryQualityGateRequest(BaseModel):
     task_id: Optional[str] = None
     min_confidence: float = Field(default=0.8, ge=0.0, le=1.0)
     risk_tier: int = Field(default=2, ge=0, le=3)
+    #: Required to replace a run's recorded verdict (identity int-b: never silently).
+    override_reason: Optional[str] = Field(default=None, max_length=500)
 
 
 class ChaosRunRequest(BaseModel):
@@ -3134,7 +3136,9 @@ class CommsChannelPolicyUpsertRequest(BaseModel):
 
 class OutboxQueueRequest(BaseModel):
     project_id: str
-    reservation_id: str
+    #: Optional on /queue: without one the API reserves the comms spend itself (a person never
+    #: calls the system-only /v1/budget/reserve; identity int-b). Required on /deliver.
+    reservation_id: Optional[str] = None
     dedupe_key: str
     actor: str = "executive_console"
     priority: int = Field(default=25, ge=0)
