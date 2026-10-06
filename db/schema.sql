@@ -7687,6 +7687,7 @@ END $$;
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS on_behalf_of TEXT;            -- usr_/agt_/sys_ the job acts for
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS grant_id TEXT;                -- dlg_ (NULL: not delegated)
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS chain JSONB;                  -- boss_chain, ["agt_x#run_…", …]
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS on_behalf_system BOOLEAN NOT NULL DEFAULT false; -- BOSS's own background work (sys_worker)
 CREATE INDEX IF NOT EXISTS jobs_identity_grant ON jobs (grant_id) WHERE grant_id IS NOT NULL;
 ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS on_behalf_of TEXT;   -- the run's authority, decided at start
 ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS grant_id TEXT;
