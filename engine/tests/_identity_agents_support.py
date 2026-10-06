@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS orgs (id TEXT PRIMARY KEY, name TEXT NOT NULL, create
 CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, org_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS roles (id TEXT PRIMARY KEY, role_key TEXT, agent_id TEXT, born_by TEXT,
-  project_id TEXT, display_name TEXT, sponsor TEXT);
+  project_id TEXT, display_name TEXT, sponsor TEXT, spec JSONB);
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS spec JSONB;
 CREATE TABLE IF NOT EXISTS code_task_runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running');
 CREATE TABLE IF NOT EXISTS code_task_stop_requests (run_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, actor TEXT NOT NULL,
   reason TEXT, phase TEXT, requested_at TIMESTAMPTZ NOT NULL DEFAULT now(), honoured_at TIMESTAMPTZ);

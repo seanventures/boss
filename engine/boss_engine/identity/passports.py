@@ -399,6 +399,27 @@ def born_by_subtree(agent_id: str, *, db: Any) -> list[str]:
     return out
 
 
+def _repair_empty_ceiling(db: Any, passport: "Passport", preset_key: str) -> None:
+    """A Passport an earlier upgrade made with NO ceiling (the preset was looked up by role key and
+    missed): give it its preset, once. A ceiling someone set by hand is never touched."""
+    import json
+
+    from sqlalchemy import text
+
+    p = _preset(preset_key)
+    ceiling = frozenset(p.permissions)
+    _require_delegable(ceiling)
+    for key in sorted(ceiling):
+        db.execute(text("INSERT INTO identity_agent_ceilings (agent_id, permission_key) VALUES (:a, :k) "
+                        "ON CONFLICT DO NOTHING"), {"a": passport.agent_id, "k": key})
+    db.execute(text("UPDATE identity_agent_passports SET ceiling_preset = :p, external_ceiling = CAST(:e AS JSONB), "
+                    "version = version + 1, updated_at = now() WHERE agent_id = :a"),
+               {"p": preset_key, "e": json.dumps(dict(p.external_ceiling)), "a": passport.agent_id})
+    from . import lineage
+    lineage.passport_event(db, get(passport.agent_id, db=db), "agent.passport.ceiling_changed",
+                           actor_id="sys_migration", details={"preset": preset_key, "repaired": True})
+
+
 def upgrade_from_roles(*, org_id: str, db: Any, default_sponsor: Optional[str] = None) -> dict[str, str]:
     """The Passport upgrade (§7.1, migration M0 calls this): every `roles` row with an `agent_id`
     gets an `agent` principal and a Passport with its preset ceiling. The sponsor is the role's
@@ -410,12 +431,21 @@ def upgrade_from_roles(*, org_id: str, db: Any, default_sponsor: Optional[str] =
     out: dict[str, str] = {}
     if not db.execute(text("SELECT to_regclass('roles') IS NOT NULL")).scalar():
         return out
-    rows = db.execute(text("SELECT r.agent_id, r.role_key, r.display_name, r.sponsor, w.org_id FROM roles r "
+    rows = db.execute(text("SELECT r.agent_id, r.role_key, r.display_name, r.sponsor, w.org_id, "
+                           "r.spec->'persona'->>'callsign' AS callsign FROM roles r "
                            "JOIN projects p ON p.id = r.project_id JOIN workspaces w ON w.id = p.workspace_id "
                            "WHERE r.agent_id IS NOT NULL AND w.org_id = :o"), {"o": org_id}).mappings().all()
     for r in rows:
-        if get(r["agent_id"], db=db) is not None:
-            out[r["agent_id"]] = "exists"
+        # The presets name agents by their persona callsign (Forge, Helm, Juno...), not by the
+        # role key (software_engineer, engineering_captain): match either, callsign first.
+        preset = preset_for_role(r["callsign"] or "") or preset_for_role(r["role_key"])
+        existing = get(r["agent_id"], db=db)
+        if existing is not None:
+            if not existing.ceiling and not existing.ceiling_preset and preset:
+                _repair_empty_ceiling(db, existing, preset)
+                out[r["agent_id"]] = f"ceiling repaired: {preset}"
+            else:
+                out[r["agent_id"]] = "exists"
             continue
         sponsor = None
         if r["sponsor"]:
@@ -429,7 +459,7 @@ def upgrade_from_roles(*, org_id: str, db: Any, default_sponsor: Optional[str] =
         try:
             ensure_passport(org_id=org_id, agent_id=r["agent_id"], role_key=r["role_key"],
                             display_name=r["display_name"] or r["role_key"], sponsor_principal_id=sponsor, db=db,
-                            created_by="sys_migration")
+                            created_by="sys_migration", preset=preset)
             out[r["agent_id"]] = "created"
         except PassportError as exc:
             out[r["agent_id"]] = f"skipped: {exc.code}"

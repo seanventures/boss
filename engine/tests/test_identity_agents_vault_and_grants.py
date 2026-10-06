@@ -392,3 +392,28 @@ def test_s1s_totp_and_sso_reads_go_through_the_vault_and_only_for_their_owner(en
         with pytest.raises(vault.VaultForbidden):     # a person may never read a client secret
             vault.get_credential(vault.ConnectionRef("okta", None, oidc), vault.CredentialPurpose.SSO_CLIENT,
                                  ctx=session_ctx("usr_totp_a"), db=c)
+
+
+def test_the_upgrade_finds_the_preset_by_persona_callsign_and_repairs_an_empty_ceiling(env):
+    """Integration walk: every shipped role key (software_engineer, engineering_captain) missed the
+    presets, which name agents by callsign (Forge, Helm) — 32 Passports were made with NO ceiling,
+    so no grant could ever name them. The callsign is matched first, and an empty ceiling an earlier
+    upgrade left is given its preset once."""
+    with env.db() as c:
+        c.execute(text("INSERT INTO identity_legacy_mappings (org_id, legacy_kind, legacy_ref, principal_id) "
+                       "VALUES ('org_boss', 'member_id', 'ceo', :u) ON CONFLICT DO NOTHING"), {"u": env.alice})
+        c.execute(text("INSERT INTO workspaces VALUES ('ws1', 'org_boss') ON CONFLICT DO NOTHING"))
+        c.execute(text("INSERT INTO projects VALUES (:p, 'ws1') ON CONFLICT DO NOTHING"), {"p": env.project})
+        c.execute(text("INSERT INTO roles (id, role_key, agent_id, project_id, display_name, sponsor, spec) VALUES "
+                       "('rq1','software_engineer','agt_forgecs00001',:p,'Software Engineer','ceo', "
+                       "CAST('{\"persona\": {\"callsign\": \"Forge\"}}' AS JSONB))"), {"p": env.project})
+        out = passports.upgrade_from_roles(org_id="org_boss", db=c)
+        assert out["agt_forgecs00001"] == "created"
+        forge = passports.get("agt_forgecs00001", db=c)
+        assert forge.ceiling_preset == "builder" and "code_task:steer" in forge.ceiling
+        # an empty ceiling from the old upgrade is repaired, a hand-set one is not touched
+        c.execute(text("DELETE FROM identity_agent_ceilings WHERE agent_id = 'agt_forgecs00001'"))
+        c.execute(text("UPDATE identity_agent_passports SET ceiling_preset = NULL WHERE agent_id = 'agt_forgecs00001'"))
+        again = passports.upgrade_from_roles(org_id="org_boss", db=c)
+        assert again["agt_forgecs00001"] == "ceiling repaired: builder"
+        assert passports.upgrade_from_roles(org_id="org_boss", db=c)["agt_forgecs00001"] == "exists"
