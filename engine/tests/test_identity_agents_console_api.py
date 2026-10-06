@@ -227,7 +227,7 @@ def test_token_claims_show_the_chain_and_never_a_token_or_key(env, api):
     claims = body["claims"]
     assert claims["sub"] == env.alice and claims["boss_grant"] == g.id and claims["typ"] == "boss-run+jwt"
     assert claims["act"]["sub"].startswith(env.forge) and claims["act"]["act"]["sub"].startswith(env.atlas)
-    assert claims["cnf"] == {"jkt": "[redacted]"} and body["scope_source"] == "live_intersection"
+    assert claims["cnf"] == {"jkt": "[redacted]"} and body["scope_source"] == "token"
     dump = json.dumps(body)
     for secret in (atlas.tokens["boss:api"].access_token, forge.tokens["boss:api"].access_token, atlas.key.jkt,
                    forge.key.jkt):

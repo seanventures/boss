@@ -292,11 +292,17 @@ class EphemeralSandbox:
         self.base_branch = base_branch
 
         # BOSS-267: the host's authenticated clone-URL form lives in ONE place now.
-        from .repo_host import clone_url_for
-        clone_url = clone_url_for(repo_host, owner, repo, token or "")
+        # The coding agent works in this clone, so the token never lands in it (IDENTITY.md
+        # §7.10): the URL is credential-free and the token rides in the environment of this
+        # object's OWN git processes only (never the agent's commands, never `.git/config`).
+        from .repo_host import git_access
+        legacy_access = git_access(repo_host, owner, repo, token or "")
+        clone_url = legacy_access.url
+        self._git_env = dict(legacy_access.env)
         egress_config: list[str] = []
         if egress is not None:
             token = None
+            self._git_env = {}
             clone_url = egress.clone_url
             for key, value in egress.git_config:
                 egress_config += ["-c", f"{key}={value}"]
@@ -610,12 +616,14 @@ class EphemeralSandbox:
     ) -> str:
         assert self.path is not None
         try:
+            extra_env = getattr(self, "_git_env", None)
             completed = owned_process.run(
                 ["git", "-C", str(self.path), *args],
                 capture_output=True,
                 text=True,
                 timeout=max(self.settings.sandbox_validation_timeout_seconds, 120),
                 check=False,
+                **({"env": {**os.environ, **extra_env}} if extra_env else {}),
             )
         except subprocess.TimeoutExpired as error:
             raise SandboxError(f"git {args[0]} timed out") from error

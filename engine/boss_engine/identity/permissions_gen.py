@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "7ce2ad37bfc59026"
+CATALOGUE_FINGERPRINT = "d20655423828c38a"
 
 
 class Permission(StrEnum):
@@ -961,4 +961,5 @@ SYSTEM_PRINCIPALS: dict[str, SystemPrincipalMeta] = {
     "sys_collector": SystemPrincipalMeta(id="sys_collector", access_role="system_collector", replaces="collector machine POSTs"),
     "sys_scim": SystemPrincipalMeta(id="sys_scim", access_role="system_scim", replaces="BOSS_ENTERPRISE_SCIM_BEARER_TOKENS (one principal per provider: sys_scim_<provider>)"),
     "sys_host_cli": SystemPrincipalMeta(id="sys_host_cli", access_role="none", replaces="nothing; the actor of host-shell recovery (boss identity recover-owner)"),
+    "sys_egress": SystemPrincipalMeta(id="sys_egress", access_role="none", replaces="BOSS_EGRESS_SERVICE_KEY (the egress proxy's shared key; it authenticates to /v1/identity/introspect with a boss_sak_ key of its own)"),
 }

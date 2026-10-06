@@ -7696,4 +7696,34 @@ DO $$ BEGIN
       ON identity_settings FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
   END IF;
 END $$;
+-- ---- Who work acts for, as real columns (IDENTITY.md §7.14 R8, §7.3 3, §7.5; int-a) -------------------
+-- Jobs, workflow runs and schedules carry their authority in columns the cascade can index, not only
+-- in JSON a caller-shaped payload sits next to. `payload._identity` / `policy_snapshot._identity` /
+-- `input._identity` are read as a fallback for rows written before these columns existed, never
+-- preferred over them. Written only by the server (lineage.stamp_job, consent.record_on_run,
+-- consent.require_for_schedule); a client-supplied value is always stripped.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS on_behalf_of TEXT;            -- usr_/agt_/sys_ the job acts for
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS grant_id TEXT;                -- dlg_ (NULL: not delegated)
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS chain JSONB;                  -- boss_chain, ["agt_x#run_…", …]
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS on_behalf_system BOOLEAN NOT NULL DEFAULT false; -- BOSS's own background work (sys_worker)
+CREATE INDEX IF NOT EXISTS jobs_identity_grant ON jobs (grant_id) WHERE grant_id IS NOT NULL;
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS on_behalf_of TEXT;   -- the run's authority, decided at start
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS grant_id TEXT;
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS authority_org_id TEXT;
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS authority_run_id TEXT; -- run_wf:<id>[/wf:<child>]
+CREATE INDEX IF NOT EXISTS workflow_runs_identity_grant ON workflow_runs (grant_id) WHERE grant_id IS NOT NULL;
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS on_behalf_of TEXT; -- the schedule's standing grant link
+ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS grant_id TEXT;
+CREATE INDEX IF NOT EXISTS workflow_schedules_identity_grant ON workflow_schedules (grant_id) WHERE grant_id IS NOT NULL;
+
+-- What a run token SAID, on its ledger row (the console's "Show token claims"): the task binding,
+-- the token's own scope, and the redacted claim set (no signature, no cnf key, nothing secret).
+ALTER TABLE identity_run_credentials ADD COLUMN IF NOT EXISTS task JSONB;
+ALTER TABLE identity_run_credentials ADD COLUMN IF NOT EXISTS scope TEXT[];
+ALTER TABLE identity_run_credentials ADD COLUMN IF NOT EXISTS claims JSONB;
+
+-- SAML (amendment S1-5): the IdP's SSO endpoint (until now carried in client_id) and the
+-- AuthnContextClassRef set that counts as MFA under "trust IdP MFA" (NULL: BOSS's default list).
+ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS saml_sso_url TEXT;
+ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS trusted_authn_contexts TEXT[];
 -- ================================ end BOSS IDENTITY ===============================================

@@ -99,6 +99,7 @@ class ProviderBody(_Body):
     scopes: list[str] = Field(default_factory=list, max_length=20)
     allowed_algs: list[str] = Field(default_factory=lambda: ["RS256", "ES256", "EdDSA"], max_length=10)
     saml_sso_url: Optional[str] = Field(default=None, max_length=1000)
+    trusted_authn_contexts: Optional[list[str]] = Field(default=None, max_length=20)
     saml_sp_entity_id: Optional[str] = Field(default=None, max_length=500)
     saml_certificates: list[str] = Field(default_factory=list, max_length=2)
     domains: list[str] = Field(default_factory=list, max_length=50)
@@ -116,6 +117,7 @@ class ProviderPatch(_Body):
     scopes: Optional[list[str]] = None
     allowed_algs: Optional[list[str]] = None
     saml_sso_url: Optional[str] = Field(default=None, max_length=1000)
+    trusted_authn_contexts: Optional[list[str]] = Field(default=None, max_length=20)
     saml_certificates: Optional[list[str]] = Field(default=None, max_length=2)
     domains: Optional[list[str]] = None
     jit_mode: Optional[str] = Field(default=None, pattern="^(off|domain)$")
@@ -131,11 +133,18 @@ class ScimKeyBody(_Body):
     expires_in_days: Optional[int] = Field(default=None, ge=1, le=3650)
 
 
+def _authn_contexts(values: Optional[list[str]]) -> Optional[list[str]]:
+    """The trusted AuthnContextClassRef set to store (None: BOSS's default list)."""
+    cleaned = sorted({v.strip()[:300] for v in (values or []) if v and v.strip()})
+    return cleaned or None
+
+
 def _public_provider(p: sso_oidc.Provider) -> dict[str, Any]:
     """Everything an admin may see. No secret, no secret reference."""
     return {"id": p.id, "protocol": p.protocol, "preset": p.preset, "name": p.name, "issuer": p.issuer,
             "client_id": p.client_id if p.protocol != "saml" else None,
-            "saml_sso_url": p.client_id if p.protocol == "saml" else None,
+            "saml_sso_url": p.sso_url,
+            "trusted_authn_contexts": list(p.trusted_authn_contexts or ()) if p.protocol == "saml" else None,
             "has_client_secret": bool(p.client_secret_vault_item_id), "scopes": list(p.scopes),
             "allowed_algs": list(p.allowed_algs), "saml_sp_entity_id": p.saml_sp_entity_id,
             "saml_certificate_count": len(p.saml_certificates), "domains": list(p.domains),
@@ -327,11 +336,14 @@ def build_identity_sso_router() -> APIRouter:
                 db.execute(text(
                     "INSERT INTO identity_providers (id, org_id, protocol, preset, name, issuer, client_id, "
                     "client_secret_vault_item_id, scopes, allowed_algs, saml_sp_entity_id, saml_certificates, "
-                    "domains, jit_mode, trust_idp_mfa, enforce_sso, groups_claim, created_by) VALUES (:id, :o, "
+                    "domains, jit_mode, trust_idp_mfa, enforce_sso, groups_claim, created_by, saml_sso_url, "
+                    "trusted_authn_contexts) VALUES (:id, :o, "
                     ":proto, :preset, :name, :iss, :cid, :sec, :scopes, :algs, :spe, :certs, :domains, :jit, "
-                    ":tmfa, :esso, :gc, :by)"),
+                    ":tmfa, :esso, :gc, :by, :sso, :tac)"),
                     {"id": pid, "o": org, "proto": body.protocol, "preset": body.preset, "name": body.name,
-                     "iss": issuer, "cid": body.saml_sso_url if body.protocol == "saml" else body.client_id,
+                     "iss": issuer, "cid": None if body.protocol == "saml" else body.client_id,
+                     "sso": body.saml_sso_url if body.protocol == "saml" else None,
+                     "tac": _authn_contexts(body.trusted_authn_contexts) if body.protocol == "saml" else None,
                      "sec": secret_ref, "scopes": body.scopes, "algs": algs, "spe": body.saml_sp_entity_id,
                      "certs": body.saml_certificates, "domains": [d.lower().lstrip("@") for d in body.domains],
                      "jit": body.jit_mode, "tmfa": body.trust_idp_mfa, "esso": body.enforce_sso,
@@ -375,9 +387,12 @@ def build_identity_sso_router() -> APIRouter:
                 if provider.protocol == "saml" and fields.get("saml_sso_url"):
                     if not fields["saml_sso_url"].startswith("https://"):
                         return error(422, "invalid_provider", detail="SSO URL must be https")
-                    changes["client_id"] = fields["saml_sso_url"]
+                    changes["saml_sso_url"] = fields["saml_sso_url"]
+                    changes["client_id"] = None          # an older row kept the SSO URL here
                 elif fields.get("client_id") is not None and provider.protocol != "saml":
                     changes["client_id"] = fields["client_id"]
+                if provider.protocol == "saml" and "trusted_authn_contexts" in fields:
+                    changes["trusted_authn_contexts"] = _authn_contexts(fields["trusted_authn_contexts"])
                 if fields.get("client_secret"):
                     changes["client_secret_vault_item_id"] = _store_secret(
                         db, provider.org_id, provider.id, fields["client_secret"])
@@ -432,7 +447,7 @@ def build_identity_sso_router() -> APIRouter:
                 if provider is None:
                     return error(404, "not_found")
             if provider.protocol == "saml":
-                return JSONResponse({"ok": bool(provider.saml_certificates and provider.client_id),
+                return JSONResponse({"ok": bool(provider.saml_certificates and provider.sso_url),
                                      "checked": "configuration"})
             sso_oidc.clear_caches()
             try:

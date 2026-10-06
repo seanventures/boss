@@ -10,6 +10,8 @@
     shadow-report [--json]                   the per-router shadow -> enforce report
     posture                                  the six posture checks
     claim-status                             one line for `boss doctor`: claimed or not
+    egress-key [--revoke-others]             mint the egress service's boss_sak_ key (sys_egress),
+                                             shown once; it authenticates /v1/identity/introspect
 
 HOST SHELL ONLY, by construction: these functions are reached from no HTTP route and no MCP tool
 (test_identity_audit_recovery_is_host_only pins it). Run them where the database is:
@@ -170,6 +172,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     rep.add_argument("--json", action="store_true")
     sub.add_parser("posture", help="identity posture checks")
     sub.add_parser("claim-status", help="one line: unclaimed, or claimed and the legacy cutoff")
+    egk = sub.add_parser("egress-key", help="mint the egress service's own boss_sak_ key (shown once)")
+    egk.add_argument("--revoke-others", action="store_true", help="end every earlier egress key now")
     args = parser.parse_args(argv)
 
     try:
@@ -183,6 +187,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                 print(f"Recovered {done.principal_id} as an Owner. MFA was reset and their "
                       f"sessions ended.\nOpen this link within 15 minutes (single use):\n\n"
                       f"  {done.link}\n\nEvery Owner will see a banner about this for 7 days.")
+            elif args.cmd == "egress-key":
+                from . import tokens
+
+                created = tokens.issue_egress_service_key(db, org_id=org_id, created_by=HOST_CLI_PRINCIPAL,
+                                                          revoke_others=args.revoke_others)
+                print("The egress service's key (sys_egress). It is shown once; give it to boss-egress as "
+                      f"its bearer for /v1/identity/introspect.\n\n  {created.key}\n")
             elif args.cmd == "migrate":
                 migration.forget_seeded()
                 _print(migration.seed(db, org_id=org_id).as_dict())

@@ -326,6 +326,51 @@ def _tool_registry():
     return build_default_registry()
 
 
+def _step_authority(ctx: Any, connection: Connection, project_id: str, context: Optional[dict[str, Any]],
+                    step: Optional[dict[str, Any]], role_key: Optional[str], scope: Optional[frozenset[str]] = None):
+    """In-process step work under the workflow run's RECORDED authority (IDENTITY.md §7.14), not
+    under whoever called in to advance the run (the worker). With an agent Passport for the step,
+    a delegated run token (`run_wf:<run>/step:<step>`: person ∩ ceilings ∩ grant ∩ task); with
+    none, the person's own live principal. A run with no recorded authority runs as before."""
+    import contextlib
+    import re
+
+    from boss_engine.identity import catalogue as _catalogue
+    from boss_engine.identity import consent as _consent
+    from boss_engine.identity import runs as _runs
+
+    run_id = str((context or {}).get("run_id") or "")
+    recorded = _consent.acting_for_workflow_run(connection, run_id) if run_id else None
+    if recorded is None:
+        if run_id and _consent.recorded_authority(connection, run_id) is not None:
+            # The run HAS an authority and it is no longer live (grant revoked/expired, person
+            # gone): fail closed rather than fall back to whoever is advancing the run.
+            raise CapabilityExecutionError(
+                "the authority this run was started under has ended; renew it to continue.")
+        return contextlib.nullcontext()
+    engine = getattr(ctx, "engine", None) or connection.engine
+    step_id = re.sub(r"[^A-Za-z0-9_.-]", "", str((step or {}).get("id") or "step"))[:60] or "step"
+
+    from boss_engine.identity.tokens import TokenError
+
+    @contextlib.contextmanager
+    def under() -> Any:
+        with contextlib.ExitStack() as stack:
+            try:
+                decided = stack.enter_context(_runs.delegated(
+                    engine, kind="step", entity_id=step_id, project_id=project_id, role_key=role_key,
+                    scope=scope or _catalogue.delegable(), acting=recorded))
+                if decided is None:
+                    decided = stack.enter_context(_runs.on_behalf(engine, recorded))
+            except TokenError as lost:
+                # Fail closed: the person or grant this run acts for is no longer live.
+                raise CapabilityExecutionError(
+                    f"this run's authority has ended ({lost.reason}); renew it to continue.") from lost
+            yield decided
+
+    return under()
+
+
 def _invoke_tool(
     ctx: Any, tool_name: str, project_id: str, actor: str, args: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1650,19 +1695,22 @@ def _execute_step(
             # step is scoped to, otherwise BOSS's pick among the agents that could do it.
             ran_as = step_agents.resolve(connection, settings, project_id, step,
                                          actor=actor, instructions=said)
-            outcome = agent_steps.run(
-                connection, settings, project_id,
-                instructions=said,
-                role_key=ran_as["agent"],
-                chosen=ran_as,
-                context=resolved,
-                actor=actor,
-                max_steps=(int(binding["max_steps"]) if binding.get("max_steps") else None),
-                # Preserve explicit outputs that the next step wires to.
-                produces=list(binding.get("produces") or []) or None,
-                skills=skills or None,
-                mcp=mcp or None,
-            )
+            # The agent's turns and tool calls run under the run's recorded authority: a run
+            # token for THIS agent acting for the person who started the run.
+            with _step_authority(ctx, connection, project_id, context, step, ran_as["agent"]):
+                outcome = agent_steps.run(
+                    connection, settings, project_id,
+                    instructions=said,
+                    role_key=ran_as["agent"],
+                    chosen=ran_as,
+                    context=resolved,
+                    actor=actor,
+                    max_steps=(int(binding["max_steps"]) if binding.get("max_steps") else None),
+                    # Preserve explicit outputs that the next step wires to.
+                    produces=list(binding.get("produces") or []) or None,
+                    skills=skills or None,
+                    mcp=mcp or None,
+                )
         except (agent_steps.AgentStepError, step_agents.StepAgentError) as error:
             raise CapabilityExecutionError(str(error)) from error
         if isinstance(outcome.get("ran_as"), dict):
@@ -2291,7 +2339,9 @@ def _perform_capability(
     ran_as = who_runs_it(connection, getattr(ctx, "settings", None), project_id, step,
                          actor=actor)
     step_actor = ran_as["agent"]
-    output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
+    # Under the run's recorded authority (the step's agent for that person), never the worker's.
+    with _step_authority(ctx, connection, project_id, context, step, step_actor):
+        output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
     result = {"capability": key, "tool": capability.tool, **output,
               "ran_as": {**ran_as, "tool": capability.tool,
                          "skills_offered": [], "skills_used": []}}

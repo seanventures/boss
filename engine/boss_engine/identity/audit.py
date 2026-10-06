@@ -68,7 +68,7 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "agent.passport.sponsor_changed", "agent.passport.suspended", "agent.passport.resumed",
     "agent.passport.revoked", "agent.passport.reissued",
     "delegation.created", "delegation.used_first", "delegation.narrowed", "delegation.revoked",
-    "delegation.expired", "delegation.suspended",
+    "delegation.expired", "delegation.suspended", "delegation.extended",
     "token.issued", "token.exchanged", "token.denied", "credential.handed_out",
     "egress.denied",
     # vault

@@ -511,16 +511,28 @@ class InfrastructureService:
             {"resource_id": resource_id, "reason": reason},
         )
         job_id = make_id("job")
+        from boss_engine.identity import lineage as _identity_lineage
+
+        # Who this job acts for (R8): the same stamping path as enqueue_job.
+        job_payload, identity_columns = _identity_lineage.stamp_job_row(
+            {
+                "project_id": project_id,
+                "resource_id": resource_id,
+                "dedupe_key": dedupe_key,
+                "reason": reason,
+            })
         connection.execute(
             text(
                 """
                 INSERT INTO jobs (
                     id, project_id, task_id, kind, priority, status, payload,
-                    data_boundary, max_attempts, attempt, run_after
+                    data_boundary, max_attempts, attempt, run_after,
+                    on_behalf_of, grant_id, chain, on_behalf_system
                 )
                 VALUES (
                     :id, :project_id, :task_id, 'infra.droplet.delete', :priority, 'queued',
-                    CAST(:payload AS JSONB), :data_boundary, :max_attempts, 0, :run_after
+                    CAST(:payload AS JSONB), :data_boundary, :max_attempts, 0, :run_after,
+                    :on_behalf_of, :grant_id, CAST(:chain AS JSONB), :on_behalf_system
                 )
                 """
             ),
@@ -529,17 +541,11 @@ class InfrastructureService:
                 "project_id": project_id,
                 "task_id": resource.get("task_id"),
                 "priority": priority,
-                "payload": json.dumps(
-                    {
-                        "project_id": project_id,
-                        "resource_id": resource_id,
-                        "dedupe_key": dedupe_key,
-                        "reason": reason,
-                    }
-                ),
+                "payload": json.dumps(job_payload),
                 "data_boundary": resource["data_boundary"],
                 "max_attempts": max_attempts,
                 "run_after": run_after_value,
+                **identity_columns,
             },
         )
         emit_event(
@@ -785,16 +791,36 @@ class InfrastructureService:
         boundary = self._resolve_boundary(connection, task_id, data_boundary)
         run_after_value = now_utc()
         job_id = make_id("job")
+        from boss_engine.identity import lineage as _identity_lineage
+
+        # Who this job acts for (R8): the same stamping path as enqueue_job.
+        job_payload, identity_columns = _identity_lineage.stamp_job_row(
+            {
+                "project_id": project_id,
+                "task_id": task_id,
+                "decision_id": decision_id,
+                "reservation_id": reservation_id,
+                "dedupe_key": dedupe_key,
+                "title": normalized_title,
+                "region": normalized_region,
+                "size": normalized_size,
+                "ttl_minutes": ttl_minutes,
+                "tags": normalized_tags,
+                "requires_reservation": True,
+                "data_boundary": boundary,
+            })
         connection.execute(
             text(
                 """
                 INSERT INTO jobs (
                     id, project_id, task_id, kind, priority, status, payload,
-                    data_boundary, max_attempts, attempt, run_after
+                    data_boundary, max_attempts, attempt, run_after,
+                    on_behalf_of, grant_id, chain, on_behalf_system
                 )
                 VALUES (
                     :id, :project_id, :task_id, 'infra.droplet.create', :priority, 'queued',
-                    CAST(:payload AS JSONB), :data_boundary, :max_attempts, 0, :run_after
+                    CAST(:payload AS JSONB), :data_boundary, :max_attempts, 0, :run_after,
+                    :on_behalf_of, :grant_id, CAST(:chain AS JSONB), :on_behalf_system
                 )
                 """
             ),
@@ -803,25 +829,11 @@ class InfrastructureService:
                 "project_id": project_id,
                 "task_id": task_id,
                 "priority": priority,
-                "payload": json.dumps(
-                    {
-                        "project_id": project_id,
-                        "task_id": task_id,
-                        "decision_id": decision_id,
-                        "reservation_id": reservation_id,
-                        "dedupe_key": dedupe_key,
-                        "title": normalized_title,
-                        "region": normalized_region,
-                        "size": normalized_size,
-                        "ttl_minutes": ttl_minutes,
-                        "tags": normalized_tags,
-                        "requires_reservation": True,
-                        "data_boundary": boundary,
-                    }
-                ),
+                "payload": json.dumps(job_payload),
                 "data_boundary": boundary,
                 "max_attempts": max_attempts,
                 "run_after": run_after_value,
+                **identity_columns,
             },
         )
         emit_event(

@@ -1986,13 +1986,19 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         # wizard, so this handed git an anonymous URL for a private repo and every clone
         # died on "could not read Username for 'https://github.com'". See
         # github_connections.github_token_for.
-        with begin(engine) as _c:
-            token = github_token_for(_c, settings, project_id)
-        from .repo_host import clone_url_for  # BOSS-267: host-aware clone
-        clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
-                                  owner, repo, token or "")
-        clone = owned_process.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-                               capture_output=True, text=True, timeout=120)
+        # The previewed app's code runs in this checkout: no token may be in it (IDENTITY.md
+        # §7.10) — through egress under a delegated principal, else in git's environment only.
+        from boss_engine.identity import runs as _identity_runs
+
+        def _token() -> str:
+            with begin(engine) as _c:
+                return github_token_for(_c, settings, project_id) or ""
+
+        with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
+                                        owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
+            clone_url = _access.url
+            clone = owned_process.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
+                               capture_output=True, text=True, timeout=120, env=_access.environ())
         if clone.returncode != 0:
             return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
@@ -2233,13 +2239,19 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     # NOT settings.github_token — see github_connections.github_token_for. Empty wherever the
     # repository was connected through the wizard, which made every clone of a private repo
     # fail on "could not read Username for 'https://github.com'".
-    with begin(engine) as _c:
-        token = github_token_for(_c, settings, project_id)
-    from .repo_host import clone_url_for  # BOSS-267: host-aware clone
-    clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
-                              owner, repo, token or "")
-    clone = owned_process.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-                           capture_output=True, text=True, timeout=120)
+    # The previewed app's code runs in this checkout: no token may be in it (IDENTITY.md
+    # §7.10) — through egress under a delegated principal, else in git's environment only.
+    from boss_engine.identity import runs as _identity_runs
+
+    def _token() -> str:
+        with begin(engine) as _c:
+            return github_token_for(_c, settings, project_id) or ""
+
+    with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
+                                    owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
+        clone_url = _access.url
+        clone = owned_process.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
+                           capture_output=True, text=True, timeout=120, env=_access.environ())
     if clone.returncode != 0:
         return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
@@ -2417,14 +2429,20 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         # wizard, so this handed git an anonymous URL for a private repo and every clone
         # died on "could not read Username for 'https://github.com'". See
         # github_connections.github_token_for.
-        with begin(engine) as _c:
-            token = github_token_for(_c, settings, project_id)
-        from .repo_host import clone_url_for  # BOSS-267: host-aware clone
-        clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
-                                  owner, repo, token or "")
-        clone = owned_process.run(
+        # The previewed app's code runs in this checkout: no token may be in it (IDENTITY.md
+        # §7.10) — through egress under a delegated principal, else in git's environment only.
+        from boss_engine.identity import runs as _identity_runs
+
+        def _token() -> str:
+            with begin(engine) as _c:
+                return github_token_for(_c, settings, project_id) or ""
+
+        with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
+                                        owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
+            clone_url = _access.url
+            clone = owned_process.run(
             ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, timeout=120, env=_access.environ())
         if clone.returncode != 0:
             return
         _changed = lineage_impl_files(engine, {"id": row["run_id"]})

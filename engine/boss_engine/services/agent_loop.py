@@ -619,8 +619,6 @@ def _open_workspace(
     target = _run_repo_and_branch(connection, run_id, project_id)
     if not target or not target.get("owner") or not target.get("repo"):
         return None, f"no repo recorded for run {run_id}"
-    from .repo_host import clone_url_for
-
     # NOT settings.github_token — see github_connections.github_token_for. It is empty wherever
     # the repository was connected through the wizard, which makes this an anonymous clone of a
     # private repo and fails with git asking for a username on a terminal nobody is at.
@@ -629,16 +627,20 @@ def _open_workspace(
     project_id = connection.execute(
         text("SELECT project_id FROM code_task_runs WHERE id = :i"), {"i": run_id},
     ).scalar() or ""
-    clone_url = clone_url_for(
-        getattr(settings, "target_repo_host", "github") or "github",
-        target["owner"], target["repo"],
-        github_token_for(connection, settings, project_id) or "",
-    )
-    return ensure_workspace(
-        run_id,
-        owner=target["owner"], repo=target["repo"], branch=target["branch"],
-        clone_url=clone_url, force=force,
-    )
+    # The agent's shell works in this checkout, so no token may ever be in it (IDENTITY.md
+    # §7.10): through egress under the run's delegated principal, else the token in git's
+    # environment only.
+    from boss_engine.identity import runs as _identity_runs
+
+    with _identity_runs.repo_access(
+            connection.engine, host=getattr(settings, "target_repo_host", "github") or "github",
+            owner=target["owner"], repo=target["repo"], project_id=project_id,
+            token=lambda: github_token_for(connection, settings, project_id) or "") as access:
+        return ensure_workspace(
+            run_id,
+            owner=target["owner"], repo=target["repo"], branch=target["branch"],
+            clone_url=access.url, force=force, git_env=access.environ(),
+        )
 
 
 _LEGACY_SHELL_EDITIONS = frozenset({
@@ -858,11 +860,14 @@ def _tool_inspect_app(connection, project_id, settings, args) -> dict:
 
     workdir = Path(tempfile.mkdtemp(prefix="boss-inspect-"))
     try:
-        token = repo_token(settings, owner, repo)
-        clone = owned_process.run(
-            ["git", "clone", "--depth", "1", "--branch", branch,
-             f"https://x-access-token:{token}@github.com/{owner}/{repo}.git", str(workdir / "r")],
-            capture_output=True, text=True, timeout=300)
+        from boss_engine.identity import runs as _identity_runs
+
+        with _identity_runs.repo_access(connection.engine, host="github", owner=owner, repo=repo,
+                                        project_id=project_id,
+                                        token=lambda: repo_token(settings, owner, repo)) as access:
+            clone = owned_process.run(
+                ["git", "clone", "--depth", "1", "--branch", branch, access.url, str(workdir / "r")],
+                capture_output=True, text=True, timeout=300, env=access.environ())
         if clone.returncode != 0:
             return {"error": f"could not read {owner}/{repo}@{branch}",
                     "detail": clone.stderr[-300:]}
@@ -1787,10 +1792,64 @@ def run_agent_loop(
     from boss_engine.identity import catalogue as _identity_catalogue
     from boss_engine.identity import runs as _identity_runs
 
+    # Run by the worker for a leased job, the loop acts for that JOB's principal and grant (its
+    # identity columns), never for the worker that called in.
     with _identity_runs.delegated(connection.engine, kind="ag", entity_id=run_id, project_id=project_id,
                                   role_key=(finalize_ctx or {}).get("role_key") or "atlas",
-                                  scope=_identity_catalogue.delegable()):
+                                  scope=_identity_catalogue.delegable(),
+                                  job_id=(finalize_ctx or {}).get("created_by_job_id")):
         return _drive_run(connection, settings, run_id, max_steps)
+
+
+#: The catalogue permission each of the loop's own tools needs (IDENTITY.md §6.4). Inside a
+#: delegated run every tool call is decided against the run token (person ∩ ceilings ∩ grant ∩
+#: task); a tool missing here is refused there (deny by default). Skills and MCP tools need
+#: `skill:invoke`; the repository read tools `repository:read`.
+AGENT_TOOL_PERMISSIONS: dict[str, str] = {
+    "describe_schema": "system:read",
+    "diagnose_deployment": "deployment:read",
+    "diagnose_preview": "preview:read",
+    "get_budget_and_costs": "budget:read",
+    "get_project_status": "project:read",
+    "inspect_app": "artifact:read",
+    "list_apps": "artifact:read",
+    "list_repo_files": "repository:read",
+    "read_repo_file": "repository:read",
+    "run_shell": "sandbox:exec",                 # not delegable: never inside a delegated run
+    "change_existing_app": "code_task:create",
+    "create_followup_task": "work_item:manage",
+    "open_incident": "reliability:respond",
+    "publish_document": "github:sync",
+}
+
+
+def _agent_tool_permission(name: str, *, mcp_map: dict, repo_map: dict, skill_map: dict,
+                           on_demand_loader: Optional[str]) -> Optional[str]:
+    if name in mcp_map or name in skill_map or (on_demand_loader is not None and name == on_demand_loader):
+        return "skill:invoke"
+    if name in repo_map:
+        return "repository:read"
+    return AGENT_TOOL_PERMISSIONS.get(name)
+
+
+def _identity_refusal(connection: Connection, project_id: str, name: str, **maps: Any) -> Optional[dict]:
+    """Inside a delegated run, the tool call is decided against the RUN TOKEN before it runs.
+    Returns the refusal to hand the model, or None to proceed (outside a run: unchanged)."""
+    from boss_engine.identity import lineage as _identity_lineage
+    from boss_engine.identity import runs as _identity_runs
+
+    ctx = _identity_lineage.current_context()
+    if ctx is None or ctx.run_token is None:
+        return None
+    permission = _agent_tool_permission(name, **maps)
+    try:
+        _identity_runs.authorize_tool(permission, project_id, db=connection)
+    except _identity_runs.ToolRefused as refused:
+        return {"status": "refused", "error": "forbidden", "permission": refused.permission,
+                "reason": refused.reason,
+                "message": (f"'{name}' needs {refused.permission}, which this run's authority does not "
+                            "include. Do not retry it; say what you could not do.")}
+    return None
 
 
 def _replace_deferred_tool_result(messages: list, result: dict) -> None:
@@ -2245,10 +2304,16 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 args = {}
             name = tc["name"]
             is_deferred = False
+            # IDENTITY: decided against the run token before anything runs (or is deferred).
+            identity_refused = (_identity_refusal(connection, project_id, name, mcp_map=mcp_map, repo_map=repo_map,
+                                                  skill_map=skill_map, on_demand_loader=on_demand_loader)
+                                if deferred is None and budget_wait is None else None)
             if deferred is not None:
                 result = {"status": "skipped", "note": "a prior action this turn awaits approval"}
             elif budget_wait is not None:
                 result = {"status": "skipped", "note": BUDGET_BUSY_MESSAGE}
+            elif identity_refused is not None:
+                result = identity_refused
             elif on_demand_loader is not None and name == on_demand_loader:
                 requested_id = str(args.get("skill_id") or "")
                 current_resolution = _skill_resolution_for_run(

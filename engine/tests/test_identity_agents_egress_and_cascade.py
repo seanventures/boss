@@ -459,10 +459,10 @@ def test_r8_a_job_carries_its_principal_and_fails_closed_without_one(monkeypatch
     assert lineage.acting_for_job({"payload": json.dumps(stamped)}) == who
     with lineage.acting(who):
         assert lineage.stamp_job({})["_identity"]["chain"] == ["agt_forge#run_ct:1"]
-    assert "_identity" not in lineage.stamp_job({"_identity": {"on_behalf_of": "usr_root"}})  # shadow: dropped
+    # No context (a system thread): never the payload's claim, never unattributed — BOSS's own work.
+    assert lineage.stamp_job({"_identity": {"on_behalf_of": "usr_root"}})["_identity"]["on_behalf_of"] == "sys_worker"
     monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
-    with pytest.raises(lineage.PrincipalRequired):
-        lineage.stamp_job({"x": 1})
+    assert lineage.stamp_job({"x": 1})["_identity"]["system"] is True
     with pytest.raises(lineage.PrincipalRequired):
         lineage.acting_for_job({"payload": {}})
 
