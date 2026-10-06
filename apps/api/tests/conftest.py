@@ -92,6 +92,7 @@ def clean_tables(engine):
             # The model router: its policy, its route records and OpenRouter's catalogue.
             "model_routes",
             "model_routing_policies",
+            "subscription_accounts",
             "provider_model_catalog",
             "experiment_assignments",
             "experiments",

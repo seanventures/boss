@@ -315,6 +315,13 @@ def windows_from_limit_message(text: Optional[str], now: Optional[datetime] = No
 
 # ── The verdict ────────────────────────────────────────────────────────────────────────────────
 
+#: A monthly spend limit is lifted by a person (an admin raises it), not by a clock, and work
+#: routed away never calls the source to find out. After this long the window is HALF-OPEN: the
+#: next boundary may try the source once; a success clears the window (accounts.observe), a
+#: refusal closes it again. Setup's "Test all" clears it at once.
+LIMIT_PROBE_S = float(__import__("os").environ.get("BOSS_ROUTER_LIMIT_PROBE_S", "900") or 900)
+
+
 def _windows(capacity: Mapping[str, Any], now: datetime) -> dict[str, Window]:
     out: dict[str, Window] = {}
     for kind, body in ((capacity or {}).get("windows") or {}).items():
@@ -323,6 +330,10 @@ def _windows(capacity: Mapping[str, Any], now: datetime) -> dict[str, Window]:
         resets = _utc(body.get("resets_at"))
         if resets is not None and resets <= now:
             continue                     # the window rolled over: what it said no longer holds
+        seen = _utc(body.get("observed_at"))
+        if kind == MONTHLY and seen is not None and \
+                (now - seen).total_seconds() >= LIMIT_PROBE_S:
+            continue                     # half-open: worth one try
         try:
             used = float(body.get("used") or 0.0)
         except (TypeError, ValueError):
