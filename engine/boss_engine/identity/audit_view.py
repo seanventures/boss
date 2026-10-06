@@ -29,7 +29,7 @@ HEADLINES = {
     "user.invited": "invited people", "role_binding.added": "granted an access role",
     "role_binding.removed": "removed an access role", "api_key.created": "created a key",
     "api_key.revoked": "revoked a key", "delegation.created": "let agents act for them",
-    "delegation.revoked": "revoked a grant", "authz.denied": "was refused",
+    "delegation.revoked": "revoked a grant", "delegation.extended": "extended a grant", "authz.denied": "was refused",
     "authz.shadow_deny": "would have been refused", "legacy.password_used":
     "used the shared password", "legacy.api_key_used": "used the shared API key",
     "legacy.network_used": "came in over the network bridge", "legacy.path_retired":
