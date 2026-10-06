@@ -118,7 +118,7 @@ function StoppedLine({ s, projectId, actor, onOpen, onRetried }: {
     form.set("project_id", projectId);
     form.set("actor", actor);
     try {
-      const r = await callAction(retryBuildAction)(form);
+      const r = await callAction(retryBuildAction, undefined, "code_task:retry")(form);
       if (r.ok) {
         showToast("success", r.attempt ? `Attempt ${r.attempt} started` : "Retrying");
         notifyChanged("code_tasks");

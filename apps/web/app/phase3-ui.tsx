@@ -92,8 +92,8 @@ export function InboxAckCard({ items }: { items: AckState[] }) {
 
 // --- Slack shaping: persona render + digest batching ---
 export function SlackToolsCard({ projectId }: { projectId: string }) {
-  const [renderState, renderAction, renderPending] = useActionState(callAction(slackRenderAction), null);
-  const [digestState, digestAction, digestPending] = useActionState(callAction(slackDigestAction), null);
+  const [renderState, renderAction, renderPending] = useActionState(callAction(slackRenderAction, undefined, "comms:read"), null);
+  const [digestState, digestAction, digestPending] = useActionState(callAction(slackDigestAction, undefined, "comms:send"), null);
   return (
     <article className="stack-card">
       <h3 style={{ margin: 0 }}>Slack — persona render & digest</h3>
@@ -118,7 +118,7 @@ export function SlackToolsCard({ projectId }: { projectId: string }) {
           <textarea name="body" className="textarea" rows={2} placeholder="All systems green." required
                     data-testid="slack-body" />
         </label>
-        <SubmitButton className="button secondary" type="submit" disabled={renderPending}
+        <SubmitButton permission="comms:read" className="button secondary" type="submit" disabled={renderPending}
                       data-testid="slack-render">
           {renderPending ? "Rendering…" : "Render Slack message"}
         </SubmitButton>
@@ -126,7 +126,7 @@ export function SlackToolsCard({ projectId }: { projectId: string }) {
       <Result state={renderState} testid="slack-render-result" />
       <form action={digestAction} style={{ marginTop: 10 }}>
         <input type="hidden" name="project_id" value={projectId} />
-        <SubmitButton className="button secondary" type="submit" disabled={digestPending}>
+        <SubmitButton permission="comms:send" className="button secondary" type="submit" disabled={digestPending}>
           {digestPending ? "Batching…" : "Batch draft Slack messages into digests"}
         </SubmitButton>
       </form>
@@ -147,8 +147,8 @@ export function MeetingConsensusCard({
   meetingId?: string;
   meetings?: Array<{ id: string; title: string }>;
 }) {
-  const [tallyState, tallyAction, tallyPending] = useActionState(callAction(tallyVotesAction), null);
-  const [sweepState, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction), null);
+  const [tallyState, tallyAction, tallyPending] = useActionState(callAction(tallyVotesAction, undefined, "meeting:convene"), null);
+  const [sweepState, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction, undefined, "meeting:convene"), null);
   const bound = Boolean(meetingId);
   // AN OPERATOR FORM, NOT A FIXTURE. On boss-1 this card sat on the Meetings screen with votes
   // prefilled 2 / 1 / 0, "requires meeting_id" copy and an "mtg_… or mrun_…" placeholder — a
@@ -192,7 +192,7 @@ export function MeetingConsensusCard({
           <label className="field" style={{ flex: 1 }}><span>Eligible</span><input name="eligible" className="input" type="number" min={0} placeholder="auto" /></label>
           <label className="field" style={{ flex: 1 }}><span>Quorum</span><input name="quorum" className="input" type="number" min={1} placeholder="auto" /></label>
         </div>
-        <SubmitButton className="button secondary" type="submit"
+        <SubmitButton permission="meeting:convene" className="button secondary" type="submit"
                       disabled={tallyPending || (!bound && !(meetings && meetings.length > 0))}>
           {tallyPending ? "Tallying…" : "Record the vote"}
         </SubmitButton>
@@ -214,7 +214,7 @@ export function MeetingConsensusCard({
         </p>
         <form action={sweepAction}>
           <input type="hidden" name="actor" value={actor} />
-          <SubmitButton className="button secondary" type="submit" disabled={sweepPending}>
+          <SubmitButton permission="meeting:convene" className="button secondary" type="submit" disabled={sweepPending}>
             {sweepPending ? "Sweeping…" : "Sweep stalled meeting runs"}
           </SubmitButton>
         </form>
@@ -237,8 +237,8 @@ export function MeetingConsensusCard({
 
 // --- Software-factory scale-up: WIP + confidence merge gate + chunk planner ---
 export function FactoryScaleCard({ wip }: { wip: WipStatus }) {
-  const [mergeState, mergeAction, mergePending] = useActionState(callAction(mergeCheckAction), null);
-  const [chunkState, chunkAction, chunkPending] = useActionState(callAction(chunkPlanAction), null);
+  const [mergeState, mergeAction, mergePending] = useActionState(callAction(mergeCheckAction, undefined, "code_task:read"), null);
+  const [chunkState, chunkAction, chunkPending] = useActionState(callAction(chunkPlanAction, undefined, "code_task:create"), null);
   const planeLabel =
     wip?.githubPlane === "mission_control_binding"
       ? `GitHub: Mission Control binding${wip.githubFullName ? ` (${wip.githubFullName})` : ""}`
@@ -282,7 +282,7 @@ export function FactoryScaleCard({ wip }: { wip: WipStatus }) {
           <label><input type="checkbox" name="adversarial" /> adversarial</label>
         </div>
         <label className="field"><span>Min confidence</span><input name="min_confidence" className="input" type="number" step="0.05" min={0} max={1} defaultValue={0.8} /></label>
-        <SubmitButton className="button secondary" type="submit" disabled={mergePending}>
+        <SubmitButton permission="code_task:read" className="button secondary" type="submit" disabled={mergePending}>
           {mergePending ? "Checking…" : "Run merge check"}
         </SubmitButton>
       </form>
@@ -295,7 +295,7 @@ export function FactoryScaleCard({ wip }: { wip: WipStatus }) {
           <span>Files (one per line)</span>
           <textarea name="files" className="textarea" rows={3} placeholder={"a.py\nb.py\nc.py\nd.py\ne.py"} />
         </label>
-        <SubmitButton className="button secondary" type="submit" disabled={chunkPending}
+        <SubmitButton permission="code_task:create" className="button secondary" type="submit" disabled={chunkPending}
                       data-testid="chunk-plan">
           {chunkPending ? "Planning…" : "Plan chunks"}
         </SubmitButton>

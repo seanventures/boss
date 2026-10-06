@@ -227,7 +227,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
       const draft = made === key ? adoptCreatedAgent(fresh, made) : fresh;
       const issue = validateAgentWizardDraft(draft)[0];
       if (issue) { setBusy(false); setFailed(issue.message); return; }
-      const result = await callAction(createStudioAgent)(buildAgentWizardSubmission(projectId, draft, actor), true);
+      const result = await callAction(createStudioAgent, undefined, "agent:create")(buildAgentWizardSubmission(projectId, draft, actor), true);
       if (!result.ok) {
         // THE AGENT EXISTS, ITS PROFILE DOES NOT: the next press finishes the profile.
         const createdKey = result.item?.agent_created;
@@ -536,7 +536,7 @@ function TemplatePicker({ projectId, actor, orphans, existing, onCreated, onBorn
   const [seeded, setSeeded] = useState("");
   const seed = async () => {
     setWorking("seed"); setFailed(""); setSeeded("");
-    const r = await callAction(seedStudioCatalog)(projectId, actor);
+    const r = await callAction(seedStudioCatalog, undefined, "agent:create")(projectId, actor);
     setWorking("");
     if (!r.ok) { setFailed(r.message); return; }
     setSeeded(r.message);

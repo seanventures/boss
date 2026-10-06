@@ -8,6 +8,7 @@ import {
   isCaptainUnavailableStatus,
 } from "../lib/metatron-captain";
 import { apiWrite } from "../lib/api-write";
+import { declareAction } from "../lib/identity/guarded-action";
 
 export type MetatronCaptainActionResult = {
   ok: boolean;
@@ -215,3 +216,15 @@ export async function runMetatronTheaterAction(
     auto: true,
   });
 }
+
+// THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
+// A declaration for the console to mirror — disabled with the reason when not held — never a
+// decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
+declareAction(loadMetatronCaptainSessionAction, "assistant:chat");
+declareAction(sendMetatronCaptainMessageAction, "assistant:chat");
+declareAction(createMetatronCaptainGoalAction, "autopilot:configure");
+declareAction(refreshMetatronCaptainWatchAction, "autopilot:read");
+declareAction(proposeMetatronCaptainDriveAction, "autopilot:operate");
+declareAction(runMetatronCaptainOverwatchAction, "autopilot:operate");
+declareAction(loadMetatronTheaterAction, "autopilot:read");
+declareAction(runMetatronTheaterAction, "autopilot:operate");

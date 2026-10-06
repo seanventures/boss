@@ -16,7 +16,7 @@ export function ChaosCard({ projectId, runs }: { projectId: string; runs: ChaosR
       </p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {["lease_reclaim", "deadletter_storm"].map((scenario) => (
-          <ActionForm action={runChaosAction} key={scenario}>
+          <ActionForm permission="reliability:manage" action={runChaosAction} key={scenario}>
             <input type="hidden" name="project_id" value={projectId} />
             <input type="hidden" name="scenario" value={scenario} />
             <SubmitButton className="button secondary" type="submit">Inject {scenario}</SubmitButton>

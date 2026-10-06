@@ -1,74 +1,11 @@
-/** Single-operator Community console session. No control-plane API key reaches the browser. */
-
-export const SESSION_COOKIE = "__Host-boss_console_session";
-const LOCAL_SESSION_COOKIE = "boss_console_session_local";
-export const SESSION_SECONDS = 8 * 60 * 60;
-
-export type ConsoleAuthConfig = { password: string; secret: string };
-
-export function consoleAuthConfig(): ConsoleAuthConfig | null {
-  const password = process.env.BOSS_CONSOLE_PASSWORD ?? "";
-  const secret = process.env.BOSS_CONSOLE_SESSION_SECRET ?? "";
-  // Both values are generated independently by the installer. No fixed development default.
-  if (password.length < 32 || secret.length < 32) return null;
-  return { password, secret };
-}
-
-function bytes(value: string): Uint8Array<ArrayBuffer> {
-  // Keep TextEncoder's native realm: Next's Edge runtime rejects an ArrayBuffer allocated
-  // by the bundled application realm even though the Node test runtime accepts it.
-  return new TextEncoder().encode(value) as Uint8Array<ArrayBuffer>;
-}
-
-function hex(value: Uint8Array): string {
-  return Array.from(value, (part) => part.toString(16).padStart(2, "0")).join("");
-}
-
-function equalHex(left: string, right: string): boolean {
-  if (left.length !== right.length) return false;
-  let difference = 0;
-  for (let i = 0; i < left.length; i += 1) {
-    difference |= left.charCodeAt(i) ^ right.charCodeAt(i);
-  }
-  return difference === 0;
-}
-
-async function digest(value: string): Promise<string> {
-  return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes(value))));
-}
-
-export async function passwordMatches(input: string, config: ConsoleAuthConfig): Promise<boolean> {
-  return equalHex(await digest(input), await digest(config.password));
-}
-
-async function mac(payload: string, config: ConsoleAuthConfig): Promise<string> {
-  // A password change revokes sessions even if the separate signing secret is unchanged.
-  const key = await crypto.subtle.importKey(
-    "raw", bytes(`${config.secret}:${config.password}`),
-    { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
-  );
-  return hex(new Uint8Array(await crypto.subtle.sign("HMAC", key, bytes(payload))));
-}
-
-export async function issueSession(
-  config: ConsoleAuthConfig, now = Date.now(), nonce = crypto.randomUUID(),
-): Promise<string> {
-  const payload = `v1.${now + SESSION_SECONDS * 1000}.${nonce}`;
-  return `${payload}.${await mac(payload, config)}`;
-}
-
-export async function validSession(
-  token: string | undefined, config: ConsoleAuthConfig, now = Date.now(),
-): Promise<boolean> {
-  if (!token || token.length > 180) return false;
-  const match = /^v1\.(\d{13})\.([a-f0-9-]{36})\.([a-f0-9]{64})$/.exec(token);
-  if (!match) return false;
-  const expires = Number(match[1]);
-  if (!Number.isSafeInteger(expires) || expires <= now ||
-      expires > now + SESSION_SECONDS * 1000) return false;
-  const payload = `v1.${match[1]}.${match[2]}`;
-  return equalHex(match[3], await mac(payload, config));
-}
+/**
+ * CONSOLE TRANSPORT RULES. The console holds no session of its own any more: the API sets and
+ * reads `__Host-boss_session` (IDENTITY.md §4.1), and middleware only checks that one is present.
+ * The shared-password HMAC cookie (BOSS_CONSOLE_PASSWORD / BOSS_CONSOLE_SESSION_SECRET) is gone;
+ * the legacy password is now the claim credential the API checks (§4.11, D25). What remains here
+ * is routing: safe redirects, the network-trusted build, the collector's machine posts, the
+ * same-origin write rule and the HTTPS rule.
+ */
 
 export function safeNext(value: string | null): string {
   if (!value || !value.startsWith("/") || value.startsWith("//") ||
@@ -184,9 +121,4 @@ export function localHttp(request: Request): boolean {
     const host = new URL(`http://${request.headers.get("host") || url.host}`);
     return ["localhost", "127.0.0.1", "[::1]"].includes(host.hostname);
   } catch { return false; }
-}
-
-export function sessionCookieName(request: Request): string {
-  // Browsers do not consistently accept Secure cookies on plain HTTP loopback.
-  return localHttp(request) ? LOCAL_SESSION_COOKIE : SESSION_COOKIE;
 }

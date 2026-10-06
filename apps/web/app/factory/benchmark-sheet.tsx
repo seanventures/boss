@@ -42,7 +42,7 @@ export function BenchmarkSheetBody({ benchmarks, builtIds, projectId, actor, own
     if (again) data.set("force", "true");
     let out: { run_id?: string; kind?: "meeting" | "code" | "existing"; error?: string } | undefined;
     try {
-      out = await callAction(startQaBenchmarkAppAction)(data);
+      out = await callAction(startQaBenchmarkAppAction, undefined, "code_task:create")(data);
       if (out?.run_id) showToast("success", out.kind === "meeting" ? "Plan started" : "Build started");
     } finally {
       setBusy(null);

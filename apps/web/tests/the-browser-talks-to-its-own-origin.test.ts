@@ -22,6 +22,7 @@ import { readFileSync } from "node:fs";
 
 const CLIENT = readFileSync(new URL("../lib/client.ts", import.meta.url), "utf8");
 const PROXY = readFileSync(new URL("../app/v1/[...path]/route.ts", import.meta.url), "utf8");
+const FORWARD = readFileSync(new URL("../lib/identity/forward.ts", import.meta.url), "utf8");
 
 describe("the base url the browser uses", () => {
   it("is same-origin, so no request is subject to CORS", () => {
@@ -37,25 +38,27 @@ describe("the base url the browser uses", () => {
 });
 
 describe("the api key", () => {
-  it("is never read in the browser", () => {
+  it("does not exist in the console any more (identity S4)", () => {
     // NEXT_PUBLIC_* is inlined into the bundle at build time, so reading it client-side shipped
-    // a control-plane credential to every visitor.
-    expect(CLIENT).toContain("export const API_KEY = IS_SERVER");
-    expect(CLIENT).toMatch(/API_KEY = IS_SERVER[\s\S]{0,200}:\s*undefined;/);
+    // a control-plane credential to every visitor. Then the server held one shared key. Now
+    // neither: every call carries the signed-in person's own session (lib/identity/forward.ts).
+    expect(CLIENT).not.toMatch(/export const API_KEY\b/);
+    expect(CLIENT).not.toMatch(/process\.env\.(NEXT_PUBLIC_)?BOSS_API_KEY/);
   });
 
-  it("is attached by the proxy instead", () => {
-    expect(PROXY).toContain('out.set("Authorization", `Bearer ${API_KEY}`)');
+  it("is not attached by the proxy either: the person's cookie is", () => {
+    expect(PROXY).not.toContain('out.set("Authorization"');
+    expect(PROXY).toContain("identityCookieHeader(req.headers.get(\"cookie\")");
   });
 });
 
 describe("the proxy", () => {
   it("refuses to take an identity from the caller", () => {
-    // A browser that could set its own Authorization would make the server-held key pointless.
-    for (const header of ["authorization", "x-boss-api-key", "cookie"]) {
-      expect(PROXY).toContain(`"${header}"`);
-    }
-    expect(PROXY).toContain("STRIPPED");
+    // A browser that could set its own Authorization, or an X-Boss-* principal header, would be
+    // choosing who it is. Everything but the identity cookies and the CSRF token is stripped.
+    expect(PROXY).toContain("isStrippedHeader(name)");
+    expect(FORWARD).toMatch(/authorization/);
+    expect(FORWARD).toContain('if (n.startsWith("x-boss-")) return true;');
   });
 
   it("covers every method a feed uses, not just GET", () => {

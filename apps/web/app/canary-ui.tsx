@@ -14,7 +14,7 @@ export function CanaryCard({ projectId, run }: { projectId: string; run: CanaryR
     <article className="stack-card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
         <h3 style={{ margin: 0 }}>Canary suite</h3>
-        <ActionForm action={runCanariesAction}>
+        <ActionForm permission="assurance:run" action={runCanariesAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <SubmitButton
             type="submit"

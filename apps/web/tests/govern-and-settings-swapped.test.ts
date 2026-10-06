@@ -43,12 +43,11 @@ describe("identity is a setting, not a platform headline", () => {
   });
 
   it("and says what it configures rather than which protocol it speaks", () => {
-    // REWRITTEN: this pinned "Who can sign in", which was untrue — console sign-in is the
-    // installer password and never consults a provider (console walk, 2026-10-02). The
-    // subtitle now says what the area configures and what sign-in uses today.
+    // REWRITTEN AGAIN (identity S4): Identity is people, access roles, agents and audit now — the
+    // installer password is gone — so the subtitle says what the area answers, not a protocol.
     const at = SHELL.indexOf('id: "enterprise"');
-    expect(SHELL.slice(at, at + 400)).toMatch(/console sign-in is the installer password/);
-    expect(SHELL.slice(at, at + 400)).not.toMatch(/Who can sign in/);
+    expect(SHELL.slice(at, at + 400)).toMatch(/Who can do what, and for whom/);
+    expect(SHELL.slice(at, at + 400)).not.toMatch(/installer password|SSO/);
   });
 
   it("the community relabel follows", () => {

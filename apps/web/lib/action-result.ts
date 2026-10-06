@@ -41,10 +41,7 @@ export function failResult(error: string, extra: Partial<ActionResult> = {}): Ac
 /** The next step for a failure, by HTTP status. The server says WHAT; this says what to DO. */
 export function whatToDo(status: number): string {
   if (status === 401) return "Your session has expired — sign in again and retry.";
-  if (status === 403) {
-    return "Your sign-in is not allowed to do this. Ask an owner to grant the permission "
-      + "in Access and packs, or sign in as someone who has it.";
-  }
+  if (status === 403) return "You're not allowed: you don't hold the permission for this · ask an Admin.";
   if (status === 404) return "It may have been removed or renamed — reload the page and look again.";
   if (status === 409) return "Reload to see its current state before trying again.";
   if (status === 400 || status === 422) return "Check the fields you entered and try again.";

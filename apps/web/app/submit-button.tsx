@@ -1,9 +1,12 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { INTENT_FIELD, newIntentKey } from "../lib/api-write";
+import type { Permission } from "../lib/identity/permissions.gen";
+import { useCan } from "../components/identity/identity-provider";
+import { FormPermission } from "../components/identity/form-permission";
 
 /**
  * A submit button that shows it was pressed.
@@ -36,9 +39,18 @@ export function SubmitButton({
   className = "",
   name,
   value,
+  permission,
+  title,
+  onClick,
   ...rest
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { pendingLabel?: string }) {
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & { pendingLabel?: string; permission?: Permission }) {
   const status = useFormStatus();
+  // MIRRORED (IDENTITY.md §6.5): refused, the button stays visible and focusable, reads as
+  // disabled, and says which permission is missing. The API decides; this only draws it.
+  const inherited = useContext(FormPermission);
+  const needs = permission ?? inherited;
+  const access = useCan(needs ?? "directory:read");
+  const refused = !!needs && !access.allowed;
   const [intent, setIntent] = useState("");
   const wasPending = useRef(false);
   useEffect(() => {
@@ -64,6 +76,14 @@ export function SubmitButton({
       name={name}
       value={value}
       disabled={blocked}
+      aria-disabled={refused || undefined}
+      data-permission={needs ?? undefined}
+      data-can={needs ? (refused ? "no" : "yes") : undefined}
+      title={refused ? access.reason : title}
+      onClick={(event) => {
+        if (refused) { event.preventDefault(); return; }
+        onClick?.(event);
+      }}
       aria-busy={pending || undefined}
       data-pending={pending ? "true" : undefined}
       className={`${className} btn-submit${pending ? " is-pending" : ""}`.trim()}
@@ -76,6 +96,7 @@ export function SubmitButton({
       ) : (
         children
       )}
+      {refused ? <span className="idn-sr">{access.reason}</span> : null}
     </button>
     </>
   );

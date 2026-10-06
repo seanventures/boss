@@ -9,6 +9,7 @@ import { revalidatePath } from "next/cache";
 
 import { apiWrite } from "../../lib/api-write";
 import { API_URL, authHeaders } from "../../lib/client";
+import { declareAction } from "../../lib/identity/guarded-action";
 
 export type CleanUpResult = { ok: boolean; result?: string; error?: string };
 
@@ -30,3 +31,8 @@ export async function cleanUpOldAction(form: FormData): Promise<CleanUpResult> {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+// THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
+// A declaration for the console to mirror — disabled with the reason when not held — never a
+// decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
+declareAction(cleanUpOldAction, "system:operate");

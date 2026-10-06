@@ -103,7 +103,7 @@ describe("New build, from anywhere", () => {
 
   it("is ONE button on the Factory: the area's own, with no second strip of builds (walk D19)", () => {
     expect(SHELL).toMatch(/active !== "code_tasks" \? <button[\s\S]{0,80}className="bx-new-project"/);
-    expect(SHELL).toMatch(/active !== "code_tasks" \? <ProjectStrip/);
+    expect(SHELL).toMatch(/active !== "code_tasks" && !routeMode \? <ProjectStrip/);
     expect(CT).toContain('data-testid="fx-new-build"');
   });
 

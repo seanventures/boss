@@ -197,7 +197,7 @@ describe("skill import lives in the Library", () => {
   // Access and packs card is a link to it. The server action contract above is unchanged.
   it("the Library's Import posts the YAML through importSkillAction", () => {
     const SHEET = readFileSync("app/skills/import-sheet.tsx", "utf8");
-    expect(SHEET).toContain("callAction(importSkillAction)(form)");
+    expect(SHEET).toContain('callAction(importSkillAction, undefined, "skill:manage")(form)');
     expect(SHEET).toContain('form.set("yaml", body)');
   });
 

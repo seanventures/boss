@@ -721,7 +721,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     form.set("workflow_version_id", "");
     form.set("actor", actor);
     if (previewId) form.set("anchor", `/v1/previews/${previewId}/web/`);
-    const r = await callAction(submitCodeTaskFeedbackAction)(null, form);
+    const r = await callAction(submitCodeTaskFeedbackAction, undefined, "feedback:submit")(null, form);
     if (r?.error) setError(r.error); else { setProposal(r); setPlanOpen(true); }
   };
 
@@ -730,7 +730,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     const form = new FormData();
     form.set("thread_id", proposal.thread_id);
     form.set("actor", actor);
-    const r = await callAction(confirmCodeTaskFeedbackAction)(null, form);
+    const r = await callAction(confirmCodeTaskFeedbackAction, undefined, "feedback:submit")(null, form);
     if (r?.error) { setError(r.error); return; }
     notifyChanged("code-tasks");
     showToast("success", "Change started");
@@ -754,7 +754,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     // STRUCTURED, NOT A MARKER: the app travels as constraints.extends_run_id, which the PRD's
     // approval reads to build onto the app (the text marker stays for old panels only).
     form.set("extends_run_id", baseRun);
-    const r = await callAction(conveneFeaturePanelAction)(form);
+    const r = await callAction(conveneFeaturePanelAction, undefined, "meeting:convene")(form);
     if (!r || r.ok === false) { setError(r?.error ?? "The panel could not be convened."); return; }
     notifyChanged("meetings");
     showToast("success", "Panel convened");

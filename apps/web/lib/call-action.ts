@@ -2,6 +2,8 @@
 
 import { runPressedAction } from "../app/press-relay";
 import { INTENT_FIELD, type Press, runPress } from "./api-write";
+import { currentMirror, wantsStepUp, wasForbidden } from "./identity/mirror";
+import type { Permission } from "./identity/permissions.gen";
 
 /**
  * THE ONE WAY CLIENT CODE INVOKES A SERVER ACTION.
@@ -63,10 +65,25 @@ function fingerprintOf(action: object, args: unknown[]): string {
 export function callAction<A extends unknown[], R>(
   action: (...args: A) => Promise<R>,
   press?: Press | ((...args: A) => Press | undefined),
+  /** The permission the action declares (lib/identity/action-permissions.ts). With it, a result
+   *  that says `step_up_required` opens the step-up sheet and the call is made once more, and a
+   *  `forbidden` refreshes the console's mirror so the control disables. The API decides. */
+  permission?: Permission,
 ): (...args: A) => Promise<R> {
-  return (...args: A) => runPress<R>({
+  const once = (...args: A) => runPress<R>({
     press: typeof press === "function" ? press(...args) : press,
     fingerprint: fingerprintOf(action, args),
   }, (key) => runPressedAction({ [INTENT_FIELD]: key } as { __boss_intent: string },
                                action, ...args));
+  if (!permission) return once;
+  return async (...args: A) => {
+    const first = await once(...args);
+    const mirror = currentMirror();
+    if (mirror && wantsStepUp(first)) {
+      if (await mirror.stepUp(`This needs ${permission}.`)) return once(...args);
+    } else if (mirror && wasForbidden(first)) {
+      mirror.refresh().catch(() => undefined);
+    }
+    return first;
+  };
 }
