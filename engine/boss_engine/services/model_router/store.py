@@ -170,17 +170,23 @@ def save_policy(connection: Any, project_id: str, patch: Mapping[str, Any], *, a
         raise PolicyConflict(current.version)
     body = {k: v for k, v in dict(patch).items() if k not in ("version",)}
     preset = str(body.get("floor_preset") or "")
-    from ..pipeline_profiles import PROFILES
+    profile = None
+    if preset and preset != "custom":
+        from ..pipeline_profile_service import resolve_for_run
 
-    if preset in PROFILES and "floors" not in body:
+        profile = resolve_for_run(connection, project_id, preset, settings)
+        if profile.get("name") != preset:
+            raise PolicyError(f"Unknown floor preset '{preset}'.")
+    if profile is not None and "floors" not in body:
         # A PRESET IS A PROFILE (Decision 4): choosing one sets the Smart floors AND the
         # project's default pipeline profile, which Fixed mode routes by — one control, one
-        # meaning, in both modes (the old Coding Pipeline page's picker).
-        from .policy import preset_floors
+        # meaning, in both modes (the old Coding Pipeline page's picker). A custom profile
+        # converts the same way.
+        from .policy import floors_from_profile
 
-        body["floors"] = [f.to_dict() for f in preset_floors(preset)]
+        body["floors"] = [f.to_dict() for f in floors_from_profile(profile)]
     merged = from_dict(body, base=current)          # validates; raises PolicyError
-    if preset in PROFILES:
+    if profile is not None:
         from ..pipeline_profile_service import set_default_profile
 
         set_default_profile(connection, project_id, preset, actor)

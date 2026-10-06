@@ -319,6 +319,31 @@ is the A/B LangChain ran by hand, as a product feature.
   message also marks Claude exhausted, so the other routes in the project move without a failed
   run.
 
+### Migration notes
+
+| What an install had | What it becomes | Changes anything on Fixed? |
+|---|---|---|
+| No routing settings | `model_routing_mode` unset → **Fixed**; no `model_routing_policies` row (the policy is seeded on read) | No |
+| *Who does what* job choices (`code_agent_engine`, `code_review_engine`, `chat_llm_engine`, their models) | The same rows, shown under **Pin a job**; on Smart they are pins (engine-only = keep the tier's model on that source) | No |
+| Hard problems / Routine work lanes (`code_agent_strong_*`, `code_agent_low_cost_*`) | Seed the Frontier and Balanced tiers when Smart is first used | No |
+| Default pipeline profile (`pipeline_profiles.is_default`) | The **Floors** preset; choosing a preset also sets the default profile | No (it *is* the profile) |
+| A task's `profile` override | Fixed: as before. Smart: the profile's floors are added to the project's for that build | No |
+| Spend-cap failover (`model_config` pin + requeue) | Unchanged; on Smart the monthly-limit message also marks Claude exhausted | No |
+| Experiments (harness, review rounds) | Plus **Model routing** (fixed vs smart); assignment writes `spec.routing_mode` | No |
+| `?area=pipeline` bookmarks | Land on Setup › Model routing; the page's Factory scale card moved to Operations | — |
+
+Schema (all additive, applied by `ensure_schema`): `model_routing_policies`, `model_routes`,
+`provider_model_catalog`, `llm_calls.route_id`, `run_scorecards.route_mode / route_tier /
+routing`. Settings: `BOSS_MODEL_ROUTING_MODE` (default `fixed`), `BOSS_ROUTER_JEV_LIVE`
+(default off, for when BOSS-451 lifts).
+
+### Where headroom is read from
+
+A subscription connected in Setup carries its windows on its own entitlement row. One
+connected through the environment (`CLAUDE_CODE_OAUTH_TOKEN`) has no connection row; telemetry
+records its windows on the catalogue row that spends for it (`anthropic_claude_code`), and the
+snapshot reads them from there.
+
 ## Realistic examples
 
 Each row is an executable test in `engine/tests/test_model_router_examples.py`. The defaults
@@ -426,10 +451,31 @@ the route's reasons in order.
 
 Agent Studio's *Routed / Pinned / Local* model policy now decides an agent's model at run time.
 
+## Verified end to end
+
+On one local stack (`scripts/e2e.sh up`, the scripted `claude` CLI, OpenRouter pointed at the
+model stub, Smart on through `PUT /v1/setup/routing`), production console build:
+
+- **Escalation on the real governed build path.** The stub answers *implement* with code that
+  fails its tests on any model but Opus. The build routed implement Balanced · sonnet, failed
+  twice, and the next boundary routed it Frontier · opus (`tests failed ×2 → Frontier`, well
+  before the legacy final attempt); it completed. Adversarial review, security and consistency
+  ran Frontier · opus by floor.
+- **Headroom.** The stub CLI reported Claude at 92% of its week (`rate_limit_event`). From the
+  next boundary every Fast and Balanced stage ran on OpenRouter (`moved`), while the three
+  Frontier review seats stayed on Claude · opus; both builds completed.
+- **Why this model** on both builds, and Setup › Model routing, at 1440 and 390 with no
+  horizontal scroll; `?area=pipeline` lands on the routing row.
+
 ## Deferred
 
 - **Pooling headroom across projects** that share one subscription. CLI-reported utilisation is
   already account-wide. The estimate is per project.
+- **Typed-decision steps** keep their own backend (Jev or the Claude subscription, through
+  `typed_decision_spend`); they are not yet tiered by the router.
+- **Creating a custom pipeline profile** from the console: the old page's form is gone with the
+  page; existing custom profiles are offered as presets and the API still creates them, and Smart
+  mode's custom floors cover the same need.
 - **Routing the remaining direct `make_code_agent` paths:** the ungoverned code task, the docs
   agent, and the evaluation tools (`verifier_debate`, `verifier_meta_eval`). They are listed in
   `test_every_model_call_goes_through_the_router`'s exemptions with that reason.
