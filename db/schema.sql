@@ -7405,6 +7405,24 @@ CREATE UNLOGGED TABLE IF NOT EXISTS identity_rate_limits (
   PRIMARY KEY (bucket, key_hash, window_start)
 );
 
+-- "Request access" from a refusal (amendment A13): who asked for which permission where, kept so
+-- an admin can see open requests and the requester is never asked twice. Decided by a binding.
+CREATE TABLE IF NOT EXISTS identity_access_requests (
+  id                     TEXT PRIMARY KEY,                 -- acr_…
+  org_id                 TEXT NOT NULL REFERENCES orgs(id),
+  requester_principal_id TEXT NOT NULL REFERENCES identity_principals(id),
+  permission_key         TEXT NOT NULL REFERENCES identity_permissions(key),
+  project_id             TEXT,                             -- NULL = org scope
+  reason                 TEXT,
+  status                 TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','granted','declined','withdrawn')),
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at            TIMESTAMPTZ,
+  resolved_by            TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS identity_access_requests_one_open
+  ON identity_access_requests (org_id, requester_principal_id, permission_key, coalesce(project_id, ''))
+  WHERE status = 'open';
+
 -- Legacy credential and identity paths, each mapped to a real principal (§12). One row per path
 -- in use; last_used_at/use_count feed the "legacy credentials still in use" posture item and the
 -- 30-day retirement countdown (operator decision 1).
