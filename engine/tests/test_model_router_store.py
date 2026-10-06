@@ -191,3 +191,16 @@ def test_an_unreadable_store_routes_as_fixed():
                              begin_nested=lambda: (_ for _ in ()).throw(RuntimeError("down")))
     snap = store.snapshot(broken, _settings(), "p9", fresh=True)
     assert snap.policy.mode == "fixed"
+
+
+def test_a_success_that_also_reports_its_windows_still_clears_the_limit(accounts_db):
+    """Claude Code sends a rate_limit_event with every call, so the success that proves a
+    monthly limit was raised arrives WITH an event — it must clear the limit all the same."""
+    settings = _settings()
+    event = {"rate_limit_info": {"status": "allowed", "rateLimitType": "seven_day",
+                                 "utilization": 0.2, "resetsAt": 4102444800}}
+    with accounts_db.begin() as c:
+        store.observe(c, settings, "p1", "claude_code",
+                      error="You've hit your org's monthly spend limit")
+        store.observe(c, settings, "p1", "claude_code", event=event, ok_model="sonnet")
+        assert set(_windows(c)) == {"seven_day"}
