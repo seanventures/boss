@@ -388,3 +388,16 @@ def test_a_decision_explains_itself():
     body = d.to_dict()
     assert body["tier_label"] == "Frontier" and body["label"] == "Claude Code · opus"
     assert body["why"][0].startswith("Task:") and body["classifier"] == "rules"
+
+
+def test_a_builds_own_profile_adds_its_floors():
+    """A task that asked for `balanced` keeps review on Frontier on a `lean` project."""
+    lean = snap(pol=policy(profile="lean"))
+    spec = {"title": "", "instructions": "Build a new app."}
+    plain = Router().route(RouteRequest(kind="build_stage", step="review_code",
+                                        project_id="p1", spec=spec), lean)
+    assert plain.tier == "balanced"
+    with_profile = Router().route(RouteRequest(
+        kind="build_stage", step="review_code", project_id="p1", spec=spec,
+        extra_floors=floors_from_profile(resolve_profile("balanced"))), lean)
+    assert with_profile.tier == "frontier" and "floor" in with_profile.rules
