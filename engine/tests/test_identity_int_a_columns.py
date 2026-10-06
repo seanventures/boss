@@ -182,3 +182,29 @@ def test_the_schema_has_the_columns():
                  "ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS grant_id",
                  "ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS grant_id"):
         assert stmt in sql
+
+
+# ---- the ledger keeps what the token SAID -------------------------------------------------------------------
+
+def test_the_claims_view_shows_the_minted_claims_not_todays_live_intersection(env):
+    from boss_engine.identity import claims_view, grants, tokens
+
+    from ._identity_agents_support import start, verify
+
+    g = env.grant()
+    shim = start(env, g.id, run="run_ct:said", scope=("code_task:read", "code_task:steer", "repository:read"))
+    said = verify(env, shim)
+    with env.db() as c:
+        task, scope, stored = c.execute(text("SELECT task, scope, claims FROM identity_run_credentials WHERE jti = :j"),
+                                        {"j": said.jti}).one()
+    assert sorted(scope) == sorted(said.scope) and task["run"] == "run_ct:said" and task["project"] == env.project
+    assert stored["cnf"] == {"jkt": "[redacted]"} and shim.key.jkt not in json.dumps(stored)
+    assert shim.tokens["boss:api"].access_token not in json.dumps(stored)
+    # Alice loses code_task:steer: live authority narrows at once; what the token SAID does not change.
+    env.world.revoke(env.alice, {"code_task:steer"}, env.project)
+    with env.db() as c:
+        view = claims_view.for_grant(grants.load(g.id, db=c), run_id="run_ct:said", db=c)
+    assert view["scope_source"] == "token"
+    assert view["claims"]["scope"] == " ".join(sorted(said.scope)) and "code_task:steer" in view["token_scope"]
+    assert "code_task:steer" not in view["live_scope"] and view["claims"]["jti"] == said.jti
+    assert view["claims"]["cnf"] == {"jkt": tokens.REDACTED_CLAIM}

@@ -196,13 +196,27 @@ def _store_credential(db: Any, claims: RunTokenClaims) -> None:
 
     db.execute(text(
         "INSERT INTO identity_run_credentials (jti, parent_jti, org_id, run_id, grant_id, subject_principal_id, "
-        " mode, chain, depth, aud, scope_hash, cnf_jkt, issued_at, expires_at) VALUES (:jti, :pjti, :org, :run, "
-        " :grant, :sub, :mode, CAST(:chain AS JSONB), :depth, :aud, :sh, :jkt, :iat, :exp)"),
+        " mode, chain, depth, aud, scope_hash, cnf_jkt, issued_at, expires_at, task, scope, claims) VALUES (:jti, "
+        " :pjti, :org, :run, :grant, :sub, :mode, CAST(:chain AS JSONB), :depth, :aud, :sh, :jkt, :iat, :exp, "
+        " CAST(:task AS JSONB), :scope, CAST(:claims AS JSONB))"),
         {"jti": claims.jti, "pjti": claims.parent_jti, "org": claims.org_id, "run": claims.task.run_id,
          "grant": claims.grant_id, "sub": claims.sub, "mode": claims.mode.value,
          "chain": json.dumps(claims.chain.to_boss_chain()), "depth": claims.depth, "aud": claims.aud,
          "sh": lineage.scope_hash(claims.scope), "jkt": claims.cnf_jkt, "iat": _dt(claims.iat),
-         "exp": _dt(claims.exp)})
+         "exp": _dt(claims.exp), "task": json.dumps(_claims_dict(claims)["boss_task"], default=str),
+         "scope": sorted(claims.scope), "claims": json.dumps(redacted_claims(claims), default=str)})
+
+
+#: Claims the ledger never keeps verbatim: the DPoP key binding is shown as "[redacted]".
+REDACTED_CLAIM = "[redacted]"
+
+
+def redacted_claims(claims: RunTokenClaims) -> dict[str, Any]:
+    """What the token SAID, for the console's claims view and the ledger: every claim, with the
+    `cnf` key binding redacted. Never a signature or the token itself (they are not claims)."""
+    out = _claims_dict(claims)
+    out["cnf"] = {"jkt": REDACTED_CLAIM}
+    return out
 
 
 def _claims_dict(c: RunTokenClaims) -> dict[str, Any]:
@@ -724,6 +738,6 @@ def verify_for_mcp(token: str, *, dpop_proof: Optional[str], htm: str, htu: str,
 
 
 __all__ = ["TokenError", "mint_run_token", "verify_run_token", "exchange_token", "renew_run_token",
-           "mint_actor_assertion", "decide", "introspect", "live_state", "context_for", "issuer",
+           "mint_actor_assertion", "decide", "introspect", "live_state", "context_for", "issuer", "redacted_claims",
            "AUD_API", "AUD_MCP", "AUD_EGRESS", "GRANT_TYPE_RENEW",
            "refuse_passthrough", "verify_for_mcp", "TokenPassthroughRefused"]
