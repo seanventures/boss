@@ -16,7 +16,7 @@ import { ArrowRight, CaretRight, EnvelopeSimple, Fingerprint, Key, LockSimple, S
 
 import { IdentityError, idPost } from "../../../lib/identity/api";
 import type { AuthOptions, SignInStep } from "../../../lib/identity/types";
-import { getAssertion, PasskeyCancelled, webauthnAvailable, type AssertionOptions } from "../../../lib/identity/webauthn";
+import { getAssertion, PasskeyCancelled, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../../lib/identity/webauthn";
 import { CodeInput, Face } from "../../../components/identity/kit";
 import { AuthStage, Live, Logo, MethodTabs, ProviderRow, safeNextClient } from "../auth-parts";
 
