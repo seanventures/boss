@@ -174,7 +174,8 @@ def test_the_router_resolves_it_once_per_turn():
     from boss_engine.services import intent_router
 
     turn = inspect.getsource(intent_router.IntentRouter.route_turn)
-    assert "self._use_project_chat_model(connection, project_id)" in turn
+    # Once per turn, with the thread so the model router can pick once per thread.
+    assert "self._use_project_chat_model(connection, project_id, messages, thread_id)" in turn
 
     apply = inspect.getsource(intent_router.IntentRouter._use_project_chat_model)
     assert "model_routing.choose(" in apply

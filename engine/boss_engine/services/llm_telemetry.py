@@ -224,6 +224,11 @@ def record_llm_call(
             # The act column is written only when there is an act, so a store that predates
             # the ledger (or a test's minimal table) records the call exactly as before.
             signed = (", act_id", ", :act") if act_id else ("", "")
+            # The route that chose this call's model (model_router): by stage, else the last.
+            routes = ctx.get("routes") if isinstance(ctx.get("routes"), dict) else {}
+            route_id = routes.get(stage or ctx.get("stage") or "") or ctx.get("route_id")
+            if route_id:
+                signed = (signed[0] + ", route_id", signed[1] + ", :route")
             c.execute(
                 text(f"""
                     INSERT INTO llm_calls (
@@ -243,6 +248,7 @@ def record_llm_call(
                     "stage": stage or ctx.get("stage"),
                     "role": role,
                     "act": act_id,
+                    "route": route_id,
                     "eng": engine_name,
                     "model": model or None,
                     "pt": int(u.get("prompt_tokens") or 0),
@@ -272,6 +278,14 @@ def record_llm_call(
                 from .provider_limits import record_call_outcome
                 record_call_outcome(c, ctx.get("settings"), str(project_id), engine_name,
                                     ok=bool(ok), error=error)
+                # SUBSCRIPTION HEADROOM (model_router.headroom): the CLI's own window numbers
+                # and its limit sentences, folded into the source's observed windows.
+                if u.get("rate_limit") or (not ok and error):
+                    from .model_router.store import observe
+
+                    observe(c, ctx.get("settings"), str(project_id), engine_name,
+                            event=u.get("rate_limit") if isinstance(u.get("rate_limit"), dict)
+                            else None, error=None if ok else error)
     except Exception as exc:  # noqa: BLE001 — telemetry must never break the pipeline
         log.warning("llm_call telemetry write failed (non-fatal): %s", exc)
 
