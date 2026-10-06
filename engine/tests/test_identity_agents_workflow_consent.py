@@ -27,7 +27,7 @@ URL_ENV = "BOSS_IDENTITY_FULL_TEST_DATABASE_URL"
 ALICE = "usr_alice_wf"
 FORGE = "agt_forgewf0001"
 ATLAS = "agt_atlaswf0001"
-NEEDS = consent.CODE_TASK_PERMISSIONS | consent.WORKFLOW_BASE_PERMISSIONS
+NEEDS = consent.CODE_TASK_PERMISSIONS | consent.WORKFLOW_BASE_PERMISSIONS | {"code_task:create"}
 
 
 @pytest.fixture()
@@ -300,3 +300,13 @@ def test_an_agent_without_a_passport_gets_one_lazily_so_a_person_is_still_asked(
     monkeypatch.setenv("BOSS_AUTHZ_MODE", "shadow")
     with env.engine.begin() as db:
         assert consent._agents(db, env.project, ["builder"]) is None
+
+
+def test_consent_asks_for_what_each_steps_tool_is_checked_against(env):
+    """Integration walk: a Fast Fix run started under a grant without code_task:create, then its
+    build step was refused under enforce ("'create_code_task' needs code_task:create"). The needs
+    now come from each step's capability tool declaration."""
+    with env.engine.begin() as db:
+        roles, perms, _ = consent.workflow_needs(db, env.project, {"steps": [
+            {"id": "build", "binding": {"capability": "build"}}]}, {})
+    assert "code_task:create" in perms and roles

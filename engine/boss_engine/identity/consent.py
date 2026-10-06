@@ -160,7 +160,11 @@ def workflow_needs(db: Any, project_id: str, spec: Any, input_data: Any) -> tupl
             seats = step.get(seat_key) or binding.get(seat_key)
             if isinstance(seats, list):
                 candidates.extend(s.get("role_key") if isinstance(s, dict) else s for s in seats)
-        is_build = str(binding.get("capability") or "") in BUILD_CAPABILITIES or step.get("kind") == "code_task"
+        cap_key = str(binding.get("capability") or "")
+        tool_perm, _cap_captain = _capability_needs(cap_key)
+        if tool_perm:
+            perms.add(tool_perm)            # what the step's own tool call will be checked against
+        is_build = cap_key in BUILD_CAPABILITIES or step.get("kind") == "code_task"
         if is_build:
             builds = True
             if not any(candidates):
@@ -172,6 +176,39 @@ def workflow_needs(db: Any, project_id: str, spec: Any, input_data: Any) -> tupl
     if builds:
         perms |= CODE_TASK_PERMISSIONS
     return roles, frozenset(perms), (_repos_for(db, project_id, input_data) if builds else [])
+
+
+_REGISTRY: list = []
+
+
+def _registry(build):
+    if not _REGISTRY:
+        _REGISTRY.append(build())
+    return _REGISTRY[0]
+
+
+def _capability_needs(cap_key: str) -> tuple[Optional[str], Optional[str]]:
+    """(the permission the capability's tool declares, if delegable; its default captain). The
+    consent must ask for exactly what the step's tool call is checked against (identity_gate), or
+    the run starts and then fails at that step under enforce."""
+    if not cap_key:
+        return None, None
+    try:
+        from ..services import workflow_capabilities
+        from ..tools.builtin import build_default_registry
+
+        cap = workflow_capabilities.CAPABILITIES.get(cap_key)
+        if cap is None:
+            return None, None
+        perm = None
+        if cap.tool:
+            spec = {t.name: t for t in _registry(build_default_registry).specs()}.get(cap.tool)
+            key = str(getattr(spec, "permission", "") or "")
+            if key and catalogue.is_known(key) and catalogue.meta(key).delegable:
+                perm = key
+        return perm, (getattr(cap, "captain", None) or None)
+    except Exception:  # noqa: BLE001 — unknown here; the step's own check still decides
+        return None, None
 
 
 class AgentWithoutPassport(Exception):
