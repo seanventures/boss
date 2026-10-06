@@ -5,11 +5,12 @@ import { AgentsForMe } from "./agents-for-me";
 
 export const dynamic = "force-dynamic";
 
-type Props = { searchParams: Promise<{ new?: string }> };
+type Props = { searchParams: Promise<{ new?: string; connected?: string; connect_error?: string }> };
 
 /** My account › Agents acting for me (and the connections the vault keeps for you). */
 export default async function AgentsForMePage({ searchParams }: Props) {
   if (!(await pageAllowed("/account/agents"))) return null;
+  const query = await searchParams;
   const [mine, agents, connections, policy] = await Promise.all([
     serverGet<{ delegations: Delegation[] }>("/v1/identity/me/delegations"),
     serverGet<{ agents: Passport[] }>("/v1/identity/agents"),
@@ -22,7 +23,8 @@ export default async function AgentsForMePage({ searchParams }: Props) {
       agents={agents.ok ? agents.data.agents.filter((a) => a.status === "active").map((a) => ({ id: a.id, name: a.name })) : null}
       connections={connections.ok ? connections.data.connections : []}
       untilRevokedAllowed={policy.ok ? policy.data.delegation_until_revoked : false}
-      openNew={(await searchParams).new === "1"}
+      openNew={query.new === "1"}
+      connectOutcome={{ connected: query.connected ?? null, error: query.connect_error ?? null }}
     />
   );
 }

@@ -15,9 +15,9 @@ import {
 } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../../../agent-avatar";
-import { CanButton, useCan, useGuardedCall } from "../../../../../components/identity/identity-provider";
+import { CanButton, useCan, useGuardedCall, useIdentity } from "../../../../../components/identity/identity-provider";
 import { Ago, ErrorLine, Face, Perm, Pill, Sheet, clock, daysUntil, shortDate, useNow } from "../../../../../components/identity/kit";
-import { IdentityError, idPost } from "../../../../../lib/identity/api";
+import { IdentityError, idGet, idPost } from "../../../../../lib/identity/api";
 import { PERMISSION_META, type Permission } from "../../../../../lib/identity/permissions.gen";
 import type { CascadePreview, ChainHop, Delegation, DelegationDetail } from "../../../../../lib/identity/types";
 import { showToast } from "../../../../client-forms";
@@ -167,17 +167,38 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
   const [narrowing, setNarrowing] = useState(false);
   const [busy, setBusy] = useState(false);
   const guarded = useGuardedCall();
-  const canRevoke = useCan("delegation:revoke_any");
+  const canRevokeAny = useCan("delegation:revoke_any");
+  const meId = useIdentity().me?.principal_id ?? null;
+  // THE GRANTOR may narrow and revoke their own grant (the API allows it on /me), and only the
+  // grantor may extend — a standing grant only: a task grant ends with its run (409).
+  const grantor = meId !== null && meId === d.user.id;
+  const canRevoke = grantor ? { allowed: true, reason: "", needsStepUp: false } : canRevokeAny;
+  const canExtend = grantor && d.kind !== "task";
+  const revokePath = grantor
+    ? `/v1/identity/me/delegations/${encodeURIComponent(d.id)}/revoke`
+    : `/v1/identity/delegations/${encodeURIComponent(d.id)}/revoke`;
   const active = d.status === "active";
+  const [tokenClaims, setTokenClaims] = useState<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     if (!active || !canRevoke.allowed) return;
     let live = true;
-    idPost<CascadePreview>(`/v1/identity/delegations/${encodeURIComponent(d.id)}/revoke`, { dry_run: true })
+    // The dry run, read-only: the grantor or a reader of every grant may ask.
+    idGet<CascadePreview>(`/v1/identity/delegations/${encodeURIComponent(d.id)}/cascade-preview`)
       .then((p) => { if (live) setPreview(p); })
       .catch((e) => { if (live) setPreviewError(e instanceof IdentityError ? e.message : "Preview unavailable"); });
     return () => { live = false; };
   }, [d.id, active, canRevoke.allowed]);
+
+  useEffect(() => {
+    if (!claims || tokenClaims) return;
+    let live = true;
+    // The newest live run token's claims, unsigned and redacted by the API.
+    idGet<Record<string, unknown>>(`/v1/identity/delegations/${encodeURIComponent(d.id)}/claims`)
+      .then((c) => { if (live) setTokenClaims(c); })
+      .catch(() => { if (live) setTokenClaims(claimsOf(d)); });
+    return () => { live = false; };
+  }, [claims, tokenClaims, d]);
 
   const halts = preview?.halts ?? 0;
   const agents = useMemo(() => d.agents.map((a) => a.name).join(", "), [d.agents]);
@@ -186,7 +207,7 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
     setBusy(true);
     try {
       const result = await guarded("Revoking halts every agent in this chain.", () =>
-        idPost<CascadePreview>(`/v1/identity/delegations/${encodeURIComponent(d.id)}/revoke`, {}));
+        idPost<CascadePreview>(revokePath, {}));
       setRevoked(result);
       setD({ ...d, status: "revoked" });
       showToast("success", "Grant revoked");
@@ -226,15 +247,28 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
         </div>
         <span className="idn-spacer" />
         <div className="idn-acts">
-          <CanButton permission="delegation:grant" className="idn-btn" disabled={!active} onClick={extend} tip="30 more days; only the person who granted it">
-            <Clock size={15} aria-hidden /> Extend
-          </CanButton>
-          <CanButton permission="delegation:revoke_any" className="idn-btn" disabled={!active} onClick={() => setNarrowing(true)} tip="Drop permissions the agents no longer need">
-            Narrow
-          </CanButton>
-          <CanButton permission="delegation:revoke_any" className="idn-btn danger" disabled={!active} onClick={openRevoke} tip="See what stops first" data-testid="revoke-grant">
-            <Prohibit size={15} aria-hidden /> Revoke grant
-          </CanButton>
+          {canExtend ? (
+            <CanButton permission="delegation:grant" className="idn-btn" disabled={!active} onClick={extend} tip="30 more days, up to the policy's limit">
+              <Clock size={15} aria-hidden /> Extend
+            </CanButton>
+          ) : null}
+          {grantor ? (
+            <>
+              <button type="button" className="idn-btn" aria-disabled={!active || undefined} onClick={() => { if (active) setNarrowing(true); }} title="Drop permissions the agents no longer need">Narrow</button>
+              <button type="button" className="idn-btn danger" aria-disabled={!active || undefined} onClick={() => { if (active) openRevoke(); }} title="See what stops first" data-testid="revoke-grant">
+                <Prohibit size={15} aria-hidden /> Revoke grant
+              </button>
+            </>
+          ) : (
+            <>
+              <CanButton permission="delegation:revoke_any" className="idn-btn" disabled={!active} onClick={() => setNarrowing(true)} tip="Drop permissions the agents no longer need">
+                Narrow
+              </CanButton>
+              <CanButton permission="delegation:revoke_any" className="idn-btn danger" disabled={!active} onClick={openRevoke} tip="See what stops first" data-testid="revoke-grant">
+                <Prohibit size={15} aria-hidden /> Revoke grant
+              </CanButton>
+            </>
+          )}
         </div>
       </header>
 
@@ -250,8 +284,8 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
             {claims ? <EyeSlash size={13} aria-hidden /> : <Eye size={13} aria-hidden />} {claims ? "Hide token claims" : "Show token claims"}
           </button>
         </div>
-        {claims ? <div className="idn-claims"><JsonView data={claimsOf(d)} label="Run token claims, redacted" /></div> : null}
-        {d.chain.length ? <Funnel hops={d.chain} /> : null}
+        {claims ? <div className="idn-claims">{tokenClaims ? <JsonView data={tokenClaims} label="Run token claims, redacted" /> : <span className="idn-dim">Reading claims…</span>}</div> : null}
+        {d.chain.length ? <Funnel hops={d.chain} /> : <div className="idn-dim idn-row" data-testid="chain-unreported">The live chain shows once an agent acts under this grant.</div>}
         <div className="idn-nodes">
           {d.chain.map((h, i) => <HopCard key={`${h.kind}-${h.id}`} hop={h} last={i === d.chain.length - 1} />)}
         </div>
@@ -329,8 +363,8 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
           <section className="idn-cascade" data-done="true" aria-live="polite" data-testid="revoked">
             <h3><CheckCircle size={20} aria-hidden /> Grant revoked</h3>
             <p className="idn-lede2" data-copy="prose">{d.user.name}'s authority left every agent in this chain. Work stopped where it was.</p>
-            {revoked.items.map((it) => (
-              <div key={it.kind} className="idn-cx"><span className="idn-i">{CASCADE_ICON[it.kind]}</span><span>{it.label}<small data-copy="data">{it.detail}</small></span><span className="idn-n">{it.count}</span></div>
+            {revoked.items.map((it, i) => (
+              <div key={`${it.kind}-${i}`} className="idn-cx"><span className="idn-i">{CASCADE_ICON[it.kind]}</span><span>{it.label}<small data-copy="data">{it.detail}</small></span><span className="idn-n">{it.count}</span></div>
             ))}
             <p className="idn-fine-l" data-copy="prose">Revoked is terminal. {d.user.name} can grant again to resume.</p>
           </section>
@@ -342,23 +376,31 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
         ) : dismissed ? (
           <section className="idn-card" aria-label="Revoke">
             <div className="idn-card-h"><h3>Revoke this grant</h3></div>
-            <CanButton permission="delegation:revoke_any" className="idn-btn danger" onClick={openRevoke}>Review revoke</CanButton>
+            {grantor ? <button type="button" className="idn-btn danger" onClick={openRevoke}>Review revoke</button>
+              : <CanButton permission="delegation:revoke_any" className="idn-btn danger" onClick={openRevoke}>Review revoke</CanButton>}
           </section>
         ) : (
           <section className="idn-cascade" aria-labelledby="idn-revoke-h" data-testid="cascade">
             <h3 id="idn-revoke-h" tabIndex={-1}><Warning size={20} aria-hidden /> Revoke this grant?</h3>
             <p className="idn-lede2" data-copy="prose">{d.user.name}'s authority leaves every agent in this chain within 5 seconds. Work stops where it is; nothing is deleted.</p>
-            {preview ? preview.items.map((it) => (
-              <div key={it.kind} className="idn-cx" data-testid={`cascade-${it.kind}`}>
+            {preview ? preview.items.map((it, i) => (
+              <div key={`${it.kind}-${i}`} className="idn-cx" data-testid={`cascade-${it.kind}`}>
                 <span className="idn-i">{CASCADE_ICON[it.kind]}</span>
                 <span>{it.label}<small data-copy="data">{it.detail}</small></span>
                 <span className="idn-n">{it.count}</span>
               </div>
             )) : <div className="idn-dim idn-row">{canRevoke.allowed ? (previewError ?? "Checking what stops…") : <><LockSimple size={14} aria-hidden /> {canRevoke.reason}</>}</div>}
             <div className="idn-save">
-              <CanButton id="idn-revoke" permission="delegation:revoke_any" className="idn-btn danger solid" disabled={busy || !preview} onClick={revoke} data-testid="revoke-confirm">
-                <Prohibit size={15} aria-hidden /> {busy ? "Revoking…" : halts ? `Revoke and halt ${halts} runs` : "Revoke grant"}
-              </CanButton>
+              {grantor ? (
+                <button type="button" id="idn-revoke" className="idn-btn danger solid" aria-disabled={busy || !preview || undefined}
+                  onClick={() => { if (!busy && preview) void revoke(); }} data-testid="revoke-confirm">
+                  <Prohibit size={15} aria-hidden /> {busy ? "Revoking…" : halts ? `Revoke and halt ${halts} runs` : "Revoke grant"}
+                </button>
+              ) : (
+                <CanButton id="idn-revoke" permission="delegation:revoke_any" className="idn-btn danger solid" disabled={busy || !preview} onClick={revoke} data-testid="revoke-confirm">
+                  <Prohibit size={15} aria-hidden /> {busy ? "Revoking…" : halts ? `Revoke and halt ${halts} runs` : "Revoke grant"}
+                </CanButton>
+              )}
               <button type="button" className="idn-btn" onClick={() => setDismissed(true)}>Cancel</button>
             </div>
             <p className="idn-fine-l" data-copy="prose">Recorded as <code className="idn-mono">delegation.revoked</code> with the full cascade. {d.user.name} is notified.</p>
