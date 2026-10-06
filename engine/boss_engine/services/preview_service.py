@@ -2788,6 +2788,27 @@ def _inject_shim(html: bytes, prefix: str) -> bytes:
         return html
 
 
+# A PREVIEW IS SOMEONE ELSE'S CODE ON THE CONSOLE'S ORIGIN. The console serves previews at
+# /v1/previews/<id>/web/... on its own host, so without isolation a previewed app's script could
+# call /v1/identity/me with the operator's session, read the CSRF token and act as them. Every
+# preview response therefore carries a CSP sandbox WITHOUT allow-same-origin: the browser gives
+# the document an opaque origin, its requests carry no SameSite cookie, and it can read nothing
+# the console's origin serves. The preview reaches only its own capability URL, which carries no
+# credential (the console's proxy forwards none there), so a wildcard CORS answer is safe and is
+# what lets an opaque-origin page read its own backend.
+PREVIEW_SANDBOX_CSP = (
+    "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+)
+
+
+def preview_isolation_headers() -> dict[str, str]:
+    """The headers every preview web/feedback response carries (see PREVIEW_SANDBOX_CSP)."""
+    return {
+        "Content-Security-Policy": PREVIEW_SANDBOX_CSP,
+        "Access-Control-Allow-Origin": "*",
+    }
+
+
 # HEADERS THE PREVIEWED APP MUST NOT SEE. Everything else is forwarded.
 #
 # This was an ALLOWLIST of four names, and it broke every app that invented a header of its
