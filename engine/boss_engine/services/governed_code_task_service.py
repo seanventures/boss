@@ -2074,7 +2074,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     def _route_ids() -> dict:
         return {s: r["route_id"] for s, r in stage_routes.items() if r.get("route_id")}
 
-    def _guarded(step: str, decision):
+    def _routed_agent(step: str, decision):
         """(agent, model) for a decision. Smart mode wraps the agent so a limit or a
         transient failure at call time retries the SAME stage on the next source at once
         (model_router.failover); Fixed mode is exactly as before."""
@@ -2107,15 +2107,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
     def _route(step: str):
         """Resolve a step to (agent, model) through the router."""
-        return _guarded(step, stage_router.route(step))
+        return _routed_agent(step, stage_router.route(step))
 
     def _route_escalated(step: str):
         """The step again, one boundary later, on the evidence that its route produced no
         usable output (write_tests) or that this is the final attempt (implement). Fixed mode:
         the hard-problems lane, as before; Smart mode: the escalation rules."""
         signal = "no_output" if step == "write_tests" else "final_attempt"
-        return _guarded(step, stage_router.route(step, signal=signal,
-                                                 previous=stage_routes.get(step)))
+        return _routed_agent(step, stage_router.route(step, signal=signal,
+                                                      previous=stage_routes.get(step)))
 
     def _vm_escalation(step: str, escalate: bool, signal: str) -> str:
         """A micro-VM stage's escalation. Fixed: the hard-problems engine override, as before.
