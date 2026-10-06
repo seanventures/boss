@@ -4,7 +4,7 @@ import {
   collectorMachinePost, collectorPathOf, localHttp, networkTrustedConsole, sameOriginMutation,
   secureConsoleTransport,
 } from "./lib/console-session";
-import { hasSessionCookie } from "./lib/identity/forward";
+import { hasSessionCookie, isPreviewCapabilityPath } from "./lib/identity/forward";
 import { isPublicConsolePath, PATH_HEADER } from "./lib/identity/pages";
 import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
 import { consoleParams } from "./app/legacy-areas";
@@ -67,6 +67,12 @@ export async function middleware(request: NextRequest) {
     return NextResponse.json({ error: "The console requires HTTPS for remote access." },
       { status: 426, headers: { "Cache-Control": "no-store" } });
   }
+  // A PREVIEW'S OWN REQUESTS (its assets, its API calls, its form posts, the feedback overlay)
+  // come from a sandboxed, opaque-origin document: no SameSite cookie, `Origin: null`. They need
+  // neither: a preview path is a capability URL, and the /v1 proxy forwards no credential to it
+  // (lib/identity/forward.ts isPreviewCapabilityPath), so there is no session to protect from a
+  // cross-site write. Only the first page load below still sends a signed-out visitor to sign in.
+  if (isPreviewCapabilityPath(path) && !previewPage) return NextResponse.next();
   // The sign-in pages and the public sign-in API (rate-limited and CSRF-checked by the API).
   if (isPublicConsolePath(path)) return passThrough(request);
   // A NETWORK-TRUSTED INSTALL (goldeneye, before and up to 30 days after its claim) has no
