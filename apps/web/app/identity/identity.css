@@ -696,3 +696,7 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn-t td .idn-mut, .idn-t td .idn-warn { white-space: nowrap; }
 .idn-f label.idn-check { justify-content: flex-start; font-weight: 500; color: var(--ink-soft); }
 @media (max-width: 480px) { .idn-me > summary > span { display: none; } .idn-me > summary { padding: 3px; } }
+/* Nothing on an identity page may widen it (a screen-reader-only label inside a scrolled table
+   is positioned against the page, not the table): contain, never scroll the page sideways. */
+.idn-scroll, .idn-lt { position: relative; }
+.idn { overflow-x: clip; }
