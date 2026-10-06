@@ -54,3 +54,15 @@ def test_the_brief_says_where_the_build_actually_ran():
     assert (b["engine"], b["model"]) == ("openrouter", "qwen/qwen3-coder")
     assert (b["review_engine"], b["review_model"]) == ("claude_code", "opus")
     assert b["cross_model"] is True
+
+
+def test_the_routing_closures_are_not_shadowed_later_in_the_pipeline():
+    """A later `def _guarded` in the same function silently replaced the router's helper and
+    every stage after the review panel failed with 'cannot unpack non-iterable function'."""
+    import ast
+
+    body = inspect.getsource(governed_code_task_service._run_governed_code_task)
+    names = [n.name for n in ast.walk(ast.parse(body.replace("\n    ", "\n", 0)))
+             if isinstance(n, ast.FunctionDef)]
+    for helper in ("_routed_agent", "_route", "_route_escalated", "_route_names", "_take"):
+        assert names.count(helper) == 1, helper

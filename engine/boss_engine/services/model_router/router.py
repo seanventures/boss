@@ -462,7 +462,9 @@ def _blocked(target: Target, snapshot: Snapshot) -> Optional[str]:
 def _headline(why: list[str], c: Classification) -> str:
     for line in reversed(why):
         if line.startswith(("Escalated", "Floor", "Budget", "Pinned", "Job pin", "Job pref",
-                            "The session")) or "moves to" in line or "exhausted" in line:
+                            "The session", "Waiting", "No ")) or any(
+                word in line for word in ("moves to", "exhausted", "failing", "limit hit",
+                                          "stands in")):
             return line
     return c.reason
 
