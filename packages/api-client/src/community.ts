@@ -2619,6 +2619,10 @@ export type CommsChannelPolicyUpsertRequest = {
   actor?: string;
 };
 
+/** POST /comms/outbox/{id}/queue: without `reservation_id` the API reserves the comms spend
+ *  itself — a person never calls the system-only /v1/budget/reserve (identity int-b). */
+export type OutboxQueueOnlyRequest = Omit<OutboxQueueRequest, "reservation_id"> & { reservation_id?: string };
+
 export type OutboxQueueRequest = {
   project_id: string;
   reservation_id: string;
@@ -5291,6 +5295,9 @@ export function createBossRequest(config: BossApiClientConfig) {
   const timeoutMs = config.timeoutMs ?? 120_000;
   const apiKey = config.apiKey?.trim();
 
+  // A GET THAT WRITES is called by its POST twin, `<path>/load`, with the same query (the API's
+  // identity_guard.writing_get): a cookie-authenticated GET to one is refused without CSRF, and a
+  // server-side GET sends none. apps/web/tests/no-console-caller-gets-a-writing-get.test.ts.
   async function request<T>(
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
@@ -5775,7 +5782,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
       });
     },
     getMeetingRoles(projectId: string) {
-      return request<MeetingRolesResponse>("GET", "/v1/meeting-roles", {
+      return request<MeetingRolesResponse>("POST", "/v1/meeting-roles/load", {
         query: { project_id: projectId },
       });
     },
@@ -5969,7 +5976,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     getPreviews(projectId: string, limit = 50) {
       return request<{ previews: PreviewRec[] }>(
-        "GET", "/v1/previews", { query: { project_id: projectId, limit } });
+        "POST", "/v1/previews/load", { query: { project_id: projectId, limit } });
     },
     getSandboxes() {
       return request<SandboxesResponse>("GET", "/v1/sandboxes");
@@ -6032,7 +6039,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
     /** `check`: none (what was recorded), stale (probe servers not checked in the last
      *  minute), now (probe every one). */
     getMcpServers(projectId: string, check: "none" | "stale" | "now" = "none") {
-      return request<McpServersResponse>("GET", "/v1/mcp/servers", {
+      return request<McpServersResponse>("POST", "/v1/mcp/servers/load", {
         query: { project_id: projectId, check },
       });
     },
@@ -6243,8 +6250,8 @@ export function createBossApiClient(config: BossApiClientConfig) {
       actor = "ceo",
     ) {
       return request<Record<string, unknown>>(
-        "GET",
-        `/v1/cloud/easy-connect/${encodeURIComponent(sessionId)}`,
+        "POST",
+        `/v1/cloud/easy-connect/${encodeURIComponent(sessionId)}/load`,
         { query: { project_id: projectId, actor } },
       );
     },
@@ -6439,7 +6446,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
       );
     },
     getStatus(projectId: string) {
-      return request<StatusResponse>("GET", "/v1/status", {
+      return request<StatusResponse>("POST", "/v1/status/load", {
         query: { project_id: projectId },
       });
     },
@@ -7710,7 +7717,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
       });
     },
     getElasticStatus(projectId: string) {
-      return request<Record<string, unknown>>("GET", "/v1/elastic/status", {
+      return request<Record<string, unknown>>("POST", "/v1/elastic/status/load", {
         query: { project_id: projectId },
       });
     },
@@ -7758,7 +7765,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
         project_id: string;
         items: Array<Record<string, unknown>>;
         count: number;
-      }>("GET", "/v1/elastic/instances", {
+      }>("POST", "/v1/elastic/instances/load", {
         query: { project_id: projectId, ...query },
       });
     },
@@ -7806,14 +7813,14 @@ export function createBossApiClient(config: BossApiClientConfig) {
         project_id: string;
         items: Array<Record<string, unknown>>;
         count: number;
-      }>("GET", "/v1/provider-usage", {
+      }>("POST", "/v1/provider-usage/load", {
         query: { project_id: projectId, ...query },
       });
     },
     getProviderUsageSummary(projectId: string, provider?: string) {
       return request<Record<string, unknown>>(
-        "GET",
-        "/v1/provider-usage/summary",
+        "POST",
+        "/v1/provider-usage/summary/load",
         { query: { project_id: projectId, provider } },
       );
     },
@@ -8021,7 +8028,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
         body: payload,
       });
     },
-    queueOutboxDelivery(messageId: string, payload: OutboxQueueRequest) {
+    queueOutboxDelivery(messageId: string, payload: OutboxQueueOnlyRequest) {
       return request<JobSummary>(
         "POST",
         `/v1/comms/outbox/${encodeURIComponent(messageId)}/queue`,
@@ -8117,7 +8124,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
       });
     },
     listDecisions(projectId: string, limit?: number, offset = 0) {
-      return request<DecisionInboxResponse>("GET", "/v1/decisions/inbox", {
+      return request<DecisionInboxResponse>("POST", "/v1/decisions/inbox/load", {
         query: { project_id: projectId, limit, offset },
       });
     },
@@ -8382,7 +8389,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
       );
     },
     listHardwarePlaces(projectId: string) {
-      return request<HardwarePlacesResponse>("GET", "/v1/hardware/places", {
+      return request<HardwarePlacesResponse>("POST", "/v1/hardware/places/load", {
         query: { project_id: projectId },
       });
     },
@@ -8405,7 +8412,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     /** Local place when `placeId` is omitted. */
     resolveHardwarePlace(projectId: string, placeId?: string) {
-      return request<HardwarePlace>("GET", "/v1/hardware/resolve", {
+      return request<HardwarePlace>("POST", "/v1/hardware/resolve/load", {
         query: { project_id: projectId, place_id: placeId },
       });
     },
