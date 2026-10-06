@@ -69,7 +69,9 @@ export function IdentityProvider({ me: initialMe, org: initialOrg, project: init
   const [ask, setAsk] = useState<StepUpAsk | null>(null);
   const epochRef = useRef<number | null>(initialOrg?.epoch ?? null);
 
-  useEffect(() => { if (me?.csrf_token) setCsrfToken(me.csrf_token); }, [me?.csrf_token]);
+  // Set during render, not in an effect: a child's mount effect (a dry-run preview, a first
+  // write) runs BEFORE this provider's effects, and would otherwise go out without the token.
+  if (me?.csrf_token) setCsrfToken(me.csrf_token);
 
   const loadPermissions = useCallback(async () => {
     const [o, p] = await Promise.all([
