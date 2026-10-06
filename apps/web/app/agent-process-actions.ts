@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { API_URL, authHeaders } from "../lib/client";
 import { apiWrite } from "../lib/api-write";
+import { loadPath } from "../lib/writing-get";
 import { declareAction } from "../lib/identity/guarded-action";
 
 export type AgentProcessActionResult = {
@@ -179,8 +180,11 @@ export async function saveAgentProcessTemplateAction(
 export async function loadAgentProcessTemplatesAction(
   projectId: string,
 ): Promise<AgentProcessActionResult> {
-  return get(
-    `/v1/agent-processes/templates?project_id=${encodeURIComponent(projectId)}`,
+  // A writing GET (it seeds the default templates): its POST twin.
+  return post(
+    loadPath(`/v1/agent-processes/templates?project_id=${encodeURIComponent(projectId)}`),
+    {},
+    { revalidate: false },
   );
 }
 

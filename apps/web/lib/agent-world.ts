@@ -15,6 +15,8 @@ import { apiWrite } from "./api-write";
 import { avatarSvg, seededSpec } from "./agent-avatar";
 import { agentIdentity } from "./agent-identity";
 import { CAST, CAST_BY_KEY } from "./avatar-kit/cast";
+import { loadPath } from "./writing-get";
+import { IdentityError, idPost } from "./identity/api";
 import { openTalk } from "./converse-doors";
 import {
   type Act, type ActHow, type ActKind, type ActStatus, type AgentIdentity, type AvatarSpec,
@@ -324,9 +326,14 @@ export function getAgentCard(projectId: string, roleKey: string): Promise<Result
 }
 
 export type RunChainLite = { acts: ReturnType<typeof toAct>[] };
-export function getRunChain(workflowRunId: string, projectId: string): Promise<Result<RunChainLite>> {
-  return getJson(`/v1/workflow-runs/${enc(workflowRunId)}/chain?project_id=${enc(projectId)}`,
-                 (w) => ({ acts: arr(obj(w).acts).map(toAct) }));
+export async function getRunChain(workflowRunId: string, projectId: string): Promise<Result<RunChainLite>> {
+  // A writing GET (it freezes the chain): its POST twin, with the session's CSRF (lib/identity/api).
+  try {
+    const w = await idPost<unknown>(loadPath(`/v1/workflow-runs/${enc(workflowRunId)}/chain?project_id=${enc(projectId)}`), {});
+    return { ok: true, data: { acts: arr(obj(w).acts).map(toAct) } };
+  } catch (e) {
+    return { ok: false, status: e instanceof IdentityError ? e.status : 0, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 /** One act, as `/v1/acts/{act_id}` returns it. */

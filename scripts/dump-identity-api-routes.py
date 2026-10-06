@@ -4,6 +4,8 @@
     PYTHONPATH=.:engine python3 scripts/dump-identity-api-routes.py           # rewrite it
     PYTHONPATH=.:engine python3 scripts/dump-identity-api-routes.py --check   # exit 1 if stale
 
+It also lists every `writes_on_get` GET (whole API), whose callers must use the POST twin.
+
 The identity console was built against an in-process stub (apps/web/lib/identity/stub) while
 S1–S5 built the API, and the two drifted: paths the console called did not exist. The vitest
 apps/web/tests/identity-console-calls-real-routes.test.ts now pins every console call's method
@@ -41,8 +43,26 @@ def routes() -> list[str]:
     return sorted(out, key=lambda r: (r.split(" ", 1)[1], r.split(" ", 1)[0]))
 
 
+def writes_on_get() -> list[str]:
+    """Every GET the API declares `writes_on_get` (identity_guard.writing_get), whole API: a
+    cookie-authenticated GET to one needs CSRF, so the console calls its POST twin `<path>/load`
+    (apps/web/tests/no-console-caller-gets-a-writing-get.test.ts)."""
+    from fastapi.routing import APIRoute
+
+    from apps.api.app.main import app
+    from boss_engine.identity.declarations import access_of
+
+    out: set[str] = set()
+    for route in app.routes:
+        if isinstance(route, APIRoute) and "GET" in (route.methods or ()):
+            if getattr(access_of(route.endpoint), "writes_on_get", False):
+                out.add(route.path.rstrip("/") or "/")
+    return sorted(out)
+
+
 def rendered() -> str:
-    return json.dumps({"generated_by": "scripts/dump-identity-api-routes.py", "routes": routes()}, indent=1) + "\n"
+    return json.dumps({"generated_by": "scripts/dump-identity-api-routes.py", "routes": routes(),
+                       "writes_on_get": writes_on_get()}, indent=1) + "\n"
 
 
 def main() -> int:
