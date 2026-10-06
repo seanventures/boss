@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 import { middleware, config as middlewareConfig } from "../middleware";
 import {
-  consoleAuthConfig, issueSession, passwordMatches, safeNext, SESSION_SECONDS,
+  collectorPath, collectorPathOf, consoleAuthConfig, issueSession, passwordMatches, safeNext, SESSION_SECONDS,
   sessionCookieName, validSession,
 } from "../lib/console-session";
 import { POST as login } from "../app/api/auth/login/route";
@@ -41,7 +43,46 @@ describe("single-operator console boundary", () => {
   );
 
   it("covers every path, including the rendered page and hand-written API routes", () => {
-    expect(middlewareConfig.matcher).toEqual(["/:path*"]);
+    // ONE named exception: the Improve BOSS collector's three machine POSTs, kept out so Next does
+    // not buffer (tee) their bodies. They carry no credential (the /v1 proxy attaches no key to
+    // them), and the /v1 route refuses any browser request to them itself
+    // (tests/a-browser-cannot-post-to-the-collector.test.ts).
+    expect(middlewareConfig.matcher).toEqual(["/((?!v1/telemetry/(?:ingest|delete|share)/*$).*)"]);
+    const re = new RegExp(`^${middlewareConfig.matcher[0]}$`);
+    for (const p of ["/", "/api/govern", "/v1/projects", "/v1/telemetry/sharing", "/login", "/v1/telemetry/ingest/x",
+                     "/v1/Telemetry/ingest", "/v1/telemetry/shared"]) {
+      expect(re.test(p), p).toBe(true);
+    }
+    const route = readFileSync(join(process.cwd(), "app", "v1", "[...path]", "route.ts"), "utf8");
+    expect(route).toMatch(/const collector = collectorPathOf\(req\.url\)/);
+    expect(route).toMatch(/if \(collector && !collectorMachinePost\(req\)\)/);
+    expect(route).not.toMatch(/COLLECTOR_PATHS/);
+  });
+
+  it("every spelling that skips middleware is one the route treats as the collector (re-check 4)", () => {
+    // The HIGH: `/ingest/`, `delete/` and `share/?x` skipped middleware AND the route's exact-path
+    // check, so they got no browser check, no cap — and the console's key. One decision now.
+    const re = new RegExp(`^${middlewareConfig.matcher[0]}$`);
+    const forms = [
+      "/v1/telemetry/ingest", "/v1/telemetry/ingest/", "/v1/telemetry/delete/", "/v1/telemetry/share/",
+      "/v1/telemetry/share//", "/v1/telemetry/ingest///",
+    ];
+    for (const p of forms) {
+      expect(re.test(p), `${p} skips middleware`).toBe(false);
+      expect(collectorPath(p), p).toBe(p.replace(/\/+$/, ""));
+    }
+    // The query never changes the decision (the matcher sees the pathname only).
+    expect(collectorPathOf("http://x/v1/telemetry/share/?x=1")).toBe("/v1/telemetry/share");
+    expect(collectorPathOf("http://x/v1/telemetry/ingest?y")).toBe("/v1/telemetry/ingest");
+    // Spellings middleware does see are still the collector — and middleware refuses them.
+    for (const p of ["/v1/telemetry/%69ngest", "/v1//telemetry/ingest", "/v1/telemetry/ingest%2F"]) {
+      expect(re.test(p), p).toBe(true);
+      expect(collectorPath(p), p).not.toBeNull();
+    }
+    // Case-sensitive, like the API's routes; neighbours are not the collector.
+    for (const p of ["/v1/Telemetry/ingest", "/v1/telemetry/INGEST", "/v1/telemetry/sharing", "/v1/telemetry/ingest/x"]) {
+      expect(collectorPath(p), p).toBeNull();
+    }
   });
 
   it("issues a signed, expiring owner session that can navigate multiple projects", async () => {

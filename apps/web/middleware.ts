@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
-  collectorMachinePost, consoleAuthConfig, localHttp, networkTrustedConsole, sameOriginMutation,
+  collectorMachinePost, collectorPathOf, consoleAuthConfig, localHttp, networkTrustedConsole, sameOriginMutation,
   secureConsoleTransport,
   sessionCookieName, validSession,
 } from "./lib/console-session";
 import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
-import { resolveLegacyArea } from "./app/legacy-areas";
+import { consoleParams } from "./app/legacy-areas";
 
 /**
  * Lift a server action's press into a request header.
@@ -47,6 +47,14 @@ export async function middleware(request: NextRequest) {
   const previewPage = request.method === "GET" && /^\/v1\/previews\/[^/]+\/web(\/|$)/.test(path)
     && (request.headers.get("accept") ?? "").includes("text/html");
   const api = (path.startsWith("/api/") || path.startsWith("/v1/")) && !previewPage;
+  // A collector route spelled any other way than plainly (`%69ngest`, `//ingest`): the matcher
+  // could not exclude it, so Next is already teeing its body here. Refused, connection closed —
+  // the plain spellings (with or without a trailing slash or a query) never reach middleware and
+  // are checked in the /v1 route (re-check 4, item 1).
+  if (collectorPathOf(request.url) && !PLAIN_COLLECTOR.test(path)) {
+    return NextResponse.json({ detail: "collector_path_not_plain" },
+      { status: 404, headers: { Connection: "close", "Cache-Control": "no-store" } });
+  }
   // Another install's heartbeat to this collector: a machine POST, no session, no Origin
   // (lib/console-session.ts collectorMachinePost). Straight to the /v1 proxy, which adds no key.
   if (collectorMachinePost(request)) return NextResponse.next();
@@ -91,12 +99,61 @@ export async function middleware(request: NextRequest) {
  */
 function legacyRedirect(request: NextRequest): NextResponse | null {
   if (request.method !== "GET" || request.nextUrl.pathname !== "/") return null;
-  if (request.headers.get("rsc") || request.headers.get("next-action")) return null;
-  const legacy = resolveLegacyArea(request.nextUrl.searchParams);
-  if (!legacy) return null;
+  // A CLIENT NAVIGATION IS NOT REDIRECTED (re-check item 5). Next strips the `RSC` header before
+  // middleware sees it, so that test never fired and router.push to an alias area got a 307
+  // instead of a page. A client navigation is recognised by what survives: the `_rsc` query, the
+  // router's state header, a fetch's `Sec-Fetch-Dest: empty`. It passes through, and page.tsx
+  // renders the area the URL means (consoleParams) with a 200.
+  if (isClientNavigation(request)) return null;
+  const meant = consoleParams(request.nextUrl.searchParams);
+  if (!meant.changed) return null;
+  // DIRECT TO THIS SERVER (no proxy in front, a local tunnel, 127.0.0.1): REWRITE, don't redirect.
+  // Next hands middleware an internal `localhost` host, so no Location built here can be the host
+  // the browser typed — a browser on 127.0.0.1 was sent to localhost, another origin, signed out.
+  // A rewrite renders the target with a 200 on the browser's own address (fragment kept: no
+  // navigation happens), and the shell writes the meant URL into the address bar.
+  if (!behindProxy(request)) {
+    const target = new URL(request.url);
+    target.search = `?${meant.params}`;
+    return NextResponse.rewrite(target, { headers: { "Cache-Control": "no-store" } });
+  }
+  // AN ABSOLUTE LOCATION, ON THE BROWSER'S OWN ORIGIN. Next's middleware adapter parses a
+  // redirect's Location with `new NextURL(location)` and NO base: a relative `/?area=budget`
+  // throws "Invalid URL" and every alias answered 500 (goldeneye, `?area=govern`). The origin is
+  // the public one when the console sits behind a proxy, never the internal listener's.
   return new NextResponse(null, {
-    status: 307, headers: { Location: `/?${legacy}`, "Cache-Control": "no-store" },
+    status: 307,
+    headers: { Location: `${browserOrigin(request)}/?${meant.params}`, "Cache-Control": "no-store" },
   });
+}
+
+/** The origin the browser used: the configured public one, else what the proxy forwarded, else
+ *  the Host header (a local tunnel), else the request's own. */
+/** A public origin is configured, or a proxy says which host the browser asked for. */
+export function behindProxy(request: NextRequest): boolean {
+  if (process.env.BOSS_CONSOLE_PUBLIC_ORIGIN) return true;
+  const fwd = (request.headers.get("x-forwarded-host") || "").split(",")[0].trim();
+  return Boolean(fwd) && !LOOPBACK.test(fwd);
+}
+
+/** Sec-Fetch-Dest and Accept survive Next's header stripping; RSC, the router state and `_rsc`
+ *  do not (they are read too, for the server actions and tests that send them). */
+export function isClientNavigation(request: NextRequest): boolean {
+  const h = request.headers;
+  return Boolean(request.nextUrl.searchParams.has("_rsc") || h.get("rsc") || h.get("next-action")
+    || h.get("next-router-state-tree") || h.get("next-router-prefetch")
+    || h.get("sec-fetch-dest") === "empty" || (h.get("accept") || "").includes("text/x-component"));
+}
+
+const LOOPBACK = /^(?:127(?:\.\d{1,3}){3}|localhost|\[::1\]|::1)(?::\d+)?$/i;
+
+export function browserOrigin(request: NextRequest): string {
+  const configured = (process.env.BOSS_CONSOLE_PUBLIC_ORIGIN || "").replace(/\/+$/, "");
+  if (configured) return configured;
+  const host = request.headers.get("x-forwarded-host") || request.headers.get("host");
+  const proto = (request.headers.get("x-forwarded-proto") || request.nextUrl.protocol.replace(":", "") || "http")
+    .split(",")[0].trim();
+  return host ? `${proto}://${host.split(",")[0].trim()}` : request.nextUrl.origin;
 }
 
 /** A request that may reach the console: still never a cross-site write. */
@@ -115,4 +172,14 @@ async function passThrough(request: NextRequest) {
   return response;
 }
 
-export const config = { matcher: ["/:path*"] };
+/**
+ * Every path but the Improve BOSS collector's three machine POSTs. Next TEES a request's body for
+ * middleware — buffering it whatever the middleware does — so a 150 MB POST to the collector
+ * cost this process ~200 MB before the route's own cap could refuse it (re-check item 3). Those
+ * three paths need nothing from middleware: no session (another install has none), no CSRF
+ * check (they carry no credential: the /v1 proxy attaches no key to them).
+ */
+export const config = { matcher: ["/((?!v1/telemetry/(?:ingest|delete|share)/*$).*)"] };
+
+/** The spellings the matcher above excludes — the same pattern, anchored. */
+const PLAIN_COLLECTOR = /^\/v1\/telemetry\/(?:ingest|delete|share)\/*$/;

@@ -6933,3 +6933,13 @@ CREATE TABLE IF NOT EXISTS tm_rollups (
   value          NUMERIC NOT NULL,
   PRIMARY KEY (month, metric, dims)
 );
+
+-- P3 (2026-10-05 fixes): the consent moment a batch was cut under, so a rebuilt batch (size cap)
+-- keeps excluding everything from before the switch went on.
+ALTER TABLE telemetry_batches ADD COLUMN IF NOT EXISTS consent_at TIMESTAMPTZ;
+-- An install id introduced by an address that already introduced too many new ids that day:
+-- stored, but kept out of every count on the dashboard (defect 10).
+ALTER TABLE tm_installs ADD COLUMN IF NOT EXISTS suspicious BOOLEAN NOT NULL DEFAULT false;
+-- A shared run carries its install's secret hash, so an id that only ever shared a run can still
+-- be deleted (re-check item 2).
+ALTER TABLE tm_shares ADD COLUMN IF NOT EXISTS secret_hash TEXT;

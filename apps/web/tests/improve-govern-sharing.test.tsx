@@ -94,6 +94,7 @@ describe("Govern › Sharing", () => {
   it("is honest when the environment turns everything off", async () => {
     const f = newImprove();
     f.sharing.env_disabled = "DO_NOT_TRACK=1";
+    f.sharing.blocked = "DO_NOT_TRACK=1";
     f.preview = { pending: null, why_not: "DO_NOT_TRACK=1", next_due_at: null };
     await open(f);
     expect($("[data-testid=gv-sharing-locked]")!.textContent).toContain("DO_NOT_TRACK=1");
@@ -115,5 +116,78 @@ describe("Govern › Sharing", () => {
     await click($("[data-testid=gv-weights-save]"));
     await settle();
     expect(f.calls.find((c) => c.op === "weights")?.body?.weights).toEqual({ tests: 0.7 });
+  });
+
+  it("with no collector: says so, sends nothing, disables Delete with the reason, takes a URL", async () => {
+    const f = newImprove();
+    f.sharing.url = ""; f.sharing.url_source = "none"; f.sharing.blocked = "No collector set";
+    await open(f);
+    expect($("[data-testid=gv-sharing-locked]")!.textContent).toContain("No collector set");
+    expect(($("[data-testid=gv-forget]") as HTMLButtonElement).disabled).toBe(true);
+    expect($("[data-testid=gv-forget-why]")!.textContent).toContain("none set");
+    const input = $("[data-testid=gv-url]") as HTMLInputElement;
+    const { act } = await import("react");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "https://c.example.com/v1/telemetry/ingest");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click($("[data-testid=gv-url-save]"));
+    await settle();
+    expect(f.calls.find((c) => c.op === "collector_url")?.body?.url).toBe("https://c.example.com/v1/telemetry/ingest");
+  });
+
+  it("a rotation says what happened to the old id", async () => {
+    const f = newImprove();
+    f.rotateOld = "kept";
+    await open(f);
+    await click($("[data-testid=gv-rotate]"));
+    await settle();
+    expect($("[data-testid=gv-rotated]")!.textContent).toBe("Old id kept until its delete goes through");
+  });
+
+  it("names people, not member ids, and the send log has a time", async () => {
+    const f = newImprove();
+    f.sharing.switches.improve = { ...f.sharing.switches.improve, asked: true, by: "executive_console", by_name: "Priya" } as never;
+    await open(f);
+    expect($("[data-testid=gv-sharing-improve]")!.textContent).toContain("Priya");
+    expect($("[data-testid=gv]")!.textContent).not.toContain("executive_console");
+    expect($("[data-testid=gv-send]")!.textContent).toMatch(/\d{1,2}:\d{2}/);
+  });
+
+  it("says the collector held nothing rather than deleted", async () => {
+    const f = newImprove();
+    f.rotateOld = "nothing_held";
+    await open(f);
+    await click($("[data-testid=gv-rotate]"));
+    await settle();
+    expect($("[data-testid=gv-rotated]")!.textContent).toBe("Collector held nothing for the old id");
+  });
+
+  it("a refused collector URL shows the reason beside the field", async () => {
+    const f = newImprove();
+    f.urlError = "Must be https (http only on this machine)";
+    await open(f);
+    const input = $("[data-testid=gv-url]") as HTMLInputElement;
+    const { act } = await import("react");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "http://c.example.test/v1/telemetry/ingest");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click($("[data-testid=gv-url-save]"));
+    await settle();
+    expect($("[data-testid=gv-url-error]")!.textContent).toBe("Must be https (http only on this machine)");
+  });
+
+  it("saves the words a shared run always masks", async () => {
+    const f = await open();
+    const input = $("[data-testid=gv-mask]") as HTMLInputElement;
+    const { act } = await import("react");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Nightjar, Larkspur");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click($("[data-testid=gv-mask-save]"));
+    await settle();
+    expect(f.calls.find((c) => c.op === "mask_words")?.body?.words).toBe("Nightjar, Larkspur");
   });
 });

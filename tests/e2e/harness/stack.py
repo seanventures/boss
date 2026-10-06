@@ -3,7 +3,7 @@ wired to the harness's stubs, with transport auth ON exactly as an installed BOS
 
 WHY NOT DOCKER COMPOSE FOR API AND WORKER. Building the three images takes the better part of
 ten minutes, and a harness people do not run because it is slow protects nothing. The processes
-here are the same entry points the images run (`uvicorn apps.api.app.main:app`,
+here are the same entry points the images run (`python -m apps.api.serve`,
 `python -m apps.worker.boss_worker.main`, `next start`) with the same environment contract as
 scripts/install/community-compose.yml: BOSS_REQUIRE_API_AUTH=true, an owner key bound to `ceo`
 and a worker key bound to `system`. Postgres runs in Docker, under a container name of its own,
@@ -220,7 +220,9 @@ def service_env(state: StackState, *, extra: Optional[dict[str, str]] = None) ->
         # unless a walk asks for them (BOSS_E2E_TELEMETRY=on), and then they report to this
         # stack's own collector rather than leaving the machine.
         "BOSS_TELEMETRY": os.environ.get("BOSS_E2E_TELEMETRY", "off"),
-        "BOSS_TELEMETRY_URL": f"http://127.0.0.1:{state.api_port}/v1/telemetry/ingest",
+        # BOSS_E2E_TELEMETRY_URL=none walks the "No collector set" state.
+        "BOSS_TELEMETRY_URL": ("" if os.environ.get("BOSS_E2E_TELEMETRY_URL") == "none"
+                               else f"http://127.0.0.1:{state.api_port}/v1/telemetry/ingest"),
         "BOSS_INSTALL_METHOD": "e2e",
         "BOSS_ARTIFACTS_DIR": str(Path(state.run_dir) / "boss-artifacts"),
         "BOSS_ENABLE_CODE_TASK": "true",
@@ -377,7 +379,7 @@ class LocalStack:
 
     def start_api(self) -> None:
         env = service_env(self.state)
-        api = self._spawn("api", [sys.executable, "-m", "uvicorn", "apps.api.app.main:app",
+        api = self._spawn("api", [sys.executable, "-m", "apps.api.serve",
                                   "--host", "127.0.0.1", "--port", str(self.state.api_port)],
                           env=env)
         wait_http(f"http://127.0.0.1:{self.state.api_port}/health", timeout=240,

@@ -21,17 +21,23 @@ const req = (path: string, headers: Record<string, string> = {}) =>
   new NextRequest(`http://127.0.0.1:3000${path}`, { headers: { host: "127.0.0.1:3000", ...headers } });
 
 describe("a retired area link", () => {
-  it("is answered with a 307 to where it lives now, as a relative Location", async () => {
+  // DIRECT TO THIS SERVER, it is a REWRITE: the target renders on the browser's own address, so
+  // the fragment is never at risk (no navigation happens) and the host is the one the browser
+  // typed. Behind a proxy it is an absolute 307 (tests/every-alias-area-lands.test.ts).
+  it("is rendered where it lives now, on the browser's own address", async () => {
     vi.stubEnv("BOSS_CONSOLE_AUTH", "network");
     const res = await middleware(req("/?org=org_boss&area=delivery"));
-    expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toBe("/?org=org_boss&area=infra&view=fleet");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();  // the browser stays where it is
+    expect(new URL(res.headers.get("x-middleware-rewrite")!).search).toBe("?org=org_boss&area=infra&view=fleet");
   });
 
   it("leaves current areas, RSC fetches and server actions to the console", async () => {
     vi.stubEnv("BOSS_CONSOLE_AUTH", "network");
     expect((await middleware(req("/?area=infra&view=fleet"))).status).toBe(200);
-    expect((await middleware(req("/?area=delivery", { rsc: "1" }))).status).toBe(200);
+    const rsc = await middleware(req("/?area=delivery", { rsc: "1" }));
+    expect(rsc.status).toBe(200);
+    expect(rsc.headers.get("x-middleware-rewrite")).toBeNull();
   });
 
   it("Infra's home opens This computer from the kept #hardware-manager anchor", () => {

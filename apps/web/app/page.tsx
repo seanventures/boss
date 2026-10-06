@@ -113,7 +113,7 @@ import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { WorkforceArea } from "./workforce-ui";
-import { resolveLegacyArea, searchParamsFrom } from "./legacy-areas";
+import { consoleParams, searchParamsFrom } from "./legacy-areas";
 import { fetchOrgChart, fetchWorkforce } from "../lib/v2/workforce";
 import { ShepherdConsole } from "./shepherd-ui";
 import { getShepherdOverviewAction } from "./actions";
@@ -141,7 +141,6 @@ import { fetchSandboxFeed } from "../lib/sandboxes";
 import { SandboxesHome } from "./sandboxes-ui";
 import { AreaLink } from "./area-link";
 import { Suspense } from "react";
-import { redirect } from "next/navigation";
 import { fetchOrgs } from "../lib/orgs";
 import { OrgGate, OrgReconnect } from "./org-gate";
 import { fetchApprovalRules } from "../lib/approval-rules";
@@ -401,7 +400,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // it, and Promise.all would reject the batch if any of them threw.
   const [
     shepherdOverview,
-    resolvedSearchParams,
+    rawSearchParams,
   ] = await Promise.all([
     getShepherdOverviewAction().catch(() => null),
     searchParams ? Promise.resolve(searchParams).then((v) => v) : Promise.resolve(undefined),
@@ -409,8 +408,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // A RETIRED SURFACE NEVER RENDERS. Agent Studio, Team structure and the Workflow area's old
   // tabs are rewritten to where they live now before anything is fetched for them; one table,
   // shared with the shell's link handler (app/legacy-areas.ts).
-  const legacy = resolveLegacyArea(searchParamsFrom(resolvedSearchParams));
-  if (legacy) redirect(`/?${legacy}`);
+  //
+  // RENDERED, NOT REDIRECTED. A redirect() here runs after the shell has started streaming and
+  // reached the browser as a 500 on goldeneye (`?area=govern`, `?area=workflows`). The page
+  // renders what the URL MEANS (consoleParams: aliases resolved, an unknown area → the Command
+  // Center); the middleware's 307 and the shell's URL sync rewrite the address bar.
+  const resolvedSearchParams: Record<string, string> = Object.fromEntries(
+    consoleParams(searchParamsFrom(rawSearchParams)).params);
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
   const requestedArea = getParam(resolvedSearchParams?.area);
@@ -458,13 +462,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // opened, at the same tree positions, so the ones on screen update rather than remount and a
   // second click on them is the old pure CSS reveal.
   const [requestHeaders, requestCookies] = await Promise.all([headers(), cookies()]);
-  const loadedAreas = areasToRender({
-    requested: shownArea,
-    cookie: requestCookies.get(LOADED_AREAS_COOKIE)?.value,
-    fullDocument: isFullDocumentRequest((name) => requestHeaders.get(name)),
-  });
-  const shows = (area: string) => loadedAreas.has(area);
-  const needs = (...areas: string[]) => areas.some((area) => loadedAreas.has(area));
   const requestedDecisionFilter = parseDecisionInboxFilter(
     getParam(resolvedSearchParams?.decision_filter),
   );
@@ -540,12 +537,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // console opens on Repo and models; once ready the default is the Command Center as before.
   // The same read feeds the rail badge, so the two cannot disagree.
   const setupSummary = await fetchSetupSummary(activeProjectId);
+  // RENDERED, NOT REDIRECTED (same class as the aliases above): the landing area is the one
+  // this render shows and the shell opens; no redirect() after the shell has streamed.
   const landing = landingArea(requestedArea, setupSummary);
-  if (landing) {
-    const next = searchParamsFrom(resolvedSearchParams);
-    next.set("area", landing);
-    redirect(`/?${next}`);
-  }
+  const initialArea = landing ?? requestedArea;
+  const loadedAreas = areasToRender({
+    requested: landing ?? shownArea,
+    cookie: requestCookies.get(LOADED_AREAS_COOKIE)?.value,
+    fullDocument: isFullDocumentRequest((name) => requestHeaders.get(name)),
+  });
+  const shows = (area: string) => loadedAreas.has(area);
+  const needs = (...areas: string[]) => areas.some((area) => loadedAreas.has(area));
   // LOAD ONLY WHAT THIS AREA NEEDS.
   //
   // Every area paid for every other: one render fetched ~70 feeds and shipped 8.38 MB in
@@ -861,7 +863,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       }}
       org={{ id: activeOrgId, name: activeOrgName }}
       editionId={editionId}
-      initialArea={requestedArea}
+      initialArea={initialArea}
       // Sign out only means something when the console has a password; without one the button
       // led to a sign-in page that could only say authentication is not configured.
       signOutAvailable={consoleAuthConfig() !== null}

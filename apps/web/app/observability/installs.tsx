@@ -57,8 +57,8 @@ function Bars({ rows, label, words, testId }: { rows: KeyN[]; label: string; wor
 }
 
 /** "claude_code · 0.82": the group with its mean score, so a bar's length is never the only fact. */
-function scored(rows: { key: string; score: number | null }[]): Record<string, string> {
-  return Object.fromEntries(rows.map((r) => [r.key, `${r.key} · ${r.score === null ? "—" : r.score.toFixed(2)}`]));
+function scored(rows: { key: string; name?: string; score: number | null }[]): Record<string, string> {
+  return Object.fromEntries(rows.map((r) => [r.key, `${r.name ?? r.key} · ${r.score === null ? "—" : r.score.toFixed(2)}`]));
 }
 
 function Panel({ label, tip, children, testId }: { label: string; tip?: string; children: React.ReactNode; testId?: string }) {
@@ -97,13 +97,18 @@ export function InstallsTab({ projectId }: ObsTabProps) {
         <div className="im-tile" title="Seen in the last 30 days"><span className="im-tile-k">Monthly</span><span className="im-tile-v">{v.active.monthly}</span></div>
         <div className="im-tile" title="Every install id ever seen (18 months kept)"><span className="im-tile-k">All time</span><span className="im-tile-v">{v.total_installs}</span></div>
         <div className="im-tile" title="Installs that turned Improve BOSS on, last 30 days"><span className="im-tile-k">Opted in</span><span className="im-tile-v">{v.opted_in}</span></div>
+        {v.held_back ? (
+          <div className="im-tile" title="Too many new ids from one address in a day: stored, not counted" data-testid="in-held">
+            <span className="im-tile-k">Held back</span><span className="im-tile-v">{v.held_back}</span></div>
+        ) : null}
       </div>
       <div className="im-grid2">
         <Panel label="NEW PER WEEK" tip="First seen, by week, last 12 weeks" testId="in-new">
-          <Bars rows={v.new_per_week.map((r) => ({ key: `Week of ${r.week.slice(5)}`, n: r.n }))} label="New installs per week" testId="in-weeks" />
+          <Bars rows={v.new_per_week.map((r) => ({ key: r.week.slice(5), n: r.n }))} label="New installs per week" testId="in-weeks" />
         </Panel>
         <Panel label="RETENTION" tip="Share of each weekly cohort seen again, week by week" testId="in-cohorts">
           {v.cohorts.length ? (
+            <div className="im-scroll" tabIndex={0} aria-label="Retention by weekly cohort" data-testid="in-cohorts-scroll">
             <table className="im-cohorts">
               <thead><tr><th scope="col">Cohort</th><th scope="col">N</th>
                 {[0, 1, 2, 3, 4, 5, 6, 7].map((k) => <th key={k} scope="col">W{k}</th>)}</tr></thead>
@@ -114,6 +119,7 @@ export function InstallsTab({ projectId }: ObsTabProps) {
                 ))}
               </tbody>
             </table>
+            </div>
           ) : <span className="im-muted">None yet</span>}
         </Panel>
         <Panel label="VERSIONS" testId="in-versions"><Bars rows={v.versions} label="Versions" testId="in-versions-bars" /></Panel>

@@ -31,6 +31,9 @@ ARM_KNOBS: dict[str, dict[str, Any]] = {
 ARM_SPEC_KEYS = frozenset({"model_config", "review_rounds", "experiment"})
 APPROVAL_KEYS = frozenset({"risk_tier", "profile", "open_pr", "auto_merge", "auto_approve",
                            "approval", "approvals", "gates", "waived_gates", "data_boundary"})
+#: Promote needs this many finished units in EACH arm and a verdict that is not "too close to
+#: call" — unless the operator ticks "Promote anyway" (defect 3).
+PROMOTE_MIN_UNITS = 5
 STOP_GATE_GAP = 0.3
 STOP_MIN_UNITS = 4
 CALL_MIN_UNITS = 5
@@ -67,6 +70,19 @@ def _coerce(knob: str, value: Any) -> Any:
     return number
 
 
+def _arm_word(knob: str, value: Any) -> str:
+    from .scorecards import HARNESS_NAMES
+
+    return HARNESS_NAMES.get(str(value), str(value)) if knob == "harness" else f"{value} rounds"
+
+
+def _default_name(connection, project_id: str, kind: str, key: str, knob: str, a: Any, b: Any) -> str:
+    from .scorecards import names_for
+
+    who = names_for(connection, project_id, "role" if kind == "role" else "workflow", [key]).get(key, key)
+    return f"{who}: {_arm_word(knob, a)} vs {_arm_word(knob, b)}"
+
+
 def create(connection, *, project_id: str, actor: str, name: str, target_kind: str,
            target_key: str, knob: str, arm_a: Any, arm_b: Any, split_b: float = 0.5,
            target_units: int = 20, arm_cost_cap_usd: float = 25.0) -> dict[str, Any]:
@@ -76,6 +92,11 @@ def create(connection, *, project_id: str, actor: str, name: str, target_kind: s
         raise ExperimentError("Target is a role or a workflow.")
     if not str(target_key or "").strip():
         raise ExperimentError("Name the role or workflow.")
+    table, col = (("roles", "role_key") if target_kind == "role"
+                  else ("workflow_definitions", "workflow_key"))
+    if not connection.execute(text(f"SELECT 1 FROM {table} WHERE project_id = :p AND {col} = :k"),
+                              {"p": project_id, "k": target_key}).scalar():
+        raise ExperimentError(f"No {target_kind} '{target_key}' in this project.")
     a, b = _coerce(knob, arm_a), _coerce(knob, arm_b)
     if a == b:
         raise ExperimentError("The two arms have to differ.")
@@ -96,7 +117,8 @@ def create(connection, *, project_id: str, actor: str, name: str, target_kind: s
         INSERT INTO experiments (id, project_id, name, target_kind, target_key, knob, arm_a, arm_b,
                                  split_b, target_units, arm_cost_cap_usd, created_by)
         VALUES (:id, :p, :n, :tk, :t, :k, CAST(:a AS JSONB), CAST(:b AS JSONB), :s, :u, :c, :by)"""),
-        {"id": eid, "p": project_id, "n": (name or f"{target_key}: {a} vs {b}")[:120],
+        {"id": eid, "p": project_id, "n": (name or _default_name(connection, project_id, target_kind,
+                                                                  target_key, knob, a, b))[:120],
          "tk": target_kind, "t": target_key, "k": knob, "a": json.dumps(a), "b": json.dumps(b),
          "s": float(split_b), "u": int(target_units), "c": float(arm_cost_cap_usd), "by": actor})
     emit_event(connection, project_id, "experiment.started", actor, "experiment", eid,
@@ -242,12 +264,16 @@ def get(connection, project_id: str, eid: str) -> dict[str, Any]:
         "target_key": exp["target_key"], "knob": exp["knob"],
         "knob_label": ARM_KNOBS.get(exp["knob"], {}).get("label", exp["knob"]),
         "arm_a": exp["arm_a"], "arm_b": exp["arm_b"], "split_b": float(exp["split_b"]),
+        "arm_a_label": _arm_word(exp["knob"], exp["arm_a"]),
+        "arm_b_label": _arm_word(exp["knob"], exp["arm_b"]),
         "target_units": int(exp["target_units"]),
         "arm_cost_cap_usd": float(exp["arm_cost_cap_usd"]), "status": exp["status"],
         "stop_reason": exp["stop_reason"], "capped_arms": list(exp["capped_arms"] or []),
         "promoted_arm": exp["promoted_arm"], "created_by": exp["created_by"],
         "created_at": exp["created_at"], "ended_at": exp["ended_at"],
         "arms": arms, "compare": compare(arms),
+        "promote": {a: promote_plan(connection, project_id, exp, a) for a in ("a", "b")}
+        if exp["status"] != "promoted" else None,
     }
 
 
@@ -255,7 +281,15 @@ def list_all(connection, project_id: str) -> dict[str, Any]:
     ids = connection.execute(text(
         "SELECT id FROM experiments WHERE project_id = :p ORDER BY (status = 'running') DESC, "
         "created_at DESC LIMIT 30"), {"p": project_id}).scalars().all()
+    roles = connection.execute(text(
+        "SELECT role_key, COALESCE(NULLIF(display_name, ''), role_key) FROM roles "
+        "WHERE project_id = :p ORDER BY 2"), {"p": project_id}).all()
+    flows = connection.execute(text(
+        "SELECT workflow_key, name FROM workflow_definitions WHERE project_id = :p "
+        "AND namespace = 'product' AND status = 'active' ORDER BY name"), {"p": project_id}).all()
     return {"items": [get(connection, project_id, i) for i in ids],
+            "targets": {"role": [{"key": r[0], "name": r[1]} for r in roles],
+                        "workflow": [{"key": r[0], "name": r[1]} for r in flows]},
             "knobs": [{"key": k, "label": v["label"], "kind": v["kind"],
                        "choices": _harnesses() if v["kind"] == "harness" else None,
                        "min": v.get("min"), "max": v.get("max")} for k, v in ARM_KNOBS.items()]}
@@ -270,9 +304,36 @@ def stop(connection, *, project_id: str, eid: str, actor: str) -> dict[str, Any]
     return get(connection, project_id, eid)
 
 
-def promote(connection, *, project_id: str, eid: str, arm: str, actor: str) -> dict[str, Any]:
+def promote_plan(connection, project_id: str, exp: Mapping[str, Any], arm: str) -> dict[str, Any]:
+    """What Promote would change, in words, and whether the evidence is enough."""
+    from ..config import get_settings
+    from .project_settings import effective
+
+    knob = ARM_KNOBS[exp["knob"]]
+    value = exp["arm_a"] if arm == "a" else exp["arm_b"]
+    current = effective(connection, project_id, get_settings(), knob["setting"])
+    arms = _arms(connection, exp["id"])
+    verdict = compare(arms)
+    short = [a for a in ("a", "b") if arms[a]["n"] < PROMOTE_MIN_UNITS]
+    reasons = []
+    if short:
+        reasons.append(f"fewer than {PROMOTE_MIN_UNITS} finished in arm "
+                       + " and ".join(a.upper() for a in short))
+    if verdict["verdict"] == "too_close":
+        reasons.append("too close to call")
+    elif verdict["verdict"] != arm:
+        reasons.append(f"arm {verdict['verdict'].upper()} scores higher")
+    return {"setting": knob["setting"], "label": knob["label"],
+            "from": _arm_word(exp["knob"], current) if current not in (None, "") else "default",
+            "to": _arm_word(exp["knob"], value), "value": value,
+            "enough": not reasons, "why_not": "; ".join(reasons)}
+
+
+def promote(connection, *, project_id: str, eid: str, arm: str, actor: str,
+            anyway: bool = False) -> dict[str, Any]:
     """Make the arm's value this project's setting — through project_settings.set_one, so the
-    change is in Govern's log like any other — and end the experiment."""
+    change is in Govern's log like any other — and end the experiment. Refused without enough
+    evidence unless `anyway` (the operator's own tick)."""
     from .project_settings import set_one
 
     if arm not in ("a", "b"):
@@ -280,11 +341,16 @@ def promote(connection, *, project_id: str, eid: str, arm: str, actor: str) -> d
     exp = _row(connection, project_id, eid)
     if exp["status"] == "promoted":
         raise ExperimentError("Already promoted.")
-    knob = ARM_KNOBS[exp["knob"]]
-    value = exp["arm_a"] if arm == "a" else exp["arm_b"]
-    set_one(connection, project_id, knob["setting"], value, actor=actor)
+    plan = promote_plan(connection, project_id, exp, arm)
+    if not plan["enough"] and not anyway:
+        raise NotEnoughEvidence(f"Not enough evidence: {plan['why_not']}.")
+    set_one(connection, project_id, plan["setting"], plan["value"], actor=actor)
     connection.execute(text(
         "UPDATE experiments SET status = 'promoted', promoted_arm = :arm, "
         "ended_at = COALESCE(ended_at, now()), ended_by = :a WHERE id = :e"),
         {"arm": arm, "a": actor, "e": eid})
     return get(connection, project_id, eid)
+
+
+class NotEnoughEvidence(ExperimentError):
+    """Promote was pressed before the arms had enough units or a clear winner (409)."""

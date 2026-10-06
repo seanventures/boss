@@ -155,8 +155,9 @@ def test_weights_are_versioned_shown_and_every_row_rescored(engine, client):
     weights = {w["key"]: w["value"] for w in r.json()["score"]["weights"]}
     assert weights["tests"] == 0.7
     with engine.begin() as c:
-        assert scorecards.rescore(c) >= 1
+        # Rescored with the save itself: nothing is left for the tick, the view is never blank.
         assert cards(c, rid)[0]["score_version"] == "1.1"
+        assert scorecards.rescore(c) == 0
         logged = c.execute(text("SELECT data FROM events WHERE event_type = 'settings.changed' "
                                 "AND entity_id = 'score_weights'")).scalar()
     assert logged and logged["to"] == "1.1"

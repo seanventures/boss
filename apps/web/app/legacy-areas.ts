@@ -10,6 +10,8 @@
  * table somewhere else is how a door ends up on a blank area.
  */
 
+import { AREA_IDS } from "../lib/area-ids";
+
 /** Parameters only the retired surfaces read. Dropped when the link is rewritten. */
 const STUDIO_ONLY = ["studio_mode", "mode", "studio_workflow", "workflow", "studio_role"];
 
@@ -175,6 +177,36 @@ export function resolveLegacyArea(params: URLSearchParams): URLSearchParams | nu
   }
 
   return null;
+}
+
+/** Areas the console renders: every known id that is not itself an alias (`delivery`,
+ *  `monitoring`, `capabilities` stay in AREA_IDS for old links and are always rewritten). */
+const RENDERED = new Set<string>(
+  AREA_IDS.filter((a) => resolveLegacyArea(new URLSearchParams(`area=${a}`)) === null));
+
+/**
+ * THE PARAMETERS A CONSOLE URL MEANS, for every door that reads one (the middleware's 307, the
+ * page render, the shell's URL sync). Aliases are resolved (more than once: `govern` → `budget`
+ * is one step, an old tab inside it another), and an area nobody renders falls back to the
+ * Command Center rather than to a blank screen. `changed` says whether the URL should be
+ * rewritten to the result.
+ */
+export function consoleParams(params: URLSearchParams): { params: URLSearchParams; changed: boolean } {
+  let current = params;
+  let changed = false;
+  for (let i = 0; i < 4; i += 1) {
+    const next = resolveLegacyArea(current);
+    if (!next) break;
+    current = next;
+    changed = true;
+  }
+  const area = current.get("area");
+  if (area !== null && area.trim() && !RENDERED.has(area.trim())) {
+    current = copyWithout(current, []);
+    current.set("area", "overview");
+    changed = true;
+  }
+  return { params: current, changed };
 }
 
 /** The v2 routes that became console areas, by path. */
