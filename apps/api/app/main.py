@@ -5037,6 +5037,10 @@ def catalog_read_scope() -> tuple[bool, str]:
     all-project operator catalog. Authenticated requests must have a member
     principal, even if the endpoint is called outside the auth middleware.
     """
+    if identity_guard.identity_enforced():
+        # Enforced: legacy memberships no longer name who may read; both callers filter the rows
+        # by the caller's own project:read (identity_access.readable_projects, §6.7).
+        return False, ""
     if not current_transport_authenticated.get():
         return False, ""
     principal = current_api_principal.get()
@@ -5092,14 +5096,22 @@ def list_orgs(request: Request):
                        (SELECT count(*) FROM meetings m WHERE m.project_id = ap.project_id)
                            AS meeting_count
                 FROM accessible_projects ap
-                WHERE ap.project_rank = 1
-                ORDER BY ap.org_created_at, ap.org_id
+                WHERE (:all_ranks OR ap.project_rank = 1)
+                ORDER BY ap.org_created_at, ap.org_id, ap.project_rank
                 """
             ),
-            {"authenticated": authenticated, "principal": principal},
+            {"authenticated": authenticated, "principal": principal,
+             "all_ranks": identity_guard.identity_enforced()},
         ).mappings().all()
         # IDENTITY (S2): only the caller's org, only projects it holds project:read in.
         visible = _readable_projects(request, [r["project_id"] for r in rows])
+        if visible is not None:
+            # Each org once, at the first project the caller may read (not the org's first).
+            first: dict[str, Any] = {}
+            for r in rows:
+                if r["project_id"] in visible:
+                    first.setdefault(r["org_id"], r)
+            rows = list(first.values())
         return {
             "items": [
                 {
