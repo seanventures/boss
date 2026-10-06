@@ -1,23 +1,219 @@
-"""GET /v1/identity/me and GET /v1/identity/me/permissions: the console's identity contract.
+"""/v1/identity/me*: the signed-in principal's own identity (IDENTITY.md §10 "Me"). Stream S1.
 
-Shapes are frozen in boss_engine/identity/contracts.py (TS mirror: apps/web/lib/identity/contract.ts).
-Phase 0 ships the routes, their declarations and their response models; the bodies answer 501
-until stream S1 (me) and S2 (effective permissions, called from here) fill them in.
+GET /v1/identity/me and /me/permissions are the console's frozen contract (contracts.py; TS mirror
+apps/web/lib/identity/contract.ts). The rest is self-service: sessions, password, TOTP, passkeys,
+recovery codes, linked identities and personal API keys.
 
-The identity routers are ALWAYS enforced (router key `identity*`), so until authentication exists
-these answer 503 `identity_unavailable` before reaching the handler. That is fail-closed by design.
+Rules: the principal comes ONLY from the request's credential (never a body, query or header
+field); every route acts on the caller alone; writes that remove a sign-in factor need fresh MFA
+(step-up), and adding a factor needs a sign-in within the last 10 minutes. Secrets (TOTP secret,
+recovery codes, a new key) are returned exactly once.
+
+This module also includes the other S1 routers (auth, people, SSO, SCIM): the lead's include
+line in main.py names only `build_identity_me_router` (IDENTITY_BUILD.md §7, S1 note).
 """
 from __future__ import annotations
 
-from typing import Optional
+from datetime import datetime
+from typing import Any, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import text
 
-from boss_engine.identity import authenticated
-from boss_engine.identity.contracts import MePermissionsResponse, MeResponse
+from boss_engine.db import begin
+from boss_engine.identity import P, authenticated, permit
+from boss_engine.identity import api_keys, recovery, sessions, signin, totp, users
+from boss_engine.identity import webauthn as passkeys
+from boss_engine.identity.audit import Outcome
+from boss_engine.identity.authn import SESSION_COOKIE, STEP_UP_WINDOW_SECONDS, AuthnError
+from boss_engine.identity.authn_support import emit, public_origin, utcnow
+from boss_engine.identity.contracts import (
+    MeBanner,
+    MeOrg,
+    MePermissionsResponse,
+    MeResponse,
+    MeSignInMethods,
+)
+from boss_engine.identity.passwords import (
+    PasswordBusy,
+    PasswordRejected,
+    check_new_password,
+    hash_password,
+    verify_password,
+)
+from boss_engine.identity.permissions_gen import CATALOGUE_FINGERPRINT
+from boss_engine.identity.principal import AuthContext, PrincipalKind
 
-NOT_YET = {"error": "not_implemented", "detail": "identity Phase 0: this route is a frozen stub"}
+from .identity_auth import current_context, error, facts, refusal
+
+
+class _Body(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class PasswordChangeBody(_Body):
+    current: Optional[str] = Field(default=None, max_length=1024)
+    new: str = Field(max_length=1024)
+
+
+class CodeBody(_Body):
+    code: str = Field(max_length=64)
+
+
+class PasskeyRegisterBody(_Body):
+    credential: dict[str, Any]
+    name: str = Field(default="Passkey", max_length=80)
+
+
+class RenameBody(_Body):
+    name: str = Field(max_length=80)
+
+
+class KeyCreateBody(_Body):
+    """A new key. Accepts the console's field names (projects, networks, expires_days) and the
+    spec's (project_ids, cidrs, expires_in_days). `replaces` + `overlap_hours` (0, 1, 24, 168)
+    is a rotation: same as POST …/{id}/rotate."""
+    name: str = Field(max_length=120)
+    scopes: list[str] = Field(max_length=200)
+    project_ids: Optional[list[str]] = None
+    projects: Optional[list[str]] = None
+    cidrs: Optional[list[str]] = None
+    networks: Optional[str] = Field(default=None, max_length=2000)
+    expires_in_days: Optional[int] = Field(default=None, ge=0, le=3650)
+    expires_days: Optional[int] = Field(default=None, ge=0, le=3650)
+    replaces: Optional[str] = Field(default=None, max_length=64)
+    overlap_hours: Optional[int] = Field(default=None, ge=0, le=168)
+
+    def resolved(self) -> dict[str, Any]:
+        nets = self.cidrs if self.cidrs is not None else (
+            [n.strip() for n in self.networks.split(",") if n.strip()] if self.networks else None)
+        return {"project_ids": self.project_ids if self.project_ids is not None else self.projects,
+                "cidrs": nets,
+                "expires_in_days": self.expires_in_days if self.expires_in_days is not None else self.expires_days}
+
+    def grace(self) -> str:
+        return {0: "0", 1: "1h", 24: "24h", 168: "7d"}.get(int(self.overlap_hours or 0), "")
+
+
+class RotateBody(_Body):
+    grace: str = Field(default="1h", pattern="^(0|1h|24h|7d)$")
+
+
+def jsonable(d: dict[str, Any]) -> dict[str, Any]:
+    return {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in d.items()}
+
+
+def _qr_svg(uri: str) -> Optional[str]:
+    """The enrolment QR code, rendered here so the secret never goes to a third-party service."""
+    try:
+        import segno
+    except ImportError:
+        return None
+    return segno.make_qr(uri, error="m").svg_inline(scale=4, dark="#111", light="#fff")
+
+
+def _epoch(db: Any, org_id: str) -> int:
+    return int(db.execute(text("SELECT epoch FROM identity_settings WHERE org_id = :o"),
+                          {"o": org_id}).scalar() or 0)
+
+
+def is_fresh(ctx: AuthContext) -> bool:
+    s = ctx.session
+    return bool(s and s.mfa_at and (utcnow() - s.mfa_at).total_seconds() <= STEP_UP_WINDOW_SECONDS)
+
+
+def need_step_up(ctx: AuthContext) -> Optional[JSONResponse]:
+    """Fresh MFA on a session. Bearer credentials can never step up (§4.6)."""
+    if ctx.session is None or not is_fresh(ctx):
+        return error(401, "step_up_required")
+    return None
+
+
+def need_person_session(ctx: AuthContext) -> Optional[JSONResponse]:
+    if ctx.principal.kind != PrincipalKind.USER or ctx.session is None:
+        return error(403, "people_only")
+    return None
+
+
+def _first_factor_extras(db: Any, ctx: AuthContext, had_factor: bool) -> dict[str, Any]:
+    """The first second factor a person adds comes with their recovery codes, shown once."""
+    if had_factor:
+        return {}
+    codes = recovery.generate(db, ctx.principal.id)
+    emit(db, org_id=ctx.principal.org_id, event_type="recovery_codes.generated",
+         outcome=Outcome.SUCCESS, ctx=ctx, target_type="user", target_id=ctx.principal.id)
+    return {"recovery_codes": codes}
+
+
+def _rotate_fresh(db: Any, request: Request, ctx: AuthContext, method: str) -> list[str]:
+    """Adding a factor proves it: rotate the session with fresh MFA (a NEW token)."""
+    f = facts(request, db)
+    row = sessions.lookup(db, f.session)
+    if row is None:
+        return []
+    issued = sessions.issue(db, principal_id=ctx.principal.id, org_id=ctx.principal.org_id,
+                            methods=[*row.auth_methods, method], mfa_at=utcnow(), ip=f.ip,
+                            user_agent=f.user_agent, device_id_hash=row.device_id_hash,
+                            replaces=row.id, absolute_expires_at=row.absolute_expires_at)
+    emit(db, org_id=ctx.principal.org_id, event_type="session.rotated", outcome=Outcome.INFO, ctx=ctx,
+         details={"replaced_by": issued.session_id, "reason": "factor_added"})
+    max_age = int((issued.absolute_expires_at - utcnow()).total_seconds())
+    return [sessions.set_cookie_header(SESSION_COOKIE, issued.token, max_age=max_age)]
+
+
+def respond(body: dict[str, Any], cookies: list[str], status: int = 200) -> JSONResponse:
+    response = JSONResponse(status_code=status, content=body, headers={"Cache-Control": "no-store"})
+    for c in cookies:
+        response.raw_headers.append((b"set-cookie", c.encode("latin-1")))
+    return response
+
+
+def _last_factor_guard(db: Any, ctx: AuthContext, removing: str) -> Optional[JSONResponse]:
+    """An MFA-required person cannot remove their last second factor (§4.4)."""
+    user = users.by_id(db, ctx.principal.id)
+    if user is None:
+        return error(404, "not_found")
+    f = users.factors(db, ctx.principal.id)
+    left = (0 if removing == "totp" else int(f.totp)) + (f.passkeys - (1 if removing == "passkey" else 0))
+    if users.mfa_required(db, user) and left <= 0:
+        return error(409, "last_factor")
+    return None
+
+
+def build_me_response(db: Any, ctx: AuthContext) -> MeResponse:
+    from boss_engine.identity.sessions import csrf_token
+
+    p = ctx.principal
+    org_name = db.execute(text("SELECT name FROM orgs WHERE id = :o"), {"o": p.org_id}).scalar() or p.org_id
+    user = users.by_id(db, p.id) if p.kind == PrincipalKind.USER else None
+    f = users.factors(db, p.id)
+    links = [r[0] for r in db.execute(text(
+        "SELECT DISTINCT coalesce(pr.name, i.provider_id) FROM identity_user_identities i LEFT JOIN "
+        "identity_providers pr ON pr.id = i.provider_id WHERE i.principal_id = :p"), {"p": p.id})]
+    required = bool(user and users.mfa_required(db, user))
+    banners: list[MeBanner] = []
+    if required and not f.any_second_factor:
+        banners.append(MeBanner(kind="mfa_enrolment_required",
+                                message="Your access needs a second factor. Add a passkey or an authenticator app."))
+    if p.network_bound:
+        banners.append(MeBanner(kind="network_bridge",
+                                message="Anyone who can reach this BOSS acts as the operator. Claim it to finish setup."))
+    s = ctx.session
+    return MeResponse(
+        principal_id=p.id, kind=p.kind.value, display_name=p.display_name,
+        email=user.email if user else None, org=MeOrg(id=p.org_id, name=str(org_name)),
+        status=p.status.value, access_roles=users.role_keys(db, p.id, org_scope_only=True),
+        sign_in=MeSignInMethods(password=bool(user and user.password_hash), totp=f.totp,
+                                passkeys=f.passkeys, recovery_codes_remaining=f.recovery_codes_remaining,
+                                sso_links=sorted(links)),
+        mfa_required=required, mfa_at=s.mfa_at if s else None, session_id=s.id if s else None,
+        session_expires_at=s.absolute_expires_at if s else None,
+        csrf_token=csrf_token(s.id) if s else "", epoch=_epoch(db, p.org_id),
+        network_bound=p.network_bound, banners=banners)
+
+
 
 
 def build_identity_me_router() -> APIRouter:
@@ -25,15 +221,442 @@ def build_identity_me_router() -> APIRouter:
 
     @router.get("/v1/identity/me", response_model=MeResponse)
     @authenticated(self_only=True)
-    def get_me():
-        # S1: build MeResponse from the request's AuthContext (never from a body or query field).
-        return JSONResponse(status_code=501, content=NOT_YET)
+    def get_me(request: Request):
+        try:
+            with begin() as db:
+                me = build_me_response(db, current_context(request, db))
+            return JSONResponse(me.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
+        except AuthnError as exc:
+            return refusal(exc)
 
     @router.get("/v1/identity/me/permissions", response_model=MePermissionsResponse)
     @authenticated(self_only=True)
-    def get_my_permissions(project_id: Optional[str] = None):
-        # S1 wires it; S2's authz.effective_permissions(ctx, scope) computes it. project_id names
-        # the scope to evaluate; an invisible project answers 404, never an empty list.
-        return JSONResponse(status_code=501, content=NOT_YET)
+    def get_my_permissions(request: Request, project_id: Optional[str] = None):
+        from boss_engine.identity import authz
+        from boss_engine.identity.scope import ResolvedScope
 
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                org = ctx.principal.org_id
+                if project_id:
+                    found = db.execute(text(
+                        "SELECT 1 FROM projects pr JOIN workspaces w ON w.id = pr.workspace_id "
+                        "WHERE pr.id = :p AND w.org_id = :o"), {"p": project_id, "o": org}).first()
+                    if found is None:
+                        return error(404, "not_found")
+                    scope = ResolvedScope.in_project(org, project_id)
+                else:
+                    scope = ResolvedScope.org_level(org)
+                eff = authz.effective_permissions(ctx, scope, db=db)
+                if project_id and "project:read" not in eff.permissions:
+                    return error(404, "not_found")     # an invisible project: no existence oracle
+                fresh_until = (sessions.step_up_fresh_until(ctx.session, window_seconds=STEP_UP_WINDOW_SECONDS)
+                               if ctx.session else None)
+                body = MePermissionsResponse(
+                    epoch=eff.epoch, scope=scope.label(), permissions=sorted(eff.permissions),
+                    step_up_fresh_until=fresh_until, catalogue_fingerprint=CATALOGUE_FINGERPRINT)
+            return JSONResponse(body.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    # ---- sessions -----------------------------------------------------------------------------------
+
+    @router.get("/v1/identity/me/sessions")
+    @authenticated(self_only=True)
+    def my_sessions(request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                current = ctx.session.id if ctx.session else None
+                rows = sessions.list_live(db, ctx.principal.id)
+                return JSONResponse({"sessions": [
+                    {"id": r.id, "current": r.id == current, "methods": list(r.auth_methods),
+                     "created_at": r.created_at.isoformat(), "last_seen_at": r.last_seen_at.isoformat(),
+                     "ip": r.ip, "user_agent": r.user_agent,
+                     "expires_at": r.absolute_expires_at.isoformat()} for r in rows]},
+                    headers={"Cache-Control": "no-store"})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.delete("/v1/identity/me/sessions/{session_id}")
+    @authenticated(self_only=True)
+    def end_my_session(session_id: str, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                row = sessions.by_id(db, session_id)
+                if row is None or row.principal_id != ctx.principal.id:
+                    return error(404, "not_found")
+                if sessions.revoke(db, session_id, by=ctx.principal.id, reason="ended by owner"):
+                    emit(db, org_id=ctx.principal.org_id, event_type="session.revoked",
+                         outcome=Outcome.SUCCESS, ctx=ctx, target_type="session", target_id=session_id)
+                return JSONResponse({"revoked": True})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.delete("/v1/identity/me/sessions")
+    @authenticated(self_only=True)
+    def end_my_other_sessions(request: Request):
+        """Sign out everywhere else: every live session but this one."""
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                ended = sessions.revoke_all(db, ctx.principal.id, by=ctx.principal.id, reason="ended by owner",
+                                            except_session=ctx.session.id if ctx.session else None)
+                if ended:
+                    emit(db, org_id=ctx.principal.org_id, event_type="session.revoked", outcome=Outcome.SUCCESS,
+                         ctx=ctx, target_type="user", target_id=ctx.principal.id, details={"count": ended})
+                return JSONResponse({"revoked": ended})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.get("/v1/identity/me/factors")
+    @authenticated(self_only=True)
+    def my_factors(request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                return JSONResponse({"factors": users.factor_list(db, ctx.principal.id)})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    # ---- password -----------------------------------------------------------------------------------
+
+    @router.post("/v1/identity/me/password")
+    @authenticated(self_only=True)
+    def change_password(body: PasswordChangeBody, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = need_person_session(ctx)
+                if blocked:
+                    return blocked
+                user = users.by_id(db, ctx.principal.id)
+                assert user is not None
+                if user.password_hash:
+                    if not verify_password(body.current or "", user.password_hash):
+                        return error(401, "invalid_credentials")
+                elif not is_fresh(ctx):
+                    return error(401, "step_up_required")   # setting a first password
+                try:
+                    check_new_password(body.new, email=user.email,
+                                       min_length=users.get_policy(user.org_id, db=db).password_min_length)
+                except PasswordRejected as exc:
+                    return error(422, exc.code)
+                users.set_password_hash(db, user.principal_id, hash_password(body.new))
+                recovery.void_reset_tokens(db, user.principal_id)
+                ended = sessions.revoke_all(db, user.principal_id, by=user.principal_id,
+                                            reason="password changed",
+                                            except_session=ctx.session.id if ctx.session else None)
+                emit(db, org_id=user.org_id, event_type="password.changed", outcome=Outcome.SUCCESS,
+                     ctx=ctx, target_type="user", target_id=user.principal_id,
+                     details={"other_sessions_revoked": ended})
+                signin.notify(user.email, "Your BOSS password changed",
+                              "Your BOSS password was changed and your other sessions were signed "
+                              "out. Review your API keys under My account.")
+                return JSONResponse({"changed": True, "other_sessions_revoked": ended,
+                                     "review_api_keys": True})
+        except AuthnError as exc:
+            return refusal(exc)
+        except PasswordBusy:
+            return JSONResponse(status_code=429, content={"error": "busy"}, headers={"Retry-After": "2"})
+
+    # ---- TOTP --------------------------------------------------------------------------------------
+
+    @router.post("/v1/identity/me/mfa/totp")
+    @authenticated(self_only=True)
+    def totp_begin(request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = need_person_session(ctx)
+                if blocked:
+                    return blocked
+                token = request.cookies.get(SESSION_COOKIE) or ""
+                row = sessions.lookup(db, token)
+                if row is None or not signin.recently_authenticated(row):
+                    return error(401, "step_up_required")
+                user = users.by_id(db, ctx.principal.id)
+                assert user is not None
+                secret, uri = totp.begin_enrolment(db, principal_id=user.principal_id, account=user.email,
+                                                   session_token=token)
+                return JSONResponse({"secret": secret, "otpauth_uri": uri, "qr_svg": _qr_svg(uri)},
+                                    headers={"Cache-Control": "no-store"})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.post("/v1/identity/me/mfa/totp/confirm")
+    @authenticated(self_only=True)
+    def totp_confirm(body: CodeBody, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = need_person_session(ctx)
+                if blocked:
+                    return blocked
+                had = users.factors(db, ctx.principal.id).any_second_factor
+                if not totp.confirm_enrolment(db, principal=ctx.principal,
+                                              session_token=request.cookies.get(SESSION_COOKIE) or "",
+                                              code=body.code):
+                    return error(400, "invalid_code")
+                emit(db, org_id=ctx.principal.org_id, event_type="mfa.enrolled", outcome=Outcome.SUCCESS,
+                     ctx=ctx, target_type="user", target_id=ctx.principal.id, details={"method": "totp"})
+                extras = _first_factor_extras(db, ctx, had)
+                cookies = _rotate_fresh(db, request, ctx, "totp")
+                return respond({"enrolled": True, **extras}, cookies)
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.delete("/v1/identity/me/mfa/totp")
+    @authenticated(self_only=True)
+    def totp_remove(request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = need_person_session(ctx) or need_step_up(ctx) or _last_factor_guard(db, ctx, "totp")
+                if blocked:
+                    return blocked
+                if not totp.remove(db, ctx.principal.id):
+                    return error(404, "not_found")
+                emit(db, org_id=ctx.principal.org_id, event_type="mfa.removed", outcome=Outcome.SUCCESS,
+                     ctx=ctx, target_type="user", target_id=ctx.principal.id, details={"method": "totp"})
+                return JSONResponse({"removed": True})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    # ---- passkeys ------------------------------------------------------------------------------------
+
+    @router.get("/v1/identity/me/passkeys")
+    @authenticated(self_only=True)
+    def my_passkeys(request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                return JSONResponse({"passkeys": [jsonable(i) for i in passkeys.list_passkeys(db, ctx.principal.id)]})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.post("/v1/identity/me/passkeys/options")
+    @authenticated(self_only=True)
+    def passkey_registration_options(request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = need_person_session(ctx)
+                if blocked:
+                    return blocked
+                token = request.cookies.get(SESSION_COOKIE) or ""
+                row = sessions.lookup(db, token)
+                if row is None or not signin.recently_authenticated(row):
+                    return error(401, "step_up_required")
+                user = users.by_id(db, ctx.principal.id)
+                assert user is not None
+                try:
+                    options = passkeys.registration_options(
+                        db, principal_id=user.principal_id, email=user.email,
+                        display_name=ctx.principal.display_name, origin=public_origin(db),
+                        binding_secret=token)
+                except passkeys.PasskeyError as exc:
+                    return error(409 if exc.code in ("unavailable", "limit_reached") else 400,
+                                 f"passkey_{exc.code}")
+                return JSONResponse({"publicKey": options}, headers={"Cache-Control": "no-store"})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.post("/v1/identity/me/passkeys")
+    @authenticated(self_only=True)
+    def passkey_register(body: PasskeyRegisterBody, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = need_person_session(ctx)
+                if blocked:
+                    return blocked
+                had = users.factors(db, ctx.principal.id).any_second_factor
+                try:
+                    pid = passkeys.verify_registration(
+                        db, principal_id=ctx.principal.id, origin=public_origin(db),
+                        binding_secret=request.cookies.get(SESSION_COOKIE) or "",
+                        credential=body.credential, name=body.name)
+                except passkeys.PasskeyError as exc:
+                    return error(400, f"passkey_{exc.code}")
+                emit(db, org_id=ctx.principal.org_id, event_type="passkey.added", outcome=Outcome.SUCCESS,
+                     ctx=ctx, target_type="passkey", target_id=pid)
+                extras = _first_factor_extras(db, ctx, had)
+                cookies = _rotate_fresh(db, request, ctx, "passkey")
+                return respond({"id": pid, **extras}, cookies, status=201)
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.patch("/v1/identity/me/passkeys/{passkey_id}")
+    @authenticated(self_only=True)
+    def passkey_rename(passkey_id: str, body: RenameBody, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                if not passkeys.rename(db, ctx.principal.id, passkey_id, body.name):
+                    return error(404, "not_found")
+                return JSONResponse({"renamed": True})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.delete("/v1/identity/me/passkeys/{passkey_id}")
+    @authenticated(self_only=True)
+    def passkey_remove(passkey_id: str, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = (need_person_session(ctx) or need_step_up(ctx)
+                           or _last_factor_guard(db, ctx, "passkey"))
+                if blocked:
+                    return blocked
+                if not passkeys.delete(db, ctx.principal.id, passkey_id):
+                    return error(404, "not_found")
+                emit(db, org_id=ctx.principal.org_id, event_type="passkey.removed", outcome=Outcome.SUCCESS,
+                     ctx=ctx, target_type="passkey", target_id=passkey_id)
+                return JSONResponse({"removed": True})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    # ---- recovery codes ---------------------------------------------------------------------------------
+
+    @router.post("/v1/identity/me/recovery-codes")
+    @authenticated(self_only=True)
+    def regenerate_recovery_codes(request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = need_person_session(ctx) or need_step_up(ctx)
+                if blocked:
+                    return blocked
+                if not users.factors(db, ctx.principal.id).any_second_factor:
+                    return error(409, "no_second_factor")
+                codes = recovery.generate(db, ctx.principal.id)
+                emit(db, org_id=ctx.principal.org_id, event_type="recovery_codes.generated",
+                     outcome=Outcome.SUCCESS, ctx=ctx, target_type="user", target_id=ctx.principal.id)
+                return JSONResponse({"recovery_codes": codes}, headers={"Cache-Control": "no-store"})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    # ---- linked identities (linking starts at /v1/auth/sso/{provider_id}/start?purpose=link) ----------
+
+    @router.get("/v1/identity/me/identities")
+    @authenticated(self_only=True)
+    def my_identities(request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                rows = db.execute(text(
+                    "SELECT i.id, coalesce(p.name, i.provider_id) AS provider, coalesce(p.preset, 'generic') AS preset, "
+                    "i.issuer, i.linked_at FROM identity_user_identities i LEFT JOIN identity_providers p ON "
+                    "p.id = i.provider_id WHERE i.principal_id = :p ORDER BY i.linked_at"),
+                    {"p": ctx.principal.id})
+                # LinkedIdentity: the provider and its host, never the subject or the email at link time.
+                return JSONResponse({"identities": [
+                    {"id": r.id, "provider": r.provider, "preset": r.preset,
+                     "label": (r.issuer or "").split("://", 1)[-1].split("/", 1)[0],
+                     "linked_at": r.linked_at.isoformat()} for r in rows]})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.delete("/v1/identity/me/identities/{identity_id}")
+    @authenticated(self_only=True)
+    def unlink_identity(identity_id: str, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = need_person_session(ctx) or need_step_up(ctx)
+                if blocked:
+                    return blocked
+                gone = db.execute(text("DELETE FROM identity_user_identities WHERE id = :id AND principal_id = :p "
+                                       "RETURNING provider_id"), {"id": identity_id, "p": ctx.principal.id}).first()
+                if gone is None:
+                    return error(404, "not_found")
+                emit(db, org_id=ctx.principal.org_id, event_type="sso.unlink", outcome=Outcome.SUCCESS,
+                     ctx=ctx, target_type="identity", target_id=identity_id,
+                     details={"provider_id": gone[0]})
+                return JSONResponse({"unlinked": True})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    # ---- personal API keys ------------------------------------------------------------------------------
+
+    @router.get("/v1/identity/me/api-keys")
+    @authenticated(self_only=True)
+    def my_keys(request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                rows = api_keys.list_keys(db, principal_id=ctx.principal.id, kinds=("pat",))
+                return JSONResponse({"keys": [api_keys.view(db, r) for r in rows]})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.post("/v1/identity/me/api-keys")
+    @permit(P.API_KEY_MANAGE_OWN)
+    def create_my_key(body: KeyCreateBody, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = need_person_session(ctx) or need_step_up(ctx)
+                if blocked:
+                    return blocked
+                if body.replaces:
+                    if not body.grace():
+                        return error(422, "invalid_overlap")
+                    created = api_keys.rotate(db, actor=ctx, key_id=body.replaces, owner=ctx.principal,
+                                              grace=body.grace())
+                else:
+                    created = api_keys.create(db, creator=ctx, owner=ctx.principal, kind="pat", name=body.name,
+                                              scopes=body.scopes, **body.resolved())
+                return JSONResponse(status_code=201, content=api_keys.issued(db, created, replaced=body.replaces),
+                                    headers={"Cache-Control": "no-store"})
+        except api_keys.KeyRefused as exc:
+            return error(exc.status, exc.code, **exc.detail)
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.post("/v1/identity/me/api-keys/{key_id}/rotate")
+    @permit(P.API_KEY_MANAGE_OWN)
+    def rotate_my_key(key_id: str, body: RotateBody, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = need_person_session(ctx) or need_step_up(ctx)
+                if blocked:
+                    return blocked
+                created = api_keys.rotate(db, actor=ctx, key_id=key_id, owner=ctx.principal, grace=body.grace)
+                return JSONResponse(status_code=201, content=api_keys.issued(db, created, replaced=key_id),
+                                    headers={"Cache-Control": "no-store"})
+        except api_keys.KeyRefused as exc:
+            return error(exc.status, exc.code, **exc.detail)
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.post("/v1/identity/me/api-keys/{key_id}/revoke")
+    @permit(P.API_KEY_MANAGE_OWN)
+    def revoke_my_key(key_id: str, request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                if not api_keys.revoke(db, actor=ctx, key_id=key_id, org_id=ctx.principal.org_id,
+                                       owner_id=ctx.principal.id):
+                    return error(404, "not_found")
+                return JSONResponse({"revoked": True})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    _include_s1_routers(router)
     return router
+
+
+def _include_s1_routers(router: APIRouter) -> None:
+    from .identity_auth import build_identity_auth_router
+    from .identity_people import build_identity_people_router
+    from .identity_scim import build_identity_scim_router
+    from .identity_sso import build_identity_sso_router
+
+    for build in (build_identity_auth_router, build_identity_people_router, build_identity_sso_router,
+                  build_identity_scim_router):
+        router.include_router(build())

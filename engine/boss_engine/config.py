@@ -1431,6 +1431,27 @@ class Settings(BaseSettings):
         default=120, alias="BOSS_RATE_LIMIT_RPM"
     )
 
+    # --- identity stream S1 (authentication; docs/product/IDENTITY.md §4–§5) -----------------
+    #: The console's public origin (scheme://host[:port]). The WebAuthn RP ID, the CSRF origin and
+    #: every emailed link come from here (or from the origin bound at the network claim), never
+    #: from a request's Host header.
+    public_url: str = Field(default="", alias="BOSS_PUBLIC_URL")
+    #: argon2id cost: "default" (m=64 MiB, t=3) or "small" (m=19 MiB, t=2; hosts under 2 GiB).
+    argon2_profile: str = Field(default="default", alias="BOSS_ARGON2_PROFILE")
+    #: Hosts (comma-separated names or IPs) the identity outbound client may reach on a private
+    #: address, e.g. a LAN Keycloak. Each use is audited. Everything else private is refused.
+    outbound_allow_private: str = Field(default="", alias="BOSS_OUTBOUND_ALLOW_PRIVATE")
+    #: 32 bytes, base64: the HMAC key for CSRF tokens and hashed rate-limit identifiers. When
+    #: unset it is derived from the vault master key; with neither, a per-process key is used.
+    identity_server_key: str = Field(default="", alias="BOSS_IDENTITY_SERVER_KEY")
+    #: The legacy shared console password, read ONLY as the claim credential of an existing
+    #: install (§4.11) — compared in constant time, never stored or logged.
+    #: (Same field and alias as stream S5's legacy block: keep one copy when the two merge.)
+    legacy_console_password: str = Field(default="", alias="BOSS_CONSOLE_PASSWORD")
+    #: Optional enterprise passkey AAGUID allowlist (comma-separated UUIDs). Empty = any.
+    webauthn_aaguid_allowlist: str = Field(default="", alias="BOSS_WEBAUTHN_AAGUIDS")
+    # --- end identity stream S1 -------------------------------------------------------------
+
     @property
     def repo_root(self) -> Path:
         # ``config.py`` moved from ``apps/api/app`` to

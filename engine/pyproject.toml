@@ -31,6 +31,11 @@ dependencies = [
     "redis>=5.2,<6",
     "SQLAlchemy>=2.0,<3",
     "websockets>=15,<16",
+    # identity: passkeys and SAML signatures (docs/product/IDENTITY.md §4.5, §4.8)
+    "webauthn>=3.0,<4",
+    "signxml>=5.1,<6",
+    "lxml>=5.2,<7",
+    "segno>=1.6,<2",
 ]
 
 [project.optional-dependencies]
@@ -48,4 +53,4 @@ where = ["."]
 include = ["boss_engine*"]
 
 [tool.setuptools.package-data]
-boss_engine = ["contracts/*.json", "mcp/*.json", "data/public_suffix_list.dat"]
+boss_engine = ["contracts/*.json", "mcp/*.json", "data/public_suffix_list.dat", "data/common_passwords.txt.gz"]
