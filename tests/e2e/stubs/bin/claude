@@ -119,6 +119,10 @@ def main() -> int:
     }
     if _flag(argv, "--output-format") == "stream-json":
         model = result["model"]
+        if isinstance(answer.get("rate_limit_event"), dict):
+            # Claude Code reports the subscription's windows on every call; so does this.
+            print(json.dumps({"type": "rate_limit_event",
+                              "rate_limit_info": answer["rate_limit_event"]}))
         for i, rel in enumerate(written):
             print(json.dumps({"type": "assistant", "message": {"model": model, "content": [
                 {"type": "tool_use", "id": f"tu_{i}", "name": "Write",

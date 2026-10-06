@@ -278,6 +278,13 @@ def service_env(state: StackState, *, extra: Optional[dict[str, str]] = None) ->
         "GIT_AUTHOR_NAME": "BOSS e2e", "GIT_AUTHOR_EMAIL": "e2e@example.test",
         "GIT_COMMITTER_NAME": "BOSS e2e", "GIT_COMMITTER_EMAIL": "e2e@example.test",
     })
+    # A walk that needs more of the install configured (another provider pointed at the model
+    # stub, a subscription token) says so here: a JSON object, `{model}` standing for the
+    # model stub's URL. Used by the model router's walk (docs/product/MODEL_ROUTER.md).
+    more = os.environ.get("BOSS_E2E_SERVICE_ENV", "").strip()
+    if more:
+        env.update({str(k): str(v).replace("{model}", model)
+                    for k, v in json.loads(more).items()})
     if extra:
         env.update(extra)
     return env
