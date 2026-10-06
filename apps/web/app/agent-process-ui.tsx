@@ -59,8 +59,8 @@ export function AgentProcesses({
 
   const reload = () =>
     Promise.all([
-      callAction(loadAgentProcessTemplatesAction)(projectId),
-      callAction(loadAgentProcessRunsAction)(projectId),
+      callAction(loadAgentProcessTemplatesAction, undefined, "autopilot:read")(projectId),
+      callAction(loadAgentProcessRunsAction, undefined, "autopilot:read")(projectId),
     ]).then(([templateResult, runResult]) => {
       const nextErrors: string[] = [];
       if (templateResult.ok && templateResult.data) {
@@ -80,8 +80,8 @@ export function AgentProcesses({
     let alive = true;
     setLoading(true);
     Promise.all([
-      callAction(loadAgentProcessTemplatesAction)(projectId),
-      callAction(loadAgentProcessRunsAction)(projectId),
+      callAction(loadAgentProcessTemplatesAction, undefined, "autopilot:read")(projectId),
+      callAction(loadAgentProcessRunsAction, undefined, "autopilot:read")(projectId),
     ]).then(([templateResult, runResult]) => {
       if (!alive) return;
       const nextErrors: string[] = [];
@@ -130,7 +130,7 @@ export function AgentProcesses({
     setDetailLoading(true);
     setError(null);
     startTransition(async () => {
-      const result = await callAction(loadAgentProcessRunAction)(projectId, runId);
+      const result = await callAction(loadAgentProcessRunAction, undefined, "autopilot:read")(projectId, runId);
       if (result.ok && result.data) {
         setSteps(mapProcessSteps(result.data));
         setDetailLoading(false);
@@ -195,7 +195,7 @@ export function AgentProcesses({
           setError(null);
           startTransition(async () => {
             if (intent === "compile") {
-              const result = await callAction(compileAgentProcessAction)(formData);
+              const result = await callAction(compileAgentProcessAction, undefined, "autopilot:configure")(formData);
               if (!result.ok || !result.data) {
                 setError(result.error ?? "Compile failed.");
                 return;
@@ -216,7 +216,7 @@ export function AgentProcesses({
             }
             let specJson = String(formData.get("spec") ?? "").trim();
             if (!specJson) {
-              const compiled = await callAction(compileAgentProcessAction)(formData);
+              const compiled = await callAction(compileAgentProcessAction, undefined, "autopilot:configure")(formData);
               if (!compiled.ok || !compiled.data) {
                 setError(compiled.error ?? "Compile failed.");
                 return;
@@ -244,7 +244,7 @@ export function AgentProcesses({
             );
             saveData.set("description", String(formData.get("description") ?? "").trim());
             saveData.set("spec", specJson);
-            const saved = await callAction(saveAgentProcessTemplateAction)(saveData);
+            const saved = await callAction(saveAgentProcessTemplateAction, undefined, "autopilot:configure")(saveData);
             if (!saved.ok) {
               setError(saved.error ?? "Save failed.");
               return;
@@ -289,7 +289,7 @@ export function AgentProcesses({
         </div>
         <p className="detail">Compile previews steps. It does not spend.</p>
         <div className="inline-actions">
-          <SubmitButton
+          <SubmitButton permission="autopilot:configure"
             className="button"
             type="submit"
             name="intent"
@@ -298,7 +298,7 @@ export function AgentProcesses({
           >
             Compile
           </SubmitButton>
-          <SubmitButton
+          <SubmitButton permission="autopilot:configure"
             className="button secondary"
             type="submit"
             name="intent"
@@ -348,7 +348,7 @@ export function AgentProcesses({
             saveData.set("name", name);
             saveData.set("description", String(formData.get("description") ?? "").trim());
             saveData.set("spec", JSON.stringify(spec));
-            const saved = await callAction(saveAgentProcessTemplateAction)(saveData);
+            const saved = await callAction(saveAgentProcessTemplateAction, undefined, "autopilot:configure")(saveData);
             if (!saved.ok) {
               setError(saved.error ?? "Save failed.");
               return;
@@ -512,7 +512,7 @@ export function AgentProcesses({
           >
             Add step
           </button>
-          <SubmitButton className="button" type="submit" disabled={pending}>
+          <SubmitButton permission="autopilot:configure" className="button" type="submit" disabled={pending}>
             Save template
           </SubmitButton>
         </div>
@@ -524,7 +524,7 @@ export function AgentProcesses({
         action={(formData) => {
           setError(null);
           startTransition(async () => {
-            const result = await callAction(startAgentProcessAction)(formData);
+            const result = await callAction(startAgentProcessAction, undefined, "autopilot:operate")(formData);
             if (result.ok && result.data) {
               setSelectedRunId(typeof result.data.id === "string" ? result.data.id : null);
               setSteps(mapProcessSteps(result.data));
@@ -575,7 +575,7 @@ export function AgentProcesses({
           <input type="checkbox" name="auto_build" value="true" />
           Auto-build (enqueue governed code.task)
         </label>
-        <SubmitButton className="button" type="submit" disabled={pending}>
+        <SubmitButton permission="autopilot:operate" className="button" type="submit" disabled={pending}>
           Start PRD process
         </SubmitButton>
       </form>

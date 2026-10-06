@@ -34,7 +34,7 @@ export function FocusedAgents({
   const [pending, startTransition] = useTransition();
 
   const reload = () =>
-    callAction(loadFocusedAgentsAction)(projectId).then((result) => {
+    callAction(loadFocusedAgentsAction, undefined, "autopilot:read")(projectId).then((result) => {
       if (result.ok && result.data) {
         setState(mapFocusedAgentList(result.data));
         setError(null);
@@ -46,7 +46,7 @@ export function FocusedAgents({
 
   useEffect(() => {
     let alive = true;
-    callAction(loadFocusedAgentsAction)(projectId).then((result) => {
+    callAction(loadFocusedAgentsAction, undefined, "autopilot:read")(projectId).then((result) => {
       if (!alive) return;
       if (result.ok && result.data) {
         setState(mapFocusedAgentList(result.data));
@@ -86,7 +86,7 @@ export function FocusedAgents({
         action={(formData) => {
           setError(null);
           startTransition(async () => {
-            const result = await callAction(createFocusedAgentAction)(formData);
+            const result = await callAction(createFocusedAgentAction, undefined, "autopilot:configure")(formData);
             if (result.ok) {
               await reload();
               return;
@@ -165,7 +165,7 @@ export function FocusedAgents({
             propose review
           </label>
         </fieldset>
-        <SubmitButton className="button" type="submit" disabled={pending}>
+        <SubmitButton permission="autopilot:configure" className="button" type="submit" disabled={pending}>
           Create and start
         </SubmitButton>
       </form>
@@ -195,7 +195,7 @@ export function FocusedAgents({
           <form
             action={(formData) => {
               startTransition(async () => {
-                const result = await callAction(wakeFocusedAgentAction)(formData);
+                const result = await callAction(wakeFocusedAgentAction, undefined, "autopilot:operate")(formData);
                 if (!result.ok) setError(result.error ?? "Wake failed.");
                 else await reload();
               });
@@ -204,7 +204,7 @@ export function FocusedAgents({
             <input type="hidden" name="project_id" value={projectId} />
             <input type="hidden" name="actor" value={actor} />
             <input type="hidden" name="agent_id" value={agent.id} />
-            <SubmitButton className="button secondary" type="submit" disabled={pending}>
+            <SubmitButton permission="autopilot:operate" className="button secondary" type="submit" disabled={pending}>
               Wake now
             </SubmitButton>
           </form>
@@ -212,7 +212,7 @@ export function FocusedAgents({
             <form
               action={(formData) => {
                 startTransition(async () => {
-                  const result = await callAction(pauseFocusedAgentAction)(formData);
+                  const result = await callAction(pauseFocusedAgentAction, undefined, "autopilot:operate")(formData);
                   if (!result.ok) setError(result.error ?? "Pause failed.");
                   else await reload();
                 });
@@ -221,7 +221,7 @@ export function FocusedAgents({
               <input type="hidden" name="project_id" value={projectId} />
               <input type="hidden" name="actor" value={actor} />
               <input type="hidden" name="agent_id" value={agent.id} />
-              <SubmitButton className="button secondary" type="submit" disabled={pending}>
+              <SubmitButton permission="autopilot:operate" className="button secondary" type="submit" disabled={pending}>
                 Pause
               </SubmitButton>
             </form>
@@ -229,7 +229,7 @@ export function FocusedAgents({
             <form
               action={(formData) => {
                 startTransition(async () => {
-                  const result = await callAction(activateFocusedAgentAction)(formData);
+                  const result = await callAction(activateFocusedAgentAction, undefined, "autopilot:operate")(formData);
                   if (!result.ok) setError(result.error ?? "Activate failed.");
                   else await reload();
                 });
@@ -238,7 +238,7 @@ export function FocusedAgents({
               <input type="hidden" name="project_id" value={projectId} />
               <input type="hidden" name="actor" value={actor} />
               <input type="hidden" name="agent_id" value={agent.id} />
-              <SubmitButton className="button secondary" type="submit" disabled={pending}>
+              <SubmitButton permission="autopilot:operate" className="button secondary" type="submit" disabled={pending}>
                 Activate
               </SubmitButton>
             </form>

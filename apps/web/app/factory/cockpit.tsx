@@ -245,7 +245,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
     const form = new FormData();
     form.set("run_id", runId);
     form.set("actor", actor);
-    const r = await callAction(retryCodeTaskWithStateAction)(null, form);
+    const r = await callAction(retryCodeTaskWithStateAction, undefined, "code_task:retry")(null, form);
     setBusy(null);
     if (r?.error) { setErr(r.error); return; }
     showToast("success", r?.attempt ? `Attempt ${r.attempt} started` : "Attempt started");

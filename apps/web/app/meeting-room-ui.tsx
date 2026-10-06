@@ -277,7 +277,7 @@ function buildHref(meeting: Meeting, search: string): string {
 /** Convene the same panel again: a failed one's way forward. */
 function ConveneAgain({ meeting, projectId }: { meeting: Meeting; projectId: string }) {
   return (
-    <ActionForm action={conveneMeetingAction} successMessage="Convened again — the new panel is in session."
+    <ActionForm permission="meeting:convene" action={conveneMeetingAction} successMessage="Convened again — the new panel is in session."
                 onResult={(r) => {
                   // Into the new panel (or the one already in session on this ask).
                   const id = r.ok ? (r.data?.run_id as string | undefined) : undefined;
@@ -366,7 +366,7 @@ function MeetingEvidence({ meetingId, projectId }: { meetingId: string; projectI
   } | null>(null);
   useEffect(() => {
     let cancelled = false;
-    callAction(loadMeetingEvidenceAction)(meetingId, projectId).then((result) => {
+    callAction(loadMeetingEvidenceAction, undefined, "meeting:read")(meetingId, projectId).then((result) => {
       if (!cancelled && result.ok) setEvidence(result);
     });
     return () => { cancelled = true; };
@@ -592,7 +592,7 @@ function ConveneHero({ projectId, roles, tasks, meetings }: {
     : "A no-spend fixture today — no model is called";
   const fixture = type !== "prd_panel";
   return (
-    <ActionForm action={conveneMeetingAction} className="rp-convene" data-testid="meeting-new-form"
+    <ActionForm permission="meeting:convene" action={conveneMeetingAction} className="rp-convene" data-testid="meeting-new-form"
                 successMessage={fixture ? "The fixture ran — its minutes are below." : "Convened — the panel is in session below."}>
       <div className="rp-aurora" aria-hidden />
       <input type="hidden" name="project_id" value={projectId} />
@@ -717,13 +717,13 @@ function ManageSeats({ projectId, roles }: { projectId: string; roles: MeetingRo
               <span>{r.lens}</span>
             </div>
             <div className="rp-role-acts">
-              <ActionForm action={setMeetingRoleEnabledAction}>
+              <ActionForm permission="meeting:configure" action={setMeetingRoleEnabledAction}>
                 <input type="hidden" name="project_id" value={projectId} />
                 <input type="hidden" name="role_key" value={r.key} />
                 <input type="hidden" name="enabled" value={r.enabled === false ? "true" : "false"} />
                 <SubmitButton type="submit" className="rp-btn sm">{r.enabled === false ? "Enable" : "Disable"}</SubmitButton>
               </ActionForm>
-              <ActionForm action={deleteMeetingRoleAction}>
+              <ActionForm permission="meeting:configure" action={deleteMeetingRoleAction}>
                 <input type="hidden" name="project_id" value={projectId} />
                 <input type="hidden" name="role_key" value={r.key} />
                 <SubmitButton type="submit" className="rp-btn sm" data-testid="meeting-seat-remove"
@@ -736,7 +736,7 @@ function ManageSeats({ projectId, roles }: { projectId: string; roles: MeetingRo
           </div>
         ))}
       </div>
-      <ActionForm action={upsertMeetingRoleAction} className="rp-add-role">
+      <ActionForm permission="meeting:configure" action={upsertMeetingRoleAction} className="rp-add-role">
         <input type="hidden" name="project_id" value={projectId} />
         <div className="rp-lbl">Add a seat</div>
         <input type="text" name="title" placeholder="Seat title — e.g. Legal Counsel" required aria-label="Seat title" />
@@ -761,8 +761,8 @@ function ManageSeats({ projectId, roles }: { projectId: string; roles: MeetingRo
  */
 function PanelsMaintenance({ actor, meetings }: { actor: string; meetings: Meeting[] }) {
   const [job, setJob] = useState<"vote" | "sweep" | null>(null);
-  const [vote, voteAction, votePending] = useActionState(callAction(tallyVotesAction), null);
-  const [sweep, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction), null);
+  const [vote, voteAction, votePending] = useActionState(callAction(tallyVotesAction, undefined, "meeting:convene"), null);
+  const [sweep, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction, undefined, "meeting:convene"), null);
   const votable = meetings.filter((m) => m.can_vote !== false && !meetingLive(m));
   const data = (r: typeof vote) => ((r?.data ?? {}) as Record<string, unknown>);
   return (
@@ -792,7 +792,7 @@ function PanelsMaintenance({ actor, meetings }: { actor: string; meetings: Meeti
                   </label>
                 ))}
               </div>
-              <SubmitButton type="submit" className="rp-btn primary sm" disabled={votePending}>Record the vote</SubmitButton>
+              <SubmitButton permission="meeting:convene" type="submit" className="rp-btn primary sm" disabled={votePending}>Record the vote</SubmitButton>
               {vote ? (vote.ok
                 ? <p className="rp-okmsg" data-testid="maint-vote-result">{voteSentence(data(vote))}
                     {((data(vote).dissent_records as Array<{ role?: string; reason?: string }> | undefined) ?? [])
@@ -806,7 +806,7 @@ function PanelsMaintenance({ actor, meetings }: { actor: string; meetings: Meeti
             <input type="hidden" name="actor" value={actor} />
             <p className="rp-sub">A panel whose worker died mid-round stays “in session” until it is swept. Sweeping marks it
               stopped, so it can be convened again.</p>
-            <SubmitButton type="submit" className="rp-btn primary sm" disabled={sweepPending}>Sweep stalled panels</SubmitButton>
+            <SubmitButton permission="meeting:convene" type="submit" className="rp-btn primary sm" disabled={sweepPending}>Sweep stalled panels</SubmitButton>
             {sweep ? (sweep.ok
               ? <p className="rp-okmsg" data-testid="maint-sweep-result">{Number(data(sweep).swept)
                   ? `Swept ${Number(data(sweep).swept)} stalled panel${Number(data(sweep).swept) === 1 ? "" : "s"}.`
@@ -915,7 +915,7 @@ export function MeetingsHome({
           <div className="rp-empty" data-testid="panels-empty">
             <b>No panels yet.</b>
             Convene one above. To see the phases without spending anything, run the no-spend fixture.
-            <ActionForm action={runSimulatedMeetingAction}>
+            <ActionForm permission="meeting:convene" action={runSimulatedMeetingAction}>
               <input type="hidden" name="project_id" value={projectId} />
               <input type="hidden" name="directive" value="Community simulated panel fixture" />
               <SubmitButton type="submit" className="rp-btn sm">Run no-spend fixture</SubmitButton>

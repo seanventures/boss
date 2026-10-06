@@ -2,6 +2,7 @@ import { createBossApiClient } from "@boss/api-client";
 
 import { writeAwareFetch } from "./api-write";
 import { installFeedCache } from "./feed-cache";
+import { installIdentityFetch } from "./identity/server-fetch";
 
 /**
  * Where the control plane lives.
@@ -49,24 +50,22 @@ export function apiUrlProblem(): string | null {
 }
 export const PROJECT_ID =
   process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood";
-/** The control-plane key. SERVER ONLY.
+/** THERE IS NO CONTROL-PLANE KEY IN THE CONSOLE (IDENTITY.md §4.1, D1).
  *
- * `NEXT_PUBLIC_BOSS_API_KEY` is inlined into the JavaScript bundle at build time, so reading it
- * in the browser handed every visitor a credential that can write to the control plane. Browser
- * requests now go through `app/v1/[...path]`, which attaches the key on the server. */
-export const API_KEY = IS_SERVER ? process.env.BOSS_API_KEY : undefined;
-
+ * The console used to attach one shared `BOSS_API_KEY` to every call, so the API could only ever
+ * say that "the console" did something. Every call now carries the signed-in person's own
+ * session cookie instead: lib/identity/server-fetch.ts adds it to server-side calls, and
+ * app/v1/[...path] forwards the browser's. Nothing here reads BOSS_API_KEY, and
+ * tests/identity-console-holds-no-key.test.ts keeps it that way. */
 export function resolveProjectId(projectId?: string): string {
   return projectId?.trim() || PROJECT_ID;
 }
 
-// Auth headers for direct fetch() calls to the control plane (the deployed API requires a key;
-// the typed client sends Bearer, so raw fetches must too). Merge with any extra headers.
+/** Headers for a direct fetch() to the control plane. No credential: the person's session is
+ *  forwarded by lib/identity/server-fetch.ts on every call to API_URL, so this only merges the
+ *  caller's own headers (kept so 150 call sites need not change shape). */
 export function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  return {
-    ...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
-    ...(extra ?? {}),
-  };
+  return { ...(extra ?? {}) };
 }
 
 // Collapse duplicate control-plane GETs before they leave this process.
@@ -75,10 +74,12 @@ export function authHeaders(extra?: Record<string, string>): Record<string, stri
 // sites — both the typed client and the raw fetch() helpers. See lib/feed-cache.ts for what
 // is and is not cached, and why the window is deliberately tiny.
 installFeedCache(API_URL);
+// Outside the cache, so the cache sees (and partitions by) the forwarded session.
+installIdentityFetch(API_URL);
 
 // Every typed write goes through lib/api-write.ts, so a server action's calls carry the
 // Idempotency-Key derived from the press that started it. Reads pass straight to fetch (and so
 // through the feed cache above).
 export const client = createBossApiClient({
-  baseUrl: API_URL, apiKey: API_KEY, fetchImpl: writeAwareFetch,
+  baseUrl: API_URL, fetchImpl: writeAwareFetch,
 });

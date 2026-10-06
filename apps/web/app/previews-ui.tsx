@@ -37,7 +37,7 @@ export function ApprovePreview(
   { preview, compact = false }: { preview: PreviewRec; compact?: boolean },
 ) {
   const [gate, setGate] = React.useState<any>(null);
-  const [state, action] = useActionState(callAction(approvePreviewAction), null);
+  const [state, action] = useActionState(callAction(approvePreviewAction, undefined, "preview:approve"), null);
 
   // A BATCHED ROUTE HANDLER, NOT A PER-ROW SERVER ACTION.
   //
@@ -99,7 +99,7 @@ export function ApprovePreview(
     return (
       <form action={action} style={{ display: "inline-flex" }} title={effect}>
         <input type="hidden" name="preview_id" value={preview.id} />
-        <SubmitButton className="cap-btn tone-green" data-testid="preview-approve">
+        <SubmitButton permission="preview:approve" className="cap-btn tone-green" data-testid="preview-approve">
           Approve &amp; ship
           {willDeploy.length ? (
             <span className="ct-approve-n" data-testid="preview-approve-count">
@@ -114,7 +114,7 @@ export function ApprovePreview(
   return (
     <form action={action} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
       <input type="hidden" name="preview_id" value={preview.id} />
-      <SubmitButton className="cap-btn tone-green" data-testid="preview-approve">
+      <SubmitButton permission="preview:approve" className="cap-btn tone-green" data-testid="preview-approve">
         Approve &amp; ship
       </SubmitButton>
       {/* What the click actually causes, before it is clicked. */}

@@ -59,8 +59,8 @@ describe("switching areas keeps the screen populated", () => {
     expect(SHELL).toContain("const selected = navTarget ?? active;");
     expect(SHELL).toContain("setNavTarget(id);");
     const rail = SHELL.slice(SHELL.indexOf("bx-nav-item"));
-    expect(rail).toMatch(/\ba\.id === selected\b/);
-    expect(rail).toMatch(/\bchild\.id === selected\b/);
+    expect(rail).toMatch(/\ba\.id === railSelected\b/);
+    expect(rail).toMatch(/\bchild\.id === railSelected\b/);
     expect(SHELL).toContain("areasForEdition.find((a) => a.id === active)");
   });
 

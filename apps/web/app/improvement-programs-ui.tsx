@@ -30,7 +30,7 @@ export function ImprovementProgramsPanel({
         proposal needs the Enterprise edition.
       </p>
 
-      <ActionForm
+      <ActionForm permission="improvement:manage"
         action={createImprovementProgramAction}
         className="composer compact"
         data-testid="improvement-program-create-form"

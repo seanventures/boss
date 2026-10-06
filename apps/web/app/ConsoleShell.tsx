@@ -83,6 +83,12 @@ import {
 import { EditionChip } from "./edition-ui";
 import { areaVisibilityCss } from "../lib/area-visibility";
 import type { AreaId } from "../lib/area-ids";
+import { accessForArea } from "../lib/identity/area-access";
+import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
+import { IdentityProvider, useIdentity } from "../components/identity/identity-provider";
+import { AccessDenied } from "../components/identity/access-denied";
+import { AccountMenu, IdentityBanners, signOut } from "../components/identity/account-menu";
+import { ConsentHost } from "../components/identity/consent-sheet";
 
 export type { AreaId };
 
@@ -244,7 +250,7 @@ const AREAS: AreaDef[] = [
     // second in the sidebar, under Command Center, ahead of everything an operator actually
     // does — and called "SSO", which names one protocol rather than the thing it configures.
     label: "Identity",
-    sub: "Identity providers and member sync — console sign-in is the installer password",
+    sub: "Who can do what, and for whom",
     group: "Settings",
     icon: ICONS.enterprise,
   },
@@ -311,10 +317,44 @@ export type ConsoleShellProps = {
    *  in the DOM yet: opening it shows a loading state and asks the server for it. Absent means
    *  every area was rendered, which is how this shell behaved before areas went lazy. */
   loadedAreas?: string[];
+  /** Who is signed in and what they hold, read on the server (lib/identity/server.ts), so the
+   *  rail and every control mirror the API from the first paint. */
+  identity?: {
+    me: MeResponse | null;
+    org: MePermissionsResponse | null;
+    project?: MePermissionsResponse | null;
+    stub?: boolean;
+    unavailable?: boolean;
+  };
+  /** The shell around a ROUTE (/identity, /account) rather than the area page: a rail press
+   *  navigates to the area instead of revealing a section already in the DOM. */
+  routeMode?: boolean;
+  /** The top bar's title on a route page with no rail area of its own (My account). */
+  title?: { label: string; sub: string };
   children: ReactNode;
 };
 
-export default function ConsoleShell({
+/** IDENTITY AREAS LIVE ON THEIR OWN ROUTES (/identity/**), not as a section of this page. */
+const ROUTE_AREAS: Partial<Record<AreaId, string>> = { enterprise: "/identity" };
+
+export default function ConsoleShell(props: ConsoleShellProps) {
+  const { identity, scope } = props;
+  return (
+    <IdentityProvider
+      me={identity?.me ?? null}
+      org={identity?.org ?? null}
+      project={identity?.project ?? null}
+      projectId={scope.projectId ?? null}
+      stub={identity?.stub ?? false}
+      unavailable={identity ? (identity.unavailable ?? false) : true}
+    >
+      <ConsoleShellInner {...props} />
+      <ConsentHost />
+    </IdentityProvider>
+  );
+}
+
+function ConsoleShellInner({
   status,
   scope,
   org,
@@ -322,8 +362,16 @@ export default function ConsoleShell({
   initialArea,
   signOutAvailable = false,
   loadedAreas,
+  routeMode = false,
+  title,
   children,
 }: ConsoleShellProps) {
+  const { check, me } = useIdentity();
+  /** Can the viewer open this area? S2's declaration, else the draft (lib/identity/area-access). */
+  const areaCan = useCallback((id: AreaId) => {
+    const access = accessForArea(id);
+    return "permission" in access ? check(access.permission) : { allowed: true, reason: "", needsStepUp: false };
+  }, [check]);
   const resolvedEdition = normalizeEditionId(editionId);
   const community = isCommunityEdition(resolvedEdition);
   // Every agent name and face in the console reads the install's identities from one store.
@@ -349,6 +397,8 @@ export default function ConsoleShell({
   // No transition: there is nothing to wait for. A rail click reveals a section already in
   // the DOM, so `active` commits on the press and the screen never blanks or lags.
   const selected = navTarget ?? active;
+  // A route page with no rail area (My account) highlights nothing in the rail.
+  const railSelected: AreaId | null = routeMode && !(AREAS.some((a) => a.id === initialArea)) ? null : selected;
   useEffect(() => {
     // The transition committed (or the URL changed underneath us). Stop showing a target that
     // is now simply the active area, so a later failure cannot leave the rail lying.
@@ -630,6 +680,17 @@ export default function ConsoleShell({
   }, [activeLoading, active]);
 
   const go = useCallback((id: AreaId) => {
+    // An area with its own route (Identity), or any area pressed from a route page: navigate.
+    const routed = ROUTE_AREAS[id];
+    if (routed || routeMode) {
+      setNavTarget(id);
+      setNavOpen(false);
+      setPaletteOpen(false);
+      const org = new URLSearchParams(window.location.search).get("org");
+      const target = routed ?? `/?area=${id}${org ? `&org=${encodeURIComponent(org)}` : ""}`;
+      window.location.assign(target);
+      return;
+    }
     // A RAIL CLICK TOUCHES THE SERVER ZERO TIMES.
     //
     // Every area is in the DOM and `main.bx-content[data-active=X]` reveals one with CSS, so
@@ -662,7 +723,13 @@ export default function ConsoleShell({
       /* non-browser / unsupported — the area is already set above, so the console still moves */
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }, []);
+  }, [routeMode]);
+
+  // The Identity area lives at /identity: however it was opened here (a link, Back, the
+  // palette), go there.
+  useEffect(() => {
+    if (!routeMode && ROUTE_AREAS[active]) window.location.assign(ROUTE_AREAS[active]!);
+  }, [active, routeMode]);
 
   // Quick-action links (AreaLink in the Overview command center) switch areas
   // client-side via this event — instant, no full-page navigation/refetch.
@@ -942,10 +1009,12 @@ export default function ConsoleShell({
 
   // Sidebar only: Community v1 home is a small cut (UI_V1_CUT.md). Palette +
   // `?area=` keep every AreaId reachable (SSO stays in the sidebar).
+  // THE RAIL SHOWS ONLY WHAT THE VIEWER CAN OPEN (IDENTITY.md §6.5). A direct URL to one they
+  // cannot still lands — on <AccessDenied> naming the permission, never a blank page.
   const navAreas = useMemo(
     () => areasForEdition.filter(
-      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OFF_THE_NAV.has(a.id)),
-    [areasForEdition, resolvedEdition],
+      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed),
+    [areasForEdition, resolvedEdition, areaCan],
   );
 
   const activeDef = areasForEdition.find((a) => a.id === active) ?? areasForEdition[0];
@@ -1009,6 +1078,7 @@ export default function ConsoleShell({
 
   return (
     <div className={`bx-shell${navOpen ? " nav-open" : ""}${railed ? " nav-docked" : ""}`}
+         data-route-mode={routeMode || undefined}
          data-rail-for-dock={railed && !docked ? "true" : undefined}>
       <a className="skip-link" href="#decision-inbox">Skip to decision inbox</a>
 
@@ -1090,13 +1160,13 @@ export default function ConsoleShell({
                               <button
                                 key={child.id}
                                 type="button"
-                                className={`bx-nav-item bx-nav-child${child.id === selected ? " active" : ""}`}
-                                aria-current={child.id === selected ? "page" : undefined}
+                                className={`bx-nav-item bx-nav-child${child.id === railSelected ? " active" : ""}`}
+                                aria-current={child.id === railSelected ? "page" : undefined}
                                 data-area-nav={child.id}
                                 onClick={() => go(child.id)}
                               >
                                 <ChildIcon size={15}
-                                            weight={child.id === selected ? "fill" : "regular"} aria-hidden />
+                                            weight={child.id === railSelected ? "fill" : "regular"} aria-hidden />
                                 <span>{labelFor(child)}</span>
                                 {childBadge ? <span className="bx-nav-badge">{childBadge}</span> : null}
                               </button>
@@ -1110,16 +1180,14 @@ export default function ConsoleShell({
                 const badge = badgeFor(a.id);
                 const Icon = a.icon;
                 const paidBadge = shouldShowPaidNavBadge(a.id, resolvedEdition);
-                const ssoBadge =
-                  community && a.id === "enterprise"
-                    ? communityNavCopy("enterprise").badge
-                    : undefined;
+                // Identity is more than SSO now: no "SSO" badge on its rail row.
+                const ssoBadge: string | undefined = undefined;
                 return (
                   <button
                     key={a.id}
                     type="button"
-                    className={`bx-nav-item${a.id === selected ? " active" : ""}`}
-                    aria-current={a.id === selected ? "page" : undefined}
+                    className={`bx-nav-item${a.id === railSelected ? " active" : ""}`}
+                    aria-current={a.id === railSelected ? "page" : undefined}
                     data-area-nav={a.id}
                     // The label survives docking as a tooltip — icons alone are a memory test.
                     data-label={labelFor(a)}
@@ -1128,7 +1196,7 @@ export default function ConsoleShell({
                     data-sso-visible={a.id === "enterprise" ? "true" : undefined}
                     onClick={() => go(a.id)}
                   >
-                    <Icon size={17} weight={a.id === selected ? "fill" : "regular"} aria-hidden />
+                    <Icon size={17} weight={a.id === railSelected ? "fill" : "regular"} aria-hidden />
                     <span>{labelFor(a)}</span>
                     {ssoBadge ? (
                       <span
@@ -1164,11 +1232,12 @@ export default function ConsoleShell({
         </nav>
 
         <div className="bx-sidebar-foot">
-          <div className="bx-operator">
-            <span className="bx-operator-avatar" aria-hidden>{scope.actor.slice(0, 1).toUpperCase()}</span>
+          {/* WHO IS SIGNED IN — the person, from the session, never a claimed actor string. */}
+          <div className="bx-operator" data-testid="signed-in-as">
+            <span className="bx-operator-avatar" aria-hidden>{(me?.display_name ?? scope.actor).slice(0, 1).toUpperCase()}</span>
             <span>
-              <strong>{scope.actor}</strong>
-              <small>Operator · in control</small>
+              <strong>{me?.display_name ?? scope.actor}</strong>
+              <small>{me ? ([...new Set(me.access_roles)].map((r) => r.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())).join(" · ") || "No access role") : "Operator · in control"}</small>
             </span>
           </div>
           <div className="bx-control-status">
@@ -1214,8 +1283,8 @@ export default function ConsoleShell({
           </button> : null}
 
           <div className="bx-topbar-title" id="boss-console-title">
-            {activeDef.label}
-            <small>{activeDef.sub}</small>
+            {title?.label ?? activeDef.label}
+            <small>{title?.sub ?? activeDef.sub}</small>
           </div>
 
           <div className="bx-topbar-spacer" />
@@ -1249,21 +1318,22 @@ export default function ConsoleShell({
             <kbd>⌘K</kbd>
           </button>
           <PresencePill projectId={scope.projectId ?? scope.project} />
+          <AccountMenu />
           <details className="bx-system-menu">
             <summary aria-label="System details">System</summary>
             <div className="bx-system-panel">
               <div><span>Edition</span><EditionChip editionId={resolvedEdition} /></div>
               <div><span>Budget</span><strong className={`bx-system-budget ${tone}`}>
                 {status.budgetState || "unknown"}</strong></div>
-              <div><span>Operator</span><strong><UserCircle size={15} aria-hidden /> {scope.actor}</strong></div>
+              <div><span>Signed in</span><strong><UserCircle size={15} aria-hidden /> {me?.display_name ?? scope.actor}</strong></div>
               <div><span>Console</span><ConsoleToggle current="v1" orgId={org?.id} /></div>
               {/* SIGN OUT. /api/auth/logout existed and nothing called it, so the only way to
                   end a console session on a shared machine was to clear the browser's cookies.
                   Shown only when sign-in is configured: there is no session to end otherwise. */}
-              {signOutAvailable ? (
-                <form action="/api/auth/logout" method="post" data-testid="bx-sign-out">
-                  <button type="submit" className="cap-btn">Sign out</button>
-                </form>
+              {signOutAvailable || me ? (
+                <div data-testid="bx-sign-out">
+                  <button type="button" className="cap-btn" onClick={signOut}>Sign out</button>
+                </div>
               ) : null}
             </div>
           </details>
@@ -1319,7 +1389,7 @@ export default function ConsoleShell({
         ) : null}
 
         {/* The Factory's Floor IS the list of builds (walk D19): no second strip of them. */}
-        {active !== "code_tasks" ? <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} /> : null}
+        {active !== "code_tasks" && !routeMode ? <ProjectStrip projectId={scope.projectId ?? scope.project} area={active} /> : null}
 
         {/* The console gets out of the panel's way rather than hiding behind it. The dock is
             fixed-position, so without this inset the right-hand column of cards sat underneath
@@ -1347,7 +1417,15 @@ export default function ConsoleShell({
               ) : null}
             </div>
           ) : null}
-          {children}
+          <IdentityBanners />
+          {/* A DIRECT URL TO AN AREA THE VIEWER CANNOT OPEN names what is missing (§9.10).
+              Route pages (Identity, My account) guard themselves in their layouts. */}
+          {!routeMode && !areaCan(active).allowed ? (() => {
+            const access = accessForArea(active);
+            return "permission" in access
+              ? <AccessDenied permission={access.permission} page={activeDef.label} />
+              : children;
+          })() : children}
         </main>
         {dockedRun ? (
           <aside className="bx-dock" aria-label="Ask BOSS about this app"

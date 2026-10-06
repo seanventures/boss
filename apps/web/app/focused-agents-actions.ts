@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { API_URL, authHeaders } from "../lib/client";
 import { apiWrite } from "../lib/api-write";
+import { declareAction } from "../lib/identity/guarded-action";
 
 export type FocusedAgentActionResult = {
   ok: boolean;
@@ -159,3 +160,12 @@ export async function activateFocusedAgentAction(
     actor: actor || "executive_console",
   });
 }
+
+// THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
+// A declaration for the console to mirror — disabled with the reason when not held — never a
+// decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
+declareAction(loadFocusedAgentsAction, "autopilot:read");
+declareAction(createFocusedAgentAction, "autopilot:configure");
+declareAction(wakeFocusedAgentAction, "autopilot:operate");
+declareAction(pauseFocusedAgentAction, "autopilot:operate");
+declareAction(activateFocusedAgentAction, "autopilot:operate");

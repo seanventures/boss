@@ -1,4 +1,7 @@
-import { API_URL, API_KEY } from "../../../lib/client";
+import { API_URL } from "../../../lib/client";
+import { CONSOLE_AUTH_HEADER_LC, consoleAuthMarker, identityCookieHeader, isStrippedHeader } from "../../../lib/identity/forward";
+import { identityStubEnabled, isIdentityPath } from "../../../lib/identity/stub/enabled";
+import { answerFromStub } from "../../../lib/identity/server-fetch";
 import { collectorMachinePost, collectorPathOf } from "../../../lib/console-session";
 import { COLLECTOR_BODY_CAP, readCapped } from "../../../lib/read-capped";
 import { clientHop, proxyHops } from "../../../lib/client-hop";
@@ -22,40 +25,53 @@ import { clientHop, proxyHops } from "../../../lib/client-hop";
  * all in this deployment"*. There were 27 hand-written route handlers doing this one endpoint at
  * a time. This is the general case, so a new client feed needs no new handler.
  *
- * It also takes the API key OFF the wire. `API_KEY` falls back to `NEXT_PUBLIC_BOSS_API_KEY`,
- * which is inlined into the JavaScript bundle at build time — every visitor gets a copy of a
- * credential that can write to the control plane. The key is attached HERE, on the server, and
- * the browser sends none.
+ * IT CARRIES THE PERSON, NOT A KEY (IDENTITY.md §4.1, D1, A9). The browser's own identity
+ * cookies are forwarded unchanged — the API sets and reads the session itself — and so are the
+ * `X-Boss-CSRF`, `Origin` and `Sec-Fetch-Site` its CSRF check needs. Every header that could
+ * name a principal is stripped (lib/identity/forward.ts isStrippedHeader), and no
+ * `Authorization` is ever added: the console has no shared key any more. The API's `Set-Cookie`
+ * is relayed, so sign-in through this proxy leaves the browser signed in.
  */
 export const dynamic = "force-dynamic";
 
-/** Never let the caller choose its own identity: the key is the server's to add. */
-const STRIPPED = new Set([
-  "authorization", "x-boss-api-key", "host", "connection", "content-length",
-  "cookie", "origin", "referer",
-]);
-
+/** Never let the caller choose its own identity: only the person's cookie goes through. */
 function forwardHeaders(req: Request, machine: boolean): Headers {
   const out = new Headers();
   req.headers.forEach((value, key) => {
-    if (!STRIPPED.has(key.toLowerCase())) out.set(key, value);
+    const name = key.toLowerCase();
+    if (name === "referer") return;
+    if (!isStrippedHeader(name)) out.set(key, value);
   });
-  // The collector's machine routes speak for another install, never for this console: they get
-  // NO key, in any spelling of their path (re-check 4, item 1) — the API exempts them from
-  // transport auth and checks them itself. `machine` is collectorPathOf(), decided once.
-  if (API_KEY && !machine) out.set("Authorization", `Bearer ${API_KEY}`);
+  // The identity cookies only — never the console's other cookies, and nothing at all for the
+  // collector's machine routes, which speak for another install, never for this console.
+  const cookie = machine ? "" : identityCookieHeader(req.headers.get("cookie"), { stub: identityStubEnabled() });
+  if (cookie) out.set("cookie", cookie);
   if (machine) {
-    // THE CLIENT'S ADDRESS, NOT ITS CLAIM (re-check C). A client may send its own
-    // X-Forwarded-For, and Next keeps it as is, so it is never forwarded unchanged: the console
-    // sends one hop — the one its own proxies appended — or none at all.
-    for (const h of ["x-forwarded-for", "x-real-ip", "forwarded"]) out.delete(h);
-    const hop = clientHop(req.headers.get("x-forwarded-for"), proxyHops());
-    if (hop) out.set("x-forwarded-for", hop);
+    // A machine POST carries no browser origin, and must not be given one.
+    out.delete("origin");
   }
+  // A network-trusted console says so on every call of its own (S5's bridge); the client's copy,
+  // if it sent one, was already stripped with every other X-Boss-* header.
+  const marker = machine ? null : consoleAuthMarker();
+  if (marker) out.set(CONSOLE_AUTH_HEADER_LC, marker);
+  // THE CLIENT'S ADDRESS, NOT ITS CLAIM (re-check C). A client may send its own
+  // X-Forwarded-For, and Next keeps it as is, so it is never forwarded unchanged: the console
+  // sends one hop — the one its own proxies appended — or none at all. Every request now: the
+  // API records the client IP on every security event (§8.2).
+  for (const h of ["x-forwarded-for", "x-real-ip", "forwarded"]) out.delete(h);
+  const hop = clientHop(req.headers.get("x-forwarded-for"), proxyHops());
+  if (hop) out.set("x-forwarded-for", hop);
   return out;
 }
 
 async function proxy(req: Request, path: string[]): Promise<Response> {
+  const pathname = new URL(req.url).pathname;
+  if (identityStubEnabled() && isIdentityPath(pathname)) {
+    // The identity stub (lib/identity/stub) answers in process while S1–S5 build the real routes.
+    const method = req.method.toUpperCase();
+    const text = method === "GET" || method === "HEAD" ? null : await req.text();
+    return answerFromStub(method, req.url, forwardHeaders(req, false), text);
+  }
   if (!API_URL) {
     // Say which variable, on the side that can set it. A relative fetch here would loop back
     // into this handler and the console would hang rather than fail.
@@ -123,11 +139,16 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
   // /v1/previews/<id>/web by the API, and a 3xx without it strands the browser on a blank page.
   // Never for a collector request (re-check 4, item 1): the API's Location there is its own
   // internal address, and an anonymous caller is owed nothing but the status and the JSON.
-  const relayed = ["content-type", "cache-control", "etag", "content-disposition"];
+  const relayed = ["content-type", "cache-control", "etag", "content-disposition", "retry-after"];
   if (!collector) relayed.push("location");
   for (const name of relayed) {
     const value = upstream.headers.get(name);
     if (value) headers.set(name, value);
+  }
+  // THE API OWNS THE SESSION COOKIE (§4.1): sign-in, MFA, step-up and sign-out set or clear it,
+  // and the browser must receive exactly what the API said. Never for a collector request.
+  if (!collector) {
+    for (const c of upstream.headers.getSetCookie?.() ?? []) headers.append("set-cookie", c);
   }
   // Streamed straight through: a proxy that buffers defeats SSE and long reads.
   return new Response(upstream.body, { status: upstream.status, headers });

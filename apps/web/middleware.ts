@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
-  collectorMachinePost, collectorPathOf, consoleAuthConfig, localHttp, networkTrustedConsole, sameOriginMutation,
+  collectorMachinePost, collectorPathOf, localHttp, networkTrustedConsole, sameOriginMutation,
   secureConsoleTransport,
-  sessionCookieName, validSession,
 } from "./lib/console-session";
+import { hasSessionCookie } from "./lib/identity/forward";
+import { isPublicConsolePath, PATH_HEADER } from "./lib/identity/pages";
 import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
 import { consoleParams } from "./app/legacy-areas";
 
@@ -34,7 +35,11 @@ async function pressIntentHeaders(request: NextRequest): Promise<Headers | null>
   }
 }
 
-/** Gate the entire console before any route can attach the server's BOSS_API_KEY. */
+/**
+ * ROUTING ONLY (IDENTITY.md §4.1): send a visitor with no session to the sign-in page, require
+ * HTTPS when remote, refuse cross-site writes. It decides nothing about WHO may do WHAT — the API
+ * does, on every call, from the session cookie this file only checks is present.
+ */
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
   if (path.startsWith("/_next/static/") || path.startsWith("/_next/image/") ||
@@ -58,33 +63,43 @@ export async function middleware(request: NextRequest) {
   // Another install's heartbeat to this collector: a machine POST, no session, no Origin
   // (lib/console-session.ts collectorMachinePost). Straight to the /v1 proxy, which adds no key.
   if (collectorMachinePost(request)) return NextResponse.next();
-  if (networkTrustedConsole()) return passThrough(request);
-  if (!secureConsoleTransport(request)) {
+  if (!secureConsoleTransport(request) && !networkTrustedConsole()) {
     return NextResponse.json({ error: "The console requires HTTPS for remote access." },
       { status: 426, headers: { "Cache-Control": "no-store" } });
   }
-  if (path === "/login" || path === "/api/auth/login") {
-    return NextResponse.next();
+  // The sign-in pages and the public sign-in API (rate-limited and CSRF-checked by the API).
+  if (isPublicConsolePath(path)) return passThrough(request);
+  // A NETWORK-TRUSTED INSTALL (goldeneye, before and up to 30 days after its claim) has no
+  // cookie to check: the API's network bridge decides who the visitor is (§4.12, S5). Once the
+  // bridge ends, the API answers 401 and the console sends the visitor to sign in like anyone.
+  if (networkTrustedConsole() || hasSessionCookie(request.headers.get("cookie"))) {
+    return passThrough(request);
   }
-  const config = consoleAuthConfig();
-  if (!config) {
-    return NextResponse.json({ error: "Console authentication is not configured." },
-      { status: 503, headers: { "Cache-Control": "no-store" } });
-  }
-  const token = request.cookies.get(sessionCookieName(request))?.value;
-  if (!(await validSession(token, config))) {
-    if (api) return NextResponse.json({ error: "Console sign-in required." },
-      { status: 401, headers: { "Cache-Control": "no-store" } });
-    // Keep a local tunnel on its original browser host. Behind a TLS proxy,
-    // redirect to the configured public origin: Next's internal listener is HTTP.
-    const local = localHttp(request);
-    const login = new URL("/login", local ? request.url : process.env.BOSS_CONSOLE_PUBLIC_ORIGIN!);
-    login.searchParams.set("next", path + request.nextUrl.search);
-    const response = local ? NextResponse.rewrite(login) : NextResponse.redirect(login);
-    response.headers.set("Cache-Control", "no-store");
-    return response;
-  }
-  return passThrough(request);
+  if (api) return NextResponse.json({ error: "unauthenticated" },
+    { status: 401, headers: { "Cache-Control": "no-store" } });
+  // Keep a local tunnel on its original browser host. Behind a TLS proxy,
+  // redirect to the configured public origin: Next's internal listener is HTTP.
+  const local = localHttp(request);
+  const login = new URL("/login", local || !process.env.BOSS_CONSOLE_PUBLIC_ORIGIN ? request.url : process.env.BOSS_CONSOLE_PUBLIC_ORIGIN);
+  login.searchParams.set("next", path + request.nextUrl.search);
+  const response = local ? NextResponse.rewrite(login) : NextResponse.redirect(login);
+  response.headers.set("Cache-Control", "no-store");
+  return response;
+}
+
+/**
+ * THE OLD IDENTITY AREA IS NOW /identity. `?area=enterprise` (and the `sso`/`identity` aliases
+ * people type) answer with a redirect to the Identity home, keeping the org — a bookmark to the
+ * providers screen lands on Sign-in & SSO.
+ */
+function identityRedirect(request: NextRequest): NextResponse | null {
+  if (request.method !== "GET" || request.nextUrl.pathname !== "/") return null;
+  const area = request.nextUrl.searchParams.get("area");
+  if (area !== "enterprise" && area !== "identity" && area !== "sso") return null;
+  const target = new URL(area === "sso" ? "/identity/sign-in" : "/identity", behindProxy(request) ? browserOrigin(request) : request.url);
+  const org = request.nextUrl.searchParams.get("org");
+  if (org) target.searchParams.set("org", org);
+  return new NextResponse(null, { status: 307, headers: { Location: target.toString(), "Cache-Control": "no-store" } });
 }
 
 /**
@@ -162,14 +177,45 @@ async function passThrough(request: NextRequest) {
     return NextResponse.json({ error: "Cross-origin console mutation denied." },
       { status: 403, headers: { "Cache-Control": "no-store" } });
   }
-  const moved = legacyRedirect(request);
+  const moved = identityRedirect(request) ?? legacyRedirect(request);
   if (moved) return moved;
-  const intentHeaders = await pressIntentHeaders(request);
-  const response = intentHeaders
-    ? NextResponse.next({ request: { headers: intentHeaders } })
-    : NextResponse.next();
+  // THE PAGE BEING OPENED, for the Identity and My-account layouts' guards (lib/identity/pages):
+  // a layout is not told its pathname. Set here, never from the client (any client copy is
+  // overwritten), and stripped before any call reaches the API (every X-Boss-* is).
+  const forwarded = (await pressIntentHeaders(request)) ?? new Headers(request.headers);
+  forwarded.set(PATH_HEADER, request.nextUrl.pathname);
+  // THE CSP (IDENTITY.md §14.1 I, A10): pages only — never the /v1 proxy, which also serves the
+  // previewed apps, nor the hand-written /api routes. Next reads the nonce from the request's
+  // CSP header and stamps it on its own scripts; nothing else may run.
+  const page = !request.nextUrl.pathname.startsWith("/v1/") && !request.nextUrl.pathname.startsWith("/api/");
+  const policy = page ? contentSecurityPolicy(btoa(crypto.randomUUID())) : null;
+  if (policy) forwarded.set("content-security-policy", policy);
+  const response = NextResponse.next({ request: { headers: forwarded } });
+  if (policy) response.headers.set("Content-Security-Policy", policy);
   response.headers.set("Cache-Control", "private, no-store");
   return response;
+}
+
+/**
+ * Scripts: only Next's own, carrying this response's nonce ('strict-dynamic' lets them load their
+ * chunks). Styles may be inline (the console sets custom properties and generated rules), fonts
+ * come from Google Fonts, the page talks only to its own origin, and nothing may frame it. Dev
+ * adds what Next's dev server needs (eval for fast refresh, ws for HMR).
+ */
+export function contentSecurityPolicy(nonce: string, dev = process.env.NODE_ENV === "development"): string {
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ""}`,
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    "img-src 'self' data: blob: https:",
+    `connect-src 'self'${dev ? " ws: wss:" : ""}`,
+    "frame-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+  ].join("; ");
 }
 
 /**

@@ -1,0 +1,26 @@
+/* Identity › auth (claim, enrolment, invitations, email landings): idn- classes; tokens only — see identity.css. */
+.idn-auth a.idn-big { text-decoration: none; }
+.idn-auth a.idn-big.p { color: var(--idn-white); }
+.idn-auth form { margin: 0; }
+.idn-auth .idn-hint { font-size: 12px; font-weight: 500; }
+.idn-auth .idn-note { margin-bottom: 14px; }
+.idn-auth a.idn-note { text-decoration: none; }
+.idn-auth .idn-need { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; }
+.idn-auth select.idn-i { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--faint) 50%), linear-gradient(135deg, var(--faint) 50%, transparent 50%); background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 32px; }
+.idn-auth .idn-check { margin: 4px 0 2px; }
+.idn-code-acts { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.idn-stored { margin: 6px 0 14px; }
+.idn-totp { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: 0 0 6px; }
+.idn-qr { width: 168px; height: 168px; border-radius: 12px; background: var(--idn-white); padding: 8px; }
+.idn-totp .idn-f { width: 100%; align-items: center; }
+.idn-secret-key { font: 600 18px var(--mono); letter-spacing: 0.08em; color: var(--idn-ink-code); background: var(--idn-deep); border: 1px dashed color-mix(in srgb, var(--teal) 45%, transparent); border-radius: 12px; padding: 10px 14px; user-select: all; word-break: break-all; text-align: center; }
+.idn-help details[open] summary { margin-bottom: 4px; }
+.idn-help .idn-cmd { margin-bottom: 8px; }
+
+@media print {
+  .idn-auth { background: none; color: black; }
+  .idn-auth::before, .idn-auth .idn-logo img, .idn-code-acts, .idn-stored, .idn-auth .idn-big, .idn-auth .idn-fine { display: none; }
+  .idn-panel { box-shadow: none; border: 0; background: none; }
+  .idn-codes { color: black; border-color: black; background: none; }
+  .idn-codes li { color: black; }
+}

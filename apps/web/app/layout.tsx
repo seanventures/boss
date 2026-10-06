@@ -21,6 +21,13 @@ import "./factory/factory.css";
 import "./factory/cockpit.css";
 import "./activity/log.css";
 import "./govern/govern.css";
+// Identity: the identity screens, My account and the sign-in sheet (idn- classes).
+import "./identity/identity.css";
+import "./identity/identity-people.css";
+import "./identity/identity-roles.css";
+import "./identity/identity-agents.css";
+import "./identity/identity-auth.css";
+import "./identity/identity-account.css";
 import type { Metadata } from "next";
 import { Toaster } from "./client-forms";
 

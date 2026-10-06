@@ -1,0 +1,76 @@
+/* Identity › agents, delegation lineage, audit and sign-in settings (idn- classes; tokens only — see identity.css). */
+
+/* page titles that are not heroes */
+.idn-h1 { font: 600 22px var(--display); margin: 0; }
+.idn-h3 { font: 600 15.5px var(--display); margin: 0; }
+.idn-block { display: block; }
+.idn-nowrap { flex-wrap: nowrap; white-space: nowrap; }
+.idn-small { font-size: 12px; }
+.idn-fine-l { font-size: 12px; color: var(--faint); line-height: 1.5; margin: 0; display: flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; }
+
+/* agents list */
+.idn-agent-card { grid-template-columns: 44px minmax(0, 1fr) auto; align-items: start; transition: border-color 120ms; }
+.idn-agent-card:hover { border-color: var(--border-strong); }
+.idn-agent-card[data-status="suspended"] { border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
+.idn-agent-card[data-status="revoked"] { opacity: 0.6; }
+.idn-agent-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.idn-agent-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+
+/* the delegation chain */
+.idn-funnel .stop-c { stop-color: var(--green); stop-opacity: 0.7; }
+.idn-funnel-path { fill: url(#idn-funnel-grad); opacity: 0.55; }
+.idn-hop-ico { width: 44px; height: 44px; border-radius: 12px; }
+.idn-node .idn-rule { display: none; font: 500 10.5px var(--mono); color: var(--faint); padding-top: 6px; border-top: 1px dashed color-mix(in srgb, var(--border-strong) 60%, transparent); }
+.idn-chain-rule { font-size: 12.5px; }
+.idn-claims { position: relative; margin-bottom: 14px; }
+.idn-tok-text { gap: 6px; flex-wrap: nowrap; min-width: 0; }
+.idn-tok-text > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.idn-cascade .idn-lede2 { color: var(--muted); font-size: 13px; margin: 6px 0 12px; line-height: 1.45; }
+.idn-cascade[data-done="true"] { border-color: color-mix(in srgb, var(--green) 45%, transparent); background: radial-gradient(420px 200px at 100% 0, color-mix(in srgb, var(--green) 12%, transparent), transparent 70%), var(--surface-2); box-shadow: none; }
+.idn-cascade[data-done="true"] h3 { color: var(--idn-ink-ok); }
+.idn-cascade .idn-fine-l { margin-top: 12px; }
+.idn-ceil-save { padding: 14px 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+.idn-lg-on { background: var(--teal); }
+.idn-lineage { list-style: none; margin: 0; padding: 0; }
+a.idn-dg { display: block; }
+a.idn-dg:hover { border-color: var(--border-strong); }
+.idn-dg .idn-top { width: 100%; }
+
+/* audit */
+.idn-lbl { margin-bottom: 8px; }
+.idn-fb .idn-q button { color: var(--faint); display: grid; place-items: center; width: 24px; height: 24px; }
+.idn-select { padding: 0 6px; }
+.idn-select select { background: none; border: 0; color: inherit; font: inherit; padding: 6px 4px; cursor: pointer; }
+.idn-select select option { background: var(--surface-2); color: var(--ink); }
+.idn-fb-more { flex-basis: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 220px)); gap: 10px; padding-top: 6px; }
+.idn-lt table { min-width: 720px; }
+.idn-lt col.idn-c-time { width: 84px; }
+.idn-lt col.idn-c-event { width: 160px; }
+.idn-lt col.idn-c-actor { width: 150px; }
+.idn-lt col.idn-c-result { width: 88px; }
+.idn-lt col.idn-c-from { width: 110px; }
+.idn-lt tbody tr:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
+.idn-actor b { font-weight: 600; font-size: 12.5px; }
+
+/* sign-in settings */
+.idn-prov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+.idn-prov .idn-card-h { align-items: center; }
+.idn-prov .idn-kv { margin-bottom: 12px; }
+.idn-prov-opts { padding-top: 10px; border-top: 1px solid var(--border); }
+.idn-domains { max-width: 260px; }
+.idn-card-h h2 { display: flex; align-items: center; gap: 8px; font: 600 15.5px var(--display); margin: 0; }
+
+@media (max-width: 1360px) {
+  .idn-node .idn-rule { display: block; }
+}
+@media (max-width: 560px) {
+  .idn-dh { align-items: flex-start; }
+  .idn-dh .idn-acts { width: 100%; }
+  .idn-chain-rule { display: none; }
+  .idn-funnel { height: 54px; }
+  .idn-funnel .idn-lbls div { font-size: 16px; }
+  .idn-funnel .idn-lbls small { font-size: 8.5px; letter-spacing: 0.06em; }
+  .idn-prov-grid { grid-template-columns: minmax(0, 1fr); }
+  .idn-fb-more { grid-template-columns: minmax(0, 1fr); }
+  .idn-domains { max-width: none; }
+}

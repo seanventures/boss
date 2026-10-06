@@ -27,7 +27,7 @@ export function PackImportForm({
         startTransition(async () => {
           try {
             // A result, not a throw: see lib/action-result.ts.
-            const result = await callAction(importPackAction)(formData);
+            const result = await callAction(importPackAction, undefined, "pack:install")(formData);
             if (!result.ok) {
               setError(result.error ?? "Pack import failed.");
               return;
@@ -65,7 +65,7 @@ export function PackImportForm({
           accept=".yaml,.yml,text/yaml,application/x-yaml"
         />
       </label>
-      <SubmitButton className="button secondary" type="submit">
+      <SubmitButton permission="pack:install" className="button secondary" type="submit">
         Import pack YAML
       </SubmitButton>
       {error ? (
@@ -96,7 +96,7 @@ export function PackExportButton({
         setError(null);
         startTransition(async () => {
           try {
-            const result = await callAction(exportPackAction)(formData);
+            const result = await callAction(exportPackAction, undefined, "pack:read")(formData);
             if (!result.ok || !result.data) {
               setError(result.error ?? "Pack export failed.");
               return;
@@ -111,7 +111,7 @@ export function PackExportButton({
       <input type="hidden" name="project_id" value={projectId} />
       <input type="hidden" name="actor" value={actor} />
       <input type="hidden" name="pack_id" value={packId} />
-      <SubmitButton className="button secondary" type="submit">
+      <SubmitButton permission="pack:read" className="button secondary" type="submit">
         Export
       </SubmitButton>
       {error ? (

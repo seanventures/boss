@@ -38,7 +38,7 @@ export function ImportSheet({ projectId, actor, onClose, onImported }: {
       } else {
         const form = new FormData();
         form.set("project_id", projectId); form.set("actor", actor); form.set("yaml", body);
-        const result = await callAction(importSkillAction)(form);
+        const result = await callAction(importSkillAction, undefined, "skill:manage")(form);
         if (!result.ok) throw new Error(result.error ?? "Import failed");
         showToast("success", "Saved");
       }

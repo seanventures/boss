@@ -40,7 +40,7 @@ describe("only the requested area is rendered", () => {
     // the requested area alone; an area opened for the first time joins a session set and is
     // fetched once, with a loading state; after that a click is the pure reveal again. Still
     // one seam — the set below is the only thing either gate reads.
-    expect(PAGE).toContain("const shows = (area: string) => loadedAreas.has(area);");
+    expect(PAGE).toContain("const shows = (area: string) => loadedAreas.has(area) && openable(area);");
     expect(PAGE).toContain("const loadedAreas = areasToRender({");
     expect(PAGE).toContain('requestedArea.trim() : "overview"');
   });

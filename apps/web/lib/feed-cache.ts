@@ -31,6 +31,8 @@
  * without a rebuild.
  */
 
+import { sessionTag } from "./identity/forward";
+
 /** A response read once and kept as bytes: every caller gets its OWN fresh Response.
  *  Cloning one shared Response raced — a joiner cloning while another reader drained it got
  *  "Response.clone: Body has already been consumed", which reached the console as a red 502. */
@@ -140,11 +142,12 @@ export function installFeedCache(apiUrl: string): void {
       return original(input as RequestInfo, init);
     }
 
-    // The Authorization header is identical for every server-side call (one service key), so
-    // the URL alone identifies the response. If per-user keys ever arrive this must include
-    // them, or one operator would see another's data — hence the explicit note rather than a
-    // silent assumption.
-    const key = url;
+    // ONE PERSON'S ANSWER IS NEVER ANOTHER'S. Every call carries the signed-in person's own
+    // session now (lib/identity/server-fetch.ts), and the same URL answers differently for an
+    // Owner and a Viewer — so the key is the URL AND whose session asked. A request with no
+    // session shares only with other sessionless requests.
+    const asker = sessionTag(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
+    const key = `${url}\u0000${asker}`;
 
     const hit = completed.get(key);
     if (hit && Date.now() - hit.at < ttl) return fresh(hit.stored);
@@ -155,7 +158,7 @@ export function installFeedCache(apiUrl: string): void {
     const started = Date.now();
     const promise: Promise<Stored> = original(input as RequestInfo, init)
       .then(async (response) => {
-        const path = key.replace(apiUrl, "");
+        const path = url.replace(apiUrl, "");
         const table = timings();
         const prev = table.get(path);
         // Keep the WORST time seen and how often it was asked for. An average would hide the

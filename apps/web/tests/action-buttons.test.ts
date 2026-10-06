@@ -53,7 +53,7 @@ describe("the chat renders offers", () => {
 
 describe("accepting one", () => {
   it("sends the tool and args verbatim", () => {
-    expect(UI_FLAT).toContain("callAction(runAgentActionAction)( projectId, actor, action.tool, action.args");
+    expect(UI_FLAT).toContain('callAction(runAgentActionAction, undefined, "assistant:chat")( projectId, actor, action.tool, action.args');
   });
 
   it("does not route the click back through the model", () => {

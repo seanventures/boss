@@ -121,7 +121,7 @@ function ProfileRow({ agent, feed, actor }: { agent: StudioAgent; feed: AgentStu
                   if (!version) return;
                   setResult(undefined);
                   start(async () => {
-                    setResult(await callAction(testStudioAgent)(feed.projectId, version.id, actor));
+                    setResult(await callAction(testStudioAgent, undefined, "agent:test")(feed.projectId, version.id, actor));
                   });
                 }}>
           <Flask size={12} aria-hidden /> {pending ? "Checking…" : "Check"}
@@ -173,7 +173,7 @@ function PanelCard({ panel, feed, actor }: { panel: StudioPanel; feed: AgentStud
     setResult(undefined);
     setRefusal(null);
     start(async () => {
-      const next = await callAction(runStudioPanel)(feed.projectId, version.id, objective.trim(), actor);
+      const next = await callAction(runStudioPanel, undefined, "meeting:convene")(feed.projectId, version.id, objective.trim(), actor);
       // A Run refused for what the project lacks gets the same checklist as every other door.
       const readiness = !next.ok ? asReadiness(next.readiness) : null;
       if (readiness) {

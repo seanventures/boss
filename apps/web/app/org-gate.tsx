@@ -71,7 +71,7 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
   const [showOnboard, setShowOnboard] = useState(orgs.length === 0);
   const [opening, setOpening] = useState<string | null>(null);
   const [onboarded, onboard] = useActionState<OnboardOrgResult | null, FormData>(
-    callAction(onboardOrgFormAction), null,
+    callAction(onboardOrgFormAction, undefined, "project:create"), null,
   );
 
   // Returning users skip the picker (unless they explicitly chose to switch).
@@ -154,7 +154,7 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
               Organization name
               <input name="name" placeholder="e.g. Northwind Robotics" required autoFocus={orgs.length > 0} />
             </label>
-            <SubmitButton type="submit" className="cap-btn primary">Onboard organization</SubmitButton>
+            <SubmitButton permission="project:create" type="submit" className="cap-btn primary">Onboard organization</SubmitButton>
             {onboarded && !onboarded.ok ? (
               <p className="error-banner" role="alert" data-testid="org-onboard-error">{onboarded.error}</p>
             ) : null}

@@ -28,7 +28,7 @@ export function PlansCard({ projectId, plans }: { projectId: string; plans: Plan
               {p.status === "dispatched" ? (
                 <span className="detail" style={{ color: "#3fb950" }}>dispatched ✓</span>
               ) : (
-                <ActionForm action={dispatchPlanAction}>
+                <ActionForm permission="work_item:manage" action={dispatchPlanAction}>
                   <input type="hidden" name="project_id" value={projectId} />
                   <input type="hidden" name="plan_id" value={p.id} />
                   <SubmitButton

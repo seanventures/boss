@@ -58,9 +58,11 @@ describe("only the requested area is fetched", () => {
     // page that renders an area it did not fetch is worse than either trade.
     // REWRITTEN when areas went lazy (lib/area-loading.ts): both gates read the SAME set — the
     // requested area plus the ones this session opened — so they still cannot drift apart.
+    // IDENTITY (S4): both gates also drop an area the viewer cannot open — the same `openable`
+    // in both, so they still cannot drift apart, and a denied area is neither fetched nor drawn.
     expect(PAGE).toContain(
-      "const needs = (...areas: string[]) => areas.some((area) => loadedAreas.has(area));");
-    expect(PAGE).toContain("const shows = (area: string) => loadedAreas.has(area);");
+      "const needs = (...areas: string[]) => areas.some((area) => loadedAreas.has(area) && openable(area));");
+    expect(PAGE).toContain("const shows = (area: string) => loadedAreas.has(area) && openable(area);");
   });
 
   it("every feed in the platform-ops wave is gated on the area that reads it", () => {
