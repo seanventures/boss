@@ -13,7 +13,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping, Optional
 
 from .classifier import CLASSIFIER, Classification, Classifier, TaskSignal
@@ -229,7 +229,9 @@ class Router:
                                      jev_state=snapshot.jev_state,
                                      model=snapshot.model_factory)
         tier = c.tier
-        source = f"{c.classifier}{' · cached' if c.cached else ''}, {c.confidence:.2f}"
+        judge = {"rules": "rules", "jev": "Jev", "model": "a Fast model"}.get(c.classifier,
+                                                                           c.classifier)
+        source = f"{judge}, {round(c.confidence * 100)}% sure"
         why.append(f"Task: {c.reason} → {TIER_LABELS[c.tier]} ({source})"
                    + (f" — {c.fallback_note}" if c.fallback_note else ""))
         rules.append(f"classified:{c.classifier}")
@@ -241,7 +243,8 @@ class Router:
         # (b) floors
         floor, floors = policy.floor_for(kind=request.kind, step=request.step, role=request.role,
                                          job=job, task_kind=request.task_kind)
-        extra = [f for f in request.extra_floors
+        extra = [replace(f, label=f"{f.describe()} (this build's profile)")
+                 for f in request.extra_floors
                  if f.matches(kind=request.kind, step=request.step, role=request.role, job=job,
                               task_kind=request.task_kind)]
         if extra:

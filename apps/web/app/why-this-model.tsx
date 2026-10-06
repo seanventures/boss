@@ -23,9 +23,13 @@ export function WhyThisModel({ route, title }: { route: RouteRow; title?: string
     <span className="wm" data-testid={`wm-route-${route.ref ?? route.step}`}>
       {title ? <span className="wm-step">{title}</span> : null}
       <TierChip tier={route.tier} label={route.tier_label} />
-      <span className="wm-label" data-user-text>{route.label ?? route.engine ?? ""}</span>
-      {route.escalation ? <span className="wm-flag" title={route.escalation}>↑ escalated</span> : null}
-      {route.moved_by_headroom ? <span className="wm-flag" title="Moved off a subscription near its limit">moved</span> : null}
+      <span className="wm-main">
+        <span className="wm-label" data-user-text>{route.label ?? route.engine ?? ""}</span>
+        {route.escalation ? <span className="wm-flag" title={route.escalation}>↑ escalated</span> : null}
+        {route.moved_by_headroom ? (
+          <span className="wm-flag" title={`Moved off a subscription near its limit, to ${route.label ?? "another source"}`}>moved</span>
+        ) : null}
+      </span>
       {route.why.length ? (
         <button type="button" className="wm-why-btn" aria-expanded={open} aria-controls={id}
                 data-testid="wm-why" onClick={() => setOpen((v) => !v)}

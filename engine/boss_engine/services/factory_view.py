@@ -2228,8 +2228,17 @@ def brief_of(run: Mapping[str, Any]) -> dict[str, Any]:
     built_on = (f"micro-VM {sandbox}".strip() if substrate == "microvm" else
                 "API host" if substrate in (None, "", "local", "local_subprocess", "host") else
                 str(substrate))
-    build_engine = ev.get("build_engine") or ev.get("engine")
-    review_engine = ev.get("review_engine")
+    # WHAT RAN, NOT WHAT WAS CONFIGURED. `build_engine` is the run's base lane; the model router
+    # can route a stage elsewhere (OpenRouter near a subscription's limit, an escalation), and
+    # `stage_engines` / `stage_models` record where each stage actually ran.
+    stage_engines = ev.get("stage_engines") if isinstance(ev.get("stage_engines"), dict) else {}
+    stage_models = ev.get("stage_models") if isinstance(ev.get("stage_models"), dict) else {}
+    build_stage = "implement" if "implement" in stage_engines else "solo"
+    build_engine = (stage_engines.get(build_stage) or ev.get("engine")
+                    or ev.get("build_engine"))
+    review_engine = stage_engines.get("review_code") or ev.get("review_engine")
+    build_model = stage_models.get(build_stage) or ev.get("model") or usage.get("model")
+    review_model = stage_models.get("review_code") or ev.get("review_model")
     bench = fctx.get("qa_benchmark") if isinstance(fctx.get("qa_benchmark"), dict) else {}
     deferred = fctx.get("deferred_findings") or ev.get("deferred_findings") or []
     return {
@@ -2241,10 +2250,11 @@ def brief_of(run: Mapping[str, Any]) -> dict[str, Any]:
         "workflow": ({"name": str(wf["name"]), "version": wf.get("version"),
                       "default": wf.get("source") == "default"} if wf.get("name") else None),
         "engine": build_engine or None,
-        "model": ev.get("model") or usage.get("model") or None,
+        "model": build_model or None,
         "review_engine": review_engine or None,
-        "review_model": ev.get("review_model") or None,
-        "cross_model": bool(review_engine and build_engine and review_engine != build_engine),
+        "review_model": review_model or None,
+        "cross_model": bool(review_engine and build_engine
+                            and (review_engine, review_model) != (build_engine, build_model)),
         "turns": ev.get("turns"),
         "built_on": built_on,
         "profile": ev.get("profile") or None,

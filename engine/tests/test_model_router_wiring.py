@@ -41,3 +41,18 @@ def test_call_sites_that_know_their_work_name_it():
     assert "purpose=purpose" in inspect.getsource(
         intent_router.IntentRouter._use_project_chat_model)
     assert "_research_model(" in inspect.getsource(discovery_service)
+
+
+def test_the_brief_says_where_the_build_actually_ran():
+    """A Smart route moved implement to OpenRouter; the brief must not say Claude Code."""
+    from boss_engine.services import factory_view as fv
+
+    run = {"spec": {}, "finalize_ctx": {}, "usage": {}, "state": {
+        "build_engine": "claude_code", "review_engine": "claude_code", "engine": "openrouter",
+        "model": "qwen/qwen3-coder",
+        "stage_engines": {"implement": "openrouter", "review_code": "claude_code"},
+        "stage_models": {"implement": "qwen/qwen3-coder", "review_code": "opus"}}}
+    b = fv.brief_of(run)
+    assert (b["engine"], b["model"]) == ("openrouter", "qwen/qwen3-coder")
+    assert (b["review_engine"], b["review_model"]) == ("claude_code", "opus")
+    assert b["cross_model"] is True

@@ -39,6 +39,9 @@ function useSave() {
   const { projectId, view, apply } = useBoard();
   const [busy, setBusy] = useState(false);
   const save = async (policy: Record<string, unknown>, label: string) => {
+    // Controls are never disabled while saving — a disabled button drops keyboard focus to
+    // <body>. A second press during a save is ignored here instead.
+    if (busy) return false;
     setBusy(true);
     try {
       const next = await setupWrite<SetupView>(projectId, "routing", {
@@ -92,16 +95,20 @@ function TierCard({ routing, tier }: { routing: Routing; tier: (Routing["tiers"]
   return (
     <div className="mr-tier" data-testid={`mr-tier-${tier.tier}`}>
       <Tip tip={tier.criteria} className="mr-tier-name"><TierDot tier={tier.tier} />{tier.label}</Tip>
-      <select aria-label={`${tier.label} model`} value={primary ? enc(primary) : ""} disabled={busy}
+      <select aria-label={`${tier.label} model`} value={primary ? enc(primary) : ""} aria-busy={busy || undefined}
               data-testid={`mr-tier-select-${tier.tier}`}
-              onChange={(e) => void write([dec(e.target.value) as RouteTarget, fallback])}>
+              onChange={(e) => {
+                const next = dec(e.target.value) as RouteTarget;
+                // Choosing the fallback as the first swaps them, rather than losing one.
+                void write([next, fallback && enc(fallback) === enc(next) ? primary : fallback]);
+              }}>
         {!primary ? <option value="">Choose…</option> : null}
         {withCurrent(primary).map((o) => <option key={enc(o)} value={enc(o)}>{o.label}</option>)}
       </select>
       <label className="mr-fallback" title="Used when the first is out of headroom or failing.">
         <span className="su-faint">then</span>
         <select aria-label={`${tier.label} fallback`} value={fallback ? enc(fallback) : ""}
-                disabled={busy} data-testid={`mr-tier-fallback-${tier.tier}`}
+                aria-busy={busy || undefined} data-testid={`mr-tier-fallback-${tier.tier}`}
                 onChange={(e) => void write([primary,
                   e.target.value ? dec(e.target.value) as RouteTarget : undefined])}>
           <option value="">None</option>
@@ -123,7 +130,7 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
     <div className="mr-section" data-testid="mr-floors">
       <div className="mr-line">
         <span className="mr-sub" title="Minimum tiers. Profiles are presets.">Floors</span>
-        <select aria-label="Floor preset" value={routing.floor_preset} disabled={busy}
+        <select aria-label="Floor preset" value={routing.floor_preset} aria-busy={busy || undefined}
                 data-testid="mr-preset" title="The pipeline profile, as floors."
                 onChange={(e) => void save({ floor_preset: e.target.value }, "Floors")}>
           {routing.presets.map((p) => <option key={p.name} value={p.name}>{p.label}</option>)}
@@ -139,7 +146,7 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
               <strong>{f.describe}</strong>
               <span>≥ {f.tier_label}</span>
               <button type="button" className="mr-x" aria-label={`Remove ${f.describe} floor`}
-                      disabled={busy}
+                      aria-busy={busy || undefined}
                       onClick={() => void save({ floor_preset: "custom",
                         floors: floors.filter((_, j) => j !== i) }, "Floors")}>
                 <X size={11} aria-hidden="true" />
@@ -147,16 +154,17 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
             </span>
           ))}
           {adding ? (
-            <span className="su-popover mr-add" role="group" aria-label="Add a floor">
+            <span className="su-popover mr-add" role="group" aria-label="Add a floor"
+                  onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setAdding(false); } }}>
               <select aria-label="Step" value={step} onChange={(e) => setStep(e.target.value)}
-                      data-testid="mr-floor-step">
+                      data-testid="mr-floor-step" autoFocus>
                 {routing.floor_steps.map((s) => <option key={s.step} value={s.step}>{s.label}</option>)}
               </select>
               <select aria-label="Minimum tier" value={tier}
                       onChange={(e) => setTier(e.target.value as Tier)} data-testid="mr-floor-tier">
                 {TIERS.map((t) => <option key={t} value={t}>≥ {TIER_LABEL[t]}</option>)}
               </select>
-              <button type="button" className="su-btn su-btn-sm su-btn-primary" disabled={busy}
+              <button type="button" className="su-btn su-btn-sm su-btn-primary" aria-busy={busy || undefined}
                       data-testid="mr-floor-save"
                       onClick={async () => {
                         if (await save({ floor_preset: "custom",
@@ -192,7 +200,7 @@ function Meter({ h }: { h: Routing["headroom"][number] }) {
       <span className={`su-pill su-tone-${STATE_TONE[h.state] ?? "grey"}`} title={tip} data-tip={tip}
             data-testid={`mr-headroom-state-${h.engine}`}>
         <span className={`su-dot su-tone-${STATE_TONE[h.state] ?? "grey"}`} aria-hidden="true" />
-        {h.label}{left != null && h.state !== "exhausted" ? ` · ${left}%` : ""}
+        {h.label}{left != null && h.state !== "exhausted" ? ` · ${left}% left` : ""}
       </span>
       {when ? <span className="su-faint">resets {when}</span> : null}
     </div>
@@ -208,7 +216,7 @@ function Headroom({ routing }: { routing: Routing }) {
   const write = (next: HeadroomRule | null) => save({ headroom: next ? [next] : [] }, "Headroom");
   const draft: HeadroomRule = rule ?? {
     source: subs[0].engine, when: "near_limit", tiers: ["fast", "balanced"],
-    to: targets[0]?.engine ?? "openrouter" };
+    to: (targets.find((t) => t.engine === "openrouter") ?? targets[0])?.engine ?? "openrouter" };
   return (
     <div className="mr-section" data-testid="mr-headroom">
       <span className="mr-sub" title="How much of each subscription's weekly window is left.">Headroom</span>
@@ -216,7 +224,7 @@ function Headroom({ routing }: { routing: Routing }) {
       {rule ? (
         <div className="mr-line mr-rule" data-testid="mr-rule">
           <span>When</span>
-          <select aria-label="When" value={rule.when} disabled={busy} data-testid="mr-rule-when"
+          <select aria-label="When" value={rule.when} aria-busy={busy || undefined} data-testid="mr-rule-when"
                   onChange={(e) => void write({ ...rule, when: e.target.value })}>
             {routing.headroom_states.filter((s) => s.state !== "exhausted")
               .map((s) => <option key={s.state} value={s.state}>{s.label.toLowerCase()}</option>)}
@@ -226,7 +234,7 @@ function Headroom({ routing }: { routing: Routing }) {
             const on = rule.tiers.includes(t);
             return (
               <button key={t} type="button" className={`mr-chip mr-toggle mr-chip-${t}`}
-                      aria-pressed={on} disabled={busy} data-testid={`mr-rule-tier-${t}`}
+                      aria-pressed={on} aria-busy={busy || undefined} data-testid={`mr-rule-tier-${t}`}
                       onClick={() => {
                         const tiers = on ? rule.tiers.filter((x) => x !== t) : [...rule.tiers, t];
                         void (tiers.length ? write({ ...rule, tiers }) : write(null));
@@ -234,7 +242,7 @@ function Headroom({ routing }: { routing: Routing }) {
             );
           })}
           <span>to</span>
-          <select aria-label="Move to" value={rule.to} disabled={busy} data-testid="mr-rule-to"
+          <select aria-label="Move to" value={rule.to} aria-busy={busy || undefined} data-testid="mr-rule-to"
                   onChange={(e) => void write({ ...rule, to: e.target.value })}>
             {targets.map((s) => <option key={s.engine} value={s.engine}>{s.label}</option>)}
             {!targets.some((s) => s.engine === rule.to)
@@ -242,7 +250,7 @@ function Headroom({ routing }: { routing: Routing }) {
           </select>
           <Tip tip="Frontier work and floors keep the subscription until it is exhausted."
                className="mr-chip mr-chip-frontier mr-keep">Frontier stays</Tip>
-          <button type="button" className="mr-x" aria-label="Remove headroom rule" disabled={busy}
+          <button type="button" className="mr-x" aria-label="Remove headroom rule" aria-busy={busy || undefined}
                   onClick={() => void write(null)}><X size={11} aria-hidden="true" /></button>
         </div>
       ) : targets.length ? (
@@ -270,13 +278,13 @@ function Classifier({ routing }: { routing: Routing }) {
     <div className="mr-section" data-testid="mr-classifier">
       <div className="mr-line">
         <span className="mr-sub" title="Reads the task and picks a tier.">Classifier</span>
-        <select aria-label="Classifier" value={c.backend} disabled={busy} data-testid="mr-classifier-backend"
+        <select aria-label="Classifier" value={c.backend} aria-busy={busy || undefined} data-testid="mr-classifier-backend"
                 onChange={(e) => void save({ classifier: { backend: e.target.value } }, "Classifier")}>
           {c.backends.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
         </select>
         <Tip tip={jev.tip} className="mr-chip" testid="mr-jev">{jev.label}</Tip>
         <label className="su-consent" title="When the rules are unsure, ask a Fast model. A small paid call.">
-          <input type="checkbox" checked={c.model_fallback} disabled={busy}
+          <input type="checkbox" checked={c.model_fallback} aria-busy={busy || undefined}
                  data-testid="mr-model-fallback"
                  onChange={(e) => void save({ classifier: { model_fallback: e.target.checked } },
                                             "Classifier")} />
@@ -293,7 +301,7 @@ function Classifier({ routing }: { routing: Routing }) {
                       onChange={(e) => setCriteria({ ...criteria, [t]: e.target.value })} />
           </label>
         ))}
-        <button type="button" className="su-btn su-btn-sm su-btn-primary" disabled={busy}
+        <button type="button" className="su-btn su-btn-sm su-btn-primary" aria-busy={busy || undefined}
                 data-testid="mr-criteria-save"
                 onClick={() => void save({ classifier: { criteria } }, "Criteria")}>Save criteria</button>
       </details>
@@ -316,7 +324,7 @@ function Week({ routing }: { routing: Routing }) {
         </span>
         <span className="mr-stat"><strong>{w.routes}</strong> <span className="su-faint">routes</span></span>
         <Tip tip="Estimated against list prices if every call had been Frontier." className="mr-stat">
-          <strong>${w.saved_usd.toFixed(0)}</strong> <span className="su-faint">saved</span>
+          <strong>${w.saved_usd < 10 ? w.saved_usd.toFixed(2) : w.saved_usd.toFixed(0)}</strong> <span className="su-faint">saved</span>
         </Tip>
         <span className="mr-stat"><strong>{w.escalations}</strong> <span className="su-faint">escalated</span></span>
         <span className="mr-stat"><strong>{w.moved}</strong> <span className="su-faint">moved off</span></span>
@@ -388,7 +396,7 @@ export const RoutingRow = forwardRef<HTMLElement, { mode: string; focused: boole
             <div className="mr-line">
               <div className="mr-seg" role="group" aria-label="Routing">
                 {(["smart", "fixed"] as const).map((m) => (
-                  <button key={m} type="button" aria-pressed={routing.mode === m} disabled={busy || none}
+                  <button key={m} type="button" aria-pressed={routing.mode === m} disabled={none} aria-busy={busy || undefined}
                           data-testid={`mr-mode-${m}`} title={MODE_TIP[m]} data-tip={MODE_TIP[m]}
                           onClick={() => routing.mode !== m && void save({ mode: m },
                             m === "smart" ? "Smart routing" : "Fixed routing")}>

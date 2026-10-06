@@ -141,7 +141,7 @@ def rules_classify(signal: TaskSignal) -> Classification:
     explicit = signal.risk_tier if signal.risk_tier is not None else spec.get("risk_tier")
     if isinstance(explicit, int) and 0 <= explicit <= 3:
         tier = {0: FAST, 1: BALANCED, 2: BALANCED, 3: FRONTIER}[explicit]
-        return Classification(tier, 0.9, "rules", f"the task says risk tier {explicit}",
+        return Classification(tier, 0.9, "rules", f"rigor {explicit} asked for",
                               explicit, explicit >= 3)
     if len(haystack.strip()) < 12:
         return Classification(BALANCED, 0.4, "rules", "too little to judge", 2)
