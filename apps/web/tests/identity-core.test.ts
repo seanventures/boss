@@ -125,3 +125,28 @@ describe("the stub API answers with the real error contract", () => {
     expect(listing).toContain('"status":"grace"');
   });
 });
+
+describe("a network-trusted console says so, and only the console can", () => {
+  it("adds X-Boss-Console-Auth: network on its own calls and strips a client's copy", async () => {
+    const { withForwardedIdentity, isStrippedHeader: stripped } = await import("../lib/identity/forward");
+    expect(stripped("X-Boss-Console-Auth")).toBe(true);
+    const prev = process.env.BOSS_CONSOLE_AUTH;
+    try {
+      delete process.env.BOSS_CONSOLE_AUTH;
+      const plain = await withForwardedIdentity("GET", { "X-Boss-Console-Auth": "network" });
+      expect(plain.get("x-boss-console-auth")).toBeNull();
+      process.env.BOSS_CONSOLE_AUTH = "network";
+      const net = await withForwardedIdentity("POST", { "X-Boss-Console-Auth": "spoofed" });
+      expect(net.get("x-boss-console-auth")).toBe("network");
+    } finally {
+      if (prev === undefined) delete process.env.BOSS_CONSOLE_AUTH; else process.env.BOSS_CONSOLE_AUTH = prev;
+    }
+  });
+
+  it("the /v1 proxy does the same", async () => {
+    const { readFileSync } = await import("node:fs");
+    const route = readFileSync("app/v1/[...path]/route.ts", "utf8");
+    expect(route).toMatch(/consoleAuthMarker\(\)/);
+    expect(route).toMatch(/CONSOLE_AUTH_HEADER_LC/);
+  });
+});

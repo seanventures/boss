@@ -26,6 +26,17 @@ export const IDENTITY_COOKIES: readonly string[] = [SESSION_COOKIE, PREAUTH_COOK
 export const STUB_COOKIES: readonly string[] = ["boss_stub_claim", "boss_stub_bare", "boss_stub_signup"];
 
 export const CSRF_HEADER_LC = "x-boss-csrf";
+/**
+ * Tells the API this console is a network-trusted build (BOSS_CONSOLE_AUTH=network, shared-server),
+ * so S5's network bridge applies even where the API's own env cannot be changed. The API honours
+ * it only from a trusted proxy. Sent by the console itself on every call when — and only when —
+ * the console runs that way; any client-sent copy is stripped like every X-Boss-* header.
+ */
+export const CONSOLE_AUTH_HEADER_LC = "x-boss-console-auth";
+
+export function consoleAuthMarker(): string | null {
+  return typeof window === "undefined" && process.env.BOSS_CONSOLE_AUTH === "network" ? "network" : null;
+}
 
 const IDENTITY_HEADER = /^(authorization|proxy-authorization|cookie|x-user(-.*)?|x-forwarded-user|x-forwarded-email|x-forwarded-preferred-username|x-forwarded-groups|x-auth-request-.*|x-remote-user|remote-user|x-webauth-.*|tailscale-user-.*|cf-access-.*|x-ms-client-principal.*|x-goog-authenticated-user-.*|x-amzn-oidc-.*|x-principal.*|x-actor.*)$/i;
 const HOP = new Set(["host", "connection", "content-length", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer"]);
@@ -105,6 +116,8 @@ export async function withForwardedIdentity(method: string, given: HeadersInit |
   new Headers(given).forEach((value, name) => {
     if (!isStrippedHeader(name)) out.set(name, value);
   });
+  const marker = consoleAuthMarker();
+  if (marker) out.set(CONSOLE_AUTH_HEADER_LC, marker);
   const write = WRITES.has(method.toUpperCase());
   const who = await resolveForwardedIdentity(write);
   if (who?.cookie) out.set("cookie", who.cookie);

@@ -1,5 +1,5 @@
 import { API_URL } from "../../../lib/client";
-import { identityCookieHeader, isStrippedHeader } from "../../../lib/identity/forward";
+import { CONSOLE_AUTH_HEADER_LC, consoleAuthMarker, identityCookieHeader, isStrippedHeader } from "../../../lib/identity/forward";
 import { identityStubEnabled, isIdentityPath } from "../../../lib/identity/stub/enabled";
 import { answerFromStub } from "../../../lib/identity/server-fetch";
 import { collectorMachinePost, collectorPathOf } from "../../../lib/console-session";
@@ -50,6 +50,10 @@ function forwardHeaders(req: Request, machine: boolean): Headers {
     // A machine POST carries no browser origin, and must not be given one.
     out.delete("origin");
   }
+  // A network-trusted console says so on every call of its own (S5's bridge); the client's copy,
+  // if it sent one, was already stripped with every other X-Boss-* header.
+  const marker = machine ? null : consoleAuthMarker();
+  if (marker) out.set(CONSOLE_AUTH_HEADER_LC, marker);
   // THE CLIENT'S ADDRESS, NOT ITS CLAIM (re-check C). A client may send its own
   // X-Forwarded-For, and Next keeps it as is, so it is never forwarded unchanged: the console
   // sends one hop — the one its own proxies appended — or none at all. Every request now: the

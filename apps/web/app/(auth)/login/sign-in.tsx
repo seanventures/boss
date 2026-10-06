@@ -234,7 +234,7 @@ export function SignIn({ options, next }: { options: AuthOptions; next: string }
               <span className="idn-flabel">
                 <label htmlFor="password">Password</label>
                 {options.smtp
-                  ? <a href={`/reset?email=${encodeURIComponent(email)}`}>Forgot password?</a>
+                  ? <a href="/reset">Forgot password?</a>
                   : <span className="idn-dim" title="An admin can send you a reset link">Ask an admin</span>}
               </span>
               <input id="password" className="idn-i" type="password" autoComplete="current-password" required value={password}
