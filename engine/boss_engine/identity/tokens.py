@@ -393,6 +393,10 @@ def context_for(claims: RunTokenClaims, *, db: Any) -> AuthContext:
         principal = grants.principal(db, claims.sub)
     if principal is None:
         raise _invalid("subject_unknown")
+    if claims.mode == RunMode.OBO and not principal.active:
+        # Defence in depth (verify_run_token's live_state already refuses it): a person who is
+        # disabled stops every run acting for them at the next call, on every path.
+        raise _invalid("subject_inactive")
     if claims.chain.current is not None:
         agent = grants.principal(db, claims.chain.current.agent_id)
         if agent is None:
