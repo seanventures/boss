@@ -24,6 +24,7 @@ import type { Permission } from "../../lib/identity/permissions.gen";
 import { checkWith } from "../../lib/identity/check";
 import { IdentityError, idGet, setCsrfToken } from "../../lib/identity/api";
 import { StepUpSheet } from "./step-up-sheet";
+import { installMirror } from "../../lib/identity/mirror";
 
 export const EPOCH_EVENT = "boss:identity-epoch";
 
