@@ -24,7 +24,7 @@ export function MfaStep({ step, onDone }: { step: SignInStep; onDone: (next: Sig
   };
   const totp = (v: string) => run(() => idPost<SignInStep>("/v1/auth/mfa/totp", { code: v }));
   const passkey = () => run(async () => {
-    const opts = await idPost<AssertionOptions>("/v1/auth/webauthn/options", { purpose: "mfa" });
+    const opts = await idPost<Wrapped<AssertionOptions>>("/v1/auth/webauthn/options", { purpose: "mfa" });
     return idPost<SignInStep>("/v1/auth/webauthn/verify", { purpose: "mfa", credential: await getAssertion(opts) });
   });
   return (
