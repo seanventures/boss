@@ -1492,6 +1492,23 @@ async def lifespan(_: FastAPI):
             _identity_claim.announce_setup_link(_connection)
     except Exception as exc:  # noqa: BLE001 — never block startup on the claim link
         print(f"[identity] claim link not announced: {type(exc).__name__}")
+    # IDENTITY VAULT AND SIGNING KEYS (A53, §7.8): register the master key's check value (or refuse
+    # a key that does not match the registered one — never decrypt with a wrong key), then make
+    # sure the run-token and actor signing keys exist, so the first delegated run can be minted.
+    try:
+        from boss_engine.identity import migration as _identity_migration
+        from boss_engine.identity import signing_keys as _identity_signing_keys
+        from boss_engine.identity import vault as _identity_vault
+
+        with begin(engine) as _connection:
+            _kek = _identity_vault.check_master_key(db=_connection)
+            _org = _identity_migration.default_org(_connection)
+            if _org:
+                _identity_signing_keys.provision(org_id=_org, db=_connection)
+        print(f"[identity] vault ready (key {_kek}); signing keys provisioned")
+    except Exception as exc:  # noqa: BLE001 — the vault is refused, the API still serves
+        print(f"[identity] VAULT NOT READY: {type(exc).__name__}: {exc}. Delegated runs, TOTP "
+              "and connected accounts are unavailable until the master key is fixed.", flush=True)
     yield
 
 
