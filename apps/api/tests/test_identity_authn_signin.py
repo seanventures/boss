@@ -23,10 +23,9 @@ from apps.api.tests.identity_s1_world import (  # noqa: F401  (world is a fixtur
 )
 from boss_engine.identity import authn
 
-#: A CSRF failure is an AuthnError("csrf_failed", 403). The frozen enforcement core renders every
-#: AuthnError as 401 today; amendment S1-1 (IDENTITY_BUILD.md §7) asks it to keep the 403. Either
-#: way the request is refused before the handler runs.
-REFUSED = (401, 403)
+#: A CSRF failure is an AuthnError("csrf_failed", 403), and the guard keeps the 403 (S1-1, applied
+#: at integration). The request is refused before the handler runs.
+REFUSED = (403,)
 
 
 def _session_cookie(client) -> str:
@@ -158,7 +157,8 @@ def test_one_credential_per_request_cookie_plus_bearer_is_400(world, engine):
     client = fresh_client()
     sign_in(client, "hal@example.test")
     res = client.get("/v1/identity/me", headers={"Authorization": "Bearer " + authn.mint_api_key("pat")})
-    assert res.status_code == 401 and res.json()["error"] == "unauthenticated"
+    # S1-1 (integration): the guard keeps S1's status — 400, not a bare 401
+    assert res.status_code == 400 and res.json()["error"] == "ambiguous_credentials"
     with engine.begin() as db:
         creds = authn.RequestCredentials("GET", "/v1/identity/me", {"authorization": "Bearer x"},
                                          {authn.SESSION_COOKIE: _session_cookie(client)})

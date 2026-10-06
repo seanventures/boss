@@ -1483,6 +1483,15 @@ async def lifespan(_: FastAPI):
     except Exception as exc:  # noqa: BLE001 — never block startup on host care
         print(f"[lifespan] system threads not started: {exc}")
     _warm_read_paths()
+    # IDENTITY (S1-3): an install with no Owner prints its one-hour claim link once at boot. The
+    # token rides in the URL fragment, so it never reaches an access log.
+    try:
+        from boss_engine.identity import claim as _identity_claim
+
+        with begin(engine) as _connection:
+            _identity_claim.announce_setup_link(_connection)
+    except Exception as exc:  # noqa: BLE001 — never block startup on the claim link
+        print(f"[identity] claim link not announced: {type(exc).__name__}")
     yield
 
 
@@ -1496,6 +1505,7 @@ app = FastAPI(title="BOSS Control Plane", version="0.2.1", lifespan=lifespan,
 identity_guard.install(app)
 identity_guard.configure(legacy_member=current_api_principal.get,
                          legacy_method=current_auth_method.get)
+identity_guard.bind_app(app)
 # COMPRESSED JSON (infra-observability spec §6.8; operator decision 2026-10-04). The console's
 # view endpoints are polled and some are large by nature: the Pulse at 50 apps × 96 cells is
 # ~63 KB of JSON and ~1.2 KB gzipped. Starlette's GZip skips `text/event-stream` (preview logs,
@@ -1550,13 +1560,12 @@ async def programming_error_fail_closed(_request: Request, exc: ProgrammingError
     response = undefined_table_response(exc)
     if response is not None:
         return response
-    LOGGER.exception("programming error")
-    # NOT "Internal Server Error". A ProgrammingError names the exact statement and column that
-    # was wrong, and replacing that with five words meant every schema mismatch in production
-    # arrived as an unreadable 500 — including one that took an afternoon to find by elimination
-    # because the message existed the whole time and was thrown away here.
-    return JSONResponse(status_code=500,
-                        content={"detail": f"{type(exc).__name__}: {str(exc)[:400]}"})
+    LOGGER.exception("programming error (request %s)", getattr(_request.state, "request_id", None))
+    # NOT "Internal Server Error", and NOT the statement either. A ProgrammingError's message names
+    # the exact SQL and column, which is what an operator needs and what a caller must never see
+    # (IDENTITY.md §8: an error body is not a data channel). The class and the request id reach
+    # the caller; the message goes to the log under the same request id.
+    return _internal_error_response(_request, exc)
 
 
 @app.exception_handler(Exception)
@@ -1568,9 +1577,19 @@ async def unhandled_fail_loudly(_request: Request, exc: Exception):
     reason", arriving where a customer sees it. The class and message are enough to act on and
     leak nothing; the stack goes to the log.
     """
-    LOGGER.exception("unhandled error")
+    LOGGER.exception("unhandled error (request %s)", getattr(_request.state, "request_id", None))
+    return _internal_error_response(_request, exc)
+
+
+def _internal_error_response(request: Request, exc: Exception) -> JSONResponse:
+    """A 500 that names what broke without carrying the message (it can hold SQL, paths or
+    secrets): the class, and the request id the log line carries."""
+    request_id = (getattr(request.state, "request_id", None)
+                  or request.headers.get("x-request-id") or "")
     return JSONResponse(status_code=500,
-                        content={"detail": f"{type(exc).__name__}: {str(exc)[:400]}"})
+                        content={"detail": f"{type(exc).__name__} (see the API log, request "
+                                           f"{request_id or 'unknown'})",
+                                 "error": "internal_error", "request_id": request_id or None})
 
 
 def extract_api_token(request: Request) -> Optional[str]:
@@ -1852,6 +1871,47 @@ async def one_effect_per_idempotency_key(request: Request, call_next):
     return replayable
 
 
+async def _identity_transport(request: Request, call_next):
+    """The legacy transport step for a NEW credential (IDENTITY.md §4; zone L at M4).
+
+    The legacy checks in handlers see the principal's legacy member id (the claimant who took over
+    `ceo`), so a shadow-mode install keeps deciding as it did; once the route is enforced the guard
+    has decided and those checks defer to it (identity_guard.identity_enforced)."""
+    from boss_engine.identity.authn import AuthnError
+    from boss_engine.identity.enforcement import AuthzMode
+
+    try:
+        ctx = await run_in_threadpool(identity_guard.request_auth, request)
+    except AuthnError as error:
+        headers = {"WWW-Authenticate": "Bearer"} if error.status == 401 else None
+        code = error.code if error.status != 401 else "unauthenticated"
+        return JSONResponse(status_code=error.status, content={"error": code}, headers=headers)
+    except Exception as error:  # noqa: BLE001 — a decision that cannot be made is not an allow
+        LOGGER.warning("identity transport unavailable: %s", type(error).__name__)
+        return JSONResponse(status_code=503, content={"error": "identity_unavailable"})
+    if ctx is None:
+        return JSONResponse(status_code=401, content={"error": "unauthenticated"},
+                            headers={"WWW-Authenticate": "Bearer"})
+    principal_token = current_api_principal.set(identity_guard.legacy_member_for(ctx))
+    authenticated_token = current_transport_authenticated.set(True)
+    auth_method_token = current_auth_method.set("identity")
+    try:
+        if identity_guard.route_mode(request.scope) != AuthzMode.ENFORCE:
+            read_project_id = requested_get_project_id(request)
+            if read_project_id:
+                try:
+                    with begin(engine) as connection:
+                        require_project_reader(connection, read_project_id)
+                except HTTPException as error:
+                    return JSONResponse(status_code=error.status_code,
+                                        content={"detail": error.detail})
+        return await call_next(request)
+    finally:
+        current_api_principal.reset(principal_token)
+        current_transport_authenticated.reset(authenticated_token)
+        current_auth_method.reset(auth_method_token)
+
+
 @app.middleware("http")
 async def require_transport_auth_for_v1(request: Request, call_next):
     auth_required = (
@@ -1915,6 +1975,11 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         request.method == "POST"
         and route_path in ("/v1/telemetry/ingest", "/v1/telemetry/delete", "/v1/telemetry/share")
     )
+    # IDENTITY (S1-8): the identity routes that prove themselves — sign-in, SSO start/callback,
+    # invitations, the claim, SAML ACS, SCIM (its own bearer), the token exchange, JWKS — are
+    # @public on an identity router and always enforced. Requiring a legacy key here made sign-in
+    # unreachable on a default install (BOSS_REQUIRE_API_AUTH=true).
+    is_identity_public = identity_guard.is_identity_public_route(request.scope)
     if not auth_required and any(
         request.headers.get(name) for name in (
             "X-BOSS-MCP-Operation", "X-BOSS-MCP-Confirmation", "X-BOSS-MCP-Project"
@@ -1933,6 +1998,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         or is_reliability_alert
         or is_investigation_callback
         or is_telemetry_collector
+        or is_identity_public
     ):
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)
@@ -1943,6 +2009,11 @@ async def require_transport_auth_for_v1(request: Request, call_next):
             current_api_principal.reset(principal_token)
             current_transport_authenticated.reset(authenticated_token)
             current_auth_method.reset(auth_method_token)
+
+    if identity_guard.presents_identity_credential(request):
+        # A person's session, a boss_ key or a run token: authenticated once, here, by identity
+        # (the guard reuses the result), never by the legacy key list.
+        return await _identity_transport(request, call_next)
 
     allowed_tokens = settings.api_key_values
     if (
@@ -2197,6 +2268,10 @@ def require_authenticated_actor_binding(
     permission: str,
     connection=None,
 ) -> None:
+    if identity_guard.identity_enforced():
+        # The guard decided this request against the catalogue (enforce): the claimed actor
+        # decides nothing (R6) and the legacy binding check has nothing left to add.
+        return
     principal = current_api_principal.get()
     if not principal:
         if current_transport_authenticated.get():
@@ -2239,6 +2314,8 @@ def require_project_actor(connection, project_id: str, actor: str, permission: s
     # permissions first can turn an impersonation attempt into a target-member
     # error and bypass the principal-specific denial evidence.
     require_authenticated_actor_binding(project_id, actor, permission, connection)
+    if identity_guard.identity_enforced():
+        return   # the route's catalogue permission was checked at this project by the guard
     try:
         members.require_member(
             connection,
@@ -2260,6 +2337,8 @@ def _may_act_as(connection, project_id: str, actor: str) -> bool:
     off), the principal itself, or a member whose role_keys name the principal (the console's
     `executive_console` carries `ceo`, so the console's key may act as it)."""
     principal = current_api_principal.get()
+    if identity_guard.identity_enforced():
+        return bool(principal) and principal == actor   # an identity principal is only itself
     if not principal or principal == actor:
         return True
     try:
@@ -2307,6 +2386,10 @@ def require_project_write_actor(
 def require_autonomy_operator(connection, project_id: str, claimed_actor: str | None) -> str:
     """Only a human CEO may change or apply the policy that resolves gates."""
     claimed = str(claimed_actor or "").strip()
+    if identity_guard.identity_enforced():
+        # policy:manage (or the route's key) was checked by the guard; the actor recorded is
+        # the authenticated principal, never the claimed one.
+        return signed_in_actor(connection, project_id, claimed_actor)
     if current_mcp_human_attribution.get():
         actor = _decision_action_actor(claimed)
         require_project_actor(connection, project_id, actor, "decision_resolve")
@@ -2330,6 +2413,8 @@ def require_autonomy_operator(connection, project_id: str, claimed_actor: str | 
 
 def require_project_reader(connection, project_id: str) -> None:
     """Limit project-scoped reads to an active member of that project or its org."""
+    if identity_guard.identity_enforced():
+        return   # the guard checked the route's read permission at this project
     if not current_transport_authenticated.get():
         # Explicitly unauthenticated local development keeps its existing behavior.
         return
@@ -22159,6 +22244,8 @@ def _is_worker_principal() -> bool:
 
 def require_worker_principal() -> None:
     """Only the configured worker identity may claim or settle leased work."""
+    if identity_guard.identity_enforced():
+        return   # worker:lease is system-only: the guard admitted a worker principal
     if not current_transport_authenticated.get():
         # The local development mode may explicitly disable transport auth.
         return
@@ -29562,11 +29649,32 @@ def conversation_close_endpoint(conversation_id: str, payload: open_bodies.Proje
 
 # IDENTITY API (docs/product/IDENTITY.md §10). Always enforced: router keys starting `identity`.
 from .routers.identity_me import build_identity_me_router  # noqa: E402
+from .routers.identity_auth import build_identity_auth_router  # noqa: E402  (identity S1)
+from .routers.identity_people import build_identity_people_router  # noqa: E402  (identity S1)
+from .routers.identity_sso import build_identity_sso_router  # noqa: E402  (identity S1)
+from .routers.identity_scim import build_identity_scim_router  # noqa: E402  (identity S1)
+from .routers.identity_admin import build_identity_admin_router  # noqa: E402  (identity S5)
+from .routers.identity_agents import build_identity_agents_router  # noqa: E402  (identity S3)
+from .routers.identity_agents import install_consent_handler  # noqa: E402  (identity S3)
+from boss_engine.identity.request_ids import RequestIdMiddleware  # noqa: E402  (identity S5)
 
 app.include_router(build_identity_me_router())
+app.include_router(build_identity_auth_router())
+app.include_router(build_identity_people_router())
+app.include_router(build_identity_sso_router())
+app.include_router(build_identity_scim_router())
+# S5's audit log, policy, posture, legacy paths and shadow report; building it starts the shadow
+# ledger's flusher (not under pytest).
+app.include_router(build_identity_admin_router())
+app.include_router(build_identity_agents_router())
+# A covering grant is missing: a flat 409 {"error": "consent_required", ...} the console's consent
+# sheet reads, wherever a build or run start raises it.
+install_consent_handler(app)
 from .routers.identity_access import build_identity_access_router  # noqa: E402  (identity S2)
 
 app.include_router(build_identity_access_router(engine))
+# One request id per request (outermost, pure ASGI): on every security event and echoed back.
+app.add_middleware(RequestIdMiddleware)
 from .routers.identity_access import declare_framework_routes  # noqa: E402  (identity S2)
 
 declare_framework_routes(app)

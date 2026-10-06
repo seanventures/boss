@@ -463,14 +463,17 @@ def test_the_parent_cannot_use_the_child_token_it_obtained(env):
 
 
 def test_a13b_an_exchange_flood_is_429(env):
+    from boss_engine.identity import ratelimit
+
     atlas = start(env, env.grant().id)
-    tokens._local_hits.clear()
-    for i in range(tokens.EXCHANGE_LIMIT_PER_MINUTE):
-        tokens._local_hits.setdefault("run_ct:task1", __import__("collections").deque()).append(time.monotonic())
+    # Fill this run's window in S1's Postgres limiter (the real one, shared by every API process).
+    with env.engine.begin() as db:
+        for _ in range(tokens.EXCHANGE_LIMIT_PER_MINUTE):
+            ratelimit.hit("token_exchange.run", "run_ct:task1",
+                          limit=tokens.EXCHANGE_LIMIT_PER_MINUTE, window_seconds=60, db=db)
     with pytest.raises(tokens.TokenError) as e:
         _exchange(env, atlas, child_agent=env.forge)
     assert e.value.status == 429 and e.value.retry_after
-    tokens._local_hits.clear()
 
 
 # ---- the decision for run tokens ------------------------------------------------------------------------

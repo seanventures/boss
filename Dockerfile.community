@@ -30,8 +30,8 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
        ca-certificates git openssh-client ffmpeg libavfilter-extra fonts-dejavu-core \
     && addgroup --system boss \
     && adduser --system --ingroup boss --home /home/boss boss \
-    && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts \
-    && chown -R boss:boss /home/boss /var/lib/boss/artifacts \
+    && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts /var/lib/boss/identity \
+    && chown -R boss:boss /home/boss /var/lib/boss/artifacts /var/lib/boss/identity && chmod 700 /var/lib/boss/identity \
     && chmod 700 /home/boss/.codex /home/boss/.claude \
     && npm install -g @anthropic-ai/claude-code@2.1.197 @openai/codex@0.158.0 @xai-official/grok@1.0.41 \
        pnpm@9.15.0 \
@@ -78,7 +78,7 @@ ARG BOSS_SOURCE_SHA=unknown
 ARG BOSS_BUILT_AT=unknown
 ENV BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA \
     BOSS_BUILT_AT=$BOSS_BUILT_AT
-RUN chown -R boss:boss /app /var/lib/boss/artifacts
+RUN chown -R boss:boss /app /var/lib/boss/artifacts /var/lib/boss/identity
 USER boss
 # Fail the build if the installed browser cannot launch as the runtime user.
 RUN python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); b.close(); p.stop()'

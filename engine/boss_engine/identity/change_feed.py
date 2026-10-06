@@ -15,8 +15,9 @@ stream S5.
   - `FEED` is the push: one LISTEN connection per API process, fanned out to every open
     GET /v1/identity/epoch/stream (server-sent events) without a thread or connection per tab.
 
-The triggers are runtime objects created by their owner's code (IDENTITY_BUILD §5), from the
-seed; folding them into db/schema.sql is an amendment for the lead.
+The function and triggers are in db/schema.sql (lead's amendment at integration), generated from
+WATCHED; `install` stays as an idempotent repair for a database whose schema predates them.
+engine/tests/test_identity_integration_wiring.py pins the two to each other.
 """
 from __future__ import annotations
 

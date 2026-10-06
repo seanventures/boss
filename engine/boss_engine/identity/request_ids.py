@@ -49,6 +49,9 @@ class RequestIdMiddleware:
                          if k.lower() == HEADER.encode()), None)
         request_id = accept(incoming) or new_request_id()
         headers.append((HEADER.encode(), request_id.encode()))
+        # Shared with the layers OUTSIDE this one (Starlette's 500 handler sees the original
+        # scope): request.state.request_id names the id the error body and the log share.
+        scope.setdefault("state", {})["request_id"] = request_id
         scope = dict(scope, headers=headers)
         token = current_request_id.set(request_id)
 

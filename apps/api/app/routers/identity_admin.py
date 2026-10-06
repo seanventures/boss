@@ -41,7 +41,7 @@ def _context(request: Request) -> Optional[AuthContext]:
     """The request's verified AuthContext: the same authentication the guard ran (S1's
     authenticate, falling back to the legacy bridge). Never built from the body."""
     from apps.api.app import identity_guard
-    return identity_guard._authenticate(identity_guard._credentials(request))
+    return identity_guard.request_auth(request)
 
 
 def _refuse(status: int, error: str, detail: Optional[str] = None) -> JSONResponse:

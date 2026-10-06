@@ -50,11 +50,9 @@ def _ctx(request: Request):
     existing = getattr(request.state, "identity", None)
     if existing is not None:
         return existing
-    from boss_engine.identity import authn
+    from ..identity_guard import request_auth
 
-    from ..identity_guard import _credentials
-
-    ctx = authn.authenticate(_credentials(request), db=None)
+    ctx = request_auth(request)
     if ctx is None:
         raise AuthnError("unauthenticated", 401)
     return ctx

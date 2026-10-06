@@ -70,13 +70,21 @@ def error(status: int, code: str, **extra: Any) -> JSONResponse:
 def current_context(request: Request, db: Any = None) -> AuthContext:
     """The request's AuthContext (authenticated again from its one credential; cached on the
     request). Raises AuthnError — handlers render it with `refusal`."""
-    cached = getattr(request.state, "identity_ctx", None)
+    from .. import identity_guard
+
+    cached = getattr(request.state, "identity", None)
     if cached is not None:
         return cached
-    ctx = authn.authenticate(credentials(request), db=db)
+    if getattr(request.state, "identity_checked", False) or getattr(request.state, "identity_error", None):
+        ctx = identity_guard.request_auth(request)   # re-raises the guard's refusal, never re-checks
+    else:
+        ctx = authn.authenticate(credentials(request), db=db)
+        request.state.identity_checked = True
+        if ctx is not None:
+            request.state.identity = ctx
+            request.state.identity_ctx = ctx
     if ctx is None:
         raise AuthnError("unauthenticated")
-    request.state.identity_ctx = ctx
     return ctx
 
 
@@ -451,8 +459,10 @@ def build_identity_auth_router() -> APIRouter:
 def _bridged(request: Request) -> Optional[AuthContext]:
     """The network-bridge context, when S5's legacy bridge maps this request to the network
     operator. Anything else (a cookie, a key, nothing) is not a network claim."""
+    from .. import identity_guard
+
     try:
-        ctx = authn.authenticate(credentials(request))
+        ctx = identity_guard.request_auth(request)
     except (AuthnError, NotImplementedError):
         return None
     return ctx if claim_module.is_network_bridged(ctx) else None

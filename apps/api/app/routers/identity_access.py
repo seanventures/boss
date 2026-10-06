@@ -100,7 +100,7 @@ def request_context(request: Request) -> AuthContext:
     to any non-public route before a handler runs."""
     from .. import identity_guard
 
-    ctx = identity_guard._authenticate(identity_guard._credentials(request))  # noqa: SLF001
+    ctx = identity_guard.request_auth(request)   # the guard's own result; never re-authenticated
     if ctx is None:
         raise AccessError(401, "unauthenticated")
     return ctx

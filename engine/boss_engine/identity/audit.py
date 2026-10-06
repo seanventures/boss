@@ -213,12 +213,21 @@ def _sql(statement: str):
 
 
 def _hmac_key() -> bytes:
+    """BOSS_IDENTITY_HMAC_KEY, else a key derived from S1's server key (itself from
+    BOSS_IDENTITY_SERVER_KEY or the vault master key), so a failed sign-in's identifier hash is
+    stable across restarts and processes; a per-process key only when neither exists."""
     try:
         from ..config import get_settings
         configured = get_settings().identity_hmac_key
     except Exception:  # noqa: BLE001
         configured = ""
-    return configured.encode("utf-8") if configured else _PROCESS_HMAC_KEY
+    if configured:
+        return configured.encode("utf-8")
+    try:
+        from .authn_support import server_key
+        return hmac.new(server_key(), b"boss identity audit identifier v1", hashlib.sha256).digest()
+    except Exception:  # noqa: BLE001
+        return _PROCESS_HMAC_KEY
 
 
 def identifier_hmac(identifier: str) -> str:
