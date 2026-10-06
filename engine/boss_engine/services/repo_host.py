@@ -65,6 +65,69 @@ def clone_url_for(host: str, owner: str, repo: str, token: str = "") -> str:
     raise ValueError(f"unsupported repo host {host!r} (known: {', '.join(KNOWN_REPO_HOSTS)})")
 
 
+# ---- git access that never writes a credential where code can read it ---------------------------------
+#
+# IDENTITY.md §7.9-§7.10: an agent (or the app an agent wrote, running in a preview or a deploy
+# workdir) never holds a raw GitHub or provider token. A URL with the token in it lands in
+# `.git/config` of the checkout and in the process table; both are reachable from the code that
+# then runs there. `git_access` returns a credential-FREE URL plus an environment that carries the
+# credential to git's own process only (GIT_CONFIG_COUNT/KEY/VALUE: an http extraheader), so
+# nothing in the workdir or in argv ever names it. With the egress proxy on and a delegated
+# principal in context, `identity.runs.repo_access` routes the clone through boss-egress instead
+# and no GitHub token exists on this side at all.
+
+_BASIC_USER = {"github": "x-access-token", "bitbucket": "x-token-auth"}
+_HOST_ORIGIN = {"github": "https://github.com/", "bitbucket": "https://bitbucket.org/"}
+
+
+class GitAccess:
+    """How to run git against one repo: `url` carries no credential; `env` (to MERGE into the git
+    process's environment) carries it. `repr` shows neither the credential nor the env."""
+
+    __slots__ = ("url", "env", "via")
+
+    def __init__(self, url: str, env: Optional[dict] = None, via: str = "anonymous"):
+        self.url = url
+        self.env = dict(env or {})
+        self.via = via                     # "egress" | "token" | "anonymous"
+
+    def __repr__(self) -> str:
+        return f"GitAccess(url={self.url!r}, via={self.via!r})"
+
+    def environ(self, base: Optional[dict] = None) -> dict:
+        import os
+
+        out = dict(os.environ if base is None else base)
+        out.update(self.env)
+        out.setdefault("GIT_TERMINAL_PROMPT", "0")
+        return out
+
+
+def git_config_env(pairs) -> dict:
+    """`git -c k=v` for every git process, through the environment (git >= 2.31), so the values
+    appear neither in argv nor in any `.git/config`."""
+    pairs = list(pairs)
+    env = {"GIT_CONFIG_COUNT": str(len(pairs))}
+    for i, (key, value) in enumerate(pairs):
+        env[f"GIT_CONFIG_KEY_{i}"] = key
+        env[f"GIT_CONFIG_VALUE_{i}"] = value
+    return env
+
+
+def git_access(host: str, owner: str, repo: str, token: str = "") -> GitAccess:
+    """The legacy (token) path, without leaking the token into the checkout or argv."""
+    import base64
+
+    kind = (host or "github").strip().lower()
+    url = clone_url_for(kind, owner, repo, "")
+    if not token:
+        return GitAccess(url, via="anonymous")
+    basic = base64.b64encode(f"{_BASIC_USER.get(kind, 'x-access-token')}:{token}".encode()).decode()
+    origin = _HOST_ORIGIN.get(kind, "https://github.com/")
+    return GitAccess(url, git_config_env([(f"http.{origin}.extraheader", f"AUTHORIZATION: basic {basic}")]),
+                     via="token")
+
+
 def resolve_repo_host_kind(settings, spec: Optional[dict] = None) -> str:
     """Per-task ``spec.repo_host`` wins; else the project-level setting; default github."""
     kind = str(((spec or {}).get("repo_host")) or
