@@ -11,6 +11,7 @@ receives (services/improve_collector.py). Every other route is a normal project 
 from __future__ import annotations
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from ..identity_guard import writing_get  # noqa: E402  (identity int-b)
 from apps.api.app import identity_verifiers as _identity_verifiers  # noqa: E402  (identity S2)
 from typing import Any, Callable, Optional
 
@@ -388,8 +389,8 @@ def build_improve_router(
                 raise HTTPException(status_code=422, detail=str(error)) from error
             return improve_boss.sharing_view(c, settings())
 
-    @router.get("/v1/telemetry/preview")
-    @permit(P.TELEMETRY_READ, scope=Scope.org())
+    @writing_get(router, "/v1/telemetry/preview")
+    @permit(P.TELEMETRY_READ, scope=Scope.org(), writes_on_get=True)
     def get_preview(project_id: str) -> dict:
         """The exact next payload. Reading it freezes it: this is the one that is sent."""
         pid = _reader(project_id)
@@ -408,8 +409,8 @@ def build_improve_router(
             raise HTTPException(status_code=404, detail="No such send.")
         return {"id": send_id, "json": body}
 
-    @router.get("/v1/telemetry/export")
-    @permit(P.TELEMETRY_SHARE, scope=Scope.org())
+    @writing_get(router, "/v1/telemetry/export")
+    @permit(P.TELEMETRY_SHARE, scope=Scope.org(), writes_on_get=True)
     def export_batch(project_id: str, actor: Optional[str] = None) -> Response:
         pid = _reader(project_id)
         with begin(engine) as c:

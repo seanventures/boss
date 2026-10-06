@@ -115,26 +115,48 @@ def request_identity(request: Request) -> Optional[AuthContext]:
         return None
 
 
-PRODUCTION_ENVIRONMENTS = frozenset({"production", "prod"})
+def require_production(request: Optional[Request], project_id: str, environment: Any = None, *,
+                       always: bool = False) -> None:
+    """THE handler-side production check (the declaration-side one is `production=` on @permit,
+    which the guard evaluates the same way). An operation whose target environment is production
+    (object_rules.is_production_environment), or `always`, also needs deployment:production at
+    the TARGET's project — pass the target's project, not the caller's.
 
+    Refuses whenever THIS request is enforced (its per-route mode, as the guard decided it — not
+    the global BOSS_AUTHZ_MODE alone); in shadow it records the would-deny; off does nothing.
+    `request` may be None in a helper that has none: the guard's context variables carry the same."""
+    from boss_engine.identity.enforcement import LEDGER, AuthzMode, Outcome
+    from boss_engine.identity.object_rules import is_production_environment
 
-def require_production(request: Request, project_id: str, environment: Any) -> None:
-    """A deploy whose target environment is production also needs deployment:production at the
-    target's project (the route's own declaration is deployment:create). Refuses only under
-    BOSS_AUTHZ_MODE=enforce; in shadow the old guards still decide."""
-    if str(environment or "").strip().lower() not in PRODUCTION_ENVIRONMENTS:
+    if not always and not is_production_environment(environment):
         return
-    ctx = request_identity(request)
+    from .. import identity_guard
+
+    mode = (getattr(request.state, "identity_mode", None) if request is not None else None) \
+        or identity_guard.IDENTITY_MODE.get() or ""
+    if mode in ("", AuthzMode.OFF.value):
+        return
+    ctx = (getattr(request.state, "identity", None) or request_identity(request)
+           if request is not None else identity_guard.REQUEST_IDENTITY.get())
+    from fastapi import HTTPException
+
     if ctx is None:
+        if mode == AuthzMode.ENFORCE.value:
+            raise HTTPException(status_code=401, detail={"error": "unauthenticated"})
         return
-    from boss_engine.config import get_settings
-
     decision = authz.check(ctx, P.DEPLOYMENT_PRODUCTION,
                            ResolvedScope.in_project(ctx.principal.org_id, project_id))
-    if not decision.allowed and get_settings().authz_mode == "enforce":
-        from fastapi import HTTPException
-
+    if decision.allowed:
+        return
+    path = request.scope.get("path", "") if request is not None else "handler"
+    LEDGER.record(router_key="production", method="CHECK", path_template=path,
+                  outcome=Outcome(False, decision.reason, P.DEPLOYMENT_PRODUCTION,
+                                  "handler:require_production", ctx.principal.kind.value,
+                                  decision=decision),
+                  mode=AuthzMode(mode))
+    if mode == AuthzMode.ENFORCE.value:
         raise HTTPException(status_code=decision.status, detail=decision.error_body())
+
 
 def _refused(error: AccessError) -> JSONResponse:
     return JSONResponse(status_code=error.status, content=error.body())

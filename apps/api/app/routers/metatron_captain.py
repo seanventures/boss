@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from ..identity_guard import writing_get  # noqa: E402  (identity int-b)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -72,8 +73,8 @@ def captain_session_turn(payload: SessionTurnRequest) -> dict[str, Any]:
         )
 
 
-@router.get("/v1/metatron/session")
-@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
+@writing_get(router, "/v1/metatron/session")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def captain_session_get(project_id: str, actor: str = "executive_console") -> dict[str, Any]:
     if not project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")

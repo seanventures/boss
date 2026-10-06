@@ -6,6 +6,9 @@ DELETE /v1/previews/{preview_id}/web:
 DELETE /v1/previews/{preview_id}/web/{path:path}:
   reason: preview_capability_url
   verifier: boss_engine.services.preview_service:proxy_preview
+GET /.well-known/boss-jwks.json:
+  reason: jwks
+  verifier: null
 GET /docs:
   reason: api_description
   verifier: null
@@ -21,9 +24,24 @@ GET /openapi.json:
 GET /redoc:
   reason: api_description
   verifier: null
+GET /saml/v2/metadata:
+  reason: saml_signed_assertion
+  verifier: apps.api.app.routers.identity_sso:verify_saml_assertion
 GET /saml/v2/{project_id}/metadata:
   reason: saml_signed_assertion
   verifier: boss_engine.services.saml:SamlAuthenticator.verify_response
+GET /v1/auth/options:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+GET /v1/auth/setup/status:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+GET /v1/auth/sso/{provider_id}/callback:
+  reason: oauth_state_bound_callback
+  verifier: apps.api.app.routers.identity_sso:verify_state_bound_callback
+GET /v1/auth/sso/{provider_id}/start:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_sso:verify_sso_start
 GET /v1/channels/{provider}/callback:
   reason: oauth_state_bound_callback
   verifier: boss_engine.services.channel_oauth:complete
@@ -39,12 +57,75 @@ PATCH /v1/previews/{preview_id}/web:
 PATCH /v1/previews/{preview_id}/web/{path:path}:
   reason: preview_capability_url
   verifier: boss_engine.services.preview_service:proxy_preview
+POST /saml/v2/acs:
+  reason: saml_signed_assertion
+  verifier: apps.api.app.routers.identity_sso:verify_saml_assertion
 POST /saml/v2/{project_id}/acs:
   reason: saml_signed_assertion
   verifier: boss_engine.services.saml:SamlAuthenticator.verify_response
+POST /v1/auth/email-code:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/email-code/verify:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/invitations/accept:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/invitations/preview:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/login:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/logout:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/magic-link:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/magic-link/verify:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/mfa/recovery:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/mfa/totp:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/password/forgot:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/password/reset:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/setup/claim:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/signup:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/signup/verify:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/sso/{provider_id}/callback:
+  reason: oauth_state_bound_callback
+  verifier: apps.api.app.routers.identity_sso:verify_state_bound_callback
+POST /v1/auth/webauthn/options:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/webauthn/verify:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_auth:verify_auth_request
 POST /v1/hardware/agents/enroll:
   reason: auth_endpoint
   verifier: apps.api.app.hardware_api:enroll_agent
+POST /v1/identity/introspect:
+  reason: auth_endpoint
+  verifier: boss_engine.identity.tokens:egress_service_key_ok
+POST /v1/identity/token:
+  reason: auth_endpoint
+  verifier: boss_engine.identity.tokens:exchange_token
 POST /v1/investigations/{investigation_id}/db:
   reason: per_investigation_callback_token
   verifier: boss_engine.services.debug_session:authorise

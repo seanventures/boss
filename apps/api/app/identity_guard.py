@@ -48,6 +48,7 @@ from boss_engine.identity.enforcement import (
     check_coverage,
     coverage_policy,
     evaluate,
+    evaluate_object_rules,
     mode_for,
 )
 from boss_engine.identity.scope import RequestValues
@@ -75,10 +76,51 @@ class AccessRefused(Exception):
         self.outcome = outcome
 
 
+#: The legacy worker check (main.py: transport auth off, or the principal is BOSS_WORKER_PRINCIPAL).
+#: Default refuses: an API that never configured it has no legacy worker.
+_legacy_worker_ok: Callable[[], bool] = lambda: False  # noqa: E731
+
+
 def configure(*, legacy_member: Callable[[], Optional[str]],
-              legacy_method: Callable[[], Optional[str]]) -> None:
-    global _legacy_member, _legacy_method
+              legacy_method: Callable[[], Optional[str]],
+              legacy_worker_ok: Optional[Callable[[], bool]] = None) -> None:
+    global _legacy_member, _legacy_method, _legacy_worker_ok
     _legacy_member, _legacy_method = legacy_member, legacy_method
+    if legacy_worker_ok is not None:
+        _legacy_worker_ok = legacy_worker_ok
+
+
+def is_worker_principal(ctx: Any) -> bool:
+    """A system principal whose fixed set holds worker:lease: sys_worker, or the legacy worker
+    key's principal while that bridge lives. Never a person, a key of a person, or an agent run."""
+    from boss_engine.identity.permissions_gen import P
+    from boss_engine.identity.principal import PrincipalKind
+
+    if ctx is None or ctx.principal.kind != PrincipalKind.SYSTEM or ctx.run_token is not None:
+        return False
+    try:
+        return P.WORKER_LEASE in authz.system_permissions(ctx.principal.id)
+    except Exception:  # noqa: BLE001 — cannot tell: not a worker
+        return False
+
+
+def require_worker_principal() -> None:
+    """THE worker-protocol check, for every handler of the worker protocol (claim, heartbeat,
+    complete, fail, apply, execute, tick): only the worker's own principal may call it.
+
+    Enforced route: the request's verified principal must be a worker principal — never taken on
+    trust from the route's declaration. Shadow/off: an identity worker principal passes, and
+    otherwise the legacy rule decides (BOSS_WORKER_PRINCIPAL, or transport auth off in local
+    development). Raises HTTPException 403."""
+    from fastapi import HTTPException
+
+    ctx = REQUEST_IDENTITY.get()
+    if is_worker_principal(ctx):
+        return
+    if identity_enforced() or not _legacy_worker_ok():
+        raise HTTPException(status_code=403, detail={
+            "error": "forbidden", "permission": "worker:lease",
+            "message": "only the worker principal may call the worker protocol"})
 
 
 def router_key_for(endpoint: Any) -> str:
@@ -108,6 +150,12 @@ def _credentials(conn: HTTPConnection) -> authn.RequestCredentials:
 IDENTITY_ENFORCED: ContextVar[bool] = ContextVar("boss_identity_enforced", default=False)
 
 _UNSET = object()
+
+#: The request's authz mode ("off" | "shadow" | "enforce") and its verified AuthContext, for code
+#: deeper than the handler (a helper with no `request`): identity_access.require_production reads
+#: them. Set by the guard on every request it decides.
+IDENTITY_MODE: ContextVar[str] = ContextVar("boss_identity_mode", default="")
+REQUEST_IDENTITY: ContextVar[Any] = ContextVar("boss_request_identity", default=None)
 
 
 def _authenticate(creds: authn.RequestCredentials, conn: Optional[HTTPConnection] = None):
@@ -164,7 +212,7 @@ async def enforce_access(conn: HTTPConnection) -> None:
         return
     access = access_of(endpoint)
     body: Any = None
-    if isinstance(access, Permit) and access.scope.body and isinstance(conn, Request):
+    if isinstance(access, Permit) and _reads_body(access) and isinstance(conn, Request):
         try:
             body = await conn.json()   # FastAPI already read and cached it; this is free
         except Exception:  # noqa: BLE001 — a missing/invalid body leaves the scope unresolved
@@ -183,6 +231,29 @@ async def enforce_access(conn: HTTPConnection) -> None:
     )
     conn.state.identity_mode = mode.value
     ctx = getattr(conn.state, "identity", None)
+    IDENTITY_MODE.set(mode.value)
+    REQUEST_IDENTITY.set(ctx)
+    if outcome.allowed and isinstance(access, Permit) and ctx is not None and (
+            access.confine or access.production is not None):
+        # The declaration's object rules (object_rules.py): confined ids in this project, and
+        # deployment:production when the operation's target is production.
+        decided = outcome.decision.scope if outcome.decision is not None else None
+        if decided is not None:
+            refused = await run_in_threadpool(
+                evaluate_object_rules, access, ctx, decided,
+                RequestValues(path_params=path_params, query=query, body=body),
+                check=lambda c, permission, scope: authz.check(c, permission, scope))
+            if refused is not None:
+                outcome = refused
+    csrf = _writing_get_csrf(conn, access, ctx, creds)
+    if csrf is not None:
+        # Not a mode question: like the CSRF check on every cookie write, a forged GET that
+        # writes is refused in shadow too (only `off`, the rollback switch, skips it).
+        method = conn.scope.get("method") or "GET"
+        path_template = getattr(route, "path", None) or conn.scope.get("path", "")
+        LEDGER.record(router_key=router_key, method=method, path_template=path_template,
+                      outcome=csrf, mode=AuthzMode.ENFORCE)
+        raise AccessRefused(csrf)
     if ctx is not None:
         # Who acts, for everything this request causes: jobs it enqueues carry the principal
         # (R8), delegated() reads it, and the tool registry's identity gate sees it.
@@ -210,6 +281,68 @@ async def enforce_access(conn: HTTPConnection) -> None:
         if conn.scope.get("type") == "websocket":
             raise WebSocketException(code=1008, reason=outcome.error_body().get("error", ""))
         raise AccessRefused(outcome)
+
+
+#: A writing GET's POST twin lives at `<path>/load` (several of these paths already answer a
+#: different POST, so the twin cannot always share the path).
+WRITING_GET_TWIN_SUFFIX = "/load"
+_TWINS: set[tuple[int, str]] = set()
+
+
+def writing_get_twin(path: str) -> str:
+    return path.rstrip("/") + WRITING_GET_TWIN_SUFFIX
+
+
+def writing_get(registrar: Any, path: str, **kwargs: Any) -> Callable[[Any], Any]:
+    """Register a GET that WRITES (it seeds defaults, reaps, freezes or probes): the GET stays as a
+    deprecated alias and the same endpoint, with the same declaration, answers POST at
+    `writing_get_twin(path)` — the method callers move to. The endpoint must be declared
+    `@permit(..., writes_on_get=True)` (below this decorator), which makes the guard treat a
+    cookie-authenticated GET to it as a write for CSRF."""
+    def deco(fn: Any) -> Any:
+        access = access_of(fn)
+        if not (isinstance(access, Permit) and access.writes_on_get):
+            raise RuntimeError(f"{getattr(fn, '__qualname__', fn)}: writing_get needs "
+                               "@permit(..., writes_on_get=True) below it")
+        registrar.get(path, deprecated=True, **kwargs)(fn)
+        twin = writing_get_twin(path)
+        key = (id(registrar), twin)
+        if key not in _TWINS:
+            _TWINS.add(key)
+            registrar.post(twin, **kwargs)(fn)
+        return fn
+    return deco
+
+
+def _reads_body(access: Permit) -> bool:
+    """Does this declaration read the JSON body (its scope, a confined id or a production source)?"""
+    if access.scope.body:
+        return True
+    if any(rule.where == "body" for rule in access.confine):
+        return True
+    production = access.production
+    return production is not None and any(where == "body" for _k, where, _n in production._sources)
+
+
+def _writing_get_csrf(conn: HTTPConnection, access: Any, ctx: Any,
+                      creds: authn.RequestCredentials) -> Optional[Outcome]:
+    """A cookie-authenticated GET to a `writes_on_get` route without proof it came from the
+    console's own page: the refusal Outcome (403 csrf_failed), else None."""
+    if not (isinstance(access, Permit) and access.writes_on_get):
+        return None
+    if (conn.scope.get("method") or "").upper() not in ("GET", "HEAD"):
+        return None
+    from boss_engine.identity.principal import AuthMethod
+
+    if ctx is None or ctx.method != AuthMethod.SESSION or ctx.session is None:
+        return None
+    try:
+        authn.check_writing_get_csrf(creds, session_id=ctx.session.id)
+    except authn.AuthnError as exc:
+        return Outcome(False, authz.DenyReason.UNAUTHENTICATED, access.permission, access.describe(),
+                       ctx.principal.kind.value, detail=f"authn: {exc.code}",
+                       authn_status=exc.status, authn_code=exc.code)
+    return None
 
 
 async def _render_refusal(_request: Request, exc: Exception) -> JSONResponse:

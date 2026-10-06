@@ -9,7 +9,7 @@ Stream S1 owns this file.
 """
 from __future__ import annotations
 
-from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from boss_engine.identity import Confine, P, Production, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -168,7 +168,9 @@ def build_infra_router(
             raise HTTPException(status_code=409, detail=infra_view.PAUSED_IN_COMMUNITY)
 
     @router.post("/v1/infra/targets/{target_id}/deploy")
-    @permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
+    @permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"),
+            confine=(Confine.path("target_id", "deployment_target"),),
+            production=Production(target="path:target_id"))
     def infra_target_deploy(target_id: str, body: TargetDeployBody, request: Request):
         """One Deploy button, routed by the target's kind (§6.5): a stack target plans a stack
         deployment, an app target a delivery deploy, a cloud-account target a registry run.
@@ -177,9 +179,8 @@ def build_infra_router(
         with begin(engine) as connection:
             target = _target(connection, pid, target_id)
             actor = require_write_actor(connection, pid, body.actor, "providerops_manage")
-        from .identity_access import require_production
-
-        require_production(request, pid, (target or {}).get("environment"))   # identity S2
+        # deployment:production for a production target: the declaration's production= rule,
+        # decided by the guard from the target's own row before this handler runs.
         route = infra_view.target_kind_route(target)
         if route == "stack":
             from boss_engine.services.stack_deploy import StackDeployError, plan_stack_deploy

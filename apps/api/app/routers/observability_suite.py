@@ -17,7 +17,7 @@ Also exposes (no clash with existing KG routes):
 """
 from __future__ import annotations
 
-from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from boss_engine.identity import Confine, P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from apps.api.app import identity_verifiers as _identity_verifiers  # noqa: E402  (identity S2)
 from typing import Any, Optional
 
@@ -73,7 +73,8 @@ def observability_suite_catalog() -> dict[str, Any]:
 
 
 @router.get("/v1/observability-suite/status")
-@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"),
+        confine=(Confine.query("host_target_id", "deployment_target"),))
 def observability_suite_status(
     project_id: str = Query(...),
     host_target_id: Optional[str] = Query(default=None),

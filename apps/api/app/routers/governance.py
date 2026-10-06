@@ -24,6 +24,7 @@ from boss_engine.services.governed_collaboration import (
 )
 from boss_engine.services.jobs import LeaseNotFoundError
 
+from .. import identity_guard
 from ..db import begin
 
 
@@ -385,6 +386,7 @@ def build_governance_router(
     def record_observation(
         metric_id: str, payload: MetricObservationRequest
     ) -> dict[str, Any]:
+        identity_guard.require_worker_principal()
         return worker(
             lambda connection: assurance.record_observation(
                 connection, metric_definition_id=metric_id, **payload.model_dump()
@@ -616,6 +618,7 @@ def build_governance_router(
     def complete_verification(
         run_id: str, payload: VerificationCompleteRequest
     ) -> dict[str, Any]:
+        identity_guard.require_worker_principal()
         return worker(
             lambda connection: assurance.complete_verification(
                 connection, verification_run_id=run_id, **payload.model_dump()
@@ -747,6 +750,7 @@ def build_governance_router(
     def complete_agent_group_member(
         run_id: str, member_key: str, payload: AgentGroupMemberCompleteRequest
     ) -> dict[str, Any]:
+        identity_guard.require_worker_principal()
         return worker(
             lambda connection: groups.complete_member(
                 connection, run_id=run_id, member_key=member_key, **payload.model_dump()
