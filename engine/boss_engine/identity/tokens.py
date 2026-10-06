@@ -662,6 +662,68 @@ def egress_service_key_ok(presented: Optional[str]) -> bool:
     return bool(expected) and bool(presented) and secrets.compare_digest(presented.encode(), expected.encode())
 
 
+#: The egress proxy's own principal (catalogue system_principals). It authenticates to
+#: /v1/identity/introspect with a `boss_sak_` key of its own; BOSS_EGRESS_SERVICE_KEY stays a fallback.
+EGRESS_PRINCIPAL = "sys_egress"
+
+
+def egress_caller_ok(authorization: Optional[str], legacy_key: Optional[str], *, db: Any,
+                     ip: Optional[str] = None) -> bool:
+    """Is this server-to-server caller the egress service? A presented bearer DECIDES: it must be
+    a live `boss_sak_` key whose principal is the active `sys_egress` system principal (checked
+    live: a revoked key or a suspended principal is refused at once). Without a bearer, the legacy
+    `X-Boss-Egress-Key` (BOSS_EGRESS_SERVICE_KEY) is accepted, as before."""
+    from .authn import AuthnError, parse_api_key
+    from .principal import PrincipalKind
+
+    scheme, _, presented = (authorization or "").partition(" ")
+    presented = presented.strip()
+    if scheme.lower() == "bearer" and presented:
+        parsed = parse_api_key(presented)
+        if parsed is None or parsed.kind != "sak" or not parsed.checksum_ok:
+            return False
+        from .api_keys import authenticate_key
+
+        try:
+            ctx = authenticate_key(db, presented, parsed, ip=ip, user_agent=None, request_id=None)
+        except AuthnError:
+            return False
+        p = ctx.principal
+        return p.id == EGRESS_PRINCIPAL and p.kind == PrincipalKind.SYSTEM and p.active
+    if authorization:
+        return False                       # some other scheme: never fall through to the shared key
+    return egress_service_key_ok(legacy_key)
+
+
+def issue_egress_service_key(db: Any, *, org_id: str, created_by: str = "sys_host_cli",
+                             revoke_others: bool = False) -> Any:
+    """Mint the egress service's `boss_sak_` key (host shell: `boss identity egress-key`). Shown
+    ONCE by the caller; only its SHA-256 is stored. `revoke_others` ends every earlier key of
+    sys_egress (a rotation without overlap)."""
+    from sqlalchemy import text
+
+    from . import audit, ids
+    from .api_keys import CreatedKey
+    from .authn import hash_token, mint_api_key
+
+    db.execute(text("INSERT INTO identity_principals (id, org_id, kind, status, display_name, created_by) "
+                    "VALUES (:id, :o, 'system', 'active', 'BOSS egress', 'identity') ON CONFLICT (id) DO NOTHING"),
+               {"id": EGRESS_PRINCIPAL, "o": org_id})
+    if revoke_others:
+        db.execute(text("UPDATE identity_api_credentials SET revoked_at = now(), revoked_by = :by "
+                        "WHERE principal_id = :p AND revoked_at IS NULL"), {"by": created_by, "p": EGRESS_PRINCIPAL})
+    key = mint_api_key("sak")
+    kid = ids.new_id("key")
+    db.execute(text("INSERT INTO identity_api_credentials (id, principal_id, kind, name, token_hash, scopes, "
+                    "created_by) VALUES (:id, :p, 'sak', 'boss-egress', :th, '{}', :by)"),
+               {"id": kid, "p": EGRESS_PRINCIPAL, "th": hash_token(key), "by": created_by})
+    audit.record(audit.SecurityEvent(org_id=org_id, event_type="api_key.created", outcome=audit.Outcome.SUCCESS,
+                                     actor_principal_id=created_by, actor_kind="system", target_type="api_key",
+                                     target_id=kid, details={"kind": "sak", "owner": EGRESS_PRINCIPAL,
+                                                             "revoked_others": revoke_others}), db=db)
+    return CreatedKey(kid, key, None)
+
+
 def introspect(token: str, *, db: Any) -> dict[str, Any]:
     """RFC 7662 for the egress service only (the route checks its credential: A40). Signature, time
     and jti liveness, plus the grant and chain status — and it RETURNS `act` (Keycloak #53029).
@@ -738,6 +800,7 @@ def verify_for_mcp(token: str, *, dpop_proof: Optional[str], htm: str, htu: str,
 
 
 __all__ = ["TokenError", "mint_run_token", "verify_run_token", "exchange_token", "renew_run_token",
-           "mint_actor_assertion", "decide", "introspect", "live_state", "context_for", "issuer", "redacted_claims",
+           "mint_actor_assertion", "decide", "introspect", "live_state", "context_for", "issuer", "redacted_claims", "egress_caller_ok",
+           "issue_egress_service_key", "EGRESS_PRINCIPAL",
            "AUD_API", "AUD_MCP", "AUD_EGRESS", "GRANT_TYPE_RENEW",
            "refuse_passthrough", "verify_for_mcp", "TokenPassthroughRefused"]
