@@ -310,3 +310,29 @@ def test_consent_asks_for_what_each_steps_tool_is_checked_against(env):
         roles, perms, _ = consent.workflow_needs(db, env.project, {"steps": [
             {"id": "build", "binding": {"capability": "build"}}]}, {})
     assert "code_task:create" in perms and roles
+
+
+def test_revoking_a_grant_stops_a_build_whose_job_never_started(env):
+    """Integration walk: revoking the grant cancelled the queued code.task job, but its code-task run
+    row stayed `running` for ever. The cascade now stops that run too."""
+    import json as _json
+
+    from boss_engine.identity import cascade, delegation, lineage
+    from boss_engine.identity.delegation import CascadeTrigger, GrantRequest
+    from ._identity_agents_support import session_ctx
+
+    with env.engine.begin() as c:
+        g = delegation.create_grant(session_ctx(ALICE), GrantRequest(
+            agent_ids=(FORGE,), permissions=frozenset(NEEDS), project_ids=(env.project,), purpose="walk"), db=c)
+        crun = f"crun_{uuid.uuid4().hex[:12]}"
+        c.execute(text("INSERT INTO code_task_runs (id, project_id, title, status, phase) VALUES "
+                       "(:i, :p, 'walk', 'running', 'queued')"), {"i": crun, "p": env.project})
+        payload = lineage.stamp_job({"code_task_run_id": crun},
+                                    lineage.Acting(principal_id=ALICE, org_id="org_boss", grant_id=g.id))
+        c.execute(text("INSERT INTO jobs (id, project_id, kind, status, payload, grant_id, on_behalf_of) VALUES "
+                       "(:j, :p, 'code.task', 'queued', CAST(:pl AS JSONB), :g, :u)"),
+                  {"j": f"job_{uuid.uuid4().hex[:12]}", "p": env.project, "pl": _json.dumps(payload), "g": g.id, "u": ALICE})
+    with env.engine.begin() as c:
+        delegation.revoke_cascade(CascadeTrigger.GRANT_REVOKED, g.id, actor=session_ctx(ALICE), reason="walk", db=c)
+    with env.engine.begin() as c:
+        assert c.execute(text("SELECT status FROM code_task_runs WHERE id = :i"), {"i": crun}).scalar() == "cancelled"

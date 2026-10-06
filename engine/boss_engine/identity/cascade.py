@@ -307,8 +307,23 @@ def revoke_cascade(trigger: CascadeTrigger, target_id: str, *, actor: AuthContex
                     log.warning("could not halt %s", rid)
     if plan["jobs"]:
         # Queued work under the dead grant never starts (leased work stops at its next token check).
-        db.execute(text("UPDATE jobs SET status = 'cancelled', last_error = to_jsonb(CAST(:why AS TEXT)), updated_at = now() "
-                        "WHERE id = ANY(:j) AND status = 'queued'"), {"j": plan["jobs"], "why": why})
+        cancelled = db.execute(text(
+            "UPDATE jobs SET status = 'cancelled', last_error = to_jsonb(CAST(:why AS TEXT)), updated_at = now() "
+            "WHERE id = ANY(:j) AND status = 'queued' RETURNING payload->>'code_task_run_id'"),
+            {"j": plan["jobs"], "why": why}).scalars().all()
+        # A build whose job never started still has its code-task run row, waiting: stop it too,
+        # so nothing shows it "running" under a revoked grant (and a later lease cannot pick it up).
+        for crun in {c for c in cancelled if c}:
+            _halt_code_task(crun, why, db)
+            if _table_exists(db, "code_task_runs"):
+                db.execute(text("SAVEPOINT identity_crun"))
+                try:
+                    db.execute(text("UPDATE code_task_runs SET status = 'cancelled', error = :why, updated_at = now() "
+                                    "WHERE id = :id AND status = 'running' AND phase = 'queued'"),
+                               {"id": crun, "why": why})
+                    db.execute(text("RELEASE SAVEPOINT identity_crun"))
+                except Exception:  # noqa: BLE001 — the stop request above still stops it
+                    db.execute(text("ROLLBACK TO SAVEPOINT identity_crun"))
     for sid in plan["schedules"]:
         db.execute(text("UPDATE workflow_schedules SET enabled = false, last_error = 'Renew authority: the grant "
                         "this schedule ran under has ended', updated_at = now() WHERE id = :s"), {"s": sid})
