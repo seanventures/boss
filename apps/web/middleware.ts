@@ -94,19 +94,21 @@ function legacyRedirect(request: NextRequest): NextResponse | null {
   if (request.headers.get("rsc") || request.headers.get("next-action")) return null;
   const legacy = resolveLegacyArea(request.nextUrl.searchParams);
   if (!legacy) return null;
-  // ABSOLUTE, ON THE HOST THE BROWSER USED. A relative Location passed the unit test and 500ed
-  // in a production build ("TypeError: Invalid URL" in Next's middleware adapter), so every
-  // retired-area link — ?area=govern, ?area=delivery, ?area=pipeline — failed on a real console.
-  // The host and scheme are the ones the browser used, never the API's.
-  // `host` first: `next start` fills x-forwarded-host with its own bind name ("localhost"),
-  // which would move a browser on 127.0.0.1 to another origin and drop its session cookie.
-  const host = request.headers.get("host") || request.headers.get("x-forwarded-host")
-    || request.nextUrl.host;
-  const proto = (request.headers.get("x-forwarded-proto") || request.nextUrl.protocol)
-    .replace(/:$/, "");
-  return new NextResponse(null, {
-    status: 307,
-    headers: { Location: `${proto}://${host}/?${legacy}`, "Cache-Control": "no-store" },
+  // A RELATIVE MOVE, MADE BY THE BROWSER. A 307 with a relative Location passed the unit test
+  // and 500ed in a production build (Next's middleware adapter parses Location as an absolute
+  // URL: "TypeError: Invalid URL"); an absolute one is rewritten by that same adapter onto the
+  // server's own bind name ("localhost"), which moves a browser on 127.0.0.1 to another origin
+  // and drops its session. So the answer is a page that moves itself: `location.replace` keeps
+  // the fragment (`#hardware-manager`) and the origin, and the refresh is the no-script path.
+  const target = `/?${legacy}`;
+  const html = `<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex">`
+    + `<meta http-equiv="refresh" content="0;url=${target.replace(/&/g, "&amp;")}">`
+    + `<title>Moved</title><script>location.replace(${JSON.stringify(target)}+location.hash)</script>`
+    + `<a href="${target.replace(/&/g, "&amp;")}">Continue</a>`;
+  return new NextResponse(html, {
+    status: 200,
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store",
+               "X-Boss-Moved-To": target },
   });
 }
 
