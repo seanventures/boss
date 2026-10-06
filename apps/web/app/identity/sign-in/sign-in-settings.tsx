@@ -2,17 +2,21 @@
 
 /**
  * IDENTITY › SIGN-IN & SSO (IDENTITY.md §9.8): the providers people sign in with (OIDC, SAML and
- * the social presets) with a test sign-in, JWKS status, domains, JIT, group mappings and SCIM
- * keys (ids only — no part of a key, ever); the security policy; the network bridge with
- * "Require sign-in"; and the legacy paths still in use, with their countdown.
+ * the social presets) with a test sign-in, domains and JIT; the security policy; the network
+ * bridge with "Require sign-in"; and the legacy paths still in use, with their countdown.
+ *
+ * S5's policy rules: network trust is never offered back ON (only "Require sign-in", which the
+ * API makes one-way); email (SMTP) is a status, not a switch; "Agents need your repo access" is
+ * automatic until pinned, and can be reset to automatic. A save sends only what changed.
  */
 import React, { useState } from "react";
 import {
-  AppleLogo, CheckCircle, GithubLogo, GoogleLogo, Key, Plugs, ShieldCheck, Warning, WindowsLogo, WifiHigh,
+  AppleLogo, CheckCircle, EnvelopeSimple, GithubLogo, GoogleLogo, Key, Plugs, ShieldCheck, Warning, WindowsLogo, WifiHigh,
 } from "@phosphor-icons/react";
 
 import { CanButton, useCan, useGuardedCall } from "../../../components/identity/identity-provider";
-import { Ago, Pill, daysUntil, shortDate, useNow } from "../../../components/identity/kit";
+import { Pill, daysUntil, shortDate, useNow } from "../../../components/identity/kit";
+import { GITHUB_ACCESS_AUTOMATIC, REQUIRE_SIGN_IN, policyChanges, providerView } from "../../../lib/identity/adapt-admin";
 import { IdentityError, idPatch, idPost, idPut } from "../../../lib/identity/api";
 import type { Posture, Provider, SecurityPolicy } from "../../../lib/identity/types";
 import { showToast } from "../../client-forms";
@@ -22,6 +26,13 @@ const PRESET_ICON: Partial<Record<Provider["preset"], React.ReactNode>> = {
   microsoft: <WindowsLogo size={18} weight="fill" aria-hidden />, apple: <AppleLogo size={18} weight="fill" aria-hidden />,
 };
 const ROLES = ["owner", "admin", "operator", "viewer", "auditor"] as const;
+const PROTOCOL_LABEL: Record<Provider["protocol"], string> = { oidc: "OIDC", saml: "SAML", oauth2: "OAuth" };
+
+/** The API's own sentence for a policy refusal (409 policy_refused, 422 invalid_policy). */
+function refusalText(e: unknown, fallback: string): string {
+  if (!(e instanceof IdentityError)) return fallback;
+  return e.detail && (e.code === "policy_refused" || e.code === "invalid_policy") ? e.detail : e.message;
+}
 
 function Toggle({ on, label, onChange, disabled, reason, testId }: {
   on: boolean; label: string; onChange: (v: boolean) => void; disabled?: boolean; reason?: string; testId?: string;
@@ -54,7 +65,7 @@ function Choice<T extends string | number>({ label, value, options, onChange, di
 }
 
 function ProviderCard({ initial }: { initial: Provider }) {
-  const [p, setP] = useState(initial);
+  const [p, setP] = useState(() => providerView(initial));
   const [testing, setTesting] = useState(false);
   const can = useCan("identity_provider:manage");
   const guarded = useGuardedCall();
@@ -62,11 +73,11 @@ function ProviderCard({ initial }: { initial: Provider }) {
     const before = p;
     setP({ ...p, ...change });
     try {
-      setP(await guarded(`Changing ${p.name} changes how people sign in.`, () => idPatch<Provider>(`/v1/identity/providers/${encodeURIComponent(p.id)}`, change)));
+      setP(providerView(await guarded(`Changing ${p.name} changes how people sign in.`, () => idPatch<Provider>(`/v1/identity/providers/${encodeURIComponent(p.id)}`, change))));
       showToast("success", "Provider saved");
     } catch (e) {
       setP(before);
-      showToast("error", e instanceof IdentityError ? e.message : "Not saved");
+      showToast("error", refusalText(e, "Not saved"));
     }
   };
   return (
@@ -74,15 +85,15 @@ function ProviderCard({ initial }: { initial: Provider }) {
       <div className="idn-card-h">
         <span className="idn-ico">{PRESET_ICON[p.preset] ?? <Key size={16} aria-hidden />}</span>
         <h3 id={`prov-${p.id}`}>{p.name}</h3>
-        <span className="idn-tag">{p.kind === "oauth2" ? "OAuth" : p.kind.toUpperCase()}</span>
-        <Pill tone={p.status === "active" ? "ok" : p.status === "error" ? "bad" : "mute"}>{p.status}</Pill>
+        <span className="idn-tag">{PROTOCOL_LABEL[p.protocol]}</span>
+        <Pill tone={p.status === "active" ? "ok" : "mute"}>{p.status}</Pill>
         <span className="idn-spacer" />
         <CanButton permission="identity_provider:manage" className="idn-btn sm" disabled={testing} tip="Runs discovery, JWKS and the redirect check"
           onClick={async () => {
             setTesting(true);
             try {
-              const r = await idPost<{ ok: boolean }>(`/v1/identity/providers/${encodeURIComponent(p.id)}/test`, {});
-              showToast(r.ok ? "success" : "error", r.ok ? "Test passed" : "Test failed");
+              const r = await idPost<{ ok: boolean; error?: string }>(`/v1/identity/providers/${encodeURIComponent(p.id)}/test`, {});
+              showToast(r.ok ? "success" : "error", r.ok ? "Test passed" : r.error ? `Test failed · ${r.error}` : "Test failed");
             } catch (e) {
               showToast("error", e instanceof IdentityError ? e.message : "Test failed");
             } finally { setTesting(false); }
@@ -93,20 +104,15 @@ function ProviderCard({ initial }: { initial: Provider }) {
       <dl className="idn-kv">
         {p.issuer ? <><dt>Issuer</dt><dd><code className="idn-mono" data-copy="data">{p.issuer}</code></dd></> : null}
         <dt>Keys</dt>
-        <dd>{p.kind === "oauth2" ? <span className="idn-dim">no id_token (OAuth)</span> : p.jwks.ok
-          ? <span className="idn-ok"><CheckCircle size={13} aria-hidden /> JWKS ok · <Ago iso={p.jwks.checked_at} /></span>
-          : <span className="idn-bad"><Warning size={13} aria-hidden /> JWKS failing</span>}</dd>
+        <dd>{p.protocol === "oauth2" ? <span className="idn-dim">no id_token (OAuth)</span>
+          : p.protocol === "saml" ? <span className="idn-dim">{p.saml_certificate_count} signing certificate{p.saml_certificate_count === 1 ? "" : "s"}</span>
+          : <span className="idn-dim">checked by Test sign-in</span>}</dd>
         <dt>Domains</dt><dd>{p.domains.length ? p.domains.map((d) => <span key={d} className="idn-chip">{d}</span>) : <span className="idn-dim">any</span>}</dd>
-        {p.group_mappings.length ? (
-          <><dt>Groups</dt><dd>{p.group_mappings.map((g) => <span key={g.idp_group} className="idn-chip"><code className="idn-mono">{g.idp_group}</code> → {g.group}</span>)}</dd></>
-        ) : null}
-        {p.scim_keys.length ? (
-          <><dt>SCIM keys</dt><dd>{p.scim_keys.map((k) => <span key={k.id} className="idn-chip" title="Only the key's id is ever shown"><code className="idn-mono">{k.id}</code> · used <Ago iso={k.last_used_at} /></span>)}</dd></>
-        ) : null}
+        {p.groups_claim ? <><dt>Groups</dt><dd><code className="idn-mono">{p.groups_claim}</code> claim</dd></> : null}
       </dl>
       <div className="idn-acts2 idn-prov-opts">
-        <Toggle on={p.jit === "domains"} label="Create people on first sign-in" disabled={!can.allowed} reason={can.reason}
-          onChange={(v) => patch({ jit: v ? "domains" : "off" })} />
+        <Toggle on={p.jit_mode === "domain"} label="Create people on first sign-in" disabled={!can.allowed} reason={can.reason}
+          onChange={(v) => patch({ jit_mode: v ? "domain" : "off" })} />
         <Toggle on={p.trust_idp_mfa} label="Trust its MFA" disabled={!can.allowed} reason={can.reason} onChange={(v) => patch({ trust_idp_mfa: v })} />
         <Toggle on={p.enforce_sso} label="Require it for domains" disabled={!can.allowed || !p.domains.length}
           reason={!can.allowed ? can.reason : "Add a domain first"} onChange={(v) => patch({ enforce_sso: v })} />
@@ -125,21 +131,28 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy }: {
   const manage = useCan("security_policy:manage");
   const guarded = useGuardedCall();
   const locked = !manage.allowed;
-  const dirty = JSON.stringify(policy) !== JSON.stringify(saved);
+  const dirty = Boolean(saved && policy && Object.keys(policyChanges(saved, policy)).length);
   const set = (change: Partial<SecurityPolicy>) => setPolicy((p) => (p ? { ...p, ...change } : p));
 
-  const save = async (next: SecurityPolicy | null = policy, why = "Policy changes apply to everyone.") => {
-    if (!next) return;
+  /** PUT exactly `body` (only what changed, or one deliberate action), then take the API's view. */
+  const send = async (body: Record<string, unknown>, why = "Policy changes apply to everyone.") => {
+    if (!Object.keys(body).length) return;
     setSaving(true);
     try {
-      const out = await guarded(why, () => idPut<SecurityPolicy>("/v1/identity/policy", next));
+      const out = await guarded(why, () => idPut<SecurityPolicy>("/v1/identity/policy", body));
       setSaved(out);
-      setPolicy(out);
+      // Unsaved edits to other fields survive a one-click action (Require sign-in, Automatic).
+      setPolicy((p) => {
+        if (!p || !saved) return out;
+        const pending = Object.entries(policyChanges(saved, p)).filter(([k]) => !(k in body));
+        return { ...out, ...Object.fromEntries(pending) } as SecurityPolicy;
+      });
       showToast("success", "Policy saved");
     } catch (e) {
-      if (!(e instanceof IdentityError && e.code === "step_up_cancelled")) showToast("error", e instanceof IdentityError ? e.message : "Not saved");
+      if (!(e instanceof IdentityError && e.code === "step_up_cancelled")) showToast("error", refusalText(e, "Not saved"));
     } finally { setSaving(false); }
   };
+  const save = () => { if (saved && policy) void send(policyChanges(saved, policy) as Record<string, unknown>); };
 
   return (
     <>
@@ -160,7 +173,7 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy }: {
           {locked ? <span className="idn-sub" title={manage.reason}>Read only · {manage.reason}</span> : null}
           <span className="idn-spacer" />
           {dirty ? <button type="button" className="idn-btn sm ghost" onClick={() => setPolicy(saved)}>Discard</button> : null}
-          <CanButton permission="security_policy:manage" className="idn-btn sm primary" disabled={!dirty || saving} onClick={() => save()} data-testid="save-policy">
+          <CanButton permission="security_policy:manage" className="idn-btn sm primary" disabled={!dirty || saving} onClick={save} data-testid="save-policy">
             <ShieldCheck size={14} aria-hidden /> {saving ? "Saving…" : "Save policy"}
           </CanButton>
         </div>
@@ -194,8 +207,22 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy }: {
                 <Toggle on={policy.breach_check} label="Check breached passwords" disabled={locked} reason={manage.reason} onChange={(v) => set({ breach_check: v })} />
                 <Toggle on={policy.delegation_until_revoked} label="Allow grants until revoked" disabled={locked} reason={manage.reason} onChange={(v) => set({ delegation_until_revoked: v })} />
                 <Toggle on={policy.key_no_expiry_for_service_accounts} label="Service keys without expiry" disabled={locked} reason={manage.reason} onChange={(v) => set({ key_no_expiry_for_service_accounts: v })} />
-                <Toggle on={policy.github_require_user_repo_access} label="Agents need your repo access" disabled={locked} reason={manage.reason} onChange={(v) => set({ github_require_user_repo_access: v })} />
+                <Toggle on={policy.github_require_user_repo_access} label="Agents need your repo access" testId="toggle-github-access"
+                  disabled={locked} reason={manage.reason} onChange={(v) => set({ github_require_user_repo_access: v })} />
+                {policy.github_require_user_repo_access_auto && policy.github_require_user_repo_access === saved?.github_require_user_repo_access ? (
+                  <span className="idn-chip" data-testid="github-access-auto" title="On once more than one person uses this BOSS">automatic</span>
+                ) : saved && !saved.github_require_user_repo_access_auto ? (
+                  <CanButton permission="security_policy:manage" className="idn-btn sm ghost" data-testid="github-access-reset" disabled={saving}
+                    tip="Follow the install again: on once more than one person"
+                    onClick={() => void send({ ...GITHUB_ACCESS_AUTOMATIC }, "Agents' repo access rule changes for everyone.")}>Automatic</CanButton>
+                ) : null}
               </div>
+            </div>
+            <div className="idn-field idn-full">
+              <span className="idn-label">Email</span>
+              <span className={policy.smtp ? "idn-ok" : "idn-dim"} data-testid="smtp-status" title="Set in the install's settings, not here">
+                <EnvelopeSimple size={13} aria-hidden /> {policy.smtp ? "Email (SMTP) configured" : "No email (SMTP) configured"}
+              </span>
             </div>
             <div className="idn-field idn-full">
               <span className="idn-label">Self sign-up</span>
@@ -219,7 +246,7 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy }: {
           <span className="idn-spacer" />
           {policy?.network_mode.active ? (
             <CanButton permission="security_policy:manage" className="idn-btn sm danger" data-testid="require-sign-in" tip="Ends the network bridge now; everyone signs in"
-              onClick={() => save({ ...policy, network_mode: { active: false, ends_at: null } }, "Everyone on this network must sign in after this.")}>Require sign-in</CanButton>
+              onClick={() => void send({ ...REQUIRE_SIGN_IN }, "Everyone on this network must sign in after this.")}>Require sign-in</CanButton>
           ) : null}
         </div>
         <p className="idn-fine-l" data-copy="prose">
@@ -235,7 +262,7 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy }: {
           : legacy.length ? legacy.map((l) => {
             const days = daysUntil(l.until, now);
             return (
-              <div key={l.kind} className="idn-sa" data-testid={`legacy-${l.kind}`}>
+              <div key={`${l.kind}-${l.until ?? "none"}`} className="idn-sa" data-testid={`legacy-${l.kind}`}>
                 <span className="idn-ico warn"><Warning size={15} aria-hidden /></span>
                 <span><b>{l.label}</b><small>{l.until ? `stops ${shortDate(l.until)}` : "until rotated in BOSS"}</small></span>
                 <span className="idn-r">{days !== null ? <Pill tone={days <= 14 ? "warn" : "mute"}>{days} days left</Pill> : <Pill tone="bad">no end date</Pill>}</span>

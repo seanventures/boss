@@ -61,3 +61,25 @@ export function inGroup(eventType: string, group: EventGroup): boolean {
   if (group === "all") return true;
   return (EVENT_GROUPS.find((g) => g.id === group)?.prefixes ?? []).some((p) => eventType.startsWith(p));
 }
+
+/** The screen's dropdowns, as the API filters them (GET /v1/identity/audit `kind`, `event`, `since`). */
+export type AuditView = { group: EventGroup; kind: "all" | "people" | "agents" | "keys" | "system"; rangeMs: number };
+
+const KIND_PARAM: Partial<Record<AuditView["kind"], string>> = { people: "user", agents: "agent", system: "system" };
+
+/**
+ * The query the API is asked, filters plus what it can filter for the dropdowns: a group that is
+ * one prefix becomes `event=<prefix>*`, a kind other than "keys" becomes `kind=`, a time range
+ * becomes `since=`. What the API cannot express (multi-prefix groups, "keys") is still filtered
+ * on screen. `cursor` asks for the next (older) page.
+ */
+export function apiQuery(f: AuditFilters, view: AuditView, now: number, cursor: string | null = null): string {
+  const p = new URLSearchParams(queryFrom(f));
+  const prefixes = EVENT_GROUPS.find((g) => g.id === view.group)?.prefixes ?? [];
+  if (prefixes.length === 1 && prefixes[0].endsWith(".")) p.set("event", `${prefixes[0]}*`);
+  const kind = KIND_PARAM[view.kind];
+  if (kind) p.set("kind", kind);
+  if (Number.isFinite(view.rangeMs)) p.set("since", new Date(now - view.rangeMs).toISOString());
+  if (cursor) p.set("cursor", cursor);
+  return p.toString();
+}
