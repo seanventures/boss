@@ -10,6 +10,7 @@ a provider API.
 from __future__ import annotations
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from .identity_guard import writing_get  # noqa: E402  (identity int-b)
 import hashlib
 import json
 import re
@@ -976,8 +977,8 @@ def _reject_raw_secret_fields(fields: dict[str, Any]) -> None:
         )
 
 
-@router.get("/places", response_model=PlaceListResponse)
-@permit(P.HOST_READ, scope=Scope.project(query="project_id"))
+@writing_get(router, "/places", response_model=PlaceListResponse)
+@permit(P.HOST_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def get_places(project_id: str = Query(min_length=1)) -> dict[str, Any]:
     def run(connection: Any) -> dict[str, Any]:
         project = _require_id(project_id, "project_id")
@@ -1121,8 +1122,8 @@ def post_propose(place_id: str, payload: ProposeRequest) -> dict[str, Any]:
     return _run(run)
 
 
-@router.get("/resolve", response_model=ResolveResponse)
-@permit(P.HOST_READ, scope=Scope.project(query="project_id"))
+@writing_get(router, "/resolve", response_model=ResolveResponse)
+@permit(P.HOST_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
 def get_resolve(
     project_id: str = Query(min_length=1),
     place_id: str | None = Query(default=None),

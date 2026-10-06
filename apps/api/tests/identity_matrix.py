@@ -56,8 +56,23 @@ def build(app: FastAPI) -> dict[str, tuple[str, str]]:
     out: dict[str, tuple[str, str]] = {}
     for method, path, access, _kind in operations(app):
         allowed = "".join(LETTER[r] for r in HUMAN_ROLES if expected(access, r) == 200)
-        out[f"{method} {path}"] = (access.describe() if access else "UNDECLARED", allowed or "-")
+        out[f"{method} {path}"] = (describe(access), allowed or "-")
     return out
+
+
+def describe(access: Any) -> str:
+    """The declaration, plus its object rules (object_rules.py) so a change to them is a diff."""
+    if access is None:
+        return "UNDECLARED"
+    text = access.describe()
+    if isinstance(access, Permit):
+        if access.writes_on_get:
+            text += " +writes_on_get"
+        if access.confine:
+            text += " +confine(" + ",".join(c.describe() for c in access.confine) + ")"
+        if access.production is not None:
+            text += " +" + access.production.describe()
+    return text
 
 
 def render(matrix: dict[str, tuple[str, str]]) -> str:
@@ -122,7 +137,10 @@ def request_for(method: str, path: str, access: Any, project_id: str,
         params[obj_param[1]] = object_id
     if obj_param and obj_param[0] == "body":
         body[obj_param[1]] = object_id
-    request: dict[str, Any] = {"method": method, "url": url, "params": params}
+    # The console's own fetches say Sec-Fetch-Site: same-origin; a GET that writes needs it
+    # (identity_guard._writing_get_csrf), every other route ignores it.
+    request: dict[str, Any] = {"method": method, "url": url, "params": params,
+                               "headers": {"sec-fetch-site": "same-origin"}}
     if method in ("POST", "PUT", "PATCH", "DELETE"):
         request["json"] = body
     return request

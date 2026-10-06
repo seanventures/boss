@@ -19,7 +19,7 @@ require confirmation before invoking them.
 from __future__ import annotations
 
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Literal, Optional
 
 ToolKind = Literal["read", "write"]
@@ -75,6 +75,14 @@ class ToolSpec:
     #: True for the API-surface tools: each one calls an API route, whose own declaration is
     #: checked when the call is dispatched, so the tool cannot drift from the route.
     inherits_route_permission: bool = False
+    #: Ids in the arguments that must belong to the call's project (object_rules.Confine at
+    #: `args:`), and where a deploying tool's target comes from (object_rules.Production). Filled
+    #: from tools/object_args.py when the tool is registered; `identity_gate` enforces both.
+    confine: tuple = ()
+    production: Any = None
+
+    def describe(self) -> str:
+        return f"tool {self.name} {self.permission or 'route'}"
 
     def __post_init__(self) -> None:
         from ..identity.catalogue import CatalogueError, require_known
@@ -122,6 +130,12 @@ class ToolRegistry:
     def register(self, spec: ToolSpec) -> ToolSpec:
         if spec.name in self._tools:
             raise ValueError(f"tool already registered: {spec.name}")
+        if not spec.confine and spec.production is None:
+            from .object_args import rules_for
+
+            confine, production = rules_for(spec.name)
+            if confine or production is not None:
+                spec = replace(spec, confine=confine, production=production)
         self._tools[spec.name] = spec
         return spec
 
@@ -275,7 +289,7 @@ class ToolRegistry:
         # session's project before the handler runs. An agent run is checked against its run
         # token, so a non-delegable permission is always refused to an agent.
         refused = identity_gate(spec, auth if auth is not None else CURRENT_TOOL_AUTH.get(),
-                                project_id)
+                                project_id, safe_args)
         if refused is not None:
             return refused
         try:
@@ -301,8 +315,14 @@ CURRENT_TOOL_AUTH: ContextVar[Any] = ContextVar("boss_tool_auth", default=None)
 TOOL_ROUTER_KEY = "mcp"
 
 
-def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str]) -> Optional[dict]:
+def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
+                  args: Optional[dict] = None) -> Optional[dict]:
     """Decide one tool call (IDENTITY.md §6.4). Returns None to proceed, or the refusal result.
+
+    The project is the one the call ACTS in: the `project_id` argument when the tool takes one
+    (handlers use `args.project_id or session project`), else the session's. Every id argument the
+    tool declares (object_args.py) must belong to that project (404 otherwise), and a deploying
+    tool's production target also needs deployment:production at the target's project.
 
     Mode follows the API (off | shadow | enforce, per-router key `mcp`): shadow records what it
     would refuse and refuses nothing; enforce refuses, and refuses a call it cannot evaluate (no
@@ -332,8 +352,9 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str]) -> Opt
     else:
         meta = PERMISSION_META[permission]
         org = auth.principal.org_id
-        scope = (ResolvedScope.org_level(org) if meta.org_only or meta.system_only or not project_id
-                 else ResolvedScope.in_project(org, str(project_id)))
+        acting_in = str((args or {}).get("project_id") or project_id or "").strip() or None
+        scope = (ResolvedScope.org_level(org) if meta.org_only or meta.system_only or not acting_in
+                 else ResolvedScope.in_project(org, acting_in))
         try:
             decision = authz.check(auth, permission, scope)
         except Exception as exc:  # noqa: BLE001 — a decision that cannot be made is not an allow
@@ -341,19 +362,37 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str]) -> Opt
                               detail=f"authz error: {type(exc).__name__}")
         else:
             if decision.allowed:
-                return None
-            outcome = Outcome(False, decision.reason, permission, f"tool:{permission}",
-                              auth.principal.kind.value, decision=decision)
+                if not (spec.confine or spec.production is not None):
+                    return None
+                from ..identity.enforcement import evaluate_object_rules
+                from ..identity.scope import RequestValues
+
+                rules_at = (ResolvedScope.in_project(org, acting_in) if acting_in
+                            else ResolvedScope.org_level(org))
+                refused = evaluate_object_rules(
+                    spec, auth, rules_at, RequestValues(path_params={}, query={}, body=dict(args or {})),
+                    check=lambda c, p, s: authz.check(c, p, s))
+                if refused is None:
+                    return None
+                outcome = refused
+            else:
+                outcome = Outcome(False, decision.reason, permission, f"tool:{permission}",
+                                  auth.principal.kind.value, decision=decision)
     LEDGER.record(router_key=TOOL_ROUTER_KEY, method="TOOL", path_template=str(getattr(spec, "name", "?")),
                   outcome=outcome, mode=mode)
     if mode != AuthzMode.ENFORCE:
         return None
     body = outcome.error_body()
+    needs = outcome.permission or permission
+    if outcome.reason == DenyReason.NOT_FOUND:
+        message = (f"'{getattr(spec, 'name', '?')}': an id in the arguments names nothing in this "
+                   "project.")
+    else:
+        message = (f"'{getattr(spec, 'name', '?')}' needs {needs or 'a declared permission'}"
+                   + (" (agents can never hold it)" if outcome.reason == DenyReason.NOT_DELEGABLE
+                      else "") + ".")
     return {"ok": False, "tool": getattr(spec, "name", "?"), "status": body.get("error", "forbidden"),
-            "error": body.get("error", "forbidden"), "permission": permission,
-            "message": (f"'{getattr(spec, 'name', '?')}' needs {permission or 'a declared permission'}"
-                        + (" (agents can never hold it)" if outcome.reason == DenyReason.NOT_DELEGABLE
-                           else "") + ".")}
+            "error": body.get("error", "forbidden"), "permission": needs, "message": message}
 
 
 def _empty_object_schema() -> dict:

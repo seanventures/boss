@@ -172,6 +172,25 @@ def check_csrf(creds: RequestCredentials, *, session_id: str, public_origin: str
         raise AuthnError("csrf_failed", 403)
 
 
+def check_writing_get_csrf(creds: RequestCredentials, *, session_id: str) -> None:
+    """A cookie-authenticated GET to a route declared `writes_on_get` (a GET that writes). The
+    session cookie is SameSite=Lax, so a cross-site top-level navigation carries it; such a GET
+    is accepted only from the console's own page: Sec-Fetch-Site: same-origin (every current
+    browser sends it on its own fetches) or a valid X-Boss-CSRF. Raises AuthnError("csrf_failed",
+    403). A navigation or a cross-site request has neither."""
+    import hmac as _hmac
+
+    from .sessions import csrf_token
+
+    site = (creds.headers.get("sec-fetch-site") or "").strip().lower()
+    if site == "same-origin":
+        return
+    sent = creds.headers.get(CSRF_HEADER.lower(), "")
+    if sent and _hmac.compare_digest(sent.encode(), csrf_token(session_id).encode()):
+        return
+    raise AuthnError("csrf_failed", 403)
+
+
 def check_origin_only(creds: RequestCredentials, *, public_origin: Optional[str]) -> None:
     """The pre-session CSRF check for /v1/auth/* writes (no session, so no HMAC yet): the Origin
     must be the public origin (or, when none is bound, this request's own origin) and

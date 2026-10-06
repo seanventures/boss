@@ -12,7 +12,7 @@ from apps.api.app import identity_guard
 from apps.api.app.main import app
 from boss_engine.identity.declarations import Permit
 
-READ_ACTIONS = {"read", "read_metadata"}
+READ_ACTIONS = {"read", "read_metadata", "read_all"}
 
 #: GETs declared with a non-read permission, each for a reason.
 GET_NOT_READ = {
@@ -25,7 +25,9 @@ GET_NOT_READ = {
                            "(role_binding:read is org-only)",
 }
 
-#: GETs the review found writing (IDENTITY_PERMISSIONS.md §9 note 6). Shrinking list.
+#: GETs the review found writing (IDENTITY_PERMISSIONS.md §9 note 6). Shrinking list. Each one
+#: is declared `writes_on_get=True` and answers POST at `<path>/load` (identity int-b); see
+#: test_identity_authz_writing_gets.py.
 GETS_THAT_WRITE = {
     "GET /v1/diag/sandbox-roundtrip", "GET /v1/diag/host-capabilities", "GET /v1/mcp/servers",
     "GET /v1/meeting-roles", "GET /v1/decisions/inbox", "GET /v1/status", "GET /v1/knowledge/eval",
@@ -57,9 +59,12 @@ def test_every_get_is_declared_as_a_read():
 
 
 def test_a_write_declared_with_a_read_permission_says_it_writes_nothing():
+    """...or is the POST twin of a writing GET (identity_guard.writing_get): the same endpoint
+    and declaration as the GET, so the same read permission."""
     wrong = [f"{label}: {access.permission}" for label, access in _entries()
              if not label.startswith(("GET ", "WS ", "MOUNT ")) and isinstance(access, Permit)
-             and access.permission.split(":", 1)[1] in READ_ACTIONS and not access.readonly_post]
+             and access.permission.split(":", 1)[1] in READ_ACTIONS and not access.readonly_post
+             and not access.writes_on_get]
     assert not wrong, wrong
 
 

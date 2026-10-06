@@ -194,6 +194,10 @@ def chunk_spec(
     }
 
 
+class QualityGateOverrideRefused(ValueError):
+    """A recorded verdict would be replaced without a stated reason (an API 409)."""
+
+
 class FactoryScaleService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -209,9 +213,37 @@ class FactoryScaleService:
         task_id: Optional[str] = None,
         min_confidence: float = DEFAULT_MIN_CONFIDENCE,
         risk_tier: int = 2,
+        override_reason: Optional[str] = None,
+        recorded_via: str = "service",
     ) -> dict[str, Any]:
-        """Evaluate + persist a quality gate, storing a review-packet artifact and the merge verdict."""
+        """Evaluate + persist a quality gate, storing a review-packet artifact and the merge verdict.
+
+        A run that already has a recorded verdict is never overwritten silently: replacing it
+        needs `override_reason`, the prior verdict is kept in the evidence, a pass written over a
+        verdict that was not a pass is recorded as `waived` (never as a pass the pipeline gave),
+        and `quality_gate.waived` / `quality_gate.overridden` is emitted."""
         result = evaluate_gate(checks, min_confidence=min_confidence)
+        prior = None
+        if code_task_run_id:
+            prior = connection.execute(
+                text("SELECT id, status, gates_failed, evidence FROM quality_gates "
+                     "WHERE project_id = :p AND code_task_run_id = :r FOR UPDATE"),
+                {"p": project_id, "r": code_task_run_id}).mappings().first()
+        reason = (override_reason or "").strip()
+        override: Optional[dict[str, Any]] = None
+        if prior is not None:
+            if not reason:
+                raise QualityGateOverrideRefused(
+                    f"code task run {code_task_run_id} already has a recorded quality gate "
+                    f"({prior['status']}); replacing it needs override_reason")
+            waived = result["status"] == "pass" and str(prior["status"]) != "pass"
+            override = {"prior_gate_id": prior["id"], "prior_status": prior["status"],
+                        "prior_gates_failed": prior["gates_failed"], "by": actor,
+                        "reason": reason[:500], "waived": waived}
+            if waived:
+                result = {**result, "status": "waived",
+                          "reasons": [*result["reasons"], f"waived over a {prior['status']} "
+                                      f"verdict by {actor}: {reason[:200]}"]}
         review_packet = {
             "project_id": project_id,
             "code_task_run_id": code_task_run_id,
@@ -269,12 +301,20 @@ class FactoryScaleService:
                 "st": result["status"],
                 "gp": json.dumps(result["gates_passed"]),
                 "gf": json.dumps(result["gates_failed"]),
-                "ev": json.dumps({**checks, "confidence": result["confidence"]}),
+                "ev": json.dumps({**checks, "confidence": result["confidence"],
+                                  "recorded_via": recorded_via,
+                                  **({"override": override} if override else {})}),
                 "lint": gates["lint_passed"], "ci": gates["ci_green"],
                 "xc": checks.get("cross_check_agreement"),
                 "conf": result["confidence"], "rp": review_packet_artifact_id,
             },
         )
+        if override is not None:
+            emit_event(
+                connection, project_id,
+                "quality_gate.waived" if override["waived"] else "quality_gate.overridden",
+                actor, "quality_gate", gate_id,
+                {**override, "status": result["status"], "code_task_run_id": code_task_run_id})
         emit_event(
             connection, project_id, "quality_gate.recorded", actor, "quality_gate", gate_id,
             {"status": result["status"], "confidence": result["confidence"],

@@ -181,29 +181,85 @@ def mutation_gate_decision(
 
 
 # --- runner (executes the frozen tests once per mutant) ----------------------
+class MutationGateRefused(ValueError):
+    """The request asks the gate to run something it never runs (an API 422)."""
+
+
+#: The ONLY commands the gate runs. The caller's files are the code under test; the program that
+#: runs them is never the caller's choice — a caller-named command was arbitrary command
+#: execution on the API host (identity int-b). `python3` is this interpreter.
+ALLOWED_TEST_COMMANDS: tuple[tuple[str, ...], ...] = (
+    ("python3", "-m", "unittest", "discover", "-v"),
+    ("python3", "-m", "unittest", "discover"),
+    ("python3", "-m", "pytest", "-q"),
+    ("python3", "-m", "pytest"),
+)
+DEFAULT_TEST_COMMAND: tuple[str, ...] = ALLOWED_TEST_COMMANDS[0]
+
+
+def allowed_test_command(test_command: Any) -> list[str]:
+    """The argv to run for `test_command` (a list or a string), or MutationGateRefused when it is
+    not one of ALLOWED_TEST_COMMANDS. None/empty means the default."""
+    import shlex
+    import sys
+
+    if test_command in (None, "", []):
+        argv: tuple[str, ...] = DEFAULT_TEST_COMMAND
+    elif isinstance(test_command, str):
+        argv = tuple(shlex.split(test_command))
+    elif isinstance(test_command, (list, tuple)) and all(isinstance(a, str) for a in test_command):
+        argv = tuple(test_command)
+    else:
+        raise MutationGateRefused("test_command must be a list of strings")
+    if argv not in ALLOWED_TEST_COMMANDS:
+        raise MutationGateRefused(
+            "test_command is not one the gate runs; allowed: "
+            + "; ".join(" ".join(c) for c in ALLOWED_TEST_COMMANDS))
+    return [sys.executable, *argv[1:]]
+
+
+def _safe_relative(rel: Any) -> str:
+    """A file path INSIDE the gate's temporary tree: relative, no `..`, no drive or NUL. A path
+    that escapes the tree would write the caller's content anywhere the API can write."""
+    from pathlib import PurePosixPath
+
+    text_rel = str(rel or "")
+    if not text_rel or "\x00" in text_rel or "\\" in text_rel or ":" in text_rel:
+        raise MutationGateRefused(f"file path {text_rel!r} is not a plain relative path")
+    path = PurePosixPath(text_rel)
+    if path.is_absolute() or any(part in ("..", "") for part in path.parts) or text_rel.startswith("~"):
+        raise MutationGateRefused(f"file path {text_rel!r} escapes the gate's working tree")
+    return str(path)
+
+
 def _write_tree(root, files: dict[str, str]) -> None:
     from pathlib import Path
     for rel, content in files.items():
-        dest = Path(root) / rel
+        dest = Path(root) / _safe_relative(rel)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content)
+
+
+def _scrubbed_env(workdir: str) -> dict[str, str]:
+    """The tests run with NOTHING of the API's environment: no DATABASE_URL, no keys, no tokens."""
+    return {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": workdir, "LANG": "C.UTF-8",
+            "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}
 
 
 def _run_tests(workdir: str, test_command, timeout: int) -> bool:
     """True iff the test command exits 0 in ``workdir``. Any non-zero exit / timeout / crash counts
     as a failing suite (which, for a mutant, means the mutant was killed — the outcome we want)."""
-    import shlex
     import subprocess
 
     from . import owned_process
     from .scheduling import low_priority
 
-    cmd = test_command if isinstance(test_command, list) else shlex.split(test_command)
+    cmd = allowed_test_command(test_command)
     try:
         # Mutation testing re-runs the project's whole suite once per mutant, in the API's
         # own container. See services/scheduling.py.
         proc = owned_process.run(low_priority(cmd), cwd=workdir, capture_output=True,
-                              text=True, timeout=timeout)
+                              text=True, timeout=timeout, env=_scrubbed_env(workdir))
         return proc.returncode == 0
     except subprocess.TimeoutExpired:
         return False
@@ -228,6 +284,9 @@ def run_mutation_gate(
     the suite fails to pin down.
     """
     import tempfile
+    allowed_test_command(test_command)          # refuse before anything is written or run
+    for rel in files:
+        _safe_relative(rel)
     if target_file not in files:
         return {"error": f"target_file {target_file!r} not in files", "gate": {"passed": False}}
 

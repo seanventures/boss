@@ -177,6 +177,46 @@ def evaluate(
                    decision=decision)
 
 
+def evaluate_object_rules(
+    access: Permit,
+    ctx: AuthContext,
+    scope: ResolvedScope,
+    values: RequestValues,
+    *,
+    check: Callable[[AuthContext, str, ResolvedScope], Decision],
+    db: Any = None,
+) -> Optional[Outcome]:
+    """The declaration's object rules, after its permission was allowed (object_rules.py):
+    every confined id must be in the scope's project (else 404), and a production target needs
+    deployment:production at the target's project. None when both hold; a deny Outcome otherwise.
+    Never raises: an error is NOT_EVALUATED (enforce refuses it, fail closed)."""
+    from .object_rules import Confined, check_confined, production_projects
+    from .permissions_gen import P
+
+    kind = ctx.principal.kind.value
+    org = ctx.principal.org_id
+    try:
+        if access.confine:
+            check_confined(access.confine, values, org_id=org, project_id=scope.project_id, db=db)
+        if access.production is not None:
+            for project_id in production_projects(access.production, values, scope=scope, db=db):
+                at = (ResolvedScope.in_project(org, project_id) if project_id
+                      else ResolvedScope.org_level(org))
+                decision = check(ctx, P.DEPLOYMENT_PRODUCTION, at)
+                if not decision.allowed:
+                    return Outcome(False, decision.reason, P.DEPLOYMENT_PRODUCTION,
+                                   access.describe() + " + " + access.production.describe(), kind,
+                                   decision=decision)
+    except Confined as exc:
+        return Outcome(False, DenyReason.NOT_FOUND, access.permission, access.describe(), kind,
+                       detail=f"confine: {exc.rule.describe()}")
+    except NotImplementedError as exc:
+        return _not_evaluated(access, f"object rules: {exc}", access.permission)
+    except Exception as exc:  # noqa: BLE001
+        return _not_evaluated(access, f"object rules error: {type(exc).__name__}", access.permission)
+    return None
+
+
 # ---- the shadow ledger -------------------------------------------------------------------------------
 
 @dataclass(frozen=True)
