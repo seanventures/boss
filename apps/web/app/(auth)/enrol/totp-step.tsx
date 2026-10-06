@@ -1,0 +1,72 @@
+"use client";
+
+/**
+ * AUTHENTICATOR ENROLMENT (IDENTITY.md §4.4): the QR code and the text secret, shown ONCE, then a
+ * code from the app to confirm. The QR is drawn by the API (`qr_svg`, a seam for S1) so the
+ * console ships no QR encoder; without it the secret is shown large enough to type.
+ */
+import React, { useEffect, useState } from "react";
+
+import { idPost } from "../../../lib/identity/api";
+import type { TotpEnrolment } from "../../../lib/identity/types-auth";
+import { CodeInput } from "../../../components/identity/kit";
+import { sayAuth } from "../auth-flow";
+
+function svgDataUri(svg: string): string {
+  const bytes = new TextEncoder().encode(svg);
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return `data:image/svg+xml;base64,${btoa(s)}`;
+}
+
+export function TotpStep({ onDone }: { onDone: () => void }) {
+  const [enrol, setEnrol] = useState<TotpEnrolment | null>(null);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    idPost<TotpEnrolment>("/v1/identity/me/mfa/totp", {})
+      .then((r) => { if (live) setEnrol(r); })
+      .catch((e) => { if (live) setError(sayAuth(e)); });
+    return () => { live = false; };
+  }, []);
+
+  const confirm = async (value: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await idPost("/v1/identity/me/mfa/totp/confirm", { code: value });
+      setEnrol(null); // the secret leaves memory the moment it is confirmed
+      onDone();
+    } catch (e) {
+      setError(sayAuth(e));
+      setCode("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div data-testid="totp-step">
+      {enrol ? (
+        <div className="idn-totp">
+          {enrol.qr_svg
+            ? /* eslint-disable-next-line @next/next/no-img-element */
+              <img className="idn-qr" src={svgDataUri(enrol.qr_svg)} alt="QR code for your authenticator app" width={168} height={168} />
+            : null}
+          <div className="idn-f">
+            <span className="idn-flabel">Or type this key</span>
+            <code className="idn-secret-key" data-copy="data" aria-label="Authenticator key">{enrol.secret}</code>
+          </div>
+        </div>
+      ) : !error ? <div className="idn-state" role="status"><span className="idn-blink" aria-hidden /> Preparing…</div> : null}
+      <CodeInput value={code} onChange={setCode} onComplete={confirm} label="Code from your app" invalid={!!error} autoFocus={false} />
+      <button type="button" className="idn-big p" disabled={busy || code.length < 6 || !enrol} onClick={() => confirm(code)}>
+        {busy ? "Checking…" : "Confirm code"}
+      </button>
+      {error ? <div className="idn-err" role="alert">{error}</div> : null}
+    </div>
+  );
+}

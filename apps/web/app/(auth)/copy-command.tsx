@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 
 /**
  * A one-line command with a Copy button.
@@ -12,9 +12,9 @@ import { useState } from "react";
 export function CopyCommand({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="login-cmd-row">
-      <pre className="login-cmd"><code>{command}</code></pre>
-      <button type="button" className="cap-btn login-copy" aria-label={`Copy: ${command}`}
+    <div className="idn-cmd">
+      <pre data-copy="data"><code>{command}</code></pre>
+      <button type="button" className="idn-btn sm" aria-label={`Copy: ${command}`}
         onClick={async () => {
           try {
             await navigator.clipboard.writeText(command);

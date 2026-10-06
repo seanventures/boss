@@ -67,7 +67,7 @@ export const ACCOUNT_TABS = IDENTITY_PAGES.filter((p) => p.tab && p.path.startsW
  * sign-in API (IDENTITY.md §10 "Sign-in"). Routing only; the API declares its own `@public`.
  */
 const PUBLIC_PAGES = [/^\/login\/?$/, /^\/claim\/?$/, /^\/invite\/[^/]+\/?$/, /^\/signin\/link\/?$/, /^\/reset\/?$/, /^\/signup(\/verify)?\/?$/];
-const PUBLIC_API = /^\/v1\/auth\/(options|login|mfa\/(totp|recovery)|webauthn\/(options|verify)|magic-link(\/verify)?|email-code(\/verify)?|signup|password\/(forgot|reset)|setup\/claim|invitations\/[^/]+(\/accept)?|sso\/[^/]+\/(start|callback))\/?$/;
+const PUBLIC_API = /^\/v1\/auth\/(options|login|mfa\/(totp|recovery)|webauthn\/(options|verify)|magic-link(\/verify)?|email-code(\/verify)?|signup(\/verify)?|password\/(forgot|reset)|setup\/claim|invitations\/[^/]+(\/accept)?|sso\/[^/]+\/(start|callback))\/?$/;
 const PUBLIC_ASSETS = new Set(["/boss-mark.png", "/BOSS-logo.png", "/boss-lockup.png", "/icon.png"]);
 
 export function isPublicConsolePath(pathname: string): boolean {
