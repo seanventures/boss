@@ -207,6 +207,16 @@ else
   warn "config: could not compare against a stock install"
 fi
 
+# 9. what this install tells the BOSS project (docs/product/RUN_SCORECARDS.md). Said plainly
+# every time: the heartbeat is on by default, so the opt-out is printed with it.
+_tel="$(env_value BOSS_TELEMETRY | tr '[:upper:]' '[:lower:]')"; _dnt="$(env_value DO_NOT_TRACK)"
+case "$_tel" in off|0|false|no|disabled) _tel=off ;; esac
+if [ "$_tel" = off ] || [ "$_dnt" = 1 ] || [ "$_dnt" = true ]; then
+  ok "sharing: off (BOSS_TELEMETRY=off or DO_NOT_TRACK=1) — nothing is sent"
+else
+  ok "sharing: daily heartbeat on (id, version, OS, alive) — opt out in Govern › Sharing or BOSS_TELEMETRY=off"
+fi
+
 printf "\n"
 if [ "$fail" -eq 0 ]; then printf "  ${G}${B}BOSS is ready.${N}  Mission Control: %s\n\n" "$CONSOLE_URL"
 else printf "  ${R}${B}Not ready.${N} Fix the FAIL lines above, then run this again.\n\n"; fi

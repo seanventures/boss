@@ -15,21 +15,23 @@ import { logHref } from "../../lib/log-url";
 import { ControlBoard } from "./control-board";
 import { EnvelopesTab } from "./envelopes-tab";
 import { GovernMeter } from "./meter";
+import { SharingTab } from "./sharing-tab";
 import { SpendTab } from "./spend-tab";
 
 export const GOVERN_POLL_MS = 15_000;
-type Tab = "limits" | "spend" | "envelopes";
+type Tab = "limits" | "spend" | "envelopes" | "sharing";
 const TABS: { key: Tab; label: string; tip: string }[] = [
   { key: "limits", label: "Limits", tip: "Every limit, and what enforces it" },
   { key: "spend", label: "Spend", tip: "Where the money went" },
   { key: "envelopes", label: "Envelopes", tip: "Allocations, initiatives and commitments" },
+  { key: "sharing", label: "Sharing", tip: "What this install tells the BOSS project, and the switch" },
 ];
 
 function readTab(): { tab: Tab; focus: string | null } {
   if (typeof window === "undefined") return { tab: "limits", focus: null };
   const q = new URLSearchParams(window.location.search);
   const tab = q.get("tab");
-  return { tab: tab === "spend" || tab === "envelopes" ? tab : "limits", focus: q.get("focus") };
+  return { tab: tab === "spend" || tab === "envelopes" || tab === "sharing" ? tab : "limits", focus: q.get("focus") };
 }
 
 export function GovernHome({ projectId, actor }: { projectId: string; actor: string }) {
@@ -99,6 +101,8 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
                       focus={focus} onSaved={view.reload} />
       ) : tab === "spend" ? (
         <SpendTab projectId={projectId} paused={!live} />
+      ) : tab === "sharing" ? (
+        <SharingTab projectId={projectId} actor={actor} paused={!live} />
       ) : (
         <EnvelopesTab projectId={projectId} actor={actor} paused={!live} />
       )}

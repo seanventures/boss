@@ -22,6 +22,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { RateScope } from "../improve/rate-it";
 
 import {
   mentionsIn, useConversation, type ConversationView, type SeatInfo, type SummaryView, type TurnView,
@@ -146,6 +147,7 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
         </div>
 
         <div className="ag-room-feed" ref={scroller} data-testid="ag-room-feed" aria-live="off">
+          <RateScope.Provider value={{ projectId, actor }}>
           {turns.length === 0 ? <span className="ag-muted ag-room-empty">Ask the room</span> : null}
           {turns.map((turn) => turn.kind === "summary" && turn.summary ? (
             <SummaryCard key={turn.turnId} turn={turn} summary={turn.summary} onStart={live.start}
@@ -155,6 +157,7 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
                       onStart={live.start} onDismiss={live.dismiss}
                       replyTo={turn.replyToTurnId ? seatName(merged.get(byTurn.get(turn.replyToTurnId)?.roleKey ?? "") ?? null).name : null} />
           ))}
+          </RateScope.Provider>
         </div>
 
         {problem ? <ProblemNote problem={problem} onClose={() => setProblem(null)} /> : null}

@@ -38,6 +38,8 @@ import { nameOf } from "../agents/run-face";
 import { ChangeIt } from "./change-it";
 import { addFeatureHref } from "./apps-tab";
 import { stopBuild, steerBuild } from "./cockpit-actions";
+import { RateIt, ReasonChips, sendReasons } from "../improve/rate-it";
+import { ShareRunSheet } from "../improve/share-run";
 import { ActPopover, StationFaceView, areaHref, money, secondsWord, spanOf } from "./cockpit-util";
 import { LogsDrawer, type LogTab } from "./logs-drawer";
 import { Outputs, defaultOpen, type OutputKey } from "./outputs";
@@ -170,6 +172,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
   const [stopped, setStopped] = useState(false);
   const [steering, setSteering] = useState(false);
   const [guidance, setGuidance] = useState("");
+  const [steerChips, setSteerChips] = useState<string[]>([]);
+  const [sharing, setSharing] = useState(false);
   const [pending, setPending] = useState<{ id: string; text: string; at: string }[]>([]);
   const [changeIt, setChangeIt] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -257,6 +261,9 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
     const r = await steerBuild(runId, actor, text);
     setBusy(null);
     if (r.ok) {
+      // The steer's reasons ride with it (optional, quiet): why the agent needed steering.
+      void sendReasons(projectId, actor, "steer", runId, steerChips);
+      setSteerChips([]);
       setPending((p) => [...p, { id: `pending-${Date.now()}`, text, at: new Date().toISOString() }]);
       setGuidance("");
       setSteering(false);
@@ -381,6 +388,9 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                   }}>Ask BOSS</button>
                   <a role="menuitem" href={logHref({ run: c.run.id })}>Activity log ↗</a>
                   <button type="button" role="menuitem" onClick={copyLink}>Copy link</button>
+                  <button type="button" role="menuitem" data-testid="fx-menu-share"
+                          title="Send this run, redacted and edited by you, to the BOSS project"
+                          onClick={() => { setMenu(false); setSharing(true); }}>Share this run</button>
                 </span>
               ) : null}
             </span>
@@ -422,6 +432,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
               from <span data-user-text>{c.origin.label}</span> ↗
             </a>
           ) : null}
+          {!stoppable ? <RateIt projectId={projectId} actor={actor} subject="build" id={c.run.id} testId="fx-rate" /> : null}
           <span className="fx-spacer" />
           {c.agents.length ? <AgFaceStack roleKeys={c.agents.map((a) => a.roleKey)} size={24} max={6} states={faceStates} /> : null}
           <CreditsButton chain={chain} runId={c.run.id} projectId={projectId} viewer={actor} title={c.app}
@@ -432,8 +443,11 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
             <input className="input" autoFocus value={guidance} onChange={(e) => setGuidance(e.target.value)}
                    placeholder={`Tell ${currentAgent} …`} aria-label="Guidance" data-testid="fx-steer-input" />
             <button type="submit" className="ag-btn ag-btn-primary" disabled={!guidance.trim() || busy !== null}>Send</button>
+            <ReasonChips value={steerChips} onChange={setSteerChips} testId="fx-steer-why" />
           </form>
         ) : null}
+        {sharing ? <ShareRunSheet projectId={projectId} actor={actor} unitKind="build" unitId={c.run.id}
+                                  onClose={() => setSharing(false)} /> : null}
         {err ? <span className="fx-err" role="alert" data-user-text data-testid="fx-error">{err}</span> : null}
       </header>
 

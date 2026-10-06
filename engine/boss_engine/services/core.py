@@ -75,7 +75,7 @@ def emit_event(
 
     ports = get_engine_ports()
     if ports is not None:
-        return ports.events.emit(
+        event_id = ports.events.emit(
             connection,
             project_id,
             event_type,
@@ -84,15 +84,40 @@ def emit_event(
             entity_id,
             data,
         )
-    return _emit_event_postgres(
-        connection,
-        project_id,
-        event_type,
-        actor,
-        entity_type,
-        entity_id,
-        data,
-    )
+    else:
+        event_id = _emit_event_postgres(
+            connection,
+            project_id,
+            event_type,
+            actor,
+            entity_type,
+            entity_id,
+            data,
+        )
+    _after_event(connection, event_type, entity_type, entity_id, data)
+    return event_id
+
+
+#: Events that finish a unit of work, or change one that finished (scorecards._EVENT_UNITS and
+#: its decision events). Checked before anything is imported: every other event costs a lookup.
+_SCORECARD_PREFIXES = ("workflow.run_", "workflow.step_", "workflow.compensation_completed",
+                       "code_task.", "meeting.completed", "discovery.", "decision.")
+
+
+def _after_event(connection: Any, event_type: str, entity_type: str, entity_id: str,
+                 data: dict) -> None:
+    """A terminal event writes its unit's run scorecard (services/scorecards.py), in a
+    savepoint, never raising: the scorecard never undoes or fails what it records."""
+    if not event_type.startswith(_SCORECARD_PREFIXES):
+        return
+    if getattr(getattr(connection, "dialect", None), "name", "") != "postgresql":
+        return
+    try:
+        from .scorecards import on_event
+
+        on_event(connection, event_type, entity_type, entity_id, data or {})
+    except Exception:  # noqa: BLE001
+        logger.warning("scorecard hook failed for %s", event_type, exc_info=True)
 
 
 def has_event(connection: Any, entity_id: str, event_type: str) -> bool:

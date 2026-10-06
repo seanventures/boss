@@ -1892,6 +1892,14 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         len(_parts) >= 5 and _parts[1] == "v1" and _parts[2] == "channels"
         and _parts[4] == "callback"
     )
+    # THE IMPROVE-BOSS COLLECTOR'S THREE MACHINE ROUTES (routers/improve.py). An install posting
+    # its heartbeat has no account here, so they are exempt from TRANSPORT auth like the signed
+    # webhooks above; each answers 404 unless Collector mode is on, bounds and validates what it
+    # reads, and the delete verifies its own signature. Exactly these paths, POST only.
+    is_telemetry_collector = (
+        request.method == "POST"
+        and route_path in ("/v1/telemetry/ingest", "/v1/telemetry/delete", "/v1/telemetry/share")
+    )
     if not auth_required and any(
         request.headers.get(name) for name in (
             "X-BOSS-MCP-Operation", "X-BOSS-MCP-Confirmation", "X-BOSS-MCP-Project"
@@ -1909,6 +1917,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         or is_bitbucket_webhook
         or is_reliability_alert
         or is_investigation_callback
+        or is_telemetry_collector
     ):
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)
@@ -28466,6 +28475,18 @@ for _build_view_router in (build_infra_router, build_observability_router):
         viewer_of=_acts_viewer,
         etagged=_etagged,
     ))
+# RUN SCORECARDS, EXPERIMENTS, PERSON FEEDBACK AND "IMPROVE BOSS" (routers/improve.py;
+# docs/product/RUN_SCORECARDS.md "Implementation").
+from .routers.improve import build_improve_router
+
+app.include_router(build_improve_router(
+    engine=engine,
+    settings=lambda: settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+    actor_of=signed_in_actor,
+    require_worker=require_worker_principal,
+))
 from .hardware_api import mount_hardware_routes
 
 mount_hardware_routes(app, require_project_actor, require_project_reader)

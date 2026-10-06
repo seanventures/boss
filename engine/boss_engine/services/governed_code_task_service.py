@@ -4209,7 +4209,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # so the context is cache reads), the frozen tests re-verify, and ONLY the
             # failed judges re-review the delta. Ships when every gate turns green;
             # falls back to the legacy paths below if it can't converge.
-            inrun_max = effective_review_rounds(getattr(settings, "code_review_inrun_max_rounds", 2))
+            # An experiment's arm (experiments.ARM_KNOBS) may set this build's rounds.
+            _spec_rounds = spec.get("review_rounds") if isinstance(spec, dict) else None
+            inrun_max = effective_review_rounds(
+                _spec_rounds if isinstance(_spec_rounds, int)
+                else getattr(settings, "code_review_inrun_max_rounds", 2))
             # Test gates are convergeable too. Previously a failing test skipped this loop entirely
             # and fell through to a FULL cold re-run — discarding the warm session and re-paying for
             # spec/plan — which is why repeated attempts never converged on test failures.

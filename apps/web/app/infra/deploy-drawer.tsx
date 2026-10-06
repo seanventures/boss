@@ -8,6 +8,7 @@
  * moves with this poll, not with a page refresh every 5 s as the old timeline did.
  */
 import React, { useState } from "react";
+import { RateIt } from "../improve/rate-it";
 
 import { showToast } from "../client-forms";
 import { buildHref, changeHref, logsHref, useDeployDetail, type DeployDetail, type StepState } from "../../lib/infra-view";
@@ -123,6 +124,11 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
   return (
     <>
       <ErrorLine error={error} testId="inf-deploy-error" />
+      {!d.live && (row.tone === "green" || row.tone === "red") ? (
+        <div className="inf-actions" data-testid="inf-deploy-rate">
+          <RateIt projectId={projectId} actor={actor} subject="deploy" id={row.ref} testId="inf-deploy-rate-it" />
+        </div>
+      ) : null}
 
       {row.can.approve || row.can.reject ? (
         <DrawerSection label="Needs you" testId="inf-deploy-needs">

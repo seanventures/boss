@@ -1,4 +1,5 @@
 import { API_URL, API_KEY } from "../../../lib/client";
+import { COLLECTOR_PATHS } from "../../../lib/console-session";
 
 /**
  * The control plane, on the console's own origin.
@@ -37,7 +38,10 @@ function forwardHeaders(req: Request): Headers {
   req.headers.forEach((value, key) => {
     if (!STRIPPED.has(key.toLowerCase())) out.set(key, value);
   });
-  if (API_KEY) out.set("Authorization", `Bearer ${API_KEY}`);
+  // The collector's machine routes speak for another install, never for this console: they get
+  // no key (the API exempts them from transport auth and checks them itself).
+  const machine = COLLECTOR_PATHS.has(new URL(req.url).pathname);
+  if (API_KEY && !machine) out.set("Authorization", `Bearer ${API_KEY}`);
   return out;
 }
 

@@ -6687,3 +6687,249 @@ CREATE INDEX IF NOT EXISTS idx_jobs_project_open ON jobs(project_id, created_at)
 -- command_center.read reads decisions by project and status with no LIMIT (the count has to
 -- equal the inbox's), and nothing served it: the pill, Live and this view all hit it.
 CREATE INDEX IF NOT EXISTS idx_decisions_project_status ON decisions(project_id, status);
+
+-- ============================================================================================
+-- RUN SCORECARDS, EXPERIMENTS, PERSON FEEDBACK AND "IMPROVE BOSS" (docs/product/RUN_SCORECARDS.md,
+-- "Implementation"). Names, numbers and verdicts only: no prompts, code, briefs, paths or
+-- secrets ever land in these tables (content stays where it already lives).
+-- ============================================================================================
+
+-- ONE ROW PER FINISHED UNIT, keyed by (unit_kind, unit_id). Written by
+-- scorecards.record_scorecard() on the unit's terminal transition and again by the late-outcome
+-- sweep (PR merged/reverted, 24h deploy health). Idempotent: a rerun rewrites the same row.
+CREATE TABLE IF NOT EXISTS run_scorecards (
+  unit_kind        TEXT NOT NULL CHECK (unit_kind IN
+                     ('workflow_run','build','step','panel','research','quick_change')),
+  unit_id          TEXT NOT NULL,
+  project_id       TEXT NOT NULL,
+  run_id           TEXT,             -- the workflow run this unit belongs to, when it has one
+  -- what was tried (the variant)
+  workflow_key     TEXT,
+  workflow_version INTEGER,
+  workflow_builtin BOOLEAN,
+  step_key         TEXT,
+  role_key         TEXT,
+  role_builtin     BOOLEAN,
+  prompt_version   TEXT,             -- a hash, never the text
+  skills           JSONB NOT NULL DEFAULT '[]'::jsonb,   -- sorted keys
+  mcp_tools        JSONB NOT NULL DEFAULT '[]'::jsonb,   -- sorted keys
+  harness          TEXT,
+  model            TEXT,
+  provider         TEXT,
+  review_lanes     INTEGER,
+  review_rounds    INTEGER,
+  turn_budget      INTEGER,
+  retry_max        INTEGER,
+  context_policy   JSONB NOT NULL DEFAULT '[]'::jsonb,   -- names of what was carried in
+  experiment_id    TEXT,
+  experiment_arm   TEXT,
+  task_kind        TEXT,
+  task_size        TEXT,
+  -- how it went (the outcome)
+  terminal_state   TEXT NOT NULL,
+  tests_passed     INTEGER,
+  tests_total      INTEGER,
+  existing_tests_intact BOOLEAN,
+  gates_passed     INTEGER,
+  gates_failed     INTEGER,
+  failed_gates     JSONB NOT NULL DEFAULT '[]'::jsonb,   -- gate names
+  review_approved  BOOLEAN,
+  review_rounds_used INTEGER,
+  approvals        INTEGER NOT NULL DEFAULT 0,
+  rejections       INTEGER NOT NULL DEFAULT 0,
+  decide_wait_s    INTEGER,
+  steers           INTEGER NOT NULL DEFAULT 0,
+  pr_opened        BOOLEAN,
+  pr_merged        BOOLEAN,
+  pr_reverted      BOOLEAN,
+  deploy_healthy   BOOLEAN,
+  deploy_healthy_24h BOOLEAN,
+  rolled_back      BOOLEAN,
+  research_verdict TEXT,
+  confidence       NUMERIC,
+  panel_agreed     BOOLEAN,
+  prd_approved     BOOLEAN,
+  cost_usd         NUMERIC NOT NULL DEFAULT 0,
+  tokens_in        BIGINT NOT NULL DEFAULT 0,
+  tokens_out       BIGINT NOT NULL DEFAULT 0,
+  model_calls      INTEGER NOT NULL DEFAULT 0,
+  tool_calls       INTEGER NOT NULL DEFAULT 0,
+  turns            INTEGER NOT NULL DEFAULT 0,
+  wall_time_s      INTEGER,
+  wait_on_person_s INTEGER,
+  retries          INTEGER NOT NULL DEFAULT 0,
+  shepherd_interventions INTEGER NOT NULL DEFAULT 0,
+  error_class      TEXT,
+  -- the person's own one-tap verdict on this unit, mirrored from person_feedback
+  rating           TEXT,
+  -- the score (0..1) and the parts it was made from; weights are versioned
+  over_median      JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {"cost":bool,"turns":bool,"steers":bool}
+  score            NUMERIC,
+  score_version    TEXT,
+  started_at       TIMESTAMPTZ,
+  ended_at         TIMESTAMPTZ,
+  computed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  late_outcomes_at TIMESTAMPTZ,
+  source           TEXT NOT NULL DEFAULT 'live' CHECK (source IN ('live','backfill')),
+  PRIMARY KEY (unit_kind, unit_id)
+);
+CREATE INDEX IF NOT EXISTS run_scorecards_project_ended
+  ON run_scorecards (project_id, ended_at DESC);
+CREATE INDEX IF NOT EXISTS run_scorecards_computed ON run_scorecards (computed_at);
+CREATE INDEX IF NOT EXISTS run_scorecards_experiment
+  ON run_scorecards (experiment_id, experiment_arm) WHERE experiment_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS run_scorecards_late
+  ON run_scorecards (unit_kind, ended_at) WHERE late_outcomes_at IS NULL;
+
+-- AN A/B ON ONE SETTING of a role or a workflow. Off by default; started by the operator.
+-- Only allow-listed knobs (experiments.ARM_KNOBS), none of which decides what needs approval.
+CREATE TABLE IF NOT EXISTS experiments (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL,
+  name          TEXT NOT NULL,
+  target_kind   TEXT NOT NULL CHECK (target_kind IN ('role','workflow')),
+  target_key    TEXT NOT NULL,
+  knob          TEXT NOT NULL,
+  arm_a         JSONB NOT NULL,
+  arm_b         JSONB NOT NULL,
+  split_b       NUMERIC NOT NULL DEFAULT 0.5 CHECK (split_b > 0 AND split_b < 1),
+  target_units  INTEGER NOT NULL DEFAULT 20 CHECK (target_units BETWEEN 2 AND 1000),
+  arm_cost_cap_usd NUMERIC NOT NULL DEFAULT 25 CHECK (arm_cost_cap_usd > 0),
+  status        TEXT NOT NULL DEFAULT 'running'
+                  CHECK (status IN ('running','stopped','finished','promoted')),
+  stop_reason   TEXT,
+  capped_arms   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  promoted_arm  TEXT,
+  created_by    TEXT NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at      TIMESTAMPTZ,
+  ended_by      TEXT
+);
+CREATE INDEX IF NOT EXISTS experiments_project_status ON experiments (project_id, status);
+
+-- Which arm a unit got, chosen once when the unit starts. The scorecard copies it.
+CREATE TABLE IF NOT EXISTS experiment_assignments (
+  experiment_id TEXT NOT NULL,
+  unit_kind     TEXT NOT NULL,
+  unit_id       TEXT NOT NULL,
+  arm           TEXT NOT NULL CHECK (arm IN ('a','b')),
+  assigned_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (unit_kind, unit_id)
+);
+CREATE INDEX IF NOT EXISTS experiment_assignments_exp ON experiment_assignments (experiment_id, arm);
+
+-- WHAT THE PERSON SAID: one-tap ratings, reason chips on rejects and steers, edit amounts and the
+-- monthly check-in. Stored locally ALWAYS, whether or not "Improve BOSS" is on. One row per
+-- (subject, person) for ratings (a second tap changes it); rejects/steers/edits append.
+CREATE TABLE IF NOT EXISTS person_feedback (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN
+                 ('build','research','panel','answer','deploy','reject','steer','edit','checkin')),
+  subject_id   TEXT NOT NULL,
+  actor        TEXT NOT NULL,
+  rating       TEXT,
+  chips        TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+  decision_kind TEXT,             -- plan / spec / merge / deploy for a reject; doc kind for an edit
+  edit_ratio   NUMERIC,           -- 0..1, how much a brief/PRD/plan changed before approval
+  one_liner    TEXT,              -- the check-in's optional line; local unless share_line
+  share_line   BOOLEAN NOT NULL DEFAULT false,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS person_feedback_one_rating
+  ON person_feedback (subject_kind, subject_id, actor)
+  WHERE subject_kind IN ('build','research','panel','answer','deploy');
+CREATE INDEX IF NOT EXISTS person_feedback_created ON person_feedback (created_at);
+
+-- Never nag: when each person was last asked, per kind of ask.
+CREATE TABLE IF NOT EXISTS person_prompt_state (
+  actor        TEXT NOT NULL,
+  prompt       TEXT NOT NULL,     -- 'checkin' | 'rate'
+  last_shown_at TIMESTAMPTZ,
+  last_answered_at TIMESTAMPTZ,
+  last_dismissed_at TIMESTAMPTZ,
+  shown_today  INTEGER NOT NULL DEFAULT 0,
+  shown_day    DATE,
+  PRIMARY KEY (actor, prompt)
+);
+
+-- THE CLIENT'S OUTBOX: one row per send attempt (the exact gzip bytes), the last 30 kept as the
+-- local log Govern › Sharing shows. Batches cut but not yet delivered ride along in the next
+-- day's single POST, at most 7 of them; older ones are dropped and the drop is recorded.
+CREATE TABLE IF NOT EXISTS telemetry_sends (
+  id           TEXT PRIMARY KEY,
+  day          DATE NOT NULL,
+  kind         TEXT NOT NULL CHECK (kind IN ('daily','share','delete','export')),
+  status       TEXT NOT NULL CHECK (status IN ('pending','sent','failed','dropped','exported')),
+  body_gz      BYTEA,
+  bytes_raw    INTEGER NOT NULL DEFAULT 0,
+  bytes_gz     INTEGER NOT NULL DEFAULT 0,
+  batch_days   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  aggregated   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  http_status  INTEGER,
+  error        TEXT,
+  cut_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sent_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS telemetry_sends_cut ON telemetry_sends (cut_at DESC);
+
+-- A day's "Improve BOSS" batch (content-free aggregates), cut once and frozen until delivered.
+CREATE TABLE IF NOT EXISTS telemetry_batches (
+  day          DATE PRIMARY KEY,
+  body         JSONB NOT NULL,
+  since_at     TIMESTAMPTZ,
+  until_at     TIMESTAMPTZ NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'unsent' CHECK (status IN ('unsent','sent','dropped')),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- THE COLLECTOR (collector mode only; shared-server for now). Keyed by the random install id; no IP
+-- address, hostname or name is ever stored. 18 months, then rolled into tm_rollups and deleted.
+CREATE TABLE IF NOT EXISTS tm_installs (
+  install_id     TEXT PRIMARY KEY,
+  secret_hash    TEXT,
+  first_seen_day DATE NOT NULL,
+  last_seen_day  DATE NOT NULL,
+  version        TEXT,
+  edition        TEXT,
+  install_method TEXT,
+  os             TEXT,
+  arch           TEXT,
+  improve_on     BOOLEAN NOT NULL DEFAULT false
+);
+CREATE TABLE IF NOT EXISTS tm_heartbeats (
+  install_id     TEXT NOT NULL,
+  day            DATE NOT NULL,
+  version        TEXT,
+  edition        TEXT,
+  install_method TEXT,
+  os             TEXT,
+  arch           TEXT,
+  age_bucket     TEXT,
+  worked_24h     BOOLEAN NOT NULL DEFAULT false,
+  received_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (install_id, day)
+);
+CREATE INDEX IF NOT EXISTS tm_heartbeats_day ON tm_heartbeats (day);
+CREATE TABLE IF NOT EXISTS tm_batches (
+  install_id     TEXT NOT NULL,
+  day            DATE NOT NULL,
+  body           JSONB NOT NULL,
+  received_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (install_id, day)
+);
+CREATE INDEX IF NOT EXISTS tm_batches_day ON tm_batches (day);
+CREATE TABLE IF NOT EXISTS tm_shares (
+  id             TEXT PRIMARY KEY,
+  install_id     TEXT NOT NULL,
+  body           JSONB NOT NULL,
+  received_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS tm_rollups (
+  month          DATE NOT NULL,
+  metric         TEXT NOT NULL,
+  dims           TEXT NOT NULL DEFAULT '',
+  value          NUMERIC NOT NULL,
+  PRIMARY KEY (month, metric, dims)
+);
