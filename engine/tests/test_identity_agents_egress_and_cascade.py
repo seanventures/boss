@@ -536,3 +536,49 @@ def test_a40_introspection_needs_the_egress_credential_and_returns_act(env, monk
     assert claims["boss_chain"] == [f"{env.atlas}#run_ct:task1", f"{env.vera}#run_ct:task1/vera"]
     bad = client.post("/v1/identity/token", data={"grant_type": "password", "subject_token": parent})
     assert bad.status_code == 400 and "Traceback" not in bad.text
+
+
+# ---- wiring: a code task clones through egress, with no GitHub token in the sandbox --------------------
+
+def test_a_code_task_runs_as_its_delegated_principal_and_clones_through_egress(env, monkeypatch, tmp_path):
+    import tempfile
+
+    from boss_engine.services.sandbox import EphemeralSandbox
+
+    install_github(monkeypatch, env)
+    monkeypatch.setenv("BOSS_EGRESS_URL", "https://egress.boss.internal")
+    monkeypatch.setenv("BOSS_SHIM_DIR", tempfile.mkdtemp(prefix="bshim", dir="/tmp"))
+    g = env.grant(agents=(env.forge,), children=(), repos=("acme/web",))
+    who = lineage.Acting(principal_id=env.alice, org_id="org_boss", grant_id=g.id)
+    with env.db() as c:
+        c.execute(text("INSERT INTO roles (id, role_key, agent_id) VALUES ('r-forge', 'forge', :a)"), {"a": env.forge})
+        c.execute(text("INSERT INTO jobs (id, project_id, kind, payload) VALUES ('job_1', :p, 'code.task', "
+                       "CAST(:pl AS JSONB))"), {"p": env.project, "pl": json.dumps(lineage.stamp_job({}, who))})
+    started = runs.start_code_task_run(env.engine, task_run_id="ct42", project_id=env.project, owner="acme",
+                                       repo="web", role_key="forge", job_id="job_1")
+    assert started is not None
+    shim, access = started
+    claims = verify(env, shim)
+    assert claims.sub == env.alice and claims.chain.agent_ids == (env.forge,) and claims.grant_id == g.id
+    assert access.clone_url == "https://egress.boss.internal/github/acme/web.git"
+    calls = []
+    box = EphemeralSandbox.__new__(EphemeralSandbox)
+    box.path, box.settings, box.task_id = None, type("S", (), {"sandbox_root_path": str(tmp_path),
+                                                                "sandbox_clone_depth": 1,
+                                                                "sandbox_integration_branch": "main"})(), "ct42"
+    box._git = lambda args, raw=False, redact=None: calls.append(args) or "deadbeef"
+    box._write_local_excludes = lambda: None
+    monkeypatch.setattr("boss_engine.services.resource_ledger.claim_dir", lambda p: None)
+    box.provision("acme", "web", token="ghs_SHOULD_NOT_BE_USED", egress=access)
+    flat = json.dumps(calls)
+    assert "ghs_" not in flat and "x-access-token" not in flat and shim.egress_credential not in flat
+    assert access.clone_url in flat and "credential.helper" in flat
+    runs.finish_code_task_run(env.engine, shim, org_id="org_boss")
+    with pytest.raises(tokens.TokenError):
+        verify(env, shim)
+    # No principal on the job: the legacy path (None), never a token minted from nothing.
+    with env.db() as c:
+        c.execute(text("INSERT INTO jobs (id, project_id, kind, payload) VALUES ('job_2', :p, 'code.task', '{}')"),
+                  {"p": env.project})
+    assert runs.start_code_task_run(env.engine, task_run_id="ct43", project_id=env.project, owner="acme",
+                                    repo="web", role_key="forge", job_id="job_2") is None

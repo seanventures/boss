@@ -2248,7 +2248,7 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
             try:
                 identity_run = identity_runs.start_code_task_run(
                     engine, task_run_id=run_id, project_id=project_id, owner=owner, repo=repo,
-                    role_key=spec.get("role_key"))
+                    role_key=spec.get("role_key"), job_id=fctx.get("created_by_job_id"))
             except Exception as exc:  # noqa: BLE001 — refused authority fails the build, never widens
                 raise RuntimeError(f"authority refused: {getattr(exc, 'reason', None) or type(exc).__name__}") from exc
             if identity_run is not None:

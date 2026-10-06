@@ -45,7 +45,10 @@ def identity_block() -> str:
 
 STUBS = """
 CREATE TABLE IF NOT EXISTS orgs (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
-CREATE TABLE IF NOT EXISTS roles (id TEXT PRIMARY KEY, role_key TEXT, agent_id TEXT, born_by TEXT);
+CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, org_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS roles (id TEXT PRIMARY KEY, role_key TEXT, agent_id TEXT, born_by TEXT,
+  project_id TEXT, display_name TEXT, sponsor TEXT);
 CREATE TABLE IF NOT EXISTS code_task_runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running');
 CREATE TABLE IF NOT EXISTS code_task_stop_requests (run_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, actor TEXT NOT NULL,
   reason TEXT, phase TEXT, requested_at TIMESTAMPTZ NOT NULL DEFAULT now(), honoured_at TIMESTAMPTZ);
@@ -60,7 +63,8 @@ _TRUNCATE = ("identity_security_events", "identity_egress_log", "identity_egress
              "identity_run_credentials", "identity_delegation_grant_permissions", "identity_delegation_grants",
              "identity_agent_ceilings", "identity_agent_passports", "identity_signing_keys", "identity_vault_items",
              "identity_vault_keks", "identity_sessions", "identity_api_credentials", "identity_principals",
-             "code_task_stop_requests", "code_task_runs", "workflow_runs", "workflow_schedules", "roles", "jobs")
+             "code_task_stop_requests", "code_task_runs", "workflow_runs", "workflow_schedules", "roles", "jobs",
+             "identity_legacy_mappings", "projects", "workspaces")
 
 _schema_ready = False
 
