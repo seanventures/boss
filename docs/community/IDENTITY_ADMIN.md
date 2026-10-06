@@ -18,7 +18,9 @@ There is no API that writes an event. Events come only from the code paths that 
 
 ### Read, verify and export
 
-In the console, open **Identity › Audit**. You can filter by person, kind of actor, event type (`auth.*` matches a group), outcome, delegation and time.
+In the console, open **Identity › Audit**. You can search free text (event, what it touched, a person's name, a grant, a token or a request id) and filter by person (an agent's events also show under the person it acted for), kind of actor, event type (`auth.*` matches a group), outcome, delegation and time.
+
+Every API response carries an `X-Request-Id` header, and every event the request caused records the same id. Quote it when you report a problem, and search for it here.
 
 | Action | Console | API | Who |
 | --- | --- | --- | --- |
@@ -56,6 +58,10 @@ BOSS never writes these to its logs, error reports, HTTP access logs or the audi
 - the vault master key and data keys.
 
 One redaction filter enforces this. It is installed at the logging root of every BOSS process and removes credential headers (`Authorization`, `Cookie`, `X-Boss-CSRF`), every field named like a credential, every value shaped like a BOSS key or a JWT, the credential parameters of OAuth and SSO callback URLs, and the configured keys and passwords themselves. A failed sign-in for an unknown account stores the identifier only as an HMAC.
+
+## The identity epoch
+
+Any identity change (a person, a role, a binding, a group, a key, a grant, the policy) moves one number, the identity epoch, in the same transaction. The console reads it from `GET /v1/identity/me` (or `GET /v1/identity/epoch`) when it regains focus and every 30 seconds, and refreshes what you may do when it moves. `GET /v1/identity/epoch/stream` pushes it as server-sent events the moment a change commits.
 
 ## Posture
 
