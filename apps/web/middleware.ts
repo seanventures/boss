@@ -97,8 +97,10 @@ function legacyRedirect(request: NextRequest): NextResponse | null {
   // ABSOLUTE, ON THE HOST THE BROWSER USED. A relative Location passed the unit test and 500ed
   // in a production build ("TypeError: Invalid URL" in Next's middleware adapter), so every
   // retired-area link — ?area=govern, ?area=delivery, ?area=pipeline — failed on a real console.
-  // The host and scheme are the request's own (or its proxy's forwarded ones), never the API's.
-  const host = request.headers.get("x-forwarded-host") || request.headers.get("host")
+  // The host and scheme are the ones the browser used, never the API's.
+  // `host` first: `next start` fills x-forwarded-host with its own bind name ("localhost"),
+  // which would move a browser on 127.0.0.1 to another origin and drop its session cookie.
+  const host = request.headers.get("host") || request.headers.get("x-forwarded-host")
     || request.nextUrl.host;
   const proto = (request.headers.get("x-forwarded-proto") || request.nextUrl.protocol)
     .replace(/:$/, "");

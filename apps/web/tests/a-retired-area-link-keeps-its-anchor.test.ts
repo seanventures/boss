@@ -26,8 +26,10 @@ describe("a retired area link", () => {
     const res = await middleware(req("/?org=org_boss&area=delivery"));
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toBe("http://127.0.0.1:3000/?org=org_boss&area=infra&view=fleet");
+    // Behind a TLS proxy that keeps the Host: the browser's host, the proxy's scheme — never
+    // the x-forwarded-host `next start` fills with its own bind name.
     const proxied = await middleware(req("/?org=org_boss&area=pipeline", {
-      "x-forwarded-host": "boss.example.com", "x-forwarded-proto": "https" }));
+      host: "boss.example.com", "x-forwarded-host": "localhost", "x-forwarded-proto": "https" }));
     expect(proxied.headers.get("location"))
       .toBe("https://boss.example.com/?org=org_boss&area=setup&focus=routing");
   });
