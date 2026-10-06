@@ -233,6 +233,14 @@ Without the `boss` command, run `./scripts/install/upgrade.sh --dir "$PWD"` and 
 
 Deleting data takes a separate confirmation. See [upgrade, backup, and restore](scripts/install/README.md#upgrade--recover).
 
+## What BOSS sends home
+
+**A daily heartbeat, on by default.** Once a day, one small request says only that this install is alive: a random install id, the BOSS version and edition, the install method, OS and CPU type, days since install (as a range), and whether any work ran in the last 24 hours. Nothing else.
+
+**"Improve BOSS", off by default.** If you turn it on (at the end of setup, or in Govern › Sharing), the same daily request also carries how runs turned out, your ratings and which features you use, as names, counts and ranges. Never your code, prompts, briefs, file or repo names, or secrets.
+
+Govern › Sharing shows the exact next payload before it is sent, a log of the last 30 sends, and buttons to export a batch, rotate the install id, and delete what was sent. To send nothing at all, heartbeat included, set `BOSS_TELEMETRY=off` (or the standard `DO_NOT_TRACK=1`) in `.env`. Details: [run scorecards and sharing](docs/product/RUN_SCORECARDS.md).
+
 ## Community
 
 - **Bugs, install problems, and ideas:** open an issue with the bug, install, or feature form. The [feedback process](docs/community/FEEDBACK_LOOP.md) explains how a report becomes a shipped change.

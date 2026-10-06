@@ -699,6 +699,20 @@ def start_code_task(
             run_finalize["workflow"] = governing
     except Exception:  # noqa: BLE001 — an unmapped task must still run
         pass
+    # AN EXPERIMENT'S ARM, chosen here — the one door every build goes through — and only when
+    # the operator started an experiment that targets this agent or workflow. It can only set
+    # the harness or the review rounds (experiments.ARM_KNOBS); an explicit pin on this build
+    # wins and the build is not enrolled. Never fatal: an experiment must not stop real work.
+    if not simulated and not hasattr(connection, "save_run"):
+        try:
+            from .experiments import apply_arm
+
+            with connection.begin_nested():
+                apply_arm(connection, project_id=project_id, run_id=run_id, spec=spec,
+                          finalize_ctx=run_finalize)
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).warning("experiment arm not applied to %s", run_id,
+                                                exc_info=True)
     if hasattr(connection, "save_run"):
         connection.save_run(
             run_id,

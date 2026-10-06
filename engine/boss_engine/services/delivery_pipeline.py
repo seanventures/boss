@@ -370,6 +370,14 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
     """
     from ..db import begin
 
+    # A LATE OUTCOME: the build's scorecard learns it merged (docs/product/RUN_SCORECARDS.md).
+    try:
+        from .scorecards import record_scorecard
+
+        with begin(engine) as c:
+            record_scorecard(c, "build", run_id, late=True)
+    except Exception:  # noqa: BLE001 — a scorecard never turns a merge into a failure
+        pass
     result: dict[str, Any] = {"status": "skipped", "reason": "no active staging target",
                               "deployments": []}
     planned_runs: list[dict[str, Any]] = []

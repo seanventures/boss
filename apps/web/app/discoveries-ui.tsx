@@ -14,6 +14,7 @@
  *                   candidate outcomes, cited signals, the critic, market and research brief.
  */
 import React, { useActionState, useEffect, useMemo, useState, type ReactNode } from "react";
+import { RateIt } from "./improve/rate-it";
 
 import type {
   DiscoveryRun, DiscoveryFinding, DiscoveryListItem, DiscoveryOutcome, DiscoveryTotals, ModelAttention,
@@ -256,9 +257,11 @@ function DossierCard({ d, onOpen }: { d: DiscoveryListItem; onOpen: () => void }
 // --------------------------------------------------------------------------- //
 export function DiscoveriesHome({
   projectId, orgId, discoveries, apiReachable, initialDiscoveryId,
-  researchAvailable = true, totals = null,
+  researchAvailable = true, totals = null, actor = "",
 }: {
   projectId: string;
+  /** Who is reading: their one-tap rating on a dossier is theirs. */
+  actor?: string;
   orgId?: string;
   discoveries: DiscoveryListItem[];
   totals?: DiscoveryTotals | null;
@@ -336,7 +339,7 @@ export function DiscoveriesHome({
 
   if (selected) {
     return (
-      <DiscoveryDetail id={selected} row={all.find((d) => d.id === selected) ?? null}
+      <DiscoveryDetail id={selected} actor={actor} row={all.find((d) => d.id === selected) ?? null}
                        projectId={projectId} orgId={orgId} researchAvailable={researchAvailable}
                        onBack={() => open(null)} />
     );
@@ -631,10 +634,11 @@ function BriefCard({ brief }: { brief: NonNullable<DiscoveryRun["state"]["resear
 
 /** One dossier. The row from the list paints the hero at once; the dossier itself is fetched
  *  here, by id — so a link to one older than the list still opens it — and re-read while live. */
-function DiscoveryDetail({ id, row, projectId, researchAvailable, onBack }: {
+function DiscoveryDetail({ id, row, projectId, actor = "", researchAvailable, onBack }: {
   id: string;
   row: DiscoveryListItem | null;
   projectId: string;
+  actor?: string;
   orgId?: string;
   researchAvailable: boolean;
   onBack: () => void;
@@ -682,6 +686,9 @@ function DiscoveryDetail({ id, row, projectId, researchAvailable, onBack }: {
         </div>
         <div className="rp-dh-r">
           <VerdictCard run={run} projectId={projectId} researchAvailable={researchAvailable} />
+          {run.status === "completed" ? (
+            <RateIt projectId={projectId} actor={actor} subject="research" id={run.id} testId="dossier-rate" />
+          ) : null}
         </div>
       </section>
 

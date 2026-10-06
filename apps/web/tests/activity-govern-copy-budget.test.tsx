@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { setConsoleLive } from "../lib/console-live";
 import { overBudget } from "./_helpers/copy-budget";
 import { fakeGovernApi, newGovern } from "./_helpers/govern-fixtures";
+import { fakeImproveApi, newImprove } from "./_helpers/improve-fixtures";
 import { FACETS, fakeLogApi, newLog, row, rows } from "./_helpers/log-fixtures";
 import { $, click, mount, settle, unmount } from "./_helpers/live-render";
 
@@ -25,7 +26,7 @@ const BANNED = ["ledger", "deterministic", "knob", "ceo", "llm_calls", "governed
 function ownWords(root: Element): string {
   const out: string[] = [];
   for (const el of [root, ...root.querySelectorAll("*")]) {
-    if (el.closest("[title], [data-user-text], [aria-hidden='true'], option, .ag-sr")) continue;
+    if (el.closest("[title], [data-user-text], [data-consent], [aria-hidden='true'], option, .ag-sr")) continue;
     out.push([...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent ?? "").join(" "));
   }
   return out.join(" ").toLowerCase();
@@ -67,7 +68,7 @@ describe("Govern's copy", () => {
                     reconciliations: [{ id: "r1", commitment_id: "c1", provider: "aws", committed_usd_micros: 10_000_000,
                                         actual_usd_micros: 4_000_000, utilization: 0.4, verdict: "under_utilized", decision_id: "dec_1" }],
                     initiative_rule: { tier_min: 2, amount_usd_micros: 50_000_000 } };
-    vi.stubGlobal("fetch", fakeGovernApi(g));
+    vi.stubGlobal("fetch", fakeImproveApi(newImprove(), fakeGovernApi(g) as never));
     setConsoleLive(true);
     window.history.replaceState({}, "", "/?area=budget");
     await mount(<GovernHome projectId="p1" actor="ceo" />);
@@ -75,7 +76,7 @@ describe("Govern's copy", () => {
     await click($("[data-testid=gv-edit-pace]"));
     await act(async () => { await new Promise((r) => setTimeout(r, 200)); });
     await settle();
-    for (const tab of ["limits", "spend", "envelopes"]) {
+    for (const tab of ["limits", "spend", "envelopes", "sharing"]) {
       if (tab !== "limits") await click($(`[data-testid=gv-tab-${tab}]`));
       const root = $("[data-testid=gv]")!;
       expect(overBudget(root), tab).toEqual([]);
