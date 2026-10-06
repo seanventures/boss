@@ -130,13 +130,21 @@ def enqueue_job(
     priority_score: Optional[float] = None,
     workload_class: str = "general",
     resource_units: int = 1,
+    on_behalf_of: Optional[Any] = None,
 ) -> dict[str, Any]:
     """Insert a queued job without importing budget, entitlement, or agent services.
 
     A non-null ``dedupe_key`` makes enqueue idempotent within a project.  Budget
     and reservation enforcement intentionally remains at lease time.
+
+    Every job carries WHO it is for (IDENTITY.md §7.14, R8): ``on_behalf_of`` (an
+    ``identity.lineage.Acting``) or the ambient acting context, stamped into the payload as
+    ``_identity`` {on_behalf_of, grant_id, chain, run_id}. The worker's own identity never
+    authorizes an effect. Under BOSS_AUTHZ_MODE=enforce a job with no principal fails closed here.
     """
-    job_payload = payload or {}
+    from boss_engine.identity import lineage as _identity_lineage
+
+    job_payload = _identity_lineage.stamp_job(dict(payload or {}), on_behalf_of)
     boundary = resolve_job_data_boundary(
         connection, task_id, job_payload, data_boundary
     )

@@ -1,19 +1,46 @@
 """The token vault: every long-lived external secret BOSS owns, envelope-encrypted. Owned by S3.
 
-FROZEN IN PHASE 0: the AAD format, the purposes, the dataclasses and signatures. Bodies marked
-NotImplementedError are S3's (IDENTITY_BUILD.md §3). IDENTITY.md §7.8.
+FROZEN IN PHASE 0: the AAD format, the purposes, the dataclasses and signatures. IDENTITY.md §7.8.
 
 ONLY THIS MODULE DECRYPTS. A test (R9) fails if any other module imports `_decrypt`. There is never
 a plaintext fallback: a decryption failure is a hard error plus a `vault.decrypt_failed` event.
+
+How a row is protected
+----------------------
+    KEK   32 bytes from BOSS_MASTER_KEY_FILE (preferred) or BOSS_MASTER_KEY (base64). Never in the DB;
+          the DB holds only its key check value (KCV) in identity_vault_keks.
+    DEK   32 random bytes per row, wrapped as nonce(12) ‖ AES-256-GCM(KEK, DEK, aad=AAD ‖ US ‖ "dek").
+    data  secret_enc = AES-256-GCM(DEK, secret, aad=AAD), nonce in secret_nonce;
+          refresh_enc  = AES-256-GCM(DEK, refresh, aad=AAD ‖ US ‖ "refresh").
+    AAD   aad(item_id, owner, provider, kind) — so a ciphertext (or a wrapped DEK) copied to another
+          row, or a refresh token swapped into the secret column, fails to decrypt (A52).
+
+Refresh is single-flight: `SELECT … FOR UPDATE` on the row, re-read, refresh only if still due,
+write the rotated refresh token in the same transaction that consumed the old one (A57). If the
+provider refuses the refresh token (revoked, expired or REUSED — reuse detection is the provider's
+rotating refresh), or rotated but our write fails, the item becomes `needs_reauth`: it is never
+retried in a loop with a refresh token the provider has already burned.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import logging
+import os
+import secrets
+import threading
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Callable, Mapping, Optional
 
-from .principal import AuthContext, TaskBinding
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from .principal import AuthContext, PrincipalKind, TaskBinding
+
+log = logging.getLogger(__name__)
 
 AAD_SEPARATOR = b"\x1f"            # ASCII unit separator; cannot appear in an id
 MASTER_KEY_FILE_ENV = "BOSS_MASTER_KEY_FILE"   # preferred (Docker secret)
@@ -69,27 +96,510 @@ def aad(item_id: str, owner_principal_id: Optional[str], provider: Optional[str]
     return AAD_SEPARATOR.join(p.encode("utf-8") for p in parts)
 
 
+# ---- errors ------------------------------------------------------------------------------------------
+
+class VaultError(Exception):
+    """Base. `code` is a stable, secret-free reason; `status` the HTTP status a route maps it to."""
+
+    status = 500
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+class MasterKeyMissing(VaultError):
+    pass
+
+
+class MasterKeyMismatch(VaultError):
+    """The configured master key is not the one the vault was written with (A53): refuse to boot."""
+
+
+class VaultDecryptError(VaultError):
+    pass
+
+
+class VaultForbidden(VaultError):
+    status = 403
+
+
+class VaultNeedsReauth(VaultError):
+    status = 409
+
+
+class VaultNotFound(VaultError):
+    status = 404
+
+
+# ---- the master key ----------------------------------------------------------------------------------
+
+_KCV_LABEL = b"BOSS-VAULT-KCV-v1"
+_kek_lock = threading.Lock()
+_kek_cache: Optional[tuple[str, bytes]] = None
+
+
+def _read_master_key(environ: Optional[Mapping[str, str]] = None) -> bytes:
+    env = os.environ if environ is None else environ
+    raw: Optional[str] = None
+    path = (env.get(MASTER_KEY_FILE_ENV) or "").strip()
+    if path:
+        try:
+            raw = Path(path).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise MasterKeyMissing("master_key_file_unreadable") from exc
+    elif env.get(MASTER_KEY_ENV):
+        raw = env[MASTER_KEY_ENV].strip()
+    if not raw:
+        raise MasterKeyMissing("master_key_not_configured")
+    try:
+        key = base64.b64decode(raw, validate=True)
+    except Exception as exc:  # noqa: BLE001
+        raise MasterKeyMissing("master_key_not_base64") from exc
+    if len(key) != 32:
+        raise MasterKeyMissing("master_key_wrong_length")
+    return key
+
+
+def kcv_of(key: bytes) -> bytes:
+    """Key check value: HMAC-SHA256(key, label)[:16]. Reveals nothing usable about the key."""
+    return hmac.new(key, _KCV_LABEL, hashlib.sha256).digest()[:16]
+
+
+def kek_id_of(key: bytes) -> str:
+    return "kek_" + kcv_of(key)[:8].hex()
+
+
+def _kek() -> tuple[str, bytes]:
+    global _kek_cache
+    with _kek_lock:
+        if _kek_cache is None:
+            key = _read_master_key()
+            _kek_cache = (kek_id_of(key), key)
+        return _kek_cache
+
+
+def reset_master_key_cache() -> None:
+    """Tests and `rotate_master_key` callers only."""
+    global _kek_cache
+    with _kek_lock:
+        _kek_cache = None
+
+
+def check_master_key(*, db: Any) -> str:
+    """Boot check (A53). Registers the KEK's KCV on first use; refuses when vault rows or KEKs exist
+    and none matches the configured key. Returns the kek id."""
+    from sqlalchemy import text
+
+    kek_id, key = _kek()
+    kcv = kcv_of(key)
+    rows = db.execute(text("SELECT kek_id, kcv FROM identity_vault_keks WHERE retired_at IS NULL")
+                      ).mappings().all()
+    if any(hmac.compare_digest(bytes(r["kcv"]), kcv) for r in rows):
+        return kek_id
+    items = db.execute(text("SELECT count(*) FROM identity_vault_items WHERE status <> 'revoked'")
+                       ).scalar_one()
+    if rows or items:
+        raise MasterKeyMismatch("master_key_mismatch")
+    source = "file" if os.environ.get(MASTER_KEY_FILE_ENV) else "env"
+    db.execute(text("INSERT INTO identity_vault_keks (kek_id, kcv, source) VALUES (:k, :c, :s) "
+                    "ON CONFLICT (kek_id) DO NOTHING"), {"k": kek_id, "c": kcv, "s": source})
+    return kek_id
+
+
+# ---- envelope crypto (private) -------------------------------------------------------------------------
+
+def _wrap_dek(kek: bytes, dek: bytes, row_aad: bytes) -> bytes:
+    nonce = secrets.token_bytes(12)
+    return nonce + AESGCM(kek).encrypt(nonce, dek, row_aad + AAD_SEPARATOR + b"dek")
+
+
+def _unwrap_dek(kek: bytes, wrapped: bytes, row_aad: bytes) -> bytes:
+    return AESGCM(kek).decrypt(wrapped[:12], wrapped[12:], row_aad + AAD_SEPARATOR + b"dek")
+
+
+def _field_aad(row_aad: bytes, field_name: str) -> bytes:
+    return row_aad if field_name == "secret" else row_aad + AAD_SEPARATOR + field_name.encode()
+
+
+def _encrypt(dek: bytes, plaintext: str, row_aad: bytes, field_name: str) -> tuple[bytes, bytes]:
+    nonce = secrets.token_bytes(12)
+    return AESGCM(dek).encrypt(nonce, plaintext.encode("utf-8"), _field_aad(row_aad, field_name)), nonce
+
+
+def _row_aad(row: Mapping[str, Any]) -> bytes:
+    return aad(row["id"], row.get("owner_principal_id"), row.get("provider"), row["kind"])
+
+
+def _decrypt(item_row: Any, *, field_name: str = "secret") -> str:
+    """Private. Only vault.py calls this (R9). Raises VaultDecryptError; never falls back."""
+    row = dict(item_row)
+    try:
+        kek_id, kek = _kek()
+        if row.get("kek_id") != kek_id:
+            raise VaultDecryptError("kek_mismatch")
+        row_aad = _row_aad(row)
+        dek = _unwrap_dek(kek, bytes(row["dek_wrapped"]), row_aad)
+        enc = row.get(f"{field_name}_enc")
+        nonce = row.get(f"{field_name}_nonce")
+        if enc is None or nonce is None:
+            raise VaultDecryptError("no_such_field")
+        return AESGCM(dek).decrypt(bytes(nonce), bytes(enc), _field_aad(row_aad, field_name)).decode("utf-8")
+    except VaultDecryptError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — InvalidTag, bad lengths: all one hard error
+        raise VaultDecryptError("decrypt_failed") from exc
+
+
+def _record_decrypt_failure(db: Any, row: Mapping[str, Any], code: str) -> None:
+    """A critical event, written OUTSIDE the caller's transaction so the caller's rollback on the
+    error it is about to receive does not erase it."""
+    from . import audit
+
+    event = audit.SecurityEvent(org_id=row.get("org_id") or "", event_type="vault.decrypt_failed",
+                                outcome=audit.Outcome.FAILURE, target_type="vault_item",
+                                target_id=row.get("id"), details={"reason": code, "critical": True})
+    try:
+        engine = getattr(db, "engine", None)
+        if engine is not None:
+            with engine.begin() as side:
+                audit.record(event, db=side)
+        else:
+            audit.record(event, db=db)
+    except Exception:  # noqa: BLE001 — the hard error still happens; the id is not a secret
+        log.error("vault.decrypt_failed for %s (event write failed)", row.get("id"))
+
+
+def _open(db: Any, row: Mapping[str, Any], field_name: str = "secret") -> str:
+    try:
+        return _decrypt(row, field_name=field_name)
+    except VaultDecryptError as exc:
+        _record_decrypt_failure(db, row, exc.code)
+        raise
+
+
+# ---- store / read / revoke -----------------------------------------------------------------------------
+
+_COLUMNS = ("id, org_id, owner_principal_id, kind, provider, provider_subject, connection_name, "
+            "granted_scopes, dek_wrapped, kek_id, secret_enc, secret_nonce, refresh_enc, refresh_nonce, "
+            "access_expires_at, refresh_expires_at, status, last_refreshed_at")
+
+
+def store(*, org_id: str, owner_principal_id: Optional[str], kind: VaultItemKind,
+          provider: Optional[str], secret: str, refresh: Optional[str] = None,
+          access_expires_at: Optional[datetime] = None, db: Any,
+          provider_subject: Optional[str] = None, connection_name: Optional[str] = None,
+          granted_scopes: Optional[list[str]] = None) -> str:
+    """Encrypt and store a secret; returns the vlt_ item id. The caller never sees ciphertext."""
+    from sqlalchemy import text
+
+    from .ids import new_id
+
+    kind = VaultItemKind(kind)
+    kek_id, kek = _kek()
+    item_id = new_id("vlt")
+    row_aad = aad(item_id, owner_principal_id, provider, kind.value)
+    dek = AESGCM.generate_key(bit_length=256)
+    secret_enc, secret_nonce = _encrypt(dek, secret, row_aad, "secret")
+    refresh_enc = refresh_nonce = None
+    if refresh is not None:
+        refresh_enc, refresh_nonce = _encrypt(dek, refresh, row_aad, "refresh")
+    db.execute(text(
+        "INSERT INTO identity_vault_items (id, org_id, owner_principal_id, kind, provider, "
+        " provider_subject, connection_name, granted_scopes, dek_wrapped, kek_id, secret_enc, "
+        " secret_nonce, refresh_enc, refresh_nonce, access_expires_at, status) VALUES "
+        "(:id, :org, :owner, :kind, :provider, :psub, :cname, :scopes, :dek, :kek, :senc, :snon, "
+        " :renc, :rnon, :exp, 'active')"),
+        {"id": item_id, "org": org_id, "owner": owner_principal_id, "kind": kind.value,
+         "provider": provider, "psub": provider_subject, "cname": connection_name,
+         "scopes": granted_scopes, "dek": _wrap_dek(kek, dek, row_aad), "kek": kek_id,
+         "senc": secret_enc, "snon": secret_nonce, "renc": refresh_enc, "rnon": refresh_nonce,
+         "exp": access_expires_at})
+    return item_id
+
+
+def _load(db: Any, item_id: str, *, for_update: bool = False) -> dict[str, Any]:
+    from sqlalchemy import text
+
+    row = db.execute(text(f"SELECT {_COLUMNS} FROM identity_vault_items WHERE id = :id"
+                          + (" FOR UPDATE" if for_update else "")), {"id": item_id}).mappings().first()
+    if row is None:
+        raise VaultNotFound("not_found")
+    return dict(row)
+
+
+def read_secret(item_id: str, *, db: Any, kind: VaultItemKind) -> str:
+    """Internal decrypt for identity's OWN org-level material (signing keys, the App key, OIDC and
+    TOTP secrets). Refuses user connections: those go through `get_credential` and its owner check."""
+    row = _load(db, item_id)
+    if row["kind"] != VaultItemKind(kind).value:
+        raise VaultForbidden("wrong_kind")
+    if row["kind"] in (VaultItemKind.OAUTH_USER.value, VaultItemKind.LEGACY_PAT.value):
+        raise VaultForbidden("use_get_credential")
+    if row["status"] != "active":
+        raise VaultNeedsReauth(row["status"])
+    return _open(db, row)
+
+
+#: provider -> refresh(refresh_token) -> (access_token, new_refresh_token|None, expires_in_seconds).
+#: Raise RefreshRejected when the provider refuses the refresh token (revoked, expired, REUSED).
+REFRESHERS: dict[str, Callable[[str], tuple[str, Optional[str], int]]] = {}
+#: provider -> revoke(access_token, refresh_token|None). Called on disconnect and person deletion.
+REVOKERS: dict[str, Callable[[str, Optional[str]], None]] = {}
+
+REFRESH_LEEWAY = timedelta(minutes=5)
+
+
+class RefreshRejected(Exception):
+    """The provider refused the refresh token: it was revoked, expired or REUSED."""
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _refresh_locked(db: Any, item_id: str) -> dict[str, Any]:
+    """Single flight: lock the row, re-read, refresh only if another caller has not already."""
+    from sqlalchemy import text
+
+    from . import audit
+
+    row = _load(db, item_id, for_update=True)
+    if row["status"] != "active":
+        raise VaultNeedsReauth(row["status"])
+    exp = row.get("access_expires_at")
+    if exp is None or exp - _now() > REFRESH_LEEWAY:
+        return row                                   # someone else refreshed while we waited
+    refresher = REFRESHERS.get(row.get("provider") or "")
+    if row.get("refresh_enc") is None or refresher is None:
+        return row
+    refresh_token = _open(db, row, "refresh")
+    try:
+        access, new_refresh, expires_in = refresher(refresh_token)
+    except RefreshRejected:
+        db.execute(text("UPDATE identity_vault_items SET status = 'needs_reauth' WHERE id = :id"),
+                   {"id": item_id})
+        audit.record(audit.SecurityEvent(org_id=row["org_id"], event_type="vault.connection.needs_reauth",
+                                         outcome=audit.Outcome.FAILURE, target_type="vault_item",
+                                         target_id=item_id, details={"reason": "refresh_rejected"}),
+                     db=db)
+        raise VaultNeedsReauth("refresh_rejected")
+    kek_id, kek = _kek()
+    row_aad = _row_aad(row)
+    dek = _unwrap_dek(kek, bytes(row["dek_wrapped"]), row_aad)
+    senc, snon = _encrypt(dek, access, row_aad, "secret")
+    params: dict[str, Any] = {"id": item_id, "senc": senc, "snon": snon,
+                              "exp": _now() + timedelta(seconds=int(expires_in))}
+    sets = "secret_enc = :senc, secret_nonce = :snon, access_expires_at = :exp, last_refreshed_at = now()"
+    if new_refresh:
+        renc, rnon = _encrypt(dek, new_refresh, row_aad, "refresh")
+        params.update(renc=renc, rnon=rnon)
+        sets += ", refresh_enc = :renc, refresh_nonce = :rnon"
+    try:
+        db.execute(text("SAVEPOINT vault_refresh"))
+        db.execute(text(f"UPDATE identity_vault_items SET {sets} WHERE id = :id"), params)
+        db.execute(text("RELEASE SAVEPOINT vault_refresh"))
+    except Exception:  # noqa: BLE001
+        # The provider has rotated (the old refresh token is burned) but we could not keep the
+        # new one. Never loop: the connection needs the person to reconnect.
+        db.execute(text("ROLLBACK TO SAVEPOINT vault_refresh"))
+        db.execute(text("UPDATE identity_vault_items SET status = 'needs_reauth' WHERE id = :id"),
+                   {"id": item_id})
+        raise VaultNeedsReauth("refresh_write_failed")
+    audit.record(audit.SecurityEvent(org_id=row["org_id"], event_type="vault.connection.refreshed",
+                                     outcome=audit.Outcome.SUCCESS, target_type="vault_item",
+                                     target_id=item_id), db=db)
+    return _load(db, item_id)
+
+
+def _owner_from_context(ctx: AuthContext) -> Optional[str]:
+    """Whose connections this caller may use: the person a run acts for, or the person signed in.
+    Never a request field."""
+    if ctx.run_token is not None:
+        return ctx.run_token.sub if ctx.run_token.sub.startswith("usr_") else None
+    if ctx.principal.kind == PrincipalKind.USER:
+        return ctx.principal.id
+    return None
+
+
+def _owner_active(db: Any, principal_id: str) -> bool:
+    from sqlalchemy import text
+
+    status = db.execute(text("SELECT status FROM identity_principals WHERE id = :id"),
+                        {"id": principal_id}).scalar()
+    return status == "active"
+
+
+def _find_user_item(db: Any, connection: ConnectionRef, owner: str) -> dict[str, Any]:
+    from sqlalchemy import text
+
+    if connection.item_id:
+        row = _load(db, connection.item_id)
+    else:
+        found = db.execute(text(
+            "SELECT id FROM identity_vault_items WHERE owner_principal_id = :o AND provider = :p "
+            "AND kind IN ('oauth_user','legacy_pat') AND status <> 'revoked' "
+            "ORDER BY created_at DESC LIMIT 1"), {"o": owner, "p": connection.provider}).scalar()
+        if not found:
+            raise VaultNotFound("no_connection")
+        row = _load(db, found)
+    if row.get("owner_principal_id") != owner or row.get("provider") != connection.provider:
+        raise VaultForbidden("not_your_connection")
+    return row
+
+
 def get_credential(connection: ConnectionRef, purpose: CredentialPurpose, *, ctx: AuthContext,
                    task: Optional[TaskBinding] = None, db: Any) -> ShortLivedCredential:
     """Return a short-lived, down-scoped credential for `connection`. Refreshes on demand when the
     stored access token has <5 min left (single-flight, SELECT … FOR UPDATE); `needs_reauth` when
     the provider rotated but the write failed. GitHub run tokens are minted per run, scoped to the
     run's repo and to grant ∩ passport.external_ceiling ∩ step needs."""
-    raise NotImplementedError("identity.vault.get_credential is stream S3's")
+    from . import audit, policy
+
+    purpose = CredentialPurpose(purpose)
+    if ctx is None:
+        raise VaultForbidden("unauthenticated")
+    caller_owner = _owner_from_context(ctx)
+    # A54: the owner is the verified subject. A ref naming anyone else is refused, whatever it says.
+    if connection.owner_principal_id is not None and connection.owner_principal_id != caller_owner:
+        raise VaultForbidden("not_your_connection")
+
+    if purpose in (CredentialPurpose.GITHUB_RUN, CredentialPurpose.GITHUB_JIT):
+        if purpose == CredentialPurpose.GITHUB_JIT:
+            pol = policy.get_policy(ctx.principal.org_id, db=db)
+            if not pol.github_jit_credentials:                       # A59
+                raise VaultForbidden("jit_disabled")
+        if ctx.run_token is None or task is None:
+            raise VaultForbidden("run_token_required")
+        from . import github_app
+
+        cred = github_app.mint_for_run(ctx.run_token, task=task, db=db)
+        if purpose == CredentialPurpose.GITHUB_JIT:
+            audit.record(audit.SecurityEvent.from_context(
+                ctx, "credential.handed_out", audit.Outcome.SUCCESS, stream=audit.Stream.LINEAGE,
+                target_type="github_repo", target_id=",".join(github_app.run_repos(task)),
+                details={"purpose": purpose.value, "run": task.run_id}), db=db)
+        return cred
+
+    if purpose in (CredentialPurpose.GITHUB_AS_USER, CredentialPurpose.PROVIDER_CALL):
+        if caller_owner is None:
+            raise VaultForbidden("no_person")
+        if ctx.run_token is not None:
+            from . import grants
+
+            provider = "github" if purpose == CredentialPurpose.GITHUB_AS_USER else connection.provider
+            if not grants.allows_as_user(ctx.run_token.grant_id, provider, db=db):
+                raise VaultForbidden("grant_not_as_me")
+        if not _owner_active(db, caller_owner):
+            raise VaultForbidden("owner_inactive")
+        row = _find_user_item(db, connection, caller_owner)
+        if row["status"] != "active":
+            raise VaultNeedsReauth(row["status"])
+        exp = row.get("access_expires_at")
+        if exp is not None and exp - _now() <= REFRESH_LEEWAY:
+            row = _refresh_locked(db, row["id"])
+        token = _open(db, row)
+        from sqlalchemy import text
+
+        db.execute(text("UPDATE identity_vault_items SET last_used_at = now() WHERE id = :id"),
+                   {"id": row["id"]})
+        return ShortLivedCredential(token=token,
+                                    expires_at=row.get("access_expires_at") or (_now() + timedelta(hours=1)),
+                                    provider=row.get("provider") or "", item_id=row["id"],
+                                    scopes=frozenset(row.get("granted_scopes") or ()))
+    raise VaultForbidden("purpose_not_served_here")
 
 
-def store(*, org_id: str, owner_principal_id: Optional[str], kind: VaultItemKind,
-          provider: Optional[str], secret: str, refresh: Optional[str] = None,
-          access_expires_at: Optional[datetime] = None, db: Any) -> str:
-    """Encrypt and store a secret; returns the vlt_ item id. The caller never sees ciphertext."""
-    raise NotImplementedError("identity.vault.store is stream S3's")
+def token_for_access_check(owner_principal_id: str, *, provider: str, db: Any) -> Optional[str]:
+    """The person's own provider token, for ONE read-only access check made on their behalf (the
+    user-repo-access guard). Not reachable from any route or agent: the caller is the grant
+    service acting for this same person. None when they have no usable connection."""
+    from sqlalchemy import text
+
+    if not _owner_active(db, owner_principal_id):
+        return None
+    found = db.execute(text(
+        "SELECT id FROM identity_vault_items WHERE owner_principal_id = :o AND provider = :p "
+        "AND kind = 'oauth_user' AND status = 'active' ORDER BY created_at DESC LIMIT 1"),
+        {"o": owner_principal_id, "p": provider}).scalar()
+    if not found:
+        return None
+    row = _load(db, found)
+    exp = row.get("access_expires_at")
+    if exp is not None and exp - _now() <= REFRESH_LEEWAY:
+        try:
+            row = _refresh_locked(db, found)
+        except VaultNeedsReauth:
+            return None
+    return _open(db, row)
 
 
 def revoke(item_id: str, *, ctx: AuthContext, reason: str, db: Any) -> None:
-    """Revoke at the provider (e.g. GitHub DELETE /applications/{client_id}/grant) and locally."""
-    raise NotImplementedError("identity.vault.revoke is stream S3's")
+    """Revoke at the provider (e.g. GitHub DELETE /applications/{client_id}/grant) and locally.
+    The ciphertext is crypto-shredded: the wrapped DEK is overwritten, so no backup reopens it."""
+    from sqlalchemy import text
+
+    from . import audit
+
+    row = _load(db, item_id, for_update=True)
+    owner = row.get("owner_principal_id")
+    if ctx is not None and ctx.run_token is not None:
+        raise VaultForbidden("agents_cannot_revoke")
+    if ctx is not None and ctx.principal.kind != PrincipalKind.SYSTEM and owner is not None \
+            and _owner_from_context(ctx) != owner:
+        from . import authz
+        from .scope import ResolvedScope
+
+        decision = authz.check(ctx, "connection:revoke_any", ResolvedScope.org_level(row["org_id"]), db=db)
+        if not decision.allowed:
+            raise VaultForbidden("not_your_connection")
+    if row["status"] == "revoked":
+        return
+    revoker = REVOKERS.get(row.get("provider") or "")
+    if revoker is not None and row["kind"] == VaultItemKind.OAUTH_USER.value:
+        try:
+            access = _open(db, row)
+            refresh = _open(db, row, "refresh") if row.get("refresh_enc") is not None else None
+            revoker(access, refresh)
+        except VaultDecryptError:
+            pass
+        except Exception:  # noqa: BLE001 — local revocation still happens
+            log.warning("provider revocation failed for vault item %s", item_id)
+    db.execute(text(
+        "UPDATE identity_vault_items SET status = 'revoked', dek_wrapped = :shred, "
+        "secret_enc = :shred, refresh_enc = NULL, refresh_nonce = NULL WHERE id = :id"),
+        {"id": item_id, "shred": secrets.token_bytes(60)})
+    details = {"reason": reason[:200]}
+    event = (audit.SecurityEvent.from_context(ctx, "vault.connection.revoked", audit.Outcome.SUCCESS,
+                                              target_type="vault_item", target_id=item_id, details=details)
+             if ctx is not None else
+             audit.SecurityEvent(org_id=row["org_id"], event_type="vault.connection.revoked",
+                                 outcome=audit.Outcome.SUCCESS, target_type="vault_item",
+                                 target_id=item_id, details=details))
+    audit.record(event, db=db)
 
 
-def _decrypt(item_row: Any, *, field_name: str = "secret") -> str:  # pragma: no cover - S3
-    """Private. Only vault.py calls this (R9)."""
-    raise NotImplementedError("identity.vault._decrypt is stream S3's")
+def rotate_master_key(new_key: bytes, *, db: Any) -> int:
+    """Re-wrap every DEK under `new_key` in the caller's ONE transaction (the CLI is S5's). Data
+    ciphertexts never change; only `dek_wrapped` and `kek_id`. Returns the number of rows re-wrapped.
+    The caller then points BOSS_MASTER_KEY(_FILE) at the new key and calls reset_master_key_cache()."""
+    from sqlalchemy import text
+
+    if len(new_key) != 32:
+        raise MasterKeyMissing("master_key_wrong_length")
+    old_id, old = _kek()
+    new_kek_id = kek_id_of(new_key)
+    rows = db.execute(text("SELECT id, owner_principal_id, provider, kind, dek_wrapped, kek_id "
+                           "FROM identity_vault_items WHERE status <> 'revoked' FOR UPDATE")).mappings().all()
+    for r in rows:
+        if r["kek_id"] != old_id:
+            raise MasterKeyMismatch("row_under_unknown_kek")
+        row_aad = _row_aad(r)
+        dek = _unwrap_dek(old, bytes(r["dek_wrapped"]), row_aad)
+        db.execute(text("UPDATE identity_vault_items SET dek_wrapped = :w, kek_id = :k WHERE id = :id"),
+                   {"w": _wrap_dek(new_key, dek, row_aad), "k": new_kek_id, "id": r["id"]})
+    db.execute(text("UPDATE identity_vault_keks SET retired_at = now() WHERE kek_id = :k"), {"k": old_id})
+    db.execute(text("INSERT INTO identity_vault_keks (kek_id, kcv, source) VALUES (:k, :c, 'rotated') "
+                    "ON CONFLICT (kek_id) DO UPDATE SET retired_at = NULL"),
+               {"k": new_kek_id, "c": kcv_of(new_key)})
+    return len(rows)

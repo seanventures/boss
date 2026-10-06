@@ -22,7 +22,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from ..config import Settings
 from . import owned_process
@@ -270,10 +270,16 @@ class EphemeralSandbox:
         work_branch: Optional[str] = None,
         token: Optional[str] = None,
         repo_host: str = "github",
+        egress: Optional[Any] = None,
     ) -> Path:
         """Shallow-clone ``owner/repo`` into a fresh temp dir and check out a work
         branch. ``token`` (PAT or short-lived GitHub-App installation token) is
-        used only for the clone URL and is never written to disk."""
+        used only for the clone URL and is never written to disk.
+
+        ``egress`` (identity.runs.CloneAccess) is the identity path: the clone goes through the
+        boss-egress proxy with a credential-free URL, git asks the run's shim for the per-run
+        ``boss_egr_`` credential, and NO GitHub token exists anywhere in the sandbox
+        (IDENTITY.md §7.10). ``token`` is then ignored."""
         if self.path is not None:
             raise SandboxError("Sandbox already provisioned.")
         root = self._root()
@@ -288,12 +294,23 @@ class EphemeralSandbox:
         # BOSS-267: the host's authenticated clone-URL form lives in ONE place now.
         from .repo_host import clone_url_for
         clone_url = clone_url_for(repo_host, owner, repo, token or "")
+        egress_config: list[str] = []
+        if egress is not None:
+            token = None
+            clone_url = egress.clone_url
+            for key, value in egress.git_config:
+                egress_config += ["-c", f"{key}={value}"]
 
         depth = max(1, int(self.settings.sandbox_clone_depth or 1))
         self._git(
-            ["clone", "--depth", str(depth), "--branch", base_branch, clone_url, "."],
+            [*egress_config, "clone", "--depth", str(depth), "--branch", base_branch, clone_url, "."],
             redact=token,
         )
+        if egress is not None:
+            # Keep pushes and fetches on the egress path inside this clone (still no secret on disk:
+            # the helper asks the shim at the moment git needs it).
+            for key, value in egress.git_config:
+                self._git(["config", "--add" if key == "credential.helper" else "--replace-all", key, value])
         # Local identity for the bot author (commits are attributed to BOSS).
         self._git(["config", "user.name", "boss-agent"])
         self._git(["config", "user.email", "boss-agent@users.noreply.github.com"])

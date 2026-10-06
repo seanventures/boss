@@ -108,8 +108,12 @@ class MCPClient:
     # ------------------------------------------------------------------ transport
     def _post(self, url: str, payload: dict, headers: Optional[dict],
               session: Optional[_Session]) -> httpx.Response:
+        # No token passthrough (IDENTITY.md §7.14): an upstream server gets only its OWN stored auth,
+        # never a BOSS session, key, run token, DPoP proof or egress credential.
+        from boss_engine.identity.tokens import refuse_passthrough
+
         sent = {"Accept": "application/json, text/event-stream",
-                "Content-Type": "application/json", **(headers or {})}
+                "Content-Type": "application/json", **refuse_passthrough(headers or {})}
         if session is not None:
             if session.session_id:
                 sent["Mcp-Session-Id"] = session.session_id
