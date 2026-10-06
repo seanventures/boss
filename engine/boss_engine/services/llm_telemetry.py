@@ -297,7 +297,7 @@ def record_llm_call(
                     observe(c, ctx.get("settings"), str(project_id), str(engine_name),
                             event=u.get("rate_limit") if isinstance(u.get("rate_limit"), dict)
                             else None, error=None if ok else error,
-                            ok_model=(model or "") if ok and not u.get("rate_limit") else None)
+                            ok_model=(model or "") if ok else None)
     except Exception as exc:  # noqa: BLE001 — telemetry must never break the pipeline
         log.warning("llm_call telemetry write failed (non-fatal): %s", exc)
 

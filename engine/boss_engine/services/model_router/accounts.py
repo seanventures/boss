@@ -183,16 +183,18 @@ def observe(connection: Any, settings: Any, project_id: Optional[str], engine: s
         current = load(connection, [key]).get(key) or {}
         windows = dict(current.get("windows") or {})
         cleared: list[str] = []
-        if ok_model is not None and not patch:
+        if ok_model is not None:
+            # A SUCCESS IS EVIDENCE: the rejected windows it disproves are cleared — even when
+            # the same call also brought a rate_limit_event (Claude Code sends one every time).
             family = next((f for f in ("opus", "sonnet") if f in str(ok_model).lower()), None)
             for kind, body in list(windows.items()):
-                if str((body or {}).get("status")) != "rejected":
+                if kind in patch or str((body or {}).get("status")) != "rejected":
                     continue
                 if kind in MODEL_WINDOWS and MODEL_WINDOWS[kind] != family:
                     continue                         # a Sonnet success says nothing of Opus
                 windows.pop(kind)
                 cleared.append(kind)
-            if not cleared:
+            if not cleared and not patch:
                 return {}
         changed = bool(cleared)
         state_moved = bool(cleared)
