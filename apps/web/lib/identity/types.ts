@@ -307,7 +307,7 @@ export interface DelegationDetail extends Delegation {
   checked: string | null;
 }
 
-/** POST /v1/identity/me/delegations/preview and /delegations/{id}/revoke?dry_run (S3 cascade). */
+/** GET /v1/identity/delegations/{id}/cascade-preview, and POST …/revoke {dry_run:true} (S3 cascade). */
 export interface CascadePreview {
   items: { kind: "runs" | "tokens" | "github" | "grants" | "schedules"; label: string; detail: string; count: number }[];
   halts: number;
@@ -370,20 +370,30 @@ export interface AuditPage {
   chain: { verified_at: string | null; seq: number; ok: boolean; first_break: number | null };
 }
 
+/**
+ * GET /v1/identity/providers → {providers: Provider[]} (routers/identity_sso.py _public_provider).
+ * No secret, ever: `has_client_secret` says whether one is stored. PATCH takes the writable keys
+ * (name, domains, jit_mode, trust_idp_mfa, enforce_sso, status, …) and answers the same shape.
+ */
 export interface Provider {
   id: string;
   name: string;
-  kind: "oidc" | "saml" | "oauth2";
-  preset: "google" | "github" | "microsoft" | "apple" | "okta" | "entra" | "keycloak" | "custom";
+  protocol: "oidc" | "saml" | "oauth2";
+  preset: "google" | "github" | "microsoft" | "apple" | "okta" | "entra" | "keycloak" | "generic";
   issuer: string | null;
-  status: "active" | "draft" | "error";
-  jwks: { ok: boolean; checked_at: string | null };
+  client_id: string | null;
+  saml_sso_url: string | null;
+  has_client_secret: boolean;
+  scopes: string[];
+  allowed_algs: string[];
+  saml_sp_entity_id: string | null;
+  saml_certificate_count: number;
   domains: string[];
-  jit: "off" | "domains";
+  jit_mode: "off" | "domain";
   trust_idp_mfa: boolean;
   enforce_sso: boolean;
-  group_mappings: { idp_group: string; group: string }[];
-  scim_keys: { id: string; created_at: string; last_used_at: string | null }[];
+  groups_claim: string | null;
+  status: "active" | "disabled";
 }
 
 export interface SecurityPolicy {
@@ -397,11 +407,18 @@ export interface SecurityPolicy {
   delegation_max_days: number;
   delegation_max_depth: number;
   delegation_until_revoked: boolean;
+  /** The EFFECTIVE value; PUT null to make it automatic again (D28). */
   github_require_user_repo_access: boolean;
+  /** Read only: true while the setting follows the install (on once more than one person). */
+  github_require_user_repo_access_auto?: boolean;
+  /** S5's network bridge. Only {active:false} may be PUT ("Require sign-in"); turning it back on is 409. */
   network_mode: { active: boolean; ends_at: string | null };
   signup: { enabled: boolean; domains: string[] };
+  /** Read only: is email (SMTP) configured. A status, never a switch. */
   smtp: boolean;
   public_origin: string | null;
+  /** Other policy keys the API serves (step_up_minutes, key_default_days, …), kept as read. */
+  [extra: string]: unknown;
 }
 
 /**

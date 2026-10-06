@@ -20,7 +20,7 @@ import { IdentityError, idGet, idPost } from "../../../lib/identity/api";
 import type { AuditEvent, AuditOutcome, AuditPage } from "../../../lib/identity/types";
 import { showToast } from "../../client-forms";
 import { JsonView } from "../json-view";
-import { EMPTY_FILTERS, EVENT_GROUPS, inGroup, parseSearch, queryFrom, searchText, type AuditFilters, type EventGroup } from "./audit-query";
+import { EMPTY_FILTERS, EVENT_GROUPS, apiQuery, inGroup, parseSearch, queryFrom, searchText, type AuditFilters, type EventGroup } from "./audit-query";
 
 type Kind = "all" | "people" | "agents" | "keys" | "system";
 const KINDS: { id: Kind; label: string }[] = [
@@ -43,6 +43,20 @@ function dayLabel(iso: string, now: number): string {
   if (key(d) === key(today)) return `TODAY · ${base}`;
   if (key(d) === key(yesterday)) return `YESTERDAY · ${base}`;
   return base;
+}
+
+/** Save the export bundle the API returns inline (it has no download URL). */
+function saveJson(data: unknown, name: string): void {
+  try {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch { /* no download here (tests, old browsers) */ }
 }
 
 const OUTCOME_TONE: Record<AuditOutcome, "ok" | "bad" | "warn"> = { ok: "ok", denied: "bad", failed: "warn", notice: "warn" };
@@ -147,8 +161,10 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
   const [more, setMore] = useState(Boolean(initialFilters.grant));
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  const [linked, setLinked] = useState<AuditEvent | null>(null);
   const guarded = useGuardedCall();
   const events = page?.events ?? [];
+  const rangeMs = RANGES.find((r) => r.id === range)!.ms;
   const firstPick = initialEvent ?? events.find((e) => e.outcome === "denied" && e.why.length)?.id ?? events.find((e) => e.outcome === "denied")?.id ?? events[0]?.id ?? null;
   const [selected, setSelected] = useState<string | null>(firstPick);
   const rowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map());
@@ -166,11 +182,12 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
   const idOf = useCallback((name: string) => [...names.entries()].find(([, n]) => n.toLowerCase() === name.toLowerCase())?.[0] ?? null, [names]);
   const [text, setText] = useState(() => searchText(initialFilters, () => null));
 
-  const load = useCallback(async (f: AuditFilters) => {
+  const load = useCallback(async (f: AuditFilters, view = { group, kind, rangeMs }, cursor: string | null = null) => {
     setLoading(true);
     try {
-      const next = await idGet<AuditPage>(`/v1/identity/audit?${queryFrom(f)}`);
-      setPage(next);
+      const next = await idGet<AuditPage>(`/v1/identity/audit?${apiQuery(f, view, Date.now(), cursor)}`);
+      // "Load more" appends the older page; a new filter replaces it.
+      setPage((p) => (cursor && p ? { ...next, events: [...p.events, ...next.events] } : next));
       try {
         const url = new URL(window.location.href);
         url.search = queryFrom(f);
@@ -181,18 +198,32 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [group, kind, rangeMs]);
 
   const apply = (f: AuditFilters) => {
     setFilters(f);
     setText(searchText(f, nameOf));
     load(f);
   };
+  /** A dropdown changed: ask the API for that slice (it filters event prefix, kind and time). */
+  const reslice = (view: { group: EventGroup; kind: Kind; rangeMs: number }) => { load(filters, view); };
+
+  // A deep link (?event=sev_N) to an event not on this page is read by id for the drawer.
+  useEffect(() => {
+    if (!initialEvent || events.some((e) => e.id === initialEvent)) return;
+    let live = true;
+    idGet<AuditEvent>(`/v1/identity/audit/${encodeURIComponent(initialEvent)}`)
+      .then((e) => { if (live) setLinked(e); })
+      .catch(() => undefined);
+    return () => { live = false; };
+    // Only for the event the page was opened on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialEvent]);
 
   const verify = useCallback(async () => {
     setVerifying(true);
     try {
-      const r = await idPost<{ ok: boolean; seq: number; verified_at: string; first_break: number | null }>("/v1/identity/audit/verify", {});
+      const r = await idPost<{ ok: boolean; seq: number; verified_at: string | null; first_break: number | null }>("/v1/identity/audit/verify", {});
       setPage((p) => (p ? { ...p, chain: { verified_at: r.verified_at, seq: r.seq, ok: r.ok, first_break: r.first_break } } : p));
       showToast(r.ok ? "success" : "error", r.ok ? "Chain verified" : "Chain broken");
     } catch (e) {
@@ -206,9 +237,11 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
 
   const exportLog = async () => {
     try {
-      const r = await guarded("Exporting copies the whole security log.", () => idPost<{ url: string | null; events: number }>("/v1/identity/audit/export", {}));
+      const r = await guarded("Exporting copies the whole security log.", () =>
+        idPost<{ url: string | null; events: number; anchor: string | null; bundle?: unknown }>("/v1/identity/audit/export", {}));
       if (r.url) window.location.assign(r.url);
-      showToast("success", "Export ready");
+      else if (r.bundle) saveJson(r.bundle, `boss-audit-${new Date().toISOString().slice(0, 10)}.json`);
+      showToast("success", `Exported ${r.events.toLocaleString("en-US")} events`);
     } catch (e) {
       if (!(e instanceof IdentityError && e.code === "step_up_cancelled")) showToast("error", e instanceof IdentityError ? e.message : "Not exported");
     }
@@ -229,7 +262,7 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
     return out;
   }, [shown, now]);
 
-  const current = shown.find((e) => e.id === selected) ?? null;
+  const current = shown.find((e) => e.id === selected) ?? (linked && linked.id === selected ? linked : null);
   const pick = (id: string) => {
     setSelected(id);
     try {
@@ -284,19 +317,19 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
         ) : null}
         <label className="idn-fchip idn-select">
           <span className="idn-sr">Event group</span>
-          <select value={group} onChange={(ev) => setGroup(ev.target.value as EventGroup)}>
+          <select value={group} onChange={(ev) => { const g = ev.target.value as EventGroup; setGroup(g); reslice({ group: g, kind, rangeMs }); }}>
             {EVENT_GROUPS.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
           </select>
         </label>
         <label className="idn-fchip idn-select">
           <span className="idn-sr">Principal kind</span>
-          <select value={kind} onChange={(ev) => setKind(ev.target.value as Kind)}>
+          <select value={kind} onChange={(ev) => { const k = ev.target.value as Kind; setKind(k); reslice({ group, kind: k, rangeMs }); }}>
             {KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
           </select>
         </label>
         <label className="idn-fchip idn-select">
           <span className="idn-sr">Time</span>
-          <select value={range} onChange={(ev) => setRange(ev.target.value as Range)}>
+          <select value={range} onChange={(ev) => { const r = ev.target.value as Range; setRange(r); reslice({ group, kind, rangeMs: RANGES.find((x) => x.id === r)!.ms }); }}>
             {RANGES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
           </select>
         </label>
@@ -355,6 +388,10 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
                 {!shown.length ? <tr><td colSpan={6} className="idn-dim">{page ? "No events match" : "The audit log is unavailable"}</td></tr> : null}
               </tbody>
             </table>
+            {page?.cursor ? (
+              <button type="button" className="idn-btn sm ghost" disabled={loading} data-testid="audit-more"
+                onClick={() => load(filters, { group, kind, rangeMs }, page.cursor)}>{loading ? "Loading…" : "Load older events"}</button>
+            ) : null}
           </div>
         </div>
         {current ? <Drawer e={current} onFilter={(f) => apply({ ...EMPTY_FILTERS, ...f })} /> : (
