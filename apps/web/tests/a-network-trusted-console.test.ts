@@ -16,7 +16,7 @@ afterEach(() => vi.unstubAllEnvs());
 
 function proxied(path: string, init: { method?: string; origin?: string } = {}) {
   const headers: Record<string, string> = {
-    host: "boss.local.sean.network", "x-forwarded-host": "boss.local.sean.network",
+    host: "boss.example.test", "x-forwarded-host": "boss.example.test",
     "x-forwarded-proto": "https",
   };
   if (init.origin) headers.origin = init.origin;
@@ -45,7 +45,7 @@ describe("a network-trusted console", () => {
     const none = await middleware(proxied("/v1/decisions/d1/approve", { method: "POST" }));
     expect(none.status).toBe(403);
     const own = await middleware(proxied("/v1/decisions/d1/approve",
-      { method: "POST", origin: "https://boss.local.sean.network" }));
+      { method: "POST", origin: "https://boss.example.test" }));
     expect(own.status).toBe(200);
   });
 

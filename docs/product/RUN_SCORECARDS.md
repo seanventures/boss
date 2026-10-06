@@ -313,7 +313,7 @@ section disagree, the code is wrong.
    payload is sent and no connection is opened by ANY path — the daily send, Share this run,
    Delete, a rotation's delete. One list of words, `improve_boss.TELEMETRY_OFF_WORDS`
    (`off 0 false no disabled disable none`) and `DNT_ON_WORDS` (`1 true yes on`), used by the
-   engine and by `checkup.sh` alike. Govern › Sharing shows the switches locked and why.
+   engine and by `checkup.sh` alike, with surrounding quotes ignored. Govern › Sharing shows the switches locked and why.
 4. **The collector is part of BOSS,** active only when **Collector mode** is on (a console toggle in
    Govern › Sharing; goldeneye's ops API cannot set env).
 5. **No default collector** (2026-10-05, after the independent test). With no collector URL
@@ -479,8 +479,12 @@ new process or thread.
   starts at consent and an off period is never covered after turning it on again. Scorecards
   travel only for units that **ended** after consent (a backfill or late outcome after consent
   does not carry an older run). A check-in line is sendable only if it was ticked **and saved
-  while the switch was on**. (Range snapshots — `scale`, `setup`, the first-week funnel — describe
-  the install as it is when the batch is cut.)
+  while the switch was on**. **Install-age facts, stated plainly:** `scale` and `setup`
+  are ranges describing the install as it is when the batch is cut, and `usage.funnel` says, for
+  each first-week milestone the install ever reached (model connected, first build, PR, merge,
+  deploy), how many days after install it happened — as an age bucket (`0-1`, `2-7`, …), never a
+  date or what the work was. These are the only fields that describe time before consent; they
+  are coarse by design, carry no content, and are what "which features you use" covers.
 - **Batches:** with the switch on, each day's batch covers `since` → `until` (see above → the
   cut), built from SQL aggregates, stored in `telemetry_batches` and kept until delivered.
   One POST carries the heartbeat plus every undelivered batch; more than 7 undelivered → the
@@ -584,8 +588,9 @@ tick the same day sent nothing.
 
 A button on a build and a workflow run. It opens the run's bundle — steps, agent turns (their
 text), errors and log tails — after `share_scrub.scrub()` (the Activity log's credential and PII
-scrub, plus URLs, hostnames, file paths and names, and this install's own repositories, projects,
-orgs and people; timestamps are kept), in an editable box under a plain notice: "Check for
+scrub, plus URLs, any host-like token, IPv4 and IPv6, file paths and names, and this install's own
+repositories, branches, app, project, org and people names, plus the operator's own "Always mask"
+words from Govern › Sharing; timestamps are kept), in an editable box under a plain notice: "Check for
 anything private". The person edits it,
 adds a note and presses Send once: `POST <collector>/v1/telemetry/share` (≤ 256 KB gzip). Nothing
 is sent before that press, and the bundle is not kept by the client.
@@ -601,8 +606,9 @@ browser always sends one), and the console's `/v1` proxy does not attach its API
   a bounded gunzip, `v` must be 1, validated with `SCHEMA` (unknown fields dropped, a bad `install_id`
   refused). The body is streamed and refused the moment it passes the cap. Rate limits, in
   memory: 30 requests per address per hour and 6 per install id per day. The address is the real
-  peer; `X-Forwarded-For` is believed only from `BOSS_TRUSTED_PROXIES` (default loopback and
-  private ranges), taking the right-most untrusted hop. One address may introduce 3 **new**
+  peer; `X-Forwarded-For` is believed only from `BOSS_TRUSTED_PROXIES` (default **loopback
+  only**; a reverse proxy on another address must be listed there), taking the right-most
+  untrusted hop and skipping malformed ones. One address may introduce 3 **new**
   install ids a day; more are stored but marked `suspicious` and kept out of every count (the
   dashboard says how many are held back). The address is hashed, held an hour in memory, never
   stored, and the API's access log writes "-" for it on `/v1/telemetry/*`. Idempotent per `(install_id, day)` for the
@@ -610,7 +616,9 @@ browser always sends one), and the console's `/v1` proxy does not attach its API
   `{"ok":true,"duplicate":true}`.
 - `POST /v1/telemetry/delete`: `{"install_id","ts","proof","sig"}` where `proof` is the install
   secret and `sig = HMAC-SHA256(secret, "delete|<install_id>|<ts>")`; `sha256(proof)` must equal
-  the stored `secret_hash` and `ts` be within 10 minutes. Deletes every row for that id.
+  the stored `secret_hash` (from its heartbeats, or from a shared run, which carries it too) and
+  `ts` be within 10 minutes. Deletes every row for that id — heartbeats, batches, shared runs —
+  and answers how many; the console reports that number, never "deleted" for nothing.
 - `POST /v1/telemetry/share`: ≤ 256 KB gzip, same limits; stored in `tm_shares`.
 - Storage: `tm_installs`, `tm_heartbeats`, `tm_batches`, `tm_shares`, `tm_rollups`. No IP address,
   hostname or name. Retention: rows older than 18 months are rolled into `tm_rollups` (monthly

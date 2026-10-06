@@ -15,7 +15,7 @@ afterEach(() => vi.unstubAllEnvs());
 
 function req(path: string, init: { method?: string; origin?: string; cookie?: string } = {}) {
   const headers: Record<string, string> = {
-    host: "boss-api.local.sean.network", "x-forwarded-host": "boss-api.local.sean.network",
+    host: "boss-api.example.test", "x-forwarded-host": "boss-api.example.test",
     "x-forwarded-proto": "https", "content-encoding": "gzip",
   };
   if (init.origin) headers.origin = init.origin;

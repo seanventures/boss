@@ -27,9 +27,16 @@ _TIMESTAMP = re.compile(
     r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b"
     r"|\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b|\b\d{2}:\d{2}\b")
 _URL = re.compile(r"\b[a-z][a-z0-9+.\-]*://[^\s'\"<>)\]]+|\bgit@[\w.\-]+:[\w./\-]+", re.I)
-_TLDS = ("com|net|org|io|dev|app|ai|co|cloud|sh|xyz|me|us|uk|de|fr|in|jp|cn|eu|biz|info|tech|"
-         "site|online|local|internal|lan|corp|home|network|intra|test|example|localhost")
-_HOST = re.compile(rf"\b(?:[a-z0-9](?:[a-z0-9\-]{{0,61}}[a-z0-9])?\.)+(?:{_TLDS})\b", re.I)
+# ANY host-like token: dot-separated labels whose last label starts with a letter — no TLD list,
+# so `db-01.acme.corp-net` and `build.intranet` go too (re-check item 4). It over-masks a code
+# path like `self.settings` — better than letting a host through; the person reads the result.
+_HOST = re.compile(r"(?<![\w@.-])(?:[a-z0-9](?:[a-z0-9_-]{0,62})?\.)+[a-z][a-z0-9-]{0,62}(?![\w-])", re.I)
+_IPV6 = re.compile(r"(?<![\w:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}"
+                   r"|(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)"
+                   r"(?![\w:])", re.I)
+#: The spec and run fields that NAME things in this install: a repository, a branch, an app.
+_SPEC_NAMES = ("repo", "owner", "base_branch", "branch", "head_branch", "app", "app_name",
+               "app_slug", "project", "project_name")
 _PATH = re.compile(r"(?<![\w:/.\-])(?:~|\.{1,2})?/?(?:[\w.\-@]+/)+[\w.\-@]+|\b[A-Za-z]:\\[^\s'\"]+")
 _FILE = re.compile(r"\b[\w\-]+\.(?:py|pyi|ts|tsx|js|jsx|mjs|go|rs|java|kt|rb|php|cs|cpp|cc|c|h|"
                    r"hpp|swift|scala|json|ya?ml|toml|ini|cfg|env|md|sql|sh|bash|css|scss|html|"
@@ -49,12 +56,24 @@ def install_names(connection, project_id: str) -> list[tuple[str, str]]:
 
     for owner, name, full in rows("SELECT owner, name, full_name FROM github_repository_bindings"):
         out += [("REPO", full), ("REPO", owner), ("REPO", name)]
-    for (spec,) in rows("SELECT spec FROM code_task_runs WHERE project_id = :p "
-                        "ORDER BY created_at DESC LIMIT 200", p=project_id):
-        if isinstance(spec, dict):
-            for key in ("repo", "owner"):
-                if spec.get(key):
-                    out.append(("REPO", str(spec[key])))
+    for spec, fc in rows("SELECT spec, finalize_ctx FROM code_task_runs WHERE project_id = :p "
+                         "ORDER BY created_at DESC LIMIT 200", p=project_id):
+        for blob in (spec, fc):
+            if not isinstance(blob, dict):
+                continue
+            for key in _SPEC_NAMES:
+                value = blob.get(key)
+                if isinstance(value, str) and value.strip():
+                    out.append(("REPO" if key in ("repo", "owner") else "NAME", value.strip()))
+                    if "/" in value:  # owner/name: the bare name and owner too
+                        out += [("REPO", part) for part in value.split("/") if part.strip()]
+    # The operator's own list (Govern › Sharing › Always mask).
+    try:
+        from .improve_boss import mask_words
+
+        out += [("NAME", w) for w in mask_words(connection)]
+    except Exception:  # noqa: BLE001
+        pass
     for row in rows("SELECT id, name, slug FROM projects"):
         out += [("NAME", str(v)) for v in row if v]
     for row in rows("SELECT id, name FROM orgs"):
@@ -102,6 +121,7 @@ def scrub(raw: str, names: list[tuple[str, str]]) -> tuple[str, dict[str, int]]:
     work, found = redact(work)
     for k, v in found.items():
         counts[k] = counts.get(k, 0) + v
+    mask(_IPV6, "IP")
     mask(_PATH, "PATH")
     mask(_FILE, "FILE")
     mask(_HOST, "HOST")

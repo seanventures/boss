@@ -30,7 +30,7 @@ const ALIASES: [string, string][] = [
 
 function proxied(path: string, headers: Record<string, string> = {}) {
   return new NextRequest(`http://10.0.0.5:3000${path}`, {
-    headers: { host: "boss.local.sean.network", "x-forwarded-host": "boss.local.sean.network",
+    headers: { host: "boss.example.test", "x-forwarded-host": "boss.example.test",
                "x-forwarded-proto": "https", ...headers },
   });
 }
@@ -44,7 +44,7 @@ describe("every alias and unknown area", () => {
       expect(res.status).toBe(307);
       const location = res.headers.get("location") ?? "";
       const url = new URL(location); // what Next's adapter does: throws on a relative one
-      expect(url.origin).toBe("https://boss.local.sean.network");
+      expect(url.origin).toBe("https://boss.example.test");
       expect(url.searchParams.get("area")).toBe(area);
       expect(url.searchParams.get("org")).toBe("org_boss");
       const meant = consoleParams(new URLSearchParams(`area=${alias}`));
@@ -73,5 +73,39 @@ describe("every alias and unknown area", () => {
       .replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
     expect(page).not.toMatch(/\bredirect\(/);
     expect(page).toContain("consoleParams(searchParamsFrom(rawSearchParams)).params");
+  });
+
+  it("keeps a browser on this machine on the host it typed (a rewrite, never a Location)", async () => {
+    vi.stubEnv("BOSS_CONSOLE_AUTH", "network");
+    vi.stubEnv("BOSS_CONSOLE_PUBLIC_ORIGIN", "");
+    // What Next hands middleware for a browser on 127.0.0.1: an internal localhost URL and host.
+    const res = await middleware(new NextRequest("http://localhost:3000/?area=govern", {
+      headers: { host: "localhost:3000", "x-forwarded-host": "localhost:3000" } }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+    expect(new URL(res.headers.get("x-middleware-rewrite")!).searchParams.get("area")).toBe("budget");
+  });
+
+  it("the collector's three POST paths never pass middleware (Next would tee their bodies)", async () => {
+    const { config } = await import("../middleware");
+    const re = new RegExp(`^${config.matcher[0].replace(/^\//, "\\/")}$`);
+    for (const p of ["/v1/telemetry/ingest", "/v1/telemetry/delete", "/v1/telemetry/share"]) {
+      expect(re.test(p), p).toBe(false);
+    }
+    for (const p of ["/", "/v1/telemetry/sharing", "/v1/telemetry/ingest/x", "/api/improve"]) {
+      expect(re.test(p), p).toBe(true);
+    }
+  });
+
+  it("a client navigation (router.push) is not redirected: the page renders the target with 200", async () => {
+    vi.stubEnv("BOSS_CONSOLE_AUTH", "network");
+    vi.stubEnv("BOSS_CONSOLE_PUBLIC_ORIGIN", "");
+    for (const extra of [{ path: "/?area=govern", headers: { "sec-fetch-dest": "empty" } },
+                         { path: "/?area=govern", headers: { accept: "text/x-component" } },
+                         { path: "/?area=govern&_rsc=abc", headers: {} }]) {
+      const res = await middleware(proxied(extra.path, extra.headers as Record<string, string>));
+      expect(res.status, extra.path).toBe(200);
+      expect(res.headers.get("x-middleware-next")).toBe("1");
+    }
   });
 });

@@ -32,6 +32,8 @@ const STATUS: Record<string, { word: string; tone: string }> = {
 };
 const KIND: Record<string, string> = { daily: "Daily", share: "Shared run", delete: "Delete", export: "Export" };
 
+const records = (n: number) => `${n} record${n === 1 ? "" : "s"}`;
+
 function whenWords(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -58,6 +60,9 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
   const [confirmForget, setConfirmForget] = useState(false);
   const [weights, setWeights] = useState<Record<string, string>>({});
   const [url, setUrl] = useState<string | null>(null);
+  const [urlError, setUrlError] = useState("");
+  const [mask, setMask] = useState<string | null>(null);
+  const [maskError, setMaskError] = useState("");
   const [rotated, setRotated] = useState("");
   const v = isSharing(read.data) ? read.data : null;
 
@@ -93,9 +98,11 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
     setBusy("");
     if (!r.ok) { showToast("error", r.status === 403 ? "You can't change this" : "Not rotated"); return; }
     // SAY WHAT HAPPENED TO THE OLD ID (P4): deleted, kept until its delete goes, or never sent.
-    const old = ((r.data as { rotated?: { old?: string } }).rotated ?? {}).old;
-    setRotated(old === "deleted" ? "Old id deleted at the collector"
-      : old === "kept" ? "Old id kept until its delete goes through" : "Old id never sent");
+    const got = (r.data as { rotated?: { old?: string; removed?: number } }).rotated ?? {};
+    // THE COLLECTOR'S OWN COUNT (re-check item 2): "deleted" only when it removed something.
+    setRotated(got.old === "deleted" ? `Old id deleted · ${records(got.removed ?? 0)}`
+      : got.old === "nothing_held" ? "Collector held nothing for the old id"
+      : got.old === "kept" ? "Old id kept until its delete goes through" : "Old id never sent");
     showToast("success", "New install id");
     read.reload(); void loadPreview();
   };
@@ -105,8 +112,10 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
     setBusy("");
     setConfirmForget(false);
     const deleted = r.ok && (r.data as { deleted?: boolean }).deleted;
-    showToast(deleted ? "success" : "error", deleted ? "Sent data deleted" : "Delete failed");
-    if (!deleted) setRotated("Not deleted yet · kept to retry");
+    const removed = r.ok ? Number((r.data as { removed?: number }).removed ?? 0) : 0;
+    showToast(deleted ? "success" : "error", !deleted ? "Delete failed" : removed ? "Sent data deleted" : "Nothing was held");
+    setRotated(!deleted ? "Not deleted yet · kept to retry"
+      : removed ? `Deleted · ${records(removed)} at the collector` : "The collector held nothing");
     read.reload();
     void loadPreview();
   };
@@ -135,8 +144,19 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
     setBusy("url");
     const r = await improveWrite("collector_url", { project_id: projectId, actor, url: (url ?? "").trim() });
     setBusy("");
-    if (r.ok) { showToast("success", "Collector saved"); setUrl(null); read.reload(); void loadPreview(); }
-    else showToast("error", r.status === 403 ? "You can't change this" : "Not saved");
+    if (r.ok) { showToast("success", "Collector saved"); setUrl(null); setUrlError(""); read.reload(); void loadPreview(); }
+    else {
+      // THE REASON, beside the field (the toast stays four words): "has to be https", …
+      setUrlError(r.status === 403 ? "You can't change this" : r.error);
+      showToast("error", "Not saved");
+    }
+  };
+  const saveMask = async () => {
+    setBusy("mask");
+    const r = await improveWrite("mask_words", { project_id: projectId, actor, words: mask ?? "" });
+    setBusy("");
+    if (r.ok) { showToast("success", "Words saved"); setMask(null); setMaskError(""); read.reload(); }
+    else { setMaskError(r.status === 403 ? "You can't change this" : r.error); showToast("error", "Not saved"); }
   };
 
   return (
@@ -187,11 +207,24 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
                        title="https://…/v1/telemetry/ingest. Empty sends nothing."
                        onChange={(e) => setUrl(e.target.value)} />
               )}
+              {urlError ? <span className="im-err" role="alert" data-testid="gv-url-error" data-user-text="">{urlError}</span> : null}
             </span>
             {v.url_source !== "env" ? (
               <button type="button" className="ag-btn" disabled={busy !== "" || url === null || url === v.url}
                       data-testid="gv-url-save" onClick={() => void saveUrl()}>Save</button>
             ) : <span />}
+          </li>
+          <li className="im-row" data-testid="gv-sharing-mask">
+            <span className="im-row-name">Always mask</span>
+            <span className="im-row-what">
+              <input className="im-input" value={mask ?? (v.mask_words ?? []).join(", ")} data-user-text=""
+                     placeholder="Client names, codenames" aria-label="Words a shared run always masks"
+                     title="Comma-separated. Masked in every Share this run bundle." data-testid="gv-mask"
+                     spellCheck={false} onChange={(e) => setMask(e.target.value)} />
+              {maskError ? <span className="im-err" role="alert" data-user-text="">{maskError}</span> : null}
+            </span>
+            <button type="button" className="ag-btn" disabled={busy !== "" || mask === null}
+                    data-testid="gv-mask-save" onClick={() => void saveMask()}>Save</button>
           </li>
         </ul>
       </section>

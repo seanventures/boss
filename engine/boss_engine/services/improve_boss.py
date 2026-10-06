@@ -27,6 +27,7 @@ import logging
 import os
 import platform
 import random
+import re
 import secrets
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -62,12 +63,17 @@ Poster = Callable[[str, bytes], tuple[Optional[int], Optional[str]]]
 # ------------------------------------------------------------------------------------------
 
 
+def _env_word(value: Any) -> str:
+    return str(value or "").strip().strip("\"'").strip().lower()
+
+
 def env_disabled(settings: Any) -> Optional[str]:
-    """Why the environment turns everything off, or None. Read on every call."""
-    tel = str(getattr(settings, "telemetry", "") or os.environ.get("BOSS_TELEMETRY", "")).strip().lower()
+    """Why the environment turns everything off, or None. Read on every call. Quotes are
+    stripped, as checkup.sh strips them: `"off"` is off."""
+    tel = _env_word(getattr(settings, "telemetry", "") or os.environ.get("BOSS_TELEMETRY", ""))
     if tel in _OFF_WORDS:
         return "BOSS_TELEMETRY=off"
-    dnt = str(getattr(settings, "do_not_track", "") or os.environ.get("DO_NOT_TRACK", "")).strip().lower()
+    dnt = _env_word(getattr(settings, "do_not_track", "") or os.environ.get("DO_NOT_TRACK", ""))
     if dnt in _ON_WORDS:
         return "DO_NOT_TRACK=1"
     return None
@@ -112,16 +118,28 @@ def switches(connection) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _when(value: Any) -> Optional[datetime]:
+    try:
+        when = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
 def consent_moment(connection) -> Optional[datetime]:
-    """When "Improve BOSS" was last turned ON, or None while it is off."""
+    """The moment from which batches may cover anything: the later of when "Improve BOSS" was last
+    turned ON and the last "Delete what was sent" (`improve_floor`). None while it is off.
+
+    THE FLOOR IS WHAT MAKES A DELETE STICK (re-check item 1): a delete clears the local batches, and
+    without it the next cut fell back to the consent moment and re-uploaded everything the delete
+    had just removed. Nothing from before a delete is ever sent again."""
     got = _get(connection, "improve_boss")
     if not got.get("on") or not got.get("at"):
         return None
-    try:
-        when = datetime.fromisoformat(str(got["at"]))
-    except ValueError:
-        return None
-    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    on_at = _when(got["at"])
+    floor = _when(_get(connection, "improve_floor").get("at"))
+    moments = [t for t in (on_at, floor) if t]
+    return max(moments) if moments else None
 
 
 def set_switch(connection, name: str, on: bool, *, actor: str, project_id: str) -> dict:
@@ -676,6 +694,39 @@ def set_endpoint(connection, url: str, *, actor: str, project_id: str) -> None:
                     host(before) if before else "none", host(clean) if clean else "none")
 
 
+MASK_WORDS_MAX = 50
+
+
+def mask_words(connection) -> list[str]:
+    """Words a shared run always masks, set in Govern › Sharing (a client, a codename)."""
+    return [str(w) for w in (_get(connection, "improve_mask").get("words") or []) if str(w).strip()]
+
+
+def set_mask_words(connection, words: Any, *, actor: str, project_id: str) -> list[str]:
+    if isinstance(words, str):
+        words = re.split(r"[,\n]", words)
+    clean = []
+    for w in words or []:
+        w = str(w).strip()
+        if not w:
+            continue
+        if len(w) < 3 or len(w) > 80:
+            raise ValueError(f"'{w[:20]}': a word to mask is 3 to 80 characters.")
+        if w.lower() not in (c.lower() for c in clean):
+            clean.append(w)
+    if len(clean) > MASK_WORDS_MAX:
+        raise ValueError(f"At most {MASK_WORDS_MAX} words.")
+    before = mask_words(connection)
+    _put(connection, "improve_mask", {"words": clean, "by": actor, "at": _now().isoformat()})
+    if before != clean:
+        from .scorecards import _log_change
+
+        # The words themselves are private: the log says how many, never which.
+        _log_change(connection, project_id, actor, "improve_mask", "Always mask",
+                    f"{len(before)} words", f"{len(clean)} words")
+    return clean
+
+
 def active(connection, settings: Any, *, need_collector: bool = True) -> tuple[bool, Optional[str]]:
     """(anything to send at all, why not). Preview and Export do not need a collector — an
     air-gapped install exports by hand — but sending does."""
@@ -849,7 +900,8 @@ def preview(connection, settings: Any) -> dict[str, Any]:
             "next_due_at": sched.get("next_due_at") if not blocked(connection, settings) else None}
 
 
-def _default_post(url: str, body: bytes) -> tuple[Optional[int], Optional[str]]:
+def _default_post(url: str, body: bytes) -> tuple:
+    """(status, error, the collector's JSON answer or None). Reads at most 64 KB of the answer."""
     import httpx
 
     try:
@@ -857,7 +909,14 @@ def _default_post(url: str, body: bytes) -> tuple[Optional[int], Optional[str]]:
             r = client.post(url, content=body, headers={
                 "Content-Type": "application/json", "Content-Encoding": "gzip",
                 "User-Agent": f"boss/{_version()}"})
-        return r.status_code, None if 200 <= r.status_code < 300 else f"http_{r.status_code}"
+        answer = None
+        try:
+            if len(r.content) <= 65536:
+                answer = r.json()
+        except ValueError:
+            answer = None
+        return (r.status_code, None if 200 <= r.status_code < 300 else f"http_{r.status_code}",
+                answer)
     except httpx.TimeoutException:
         return None, "timeout"
     except httpx.HTTPError as error:
@@ -871,12 +930,21 @@ def transmit(settings: Any, url: str, body: bytes, post: Optional[Poster] = None
     """THE ONE DOOR every outbound telemetry byte goes through: the daily send, a shared run, a
     delete, a rotation's delete. It refuses — before any poster, injected or real, is called —
     when the environment turns sharing off or no collector is set (P2)."""
+    status, error, _answer = transmit_answer(settings, url, body, post)
+    return status, error
+
+
+def transmit_answer(settings: Any, url: str, body: bytes, post: Optional[Poster] = None
+                    ) -> tuple[Optional[int], Optional[str], Optional[dict]]:
+    """transmit(), keeping what the collector answered (a delete's counts)."""
     why = env_disabled(settings)
     if why:
-        return None, "disabled_by_env"
+        return None, "disabled_by_env", None
     if not url:
-        return None, "no_collector"
-    return (post or _default_post)(url, body)
+        return None, "no_collector", None
+    got = tuple((post or _default_post)(url, body))
+    answer = got[2] if len(got) > 2 and isinstance(got[2], dict) else None
+    return got[0], got[1], answer
 
 
 def _trim_log(connection) -> None:
@@ -1005,19 +1073,30 @@ def _log_send(connection, kind: str, ok: bool, raw: int, gz: int, status, error)
          "code": status, "err": error})
 
 
+_LAST_DELETE_COUNTS: dict[str, int] = {}
+
+
 def _delete_ids(engine, settings: Any, idents: list[Mapping[str, str]],
                 post: Optional[Poster]) -> tuple[list[str], list[str], Optional[str]]:
-    """Signed deletes, one per id, through the one door. (deleted ids, failed ids, last error)."""
+    """Signed deletes, one per id, through the one door. (deleted ids, failed ids, last error).
+    What the collector says it removed, per id, is kept in `_LAST_DELETE_COUNTS` — the screen
+    reports those numbers, never "deleted" for an id the collector held nothing for."""
     from ..db import begin
 
     with begin(engine) as c:
         url = collector_url(endpoint(c, settings)[0], "delete")
     done, failed, last_error = [], [], None
+    _LAST_DELETE_COUNTS.clear()
     for ident in idents:
         body = json.dumps(delete_request(ident), sort_keys=True).encode()
         gz = gzip.compress(body, mtime=0)
-        status, error = transmit(settings, url, gz, post)
+        status, error, answer = transmit_answer(settings, url, gz, post)
         ok = status is not None and 200 <= status < 300
+        if ok:
+            try:
+                _LAST_DELETE_COUNTS[ident["id"]] = int((answer or {}).get("deleted") or 0)
+            except (TypeError, ValueError):
+                _LAST_DELETE_COUNTS[ident["id"]] = 0
         with begin(engine) as c:
             _log_send(c, "delete", ok, len(body), len(gz), status, error)
         (done if ok else failed).append(ident["id"])
@@ -1042,8 +1121,12 @@ def rotate(engine, settings: Any, *, actor: str, project_id: str,
     with begin(engine) as c:
         old = identity(c)
         new = _new_identity()
-        if old.get("sent"):
-            ids = _retired(c) + [{"id": old["id"], "secret": old["secret"]}]
+        reachable = blocked(c, settings) is None
+        # The old id is deleted at the collector whenever one can be reached — not only when this
+        # install remembers sending (a shared run, an export carried by hand, a flag lost to a
+        # restore). It is KEPT, with its secret, when something was sent and no delete can go.
+        if old.get("sent") or reachable:
+            ids = _retired(c) + [{"id": old["id"], "secret": old["secret"], "sent": bool(old.get("sent"))}]
             _put(c, "improve_retired", {"ids": ids})
         _put(c, "improve_identity", new)
         _discard_pending(c)
@@ -1054,12 +1137,17 @@ def rotate(engine, settings: Any, *, actor: str, project_id: str,
         pending = _retired(c)
     deleted, failed, error = (_delete_ids(engine, settings, pending, post) if pending
                               else ([], [], None))
+    counts = dict(_LAST_DELETE_COUNTS)
     with begin(engine) as c:
-        left = _settle_retired(c, deleted)
+        # A never-sent id whose delete could not go is not worth keeping a secret for.
+        stale = [r["id"] for r in _retired(c) if r["id"] == old["id"] and not r.get("sent")
+                 and old["id"] in failed]
+        left = _settle_retired(c, deleted + stale)
+    removed = counts.get(old["id"])
     return {"install_id": new["id"],
-            "old": "nothing_sent" if not old.get("sent") else (
-                "deleted" if old["id"] in deleted else "kept"),
-            "waiting": len(left), "error": error}
+            "old": ("deleted" if removed else "nothing_held") if old["id"] in deleted
+            else ("kept" if old.get("sent") else "nothing_sent"),
+            "removed": removed or 0, "waiting": len(left), "error": error}
 
 
 def forget(engine, settings: Any, *, actor: str, project_id: str,
@@ -1085,14 +1173,17 @@ def forget(engine, settings: Any, *, actor: str, project_id: str,
         left = _settle_retired(c, deleted)
         if not failed:
             # Nothing of ours is at the collector any more: start clean, and the day's send may
-            # happen again, from this moment (defect 18).
+            # happen again — but only from THIS moment: the floor keeps everything before the
+            # delete from ever being cut again (re-check item 1).
+            _put(c, "improve_floor", {"at": _now().isoformat(), "by": actor})
             c.execute(text("DELETE FROM telemetry_batches"))
             _discard_pending(c)
             sched = _schedule(c)
             sched.pop("last_attempt_day", None)
             _put(c, "improve_schedule", sched)
         _trim_log(c)
-    return {"deleted": not failed, "ids_deleted": len(deleted), "ids_failed": len(failed),
+    removed = sum(_LAST_DELETE_COUNTS.values())
+    return {"deleted": not failed, "removed": removed, "ids_deleted": len(deleted), "ids_failed": len(failed),
             "waiting": len(left), "error": error}
 
 
@@ -1154,7 +1245,8 @@ def share_send(engine, settings: Any, *, bundle: str, note: str,
     with begin(engine) as c:
         ident = identity(c)
         url = collector_url(endpoint(c, settings)[0], "share")
-    payload, _ = allow.sanitize({"v": 1, "install_id": ident["id"], "note": note or "",
+    payload, _ = allow.sanitize({"v": 1, "install_id": ident["id"],
+                                 "secret_hash": secret_hash(ident["secret"]), "note": note or "",
                                  "bundle": bundle or "",
                                  "context": {"version": _version(), "edition": _edition(settings)}},
                                 allow.SHARE)
@@ -1167,6 +1259,11 @@ def share_send(engine, settings: Any, *, bundle: str, note: str,
         return {"sent": False, "status": None, "error": error, "bytes_gz": len(gz)}
     with begin(engine) as c:
         _log_send(c, "share", ok, len(raw), len(gz), status, error)
+        if ok:
+            # A shared run sits at the collector under this id: rotate and Delete must remove it.
+            cur = identity(c)
+            if cur["id"] == ident["id"] and not cur.get("sent"):
+                _put(c, "improve_identity", {**cur, "sent": True})
         _trim_log(c)
     return {"sent": ok, "status": status, "error": error, "bytes_gz": len(gz)}
 
@@ -1248,6 +1345,7 @@ def sharing_view(connection, settings: Any) -> dict[str, Any]:
         "switches": sw, "env_disabled": why, "blocked": stop,
         "install_id": ident["id"], "url": url, "url_source": source,
         "retired_waiting": len(_retired(connection)),
+        "mask_words": mask_words(connection),
         "next_due_at": sched.get("next_due_at") if not stop else None,
         "last_attempt_at": sched.get("last_attempt_at"),
         "sends": sends(connection),
