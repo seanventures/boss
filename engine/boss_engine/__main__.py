@@ -260,10 +260,21 @@ def _cmd_serve_mcp(args) -> int:
         print("boss-engine: --api-domain requires --api-url or BOSS_MCP_API_URL",
               file=sys.stderr)
         return 2
+    # WHO THE STDIO SESSION IS: the BOSS API key it was launched with (BOSS_MCP_API_KEY, a
+    # boss_pat_/boss_sak_ key), verified by identity on EVERY tool call, so a revoked key stops at
+    # once. Without one, tool calls carry no identity and are refused under BOSS_AUTHZ_MODE=enforce.
+    # Over HTTP each request authenticates its own bearer instead (MCPServer.asgi_app).
+    identity = None
+    session_key = (os.environ.get("BOSS_MCP_API_KEY") or "").strip()
+    if not args.http and session_key:
+        from .mcp.server import authenticate_transport
+
+        def identity():  # noqa: E306 — re-verified per call, never cached
+            return authenticate_transport({"authorization": f"Bearer {session_key}"})
     server = MCPServer(
         ctx, project_id=args.project, read_only=read_only,
         http_token=http_token, api_surface=api_surface,
-        api_domains=set(args.api_domain),
+        api_domains=set(args.api_domain), identity=identity,
     )
     if args.http:
         import uvicorn  # lazy: only for HTTP transport
