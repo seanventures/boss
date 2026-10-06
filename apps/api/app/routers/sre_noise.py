@@ -5,6 +5,7 @@ Not public GA.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -31,6 +32,7 @@ def _require_db() -> None:
 
 
 @router.get("/noise")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def get_noise(project_id: str = Query(...)) -> dict[str, Any]:
     """Clustered incidents vs raw signals for a project. Honest zeros when empty."""
     pid = project_id.strip()
@@ -43,6 +45,7 @@ def get_noise(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @router.post("/ask")
+@permit(P.RELIABILITY_READ, scope=Scope.project(body="project_id"), readonly_post=True)
 def post_ask(payload: AskBody) -> dict[str, Any]:
     """Translate a question into a query plan. Never executes it."""
     pid = payload.project_id.strip()

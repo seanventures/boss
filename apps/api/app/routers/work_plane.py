@@ -15,6 +15,7 @@ Prefix: ``/v1/work-plane``
 
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -116,18 +117,21 @@ class LinkIssueRequest(ActorBody):
 
 
 @router.get("/status")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def get_status(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(_engine) as connection:
         return _service.status_snapshot(connection, project_id)
 
 
 @router.get("/board")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def get_board(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(_engine) as connection:
         return _service.board(connection, project_id)
 
 
 @router.get("/overview")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def get_overview(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(_engine) as connection:
         try:
@@ -137,6 +141,7 @@ def get_overview(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @router.post("/initiatives", status_code=201)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_initiative(payload: InitiativeRequest) -> dict[str, Any]:
     with begin(_engine) as connection:
         _require_actor(connection, payload.project_id, payload.actor, "command_submit")
@@ -163,6 +168,7 @@ def create_initiative(payload: InitiativeRequest) -> dict[str, Any]:
 
 
 @router.get("/initiatives")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def list_initiatives(
     project_id: str = Query(...),
     status: Optional[str] = None,
@@ -173,6 +179,7 @@ def list_initiatives(
 
 
 @router.post("/modules", status_code=201)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_module(payload: ModuleRequest) -> dict[str, Any]:
     with begin(_engine) as connection:
         _require_actor(connection, payload.project_id, payload.actor, "command_submit")
@@ -199,6 +206,7 @@ def create_module(payload: ModuleRequest) -> dict[str, Any]:
 
 
 @router.get("/modules")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def list_modules(
     project_id: str = Query(...),
     initiative_id: Optional[str] = None,
@@ -215,6 +223,7 @@ def list_modules(
 
 
 @router.post("/cycles", status_code=201)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_cycle(payload: CycleRequest) -> dict[str, Any]:
     with begin(_engine) as connection:
         _require_actor(connection, payload.project_id, payload.actor, "command_submit")
@@ -241,6 +250,7 @@ def create_cycle(payload: CycleRequest) -> dict[str, Any]:
 
 
 @router.get("/cycles")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def list_cycles(
     project_id: str = Query(...),
     status: Optional[str] = None,
@@ -251,6 +261,7 @@ def list_cycles(
 
 
 @router.post("/roadmap-items", status_code=201)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_roadmap_item(payload: RoadmapItemRequest) -> dict[str, Any]:
     with begin(_engine) as connection:
         _require_actor(connection, payload.project_id, payload.actor, "command_submit")
@@ -280,6 +291,7 @@ def create_roadmap_item(payload: RoadmapItemRequest) -> dict[str, Any]:
 
 
 @router.get("/roadmap-items")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def list_roadmap_items(
     project_id: str = Query(...),
     initiative_id: Optional[str] = None,
@@ -300,6 +312,7 @@ def list_roadmap_items(
 
 
 @router.post("/dependencies", status_code=201)
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def add_dependency(payload: DependencyRequest) -> dict[str, Any]:
     with begin(_engine) as connection:
         _require_actor(connection, payload.project_id, payload.actor, "command_submit")
@@ -322,6 +335,7 @@ def add_dependency(payload: DependencyRequest) -> dict[str, Any]:
 
 
 @router.get("/dependencies")
+@permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
 def list_dependencies(
     project_id: str = Query(...),
     entity_type: Optional[str] = None,
@@ -338,6 +352,7 @@ def list_dependencies(
 
 
 @router.post("/link-issue")
+@permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def link_issue(payload: LinkIssueRequest) -> dict[str, Any]:
     with begin(_engine) as connection:
         _require_actor(connection, payload.project_id, payload.actor, "command_submit")

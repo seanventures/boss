@@ -5,6 +5,7 @@ on ``approved_local_model_host``. The raw credential is never returned.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -63,6 +64,7 @@ def json_safe(value: Any) -> Any:
 
 
 @router.post("/v1/entitlements/sources/{source_id}/openai-compatible")
+@permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def configure_openai_compatible_source(
     source_id: str, payload: ConfigureLocalEndpointRequest
 ) -> dict[str, Any]:

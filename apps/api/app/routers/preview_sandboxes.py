@@ -5,6 +5,7 @@ Fail closed without a host unless ``simulate=true`` (tests / local demos).
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -63,6 +64,7 @@ def _require_preview_operator(
 
 @router.post("")
 @router.post("/")
+@permit(P.PREVIEW_MANAGE, scope=Scope.project(body="project_id"))
 def reserve_preview_sandbox(payload: ReserveRequest) -> dict[str, Any]:
     """Reserve a durable preview sandbox (host-backed or simulated)."""
     try:
@@ -96,6 +98,7 @@ def reserve_preview_sandbox(payload: ReserveRequest) -> dict[str, Any]:
 
 @router.get("")
 @router.get("/")
+@permit(P.PREVIEW_READ, scope=Scope.project(query="project_id"))
 def list_preview_sandboxes(
     project_id: str = Query(...),
     actor: str = Query(...),
@@ -115,6 +118,7 @@ def list_preview_sandboxes(
 
 
 @router.get("/{preview_id}")
+@permit(P.PREVIEW_READ, scope=Scope.project(query="project_id"))
 def get_preview_sandbox(
     preview_id: str,
     project_id: str = Query(...),
@@ -132,6 +136,7 @@ def get_preview_sandbox(
 
 
 @router.post("/{preview_id}/heartbeat")
+@permit(P.PREVIEW_MANAGE, scope=Scope.project(body="project_id"))
 def heartbeat_preview_sandbox(
     preview_id: str, payload: HeartbeatRequest
 ) -> dict[str, Any]:
@@ -162,6 +167,7 @@ def heartbeat_preview_sandbox(
 
 @router.post("/{preview_id}/release")
 @router.delete("/{preview_id}")
+@permit(P.PREVIEW_MANAGE, scope=Scope.project(body="project_id"))
 def release_preview_sandbox(
     preview_id: str, payload: Optional[ReleaseRequest] = None
 ) -> dict[str, Any]:

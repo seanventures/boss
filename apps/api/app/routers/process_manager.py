@@ -6,6 +6,7 @@ Never invents scores.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -65,6 +66,7 @@ def _require_project(project_id: str) -> str:
 
 
 @router.get("/v1/process-manager")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def get_process_manager(project_id: str) -> dict[str, Any]:
     project_id = _require_project(project_id)
     with begin(get_engine()) as connection:
@@ -75,6 +77,7 @@ def get_process_manager(project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/process-manager/ensure")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def ensure_process_manager(payload: ProcessManagerActorRequest) -> dict[str, Any]:
     project_id = _require_project(payload.project_id)
     with begin(get_engine()) as connection:
@@ -100,6 +103,7 @@ def ensure_process_manager(payload: ProcessManagerActorRequest) -> dict[str, Any
 
 
 @router.post("/v1/process-manager/tick")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def tick_process_manager(payload: ProcessManagerActorRequest) -> dict[str, Any]:
     project_id = _require_project(payload.project_id)
     with begin(get_engine()) as connection:
@@ -125,6 +129,7 @@ def tick_process_manager(payload: ProcessManagerActorRequest) -> dict[str, Any]:
 
 
 @router.get("/v1/process-manager/metrics")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def get_process_manager_metrics(project_id: str) -> dict[str, Any]:
     project_id = _require_project(project_id)
     with begin(get_engine()) as connection:
@@ -140,6 +145,7 @@ def get_process_manager_metrics(project_id: str) -> dict[str, Any]:
 
 
 @router.get("/v1/process-manager/proposals")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def get_process_manager_proposals(project_id: str) -> dict[str, Any]:
     project_id = _require_project(project_id)
     with begin(get_engine()) as connection:

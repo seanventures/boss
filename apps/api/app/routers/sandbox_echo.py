@@ -1,6 +1,7 @@
 """Freeze-safe Firecracker echo exercise (no LLM, no coding claim)."""
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -17,6 +18,7 @@ router = APIRouter(tags=["sandbox"])
 
 
 @router.post("/v1/diag/sandbox-echo")
+@permit(P.SANDBOX_EXEC, scope=Scope.org())
 def sandbox_echo_exercise() -> dict[str, Any]:
     """Boot a throwaway echo VM (test_mode + engine=echo).
 

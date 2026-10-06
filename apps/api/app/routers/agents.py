@@ -16,6 +16,7 @@ Mounted from main.py with the auth helpers injected, so this module does not imp
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -134,6 +135,7 @@ def build_agents_router(
         raise error
 
     @router.get("/v1/agents")
+    @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
     def list_agents(project_id: str) -> dict[str, Any]:
         with begin(engine) as connection:
             require_reader(connection, project_id)
@@ -141,6 +143,7 @@ def build_agents_router(
                     "items": agents.list_agents(connection, project_id)}
 
     @router.get("/v1/agents/grantable")
+    @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
     def grantable(project_id: str) -> dict[str, Any]:
         """Everything an agent could be given here: skills (authored and built-in) and servers.
 
@@ -165,6 +168,7 @@ def build_agents_router(
             }
 
     @router.get("/v1/agents/{role_key}")
+    @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
     def get_agent(role_key: str, project_id: str) -> dict[str, Any]:
         with begin(engine) as connection:
             require_reader(connection, project_id)
@@ -174,6 +178,7 @@ def build_agents_router(
                 _fail(error)
 
     @router.post("/v1/agents", status_code=201)
+    @permit(P.AGENT_CREATE, scope=Scope.project(body="project_id"))
     def create_agent(body: AgentCreateBody) -> dict[str, Any]:
         """Quick create: name, purpose, skills, MCP servers, reports-to — in one transaction."""
         with begin(engine) as connection:
@@ -192,6 +197,7 @@ def build_agents_router(
                 _fail(error)
 
     @router.patch("/v1/agents/{role_key}")
+    @permit(P.AGENT_UPDATE, scope=Scope.project(body="project_id"))
     def update_agent(role_key: str, body: AgentUpdateBody) -> dict[str, Any]:
         from boss_engine.services.agent_identity import IDENTITY_FIELDS, IDENTITY_FIXED
 
@@ -220,6 +226,7 @@ def build_agents_router(
                 _fail(error)
 
     @router.delete("/v1/agents/{role_key}")
+    @permit(P.AGENT_LIFECYCLE, scope=Scope.project(query="project_id"))
     def delete_agent(role_key: str, project_id: str, actor: Optional[str] = None,
                      retire_older_versions: bool = False) -> dict[str, Any]:
         """`retire_older_versions=true`: an agent named only in older workflow versions that
@@ -252,6 +259,7 @@ def build_agents_router(
         raise error
 
     @router.get("/v1/agents/{role_key}/instructions")
+    @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
     def list_instructions(role_key: str, project_id: str,
                           actor: Optional[str] = None) -> dict[str, Any]:
         """The documents, the per-mode budget and `can_edit` — whether this viewer may write
@@ -266,6 +274,7 @@ def build_agents_router(
             return out
 
     @router.get("/v1/agents/{role_key}/instructions/{ins_id}")
+    @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
     def get_instruction(role_key: str, ins_id: str, project_id: str) -> dict[str, Any]:
         from boss_engine.services import agent_instructions
 
@@ -277,6 +286,7 @@ def build_agents_router(
                 _ins_fail(error)
 
     @router.post("/v1/agents/{role_key}/instructions", status_code=201)
+    @permit(P.AGENT_UPDATE, scope=Scope.project(body="project_id"))
     def add_instruction(role_key: str, body: InstructionAddBody):
         from fastapi.responses import JSONResponse
 
@@ -293,6 +303,7 @@ def build_agents_router(
         return JSONResponse(out, status_code=200 if body.dry_run else 201)
 
     @router.patch("/v1/agents/{role_key}/instructions/{ins_id}")
+    @permit(P.AGENT_UPDATE, scope=Scope.project(body="project_id"))
     def update_instruction(role_key: str, ins_id: str, body: InstructionUpdateBody):
         from boss_engine.services import agent_instructions
 
@@ -307,6 +318,7 @@ def build_agents_router(
                 return _ins_fail(error, dry_run=body.dry_run)
 
     @router.delete("/v1/agents/{role_key}/instructions/{ins_id}")
+    @permit(P.AGENT_UPDATE, scope=Scope.project(query="project_id"))
     def remove_instruction(role_key: str, ins_id: str, project_id: str,
                            actor: Optional[str] = None) -> dict[str, Any]:
         from boss_engine.services import agent_instructions
@@ -320,6 +332,7 @@ def build_agents_router(
                 _ins_fail(error)
 
     @router.get("/v1/agents/{role_key}/versions/{version}/instructions")
+    @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
     def instructions_at_version(role_key: str, version: int, project_id: str) -> dict[str, Any]:
         from boss_engine.services import agent_instructions
 
@@ -328,6 +341,7 @@ def build_agents_router(
             return agent_instructions.at_version(connection, project_id, role_key, version)
 
     @router.get("/v1/agents/{role_key}/prompt")
+    @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
     def agent_prompt(role_key: str, project_id: str, mode: str = "work",
                      actor: Optional[str] = None) -> dict[str, Any]:
         """`See its prompt`: the composed prompt by layer, without a task. It shows remit text,
@@ -358,6 +372,7 @@ def build_agents_router(
                             "text": b["text"]} for b in blocks if b.get("text")]}
 
     @router.post("/v1/skills/from-file", status_code=201)
+    @permit(P.SKILL_MANAGE, scope=Scope.project(body="project_id"))
     def skill_from_file(body: SkillFromFileBody) -> dict[str, Any]:
         """A SKILL.md-style file → a `guide` skill, given to `grant_to` in the same step."""
         from boss_engine.services import agent_instructions
@@ -376,6 +391,7 @@ def build_agents_router(
                 _ins_fail(error)
 
     @router.get("/v1/role-mcp-servers")
+    @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
     def list_role_mcp(project_id: str, role_key: Optional[str] = None) -> dict[str, Any]:
         with begin(engine) as connection:
             require_reader(connection, project_id)
@@ -383,6 +399,7 @@ def build_agents_router(
                     "assignments": agents.list_role_mcp(connection, project_id, role_key)}
 
     @router.post("/v1/role-mcp-servers", status_code=201)
+    @permit(P.AGENT_ABILITY_ASSIGN, scope=Scope.project(body="project_id"))
     def grant_role_mcp(body: RoleMcpBody) -> dict[str, Any]:
         """Give one MCP server — all its tools, or only those named — to one agent."""
         with begin(engine) as connection:
@@ -396,6 +413,7 @@ def build_agents_router(
                 _fail(error)
 
     @router.delete("/v1/role-mcp-servers")
+    @permit(P.AGENT_ABILITY_ASSIGN, scope=Scope.project(query="project_id"))
     def revoke_role_mcp(project_id: str, role_key: str, mcp_server_id: str,
                         actor: Optional[str] = None) -> dict[str, Any]:
         with begin(engine) as connection:

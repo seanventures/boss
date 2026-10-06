@@ -5,6 +5,7 @@ kernel work on ``ai_sre.py`` is not disturbed.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -31,6 +32,7 @@ def _require(connection, project_id: str, actor: str) -> None:
 
 
 @router.post("/overwatch")
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def ai_sre_overwatch(payload: OverwatchRequest) -> dict[str, Any]:
     """Observe-only: scan due sources, diagnose open/critical, optional dry-run page."""
     project_id = (payload.project_id or "").strip()

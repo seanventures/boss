@@ -5,6 +5,7 @@ Never claims production health. Fail-closed when assurance tables are missing.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -34,6 +35,7 @@ def _require_actor(connection: Any, project_id: str, actor: str, permission: str
 
 
 @router.post("/v1/assurance/seed-demo")
+@permit(P.ASSURANCE_MANAGE, scope=Scope.project(body="project_id"))
 def seed_assurance_demo(payload: SeedDemoRequest) -> dict[str, Any]:
     settings = get_settings()
     service = AssuranceService(settings)

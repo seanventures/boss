@@ -243,9 +243,6 @@ def test_secrets_do_not_appear_in_reprs():
 # ---- the stubs say whose they are ------------------------------------------------------------------
 
 STUBS = [
-    (lambda: authz.check(None, "settings:read", ResolvedScope.org_level("o")), "S2"),
-    (lambda: authz.effective_permissions(ALICE, ResolvedScope.org_level("o")), "S2"),
-    (lambda: authz.explain("usr_alice", "settings:read", ResolvedScope.org_level("o")), "S2"),
     (lambda: delegation.exchange_token(None, htm="POST", htu="/", db=None), "S3"),
     (lambda: delegation.revoke_cascade(delegation.CascadeTrigger.GRANT_REVOKED, "dlg_1",
                                        actor=None, reason="", db=None), "S3"),

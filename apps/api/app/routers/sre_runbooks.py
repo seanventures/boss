@@ -6,6 +6,7 @@ Not public GA.
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -59,6 +60,7 @@ class RunCreate(BaseModel):
 
 
 @router.get("")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def list_runbooks(project_id: str = Query(...)) -> dict[str, Any]:
     with begin(_engine()) as connection:
         items = _svc().list_runbooks(connection, project_id)
@@ -66,6 +68,7 @@ def list_runbooks(project_id: str = Query(...)) -> dict[str, Any]:
 
 
 @router.post("", status_code=201)
+@permit(P.RELIABILITY_MANAGE, scope=Scope.project(body="project_id"))
 def create_runbook(payload: RunbookCreate) -> dict[str, Any]:
     with begin(_engine()) as connection:
         _require_actor(connection, payload.project_id, payload.actor)
@@ -83,6 +86,7 @@ def create_runbook(payload: RunbookCreate) -> dict[str, Any]:
 
 
 @router.get("/runs")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def list_runs(
     project_id: str = Query(...),
     runbook_id: Optional[str] = Query(None),
@@ -96,6 +100,7 @@ def list_runs(
 
 
 @router.post("/{runbook_id}/runs")
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
 def execute_run(runbook_id: str, payload: RunCreate) -> dict[str, Any]:
     with begin(_engine()) as connection:
         _require_actor(connection, payload.project_id, payload.actor)

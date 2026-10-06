@@ -17,6 +17,8 @@ Also exposes (no clash with existing KG routes):
 """
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
+from apps.api.app import identity_verifiers as _identity_verifiers  # noqa: E402  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -64,12 +66,14 @@ def _require_db() -> None:
 
 
 @router.get("/v1/observability-suite/catalog")
+@permit(P.OBSERVABILITY_READ, scope=Scope.org())
 def observability_suite_catalog() -> dict[str, Any]:
     """OSS components with purpose + stars note, workload profiles, connector kinds."""
     return _suite.catalog()
 
 
 @router.get("/v1/observability-suite/status")
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
 def observability_suite_status(
     project_id: str = Query(...),
     host_target_id: Optional[str] = Query(default=None),
@@ -80,6 +84,8 @@ def observability_suite_status(
     engine = get_engine(settings)
     svc = ObservabilitySuiteService(settings)
     with begin(engine) as connection:
+        _identity_verifiers.require_in_project(connection, "deployment_targets", host_target_id,
+                                               project_id)
         return svc.status(
             connection,
             project_id,
@@ -89,6 +95,7 @@ def observability_suite_status(
 
 
 @router.post("/v1/observability-suite/recommend")
+@permit(P.OBSERVABILITY_READ, scope=Scope.org(), readonly_post=True)
 def observability_suite_recommend(payload: RecommendRequest) -> dict[str, Any]:
     """Recommend an OSS observability set for a workload profile."""
     try:
@@ -98,6 +105,7 @@ def observability_suite_recommend(payload: RecommendRequest) -> dict[str, Any]:
 
 
 @router.post("/v1/observability-suite/health-check")
+@permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(body="project_id"))
 def observability_suite_health_check(payload: HealthCheckRequest) -> dict[str, Any]:
     """Dry-run connectivity for configured telemetry sources (live probes optional)."""
     _require_db()
@@ -113,6 +121,7 @@ def observability_suite_health_check(payload: HealthCheckRequest) -> dict[str, A
 
 
 @router.get("/v1/observability-suite/graph-summary")
+@permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
 def observability_suite_graph_summary(
     project_id: str = Query(...),
     kind: Optional[str] = Query(default=None),
@@ -133,6 +142,7 @@ def observability_suite_graph_summary(
 
 
 @router.post("/v1/observability-suite/graph-seed")
+@permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(body="project_id"))
 def observability_suite_graph_seed(payload: GraphSeedRequest) -> dict[str, Any]:
     """Seed KG resource nodes from active infra_resources and return health summary.
 
@@ -154,6 +164,7 @@ def observability_suite_graph_seed(payload: GraphSeedRequest) -> dict[str, Any]:
 
 
 @router.get("/v1/knowledge/graph/health")
+@permit(P.RELIABILITY_READ, scope=Scope.project(query="project_id"))
 def knowledge_graph_health(project_id: str = Query(...)) -> dict[str, Any]:
     """Node/edge counts and readiness for the project knowledge graph."""
     _require_db()

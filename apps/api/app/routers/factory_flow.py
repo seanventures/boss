@@ -1,6 +1,7 @@
 """Factory flow debug board + improve tick."""
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -25,6 +26,7 @@ def _service():
 
 
 @router.get("/v1/factory/flow")
+@permit(P.CODE_TASK_READ, scope=Scope.project(query="project_id"))
 def factory_flow_board(project_id: str) -> dict[str, Any]:
     """Unified official/factory + captain-swarm flow. Evidence only."""
     if not project_id.strip():
@@ -34,6 +36,7 @@ def factory_flow_board(project_id: str) -> dict[str, Any]:
 
 
 @router.get("/v1/factory/flow/{run_id}")
+@permit(P.CODE_TASK_READ, scope=Scope.project(query="project_id"))
 def factory_flow_one(run_id: str, project_id: str) -> dict[str, Any]:
     if not project_id.strip() or not run_id.strip():
         raise HTTPException(status_code=422, detail="project_id and run_id are required")
@@ -53,6 +56,7 @@ def factory_flow_one(run_id: str, project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/factory/flow/tick")
+@permit(P.SYSTEM_OPERATE, scope=Scope.project(body="project_id"))
 def factory_flow_tick(payload: FlowTickRequest) -> dict[str, Any]:
     """Observe stalls, record findings, attach missing official swarms. No code edits."""
     if not payload.project_id.strip():

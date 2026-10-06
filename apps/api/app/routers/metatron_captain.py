@@ -1,6 +1,7 @@
 """Metatron Captain HTTP surface — session, goals, watch, drive, overwatch."""
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -56,6 +57,7 @@ def _require(connection, project_id: str, actor: str) -> None:
 
 
 @router.post("/v1/metatron/session")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def captain_session_turn(payload: SessionTurnRequest) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
@@ -71,6 +73,7 @@ def captain_session_turn(payload: SessionTurnRequest) -> dict[str, Any]:
 
 
 @router.get("/v1/metatron/session")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def captain_session_get(project_id: str, actor: str = "executive_console") -> dict[str, Any]:
     if not project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
@@ -80,6 +83,7 @@ def captain_session_get(project_id: str, actor: str = "executive_console") -> di
 
 
 @router.get("/v1/metatron/goals")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def captain_goals_list(project_id: str) -> dict[str, Any]:
     if not project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
@@ -88,6 +92,7 @@ def captain_goals_list(project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/metatron/goals", status_code=201)
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def captain_goals_create(payload: GoalCreateRequest) -> dict[str, Any]:
     if not payload.project_id.strip() or not payload.title.strip():
         raise HTTPException(status_code=422, detail="project_id and title are required")
@@ -106,6 +111,7 @@ def captain_goals_create(payload: GoalCreateRequest) -> dict[str, Any]:
 
 
 @router.post("/v1/metatron/watch")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def captain_watch(payload: WatchRequest) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
@@ -117,6 +123,7 @@ def captain_watch(payload: WatchRequest) -> dict[str, Any]:
 
 
 @router.get("/v1/metatron/watch/latest")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def captain_watch_latest(project_id: str) -> dict[str, Any]:
     if not project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
@@ -126,6 +133,7 @@ def captain_watch_latest(project_id: str) -> dict[str, Any]:
 
 
 @router.post("/v1/metatron/drive")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def captain_drive(payload: DriveRequest) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
@@ -140,6 +148,7 @@ def captain_drive(payload: DriveRequest) -> dict[str, Any]:
 
 
 @router.post("/v1/metatron/overwatch")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def captain_overwatch(payload: WatchRequest) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
@@ -160,6 +169,7 @@ class TheaterRequest(BaseModel):
 
 
 @router.get("/v1/metatron/theater")
+@permit(P.AUTOPILOT_READ, scope=Scope.project(query="project_id"))
 def captain_theater(project_id: str, actor: str = "executive_console") -> dict[str, Any]:
     """Fleet view of official work, captains, and proposed command powers."""
     if not project_id.strip():
@@ -170,6 +180,7 @@ def captain_theater(project_id: str, actor: str = "executive_console") -> dict[s
 
 
 @router.post("/v1/metatron/theater")
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def captain_theater_enact(payload: TheaterRequest) -> dict[str, Any]:
     """Observe the fleet, then apply validated command powers when auto=true."""
     if not payload.project_id.strip():

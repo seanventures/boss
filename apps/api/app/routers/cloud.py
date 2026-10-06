@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Callable
 
 from fastapi import FastAPI, HTTPException
@@ -29,30 +30,35 @@ def register_community_cloud_routes(
     """Register local reads and authorized opt-in Cloud link flows."""
 
     @app.get("/v1/cloud/catalog")
+    @permit(P.SYSTEM_READ, scope=Scope.project(query="project_id"))
     def get_cloud_catalog(project_id: str) -> dict:
         """Community-callable Cloud/Enterprise feature catalog and independence contract."""
         with begin(engine) as connection:
             return cloud_product.catalog(connection, project_id)
 
     @app.get("/v1/cloud/status")
+    @permit(P.SYSTEM_READ, scope=Scope.project(query="project_id"))
     def get_cloud_status(project_id: str) -> dict:
         """Independence + Account Connect link state for this project."""
         with begin(engine) as connection:
             return cloud_product.status(connection, project_id)
 
     @app.get("/v1/cloud/comparison")
+    @permit(P.SYSTEM_READ, scope=Scope.project(query="project_id"))
     def get_cloud_comparison(project_id: str) -> dict:
         """Community vs Cloud vs Enterprise packaging matrix (marketing parity)."""
         with begin(engine) as connection:
             return cloud_product.comparison(connection, project_id)
 
     @app.get("/v1/cloud/capabilities")
+    @permit(P.SYSTEM_READ, scope=Scope.project(query="project_id"))
     def get_cloud_capabilities(project_id: str) -> dict:
         """Local vs Cloud-locked capabilities for this project."""
         with begin(engine) as connection:
             return cloud_product.capabilities(connection, project_id)
 
     @app.get("/v1/cloud/workers")
+    @permit(P.INFRA_READ, scope=Scope.project(query="project_id"))
     def get_cloud_managed_workers(project_id: str) -> dict:
         """Managed worker fabric status (honest planned until fleets ship).
 
@@ -63,6 +69,7 @@ def register_community_cloud_routes(
             return cloud_product.managed_workers_status(connection, project_id)
 
     @app.post("/v1/cloud/easy-connect", status_code=201)
+    @permit(P.CLOUD_ACCOUNT_MANAGE, scope=Scope.org())
     def start_cloud_easy_connect(payload: open_bodies.CloudEasyConnectBody) -> dict:
         """Start Easy Connect from self-hosted Community (or any edition) to BOSS Cloud.
 
@@ -93,6 +100,7 @@ def register_community_cloud_routes(
                 raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.get("/v1/cloud/easy-connect/{session_id}")
+    @permit(P.CLOUD_ACCOUNT_MANAGE, scope=Scope.org())
     def poll_cloud_easy_connect(session_id: str, project_id: str, actor: str = "ceo") -> dict:
         """Poll Easy Connect session (device flow) until completed or expired."""
         with begin(engine) as connection:
@@ -114,6 +122,7 @@ def register_community_cloud_routes(
                 raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.post("/v1/cloud/easy-connect/{session_id}/complete")
+    @permit(P.CLOUD_ACCOUNT_MANAGE, scope=Scope.org())
     def complete_cloud_easy_connect(session_id: str, payload: open_bodies.CloudEasyCompleteBody) -> dict:
         """Complete browser Easy Connect after hosted Account Connect returns code/state."""
         payload = payload.payload()
@@ -145,6 +154,7 @@ def register_community_cloud_routes(
                 raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.post("/v1/cloud/easy-connect/complete")
+    @permit(P.CLOUD_ACCOUNT_MANAGE, scope=Scope.org())
     def complete_cloud_easy_connect_by_state(payload: open_bodies.CloudEasyCompleteByStateBody) -> dict:
         """Complete browser Easy Connect using code+state from the hosted redirect callback."""
         payload = payload.payload()
@@ -177,6 +187,7 @@ def register_community_cloud_routes(
                 raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.post("/v1/cloud/unlink")
+    @permit(P.CLOUD_ACCOUNT_MANAGE, scope=Scope.org())
     def unlink_cloud(payload: open_bodies.CloudUnlinkBody) -> dict:
         """Disconnect this project from BOSS Cloud; Community stays fully usable."""
         payload = payload.payload()
@@ -198,6 +209,7 @@ def register_community_cloud_routes(
                 raise HTTPException(status_code=404, detail=str(error)) from error
 
     @app.get("/v1/cloud/retention")
+    @permit(P.SYSTEM_READ, scope=Scope.project(query="project_id"))
     def get_cloud_retention(project_id: str) -> dict:
         """Evidence retention policy for this project (local receipts + Cloud SLA when linked)."""
         with begin(engine) as connection:

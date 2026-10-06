@@ -6,7 +6,8 @@ IDENTITY.md §6.3, §6.6 and §15.4 R1; frozen in Phase 0 (IDENTITY_BUILD.md §2
   - shadow mode refuses nothing and records what it would deny; enforce refuses, fail-closed;
   - the identity API is enforced even while everything else is in shadow;
   - the boot-time coverage check lists undeclared routes, and refuses to boot when told to;
-  - tests/identity/undeclared_routes.txt is exactly today's undeclared routes: it may only shrink.
+  - every route is declared (the shrinking list emptied and was deleted, stream S2): coverage
+    is a hard requirement and the API refuses to boot with an undeclared route by default.
 """
 from __future__ import annotations
 
@@ -23,14 +24,6 @@ from boss_engine.config import get_settings
 from boss_engine.identity import P, Permit, PublicReason, Scope, permit, public
 from boss_engine.identity.catalogue import is_known
 from boss_engine.identity.enforcement import LEDGER, CoverageReport, UndeclaredRoutesError
-
-BASELINE = Path(__file__).resolve().parents[3] / "tests" / "identity" / "undeclared_routes.txt"
-
-
-def _baseline() -> list[str]:
-    return sorted(line.strip() for line in BASELINE.read_text(encoding="utf-8").splitlines()
-                  if line.strip() and not line.startswith("#"))
-
 
 @pytest.fixture
 def authz_mode(monkeypatch):
@@ -80,14 +73,16 @@ def test_the_guard_is_on_every_route_of_the_real_app():
             assert identity_guard.enforce_access in calls, f"{route.path} bypasses the guard"
 
 
-def test_every_route_is_declared_or_on_the_shrinking_list():
+def test_every_route_is_declared():
     report = CoverageReport(identity_guard.route_inventory(app))
-    undeclared, baseline = set(report.undeclared), set(_baseline())
-    assert not undeclared - baseline, (
-        "declare these new routes with @permit, @public or @authenticated: "
-        f"{sorted(undeclared - baseline)}")
-    assert not baseline - undeclared, (
-        f"declared now (or gone); remove from {BASELINE.name}: {sorted(baseline - undeclared)}")
+    assert report.undeclared == [], (
+        "declare these routes with @permit, @public or @authenticated: " f"{report.undeclared}")
+    assert not (Path(__file__).resolve().parents[3] / "tests" / "identity"
+                / "undeclared_routes.txt").exists(), "the shrinking list is gone; do not bring it back"
+
+
+def test_coverage_refuses_to_boot_by_default():
+    assert type(get_settings()).model_fields["authz_coverage"].default == "fail"
 
 
 def test_every_declared_permission_is_in_the_catalogue():

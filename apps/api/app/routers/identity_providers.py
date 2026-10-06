@@ -8,6 +8,7 @@ no crypto reimplementation and no secrets in responses.
 
 from __future__ import annotations
 
+from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -67,12 +68,14 @@ def _settings_and_engine():
 
 @router.get("")
 @router.get("/")
+@permit(P.IDENTITY_PROVIDER_READ, scope=Scope.org())
 def list_catalog() -> dict[str, Any]:
     """Return the top-10 IdP product catalog (static, no secrets)."""
     return catalog_summary()
 
 
 @router.get("/project-status")
+@permit(P.IDENTITY_PROVIDER_READ, scope=Scope.org())
 def project_status(
     project_id: str = Query(..., min_length=1),
 ) -> dict[str, Any]:
@@ -91,6 +94,7 @@ def project_status(
 
 
 @router.get("/{idp_id}")
+@permit(P.IDENTITY_PROVIDER_READ, scope=Scope.org())
 def get_catalog_detail(idp_id: str) -> dict[str, Any]:
     """Return full catalog entry including setup steps and claim map."""
     entry = get_identity_provider(idp_id)
@@ -128,6 +132,7 @@ def get_catalog_detail(idp_id: str) -> dict[str, Any]:
 
 
 @router.post("/{idp_id}/blueprint", response_model=BlueprintResponse)
+@permit(P.IDENTITY_PROVIDER_READ, scope=Scope.org(), readonly_post=True)
 def create_blueprint(idp_id: str, payload: BlueprintRequest) -> dict[str, Any]:
     """Materialize a dry-run enterprise IdP config payload.
 
