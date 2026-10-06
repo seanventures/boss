@@ -144,6 +144,8 @@ def _read_master_key(environ: Optional[Mapping[str, str]] = None) -> bytes:
     raw: Optional[str] = None
     path = (env.get(MASTER_KEY_FILE_ENV) or "").strip()
     if path:
+        if not Path(path).exists() and (env.get(MASTER_KEY_AUTOCREATE_ENV) or "1").strip() != "0":
+            _provision_key_file(Path(path))
         try:
             raw = Path(path).read_text(encoding="utf-8").strip()
         except OSError as exc:
@@ -159,6 +161,32 @@ def _read_master_key(environ: Optional[Mapping[str, str]] = None) -> bytes:
     if len(key) != 32:
         raise MasterKeyMissing("master_key_wrong_length")
     return key
+
+
+#: A compose install names a key FILE on its own volume and lets the API create it on first boot
+#: (no installer step). Set to 0 to require an operator-provided file.
+MASTER_KEY_AUTOCREATE_ENV = "BOSS_MASTER_KEY_AUTOCREATE"
+
+
+def _provision_key_file(path: Path) -> None:
+    """Create the master key file once: 32 random bytes, base64, mode 0600, O_EXCL so two processes
+    (api and worker) starting together cannot write two different keys — the loser reads the
+    winner's. A file that later goes missing is NOT silently replaced with a usable one: the boot
+    check (check_master_key) refuses a key whose KCV does not match the registered KEK."""
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return
+    except OSError:
+        return   # read below reports master_key_file_unreadable
+    try:
+        os.write(fd, base64.b64encode(secrets.token_bytes(32)) + b"\n")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    logging.getLogger(__name__).warning(
+        "[identity] created the vault master key file %s (back it up with the database)", path)
 
 
 def kcv_of(key: bytes) -> bytes:

@@ -7564,4 +7564,118 @@ DO $$ BEGIN
       FOR EACH ROW EXECUTE FUNCTION identity_assert_an_owner_remains();
   END IF;
 END $$;
+-- The identity epoch (S5, IDENTITY.md §6.6): one number that moves on ANY identity change, bumped in
+-- the changing transaction by a statement-level trigger, with NOTIFY identity_epoch for the push stream.
+-- High-churn bookkeeping columns (last_used_at, sign_count, session last_seen) are not watched, so a
+-- request never moves it. Generated from boss_engine.identity.change_feed.WATCHED (a test pins it).
+CREATE OR REPLACE FUNCTION identity_epoch_bump() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE v BIGINT;
+BEGIN
+  UPDATE identity_settings SET epoch = epoch + 1;
+  SELECT max(epoch) INTO v FROM identity_settings;
+  PERFORM pg_notify('identity_epoch', coalesce(v, 0)::text);
+  RETURN NULL;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_principals'
+                 AND tgrelid = 'identity_principals'::regclass) THEN
+    CREATE TRIGGER identity_epoch_principals AFTER INSERT OR DELETE OR UPDATE OF status, kind, display_name, network_bound, legacy_member_ids, org_id
+      ON identity_principals FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_users'
+                 AND tgrelid = 'identity_users'::regclass) THEN
+    CREATE TRIGGER identity_epoch_users AFTER INSERT OR DELETE OR UPDATE OF email, mfa_required, principal_id
+      ON identity_users FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_user_identities'
+                 AND tgrelid = 'identity_user_identities'::regclass) THEN
+    CREATE TRIGGER identity_epoch_user_identities AFTER INSERT OR DELETE OR UPDATE OF principal_id, issuer, subject
+      ON identity_user_identities FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_providers'
+                 AND tgrelid = 'identity_providers'::regclass) THEN
+    CREATE TRIGGER identity_epoch_providers AFTER INSERT OR DELETE OR UPDATE
+      ON identity_providers FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_provider_group_mappings'
+                 AND tgrelid = 'identity_provider_group_mappings'::regclass) THEN
+    CREATE TRIGGER identity_epoch_provider_group_mappings AFTER INSERT OR DELETE OR UPDATE
+      ON identity_provider_group_mappings FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_totp'
+                 AND tgrelid = 'identity_totp'::regclass) THEN
+    CREATE TRIGGER identity_epoch_totp AFTER INSERT OR DELETE OR UPDATE OF principal_id, vault_item_id
+      ON identity_totp FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_webauthn_credentials'
+                 AND tgrelid = 'identity_webauthn_credentials'::regclass) THEN
+    CREATE TRIGGER identity_epoch_webauthn_credentials AFTER INSERT OR DELETE OR UPDATE OF principal_id, name
+      ON identity_webauthn_credentials FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_groups'
+                 AND tgrelid = 'identity_groups'::regclass) THEN
+    CREATE TRIGGER identity_epoch_groups AFTER INSERT OR DELETE OR UPDATE
+      ON identity_groups FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_group_members'
+                 AND tgrelid = 'identity_group_members'::regclass) THEN
+    CREATE TRIGGER identity_epoch_group_members AFTER INSERT OR DELETE OR UPDATE
+      ON identity_group_members FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_access_roles'
+                 AND tgrelid = 'identity_access_roles'::regclass) THEN
+    CREATE TRIGGER identity_epoch_access_roles AFTER INSERT OR DELETE OR UPDATE
+      ON identity_access_roles FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_access_role_permissions'
+                 AND tgrelid = 'identity_access_role_permissions'::regclass) THEN
+    CREATE TRIGGER identity_epoch_access_role_permissions AFTER INSERT OR DELETE OR UPDATE
+      ON identity_access_role_permissions FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_role_bindings'
+                 AND tgrelid = 'identity_role_bindings'::regclass) THEN
+    CREATE TRIGGER identity_epoch_role_bindings AFTER INSERT OR DELETE OR UPDATE
+      ON identity_role_bindings FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_approval_seats'
+                 AND tgrelid = 'identity_approval_seats'::regclass) THEN
+    CREATE TRIGGER identity_epoch_approval_seats AFTER INSERT OR DELETE OR UPDATE
+      ON identity_approval_seats FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_service_accounts'
+                 AND tgrelid = 'identity_service_accounts'::regclass) THEN
+    CREATE TRIGGER identity_epoch_service_accounts AFTER INSERT OR DELETE OR UPDATE
+      ON identity_service_accounts FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_api_credentials'
+                 AND tgrelid = 'identity_api_credentials'::regclass) THEN
+    CREATE TRIGGER identity_epoch_api_credentials AFTER INSERT OR DELETE OR UPDATE OF principal_id, scopes, project_ids, cidrs, expires_at, grace_until, suspended_at, revoked_at
+      ON identity_api_credentials FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_agent_passports'
+                 AND tgrelid = 'identity_agent_passports'::regclass) THEN
+    CREATE TRIGGER identity_epoch_agent_passports AFTER INSERT OR DELETE OR UPDATE
+      ON identity_agent_passports FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_agent_ceilings'
+                 AND tgrelid = 'identity_agent_ceilings'::regclass) THEN
+    CREATE TRIGGER identity_epoch_agent_ceilings AFTER INSERT OR DELETE OR UPDATE
+      ON identity_agent_ceilings FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_delegation_grants'
+                 AND tgrelid = 'identity_delegation_grants'::regclass) THEN
+    CREATE TRIGGER identity_epoch_delegation_grants AFTER INSERT OR DELETE OR UPDATE OF status, expires_at, revoked_at, agent_ids, project_ids, resources, allow_subdelegation, max_depth
+      ON identity_delegation_grants FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_delegation_grant_permissions'
+                 AND tgrelid = 'identity_delegation_grant_permissions'::regclass) THEN
+    CREATE TRIGGER identity_epoch_delegation_grant_permissions AFTER INSERT OR DELETE OR UPDATE
+      ON identity_delegation_grant_permissions FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_epoch_settings'
+                 AND tgrelid = 'identity_settings'::regclass) THEN
+    CREATE TRIGGER identity_epoch_settings AFTER INSERT OR DELETE OR UPDATE OF policy
+      ON identity_settings FOR EACH STATEMENT EXECUTE FUNCTION identity_epoch_bump();
+  END IF;
+END $$;
 -- ================================ end BOSS IDENTITY ===============================================

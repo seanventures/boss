@@ -80,17 +80,25 @@ class Outcome:
     principal_kind: str = ""
     detail: str = ""             # e.g. "authn: not implemented (S1)"; never a secret
     decision: Optional[Decision] = None
+    #: An authentication refusal that is not a plain 401 (S1-1): `csrf_failed` is 403 and a cookie
+    #: plus a bearer on one request (`ambiguous_credentials`) is 400. The code is S1's stable string.
+    authn_status: Optional[int] = None
+    authn_code: str = ""
 
     @property
     def status(self) -> int:
         if self.allowed:
             return 200
+        if self.authn_status is not None:
+            return self.authn_status
         if self.decision is not None:
             return self.decision.status
         from .authz import DENY_STATUS
         return DENY_STATUS.get(self.reason or DenyReason.MISSING_PERMISSION, 403)
 
     def error_body(self) -> dict[str, Any]:
+        if self.authn_status is not None and self.authn_status != 401 and self.authn_code:
+            return {"error": self.authn_code}
         if self.decision is not None:
             return self.decision.error_body()
         if self.reason == DenyReason.UNAUTHENTICATED:
@@ -132,8 +140,11 @@ def evaluate(
     except Exception as exc:  # noqa: BLE001 — an AuthnError is a deny, anything else unexplained
         code = getattr(exc, "code", None)
         if code:
+            status = getattr(exc, "status", 401)
             return Outcome(False, DenyReason.UNAUTHENTICATED, getattr(access, "permission", ""),
-                           access.describe(), detail=f"authn: {code}")
+                           access.describe(), detail=f"authn: {code}",
+                           authn_status=int(status) if isinstance(status, int) else 401,
+                           authn_code=str(code))
         return _not_evaluated(access, f"authn error: {type(exc).__name__}")
     if ctx is None:
         return Outcome(False, DenyReason.UNAUTHENTICATED, getattr(access, "permission", ""),

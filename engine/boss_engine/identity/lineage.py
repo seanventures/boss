@@ -167,6 +167,14 @@ def acting(who: Acting | AuthContext) -> Iterator[Acting]:
         _ACTING.reset(token)
 
 
+def enter(ctx: AuthContext) -> None:
+    """Set the acting context for the rest of the current task WITHOUT a reset: the API's guard
+    calls this once per request, and a request is its own task (its context dies with it). Code
+    with a bounded scope uses `acting(...)` instead."""
+    _ACTING.set(Acting.from_context(ctx))
+    _CONTEXT.set(ctx)
+
+
 # ---- jobs carry a principal (R8) ------------------------------------------------------------------------
 
 JOB_IDENTITY_KEY = "_identity"

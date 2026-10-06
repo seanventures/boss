@@ -9,8 +9,7 @@ field); every route acts on the caller alone; writes that remove a sign-in facto
 (step-up), and adding a factor needs a sign-in within the last 10 minutes. Secrets (TOTP secret,
 recovery codes, a new key) are returned exactly once.
 
-This module also includes the other S1 routers (auth, people, SSO, SCIM): the lead's include
-line in main.py names only `build_identity_me_router` (IDENTITY_BUILD.md §7, S1 note).
+main.py includes each identity router itself (auth, people, SSO, SCIM, admin, agents, access).
 """
 from __future__ import annotations
 
@@ -115,8 +114,10 @@ def _qr_svg(uri: str) -> Optional[str]:
 
 
 def _epoch(db: Any, org_id: str) -> int:
-    return int(db.execute(text("SELECT epoch FROM identity_settings WHERE org_id = :o"),
-                          {"o": org_id}).scalar() or 0)
+    """S5's identity epoch (change_feed): the same number the push stream announces."""
+    from boss_engine.identity import change_feed
+
+    return change_feed.current_epoch(org_id, db=db)
 
 
 def is_fresh(ctx: AuthContext) -> bool:
@@ -647,16 +648,4 @@ def build_identity_me_router() -> APIRouter:
         except AuthnError as exc:
             return refusal(exc)
 
-    _include_s1_routers(router)
     return router
-
-
-def _include_s1_routers(router: APIRouter) -> None:
-    from .identity_auth import build_identity_auth_router
-    from .identity_people import build_identity_people_router
-    from .identity_scim import build_identity_scim_router
-    from .identity_sso import build_identity_sso_router
-
-    for build in (build_identity_auth_router, build_identity_people_router, build_identity_sso_router,
-                  build_identity_scim_router):
-        router.include_router(build())

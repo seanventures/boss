@@ -102,6 +102,15 @@ def server_key() -> bytes:
                 raise RuntimeError("BOSS_IDENTITY_SERVER_KEY must be at least 32 bytes, base64")
         if key is None:
             master = _master_key_bytes()
+            if master is None:
+                # The vault's own reader: it also creates a compose install's key file on first
+                # boot, so the server key is persistent without an installer step.
+                try:
+                    from .vault import MasterKeyMissing, _read_master_key
+
+                    master = _read_master_key()
+                except MasterKeyMissing:
+                    master = None
             if master:
                 key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
                            info=b"boss identity server key v1").derive(master)

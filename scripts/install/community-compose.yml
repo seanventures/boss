@@ -185,6 +185,17 @@ services:
       # the installer's "database or infisical" answer.
       BOSS_COMMUNITY_SECRET_STORE: ${BOSS_COMMUNITY_SECRET_STORE:-}
       BOSS_KMS_MASTER_KEY: ${BOSS_KMS_MASTER_KEY:-}
+      # BOSS IDENTITY (docs/product/IDENTITY.md). The vault's key-encryption key lives in a file
+      # on its own volume (never in Postgres, so a database dump is not a key compromise); the
+      # API creates it on first boot when it is absent, and api and worker share it. The
+      # server key (CSRF, hashed identifiers) is derived from it unless set. Back this file up
+      # with the database: without it, stored TOTP secrets and connections cannot be decrypted.
+      BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
+      BOSS_IDENTITY_SERVER_KEY: ${BOSS_IDENTITY_SERVER_KEY:-}
+      BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-}
+      BOSS_AUTHZ_MODE: ${BOSS_AUTHZ_MODE:-shadow}
+      BOSS_AUTHZ_ROUTER_MODES: ${BOSS_AUTHZ_ROUTER_MODES:-}
+      BOSS_AUTHZ_COVERAGE: ${BOSS_AUTHZ_COVERAGE:-}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
       BOSS_GITHUB_OWNER: ${BOSS_GITHUB_OWNER:-}
       BOSS_GITHUB_REPO: ${BOSS_GITHUB_REPO:-}
@@ -227,6 +238,7 @@ services:
       - "${BOSS_API_BIND:-127.0.0.1}:${BOSS_API_PORT:-8000}:8000"
     volumes:
       - boss_community_artifacts:/var/lib/boss/artifacts
+      - boss_community_identity:/var/lib/boss/identity
       # ONE Codex session shared by api and worker. A subscription CLI holds a rotating
       # credential: every refresh revokes the previous one, so two containers each holding
       # their own copy revoke each other — api detects, worker builds, and whichever runs
@@ -323,6 +335,17 @@ services:
       # the installer's "database or infisical" answer.
       BOSS_COMMUNITY_SECRET_STORE: ${BOSS_COMMUNITY_SECRET_STORE:-}
       BOSS_KMS_MASTER_KEY: ${BOSS_KMS_MASTER_KEY:-}
+      # BOSS IDENTITY (docs/product/IDENTITY.md). The vault's key-encryption key lives in a file
+      # on its own volume (never in Postgres, so a database dump is not a key compromise); the
+      # API creates it on first boot when it is absent, and api and worker share it. The
+      # server key (CSRF, hashed identifiers) is derived from it unless set. Back this file up
+      # with the database: without it, stored TOTP secrets and connections cannot be decrypted.
+      BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
+      BOSS_IDENTITY_SERVER_KEY: ${BOSS_IDENTITY_SERVER_KEY:-}
+      BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-}
+      BOSS_AUTHZ_MODE: ${BOSS_AUTHZ_MODE:-shadow}
+      BOSS_AUTHZ_ROUTER_MODES: ${BOSS_AUTHZ_ROUTER_MODES:-}
+      BOSS_AUTHZ_COVERAGE: ${BOSS_AUTHZ_COVERAGE:-}
       BOSS_GITHUB_TOKEN: ${BOSS_GITHUB_TOKEN:-}
       BOSS_GITHUB_OWNER: ${BOSS_GITHUB_OWNER:-}
       BOSS_GITHUB_REPO: ${BOSS_GITHUB_REPO:-}
@@ -358,6 +381,7 @@ services:
       BOSS_MODEL_PRICES_JSON: ${BOSS_MODEL_PRICES_JSON:-}
     volumes:
       - boss_community_artifacts:/var/lib/boss/artifacts
+      - boss_community_identity:/var/lib/boss/identity
       # ONE Codex session shared by api and worker. A subscription CLI holds a rotating
       # credential: every refresh revokes the previous one, so two containers each holding
       # their own copy revoke each other — api detects, worker builds, and whichever runs
@@ -456,3 +480,4 @@ volumes:
   boss_community_infisical_redis:
   boss_community_pg:
   boss_community_artifacts:
+  boss_community_identity:
