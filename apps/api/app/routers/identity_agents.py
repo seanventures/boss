@@ -716,3 +716,13 @@ def install_consent_handler(app) -> None:
         return JSONResponse(status_code=409, content=exc.body)
 
     app.add_exception_handler(ConsentRequired, handler)
+
+    from boss_engine.identity.consent import AgentWithoutPassport
+
+    async def no_passport(_request, exc: AgentWithoutPassport):
+        return JSONResponse(status_code=409, content={
+            "error": "agent_without_passport", "role_key": exc.role_key,
+            "message": "This agent has no Passport, so it cannot act for anyone. An Owner can give "
+                       "it one under Identity › Agents."})
+
+    app.add_exception_handler(AgentWithoutPassport, no_passport)

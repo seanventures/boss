@@ -275,3 +275,28 @@ def test_a_live_schedule_fires_under_its_grant(env, monkeypatch):
                          {"r": out[0]["run_id"]}).one()
     assert snap[0] == g.id and "_identity" not in snap[1] and snap[2] == ALICE
 
+
+
+def test_an_agent_without_a_passport_gets_one_lazily_so_a_person_is_still_asked(env, monkeypatch):
+    """Integration: no install ran the Passport upgrade, so builds silently ran outside delegation
+    (consent returned None for an un-passported agent). The start now upgrades the roles first —
+    the person is asked for consent — and under enforce an agent that still cannot have one is
+    refused, never run as the worker."""
+    from boss_engine.identity import consent, passports
+
+    calls = []
+    real = passports.upgrade_from_roles
+    monkeypatch.setattr(passports, "upgrade_from_roles",
+                        lambda **kw: calls.append(kw) or real(**kw))
+    monkeypatch.setattr(passports, "get", lambda aid, db=None: None)   # nobody can get one
+    monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
+    from boss_engine.identity import runs
+
+    monkeypatch.setattr(runs, "agent_for_role", lambda db, project_id, rk: "agt_nopass000001")
+    with env.engine.begin() as db:
+        with pytest.raises(consent.AgentWithoutPassport):
+            consent._agents(db, env.project, ["builder"])
+    assert calls and calls[0]["org_id"] == "org_boss"
+    monkeypatch.setenv("BOSS_AUTHZ_MODE", "shadow")
+    with env.engine.begin() as db:
+        assert consent._agents(db, env.project, ["builder"]) is None

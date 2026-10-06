@@ -794,6 +794,10 @@ def on_claimed(org_id: str, owner_principal_id: str, *, db: Any, now: Optional[d
     seed(db, settings=settings, org_id=org_id, now=now, apply_claimed=False)
     if assume_member:
         assume_legacy_member(org_id, owner_principal_id, assume_member, db=db)
+    # Every agent gets its Passport now, sponsored by its role's sponsor or this Owner (S3 §7.1):
+    # without one, delegation never applies and work would run outside it.
+    from . import passports
+    passports.upgrade_from_roles(org_id=org_id, db=db, default_sponsor=owner_principal_id)
     return _apply_claimed_state(db, org_id, settings, now, started=now)
 
 
