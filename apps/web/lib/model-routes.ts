@@ -43,3 +43,9 @@ export function latestPerStep(routes: RouteRow[]): RouteRow[] {
   return order.map((k) => last.get(k)!);
 }
 
+
+/** "OpenRouter · deepseek/deepseek-chat" → "OpenRouter · deepseek-chat": the vendor prefix of an
+ *  OpenRouter-style id is noise in a narrow column; the full label goes in the tooltip. */
+export function shortLabel(label: string): string {
+  return label.replace(/ · [^·\s/]+\/([^·\s]+)$/, " · $1");
+}

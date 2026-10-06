@@ -8640,7 +8640,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 /* "Why this model" (app/why-this-model.tsx): a route's tier, source · model, and its reasons. */
 /* One row per stage: step | tier | source · model (+ flags) | Why — columns that line up. */
 .wm {
-  display: grid; grid-template-columns: 130px auto minmax(0, 1fr) auto; align-items: center;
+  display: grid; grid-template-columns: 130px 76px minmax(0, 1fr) auto; align-items: center;
   gap: 4px 8px; min-width: 0;
 }
 .wm:not(:has(.wm-step)) { display: inline-flex; flex-wrap: wrap; }
@@ -8653,7 +8653,8 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .wm-fast { border-color: var(--tier-fast); background: var(--tier-fast-soft); }
 .wm-balanced { border-color: var(--tier-balanced); background: var(--tier-balanced-soft); }
 .wm-frontier { border-color: var(--tier-frontier); background: var(--tier-frontier-soft); }
-.wm-label { font-size: 0.8125rem; color: var(--ink-soft); overflow-wrap: anywhere; }
+.wm-label { font-size: 0.8125rem; color: var(--ink-soft); overflow-wrap: break-word; }
+.wm-tier { justify-self: start; }
 .wm-flag { font-size: 0.75rem; color: var(--amber); cursor: help; }
 .wm-why-btn {
   min-height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-sm);
@@ -8667,7 +8668,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .wm-why li + li { margin-top: 2px; }
 .wm-list { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 @media (max-width: 639px) {
-  .wm { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .wm { grid-template-columns: 76px minmax(0, 1fr) auto; }
   .wm-step { grid-column: 1 / -1; }
   .wm-why-btn { min-height: 44px; min-width: 44px; }
 }

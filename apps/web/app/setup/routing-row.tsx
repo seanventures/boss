@@ -11,6 +11,7 @@
 import React, { forwardRef, useEffect, useMemo, useState } from "react";
 import { CaretRight, Plus, X } from "@phosphor-icons/react";
 
+import { shortLabel } from "../../lib/model-routes";
 import { SetupFailure, setupWrite } from "../../lib/setup-client";
 import type {
   HeadroomRule, Routing, RouteTarget, SetupView, Tier,
@@ -59,6 +60,19 @@ function useSave() {
   return { save, busy };
 }
 
+/** Focus a control by test id after the next render — for when the pressed one unmounted
+ *  (a removed chip, a closed popover), so keyboard focus never falls to <body>. */
+function useRefocus(): (testid: string) => void {
+  const [target, setTarget] = useState<string | null>(null);
+  useEffect(() => {
+    if (!target) return;
+    const el = document.querySelector<HTMLElement>(`[data-testid="${target}"]`);
+    el?.focus();
+    setTarget(null);
+  });
+  return setTarget;
+}
+
 function TierDot({ tier }: { tier: Tier }) {
   return <span className={`mr-dot mr-${tier}`} aria-hidden="true" />;
 }
@@ -103,7 +117,7 @@ function TierCard({ routing, tier }: { routing: Routing; tier: (Routing["tiers"]
                 void write([next, fallback && enc(fallback) === enc(next) ? primary : fallback]);
               }}>
         {!primary ? <option value="">Choose…</option> : null}
-        {withCurrent(primary).map((o) => <option key={enc(o)} value={enc(o)}>{o.label}</option>)}
+        {withCurrent(primary).map((o) => <option key={enc(o)} value={enc(o)} title={o.label}>{shortLabel(o.label)}</option>)}
       </select>
       <label className="mr-fallback" title="Used when the first is out of headroom or failing.">
         <span className="su-faint">then</span>
@@ -113,7 +127,7 @@ function TierCard({ routing, tier }: { routing: Routing; tier: (Routing["tiers"]
                   e.target.value ? dec(e.target.value) as RouteTarget : undefined])}>
           <option value="">None</option>
           {withCurrent(fallback).filter((o) => !primary || enc(o) !== enc(primary))
-            .map((o) => <option key={enc(o)} value={enc(o)}>{o.label}</option>)}
+            .map((o) => <option key={enc(o)} value={enc(o)} title={o.label}>{shortLabel(o.label)}</option>)}
         </select>
       </label>
     </div>
@@ -125,6 +139,7 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
   const [adding, setAdding] = useState(false);
   const [step, setStep] = useState(routing.floor_steps[0]?.step ?? "implement");
   const [tier, setTier] = useState<Tier>("frontier");
+  const refocus = useRefocus();
   const floors = routing.floors.map(({ match, tier: t, label }) => ({ match, tier: t, ...(label ? { label } : {}) }));
   return (
     <div className="mr-section" data-testid="mr-floors">
@@ -147,15 +162,21 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
               <span>≥ {f.tier_label}</span>
               <button type="button" className="mr-x" aria-label={`Remove ${f.describe} floor`}
                       aria-busy={busy || undefined}
-                      onClick={() => void save({ floor_preset: "custom",
-                        floors: floors.filter((_, j) => j !== i) }, "Floors")}>
+                      data-testid={`mr-floor-x-${i}`}
+                      onClick={async () => {
+                        await save({ floor_preset: "custom",
+                                     floors: floors.filter((_, j) => j !== i) }, "Floors");
+                        refocus(i < routing.floors.length - 1 ? `mr-floor-x-${i}` : "mr-floor-add");
+                      }}>
                 <X size={11} aria-hidden="true" />
               </button>
             </span>
           ))}
           {adding ? (
             <span className="su-popover mr-add" role="group" aria-label="Add a floor"
-                  onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setAdding(false); } }}>
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") { e.stopPropagation(); setAdding(false); refocus("mr-floor-add"); }
+                  }}>
               <select aria-label="Step" value={step} onChange={(e) => setStep(e.target.value)}
                       data-testid="mr-floor-step" autoFocus>
                 {routing.floor_steps.map((s) => <option key={s.step} value={s.step}>{s.label}</option>)}
@@ -168,9 +189,13 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
                       data-testid="mr-floor-save"
                       onClick={async () => {
                         if (await save({ floor_preset: "custom",
-                          floors: [...floors, { match: { step }, tier }] }, "Floors")) setAdding(false);
+                          floors: [...floors, { match: { step }, tier }] }, "Floors")) {
+                          setAdding(false);
+                          refocus("mr-floor-add");
+                        }
                       }}>Add</button>
-              <button type="button" className="su-link" onClick={() => setAdding(false)}>Cancel</button>
+              <button type="button" className="su-link"
+                      onClick={() => { setAdding(false); refocus("mr-floor-add"); }}>Cancel</button>
             </span>
           ) : (
             <button type="button" className="mr-chip mr-chip-add" data-testid="mr-floor-add"
@@ -213,6 +238,7 @@ function Headroom({ routing }: { routing: Routing }) {
   const subs = routing.headroom;
   const targets = routing.sources.filter((s) => s.kind !== "subscription");
   if (!subs.length) return null;
+  const refocus = useRefocus();
   const write = (next: HeadroomRule | null) => save({ headroom: next ? [next] : [] }, "Headroom");
   const draft: HeadroomRule = rule ?? {
     source: subs[0].engine, when: "near_limit", tiers: ["fast", "balanced"],
@@ -251,11 +277,13 @@ function Headroom({ routing }: { routing: Routing }) {
           <Tip tip="Frontier work and floors keep the subscription until it is exhausted."
                className="mr-chip mr-chip-frontier mr-keep">Frontier stays</Tip>
           <button type="button" className="mr-x" aria-label="Remove headroom rule" aria-busy={busy || undefined}
-                  onClick={() => void write(null)}><X size={11} aria-hidden="true" /></button>
+                  data-testid="mr-rule-x"
+                  onClick={async () => { await write(null); refocus("mr-rule-add"); }}>
+            <X size={11} aria-hidden="true" /></button>
         </div>
       ) : targets.length ? (
         <button type="button" className="mr-chip mr-chip-add" data-testid="mr-rule-add"
-                onClick={() => void write(draft)}>
+                onClick={async () => { await write(draft); refocus("mr-rule-when"); }}>
           <Plus size={11} aria-hidden="true" />Move cheap work near limit
         </button>
       ) : (

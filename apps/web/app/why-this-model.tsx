@@ -7,7 +7,7 @@
  */
 import React, { useEffect, useId, useState } from "react";
 
-import { parseRoutes, type RouteRow } from "../lib/model-routes";
+import { parseRoutes, shortLabel, type RouteRow } from "../lib/model-routes";
 
 export type { RouteRow };
 
@@ -24,7 +24,9 @@ export function WhyThisModel({ route, title }: { route: RouteRow; title?: string
       {title ? <span className="wm-step">{title}</span> : null}
       <TierChip tier={route.tier} label={route.tier_label} />
       <span className="wm-main">
-        <span className="wm-label" data-user-text>{route.label ?? route.engine ?? ""}</span>
+        <span className="wm-label" data-user-text title={route.label ?? undefined}>
+          {shortLabel(route.label ?? route.engine ?? "")}
+        </span>
         {route.escalation ? <span className="wm-flag" title={route.escalation}>↑ escalated</span> : null}
         {route.moved_by_headroom ? (
           <span className="wm-flag" title={`Moved off a subscription near its limit, to ${route.label ?? "another source"}`}>moved</span>
