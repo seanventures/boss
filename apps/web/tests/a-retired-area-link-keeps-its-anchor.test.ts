@@ -21,23 +21,24 @@ const req = (path: string, headers: Record<string, string> = {}) =>
   new NextRequest(`http://127.0.0.1:3000${path}`, { headers: { host: "127.0.0.1:3000", ...headers } });
 
 describe("a retired area link", () => {
-  it("is answered with a 307 to where it lives now, on the browser's own host", async () => {
+  it("is answered with a page that moves the browser, same origin, fragment kept", async () => {
     vi.stubEnv("BOSS_CONSOLE_AUTH", "network");
     const res = await middleware(req("/?org=org_boss&area=delivery"));
-    expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toBe("http://127.0.0.1:3000/?org=org_boss&area=infra&view=fleet");
-    // Behind a TLS proxy that keeps the Host: the browser's host, the proxy's scheme — never
-    // the x-forwarded-host `next start` fills with its own bind name.
-    const proxied = await middleware(req("/?org=org_boss&area=pipeline", {
-      host: "boss.example.com", "x-forwarded-host": "localhost", "x-forwarded-proto": "https" }));
-    expect(proxied.headers.get("location"))
-      .toBe("https://boss.example.com/?org=org_boss&area=setup&focus=routing");
+    expect(res.headers.get("x-boss-moved-to")).toBe("/?org=org_boss&area=infra&view=fleet");
+    const body = await res.text();
+    expect(body).toContain('location.replace("/?org=org_boss&area=infra&view=fleet"+location.hash)');
+    expect(body).not.toMatch(/https?:\/\//);          // never a host: the browser's own origin
+    const pipeline = await middleware(req("/?org=org_boss&area=pipeline"));
+    expect(pipeline.headers.get("x-boss-moved-to")).toBe("/?org=org_boss&area=setup&focus=routing");
   });
 
   it("leaves current areas, RSC fetches and server actions to the console", async () => {
     vi.stubEnv("BOSS_CONSOLE_AUTH", "network");
-    expect((await middleware(req("/?area=infra&view=fleet"))).status).toBe(200);
-    expect((await middleware(req("/?area=delivery", { rsc: "1" }))).status).toBe(200);
+    for (const res of [await middleware(req("/?area=infra&view=fleet")),
+                       await middleware(req("/?area=delivery", { rsc: "1" }))]) {
+      expect(res.status).toBe(200);
+      expect(res.headers.get("x-boss-moved-to")).toBeNull();
+    }
   });
 
   it("Infra's home opens This computer from the kept #hardware-manager anchor", () => {
