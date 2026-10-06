@@ -363,3 +363,32 @@ def test_the_passport_upgrade_never_creates_an_agent_without_an_accountable_pers
         assert out == {"agt_helm0000001": "created", "agt_quill000001": "skipped: no accountable person"}
         helm = passports.get("agt_helm0000001", db=c)
         assert helm.sponsor_principal_id == env.alice and helm.ceiling_preset == "builder"
+
+
+def test_s1s_totp_and_sso_reads_go_through_the_vault_and_only_for_their_owner(env):
+    """Integration: S1's TOTP verification and OIDC client-secret reads use purposes S3's vault did
+    not serve (sign-in with an authenticator app and every OIDC login were a 500). Each is served
+    only to its rightful caller."""
+    from boss_engine.identity import AuthContext, AuthMethod, Principal, PrincipalKind, PrincipalStatus, totp
+
+    with env.db() as c:
+        add_person(c, "usr_totp_a")
+        add_person(c, "usr_totp_b")
+        secret = totp.generate_secret() if hasattr(totp, "generate_secret") else "JBSWY3DPEHPK3PXP"
+        item = vault.store(org_id="org_boss", owner_principal_id="usr_totp_a", kind=vault.VaultItemKind.TOTP_SECRET,
+                           provider="totp", secret=secret, db=c)
+        ref = vault.ConnectionRef("totp", "usr_totp_a", item)
+        got = vault.get_credential(ref, vault.CredentialPurpose.TOTP_VERIFY, ctx=session_ctx("usr_totp_a"), db=c)
+        assert got.token == secret
+        with pytest.raises(vault.VaultForbidden):     # another person, naming the item directly
+            vault.get_credential(vault.ConnectionRef("totp", None, item), vault.CredentialPurpose.TOTP_VERIFY,
+                                 ctx=session_ctx("usr_totp_b"), db=c)
+        oidc = vault.store(org_id="org_boss", owner_principal_id=None, kind=vault.VaultItemKind.OIDC_CLIENT_SECRET,
+                           provider="okta", secret="client-secret-x", db=c)
+        system = AuthContext(Principal("sys_sso", PrincipalKind.SYSTEM, "org_boss", PrincipalStatus.ACTIVE, "SSO"),
+                             AuthMethod.SYSTEM)
+        assert vault.get_credential(vault.ConnectionRef("okta", None, oidc), vault.CredentialPurpose.SSO_CLIENT,
+                                    ctx=system, db=c).token == "client-secret-x"
+        with pytest.raises(vault.VaultForbidden):     # a person may never read a client secret
+            vault.get_credential(vault.ConnectionRef("okta", None, oidc), vault.CredentialPurpose.SSO_CLIENT,
+                                 ctx=session_ctx("usr_totp_a"), db=c)
