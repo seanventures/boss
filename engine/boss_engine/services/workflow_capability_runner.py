@@ -346,6 +346,20 @@ def _invoke_tool(
     refused = identity_gate(spec, CURRENT_TOOL_AUTH.get(), project_id)
     if refused is not None:
         return refused
+    # Inside a delegated run, the step's tool is decided against the run token (IDENTITY.md §7.4);
+    # this path calls the handler directly, so the check cannot be left to the registry.
+    from boss_engine.identity import lineage as _identity_lineage
+    from boss_engine.identity import runs as _identity_runs
+
+    _delegated = _identity_lineage.current_context()
+    if _delegated is not None and _delegated.run_token is not None and getattr(ctx, "engine", None) is not None:
+        with ctx.engine.begin() as _db:
+            try:
+                _identity_runs.authorize_tool(getattr(spec, "permission", None), project_id, db=_db)
+            except _identity_runs.ToolRefused as refused:
+                raise CapabilityExecutionError(
+                    f"'{tool_name}' was refused for this agent: {refused.permission} ({refused.reason})"
+                ) from refused
     result = spec.handler(ctx, project_id=project_id, actor=actor, args=args)
     if isinstance(result, dict) and result.get("ok") is False:
         raise CapabilityExecutionError(str(result.get("error") or f"{tool_name} failed."))

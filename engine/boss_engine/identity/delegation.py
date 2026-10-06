@@ -1,8 +1,9 @@
 """Agents acting for people: delegation grants, RFC 8693 token exchange, run tokens, the
 revocation cascade. Owned by stream S3.
 
-FROZEN IN PHASE 0: constants, claim names, dataclasses and signatures. Bodies marked
-NotImplementedError are S3's (IDENTITY_BUILD.md §3). IDENTITY.md §7.
+FROZEN IN PHASE 0: constants, claim names, dataclasses and signatures. The bodies delegate to S3's
+modules: grants.py, tokens.py (mint, exchange, verify, renew, introspect, decide), cascade.py,
+runs.py (the run supervisor), passports.py, vault.py. IDENTITY.md §7.
 
 Effective permission at hop n (§7.4):
     person_live(scope) ∩ ceiling(agent_1) ∩ … ∩ ceiling(agent_n) ∩ grant ∩ token.scope ∩ task
@@ -153,7 +154,9 @@ def create_grant(ctx: AuthContext, request: GrantRequest, *, db: Any) -> Delegat
     request.permissions ⊆ person's live permissions ∩ every named agent's ceiling, all delegable,
     at creation; re-intersected live at every use. GitHub resources pass the user-repo-access guard
     on multi-person installs (operator decision 4)."""
-    raise NotImplementedError("identity.delegation.create_grant is stream S3's")
+    from . import grants
+
+    return grants.create_grant(ctx, request, db=db)
 
 
 def mint_run_token(*, subject: AuthContext, agent: AgentInstance, grant_id: Optional[str],
@@ -161,24 +164,35 @@ def mint_run_token(*, subject: AuthContext, agent: AgentInstance, grant_id: Opti
                    db: Any) -> IssuedToken:
     """The FIRST hop: the run supervisor mints a run token for a person's (or, autonomous, an
     agent's) request context. Refuses any scope containing a non-delegable key (second check)."""
-    raise NotImplementedError("identity.delegation.mint_run_token is stream S3's")
+    from . import tokens
+
+    return tokens.mint_run_token(subject=subject, agent=agent, grant_id=grant_id, task=task,
+                                 audience=audience, scope=scope, cnf_jkt=cnf_jkt, db=db)
 
 
 def exchange_token(request: TokenExchangeRequest, *, htm: str, htu: str, db: Any) -> IssuedToken:
     """Every later hop (RFC 8693, IDENTITY.md §7.5 checks 1-8, in order; any failure denies).
     new_scope = requested ∩ parent.scope ∩ ceiling(child); empty means refused, never 'requested'."""
-    raise NotImplementedError("identity.delegation.exchange_token is stream S3's")
+    from . import tokens
+
+    if request is None:
+        raise tokens.TokenError("invalid_request", 400, "no_request")
+    return tokens.exchange_token(request, htm=htm, htu=htu, db=db)
 
 
 def verify_run_token(token: str, *, audience: str, dpop_proof: Optional[str], htm: str, htu: str,
                      db: Any) -> RunTokenClaims:
     """Verify signature (local JWKS only; never jku/x5u/jwk), alg, typ, iss, aud, time with 30 s
     skew, DPoP (htm, htu, iat, jti replay, ath) and jti liveness. Raises AuthnError."""
-    raise NotImplementedError("identity.delegation.verify_run_token is stream S3's")
+    from . import tokens
+
+    return tokens.verify_run_token(token, audience=audience, dpop_proof=dpop_proof, htm=htm, htu=htu, db=db)
 
 
 def revoke_cascade(trigger: CascadeTrigger, target_id: str, *, actor: AuthContext, reason: str,
                    db: Any, dry_run: bool = False) -> CascadeReport:
     """Revoke and propagate in ONE transaction plus NOTIFY (IDENTITY.md §7.11); effect ≤5 s end to
     end. `dry_run=True` computes the preview and changes nothing."""
-    raise NotImplementedError("identity.delegation.revoke_cascade is stream S3's")
+    from . import cascade
+
+    return cascade.revoke_cascade(trigger, target_id, actor=actor, reason=reason, db=db, dry_run=dry_run)
