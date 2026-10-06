@@ -1999,7 +1999,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     agents: dict[str, object] = {}  # one CodeAgent per engine name, reused across steps
     stage_routes: dict[str, dict] = {}  # step -> {"engine", "model"} resolved (evidence)
 
+    _agents_lock = threading.RLock()
+
     def _agent_for(engine_name: str):
+        with _agents_lock:
+            return _agent_for_locked(engine_name)
+
+    def _agent_for_locked(engine_name: str):
         a = agents.get(engine_name)
         if a is None:
             with _transaction(engine) as c:
@@ -2050,6 +2056,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         risk_tier=risk_tier)
 
     def _take(step: str, decision) -> tuple:
+        if decision.refused:
+            # No source may take this stage under the policy — in words, never a silent
+            # fallback (docs/product/MODEL_ROUTER.md).
+            from .model_router.failover import RouteRefused
+
+            raise RouteRefused(f"{step}: {decision.refusal}")
         stage_routes[step] = {"engine": decision.engine, "model": decision.model,
                               "route_id": decision.id, "tier": decision.tier,
                               **({"budget_lite": True} if decision.budget_lite else {}),
@@ -2062,20 +2074,48 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     def _route_ids() -> dict:
         return {s: r["route_id"] for s, r in stage_routes.items() if r.get("route_id")}
 
+    def _guarded(step: str, decision):
+        """(agent, model) for a decision. Smart mode wraps the agent so a limit or a
+        transient failure at call time retries the SAME stage on the next source at once
+        (model_router.failover); Fixed mode is exactly as before."""
+        eng, model = _take(step, decision)
+        agent = _agent_for(eng)
+        if decision.mode != "smart":
+            return agent, model
+        from .model_router import store as _route_store
+        from .model_router.failover import FailoverAgent
+
+        def reroute():
+            _route_store.invalidate(project_id)
+            nxt = stage_router.route(step)
+            if nxt.refused:
+                return None, None, nxt
+            e2, m2 = _take(step, nxt)
+            return _agent_for(e2), m2, nxt
+
+        def on_hop(failed: str, nxt, kind: str) -> None:
+            try:
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.stage_rerouted", "boss",
+                               "code_task_run", run_id,
+                               {"step": step, "from": failed, "to": nxt.engine,
+                                "model": nxt.model, "why": kind})
+            except Exception:  # noqa: BLE001 — the record of a reroute is not the reroute
+                pass
+
+        return FailoverAgent(agent, model, eng, reroute, on_hop), model
+
     def _route(step: str):
-        """Resolve a step to (agent, model) through the router. Call from the MAIN thread
-        only (the agent cache is not locked)."""
-        eng, model = _take(step, stage_router.route(step))
-        return _agent_for(eng), model
+        """Resolve a step to (agent, model) through the router."""
+        return _guarded(step, stage_router.route(step))
 
     def _route_escalated(step: str):
         """The step again, one boundary later, on the evidence that its route produced no
         usable output (write_tests) or that this is the final attempt (implement). Fixed mode:
-        the hard-problems lane, as before; Smart mode: the escalation rules. MAIN thread only."""
+        the hard-problems lane, as before; Smart mode: the escalation rules."""
         signal = "no_output" if step == "write_tests" else "final_attempt"
-        eng, model = _take(step, stage_router.route(step, signal=signal,
-                                                    previous=stage_routes.get(step)))
-        return _agent_for(eng), model
+        return _guarded(step, stage_router.route(step, signal=signal,
+                                                 previous=stage_routes.get(step)))
 
     def _vm_escalation(step: str, escalate: bool, signal: str) -> str:
         """A micro-VM stage's escalation. Fixed: the hard-problems engine override, as before.

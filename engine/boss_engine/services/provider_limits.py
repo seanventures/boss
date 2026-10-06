@@ -121,29 +121,34 @@ def classify_limit(error: Optional[str]) -> Optional[LimitSignal]:
         return None
     text = str(error)
     lowered = text.lower()
-    if not any(phrase in lowered for phrase in _EXHAUSTED):
+    # ONE PARSER FOR EVERY PROVIDER'S LIMIT SENTENCE (model_router.headroom, with its corpus
+    # test): Claude's "Weekly limit reached ∙ resets Oct 13, 10am", "usage limit reached|<epoch>",
+    # a 429 with Retry-After, Codex's "try again at …". A window for one model family (an Opus
+    # limit) does not close the source, so it is not an exhaustion here.
+    windows: dict = {}
+    try:
+        from .model_router.headroom import MODEL_WINDOWS, windows_from_limit_message
+
+        windows = {k: w for k, w in windows_from_limit_message(text).items()
+                   if k not in MODEL_WINDOWS}
+    except Exception:  # noqa: BLE001
+        windows = {}
+    if not windows and not any(phrase in lowered for phrase in _EXHAUSTED):
         return None
 
     retry_at = _parse_retry_at(text)
-    if retry_at is None:
-        # "· resets Mon 12:00am" — Claude Code's phrasing, parsed where the router reads it.
-        try:
-            from .model_router.headroom import windows_from_limit_message
-
-            resets = [w["resets_at"] for k, w in windows_from_limit_message(text).items()
-                      if k in ("seven_day", "five_hour") and w.get("resets_at")]
-            if resets:
-                retry_at = datetime.fromisoformat(min(resets))
-        except Exception:  # noqa: BLE001
-            retry_at = None
+    if retry_at is None and windows:
+        resets = [w["resets_at"] for w in windows.values() if w.get("resets_at")]
+        if resets:
+            retry_at = datetime.fromisoformat(min(resets))
     seconds_match = _RETRY_SECONDS.search(text)
     seconds = int(seconds_match.group("seconds")) if seconds_match else None
 
     # The provider's own sentence, not a paraphrase: it names the plan, the cap and the
     # remedy, and an operator deciding whether to wait or switch needs all three.
-    sentence = text.strip()
+    sentence = text.strip().splitlines()[0].strip() if text.strip() else ""
     for line in text.splitlines():
-        if any(phrase in line.lower() for phrase in _EXHAUSTED):
+        if any(phrase in line.lower() for phrase in _EXHAUSTED) or "limit" in line.lower():
             sentence = line.strip()
             break
 
@@ -152,7 +157,8 @@ def classify_limit(error: Optional[str]) -> Optional[LimitSignal]:
         detail=sentence,
         retry_at=retry_at,
         retry_after_seconds=seconds,
-        evidence={"matched": next(p for p in _EXHAUSTED if p in lowered)},
+        evidence={"matched": next((p for p in _EXHAUSTED if p in lowered),
+                                  ",".join(sorted(windows)) or "limit")},
     )
 
 

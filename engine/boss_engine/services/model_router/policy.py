@@ -53,6 +53,37 @@ DEFAULT_CRITERIA = {
 }
 
 
+#: Model names by the tier they belong to — for reading what a pin, a profile or a session is
+#: really running, and for refusing a non-frontier model as the Frontier tier. Frontier is
+#: checked first (gpt-5 before "mini"), so "gpt-5-mini" is not Frontier because of the order
+#: below: the fast markers are checked against the name before the frontier ones.
+_FAST_MARKERS = ("haiku", "-mini", "mini-", "nano", "flash", "-small", "ministral", "3b", "1b",
+                 "7b", "8b", "lite")
+_FRONTIER_MARKERS = ("opus", "gpt-5", "gemini-2.5-pro", "gemini-3-pro", "grok-4",
+                     "claude-sonnet-4.5-thinking")
+_BALANCED_MARKERS = ("sonnet", "deepseek", "qwen", "coder", "kimi", "glm", "llama", "mistral",
+                     "gpt-4", "gemini", "codestral", "devstral")
+
+
+def model_tier(engine: str, model: Optional[str]) -> Optional[str]:
+    """The tier a named model belongs to, or None when the name says nothing. An engine's own
+    tier aliases (claude_code: haiku/sonnet/opus) are exact; other names go by markers."""
+    name = str(model or "").strip().lower()
+    if not name:
+        return None
+    for tier, alias in (ENGINE_TIER_MODELS.get(str(engine or "").lower()) or {}).items():
+        if alias and name == alias:
+            return tier
+    base = name.rsplit("/", 1)[-1]
+    if any(m in base for m in _FAST_MARKERS):
+        return FAST
+    if any(m in base for m in _FRONTIER_MARKERS) or base.startswith(("o3", "o4")):
+        return FRONTIER
+    if any(m in base for m in _BALANCED_MARKERS):
+        return BALANCED
+    return None
+
+
 class PolicyError(ValueError):
     """A policy document that cannot be routed on. The message names the field."""
 
@@ -175,6 +206,13 @@ class RoutingPolicy:
     #: engine -> the weekly allowance in API-equivalent USD, set by the operator. Learned
     #: allowances live with the source's observed capacity, not here.
     weekly_allowance_usd: Mapping[str, float] = field(default_factory=dict)
+    #: Jobs whose pin is HARD ("Always use, even when limited"). Every other job pin is a
+    #: preference: it picks the source and model within the tier, and headroom rules and
+    #: exhaustion can still move it (Decision 5).
+    hard_pins: tuple[str, ...] = ()
+    #: Frontier work may fall back to a local model. Off: Frontier goes subscription →
+    #: metered frontier → a refusal in words (Decision 6).
+    frontier_allows_local: bool = False
     version: int = 0
 
     @property
@@ -206,6 +244,8 @@ class RoutingPolicy:
             "allowed_sources": list(self.allowed_sources) if self.allowed_sources else None,
             "classifier": self.classifier.to_dict(),
             "weekly_allowance_usd": dict(self.weekly_allowance_usd),
+            "hard_pins": list(self.hard_pins),
+            "frontier_allows_local": self.frontier_allows_local,
             "version": self.version,
         }
 
@@ -249,6 +289,13 @@ def from_dict(doc: Mapping[str, Any], *, base: Optional[RoutingPolicy] = None) -
             if not isinstance(targets, (list, tuple)):
                 targets = [targets]
             parsed = tuple(_target(t, f"tiers.{tier}") for t in targets if t)
+            if tier == FRONTIER:
+                for t in parsed:
+                    found = model_tier(t.engine, t.model)
+                    if found in (FAST, BALANCED):
+                        raise PolicyError(
+                            f"tiers.frontier: {t.model} is a {found} model, not a Frontier one. "
+                            "Frontier is for judgment work — choose an Opus-class model.")
             if len(parsed) > 6:
                 raise PolicyError(f"tiers.{tier}: at most 6 targets.")
             tiers[tier] = parsed
@@ -296,7 +343,10 @@ def from_dict(doc: Mapping[str, Any], *, base: Optional[RoutingPolicy] = None) -
         for state, drop in (doc["budget"] or {}).items():
             if state not in ("yellow", "orange", "red"):
                 raise PolicyError("budget: states are yellow, orange and red.")
-            budget[state] = max(0, min(2, int(drop)))
+            drop = _int(drop, f"budget.{state}")
+            if not 0 <= drop <= 2:
+                raise PolicyError(f"budget.{state} drops 0, 1 or 2 tiers (not {drop}).")
+            budget[state] = drop
     escalation = base.escalation
     if "escalation" in doc:
         rules = []
@@ -307,12 +357,18 @@ def from_dict(doc: Mapping[str, Any], *, base: Optional[RoutingPolicy] = None) -
             to = str(e.get("to") or "up")
             if to != "up":
                 to = _tier(to, f"escalation[{i}]")
-            rules.append(EscalationRule(signal, max(1, min(9, int(e.get("count") or 1))),
+            count = _int(e.get("count", 1), f"escalation[{i}].count")
+            if not 1 <= count <= 9:
+                raise PolicyError(f"escalation[{i}].count is 1–9 (not {count}).")
+            rules.append(EscalationRule(signal, count,
                                         tuple(str(s) for s in (e.get("steps") or ())), to))
         escalation = tuple(rules)
     allowed = base.allowed_sources
     if "allowed_sources" in doc:
         raw = doc["allowed_sources"]
+        if isinstance(raw, (list, tuple)) and not raw:
+            raise PolicyError("allowed_sources: name at least one source, or clear the list "
+                              "(null) to allow every connected source.")
         allowed = tuple(str(s).lower() for s in raw) if raw else None
     classifier = base.classifier
     if "classifier" in doc:
@@ -328,23 +384,54 @@ def from_dict(doc: Mapping[str, Any], *, base: Optional[RoutingPolicy] = None) -
             criteria[_tier(tier, "classifier.criteria")] = text[:600]
         classifier = ClassifierConfig(
             backend=backend,
-            jev_timeout_ms=max(100, min(5000, int(c.get("jev_timeout_ms",
-                                                        classifier.jev_timeout_ms)))),
-            model_timeout_ms=max(500, min(30000, int(c.get("model_timeout_ms",
-                                                           classifier.model_timeout_ms)))),
-            model_below=max(0.0, min(1.0, float(c.get("model_below", classifier.model_below)))),
+            jev_timeout_ms=_bounded(c.get("jev_timeout_ms", classifier.jev_timeout_ms),
+                                    100, 5000, "classifier.jev_timeout_ms"),
+            model_timeout_ms=_bounded(c.get("model_timeout_ms", classifier.model_timeout_ms),
+                                      500, 30000, "classifier.model_timeout_ms"),
+            model_below=_bounded(c.get("model_below", classifier.model_below), 0.0, 1.0,
+                                 "classifier.model_below", number=float),
             model_fallback=bool(c.get("model_fallback", classifier.model_fallback)),
             criteria=criteria)
     allowance = dict(base.weekly_allowance_usd)
     if "weekly_allowance_usd" in doc:
         allowance = {str(k).lower(): float(v) for k, v in (doc["weekly_allowance_usd"] or {}).items()
                      if v not in (None, "") and float(v) > 0}
+    hard_pins = base.hard_pins
+    if "hard_pins" in doc:
+        jobs = ("build", "review", "chat")
+        hard_pins = tuple(str(j) for j in (doc["hard_pins"] or ()))
+        unknown = [j for j in hard_pins if j not in jobs]
+        if unknown:
+            raise PolicyError(f"hard_pins: {', '.join(unknown)} is not a job ({', '.join(jobs)}).")
+    frontier_local = bool(doc.get("frontier_allows_local", base.frontier_allows_local))
     return RoutingPolicy(
+        hard_pins=hard_pins, frontier_allows_local=frontier_local,
         mode=mode, tiers=tiers, floors=floors,
         floor_preset=str(doc.get("floor_preset", base.floor_preset) or "custom")[:40],
         headroom=headroom, thresholds=thresholds, budget=budget, escalation=escalation,
         allowed_sources=allowed, classifier=classifier, weekly_allowance_usd=allowance,
         version=int(doc.get("version", base.version) or 0))
+
+
+def _int(value: Any, where: str) -> int:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise PolicyError(f"{where} is a whole number.") from None
+    if number != int(number):
+        raise PolicyError(f"{where} is a whole number (not {value}).")
+    return int(number)
+
+
+def _bounded(value: Any, low: float, high: float, where: str, *, number=int) -> Any:
+    """A value inside its bounds, or a PolicyError that says so — never a silent clamp."""
+    try:
+        got = number(float(value)) if number is int else float(value)
+    except (TypeError, ValueError):
+        raise PolicyError(f"{where} is a number between {low} and {high}.") from None
+    if not low <= got <= high:
+        raise PolicyError(f"{where} is between {low} and {high} (not {value}).")
+    return got
 
 
 # ── Presets: the pipeline profiles, as floors ─────────────────────────────────────────────────
@@ -358,15 +445,41 @@ BASE_FLOORS: tuple[Floor, ...] = (
 )
 
 
-def floors_from_profile(profile: Mapping[str, Any]) -> tuple[Floor, ...]:
-    """A profile's `strong` steps ARE its floors (Decision 4). `lean` has none, `balanced` floors
-    the three adversarial seats, `strict` floors every stage, `vag` every stage but the junior
-    ones. A custom profile converts the same way."""
-    from ..pipeline_profiles import model_for_step
+def _step_tier(profile: Mapping[str, Any], step: str) -> tuple[Optional[str], Optional[Target]]:
+    """A profile step's value as (the tier it demands, the explicit pin it names). `strong` is
+    Frontier; a pin to a model is that model's tier — `claude_code:opus` is a Frontier floor
+    exactly as `strong` is (classified by tier, not by string)."""
+    from ..pipeline_profiles import _parse_route
 
     routing = profile.get("model") or {}
-    strong = [s for s in BUILD_STEPS if model_for_step(profile, s) == "strong"]
-    if routing.get("default", "strong") == "strong" and len(strong) == len(BUILD_STEPS):
+    value = routing.get(step, routing.get("default", "strong"))
+    parsed = _parse_route(value)
+    if parsed.get("model_class") == "strong":
+        return FRONTIER, None
+    if parsed.get("model_class") == "low_cost":
+        return None, None
+    pin = Target(parsed["engine"], parsed.get("model")) if parsed.get("engine") else None
+    tier = model_tier(parsed.get("engine") or "", parsed.get("model"))
+    return (FRONTIER if tier == FRONTIER else None), pin
+
+
+def profile_preferences(profile: Optional[Mapping[str, Any]]) -> dict[str, Target]:
+    """Steps the profile pins to an explicit source/model: on Smart these are preferences
+    within the tier (the floor still wins), never ignored."""
+    out: dict[str, Target] = {}
+    for step in BUILD_STEPS:
+        _tier, pin = _step_tier(profile or {}, step)
+        if pin is not None:
+            out[step] = pin
+    return out
+
+
+def floors_from_profile(profile: Mapping[str, Any]) -> tuple[Floor, ...]:
+    """A profile's Frontier-class steps ARE its floors (Decision 4): `strong`, or a pin to a
+    Frontier model. `lean` has none, `balanced` floors the three adversarial seats, `strict`
+    every stage, `vag` every stage but the junior ones. A custom profile converts the same way."""
+    strong = [s for s in BUILD_STEPS if _step_tier(profile, s)[0] == FRONTIER]
+    if len(strong) == len(BUILD_STEPS):
         floors: list[Floor] = [Floor({"kind": "build_stage"}, FRONTIER)]
     else:
         floors = [Floor({"step": s}, FRONTIER) for s in strong]

@@ -98,14 +98,20 @@ def test_4_tests_failing_twice_escalates_implement():
     assert third.escalation_signal == "tests_failed"
 
 
-# 5 ─ the monthly API budget is red: downgrade, except floors
+ARCHITECTURE = {"title": "Scheduler", "instructions": "Redesign the architecture of the existing "
+                                                     "job scheduler for concurrency."}
+
+
+# 5 ─ the monthly API budget is red: downgrade, except floors (and sensitive work, a floor)
 def test_5_a_red_budget_drops_a_tier():
-    d = route(build("implement", OAUTH), snap(budget="red"))
+    d = route(build("implement", ARCHITECTURE), snap(budget="red"))
     assert d.classified_tier == "frontier" and d.tier == "balanced" and d.budget_lite
 
 
 def test_5b_a_red_budget_never_drops_below_a_floor():
     assert route(build("review_code", OAUTH), snap(budget="red")).tier == "frontier"
+    # Sensitive work is a floor of its own: a red budget does not drop OAuth to Balanced.
+    assert route(build("implement", OAUTH), snap(budget="red")).tier == "frontier"
 
 
 # 6 ─ Jev times out → the rules answer
@@ -235,7 +241,8 @@ def test_13_a_build_pinned_to_codex_runs_on_codex():
     s = snap(sources={"claude_code": claude(), "codex": SourceState("codex", "subscription")},
              job_pins={"build": ("codex", None)})
     d = route(build("implement", FULL_STACK), s)
-    assert d.engine == "codex" and d.tier == "balanced" and "pin:job" in d.rules
+    # A migrated job pin is a PREFERENCE (Decision 5): it chooses the source within the tier.
+    assert d.engine == "codex" and d.tier == "balanced" and "prefer:job" in d.rules
 
 
 def test_13b_a_job_pinned_to_a_model_is_a_hard_pin():

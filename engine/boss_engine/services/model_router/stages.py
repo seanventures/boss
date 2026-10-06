@@ -105,7 +105,8 @@ class StageRouter:
                                        previous=previous),
             mode_override=self.mode_override,
             aliases=tuple(CODING_STEPS - {step}) if step in CODING_STEPS else (),
-            extra_floors=self._profile_floors())
+            extra_floors=self._profile_floors(),
+            preferred=self._profile_preferences().get(step))
         with self._tx() as connection:
             decision = store.route(connection, self.settings, request, ledger=self.ledger)
         self.decisions[step] = decision
@@ -122,6 +123,18 @@ class StageRouter:
             except Exception:  # noqa: BLE001
                 self._floors = ()
         return self._floors
+
+    def _profile_preferences(self) -> dict:
+        """The profile's explicit step pins (`implement: claude_code:sonnet`): preferences
+        within the tier on Smart — the floor still raises them (Decision 4)."""
+        if not hasattr(self, "_prefs"):
+            from .policy import profile_preferences
+
+            try:
+                self._prefs = profile_preferences(self.profile or {})
+            except Exception:  # noqa: BLE001
+                self._prefs = {}
+        return self._prefs
 
     def signal(self, step: str, signal: str, n: int = 1) -> int:
         """Evidence seen during a stage (tests failed, reviewers asked for changes…). It moves

@@ -1075,9 +1075,8 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
         project_id=run["project_id"], unit_id=run_id,
         role="facilitator" if facilitating else None,
         text=str(run.get("directive") or "")[:6000])
-    with begin(engine) as c:
-        adapter = model_routing.project_chat_adapter(c, settings, run["project_id"],
-                                                     purpose=purpose)
+    with begin(engine) as c, model_routing.routing_purpose(purpose):
+        adapter = model_routing.project_chat_adapter(c, settings, run["project_id"])
     add_cost = 0
     model = (run["usage"] or {}).get("model")
 
