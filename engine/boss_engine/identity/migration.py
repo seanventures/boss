@@ -20,7 +20,9 @@ migrate`) maps, and to what:
   member capabilities (21 strings)        catalogue permissions (CAPABILITY_PERMISSIONS)
   break-glass grant (active)              a time-boxed binding (expires_at) of the grant's role
   approver role in default_safety.yaml    an approval seat row for the placeholder
-  BOSS_API_KEY (the console's key)        sys_legacy_console until the cutoff (D25, M5)
+  BOSS_API_KEY (the console's key)        sys_legacy_console: the Owner set until the claim, then
+                                          the Owner set minus identity writes until the cutoff
+                                          (D25, M5; operator decision 2026-10-06)
   BOSS_API_KEYS + _PRINCIPALS             identity_api_credentials(kind=legacy_env), hash only,
                                           bound to the member's principal (system) or to a legacy
                                           service account for that member (human)
@@ -122,6 +124,16 @@ BRIDGE_SET: frozenset[str] = frozenset(
     if PERMISSION_META[p].category != IDENTITY_CATEGORY or p.endswith(":read")
     or p in ("directory:read", "api_key:manage_own", "connection:use_own",
              "delegation:read_all", "connection:read_all"))
+
+#: sys_legacy_console FROM THE CLAIM ON (operator decision, 2026-10-06): real Owners manage
+#: identity from then, so the shared key loses every identity write at once — people, groups,
+#: roles and bindings, owners, service accounts and keys, sessions, agent passports and
+#: delegations, connections, providers, the sign-in policy and the audit export — and keeps
+#: everything else (and every identity read) until the cutoff.
+CONSOLE_AFTER_CLAIM_SET: frozenset[str] = frozenset(
+    p for p in LEGACY_OWNER_SET
+    if PERMISSION_META[p].category != IDENTITY_CATEGORY
+    or p.endswith(":read") or p.endswith(":read_all"))
 
 LEGACY_BRIDGE_ROLE_KEY = "legacy_bridge"
 ROLE_ORDER = ("viewer", "operator", "admin", "owner")

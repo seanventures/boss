@@ -136,6 +136,7 @@ docker compose exec api python -m boss_engine.identity.cli <command>
 | `audit prune [--older-than-days N]` | Prunes with a checkpoint (default: the retention setting). |
 | `shadow-report [--json]` | Prints the per-router shadow report. |
 | `posture` | Prints the posture checks. |
+| `claim-status` | One line: `unclaimed`, or when the install was claimed and when the shared credentials stop. `boss doctor` prints it. |
 | `migrate` | Re-runs the mapping of legacy members, keys, grants and SCIM data. It runs by itself at startup, and running it again changes nothing that is already mapped. |
 
 ## Next steps

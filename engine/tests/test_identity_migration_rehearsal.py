@@ -21,6 +21,7 @@ from sqlalchemy import text
 
 from boss_engine.identity import audit, legacy, migration, posture, shadow_report
 from boss_engine.identity.authn import AuthnError
+from boss_engine.identity.permissions_gen import PERMISSION_META
 from boss_engine.identity.legacy import (
     LEGACY_CONSOLE_PRINCIPAL,
     LEGACY_SHARED_PRINCIPAL,
@@ -380,3 +381,51 @@ def test_a_network_bridge_first_seen_after_the_claim_still_has_its_window(db):
     assert not fake_check(db, visitor, "settings:update", project=PROJECT, now=later).allowed
     paths = {p["kind"]: p for p in posture.legacy_paths(ORG, db=db, now=later)}
     assert paths["network_mode"]["retire_after"] is not None
+
+
+IDENTITY_WRITES = ("user:invite", "user:update", "user:disable", "group:manage_members",
+                   "access_role:manage", "role_binding:assign", "owner:assign",
+                   "service_account_key:manage", "api_key:revoke", "security_policy:manage",
+                   "identity_provider:manage", "delegation:grant")
+
+
+def test_the_console_key_loses_identity_writes_at_the_claim_and_everything_at_the_cutoff(db):
+    """Operator decision 2026-10-06: BOSS_API_KEY is the full Owner set only until the first
+    Owner is claimed; from the claim, real Owners manage people, so the shared key keeps
+    everything EXCEPT identity writes until claim + 30 days, then nothing."""
+    cfg = shared_server_settings()
+    community_install(db)
+    before = legacy.bridge(console_request(), db=db, now=NOW, settings=cfg)
+    assert all(allowed(db, before, *IDENTITY_WRITES).values())        # today's reach, pre-claim
+    assert legacy.system_permissions(LEGACY_CONSOLE_PRINCIPAL, db=db) == \
+        migration.LEGACY_OWNER_SET
+
+    claim = fake_claim(db, name="Param", email="param@example.com", via="network_bridge",
+                       now=NOW, cfg=cfg)
+    day1 = NOW + timedelta(days=1)
+    after = legacy.bridge(console_request(), db=db, now=day1, settings=cfg)
+    assert after.principal.id == LEGACY_CONSOLE_PRINCIPAL
+    assert not any(allowed(db, after, *IDENTITY_WRITES, now=day1).values())
+    still = ("settings:update", "deployment:production", "code_task:create", "workflow:publish",
+             "budget:manage", "user:read", "role_binding:read", "audit:read",
+             "delegation:read_all")
+    assert all(allowed(db, after, *still, now=day1).values())
+    granted = legacy.system_permissions(LEGACY_CONSOLE_PRINCIPAL, db=db)
+    assert granted == migration.CONSOLE_AFTER_CLAIM_SET
+    assert {p for p in migration.LEGACY_OWNER_SET - granted
+            if PERMISSION_META[p].category != migration.IDENTITY_CATEGORY} == set()
+    # the real Owner holds what the key lost: no lockout
+    assert all(fake_check(db, claim.ctx, p, now=NOW).allowed for p in IDENTITY_WRITES
+               if p != "delegation:grant")
+    # the other legacy system principals (worker, metatron, coo) are not narrowed by the claim
+    assert legacy.system_permissions(LEGACY_WORKER_PRINCIPAL, db=db) == migration.WORKER_LEGACY_SET
+
+    # at the cutoff (once the Owner has a session) the key holds nothing
+    db.execute(text(
+        "INSERT INTO identity_sessions (id, token_hash, principal_id, auth_methods, mfa_at, "
+        "last_seen_at, idle_expires_at, absolute_expires_at) VALUES ('ses_y', 'hy', :p, "
+        "ARRAY['passkey'], :t, :t, :t2, :t2)"),
+        {"p": claim.principal_id, "t": NOW + timedelta(days=31),
+         "t2": NOW + timedelta(days=32)})
+    migration.retire_due(ORG, db=db, now=NOW + timedelta(days=31))
+    assert legacy.system_permissions(LEGACY_CONSOLE_PRINCIPAL, db=db) == frozenset()
