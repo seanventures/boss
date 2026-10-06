@@ -409,7 +409,7 @@ def extend_grant(ctx: AuthContext, grant_id: str, days: int, *, db: Any) -> Dele
     permissions are re-checked against their live access and every ceiling (no stale widening)."""
     from sqlalchemy import text
 
-    from . import audit, lineage, passports
+    from . import lineage, passports
 
     if ctx is None or not ctx.is_human_session:
         raise GrantRefused("people_only", 403)
@@ -436,9 +436,8 @@ def extend_grant(ctx: AuthContext, grant_id: str, days: int, *, db: Any) -> Dele
         raise GrantRefused("exceeds_ceiling", 403, {"permissions": sorted(unusable)})
     new_exp = _now() + timedelta(days=days)
     db.execute(text("UPDATE identity_delegation_grants SET expires_at = :e WHERE id = :g"), {"e": new_exp, "g": g.id})
-    event = "delegation.extended" if "delegation.extended" in audit.EVENT_TYPES else "delegation.created"
     after = load(g.id, db=db)
-    lineage.grant_event(db, after, event, ctx=ctx, details={"change": "extended", "days": days,
+    lineage.grant_event(db, after, "delegation.extended", ctx=ctx, details={"change": "extended", "days": days,
                                                             "expires_at": new_exp.isoformat()})
     return after
 
