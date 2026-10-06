@@ -304,6 +304,13 @@ def test_execute_endpoint_wires_worker_boundary(client, engine, monkeypatch):
         )
         phase_ids = dispatched["phase_task_ids"]
         parent_task = proposed["task_id"]
+    # The endpoint executes only under a LIVE lease on a next_move job (identity int-b).
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE jobs SET status = 'cancelled' WHERE status = 'queued'"))
+        job = api_main.jobs.create_job(connection, PROJECT_ID, "agent.orchestrator.next_move", {})
+    with engine.begin() as connection:
+        leased = api_main.jobs.claim_job(connection, "worker-http", ["agent.orchestrator.next_move"], 120)
+    assert leased and leased["id"] == job["id"]
 
     response = client.post(
         "/v1/orchestration/next-move/execute",
@@ -319,7 +326,8 @@ def test_execute_endpoint_wires_worker_boundary(client, engine, monkeypatch):
             },
             "task_id": parent_task,
             "worker_id": "worker-http",
-            "lease_token": "lease_http",
+            "created_by_job_id": job["id"],
+            "lease_token": leased["lease_token"],
         },
     )
     assert response.status_code == 200
