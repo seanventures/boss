@@ -39,10 +39,21 @@ done
 ENV_FILE="${BOSS_ENV_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.env}"
 # .env is Docker data, not shell code. A model key or operator-added value may
 # contain shell metacharacters; sourcing it would execute them on the host.
+# Read the way Docker Compose reads it: an `export ` prefix is allowed, the LAST definition wins,
+# a quoted value ends at its closing quote, an unquoted one at ` #` (a trailing comment).
 env_value() {
   local key="$1"
   [ -f "$ENV_FILE" ] || return 0
-  grep -m 1 "^${key}=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true
+  awk -v k="$key" '
+    { line = $0; sub(/^[ \t]+/, "", line); sub(/^export[ \t]+/, "", line) }
+    index(line, k "=") == 1 { v = substr(line, length(k) + 2); found = 1 }
+    END {
+      if (!found) exit
+      q = substr(v, 1, 1)
+      if (q == "\"" || q == "\047") { v = substr(v, 2); i = index(v, q); if (i) v = substr(v, 1, i - 1) }
+      else { sub(/[ \t]+#.*$/, "", v); sub(/[ \t]+$/, "", v) }
+      print v
+    }' "$ENV_FILE" 2>/dev/null || true
 }
 for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_DEFAULT_PROJECT_ID BOSS_API_KEY BOSS_PUBLIC_URL BOSS_API_BIND; do
   if [ -z "${!key:-}" ]; then

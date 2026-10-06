@@ -670,13 +670,13 @@ def check_url(url: str) -> str:
     parts = urlsplit(url)
     local = parts.hostname in ("127.0.0.1", "localhost", "::1")
     if parts.scheme != "https" and not (parts.scheme == "http" and local):
-        raise ValueError("The collector URL has to be https.")
+        raise ValueError("Must be https (http only on this machine)")
     if parts.username or parts.password or parts.query or parts.fragment:
-        raise ValueError("The collector URL takes no credentials, query or fragment.")
+        raise ValueError("Must not carry credentials, a query or a fragment")
     if not parts.hostname or len(url) > 300:
-        raise ValueError("That is not a collector URL.")
+        raise ValueError("Must be a full collector URL")
     if not parts.path.rstrip("/").endswith("/telemetry/ingest"):
-        raise ValueError("The URL ends in /v1/telemetry/ingest.")
+        raise ValueError("Must end in /v1/telemetry/ingest")
     return url.rstrip("/")
 
 

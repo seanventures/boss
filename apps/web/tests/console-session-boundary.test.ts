@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
@@ -41,7 +43,17 @@ describe("single-operator console boundary", () => {
   );
 
   it("covers every path, including the rendered page and hand-written API routes", () => {
-    expect(middlewareConfig.matcher).toEqual(["/:path*"]);
+    // ONE named exception: the Improve BOSS collector's three machine POSTs, kept out so Next does
+    // not buffer (tee) their bodies. They carry no credential (the /v1 proxy attaches no key to
+    // them), and the /v1 route refuses any browser request to them itself
+    // (tests/a-browser-cannot-post-to-the-collector.test.ts).
+    expect(middlewareConfig.matcher).toEqual(["/((?!v1/telemetry/(?:ingest|delete|share)/?$).*)"]);
+    const re = new RegExp(`^${middlewareConfig.matcher[0]}$`);
+    for (const p of ["/", "/api/govern", "/v1/projects", "/v1/telemetry/sharing", "/login", "/v1/telemetry/ingest/x"]) {
+      expect(re.test(p), p).toBe(true);
+    }
+    const route = readFileSync(join(process.cwd(), "app", "v1", "[...path]", "route.ts"), "utf8");
+    expect(route).toMatch(/COLLECTOR_PATHS\.has\(incoming\.pathname\) && !collectorMachinePost\(req\)/);
   });
 
   it("issues a signed, expiring owner session that can navigate multiple projects", async () => {

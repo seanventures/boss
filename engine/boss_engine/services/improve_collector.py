@@ -150,6 +150,13 @@ def ingest(connection, payload: Any, *, ip: str = "") -> dict[str, Any]:
     batches = clean.get("batches") or []
     known = connection.execute(text("SELECT 1 FROM tm_installs WHERE install_id = :id"),
                                {"id": install_id}).scalar()
+    # AN ID'S HASH IS ITS FIRST ONE, wherever it was first seen — a heartbeat or a shared run. A
+    # later envelope with another hash is someone else claiming the id (re-check D): refused, so
+    # it can neither register its own hash nor take over the id's delete.
+    held = registered_hash(connection, install_id)
+    offered = clean.get("secret_hash")
+    if held and offered and offered != held:
+        raise CollectorError(409, "install_id_taken")
     suspicious = bool(not known and not NEW_INSTALL_LIMIT.allow(ip_key(ip)))
     ctx = (batches[-1].get("context") if batches else None) or {}
     connection.execute(text("""
@@ -166,7 +173,7 @@ def ingest(connection, payload: Any, *, ip: str = "") -> dict[str, Any]:
           os = COALESCE(EXCLUDED.os, tm_installs.os),
           arch = COALESCE(EXCLUDED.arch, tm_installs.arch),
           improve_on = EXCLUDED.improve_on"""),
-        {"id": install_id, "h": clean.get("secret_hash"), "d": day,
+        {"id": install_id, "h": held or offered, "d": day,
          "v": hb.get("version") or ctx.get("version"), "e": hb.get("edition") or ctx.get("edition"),
          "m": hb.get("install_method"), "os": hb.get("os"), "arch": hb.get("arch"),
          "imp": bool(batches), "sus": suspicious})
@@ -189,6 +196,19 @@ def ingest(connection, payload: Any, *, ip: str = "") -> dict[str, Any]:
     return {"ok": True, "duplicate": new == 0, "stored": new, "dropped_fields": dropped}
 
 
+def registered_hash(connection, install_id: str) -> Optional[str]:
+    """The secret hash an id registered FIRST — from its first heartbeat or batch, or its first
+    shared run, whichever came earlier. Never a later one: that is how an id is taken over."""
+    return connection.execute(text("""
+        SELECT h FROM (
+          SELECT secret_hash AS h, first_seen_day::timestamptz AS at, 1 AS pref FROM tm_installs
+          WHERE install_id = :id AND secret_hash IS NOT NULL
+          UNION ALL
+          SELECT secret_hash, received_at, 0 FROM tm_shares
+          WHERE install_id = :id AND secret_hash IS NOT NULL
+        ) x ORDER BY at, pref LIMIT 1"""), {"id": install_id}).scalar()
+
+
 def delete(connection, payload: Any, *, now: Optional[float] = None) -> dict[str, Any]:
     """A signed delete: the secret whose hash we hold, and an HMAC over the id and a fresh time."""
     if not isinstance(payload, dict):
@@ -201,13 +221,7 @@ def delete(connection, payload: Any, *, now: Optional[float] = None) -> dict[str
         raise CollectorError(400, "bad_request") from error
     if abs((now or time.time()) - ts) > DELETE_SKEW_S:
         raise CollectorError(401, "stale")
-    # The hash this id registered: with its heartbeats and batches, or with a shared run — an id
-    # that only ever shared a run has no tm_installs row and must still be deletable.
-    stored = connection.execute(text("""
-        SELECT secret_hash FROM tm_installs WHERE install_id = :id AND secret_hash IS NOT NULL
-        UNION ALL
-        SELECT secret_hash FROM tm_shares WHERE install_id = :id AND secret_hash IS NOT NULL
-        LIMIT 1"""), {"id": install_id}).scalar()
+    stored = registered_hash(connection, install_id)
     if not stored:
         return {"ok": True, "deleted": 0}  # nothing held: the answer is the same either way
     want = hmac.new(proof.encode(), f"delete|{install_id}|{ts}".encode(),
@@ -233,11 +247,7 @@ def share(connection, payload: Any, *, ip: str = "") -> dict[str, Any]:
     if not IP_LIMIT.allow(ip_key(ip)) or not INSTALL_LIMIT.allow("share:" + clean["install_id"]):
         raise CollectorError(429, "rate_limited")
     sid = make_id("tmsh")
-    known = connection.execute(text(
-        "SELECT secret_hash FROM tm_installs WHERE install_id = :i"), {"i": clean["install_id"]}).scalar()
-    held = known or connection.execute(text(
-        "SELECT secret_hash FROM tm_shares WHERE install_id = :i AND secret_hash IS NOT NULL LIMIT 1"),
-        {"i": clean["install_id"]}).scalar()
+    held = registered_hash(connection, clean["install_id"])
     # First seen wins, as for heartbeats: a later share cannot swap the hash that deletes this id.
     connection.execute(text(
         "INSERT INTO tm_shares (id, install_id, body, secret_hash) "

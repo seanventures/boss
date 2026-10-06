@@ -165,7 +165,7 @@ describe("Govern › Sharing", () => {
 
   it("a refused collector URL shows the reason beside the field", async () => {
     const f = newImprove();
-    f.urlError = "The collector URL has to be https.";
+    f.urlError = "Must be https (http only on this machine)";
     await open(f);
     const input = $("[data-testid=gv-url]") as HTMLInputElement;
     const { act } = await import("react");
@@ -175,7 +175,7 @@ describe("Govern › Sharing", () => {
     });
     await click($("[data-testid=gv-url-save]"));
     await settle();
-    expect($("[data-testid=gv-url-error]")!.textContent).toBe("The collector URL has to be https.");
+    expect($("[data-testid=gv-url-error]")!.textContent).toBe("Must be https (http only on this machine)");
   });
 
   it("saves the words a shared run always masks", async () => {
