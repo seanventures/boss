@@ -344,9 +344,7 @@ def create(
     # consent_required (scope "schedule"). The link is stored server-side; when the grant ends the
     # schedule pauses with "Renew authority" instead of running on stale authority.
     link = _consent.require_for_schedule(connection, project_id=project_id, spec=spec,
-                                         input_data=input_data, name=name)
-    if link is not None:
-        input_data = {**(input_data or {}), _consent.IDENTITY_KEY: link}
+                                         input_data=input_data, name=name) or {}
 
     cadence, minute, hour, weekday, tz_name = validate(
         cadence=cadence, minute=minute, hour=hour, weekday=weekday, tz_name=tz_name)
@@ -358,18 +356,20 @@ def create(
             """
             INSERT INTO workflow_schedules (
                 id, project_id, workflow_key, name, cadence, minute, hour, weekday,
-                timezone, input, actor, enabled, next_run_at, start_anyway
+                timezone, input, actor, enabled, next_run_at, start_anyway,
+                on_behalf_of, grant_id
             ) VALUES (
                 :id, :p, :k, :name, :cadence, :minute, :hour, :weekday,
                 :tz, CAST(:input AS JSONB), :actor, :enabled, :due,
-                CAST(:anyway AS JSONB)
+                CAST(:anyway AS JSONB), :obo, :grant
             ) RETURNING *
             """
         ),
         {"id": make_id("wsc"), "p": project_id, "k": workflow_key, "name": name,
          "cadence": cadence, "minute": minute, "hour": hour, "weekday": weekday,
          "tz": tz_name, "input": json.dumps(input_data or {}), "actor": actor,
-         "enabled": bool(enabled), "due": due, "anyway": json.dumps(accepted)},
+         "enabled": bool(enabled), "due": due, "anyway": json.dumps(accepted),
+         "obo": link.get("on_behalf_of"), "grant": link.get("grant_id")},
     ).mappings().one()
     emit_event(connection, project_id, "workflow.schedule_created", actor,
                "workflow_schedule", row["id"],
@@ -412,8 +412,10 @@ def replace_inputs(
     from boss_engine.identity import consent as _consent
 
     data = require_schedule_inputs(spec, _consent.strip_identity(input_data))
-    kept_link = connection.execute(text("SELECT input->'_identity' FROM workflow_schedules WHERE id = :i"),
-                                   {"i": schedule_id}).scalar()
+    # The grant link lives in the row's on_behalf_of / grant_id columns, which an edit never
+    # touches. A schedule saved before those columns keeps its old link in `input._identity`.
+    kept_link = None if row.get("on_behalf_of") else connection.execute(
+        text("SELECT input->'_identity' FROM workflow_schedules WHERE id = :i"), {"i": schedule_id}).scalar()
     if kept_link:
         data = {**data, _consent.IDENTITY_KEY: kept_link}       # the server's link survives an edit
     zone = row["timezone"]

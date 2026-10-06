@@ -355,15 +355,12 @@ def close_shim_socket(run_id: str) -> None:
 
 
 def _acting_of_job(engine: Any, job_id: Optional[str]) -> Any:
-    from sqlalchemy import text
-
     from . import lineage
 
     if not job_id:
         return None
     with engine.begin() as db:
-        payload = db.execute(text("SELECT payload FROM jobs WHERE id = :j"), {"j": job_id}).scalar()
-    return lineage.acting_for_job({"payload": payload or {}})
+        return lineage.acting_for_job_id(db, job_id)
 
 
 def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner: str, repo: str,

@@ -195,7 +195,9 @@ _warned_unattributed: set[str] = set()
 
 def stamp_job(payload: dict[str, Any], who: Optional[Acting] = None) -> dict[str, Any]:
     """Stamp `payload["_identity"]` from `who` or the ambient context. A payload may not bring its
-    own `_identity` (that would be an asserted identity): it is always overwritten or refused."""
+    own `_identity` (that would be an asserted identity): it is always overwritten or refused.
+    The job ROW's identity columns come from `stamp_job_row` (which calls this): every INSERT INTO
+    jobs goes through that, so the columns and the payload never disagree."""
     payload.pop(JOB_IDENTITY_KEY, None)
     acting_now = who if who is not None else current()
     if acting_now is None:
@@ -213,16 +215,66 @@ def stamp_job(payload: dict[str, Any], who: Optional[Acting] = None) -> dict[str
     return payload
 
 
+JOB_IDENTITY_COLUMNS = ("on_behalf_of", "grant_id", "chain")
+
+
+def stamp_job_row(payload: Optional[Mapping[str, Any]], who: Optional[Acting] = None
+                  ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(payload, columns) for one `INSERT INTO jobs`: the payload stamped by `stamp_job`, and the
+    values for the row's `on_behalf_of`, `grant_id` and `chain` (JSON text, bind it with
+    `CAST(:chain AS JSONB)`). Every job enqueue path uses this; a raw INSERT that skipped it
+    would be a job with no principal (R8). Fails closed under enforce, like `stamp_job`."""
+    import json
+
+    stamped = stamp_job(dict(payload or {}), who)
+    data = stamped.get(JOB_IDENTITY_KEY) or {}
+    chain = list(data.get("chain") or [])
+    return stamped, {"on_behalf_of": data.get("on_behalf_of"), "grant_id": data.get("grant_id"),
+                     "chain": json.dumps(chain) if data else None}
+
+
+def _acting_from_columns(job: Mapping[str, Any], extra: Mapping[str, Any]) -> Acting:
+    import json
+
+    chain = job.get("chain")
+    if isinstance(chain, str):
+        chain = json.loads(chain)
+    same = bool(extra) and extra.get("on_behalf_of") == job["on_behalf_of"]
+    # The columns are the authority. The payload copy only adds what has no column (org, run,
+    # jti) and only when it names the same principal and grant.
+    same = same and (extra.get("grant_id") or None) == (job.get("grant_id") or None)
+    return Acting(principal_id=str(job["on_behalf_of"]),
+                  org_id=str((extra.get("org_id") if same else None) or job.get("org_id") or ""),
+                  grant_id=job.get("grant_id") or None, chain=tuple(chain or ()),
+                  run_id=extra.get("run_id") if same else None, jti=extra.get("jti") if same else None)
+
+
 def acting_for_job(job: Mapping[str, Any]) -> Optional[Acting]:
-    """The principal a leased job acts for (the API wraps the job's execution in `acting(...)`)."""
+    """The principal a leased job acts for. Reads the row's identity columns; `payload._identity`
+    only for a row written before the columns existed (its `on_behalf_of` column is NULL)."""
     import json
 
     payload = job.get("payload") or {}
     if isinstance(payload, str):
         payload = json.loads(payload)
     data = payload.get(JOB_IDENTITY_KEY) if isinstance(payload, Mapping) else None
+    if job.get("on_behalf_of"):
+        return _acting_from_columns(job, data if isinstance(data, Mapping) else {})
     if not data:
         if _enforced():
             raise PrincipalRequired("this job carries no principal")
         return None
     return Acting.from_json(data)
+
+
+def acting_for_job_id(db: Any, job_id: Optional[str]) -> Optional[Acting]:
+    """`acting_for_job` for a job by id (the run path: a build or step started from a leased job)."""
+    from sqlalchemy import text
+
+    if not job_id:
+        return None
+    row = db.execute(text("SELECT payload, on_behalf_of, grant_id, chain FROM jobs WHERE id = :j"),
+                     {"j": job_id}).mappings().first()
+    if row is None:
+        return None
+    return acting_for_job(dict(row))

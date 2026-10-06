@@ -611,27 +611,32 @@ class A2AService:
             )
         outbox_id = make_id("a2aout")
         job_id = make_id("job")
-        job_payload = {
+        from boss_engine.identity import lineage as _identity_lineage
+
+        # Who this dispatch acts for (R8): the same stamping path as enqueue_job.
+        job_payload, identity_columns = _identity_lineage.stamp_job_row({
             "message_id": message_id,
             "outbox_id": outbox_id,
             "channel_id": channel_id,
             "requires_reservation": False,
-        }
+        })
         connection.execute(
             text(
                 """
                 INSERT INTO jobs (
                     id, project_id, kind, priority, status, payload,
-                    data_boundary, max_attempts, attempt, dedupe_key, run_after
+                    data_boundary, max_attempts, attempt, dedupe_key, run_after,
+                    on_behalf_of, grant_id, chain
                 )
                 VALUES (
                     :id, :project_id, 'a2a.dispatch', :priority, 'queued',
                     CAST(:payload AS JSONB), :data_boundary, :max_attempts, 0,
-                    :dedupe_key, :run_after
+                    :dedupe_key, :run_after, :on_behalf_of, :grant_id, CAST(:chain AS JSONB)
                 )
                 """
             ),
             {
+                **identity_columns,
                 "id": job_id,
                 "project_id": project_id,
                 "priority": int(priority),

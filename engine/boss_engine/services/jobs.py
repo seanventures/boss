@@ -149,7 +149,7 @@ def enqueue_job(
         from boss_engine.identity import consent as _identity_consent
 
         on_behalf_of = _identity_consent.acting_for_workflow_run(connection, str(payload["workflow_run_id"]))
-    job_payload = _identity_lineage.stamp_job(dict(payload or {}), on_behalf_of)
+    job_payload, identity_columns = _identity_lineage.stamp_job_row(payload, on_behalf_of)
     boundary = resolve_job_data_boundary(
         connection, task_id, job_payload, data_boundary
     )
@@ -191,14 +191,14 @@ def enqueue_job(
                 id, project_id, task_id, work_item_id, tracker_binding_id,
                 allocation_id, kind, priority, priority_score, workload_class,
                 resource_units, status, payload, data_boundary, max_attempts,
-                attempt, run_after, dedupe_key
+                attempt, run_after, dedupe_key, on_behalf_of, grant_id, chain
             )
             VALUES (
                 :id, :project_id, :task_id, :work_item_id, :tracker_binding_id,
                 :allocation_id, :kind, :priority, :priority_score,
                 :workload_class, :resource_units, 'queued',
                 CAST(:payload AS JSONB), :data_boundary, :max_attempts,
-                0, :run_after, :dedupe_key
+                0, :run_after, :dedupe_key, :on_behalf_of, :grant_id, CAST(:chain AS JSONB)
             )
             ON CONFLICT (project_id, dedupe_key)
               WHERE dedupe_key IS NOT NULL
@@ -226,6 +226,7 @@ def enqueue_job(
             "max_attempts": max_attempts,
             "run_after": run_after,
             "dedupe_key": dedupe_key,
+            **identity_columns,
         },
     ).mappings().first()
     created = row is not None
