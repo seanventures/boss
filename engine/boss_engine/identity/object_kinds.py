@@ -113,6 +113,21 @@ KINDS: tuple[ObjectKind, ...] = (
     ObjectKind("stack_deployment", "stack_deployments"),
     ObjectKind("task", "tasks"),
     ObjectKind("workflow_run", "workflow_runs"),
+    # int-b: ids that ride in bodies, queries and tool arguments (object_rules.Confine)
+    ObjectKind("agent_definition", "agent_definitions"),
+    ObjectKind("agent_memory", "agent_memory"),
+    ObjectKind("agent_wakeup", "agent_wakeups"),
+    ObjectKind("budget_reservation", "budget_reservations"),
+    ObjectKind("github_connection", "github_connections"),
+    ObjectKind("investigation", "investigations"),
+    ObjectKind("meeting_run", "meeting_runs"),
+    ObjectKind("plan", "plans"),
+    #: a body's own project_id, confined to the project the scope resolved (Confine.body)
+    ObjectKind("project", "projects", project="t.id"),
+    ObjectKind("resource_allocation", "resource_allocations"),
+    ObjectKind("work_item", "work_items"),
+    ObjectKind("work_tracker_binding", "work_tracker_bindings"),
+    ObjectKind("workflow_version", "workflow_versions"),
     # a meeting route's id may also name one of its runs (meetings.load_meeting_run)
     UniqueProjectKind("meeting", "SELECT project_id FROM meetings WHERE id = :id "
                                  "UNION SELECT project_id FROM meeting_runs WHERE id = :id"),
