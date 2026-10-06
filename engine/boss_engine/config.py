@@ -681,13 +681,20 @@ class Settings(BaseSettings):
     boss_edition: str = Field(default="community", alias="BOSS_EDITION")
     # "IMPROVE BOSS" AND THE DAILY HEARTBEAT (docs/product/RUN_SCORECARDS.md, Implementation).
     # BOSS_TELEMETRY=off (or the standard DO_NOT_TRACK=1) disables everything, the heartbeat
-    # included: no payload is cut and no connection is opened. The URL is where the one daily
-    # POST goes; a public collector later is a change of this value.
+    # included: no payload is cut and no connection is opened. The accepted words are ONE list,
+    # improve_boss.TELEMETRY_OFF_WORDS / DNT_ON_WORDS, mirrored by scripts/install/checkup.sh.
     telemetry: str = Field(default="", alias="BOSS_TELEMETRY")
     do_not_track: str = Field(default="", alias="DO_NOT_TRACK")
-    telemetry_url: str = Field(
-        default="https://boss-api.example.test/v1/telemetry/ingest",
-        alias="BOSS_TELEMETRY_URL")
+    # NO DEFAULT COLLECTOR (operator decision, 2026-10-05): with none configured nothing is sent,
+    # the heartbeat included. Set here, or in Govern › Sharing; a release names a public one later.
+    telemetry_url: str = Field(default="", alias="BOSS_TELEMETRY_URL")
+    #: Proxies whose X-Forwarded-For the collector believes (comma-separated CIDRs). Only the
+    #: collector's rate limits read a client address, and never store it.
+    trusted_proxies: str = Field(
+        # LOOPBACK ONLY by default (re-check item 6): a private address is not a proxy just for
+        # being private. Behind a reverse proxy on another host, name it here (see .env.example).
+        default="127.0.0.0/8,::1/128",
+        alias="BOSS_TRUSTED_PROXIES")
     #: How this install was made (compose, source, e2e …). Compose forwards it; unset reads as
     #: "compose" inside the shipped images and "source" otherwise.
     install_method: str = Field(default="", alias="BOSS_INSTALL_METHOD")

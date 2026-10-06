@@ -45,12 +45,6 @@ TASK_KINDS = ("new_app", "add_feature", "fix", "research", "panel", "other")
 TASK_SIZES = ("small", "medium", "large")
 RESEARCH_VERDICTS = ("pursue", "promising", "needs_more_research", "not_promising", "kill",
                      "not_worth_it", "other")
-#: The model families a model name may be reported as. Anything else is `other` — a local model
-#: an operator named after their company must not travel.
-MODEL_FAMILIES = ("claude-", "gpt-", "o1", "o3", "o4", "codex", "gemini", "llama", "qwen",
-                  "mistral", "deepseek", "grok", "sonnet", "opus", "haiku", "fable", "phi",
-                  "gemma")
-
 SUBJECTS = ("build", "research", "panel", "answer", "deploy")
 RATINGS: dict[str, tuple[str, ...]] = {
     "build": ("yes", "with_changes", "no"),
@@ -136,6 +130,30 @@ def builtin_keys() -> dict[str, frozenset[str]]:
             "workflows": frozenset(workflows), "steps": frozenset(steps)}
 
 
+@lru_cache(maxsize=1)
+def builtin_role_names() -> dict[str, str]:
+    """{role key: display name} for the roles BOSS ships, for screens (never sent)."""
+    import yaml
+
+    try:
+        from ..config import get_settings
+
+        root = Path(get_settings().specpack_root)
+    except Exception:  # noqa: BLE001
+        root = Path(__file__).resolve().parents[3] / "packages" / "specpack"
+    out: dict[str, str] = {}
+    for folder in ("agents", "roles"):
+        for p in (root / folder).glob("*.yaml"):
+            try:
+                got = yaml.safe_load(p.read_text()) or {}
+            except Exception:  # noqa: BLE001
+                continue
+            name = got.get("display_name") or got.get("name") or got.get("title")
+            if isinstance(name, str) and name.strip():
+                out.setdefault(p.stem, name.strip())
+    return out
+
+
 def catalogue_name(kind: str, value: Any) -> Optional[str]:
     """A built-in key as itself, anything else as `custom`; None stays None."""
     if value is None or value == "":
@@ -144,14 +162,62 @@ def catalogue_name(kind: str, value: Any) -> Optional[str]:
     return text if text in builtin_keys().get(kind, frozenset()) else "custom"
 
 
-def model_family(value: Any) -> Optional[str]:
-    """A model name, if it is one of the known families' public names; else `other`."""
+#: THE PUBLIC MODEL IDS that may be named (P1, 2026-10-05). Exact ids only — a prefix test let
+#: `claude-nightingale-ft`, `gpt-4o-acmecorp` and `qwen-acme-payroll-7b` through, and a fine-tune or
+#: a local model is routinely named after the company or the person who made it. A name is
+#: normalised (lower case; a provider prefix, a date stamp, `-latest` and a `[1m]` context tag
+#: removed) and then must be IN this set; everything else is `other`. Add a model here when it is
+#: publicly released, never by pattern.
+PUBLIC_MODELS: frozenset[str] = frozenset({
+    # Anthropic
+    "claude-3-opus", "claude-3-sonnet", "claude-3-haiku", "claude-3-5-sonnet", "claude-3-5-haiku",
+    "claude-3-7-sonnet", "claude-sonnet-4", "claude-opus-4", "claude-opus-4-1", "claude-sonnet-4-5",
+    "claude-haiku-4-5", "claude-opus-4-5", "claude-sonnet-5", "claude-opus-5", "claude-haiku-5",
+    "claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5", "opus", "sonnet", "haiku", "fable",
+    # OpenAI
+    "gpt-4", "gpt-4-turbo", "gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+    "gpt-4.5", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-codex", "gpt-5-pro", "gpt-5.1",
+    "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-codex-max", "gpt-5.2", "gpt-5.2-codex",
+    "gpt-5.2-pro", "gpt-6", "gpt-6-codex", "gpt-6-mini", "o1", "o1-mini", "o1-pro", "o3", "o3-mini",
+    "o3-pro", "o4-mini", "codex-mini", "gpt-oss-20b", "gpt-oss-120b",
+    # Google
+    "gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite",
+    "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-pro", "gemini-3-flash",
+    # xAI, DeepSeek, Mistral
+    "grok-3", "grok-3-mini", "grok-4", "grok-4-fast", "grok-code-fast-1",
+    "deepseek-chat", "deepseek-reasoner", "deepseek-v3", "deepseek-r1", "deepseek-coder",
+    "mistral-large", "mistral-medium", "mistral-small", "codestral", "devstral", "ministral-8b",
+    # Open weights as their public registries tag them (family:size)
+    "llama3:8b", "llama3:70b", "llama3.1:8b", "llama3.1:70b", "llama3.1:405b", "llama3.2:1b",
+    "llama3.2:3b", "llama3.3:70b", "llama4:scout", "llama4:maverick",
+    "qwen2.5:7b", "qwen2.5:14b", "qwen2.5:32b", "qwen2.5:72b", "qwen2.5-coder:7b",
+    "qwen2.5-coder:14b", "qwen2.5-coder:32b", "qwen3:8b", "qwen3:14b", "qwen3:32b", "qwen3:235b",
+    "qwen3-coder:30b", "qwen3-coder:480b", "gemma2:9b", "gemma2:27b", "gemma3:4b", "gemma3:12b",
+    "gemma3:27b", "phi3:mini", "phi4", "phi4:14b", "mistral:7b", "mixtral:8x7b",
+    "deepseek-r1:7b", "deepseek-r1:14b", "deepseek-r1:32b", "deepseek-r1:70b",
+    "deepseek-coder-v2:16b", "codellama:7b", "codellama:13b", "codellama:34b",
+})
+_PROVIDER_PREFIX = re.compile(r"^(?:[a-z0-9-]+\.)?(?:anthropic|openai|google|xai|meta|mistralai|"
+                              r"deepseek|qwen|ollama|openrouter)[/.]")
+_DATE_SUFFIX = re.compile(r"(?:-20\d{6}|-20\d{2}-\d{2}-\d{2}|-latest|-preview|-v\d+:\d+)$")
+
+
+def public_model(value: Any) -> Optional[str]:
+    """A model as it may travel: its public id, or `other`. None stays None."""
     if not value:
         return None
     text = str(value).strip().lower()
-    if not re.fullmatch(r"[a-z0-9][a-z0-9.\-:_]{0,47}", text):
-        return "other"
-    return text if text.startswith(MODEL_FAMILIES) else "other"
+    text = text.replace("[1m]", "").strip()
+    for _ in range(3):
+        text = _PROVIDER_PREFIX.sub("", text)
+        text = _DATE_SUFFIX.sub("", text)
+    if text.endswith(":latest"):
+        text = text[: -len(":latest")]
+    return text if text in PUBLIC_MODELS else "other"
+
+
+#: Kept for callers that still say family; it is the exact check now.
+model_family = public_model
 
 
 def count_range(n: Any) -> str:
@@ -287,6 +353,9 @@ SCORECARD_ROW: dict[str, Spec] = {
 }
 
 #: One aggregate group: the same dimensions, counted.
+#: The most aggregate groups one batch carries. The client coarsens to fit; it never truncates.
+MAX_AGG_GROUPS = 400
+
 SCORECARD_AGG: dict[str, Spec] = {
     "unit_kind": _enum(UNIT_KINDS),
     "harness": _enum(HARNESSES, "other"),
@@ -348,11 +417,11 @@ BATCH: dict[str, Spec] = {
     },
     "scorecards": {
         "rows": ("list", SCORECARD_ROW, 200),
-        "agg": ("list", SCORECARD_AGG, 400),
+        "agg": ("list", SCORECARD_AGG, MAX_AGG_GROUPS),
     },
     "aggregated": ("map", _enum(("scorecards",)), {
-        "from_rows": _COUNT, "groups": _COUNT, "reason": _enum(AGG_REASONS),
-        "level": ("int", 1, 2)}, 2),
+        "from_rows": _COUNT, "covered": _COUNT, "groups": _COUNT, "reason": _enum(AGG_REASONS),
+        "level": ("int", 1, 4)}, 2),
 }
 
 ENVELOPE: dict[str, Spec] = {
@@ -369,6 +438,7 @@ ENVELOPE: dict[str, Spec] = {
 SHARE: dict[str, Spec] = {
     "v": ("int", 1, 1),
     "install_id": ("re", _INSTALL_ID),
+    "secret_hash": ("re", _HEX64),
     "note": ("text", 2000),
     "bundle": ("text", 400_000),
     "context": {"version": ("re", _VERSION), "edition": _enum(EDITIONS, "other")},
@@ -426,7 +496,7 @@ def _value(spec: Spec, value: Any, drop: Callable[[], None]) -> Any:
     if kind == "catalogue_only":
         return value if isinstance(value, str) and value in builtin_keys()[spec[1]] else None
     if kind == "model":
-        return model_family(value) if isinstance(value, str) else None
+        return public_model(value) if isinstance(value, str) else None
     if kind == "list":
         if not isinstance(value, list):
             return None

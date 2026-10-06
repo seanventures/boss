@@ -64,7 +64,7 @@ export function SharingAsk({ projectId, actor }: { projectId: string; actor: str
       {!v.env_disabled ? (
         <span className="im-ask-head" data-testid="su-heartbeat">
           <span className="im-muted" title="Once a day, separate from Improve BOSS. Nothing else.">
-            Daily heartbeat {sw.heartbeat.on ? "on" : "off"}
+            Daily heartbeat {sw.heartbeat.on ? "on" : "off"}{v.blocked ? " · no collector set" : ""}
           </span>
           <HeartbeatFields />
           <a className="ag-link" href={govern} data-testid="su-heartbeat-optout"

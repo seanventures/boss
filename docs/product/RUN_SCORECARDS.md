@@ -305,15 +305,28 @@ section disagree, the code is wrong.
 1. **One switch, "Improve BOSS", off by default.** No tiers. Asked once at the end of setup
    (the last block of Setup, under Try it), changeable in **Govern › Sharing**. Each change is a `settings.changed` event
    (key `improve_boss`) with actor and time, so it shows in the Log's "Govern changes".
-2. **A daily heartbeat, on by default, with one opt-out.** Separate from the switch. It says only
-   "this install is alive" (fields below). Shown in the README, in Setup and in Govern › Sharing.
-   `scripts/install/install.sh` is not changed; `boss doctor` prints one line about it.
+2. **A daily heartbeat, on by default in principle, with one opt-out.** Separate from the switch.
+   It says only "this install is alive" (fields below). Shown in the README, in Setup and in
+   Govern › Sharing. `scripts/install/install.sh` is not changed; `boss doctor` prints one line.
+   **It sends nothing until a collector is set** (decision 5).
 3. **`BOSS_TELEMETRY=off` or `DO_NOT_TRACK=1` turns everything off,** the heartbeat included: no
-   payload is cut and no connection is opened. Govern › Sharing shows the switches locked and why.
+   payload is sent and no connection is opened by ANY path — the daily send, Share this run,
+   Delete, a rotation's delete. One list of words, `improve_boss.TELEMETRY_OFF_WORDS`
+   (`off 0 false no disabled disable none`) and `DNT_ON_WORDS` (`1 true yes on`), used by the
+   engine and by `checkup.sh` alike, with surrounding quotes ignored. Govern › Sharing shows the switches locked and why.
 4. **The collector is part of BOSS,** active only when **Collector mode** is on (a console toggle in
-   Govern › Sharing; shared-server's ops API cannot set env). Clients send to `BOSS_TELEMETRY_URL`,
-   default `https://boss-api.example.test/v1/telemetry/ingest`. A public collector later is
-   a change of that URL.
+   Govern › Sharing; shared-server's ops API cannot set env).
+5. **No default collector** (2026-10-05, after the independent test). With no collector URL
+   configured nothing is sent, the heartbeat included, and Govern says "No collector set". The
+   URL is set by `BOSS_TELEMETRY_URL` (which then locks the field) or in Govern › Sharing (by a
+   member who can manage providers; https only, no credentials, ending `/v1/telemetry/ingest`).
+   The heartbeat starts working for everyone once a release names a public collector. Preview
+   and Export work without one (an air-gapped install exports by hand).
+
+**One door.** Every outbound byte goes through `improve_boss.transmit()`, which refuses before
+any sender is called when the environment turns sharing off or no collector is set; the routes
+that send (`share-run`, `forget`) answer 409 with the same reason, and the console disables
+those buttons and says why. A socket-level test covers each path.
 
 ### Units and where the scorecard is written
 
@@ -396,10 +409,11 @@ knob from an allow-list that never decides what needs approval:
 
 | Knob | What changes on the build's spec |
 |---|---|
-| `harness` | `model_config.default.engine` (e.g. `claude_code` vs `codex`) |
-| `review_rounds` | `review_rounds` (read before `code_review_inrun_max_rounds`) |
-| `review_lanes` | `review_panel_size` |
-| `repair_retries` | `repair_retries` |
+| `harness` | `model_config.default.engine` (e.g. `claude_code` vs `codex`); Promote sets `code_agent_engine` |
+| `review_rounds` | `review_rounds` (read before `code_review_inrun_max_rounds`); Promote sets that knob |
+
+(Review lanes and repair retries are not offered: they have no project setting to promote into.)
+The target is picked from this project's agents or workflows, never typed.
 
 The arm is picked in `code_task_service.start_code_task` (the one door every build goes
 through), deterministically from the run id and the split, and stamped on the scorecard. An
@@ -409,8 +423,11 @@ touched (test-enforced); each arm has a **cost cap** — a capped arm takes no n
 stops it; an arm whose gate-failure rate is ≥ 0.3 above the other's after ≥ 4 units each **stops
 the experiment**. The compare view shows each arm's n, mean, spread (sd) and the 95% interval of
 the difference; it says **"Too close to call"** while the interval crosses 0 or either arm has
-fewer than 5 units. **Promote** writes the winning value as the project setting
-(`project_settings.set_one`, so it is in the change log) and marks the experiment `promoted`.
+fewer than 5 units. **Promote** opens a confirm sheet that shows what changes ("Harness:
+claude_code → codex"); it needs at least 5 finished units in each arm and a verdict that is not
+"too close to call" — otherwise the server refuses (409) unless the operator ticks **Promote
+anyway**. It writes the value as the project setting (`project_settings.set_one`, so it is in the
+change log) and marks the experiment `promoted`.
 
 ### Feedback from the person (always local)
 
@@ -457,15 +474,30 @@ new process or thread.
 - **Cut once, frozen:** the next payload is built once (by the first preview or by the send) and
   stored as exact gzip bytes in `telemetry_sends` (`pending`). The send posts those bytes. Govern
   shows them. So the preview IS what is sent. Data after the cut goes to the next day's batch.
-- **Batches:** with the switch on, each day's batch covers `since` → `until` (the last batch's end
-  → the cut), built from SQL aggregates, stored in `telemetry_batches` and kept until delivered.
+- **Nothing from before consent:** a batch's `since` is the later of the last batch's end and the
+  moment the switch was last turned **on** — never `MAX(until_at)` alone — so the first batch
+  starts at consent and an off period is never covered after turning it on again. Scorecards
+  travel only for units that **ended** after consent (a backfill or late outcome after consent
+  does not carry an older run). A check-in line is sendable only if it was ticked **and saved
+  while the switch was on**. **Install-age facts, stated plainly:** `scale` and `setup`
+  are ranges describing the install as it is when the batch is cut, and `usage.funnel` says, for
+  each first-week milestone the install ever reached (model connected, first build, PR, merge,
+  deploy), how many days after install it happened — as an age bucket (`0-1`, `2-7`, …), never a
+  date or what the work was. These are the only fields that describe time before consent; they
+  are coarse by design, carry no content, and are what "which features you use" covers.
+- **Batches:** with the switch on, each day's batch covers `since` → `until` (see above → the
+  cut), built from SQL aggregates, stored in `telemetry_batches` and kept until delivered.
   One POST carries the heartbeat plus every undelivered batch; more than 7 undelivered → the
   oldest are marked `dropped` and the envelope says how many. Turning the switch off drops
   undelivered batches at once.
 - **Size:** target ≤ 64 KB gzip. Per-run scorecard rows are sent up to 200 per batch; past that the
-  batch carries aggregates (counts, sums and a 10-bin score histogram per harness · model · role ·
-  workflow · outcome). If the gzip is still over 64 KB, groups coarsen to unit kind · outcome. The
-  batch's `aggregated` block records what was aggregated and why. Nothing is cut off silently.
+  batch carries aggregates (counts, sums and a 10-bin score histogram). Groups coarsen level by
+  level until there are at most 400 of them and the gzip fits: (1) kind · harness · model · role ·
+  workflow · outcome · arm, (2) without workflow and arm, (3) without role, (4) kind · outcome.
+  Names are folded (`custom`, `other`) by the database before grouping. The batch's `aggregated`
+  note records the level, the groups, and units **covered** of units in total — always all of
+  them; nothing is cut. Only if level 4 of every batch still does not fit do the oldest batches
+  go, and `dropped_batches` says how many.
 - **Wire:** `POST $BOSS_TELEMETRY_URL`, `Content-Type: application/json`,
   `Content-Encoding: gzip`, 5 s timeout, no redirects, no cookies. The body is
   `json.dumps(sort_keys=True, separators=(",", ":"))` gzipped with `mtime=0` (deterministic).
@@ -473,12 +505,20 @@ new process or thread.
   `improve_allowlist.sanitize()` (a typed schema: anything not in it is dropped; strings must be
   an enum value, a built-in catalogue key, or are replaced by `custom`/`other`) and then
   `redaction.redact()`: a string the secret or PII gate would change is dropped. Custom workflow,
-  role and skill names are sent as `custom`; model names outside known families as `other`.
+  role and skill names are sent as `custom`. A model is named only if, normalised (lower case; a
+  provider prefix, a date stamp, `-latest`, `[1m]` removed), it is EXACTLY one of the public ids
+  in `improve_allowlist.PUBLIC_MODELS` — a fine-tune or local model named after a company or a
+  person (`gpt-4o-acmecorp`, `qwen-acme-payroll-7b`) is `other`, in rows and in aggregates.
 - **Local log:** the last 30 sends (status, HTTP code, sizes, what was aggregated) are kept and
   each one's exact bytes can be opened.
 - **Export batch** downloads the pending payload (`.json`) for an air-gapped install.
-- **Rotate install id** makes a new random id and secret and discards the pending payload.
-- **Delete what was sent** posts a signed delete to the collector (below), then rotates.
+- **Rotate install id** makes a new random id and secret and discards the pending payload. If
+  anything was sent under the old id, a signed delete for it goes first; if that cannot go now
+  (off, no collector, unreachable), the old id **and its secret** are kept and retried with the
+  next daily send, and the screen says "Old id kept until its delete goes through".
+- **Delete what was sent** posts a signed delete for **every** id this install used and has not
+  yet had deleted, then a new id; local batches are cleared, and turning sharing on again the
+  same day may send that day's batch, starting from that moment.
 
 #### The heartbeat (exactly these fields)
 
@@ -538,7 +578,7 @@ validates against the same schema.
 |---|---|---|
 | Heartbeat only (the default install) | 339 B | 234 B |
 | Heartbeat + one batch, 19 per-run scorecard rows | 10,953 B | 1,690 B |
-| One batch built from 50,000 scorecards (aggregated) | — | < 64 KB; built in < 1.5 s, < 16 MB peak (test-enforced) |
+| One batch built from 50,000 scorecards in 9,720 distinct groups (coarsened to level 2-3) | — | < 64 KB; built in < 1.5 s, < 16 MB peak Python memory (test-enforced; names folded and histograms counted in SQL) |
 
 The real daily send on that stack posted to its own collector (Collector mode on): the preview's
 SHA-256 equalled the sent bytes', the collector stored one heartbeat and one batch, and a second
@@ -547,7 +587,19 @@ tick the same day sent nothing.
 #### Share this run (separate from the switch)
 
 A button on a build and a workflow run. It opens the run's bundle — steps, agent turns (their
-text), errors and log tails — after `redaction.redact()`, in an editable box. The person edits it,
+text), errors and log tails — after `share_scrub.scrub()`, measured for precision AND recall on
+the independent tester's corpus (no known name leaks; 0 of 28 harmless tokens masked):
+- **masked:** the Activity log's credential and PII scrub; URLs; IPv4 and IPv6; a word after
+  `ssh`/`scp`/`ping`; a dotted name ending in a real public suffix (a bundled subset of the
+  public-suffix list, without the suffixes that are also file extensions or code — `md`, `sh`,
+  `py`, `map`, `name` …); path-shaped tokens (rooted, ≥ 2 separators, or ending in a file name);
+  and this install's own names from every table that holds one — repositories, branches, apps,
+  deploy hosts and targets, previews, workflow inputs, projects, orgs, workspaces, people (full
+  names and handles; a name part only if ≥ 4 letters and not a role or common word) and the
+  operator's "Always mask" words — each with its snake/kebab/camel variants;
+- **kept:** timestamps, code (`self.items`, `os.path.join`, `package.json`, `api.v1`), module
+  names (`react-dom/client`), role words (release, manager, console, BOSS …)., in an editable box under a plain notice: "Check for
+anything private". The person edits it,
 adds a note and presses Send once: `POST <collector>/v1/telemetry/share` (≤ 256 KB gzip). Nothing
 is sent before that press, and the bundle is not kept by the client.
 
@@ -560,14 +612,41 @@ browser always sends one), and the console's `/v1` proxy does not attach its API
 
 - `POST /v1/telemetry/ingest`: ≤ 256 KB compressed (the client's own cap is 64 KB), ≤ 2 MB after
   a bounded gunzip, `v` must be 1, validated with `SCHEMA` (unknown fields dropped, a bad `install_id`
-  refused). Rate limits, in memory: 30 requests per IP per hour (the IP is used for the bucket and
-  never stored) and 6 per install id per day. Idempotent per `(install_id, day)` for the
+  refused). The body is streamed and refused the moment it passes the cap. Rate limits, in
+  memory: 30 requests per address per hour and 6 per install id per day. The address is the real
+  peer; `X-Forwarded-For` is believed only from `BOSS_TRUSTED_PROXIES` (default **loopback
+  only**; a reverse proxy on another address must be listed there), taking the right-most
+  untrusted hop and skipping malformed ones. An entry may be a host name: Community compose
+  trusts `web`, the console's own container, so a request through the console is counted by the
+  client the console vouches for and a request at the published API port by its own address. The
+  console forwards ONE hop, never a client's X-Forwarded-For as is: the hop its own proxies
+  appended (`BOSS_CONSOLE_PROXY_HOPS`, set it to 1 behind your own TLS proxy), or none (0, the
+  compose default: no proxy ships, so a console reached directly is one bucket rather than a
+  believed claim). The API is started by `python -m apps.api.serve`, which gives uvicorn the IP
+  and CIDR entries of `BOSS_TRUSTED_PROXIES` as its `forwarded_allow_ips` — uvicorn otherwise
+  believes loopback's X-Forwarded-For on its own. A host-name entry is resolved off the event
+  loop, cached a minute, and a failed lookup is never cached. The console decides "is this a
+  collector route" once, on the normalised path (query ignored, percent-encoding decoded,
+  repeated and trailing slashes collapsed, case-sensitive): every such spelling gets the browser
+  check, the cap, no console key, the plain upstream path and no relayed `Location`; a spelling
+  middleware cannot skip (`%69ngest`, `//`) is refused there. The console's
+  `/v1` route refuses any browser request to these paths (Origin, cookie or any `Sec-Fetch-*`
+  header) before reading the body; a refused or over-cap POST answers with `Connection: close`
+  and the body is cancelled, so Node stops reading it. One address may introduce 3 **new**
+  install ids a day; more are stored but marked `suspicious` and kept out of every count (the
+  dashboard says how many are held back). The address is hashed, held an hour in memory, never
+  stored, and the API's access log writes "-" for it on `/v1/telemetry/*`. Idempotent per `(install_id, day)` for the
   heartbeat and per `(install_id, batch day)` for each batch: a repeat answers
   `{"ok":true,"duplicate":true}`.
 - `POST /v1/telemetry/delete`: `{"install_id","ts","proof","sig"}` where `proof` is the install
   secret and `sig = HMAC-SHA256(secret, "delete|<install_id>|<ts>")`; `sha256(proof)` must equal
-  the stored `secret_hash` and `ts` be within 10 minutes. Deletes every row for that id.
-- `POST /v1/telemetry/share`: ≤ 256 KB gzip, same limits; stored in `tm_shares`.
+  the id's FIRST registered `secret_hash` (from its first heartbeat or its first shared run,
+  whichever came earlier — an envelope offering another hash, or none, for a known id is refused,
+  409, so a forged heartbeat cannot take an id over) and
+  `ts` be within 10 minutes. Deletes every row for that id — heartbeats, batches, shared runs —
+  and answers how many; the console reports that number, never "deleted" for nothing.
+- `POST /v1/telemetry/share`: ≤ 256 KB gzip, same limits; stored in `tm_shares`. A share for a
+  known id carrying a different hash, or none, is refused (409).
 - Storage: `tm_installs`, `tm_heartbeats`, `tm_batches`, `tm_shares`, `tm_rollups`. No IP address,
   hostname or name. Retention: rows older than 18 months are rolled into `tm_rollups` (monthly
   active installs, batches, by version and edition) and deleted, daily, by the tick.
@@ -585,7 +664,7 @@ browser always sends one), and the console's `/v1` proxy does not attach its API
 | `POST /v1/scorecards/backfill` | build scorecards for history now |
 | `GET /v1/experiments`, `POST /v1/experiments`, `POST /v1/experiments/{id}/stop`, `POST /v1/experiments/{id}/promote` | A/B |
 | `POST /v1/feedback`, `GET /v1/feedback/prompts`, `POST /v1/feedback/checkin` | ratings, chips, check-in |
-| `GET /v1/telemetry/sharing`, `PUT /v1/telemetry/sharing` | switch, heartbeat, collector mode, weights, log |
+| `GET /v1/telemetry/sharing`, `PUT /v1/telemetry/sharing` | switch, heartbeat, collector mode, collector URL (`url`), weights (rescored at once), log; `blocked` says why nothing can be sent |
 | `GET /v1/telemetry/preview`, `GET /v1/telemetry/sends/{id}`, `GET /v1/telemetry/export` | the exact payload |
 | `POST /v1/telemetry/rotate`, `POST /v1/telemetry/forget` | rotate id, delete what was sent |
 | `GET /v1/telemetry/share-bundle`, `POST /v1/telemetry/share-run` | Share this run |

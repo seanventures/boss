@@ -39,10 +39,72 @@ done
 ENV_FILE="${BOSS_ENV_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.env}"
 # .env is Docker data, not shell code. A model key or operator-added value may
 # contain shell metacharacters; sourcing it would execute them on the host.
+# Read the way Docker Compose reads it (its dotenv parser; checked against `docker compose
+# config` case by case in apps/api/tests/test_improve_boss_recheck4.py): an `export ` prefix,
+# spaces or tabs around `=`, the LAST definition wins; a quoted value ends at its closing quote
+# (and may span lines; `\"` escapes one inside double quotes); an unquoted value ends at ` #`
+# (a SPACE then `#` — a tab before `#` is part of the value) and loses trailing blanks. A quote
+# that never closes makes Compose refuse the whole file, so then no value is read at all and
+# env_file_error names the line.
+_env_awk='
+  function unq(v, q,   out, i, c) {
+    if (q == "\047") return v
+    out = ""
+    for (i = 1; i <= length(v); i++) {
+      c = substr(v, i, 1)
+      if (c == "\\" && i < length(v)) {
+        i++; c = substr(v, i, 1)
+        if (c == "n") c = "\n"; else if (c == "t") c = "\t"; else if (c != "\"" && c != "\\") c = "\\" c
+      }
+      out = out c
+    }
+    return out
+  }
+  function close_at(v, q,   i, c) {
+    for (i = 1; i <= length(v); i++) {
+      c = substr(v, i, 1)
+      if (q == "\"" && c == "\\") { i++; continue }
+      if (c == q) return i
+    }
+    return 0
+  }
+  {
+    sub(/\r$/, "")
+    if (open) {
+      buf = buf "\n" $0
+      i = close_at($0, q)
+      if (i) { open = 0; buf = substr(buf, 1, length(buf) - length($0) + i - 1); if (name == k) { v = unq(buf, q); found = 1 } }
+      next
+    }
+    line = $0; sub(/^[ \t]+/, "", line)
+    if (substr(line, 1, 1) == "#") next
+    sub(/^export[ \t]+/, "", line)
+    eq = index(line, "="); if (!eq) next
+    name = substr(line, 1, eq - 1); sub(/[ \t]+$/, "", name)
+    val = substr(line, eq + 1); sub(/^[ \t]+/, "", val)
+    q = substr(val, 1, 1)
+    if (q == "\"" || q == "\047") {
+      rest = substr(val, 2); i = close_at(rest, q)
+      if (!i) { open = 1; buf = rest; start = NR; next }
+      val = unq(substr(rest, 1, i - 1), q)
+    } else {
+      i = index(val, " #"); if (i) val = substr(val, 1, i - 1)
+      sub(/[ \t]+$/, "", val)
+    }
+    if (name == k) { v = val; found = 1 }
+  }
+  END {
+    if (open) { if (mode == "error") print start; exit }
+    if (mode == "value" && found) print v
+  }'
 env_value() {
-  local key="$1"
   [ -f "$ENV_FILE" ] || return 0
-  grep -m 1 "^${key}=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true
+  awk -v k="$1" -v mode=value "$_env_awk" "$ENV_FILE" 2>/dev/null || true
+}
+# The line of a quote that never closes (Compose then refuses the whole .env), or nothing.
+env_file_error() {
+  [ -f "$ENV_FILE" ] || return 0
+  awk -v k="" -v mode=error "$_env_awk" "$ENV_FILE" 2>/dev/null || true
 }
 for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_DEFAULT_PROJECT_ID BOSS_API_KEY BOSS_PUBLIC_URL BOSS_API_BIND; do
   if [ -z "${!key:-}" ]; then
@@ -73,6 +135,10 @@ warn() { printf "  ${Y}warn${N}  %s\n" "$1"; }
 bad()  { printf "  ${R}FAIL${N}  %s\n" "$1"; fail=1; }
 
 printf "\n${B}BOSS checkup${N}  (%s)\n\n" "$API"
+
+# 0. .env itself: a quote that never closes makes Compose refuse the whole file.
+_env_bad="$(env_file_error)"
+[ -z "$_env_bad" ] || bad ".env line $_env_bad: a quote never closes — Compose refuses the file"
 
 # 1. containers. FOUR are required; web and the bundled secret store are profiles, and a
 # healthy install that runs neither is still a healthy install. The first version of this
@@ -208,13 +274,22 @@ else
 fi
 
 # 9. what this install tells the BOSS project (docs/product/RUN_SCORECARDS.md). Said plainly
-# every time: the heartbeat is on by default, so the opt-out is printed with it.
-_tel="$(env_value BOSS_TELEMETRY | tr '[:upper:]' '[:lower:]')"; _dnt="$(env_value DO_NOT_TRACK)"
-case "$_tel" in off|0|false|no|disabled) _tel=off ;; esac
-if [ "$_tel" = off ] || [ "$_dnt" = 1 ] || [ "$_dnt" = true ]; then
+# every time. The words are the engine's ONE list (improve_boss.TELEMETRY_OFF_WORDS and
+# DNT_ON_WORDS); test_the_off_words_are_one_list holds this case to it.
+# Quotes are stripped: `BOSS_TELEMETRY="off"` in .env means off, as it does to the engine.
+_unq() { tr -d "\"'" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'; }
+_tel="$(env_value BOSS_TELEMETRY | _unq | tr '[:upper:]' '[:lower:]')"
+_dnt="$(env_value DO_NOT_TRACK | _unq | tr '[:upper:]' '[:lower:]')"
+_url="$(env_value BOSS_TELEMETRY_URL | _unq)"
+_off=0
+case "$_tel" in off|0|false|no|disabled|disable|none) _off=1 ;; esac
+case "$_dnt" in 1|true|yes|on) _off=1 ;; esac
+if [ "$_off" = 1 ]; then
   ok "sharing: off (BOSS_TELEMETRY=off or DO_NOT_TRACK=1) — nothing is sent"
+elif [ -z "$_url" ]; then
+  ok "sharing: no collector in .env — nothing is sent unless one is set in Govern › Sharing"
 else
-  ok "sharing: daily heartbeat on (id, version, OS, alive) — opt out in Govern › Sharing or BOSS_TELEMETRY=off"
+  ok "sharing: daily heartbeat to the collector in .env — opt out in Govern › Sharing or BOSS_TELEMETRY=off"
 fi
 
 printf "\n"

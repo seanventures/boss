@@ -27,6 +27,7 @@ import logging
 import os
 import platform
 import random
+import re
 import secrets
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -45,8 +46,13 @@ LOG_KEEP = 30
 TIMEOUT_S = 5.0
 SHARE_CAP_GZ = 256 * 1024
 
-_OFF_WORDS = {"off", "0", "false", "no", "disabled", "disable", "none"}
-_ON_WORDS = {"1", "true", "yes", "on"}
+#: THE ONE LIST of words that turn sharing off (documented in .env.example and the doc;
+#: scripts/install/checkup.sh matches them, and a test holds the two together).
+TELEMETRY_OFF_WORDS = ("off", "0", "false", "no", "disabled", "disable", "none")
+DNT_ON_WORDS = ("1", "true", "yes", "on")
+_OFF_WORDS = set(TELEMETRY_OFF_WORDS)
+_ON_WORDS = set(DNT_ON_WORDS)
+NO_COLLECTOR = "No collector set"
 
 #: A send function: (url, gzip body) -> (http status or None, short error or None).
 Poster = Callable[[str, bytes], tuple[Optional[int], Optional[str]]]
@@ -57,12 +63,17 @@ Poster = Callable[[str, bytes], tuple[Optional[int], Optional[str]]]
 # ------------------------------------------------------------------------------------------
 
 
+def _env_word(value: Any) -> str:
+    return str(value or "").strip().strip("\"'").strip().lower()
+
+
 def env_disabled(settings: Any) -> Optional[str]:
-    """Why the environment turns everything off, or None. Read on every call."""
-    tel = str(getattr(settings, "telemetry", "") or os.environ.get("BOSS_TELEMETRY", "")).strip().lower()
+    """Why the environment turns everything off, or None. Read on every call. Quotes are
+    stripped, as checkup.sh strips them: `"off"` is off."""
+    tel = _env_word(getattr(settings, "telemetry", "") or os.environ.get("BOSS_TELEMETRY", ""))
     if tel in _OFF_WORDS:
         return "BOSS_TELEMETRY=off"
-    dnt = str(getattr(settings, "do_not_track", "") or os.environ.get("DO_NOT_TRACK", "")).strip().lower()
+    dnt = _env_word(getattr(settings, "do_not_track", "") or os.environ.get("DO_NOT_TRACK", ""))
     if dnt in _ON_WORDS:
         return "DO_NOT_TRACK=1"
     return None
@@ -107,19 +118,50 @@ def switches(connection) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _when(value: Any) -> Optional[datetime]:
+    try:
+        when = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def consent_moment(connection) -> Optional[datetime]:
+    """The moment from which batches may cover anything: the later of when "Improve BOSS" was last
+    turned ON and the last "Delete what was sent" (`improve_floor`). None while it is off.
+
+    THE FLOOR IS WHAT MAKES A DELETE STICK (re-check item 1): a delete clears the local batches, and
+    without it the next cut fell back to the consent moment and re-uploaded everything the delete
+    had just removed. Nothing from before a delete is ever sent again."""
+    got = _get(connection, "improve_boss")
+    if not got.get("on") or not got.get("at"):
+        return None
+    on_at = _when(got["at"])
+    floor = _when(_get(connection, "improve_floor").get("at"))
+    moments = [t for t in (on_at, floor) if t]
+    return max(moments) if moments else None
+
+
 def set_switch(connection, name: str, on: bool, *, actor: str, project_id: str) -> dict:
     """Flip one switch; record who and when in Govern's log; apply what it means at once."""
     if name not in SWITCHES:
         raise ValueError(f"switch must be one of {', '.join(SWITCHES)}")
     key, default, label = SWITCHES[name]
-    before = switches(connection)[name]["on"]
-    _put(connection, key, {"on": bool(on), "by": actor, "at": _now().isoformat()})
+    current = switches(connection)[name]
+    before = current["on"]
+    # The moment of the last CHANGE is kept: pressing On again must not move consent.
+    at = current["at"] if current["asked"] and before == bool(on) and current["at"] else _now().isoformat()
+    _put(connection, key, {"on": bool(on), "by": actor, "at": at})
     if name in ("improve", "heartbeat"):
         _discard_pending(connection)
     if name == "improve" and not on:
         # Revoking stops sending immediately: batches not yet delivered never will be.
         connection.execute(text(
             "UPDATE telemetry_batches SET status = 'dropped' WHERE status = 'unsent'"))
+    if name == "improve" and on and not before:
+        # Turned on again: what was cut before (and dropped) is gone; today's batch can be cut
+        # afresh, starting at this moment (P3, defect 18).
+        connection.execute(text("DELETE FROM telemetry_batches WHERE status <> 'sent'"))
     if before != bool(on) or not switches(connection)[name]["asked"]:
         from .scorecards import _log_change
 
@@ -154,18 +196,6 @@ def identity(connection) -> dict[str, str]:
         "INSERT INTO system_state (key, value) VALUES ('improve_identity', CAST(:v AS JSONB)) "
         "ON CONFLICT (key) DO NOTHING"), {"v": json.dumps(new)})
     return _get(connection, "improve_identity") or new
-
-
-def rotate(connection, *, actor: str, project_id: str) -> dict[str, str]:
-    before = identity(connection)["id"]
-    new = _new_identity()
-    _put(connection, "improve_identity", new)
-    _discard_pending(connection)
-    from .scorecards import _log_change
-
-    _log_change(connection, project_id, actor, "improve_identity", "Install id",
-                before[:7] + "…", new["id"][:7] + "…")
-    return {"install_id": new["id"]}
 
 
 def secret_hash(secret: str) -> str:
@@ -279,14 +309,57 @@ def _days_bucket(start: Optional[datetime], at: Optional[datetime]) -> Optional[
     return allow.age_bucket(max(0, (at - start).days))
 
 
-_SCORE_HIST = ("width_bucket(LEAST(GREATEST(score, 0), 0.9999), 0, 1, 10)")
+#: Aggregate levels, finest first. A level is used only if its groups fit MAX_GROUPS and the
+#: gzip fits SIZE_CAP_GZ; otherwise the next, coarser one. Every level covers EVERY unit — nothing
+#: is cut: coarsening only merges groups, and the note says which level and how many units.
+AGG_LEVELS: tuple[tuple[str, ...], ...] = (
+    ("unit_kind", "harness", "model", "role_key", "workflow_key", "terminal_state", "experiment_arm"),
+    ("unit_kind", "harness", "model", "role_key", "terminal_state"),
+    ("unit_kind", "harness", "model", "terminal_state"),
+    ("unit_kind", "terminal_state"),
+)
+MAX_GROUPS = allow.MAX_AGG_GROUPS
+
+
+def _fold_map(connection, column: str, where: str, params: Mapping[str, Any]) -> str:
+    """{raw value: what may travel} for one dimension's DISTINCT values in the window, as JSON
+    for the SQL to look up — so 50,000 rows are folded by the database, not in Python."""
+    vals = connection.execute(text(f"SELECT DISTINCT {column} FROM run_scorecards WHERE {where}"),
+                              dict(params)).scalars().all()
+    fold: dict[str, Optional[str]] = {}
+    for v in vals:
+        if v is None:
+            continue
+        if column == "role_key":
+            fold[v] = allow.catalogue_name("roles", v)
+        elif column == "workflow_key":
+            fold[v] = allow.catalogue_name("workflows", v)
+        elif column == "model":
+            fold[v] = allow.public_model(v)
+        elif column == "harness":
+            fold[v] = v if v in allow.HARNESSES else "other"
+        else:
+            fold[v] = v
+    return json.dumps(fold)
+
+
+def _scorecard_window(since: Optional[datetime], consent_at: Optional[datetime]) -> str:
+    """Rows recomputed in this batch's window, of units that ENDED after consent: a backfill or a
+    late outcome after the switch went on must not carry a run from before it."""
+    where = "computed_at <= :u"
+    if since:
+        where += " AND computed_at > :s"
+    if consent_at:
+        where += " AND ended_at > :c"
+    return where
 
 
 def _scorecards(connection, secret: str, since: Optional[datetime], until: datetime,
-                *, force_agg: bool = False, coarse: bool = False) -> tuple[dict, dict]:
-    """Per-run rows (≤ ROW_THRESHOLD) or aggregates. Returns (block, aggregated-note)."""
-    window = "computed_at <= :u" + (" AND computed_at > :s" if since else "")
-    params = {"u": until, "s": since}
+                *, consent_at: Optional[datetime] = None, force_agg: bool = False,
+                level: int = 1) -> tuple[dict, dict]:
+    """Per-run rows (≤ ROW_THRESHOLD) or aggregates at `level` or coarser. (block, note)."""
+    window = _scorecard_window(since, consent_at)
+    params = {"u": until, "s": since, "c": consent_at}
     n = _count(connection, f"SELECT COUNT(*) FROM run_scorecards WHERE {window}", params)
     if n == 0:
         return {"rows": [], "agg": []}, {}
@@ -315,67 +388,58 @@ def _scorecards(connection, secret: str, since: Optional[datetime], until: datet
             row["ref"] = _ref(secret, str(r["unit_id"]))
             out.append(row)
         return {"rows": out, "agg": []}, {}
-    dims = ["unit_kind", "terminal_state"] if coarse else [
-        "unit_kind", "harness", "model", "role_key", "workflow_key", "terminal_state",
-        "experiment_arm"]
-    groups = connection.execute(text(f"""
-        SELECT {', '.join(dims)}, score_version, COUNT(*) AS n,
-               COUNT(*) FILTER (WHERE pr_merged) AS merged,
-               COUNT(*) FILTER (WHERE COALESCE(gates_failed, 0) > 0) AS gates_failed_units,
-               COALESCE(SUM(steers), 0) AS steers, COALESCE(SUM(turns), 0) AS turns,
-               COALESCE(SUM(cost_usd), 0) AS cost_usd, AVG(score) AS score_mean,
-               array_agg({_SCORE_HIST}) FILTER (WHERE score IS NOT NULL) AS hist
-        FROM run_scorecards WHERE {window}
-        GROUP BY {', '.join(dims)}, score_version"""), params).mappings().all()
-    # Custom names fold into `custom` here, so two custom roles become one group.
-    merged: dict[tuple, dict[str, Any]] = {}
-    for g in groups:
-        key_vals = {}
-        for d in dims:
-            v = g[d]
-            if d == "role_key":
-                v = allow.catalogue_name("roles", v)
-            elif d == "workflow_key":
-                v = allow.catalogue_name("workflows", v)
-            elif d == "model":
-                v = allow.model_family(v)
-            key_vals[d] = v
-        key = tuple(key_vals.get(d) for d in dims) + (g["score_version"],)
-        hist = [0] * 10
-        for b in g["hist"] or []:
-            if b:
-                hist[min(10, int(b)) - 1] += 1
-        cur = merged.get(key)
-        if cur is None:
-            merged[key] = {**{k: v for k, v in key_vals.items() if v is not None},
-                           "score_version": g["score_version"], "n": int(g["n"]),
-                           "merged": int(g["merged"]),
-                           "gates_failed_units": int(g["gates_failed_units"]),
-                           "steers": int(g["steers"]), "turns": int(g["turns"]),
-                           "cost_usd": float(g["cost_usd"]),
-                           "_score_sum": float(g["score_mean"] or 0) * int(g["n"]),
-                           "score_hist": hist}
-        else:
-            for k in ("n", "merged", "gates_failed_units", "steers", "turns"):
-                cur[k] += int(g[k])
-            cur["cost_usd"] += float(g["cost_usd"])
-            cur["_score_sum"] += float(g["score_mean"] or 0) * int(g["n"])
-            cur["score_hist"] = [a + b for a, b in zip(cur["score_hist"], hist)]
+    folds = {d: _fold_map(connection, d, window, params)
+             for d in ("role_key", "workflow_key", "model", "harness")}
+    expr = {d: f"(CAST(:f_{d} AS JSONB) ->> {d})" if d in folds else d
+            for d in AGG_LEVELS[0]}
+    hist = ", ".join(
+        f"COUNT(*) FILTER (WHERE width_bucket(LEAST(GREATEST(score, 0), 0.9999), 0, 1, 10) = {k}) AS h{k}"
+        for k in range(1, 11))
+    groups: list = []
+    used = 0
+    for i in range(max(1, level) - 1, len(AGG_LEVELS)):
+        dims = AGG_LEVELS[i]
+        sel = ", ".join(f"{expr[d]} AS {d}" for d in dims)
+        count = _count(connection, f"""SELECT COUNT(*) FROM (SELECT 1 FROM run_scorecards
+            WHERE {window} GROUP BY {', '.join(expr[d] for d in dims)}, score_version) g""",
+                       {**params, **{f"f_{d}": v for d, v in folds.items()}})
+        if count > MAX_GROUPS and i < len(AGG_LEVELS) - 1:
+            continue
+        used = i + 1
+        groups = connection.execute(text(f"""
+            SELECT {sel}, score_version, COUNT(*) AS n,
+                   COUNT(*) FILTER (WHERE pr_merged) AS merged,
+                   COUNT(*) FILTER (WHERE COALESCE(gates_failed, 0) > 0) AS gates_failed_units,
+                   COALESCE(SUM(steers), 0) AS steers, COALESCE(SUM(turns), 0) AS turns,
+                   COALESCE(SUM(cost_usd), 0) AS cost_usd, AVG(score) AS score_mean, {hist}
+            FROM run_scorecards WHERE {window}
+            GROUP BY {', '.join(expr[d] for d in dims)}, score_version"""),
+            {**params, **{f"f_{d}": v for d, v in folds.items()}}).mappings().all()
+        break
     agg = []
-    for v in merged.values():
-        v["score_mean"] = round(v.pop("_score_sum") / v["n"], 3) if v["n"] else None
-        v["cost_usd"] = round(v["cost_usd"], 2)
-        if v.get("score_version") is None:
-            v.pop("score_version")
-        agg.append(v)
-    note = {"scorecards": {"from_rows": n, "groups": len(agg),
-                           "reason": "size_cap" if (force_agg and n <= ROW_THRESHOLD) or coarse
-                           else "rows_over_threshold", "level": 2 if coarse else 1}}
+    for g in groups:
+        row = {d: g[d] for d in AGG_LEVELS[used - 1] if g[d] is not None}
+        row.update({"n": int(g["n"]), "merged": int(g["merged"]),
+                    "gates_failed_units": int(g["gates_failed_units"]),
+                    "steers": int(g["steers"]), "turns": int(g["turns"]),
+                    "cost_usd": round(float(g["cost_usd"]), 2),
+                    "score_mean": None if g["score_mean"] is None else round(float(g["score_mean"]), 3),
+                    "score_hist": [int(g[f"h{k}"]) for k in range(1, 11)]})
+        if g["score_version"] is not None:
+            row["score_version"] = g["score_version"]
+        if row["score_mean"] is None:
+            row.pop("score_mean")
+        agg.append(row)
+    covered = sum(r["n"] for r in agg)
+    note = {"scorecards": {"from_rows": n, "covered": covered, "groups": len(agg), "level": used,
+                           "reason": "size_cap" if force_agg and (n <= ROW_THRESHOLD or level > 1)
+                           else "rows_over_threshold"}}
     return {"rows": [], "agg": agg}, note
 
 
 def build_batch(connection, settings: Any, *, day: date, since: Optional[datetime],
-                until: datetime, force_agg: bool = False, coarse: bool = False) -> dict[str, Any]:
+                until: datetime, consent_at: Optional[datetime] = None, force_agg: bool = False,
+                level: int = 1) -> dict[str, Any]:
     """One day's batch, content-free, from aggregates. Sanitized before it is returned."""
     ident = identity(connection)
     p = {"s": since or datetime(1970, 1, 1, tzinfo=timezone.utc), "u": until}
@@ -531,8 +595,8 @@ def build_batch(connection, settings: Any, *, day: date, since: Optional[datetim
             SELECT finding_kind, COUNT(*) FROM system_doctor_actions
             WHERE finding_kind IS NOT NULL AND {w('created_at')} GROUP BY 1""", p)},
     }
-    cards, note = _scorecards(connection, ident["secret"], since, until,
-                              force_agg=force_agg, coarse=coarse)
+    cards, note = _scorecards(connection, ident["secret"], since, until, consent_at=consent_at,
+                              force_agg=force_agg, level=level)
     batch = {
         "day": day.isoformat(),
         "since": since.date().isoformat() if since else None,
@@ -580,9 +644,93 @@ def _first_due(now: datetime) -> datetime:
     return now + timedelta(seconds=random.randint(600, 6 * 3600))
 
 
-def active(connection, settings: Any) -> tuple[bool, Optional[str]]:
-    """(anything to send at all, why not)."""
-    why = env_disabled(settings)
+def endpoint(connection, settings: Any) -> tuple[str, str]:
+    """(collector ingest URL, where it came from: env | govern | none). No default (operator
+    decision 2026-10-05): with none set, nothing is sent, the heartbeat included."""
+    env = str(getattr(settings, "telemetry_url", "") or "").strip()
+    if env:
+        return env, "env"
+    got = str(_get(connection, "improve_endpoint").get("url") or "").strip()
+    return (got, "govern") if got else ("", "none")
+
+
+def blocked(connection, settings: Any) -> Optional[str]:
+    """Why NOTHING may leave this install right now — env off, or no collector — or None."""
+    return env_disabled(settings) or (None if endpoint(connection, settings)[0] else NO_COLLECTOR)
+
+
+def check_url(url: str) -> str:
+    """A collector URL an operator may set: https (or http on this machine), no credentials,
+    the ingest path. Raises ValueError with the reason."""
+    from urllib.parse import urlsplit
+
+    url = (url or "").strip()
+    if not url:
+        return ""
+    parts = urlsplit(url)
+    local = parts.hostname in ("127.0.0.1", "localhost", "::1")
+    if parts.scheme != "https" and not (parts.scheme == "http" and local):
+        raise ValueError("Must be https (http only on this machine)")
+    if parts.username or parts.password or parts.query or parts.fragment:
+        raise ValueError("Must not carry credentials, a query or a fragment")
+    if not parts.hostname or len(url) > 300:
+        raise ValueError("Must be a full collector URL")
+    if not parts.path.rstrip("/").endswith("/telemetry/ingest"):
+        raise ValueError("Must end in /v1/telemetry/ingest")
+    return url.rstrip("/")
+
+
+def set_endpoint(connection, url: str, *, actor: str, project_id: str) -> None:
+    clean = check_url(url)
+    before = str(_get(connection, "improve_endpoint").get("url") or "")
+    _put(connection, "improve_endpoint", {"url": clean, "by": actor, "at": _now().isoformat()})
+    _discard_pending(connection)
+    if before != clean:
+        from urllib.parse import urlsplit
+        from .scorecards import _log_change
+
+        host = lambda u: urlsplit(u).hostname or "none"  # noqa: E731
+        _log_change(connection, project_id, actor, "improve_endpoint", "Collector",
+                    host(before) if before else "none", host(clean) if clean else "none")
+
+
+MASK_WORDS_MAX = 50
+
+
+def mask_words(connection) -> list[str]:
+    """Words a shared run always masks, set in Govern › Sharing (a client, a codename)."""
+    return [str(w) for w in (_get(connection, "improve_mask").get("words") or []) if str(w).strip()]
+
+
+def set_mask_words(connection, words: Any, *, actor: str, project_id: str) -> list[str]:
+    if isinstance(words, str):
+        words = re.split(r"[,\n]", words)
+    clean = []
+    for w in words or []:
+        w = str(w).strip()
+        if not w:
+            continue
+        if len(w) < 3 or len(w) > 80:
+            raise ValueError(f"'{w[:20]}': a word to mask is 3 to 80 characters.")
+        if w.lower() not in (c.lower() for c in clean):
+            clean.append(w)
+    if len(clean) > MASK_WORDS_MAX:
+        raise ValueError(f"At most {MASK_WORDS_MAX} words.")
+    before = mask_words(connection)
+    _put(connection, "improve_mask", {"words": clean, "by": actor, "at": _now().isoformat()})
+    if before != clean:
+        from .scorecards import _log_change
+
+        # The words themselves are private: the log says how many, never which.
+        _log_change(connection, project_id, actor, "improve_mask", "Always mask",
+                    f"{len(before)} words", f"{len(clean)} words")
+    return clean
+
+
+def active(connection, settings: Any, *, need_collector: bool = True) -> tuple[bool, Optional[str]]:
+    """(anything to send at all, why not). Preview and Export do not need a collector — an
+    air-gapped install exports by hand — but sending does."""
+    why = blocked(connection, settings) if need_collector else env_disabled(settings)
     if why:
         return False, why
     sw = switches(connection)
@@ -608,8 +756,9 @@ def _send_day(connection, now: datetime) -> date:
 
 def cut(connection, settings: Any, *, now: Optional[datetime] = None) -> Optional[Mapping[str, Any]]:
     """The next payload, frozen: the pending row if there is one, else build and store it.
-    None when nothing is to be sent (and then nothing is built)."""
-    ok, _why = active(connection, settings)
+    None when nothing is to be sent (and then nothing is built). Built with or without a
+    collector set — it is shown and exportable either way; only transmit() sends."""
+    ok, _why = active(connection, settings, need_collector=False)
     if not ok:
         return None
     pending = _pending(connection)
@@ -627,15 +776,22 @@ def cut(connection, settings: Any, *, now: Optional[datetime] = None) -> Optiona
     batch_days: list[str] = []
     dropped = 0
     if sw["improve"]["on"]:
+        # NOTHING FROM BEFORE CONSENT (P3): a batch starts at the later of the last batch's end
+        # and the moment the switch was last turned ON — so the first batch starts at consent,
+        # and an off period is never covered after the switch is turned on again.
+        consent_at = consent_moment(connection)
         last_until = connection.execute(text(
             "SELECT MAX(until_at) FROM telemetry_batches")).scalar()
+        since = max([t for t in (last_until, consent_at) if t] or [None],
+                    key=lambda t: t or datetime.min.replace(tzinfo=timezone.utc))
         if not connection.execute(text("SELECT 1 FROM telemetry_batches WHERE day = :d"),
                                   {"d": day}).scalar():
-            body = build_batch(connection, settings, day=day, since=last_until, until=now)
+            body = build_batch(connection, settings, day=day, since=since, until=now,
+                               consent_at=consent_at)
             connection.execute(text(
-                "INSERT INTO telemetry_batches (day, body, since_at, until_at) "
-                "VALUES (:d, CAST(:b AS JSONB), :s, :u)"),
-                {"d": day, "b": json.dumps(body), "s": last_until, "u": now})
+                "INSERT INTO telemetry_batches (day, body, since_at, until_at, consent_at) "
+                "VALUES (:d, CAST(:b AS JSONB), :s, :u, :c)"),
+                {"d": day, "b": json.dumps(body), "s": since, "u": now, "c": consent_at})
         unsent = connection.execute(text(
             "SELECT day FROM telemetry_batches WHERE status = 'unsent' ORDER BY day DESC")).scalars().all()
         keep, drop = unsent[:MAX_UNSENT_BATCHES], unsent[MAX_UNSENT_BATCHES:]
@@ -674,34 +830,37 @@ def cut(connection, settings: Any, *, now: Optional[datetime] = None) -> Optiona
 
 def _fit(connection, settings: Any, envelope: dict[str, Any], *, now: datetime
          ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Over 64 KB gzip → aggregate (never truncate): rows → groups, then coarse groups, then
-    the oldest batches go, each step recorded in the batch and in the send's note."""
+    """Over 64 KB gzip → aggregate, never truncate: per-run rows become groups, and the groups
+    coarsen level by level (fewer dimensions) until it fits. Every level still counts every unit;
+    the batch's `aggregated` note says the level, the groups and units covered of units in total.
+    Only if the coarsest level of every batch still does not fit do the OLDEST batches go, and
+    the envelope says how many (`dropped_batches`)."""
     notes: dict[str, Any] = {}
     _raw, gz = encode(envelope)
     if len(gz) <= SIZE_CAP_GZ or not envelope.get("batches"):
         return envelope, {b["day"]: b.get("aggregated") for b in envelope.get("batches", [])
                           if b.get("aggregated")}
-    for level, (force, coarse) in enumerate(((True, False), (True, True)), start=1):
+    for level in range(1, len(AGG_LEVELS) + 1):
         rebuilt = []
         for b in envelope["batches"]:
             row = connection.execute(text(
-                "SELECT since_at, until_at FROM telemetry_batches WHERE day = :d"),
+                "SELECT since_at, until_at, consent_at FROM telemetry_batches WHERE day = :d"),
                 {"d": b["day"]}).mappings().first()
             if not row:
                 rebuilt.append(b)
                 continue
             nb = build_batch(connection, settings, day=date.fromisoformat(b["day"]),
                              since=row["since_at"], until=row["until_at"],
-                             force_agg=force, coarse=coarse)
-            note = nb.setdefault("aggregated", {}).setdefault(
-                "scorecards", {"from_rows": 0, "groups": 0, "reason": "size_cap", "level": level})
-            note["reason"] = "size_cap"
-            note["level"] = level
+                             consent_at=row["consent_at"], force_agg=True, level=level)
+            note = (nb.get("aggregated") or {}).get("scorecards")
+            if note:
+                note["reason"] = "size_cap"
             connection.execute(text(
                 "UPDATE telemetry_batches SET body = CAST(:b AS JSONB) WHERE day = :d"),
                 {"b": json.dumps(nb), "d": b["day"]})
             rebuilt.append(nb)
-            notes[b["day"]] = nb["aggregated"]
+            if nb.get("aggregated"):
+                notes[b["day"]] = nb["aggregated"]
         envelope = {**envelope, "batches": rebuilt}
         envelope, _ = allow.sanitize(envelope, allow.ENVELOPE)
         _raw, gz = encode(envelope)
@@ -727,8 +886,9 @@ def preview(connection, settings: Any) -> dict[str, Any]:
     row = cut(connection, settings)
     sched = _schedule(connection)
     if row is None:
-        _ok, why = active(connection, settings)
-        return {"pending": None, "why_not": why, "next_due_at": sched.get("next_due_at")}
+        _ok, why = active(connection, settings, need_collector=False)
+        return {"pending": None, "why_not": why, "blocked": blocked(connection, settings),
+                "next_due_at": sched.get("next_due_at")}
     body = bytes(row["body_gz"])
     return {"pending": {"id": row["id"], "day": row["day"].isoformat(),
                         "cut_at": row["cut_at"], "bytes_raw": row["bytes_raw"],
@@ -736,10 +896,12 @@ def preview(connection, settings: Any) -> dict[str, Any]:
                         "batch_days": row["batch_days"],
                         "sha256": hashlib.sha256(body).hexdigest(),
                         "json": decode(body)},
-            "why_not": None, "next_due_at": sched.get("next_due_at")}
+            "why_not": None, "blocked": blocked(connection, settings),
+            "next_due_at": sched.get("next_due_at") if not blocked(connection, settings) else None}
 
 
-def _default_post(url: str, body: bytes) -> tuple[Optional[int], Optional[str]]:
+def _default_post(url: str, body: bytes) -> tuple:
+    """(status, error, the collector's JSON answer or None). Reads at most 64 KB of the answer."""
     import httpx
 
     try:
@@ -747,13 +909,42 @@ def _default_post(url: str, body: bytes) -> tuple[Optional[int], Optional[str]]:
             r = client.post(url, content=body, headers={
                 "Content-Type": "application/json", "Content-Encoding": "gzip",
                 "User-Agent": f"boss/{_version()}"})
-        return r.status_code, None if 200 <= r.status_code < 300 else f"http_{r.status_code}"
+        answer = None
+        try:
+            if len(r.content) <= 65536:
+                answer = r.json()
+        except ValueError:
+            answer = None
+        return (r.status_code, None if 200 <= r.status_code < 300 else f"http_{r.status_code}",
+                answer)
     except httpx.TimeoutException:
         return None, "timeout"
     except httpx.HTTPError as error:
         return None, type(error).__name__.lower()[:40]
     except Exception as error:  # noqa: BLE001
         return None, type(error).__name__.lower()[:40]
+
+
+def transmit(settings: Any, url: str, body: bytes, post: Optional[Poster] = None
+             ) -> tuple[Optional[int], Optional[str]]:
+    """THE ONE DOOR every outbound telemetry byte goes through: the daily send, a shared run, a
+    delete, a rotation's delete. It refuses — before any poster, injected or real, is called —
+    when the environment turns sharing off or no collector is set (P2)."""
+    status, error, _answer = transmit_answer(settings, url, body, post)
+    return status, error
+
+
+def transmit_answer(settings: Any, url: str, body: bytes, post: Optional[Poster] = None
+                    ) -> tuple[Optional[int], Optional[str], Optional[dict]]:
+    """transmit(), keeping what the collector answered (a delete's counts)."""
+    why = env_disabled(settings)
+    if why:
+        return None, "disabled_by_env", None
+    if not url:
+        return None, "no_collector", None
+    got = tuple((post or _default_post)(url, body))
+    answer = got[2] if len(got) > 2 and isinstance(got[2], dict) else None
+    return got[0], got[1], answer
 
 
 def _trim_log(connection) -> None:
@@ -793,8 +984,8 @@ def send_due(engine, settings: Any, *, now: Optional[datetime] = None,
         if row is None:
             return {"sent": False, "why": "nothing"}
         sid, body, days = row["id"], bytes(row["body_gz"]), list(row["batch_days"] or [])
-    url = str(getattr(settings, "telemetry_url", "") or "").strip()
-    status, error = (post or _default_post)(url, body) if url else (None, "no_url")
+        url = endpoint(c, settings)[0]
+    status, error = transmit(settings, url, body, post)
     ok_sent = status is not None and 200 <= status < 300
     with begin(engine) as c:
         c.execute(text("""
@@ -804,6 +995,11 @@ def send_due(engine, settings: Any, *, now: Optional[datetime] = None,
         if ok_sent and days:
             c.execute(text("UPDATE telemetry_batches SET status = 'sent' WHERE day = ANY(:d)"),
                       {"d": [date.fromisoformat(d) for d in days]})
+        if ok_sent:
+            # Something now sits at the collector under this id: a rotation must delete it.
+            ident = identity(c)
+            if not ident.get("sent"):
+                _put(c, "improve_identity", {**ident, "sent": True})
         _trim_log(c)
     return {"sent": ok_sent, "status": status, "error": error, "id": sid}
 
@@ -844,8 +1040,10 @@ def export(connection, settings: Any) -> Optional[bytes]:
 # ------------------------------------------------------------------------------------------
 
 
-def collector_url(settings: Any, path: str) -> str:
-    base = str(getattr(settings, "telemetry_url", "") or "").strip()
+def collector_url(base: str, path: str) -> str:
+    base = (base or "").strip().rstrip("/")
+    if not base:
+        return ""
     if base.endswith("/ingest"):
         base = base[: -len("/ingest")]
     return f"{base}/{path}"
@@ -858,37 +1056,141 @@ def delete_request(ident: Mapping[str, str], ts: Optional[int] = None) -> dict[s
     return {"install_id": ident["id"], "ts": ts, "proof": ident["secret"], "sig": sig}
 
 
-def forget(engine, settings: Any, *, actor: str, project_id: str,
-           post: Optional[Poster] = None) -> dict[str, Any]:
-    """Ask the collector to delete everything under this install id; on success, rotate."""
+def _retired(connection) -> list[dict[str, str]]:
+    """Old ids whose data may still sit at the collector, kept WITH their secret until a signed
+    delete for each goes through (P4). Never sent anywhere but in that delete."""
+    return list(_get(connection, "improve_retired").get("ids") or [])
+
+
+def _log_send(connection, kind: str, ok: bool, raw: int, gz: int, status, error) -> None:
+    from .core import make_id
+
+    connection.execute(text("""
+        INSERT INTO telemetry_sends (id, day, kind, status, bytes_raw, bytes_gz, http_status,
+                                     error, cut_at, sent_at)
+        VALUES (:id, CURRENT_DATE, :k, :st, :r, :g, :code, :err, now(), now())"""),
+        {"id": make_id("tms"), "k": kind, "st": "sent" if ok else "failed", "r": raw, "g": gz,
+         "code": status, "err": error})
+
+
+_LAST_DELETE_COUNTS: dict[str, int] = {}
+
+
+def _delete_ids(engine, settings: Any, idents: list[Mapping[str, str]],
+                post: Optional[Poster]) -> tuple[list[str], list[str], Optional[str]]:
+    """Signed deletes, one per id, through the one door. (deleted ids, failed ids, last error).
+    What the collector says it removed, per id, is kept in `_LAST_DELETE_COUNTS` — the screen
+    reports those numbers, never "deleted" for an id the collector held nothing for."""
     from ..db import begin
 
     with begin(engine) as c:
-        ident = identity(c)
-    body = json.dumps(delete_request(ident), sort_keys=True).encode()
-    gz = gzip.compress(body, mtime=0)
-    status, error = (post or _default_post)(collector_url(settings, "delete"), gz)
-    ok = status is not None and 200 <= status < 300
-    with begin(engine) as c:
-        from .core import make_id
-
-        c.execute(text("""
-            INSERT INTO telemetry_sends (id, day, kind, status, bytes_raw, bytes_gz, http_status,
-                                         error, cut_at, sent_at)
-            VALUES (:id, CURRENT_DATE, 'delete', :st, :r, :g, :code, :err, now(), now())"""),
-            {"id": make_id("tms"), "st": "sent" if ok else "failed", "r": len(body),
-             "g": len(gz), "code": status, "err": error})
+        url = collector_url(endpoint(c, settings)[0], "delete")
+    done, failed, last_error = [], [], None
+    _LAST_DELETE_COUNTS.clear()
+    for ident in idents:
+        body = json.dumps(delete_request(ident), sort_keys=True).encode()
+        gz = gzip.compress(body, mtime=0)
+        status, error, answer = transmit_answer(settings, url, gz, post)
+        ok = status is not None and 200 <= status < 300
         if ok:
-            rotate(c, actor=actor, project_id=project_id)
-            c.execute(text("UPDATE telemetry_batches SET status = 'dropped' WHERE status = 'unsent'"))
+            try:
+                _LAST_DELETE_COUNTS[ident["id"]] = int((answer or {}).get("deleted") or 0)
+            except (TypeError, ValueError):
+                _LAST_DELETE_COUNTS[ident["id"]] = 0
+        with begin(engine) as c:
+            _log_send(c, "delete", ok, len(body), len(gz), status, error)
+        (done if ok else failed).append(ident["id"])
+        if not ok:
+            last_error = error
+    return done, failed, last_error
+
+
+def _settle_retired(connection, deleted: list[str]) -> list[dict[str, str]]:
+    left = [r for r in _retired(connection) if r["id"] not in deleted]
+    _put(connection, "improve_retired", {"ids": left})
+    return left
+
+
+def rotate(engine, settings: Any, *, actor: str, project_id: str,
+           post: Optional[Poster] = None) -> dict[str, Any]:
+    """A new random id. The OLD one's data is deleted at the collector first (signed); if that
+    cannot happen now, the old id and its secret are kept until it can (P4) — and the answer
+    says which, so the screen can tell the truth."""
+    from ..db import begin
+
+    with begin(engine) as c:
+        old = identity(c)
+        new = _new_identity()
+        reachable = blocked(c, settings) is None
+        # The old id is deleted at the collector whenever one can be reached — not only when this
+        # install remembers sending (a shared run, an export carried by hand, a flag lost to a
+        # restore). It is KEPT, with its secret, when something was sent and no delete can go.
+        if old.get("sent") or reachable:
+            ids = _retired(c) + [{"id": old["id"], "secret": old["secret"], "sent": bool(old.get("sent"))}]
+            _put(c, "improve_retired", {"ids": ids})
+        _put(c, "improve_identity", new)
+        _discard_pending(c)
+        from .scorecards import _log_change
+
+        _log_change(c, project_id, actor, "improve_identity", "Install id",
+                    old["id"][:7] + "…", new["id"][:7] + "…")
+        pending = _retired(c)
+    deleted, failed, error = (_delete_ids(engine, settings, pending, post) if pending
+                              else ([], [], None))
+    counts = dict(_LAST_DELETE_COUNTS)
+    with begin(engine) as c:
+        # A never-sent id whose delete could not go is not worth keeping a secret for.
+        stale = [r["id"] for r in _retired(c) if r["id"] == old["id"] and not r.get("sent")
+                 and old["id"] in failed]
+        left = _settle_retired(c, deleted + stale)
+    removed = counts.get(old["id"])
+    return {"install_id": new["id"],
+            "old": ("deleted" if removed else "nothing_held") if old["id"] in deleted
+            else ("kept" if old.get("sent") else "nothing_sent"),
+            "removed": removed or 0, "waiting": len(left), "error": error}
+
+
+def forget(engine, settings: Any, *, actor: str, project_id: str,
+           post: Optional[Poster] = None) -> dict[str, Any]:
+    """Delete what was sent: a signed delete for EVERY id this install has used (the current one
+    and any earlier one not yet deleted); then a new id, and nothing cut locally kept. An id whose
+    delete fails is kept, with its secret, to try again."""
+    from ..db import begin
+
+    with begin(engine) as c:
+        cur = identity(c)
+        targets = _retired(c) + [{"id": cur["id"], "secret": cur["secret"]}]
+    deleted, failed, error = _delete_ids(engine, settings, targets, post)
+    with begin(engine) as c:
+        if cur["id"] in deleted:
+            # The current id's data is gone: it is never used again.
+            new = _new_identity()
+            _put(c, "improve_identity", new)
+            from .scorecards import _log_change
+
+            _log_change(c, project_id, actor, "improve_identity", "Install id",
+                        cur["id"][:7] + "…", new["id"][:7] + "…")
+        left = _settle_retired(c, deleted)
+        if not failed:
+            # Nothing of ours is at the collector any more: start clean, and the day's send may
+            # happen again — but only from THIS moment: the floor keeps everything before the
+            # delete from ever being cut again (re-check item 1).
+            _put(c, "improve_floor", {"at": _now().isoformat(), "by": actor})
+            c.execute(text("DELETE FROM telemetry_batches"))
+            _discard_pending(c)
+            sched = _schedule(c)
+            sched.pop("last_attempt_day", None)
+            _put(c, "improve_schedule", sched)
         _trim_log(c)
-    return {"deleted": ok, "status": status, "error": error}
+    removed = sum(_LAST_DELETE_COUNTS.values())
+    return {"deleted": not failed, "removed": removed, "ids_deleted": len(deleted), "ids_failed": len(failed),
+            "waiting": len(left), "error": error}
 
 
 def share_bundle(connection, project_id: str, unit_kind: str, unit_id: str) -> dict[str, Any]:
     """One run's bundle for "Share this run": steps, agent turns, errors and log tails, through
-    the redaction gate. Shown to the person to edit; nothing is sent until they press Send."""
-    from .redaction import redact
+    the share scrub (services/share_scrub.py). Shown to the person to edit; nothing is sent until
+    they press Send."""
 
     lines: list[str] = []
     if unit_kind in ("build", "quick_change"):
@@ -928,7 +1230,9 @@ def share_bundle(connection, project_id: str, unit_kind: str, unit_id: str) -> d
                          + (f" — {s['err']}" if s["err"] else ""))
     else:
         raise ValueError("Share a build or a workflow run.")
-    cleaned, masked = redact("\n".join(lines))
+    from .share_scrub import install_names, scrub
+
+    cleaned, masked = scrub("\n".join(lines), install_names(connection, project_id))
     return {"bundle": cleaned[:400_000], "masked": masked,
             "chars": len(cleaned)}
 
@@ -940,24 +1244,26 @@ def share_send(engine, settings: Any, *, bundle: str, note: str,
 
     with begin(engine) as c:
         ident = identity(c)
-    payload, _ = allow.sanitize({"v": 1, "install_id": ident["id"], "note": note or "",
+        url = collector_url(endpoint(c, settings)[0], "share")
+    payload, _ = allow.sanitize({"v": 1, "install_id": ident["id"],
+                                 "secret_hash": secret_hash(ident["secret"]), "note": note or "",
                                  "bundle": bundle or "",
                                  "context": {"version": _version(), "edition": _edition(settings)}},
                                 allow.SHARE)
     raw, gz = encode(payload)
     if len(gz) > SHARE_CAP_GZ:
         return {"sent": False, "error": "too_large", "bytes_gz": len(gz)}
-    status, error = (post or _default_post)(collector_url(settings, "share"), gz)
+    status, error = transmit(settings, url, gz, post)
     ok = status is not None and 200 <= status < 300
+    if error in ("disabled_by_env", "no_collector"):
+        return {"sent": False, "status": None, "error": error, "bytes_gz": len(gz)}
     with begin(engine) as c:
-        from .core import make_id
-
-        c.execute(text("""
-            INSERT INTO telemetry_sends (id, day, kind, status, bytes_raw, bytes_gz, http_status,
-                                         error, cut_at, sent_at)
-            VALUES (:id, CURRENT_DATE, 'share', :st, :r, :g, :code, :err, now(), now())"""),
-            {"id": make_id("tms"), "st": "sent" if ok else "failed", "r": len(raw), "g": len(gz),
-             "code": status, "err": error})
+        _log_send(c, "share", ok, len(raw), len(gz), status, error)
+        if ok:
+            # A shared run sits at the collector under this id: rotate and Delete must remove it.
+            cur = identity(c)
+            if cur["id"] == ident["id"] and not cur.get("sent"):
+                _put(c, "improve_identity", {**cur, "sent": True})
         _trim_log(c)
     return {"sent": ok, "status": status, "error": error, "bytes_gz": len(gz)}
 
@@ -998,21 +1304,49 @@ def tick(engine, settings: Any, *, post: Optional[Poster] = None,
     except Exception:  # noqa: BLE001
         log.warning("improve tick: send failed", exc_info=True)
         out["send"] = {"sent": False, "why": "error"}
+    try:
+        # Old ids still waiting for their delete (P4): retried with the day's send, never more.
+        if (out.get("send") or {}).get("id"):
+            with begin(engine) as c:
+                pending = _retired(c)
+            if pending:
+                deleted, _f, _e = _delete_ids(engine, settings, pending, post)
+                with begin(engine) as c:
+                    _settle_retired(c, deleted)
+    except Exception:  # noqa: BLE001
+        log.warning("improve tick: retired-id delete failed", exc_info=True)
     return out
+
+
+def person_name(connection, member_id: Optional[str]) -> Optional[str]:
+    """A person's display name for the screen — never their raw member id (defect 13)."""
+    if not member_id:
+        return None
+    got = connection.execute(text(
+        "SELECT display_name FROM project_members WHERE member_id = :m AND display_name <> '' "
+        "UNION ALL SELECT display_name FROM org_members WHERE member_id = :m AND display_name <> '' "
+        "LIMIT 1"), {"m": member_id}).scalar()
+    return str(got) if got else str(member_id).replace("_", " ").title()
 
 
 def sharing_view(connection, settings: Any) -> dict[str, Any]:
     from .scorecards import DEFAULT_WEIGHTS, WEIGHT_LABELS, weights
 
     sw = switches(connection)
+    for one in sw.values():
+        one["by_name"] = person_name(connection, one.get("by"))
     why = env_disabled(settings)
+    url, source = endpoint(connection, settings)
     w, version = weights(connection)
     ident = identity(connection)
     sched = _schedule(connection)
+    stop = blocked(connection, settings)
     return {
-        "switches": sw, "env_disabled": why,
-        "install_id": ident["id"], "url": str(getattr(settings, "telemetry_url", "") or ""),
-        "next_due_at": sched.get("next_due_at") if not why else None,
+        "switches": sw, "env_disabled": why, "blocked": stop,
+        "install_id": ident["id"], "url": url, "url_source": source,
+        "retired_waiting": len(_retired(connection)),
+        "mask_words": mask_words(connection),
+        "next_due_at": sched.get("next_due_at") if not stop else None,
         "last_attempt_at": sched.get("last_attempt_at"),
         "sends": sends(connection),
         "unsent_batches": int(connection.execute(text(

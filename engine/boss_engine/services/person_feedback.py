@@ -33,8 +33,25 @@ class FeedbackError(ValueError):
     pass
 
 
+class CheckinTooSoon(FeedbackError):
+    """The check-in was answered less than 30 days ago (409)."""
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def subject_unit(connection, subject_kind: str, subject_id: str) -> str:
+    """The id a rating is filed under: the scored UNIT's own id. A panel is rated from its room,
+    which may carry the meeting's id (mtg_…); the scorecard is the meeting run's (mrun_…)."""
+    sid = str(subject_id or "").strip()
+    if subject_kind == "panel" and sid and not sid.startswith("mrun_"):
+        got = connection.execute(text(
+            "SELECT id FROM meeting_runs WHERE meeting_id = :m ORDER BY created_at DESC LIMIT 1"),
+            {"m": sid}).scalar()
+        if got:
+            return str(got)
+    return sid
 
 
 def record(connection, *, project_id: str, actor: str, subject_kind: str, subject_id: str,
@@ -50,6 +67,7 @@ def record(connection, *, project_id: str, actor: str, subject_kind: str, subjec
         raise FeedbackError(f"subject_kind must be one of {', '.join(RATED + ('reject', 'steer'))}")
     if not str(subject_id or "").strip():
         raise FeedbackError("subject_id is required")
+    subject_id = subject_unit(connection, subject_kind, subject_id)
     allowed_chips = CHIPS.get(subject_kind, ())
     chips = list(dict.fromkeys(chips or []))
     bad = [c for c in chips if c not in allowed_chips]
@@ -192,12 +210,13 @@ def prompts(connection, *, actor: str, subjects: Optional[list[tuple[str, str]]]
     quiet = any(t and _now() - t < month for t in (last_acted, shown))
     due = _install_age_days(connection) >= CHECKIN_AFTER_DAYS and (shown_open or not quiet)
     mine: dict[str, dict[str, Any]] = {}
-    for kind, sid in subjects or []:
+    for kind, asked in subjects or []:
+        sid = subject_unit(connection, kind, asked)
         row = connection.execute(text(
             "SELECT rating, chips FROM person_feedback WHERE subject_kind = :k AND "
             "subject_id = :s AND actor = :a"), {"k": kind, "s": sid, "a": actor}).mappings().first()
         if row:
-            mine[f"{kind}:{sid}"] = {"rating": row["rating"], "chips": list(row["chips"] or [])}
+            mine[f"{kind}:{asked}"] = {"rating": row["rating"], "chips": list(row["chips"] or [])}
     return {"ask_open": shown_today < ASKS_PER_DAY, "asks_left_today": max(0, ASKS_PER_DAY - shown_today),
             "checkin_due": bool(due), "mine": mine,
             "chips": {k: list(v) for k, v in CHIPS.items()},
@@ -218,12 +237,23 @@ def checkin(connection, *, project_id: str, actor: str, answer: Optional[str],
         return {"dismissed": True}
     if answer not in PMF_ANSWERS:
         raise FeedbackError(f"answer must be one of {', '.join(PMF_ANSWERS)}")
+    # ONCE IN 30 DAYS, enforced here and not only by the console (defect 17).
+    check = _state(connection, actor, "checkin")
+    last = check.get("last_answered_at")
+    if last and _now() - last < timedelta(days=CHECKIN_EVERY_DAYS):
+        raise CheckinTooSoon("Already answered this month.")
     one = (line or "").strip()[:LINE_MAX] or None
+    # A line is sendable only if it was ticked AND saved while Improve BOSS was on (P3): turning
+    # the switch on later never sends what was written while it was off.
+    from .improve_boss import switches
+
+    sharing_on = bool(switches(connection)["improve"]["on"])
+    share_line = bool(share_line and one and sharing_on)
     connection.execute(text("""
         INSERT INTO person_feedback (id, project_id, subject_kind, subject_id, actor, rating,
                                      one_liner, share_line)
         VALUES (:id, :p, 'checkin', :s, :a, :r, :l, :sh)"""),
         {"id": make_id("pfb"), "p": project_id, "s": _now().strftime("%Y-%m"), "a": actor,
-         "r": answer, "l": one, "sh": bool(share_line and one)})
+         "r": answer, "l": one, "sh": share_line})
     _answered(connection, actor, "checkin")
-    return {"answer": answer, "line_kept": bool(one), "line_shared": bool(share_line and one)}
+    return {"answer": answer, "line_kept": bool(one), "line_shared": share_line}

@@ -48,15 +48,25 @@ describe("Observability › Scorecards", () => {
   it("experiments say too close to call, and Promote is one press", async () => {
     const f = await open("view=scorecards&sc=experiments");
     expect($("[data-testid=sc-exp-verdict]")!.textContent).toBe("Too close to call");
-    expect($("[data-testid=sc-arm-a]")!.textContent).toContain("claude_code");
+    expect($("[data-testid=sc-arm-a]")!.textContent).toContain("Claude Code");
+    expect(document.body.textContent).not.toMatch(/claude_code|software_engineer/);
     await click($("[data-testid=sc-promote-b]"));
     await settle();
-    expect(f.calls.find((c) => c.op === "experiment_promote")?.body).toMatchObject({ id: "exp_1", arm: "b" });
+    // A confirm sheet first: what changes, and short evidence needs the operator's own tick.
+    expect(f.calls.some((c) => c.op === "experiment_promote")).toBe(false);
+    expect($("[data-testid=sc-promote-change]")!.textContent).toContain("Claude Code → Codex");
+    expect(($("[data-testid=sc-promote-yes]") as HTMLButtonElement).disabled).toBe(true);
+    await click($("[data-testid=sc-promote-anyway]"));
+    await click($("[data-testid=sc-promote-yes]"));
+    await settle();
+    expect(f.calls.find((c) => c.op === "experiment_promote")?.body).toMatchObject({ id: "exp_1", arm: "b", anyway: true });
   });
 
   it("a new experiment posts exactly what the form says", async () => {
     const f = await open("view=scorecards&sc=experiments");
     await click($("[data-testid=sc-exp-add]"));
+    expect(($("[data-testid=sc-new-key]") as HTMLElement).tagName).toBe("SELECT");  // a picker, not free text
+    expect($("[data-testid=sc-new-key]")!.textContent).toContain("Software Engineer");
     await click($("[data-testid=sc-new-start]"));
     await settle();
     expect(f.calls.find((c) => c.op === "experiment")?.body).toMatchObject({
@@ -79,5 +89,12 @@ describe("Observability › Installs", () => {
     expect($("[data-testid=in-csv]")!.getAttribute("href")).toContain("view=collector_csv");
     expect($("[data-testid=in-harness]")!.textContent).toContain("claude_code · 0.74");
     expect($("[data-testid=in-installer]")!.textContent).toContain("Not reported");
+  });
+});
+
+describe("Installs on a phone", () => {
+  it("the retention table scrolls inside its card", async () => {
+    await open("view=installs", true);
+    expect($("[data-testid=in-cohorts-scroll] table")).toBeTruthy();
   });
 });

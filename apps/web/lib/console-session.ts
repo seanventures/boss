@@ -97,10 +97,39 @@ export function networkTrustedConsole(): boolean {
  * mode is on; bounded, validated, rate-limited), and the /v1 proxy attaches no key to them.
  */
 export const COLLECTOR_PATHS = new Set(["/v1/telemetry/ingest", "/v1/telemetry/delete", "/v1/telemetry/share"]);
+
+const COLLECTOR_ROUTE = /^\/v1\/telemetry\/(?:ingest|delete|share)$/;
+
+/**
+ * THE ONE COLLECTOR-PATH DECISION (re-check 4, item 1). `/v1/telemetry/share/?x` is the same
+ * route to the API — it decodes, collapses slashes and redirects a trailing one — so every form
+ * that reaches a collector route is named here, once: the query is ignored, percent-encoding is
+ * decoded, repeated and trailing slashes collapse, and the match is case-sensitive like the API's.
+ * Returns the canonical path ("/v1/telemetry/share") or null. Every collector decision — the
+ * browser check, the cap, the key, the client hop, the upstream path — reads this, never the raw
+ * pathname.
+ */
+export function collectorPath(pathname: string): string | null {
+  let decoded: string;
+  try { decoded = decodeURIComponent(pathname); } catch { decoded = pathname; }
+  const canonical = decoded.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
+  return COLLECTOR_ROUTE.test(canonical) ? canonical : null;
+}
+
+/** collectorPath for a whole URL (its query and fragment never matter). */
+export function collectorPathOf(url: string): string | null {
+  try { return collectorPath(new URL(url).pathname); } catch { return null; }
+}
+
 export function collectorMachinePost(request: Request): boolean {
   if (request.method.toUpperCase() !== "POST") return false;
   if (request.headers.get("origin") || request.headers.get("cookie")) return false;
-  try { return COLLECTOR_PATHS.has(new URL(request.url).pathname); } catch { return false; }
+  // A browser marks every request it makes; a server-to-server POST carries none of these. A
+  // cross-site `text/plain` form or no-cors fetch therefore never counts as a machine POST.
+  for (const h of ["sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-user"]) {
+    if (request.headers.get(h)) return false;
+  }
+  return collectorPathOf(request.url) !== null;
 }
 
 export function sameOriginMutation(request: Request): boolean {

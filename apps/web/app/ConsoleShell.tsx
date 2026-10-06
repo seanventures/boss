@@ -2,7 +2,7 @@
 
 import { IDENTITY_PARAMS } from "./url-intent";
 import { isInConsoleLink } from "./console-href";
-import { resolveLegacyArea } from "./legacy-areas";
+import { consoleParams, resolveLegacyArea } from "./legacy-areas";
 import { SETUP_BADGE_EVENT } from "../lib/setup-stepper";
 import { onChanged } from "./changed";
 import { createRefreshCoordinator, registerConsoleRefresh } from "../lib/console-refresh";
@@ -550,7 +550,8 @@ export default function ConsoleShell({
   useEffect(() => {
     // A RETIRED SURFACE IS REWRITTEN BEFORE ANYTHING READS IT. The server redirects these too;
     // this covers the URL changing under a mounted console (Back, a pushState from a panel).
-    const legacy = resolveLegacyArea(new URLSearchParams(queryString));
+    const meant = consoleParams(new URLSearchParams(queryString));
+    const legacy = meant.changed ? meant.params : null;
     if (legacy) {
       try {
         window.history.replaceState(null, "", `${window.location.pathname}?${legacy}${window.location.hash}`);

@@ -144,6 +144,8 @@ def test_end_to_end_client_to_collector_on_one_stack(engine, client):
 
     with engine.begin() as c:
         set_switch(c, "improve", True, actor="ceo", project_id=project())
+    # Work AFTER consent (P3: a unit that ended before the switch went on never travels).
+    with engine.begin() as c:
         seed_build(c)
         from boss_engine.services import scorecards
 
