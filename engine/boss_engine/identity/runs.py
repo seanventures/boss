@@ -395,6 +395,49 @@ def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner
     return shim, egress_access(shim, owner=owner, repo=repo)
 
 
+@contextlib.contextmanager
+def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Optional[str],
+                token: Any = "", role_key: Optional[str] = None) -> Iterator[Any]:
+    """How BOSS-side code (an agent's shell workspace, the read tools' clones, a preview or deploy
+    workdir) runs git against a repo, as a `repo_host.GitAccess`.
+
+    With the egress proxy on and a delegated principal in context (a person's grant, or a run
+    acting under one), the clone goes through boss-egress under a short run of its own (the
+    run's agent for that person: run_<…>/git:<id>), and no GitHub token exists on this side; a
+    refused authority raises, it never falls back to the shared token. Otherwise the legacy token
+    (`token`, a string or a callable) is used — carried in git's environment only, never in the
+    URL, argv or the checkout's `.git/config`, so the code that later runs in that directory can
+    never read it."""
+    from . import lineage
+    from ..services.repo_host import GitAccess, git_access, git_config_env
+
+    acting = lineage.current()
+    kind = (host or "github").strip().lower()
+    if kind == "github" and engine is not None and egress_enabled() and acting is not None and acting.grant_id:
+        shim = None
+        with engine.begin() as db:
+            agent_id = (acting.chain[-1].split("#", 1)[0] if acting.chain
+                        else agent_for_role(db, project_id, role_key or "forge"))
+            if agent_id:
+                rid = _nested_run_id(acting, "git", secrets.token_hex(6))
+                shim = start_run(subject_for(acting, db=db),
+                                 RunStart(run_id=rid, agent_id=agent_id, project_id=project_id,
+                                          repos=(f"{owner}/{repo}",),
+                                          scope=frozenset({"repository:read", "github:read"})),
+                                 grant_id=acting.grant_id, db=db, audiences=(AUD_API,))
+        if shim is not None:
+            access = egress_access(shim, owner=owner, repo=repo)
+            try:
+                yield GitAccess(access.clone_url, git_config_env(access.git_config), via="egress")
+            finally:
+                close_shim_socket(shim.run_id)
+                with engine.begin() as db:
+                    end_run(shim.run_id, db=db, org_id=acting.org_id)
+            return
+    raw = token() if callable(token) else token
+    yield git_access(kind, owner, repo, raw or "")
+
+
 def finish_code_task_run(engine: Any, shim: Shim, *, org_id: str) -> None:
     close_shim_socket(shim.run_id)
     with engine.begin() as db:

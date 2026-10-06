@@ -619,8 +619,6 @@ def _open_workspace(
     target = _run_repo_and_branch(connection, run_id, project_id)
     if not target or not target.get("owner") or not target.get("repo"):
         return None, f"no repo recorded for run {run_id}"
-    from .repo_host import clone_url_for
-
     # NOT settings.github_token — see github_connections.github_token_for. It is empty wherever
     # the repository was connected through the wizard, which makes this an anonymous clone of a
     # private repo and fails with git asking for a username on a terminal nobody is at.
@@ -629,16 +627,20 @@ def _open_workspace(
     project_id = connection.execute(
         text("SELECT project_id FROM code_task_runs WHERE id = :i"), {"i": run_id},
     ).scalar() or ""
-    clone_url = clone_url_for(
-        getattr(settings, "target_repo_host", "github") or "github",
-        target["owner"], target["repo"],
-        github_token_for(connection, settings, project_id) or "",
-    )
-    return ensure_workspace(
-        run_id,
-        owner=target["owner"], repo=target["repo"], branch=target["branch"],
-        clone_url=clone_url, force=force,
-    )
+    # The agent's shell works in this checkout, so no token may ever be in it (IDENTITY.md
+    # §7.10): through egress under the run's delegated principal, else the token in git's
+    # environment only.
+    from boss_engine.identity import runs as _identity_runs
+
+    with _identity_runs.repo_access(
+            connection.engine, host=getattr(settings, "target_repo_host", "github") or "github",
+            owner=target["owner"], repo=target["repo"], project_id=project_id,
+            token=lambda: github_token_for(connection, settings, project_id) or "") as access:
+        return ensure_workspace(
+            run_id,
+            owner=target["owner"], repo=target["repo"], branch=target["branch"],
+            clone_url=access.url, force=force, git_env=access.environ(),
+        )
 
 
 _LEGACY_SHELL_EDITIONS = frozenset({
@@ -858,11 +860,14 @@ def _tool_inspect_app(connection, project_id, settings, args) -> dict:
 
     workdir = Path(tempfile.mkdtemp(prefix="boss-inspect-"))
     try:
-        token = repo_token(settings, owner, repo)
-        clone = owned_process.run(
-            ["git", "clone", "--depth", "1", "--branch", branch,
-             f"https://x-access-token:{token}@github.com/{owner}/{repo}.git", str(workdir / "r")],
-            capture_output=True, text=True, timeout=300)
+        from boss_engine.identity import runs as _identity_runs
+
+        with _identity_runs.repo_access(connection.engine, host="github", owner=owner, repo=repo,
+                                        project_id=project_id,
+                                        token=lambda: repo_token(settings, owner, repo)) as access:
+            clone = owned_process.run(
+                ["git", "clone", "--depth", "1", "--branch", branch, access.url, str(workdir / "r")],
+                capture_output=True, text=True, timeout=300, env=access.environ())
         if clone.returncode != 0:
             return {"error": f"could not read {owner}/{repo}@{branch}",
                     "detail": clone.stderr[-300:]}
