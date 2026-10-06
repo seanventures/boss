@@ -135,16 +135,19 @@ def test_a_person_starting_a_workflow_run_without_a_grant_gets_409_and_nothing_i
     with env.engine.begin() as c:
         run = _start(c, env.project, version["id"], policy_snapshot={"_identity": {"on_behalf_of": "usr_root",
                                                                                  "grant_id": "dlg_forged"}})
-        snap = c.execute(text("SELECT policy_snapshot FROM workflow_runs WHERE id = :r"), {"r": run["id"]}).scalar()
-    assert snap["_identity"]["grant_id"] == g.id and snap["_identity"]["on_behalf_of"] == ALICE
+        snap, obo, gid, rid = c.execute(text("SELECT policy_snapshot, on_behalf_of, grant_id, authority_run_id "
+                                             "FROM workflow_runs WHERE id = :r"), {"r": run["id"]}).one()
+    # The authority is in the run's columns, never in the caller-shaped snapshot.
+    assert gid == g.id and obo == ALICE and rid == f"run_wf:{run['id']}" and "_identity" not in snap
 
 
 def test_system_starts_are_not_asked_and_record_no_authority(env):
     with env.engine.begin() as c:
         _, version = _workflow(c, env.project)
         run = _start(c, env.project, version["id"], as_person=False)
-        snap = c.execute(text("SELECT policy_snapshot FROM workflow_runs WHERE id = :r"), {"r": run["id"]}).scalar()
-    assert "_identity" not in (snap or {})
+        snap, obo, gid = c.execute(text("SELECT policy_snapshot, on_behalf_of, grant_id FROM workflow_runs "
+                                        "WHERE id = :r"), {"r": run["id"]}).one()
+    assert "_identity" not in (snap or {}) and obo is None and gid is None
 
 
 def test_for_this_run_only_attaches_to_the_run_and_its_builds_carry_it(env, monkeypatch):
@@ -162,8 +165,9 @@ def test_for_this_run_only_attaches_to_the_run_and_its_builds_carry_it(env, monk
         assert acting.principal_id == ALICE and acting.grant_id == pending.id
         # The worker queues the run's build: no session, no ambient context — the job carries it.
         job = jobs.enqueue_job(c, env.project, "code.task", {"run_id": "crun_x1", "workflow_run_id": run["id"]})
-        payload = c.execute(text("SELECT payload FROM jobs WHERE id = :j"), {"j": job["id"]}).scalar()
-    assert payload["_identity"]["on_behalf_of"] == ALICE and payload["_identity"]["grant_id"] == pending.id
+        obo, gid, chain = c.execute(text("SELECT on_behalf_of, grant_id, chain FROM jobs WHERE id = :j"),
+                                    {"j": job["id"]}).one()
+    assert obo == ALICE and gid == pending.id and chain == []
     # ...and the build mints its run token from that job: Forge for Alice, nested under the run.
     monkeypatch.setenv("BOSS_EGRESS_URL", "https://egress.boss.internal")
     import tempfile
@@ -230,8 +234,9 @@ def test_a_schedule_needs_a_standing_grant_and_pauses_when_it_ends(env):
     g = _grant(env)
     sched = create()
     with env.engine.begin() as c:
-        stored = c.execute(text("SELECT input FROM workflow_schedules WHERE id = :s"), {"s": sched["id"]}).scalar()
-    assert stored["_identity"] == {"on_behalf_of": ALICE, "org_id": "org_boss", "grant_id": g.id}
+        stored, obo, gid = c.execute(text("SELECT input, on_behalf_of, grant_id FROM workflow_schedules "
+                                          "WHERE id = :s"), {"s": sched["id"]}).one()
+    assert obo == ALICE and gid == g.id and "_identity" not in stored          # the forged link was dropped
     # The grant ends -> the cascade pauses the schedule; a firing under a dead grant pauses too.
     with env.engine.begin() as c:
         report = cascade.revoke_cascade(CascadeTrigger.GRANT_REVOKED, g.id, actor=session_ctx(ALICE), reason="x", db=c)
@@ -266,7 +271,7 @@ def test_a_live_schedule_fires_under_its_grant(env, monkeypatch):
                   {"s": sched["id"]})
         out = workflow_schedules.run_due(c, project_id=env.project)
         assert out and out[0].get("run_id"), out
-        snap = c.execute(text("SELECT policy_snapshot, input FROM workflow_runs WHERE id = :r"),
+        snap = c.execute(text("SELECT grant_id, input, on_behalf_of FROM workflow_runs WHERE id = :r"),
                          {"r": out[0]["run_id"]}).one()
-    assert snap[0]["_identity"]["grant_id"] == g.id and "_identity" not in snap[1]
+    assert snap[0] == g.id and "_identity" not in snap[1] and snap[2] == ALICE
 

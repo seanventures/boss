@@ -264,17 +264,34 @@ class CommsService:
             channel=message["channel"],
             urgency=normalized_urgency,
         )
+        from boss_engine.identity import lineage as _identity_lineage
+
+        # Who this delivery acts for (R8): the same stamping path as enqueue_job.
+        job_payload, identity_columns = _identity_lineage.stamp_job_row(
+            {
+                "project_id": project_id,
+                "outbox_message_id": message_id,
+                "reservation_id": reservation_id,
+                "dedupe_key": dedupe_key,
+                "channel": message["channel"],
+                "subject": message.get("subject"),
+                "body": message["body"],
+                "data_boundary": boundary,
+                "urgency": normalized_urgency,
+                "requires_reservation": True,
+            })
         connection.execute(
             text(
                 """
                 INSERT INTO jobs (
                     id, project_id, task_id, kind, priority, status, payload,
-                    data_boundary, max_attempts, attempt, run_after
+                    data_boundary, max_attempts, attempt, run_after,
+                    on_behalf_of, grant_id, chain
                 )
                 VALUES (
                     :id, :project_id, NULL, 'comms.outbox.deliver', :priority, 'queued',
                     CAST(:payload AS JSONB), :data_boundary, :max_attempts, 0,
-                    :run_after
+                    :run_after, :on_behalf_of, :grant_id, CAST(:chain AS JSONB)
                 )
                 """
             ),
@@ -282,23 +299,11 @@ class CommsService:
                 "id": job_id,
                 "project_id": project_id,
                 "priority": priority,
-                "payload": json.dumps(
-                    {
-                        "project_id": project_id,
-                        "outbox_message_id": message_id,
-                        "reservation_id": reservation_id,
-                        "dedupe_key": dedupe_key,
-                        "channel": message["channel"],
-                        "subject": message.get("subject"),
-                        "body": message["body"],
-                        "data_boundary": boundary,
-                        "urgency": normalized_urgency,
-                        "requires_reservation": True,
-                    }
-                ),
+                "payload": json.dumps(job_payload),
                 "data_boundary": boundary,
                 "max_attempts": max_attempts,
                 "run_after": run_after,
+                **identity_columns,
             },
         )
         emit_event(
