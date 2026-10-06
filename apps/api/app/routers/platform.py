@@ -19,7 +19,7 @@ def mount_platform_routers(app: FastAPI) -> None:
         pass
     # Identity IdP catalog + setup blueprints
     try:
-        from .identity_providers import router as identity_router
+        from .idp_catalog import router as identity_router
 
         app.include_router(identity_router)
     except ImportError:

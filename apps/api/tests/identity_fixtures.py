@@ -205,7 +205,12 @@ class IdentityWorld:
 
         settings = get_settings()
         saved = (identity_guard._authenticate, settings.authz_mode, settings.authz_router_modes)
-        identity_guard._authenticate = lambda creds: ctx
+        def fake(creds, conn=None):
+            if conn is not None and ctx is not None:
+                conn.state.identity = ctx     # what the real guard keeps for the handler
+            return ctx
+
+        identity_guard._authenticate = fake
         settings.authz_mode, settings.authz_router_modes = mode, ""
         try:
             yield
