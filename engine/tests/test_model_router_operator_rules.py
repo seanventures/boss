@@ -350,3 +350,20 @@ def test_utilization_is_a_fraction_and_used_percentage_a_percent():
     assert w({"rateLimitType": "seven_day", "utilization": 45})["seven_day"]["used"] == 0.45
     assert assess("claude_code", {"windows": {"seven_day": {"used": 0.45}}},
                   thresholds={"tight": 0.4, "near_limit": 0.15}).state == "plenty"
+
+
+def test_a_monthly_limit_is_half_open_after_a_while():
+    """A monthly spend limit is lifted by a person; routed-away work would never find out, so
+    after LIMIT_PROBE_S the source may be tried once (a success then clears it)."""
+    from datetime import datetime, timedelta, timezone
+
+    from boss_engine.services.model_router import headroom
+
+    now = datetime(2026, 10, 6, 9, 0, tzinfo=timezone.utc)
+    window = {"used": 1.0, "status": "rejected", "resets_at": "2026-11-01T00:00:00+00:00"}
+    th = {"tight": 0.4, "near_limit": 0.15}
+    fresh = {"windows": {"monthly": {**window, "observed_at": now.isoformat()}}}
+    old = {"windows": {"monthly": {**window, "observed_at": (
+        now - timedelta(seconds=headroom.LIMIT_PROBE_S + 1)).isoformat()}}}
+    assert headroom.assess("claude_code", fresh, thresholds=th, now=now).state == "exhausted"
+    assert headroom.assess("claude_code", old, thresholds=th, now=now).state != "exhausted"

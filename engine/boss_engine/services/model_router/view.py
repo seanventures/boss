@@ -76,6 +76,7 @@ def _week(connection: Any, project_id: str) -> dict[str, Any]:
                 "SUM(CASE WHEN escalation IS NOT NULL THEN 1 ELSE 0 END) AS esc, "
                 "SUM(CASE WHEN moved_by_headroom THEN 1 ELSE 0 END) AS moved "
                 "FROM model_routes WHERE project_id = :p AND created_at >= :s "
+                "AND step <> 'connection_proof' "      # Setup's own checks are not work
                 "GROUP BY tier, mode"), {"p": project_id, "s": since}).mappings().all()
             calls = connection.execute(text(
                 "SELECT r.tier, SUM(c.prompt_tokens) AS pin, SUM(c.completion_tokens) AS pout, "
