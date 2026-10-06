@@ -162,7 +162,7 @@ def test_share_masks_any_host_ipv6_spec_names_and_chosen_words(engine, client):
                                                     "base_branch": "release-larkspur-q4"},
                          finalize={"app_name": "PayrollPilot", "branch": "boss/fix-ledger-77"})
         c.execute(text("UPDATE code_task_runs SET error = :e WHERE id = :id"), {"id": rid, "e": (
-            "boom on build-07.intranet and db.acme.corp-net via fe80::1ff:fe23:4567:890a for "
+            "boom on build-07.intranet and db.acme-corp.net via fe80::1ff:fe23:4567:890a for "
             "ledgerly (PayrollPilot) on boss/fix-ledger-77 from release-larkspur-q4, codename Nightjar")})
         b = improve_boss.share_bundle(c, project(), "build", rid)["bundle"]
     for leak in ("build-07", "intranet", "acme", "fe80", "ledgerly", "PayrollPilot", "fix-ledger",

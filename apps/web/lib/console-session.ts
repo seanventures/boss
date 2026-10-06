@@ -100,6 +100,11 @@ export const COLLECTOR_PATHS = new Set(["/v1/telemetry/ingest", "/v1/telemetry/d
 export function collectorMachinePost(request: Request): boolean {
   if (request.method.toUpperCase() !== "POST") return false;
   if (request.headers.get("origin") || request.headers.get("cookie")) return false;
+  // A browser marks every request it makes; a server-to-server POST carries none of these. A
+  // cross-site `text/plain` form or no-cors fetch therefore never counts as a machine POST.
+  for (const h of ["sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-user"]) {
+    if (request.headers.get(h)) return false;
+  }
   try { return COLLECTOR_PATHS.has(new URL(request.url).pathname); } catch { return false; }
 }
 

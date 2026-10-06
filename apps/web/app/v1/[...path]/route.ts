@@ -1,6 +1,7 @@
 import { API_URL, API_KEY } from "../../../lib/client";
-import { COLLECTOR_PATHS } from "../../../lib/console-session";
+import { COLLECTOR_PATHS, collectorMachinePost } from "../../../lib/console-session";
 import { COLLECTOR_BODY_CAP, readCapped } from "../../../lib/read-capped";
+import { clientHop, proxyHops } from "../../../lib/client-hop";
 
 /**
  * The control plane, on the console's own origin.
@@ -43,6 +44,14 @@ function forwardHeaders(req: Request): Headers {
   // no key (the API exempts them from transport auth and checks them itself).
   const machine = COLLECTOR_PATHS.has(new URL(req.url).pathname);
   if (API_KEY && !machine) out.set("Authorization", `Bearer ${API_KEY}`);
+  if (machine) {
+    // THE CLIENT'S ADDRESS, NOT ITS CLAIM (re-check C). A client may send its own
+    // X-Forwarded-For, and Next keeps it as is, so it is never forwarded unchanged: the console
+    // sends one hop — the one its own proxies appended — or none at all.
+    for (const h of ["x-forwarded-for", "x-real-ip", "forwarded"]) out.delete(h);
+    const hop = clientHop(req.headers.get("x-forwarded-for"), proxyHops());
+    if (hop) out.set("x-forwarded-for", hop);
+  }
   return out;
 }
 
@@ -72,6 +81,12 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
   // collector routes are open to anyone, so a 150 MB chunked body must stop at the cap here,
   // before it costs this process its memory. The API applies its own, finer cap after.
   let body: ArrayBuffer | Uint8Array | undefined;
+  // THE BROWSER CHECK, HERE (re-check A). These three paths skip middleware (so Next does not
+  // tee their bodies), which also skipped its Origin/cookie check: it is enforced in this handler
+  // instead, before a byte of the body is read. Only a server-to-server POST passes.
+  if (COLLECTOR_PATHS.has(incoming.pathname) && !collectorMachinePost(req)) {
+    return Response.json({ detail: "browser_requests_refused" }, { status: 403 });
+  }
   if (hasBody && COLLECTOR_PATHS.has(incoming.pathname)) {
     const read = await readCapped(req, COLLECTOR_BODY_CAP);
     if (read === null) {

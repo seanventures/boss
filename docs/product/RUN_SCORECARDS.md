@@ -587,10 +587,18 @@ tick the same day sent nothing.
 #### Share this run (separate from the switch)
 
 A button on a build and a workflow run. It opens the run's bundle — steps, agent turns (their
-text), errors and log tails — after `share_scrub.scrub()` (the Activity log's credential and PII
-scrub, plus URLs, any host-like token, IPv4 and IPv6, file paths and names, and this install's own
-repositories, branches, app, project, org and people names, plus the operator's own "Always mask"
-words from Govern › Sharing; timestamps are kept), in an editable box under a plain notice: "Check for
+text), errors and log tails — after `share_scrub.scrub()`, measured for precision AND recall on
+the independent tester's corpus (no known name leaks; 0 of 28 harmless tokens masked):
+- **masked:** the Activity log's credential and PII scrub; URLs; IPv4 and IPv6; a word after
+  `ssh`/`scp`/`ping`; a dotted name ending in a real public suffix (a bundled subset of the
+  public-suffix list, without the suffixes that are also file extensions or code — `md`, `sh`,
+  `py`, `map`, `name` …); path-shaped tokens (rooted, ≥ 2 separators, or ending in a file name);
+  and this install's own names from every table that holds one — repositories, branches, apps,
+  deploy hosts and targets, previews, workflow inputs, projects, orgs, workspaces, people (full
+  names and handles; a name part only if ≥ 4 letters and not a role or common word) and the
+  operator's "Always mask" words — each with its snake/kebab/camel variants;
+- **kept:** timestamps, code (`self.items`, `os.path.join`, `package.json`, `api.v1`), module
+  names (`react-dom/client`), role words (release, manager, console, BOSS …)., in an editable box under a plain notice: "Check for
 anything private". The person edits it,
 adds a note and presses Send once: `POST <collector>/v1/telemetry/share` (≤ 256 KB gzip). Nothing
 is sent before that press, and the bundle is not kept by the client.
@@ -608,7 +616,14 @@ browser always sends one), and the console's `/v1` proxy does not attach its API
   memory: 30 requests per address per hour and 6 per install id per day. The address is the real
   peer; `X-Forwarded-For` is believed only from `BOSS_TRUSTED_PROXIES` (default **loopback
   only**; a reverse proxy on another address must be listed there), taking the right-most
-  untrusted hop and skipping malformed ones. One address may introduce 3 **new**
+  untrusted hop and skipping malformed ones. An entry may be a host name: Community compose
+  trusts `web`, the console's own container, so a request through the console is counted by the
+  client the console vouches for and a request at the published API port by its own address. The
+  console forwards ONE hop, never a client's X-Forwarded-For as is: the hop its own proxies
+  appended (`BOSS_CONSOLE_PROXY_HOPS`, 1 in compose — the install's TLS proxy), or none (0, a
+  console reached directly: it is then one bucket rather than a believed claim). The console's
+  `/v1` route refuses any browser request to these paths (Origin, cookie or any `Sec-Fetch-*`
+  header) before reading the body. One address may introduce 3 **new**
   install ids a day; more are stored but marked `suspicious` and kept out of every count (the
   dashboard says how many are held back). The address is hashed, held an hour in memory, never
   stored, and the API's access log writes "-" for it on `/v1/telemetry/*`. Idempotent per `(install_id, day)` for the
@@ -616,7 +631,9 @@ browser always sends one), and the console's `/v1` proxy does not attach its API
   `{"ok":true,"duplicate":true}`.
 - `POST /v1/telemetry/delete`: `{"install_id","ts","proof","sig"}` where `proof` is the install
   secret and `sig = HMAC-SHA256(secret, "delete|<install_id>|<ts>")`; `sha256(proof)` must equal
-  the stored `secret_hash` (from its heartbeats, or from a shared run, which carries it too) and
+  the id's FIRST registered `secret_hash` (from its first heartbeat or its first shared run,
+  whichever came earlier — an envelope offering another hash for a known id is refused, 409, so a
+  forged heartbeat cannot take an id over) and
   `ts` be within 10 minutes. Deletes every row for that id — heartbeats, batches, shared runs —
   and answers how many; the console reports that number, never "deleted" for nothing.
 - `POST /v1/telemetry/share`: ≤ 256 KB gzip, same limits; stored in `tm_shares`.

@@ -82,6 +82,25 @@ class ShareRunBody(Body):
     note: Optional[str] = None
 
 
+_RESOLVED: dict[str, tuple[float, list[str]]] = {}
+
+
+def _resolve(name: str) -> list[str]:
+    """A trusted proxy given by name, resolved and cached for a minute. Unknown → nothing."""
+    import socket
+    import time as _time
+
+    hit = _RESOLVED.get(name)
+    if hit and _time.monotonic() - hit[0] < 60:
+        return hit[1]
+    try:
+        addrs = sorted({ai[4][0] for ai in socket.getaddrinfo(name, None)})
+    except OSError:
+        addrs = []
+    _RESOLVED[name] = (_time.monotonic(), addrs)
+    return addrs
+
+
 def client_ip(peer: str, forwarded: str, trusted: str) -> str:
     """The address a rate limit counts (hashed, held an hour in memory, never stored). The REAL
     peer, unless the peer is a trusted proxy: then the right-most X-Forwarded-For hop that is not
@@ -90,11 +109,15 @@ def client_ip(peer: str, forwarded: str, trusted: str) -> str:
     import ipaddress
 
     nets = []
-    for cidr in (trusted or "").split(","):
-        try:
-            nets.append(ipaddress.ip_network(cidr.strip(), strict=False))
-        except ValueError:
+    for entry in (trusted or "").split(","):
+        entry = entry.strip()
+        if not entry:
             continue
+        try:
+            nets.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            # A NAME (compose's `web`): the console container, whatever address it got today.
+            nets.extend(ipaddress.ip_network(a) for a in _resolve(entry))
 
     def is_trusted(addr: str) -> bool:
         try:
