@@ -161,9 +161,15 @@ def workflow_needs(db: Any, project_id: str, spec: Any, input_data: Any) -> tupl
             if isinstance(seats, list):
                 candidates.extend(s.get("role_key") if isinstance(s, dict) else s for s in seats)
         cap_key = str(binding.get("capability") or "")
-        tool_perm, _cap_captain = _capability_needs(cap_key)
+        tool_perm, cap_captain = _capability_needs(cap_key)
         if tool_perm:
             perms.add(tool_perm)            # what the step's own tool call will be checked against
+        if cap_captain and not any(candidates) and db is not None:
+            # The step runs as its capability's captain (workflow runner "ran_as"), so that agent
+            # must be in the grant — when this project has it.
+            from . import runs
+            if runs.agent_for_role(db, project_id, cap_captain):
+                candidates.append(cap_captain)
         is_build = cap_key in BUILD_CAPABILITIES or step.get("kind") == "code_task"
         if is_build:
             builds = True
