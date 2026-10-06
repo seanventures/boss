@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ShareRunButton } from "./improve/share-run";
 
 import { ActionPreview, actionPreviewOf } from "./action-preview";
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
@@ -2027,6 +2028,8 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
         recheck: onRecheck, stop: onStop, stop_and_rerun: onStopAndRerun, rerun: onRerun,
         remove: onDelete, build_on_research: onBuildOnThis,
       }} />
+      {/* Share this run: a press, never a setting (docs/product/RUN_SCORECARDS.md). */}
+      <ShareRunButton projectId={projectId} actor={actor} unitKind="workflow_run" unitId={run.id} />
     </div>
   );
 }

@@ -115,6 +115,12 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:-boss}@db:5432/boss
       BOSS_EDITION: community
+      # Improve BOSS / daily heartbeat (docs/product/RUN_SCORECARDS.md). BOSS_TELEMETRY=off or
+      # DO_NOT_TRACK=1 in .env turns every send off, the heartbeat included.
+      BOSS_TELEMETRY: ${BOSS_TELEMETRY:-}
+      DO_NOT_TRACK: ${DO_NOT_TRACK:-}
+      BOSS_TELEMETRY_URL: ${BOSS_TELEMETRY_URL:-https://boss-api.local.sean.network/v1/telemetry/ingest}
+      BOSS_INSTALL_METHOD: ${BOSS_INSTALL_METHOD:-compose}
       BOSS_REQUIRE_API_AUTH: ${BOSS_REQUIRE_API_AUTH:-true}
       BOSS_API_KEY: ${BOSS_API_KEY}
       # The installer preserves operator-added keys and binds the dedicated

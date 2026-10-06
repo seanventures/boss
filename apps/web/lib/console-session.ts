@@ -88,6 +88,21 @@ export function networkTrustedConsole(): boolean {
   return process.env.BOSS_CONSOLE_AUTH === "network";
 }
 
+/**
+ * THE IMPROVE BOSS COLLECTOR'S MACHINE POSTS (docs/product/RUN_SCORECARDS.md, "Collector"). An
+ * install posting its daily heartbeat to this BOSS is a server, not a browser: it has no session
+ * and sends no `Origin`. Exactly these three paths, POST only, and only WITHOUT an Origin header —
+ * every browser sends Origin on a POST, so no browser write is let through by this, and the
+ * console's CSRF rule for browsers is unchanged. The API checks them itself (404 unless Collector
+ * mode is on; bounded, validated, rate-limited), and the /v1 proxy attaches no key to them.
+ */
+export const COLLECTOR_PATHS = new Set(["/v1/telemetry/ingest", "/v1/telemetry/delete", "/v1/telemetry/share"]);
+export function collectorMachinePost(request: Request): boolean {
+  if (request.method.toUpperCase() !== "POST") return false;
+  if (request.headers.get("origin") || request.headers.get("cookie")) return false;
+  try { return COLLECTOR_PATHS.has(new URL(request.url).pathname); } catch { return false; }
+}
+
 export function sameOriginMutation(request: Request): boolean {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method.toUpperCase())) return true;
   const origin = request.headers.get("origin");

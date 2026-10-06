@@ -1,5 +1,6 @@
 
 import { consoleAuthConfig } from "../lib/console-session";
+import { CheckinCard } from "./improve/checkin-card";
 import { cookies, headers } from "next/headers";
 import {
   areasToRender,
@@ -992,6 +993,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             inline before the first run. See command-center-ui.tsx. */}
         {shows("overview") ? (
         <section className="ov-cc" data-area="overview" aria-label="Command center">
+          {/* The monthly check-in: renders nothing unless it is this person's month (≤ once in 30 days). */}
+          <CheckinCard projectId={activeProjectId} actor={activeActorId} />
           <CommandCenter key={`${activeOrgId}:${activeProjectId}`} projectId={activeProjectId}
             orgId={activeOrgId} actor={activeActorId} viewer={activeActorId}
             initial={null} initialWire={commandCenter.wire} initialError={commandCenter.error} tz={ccZone}
@@ -3023,6 +3026,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               links here for the full view. */}
           <DiscoveriesHome
             projectId={activeProjectId}
+            actor={activeActorId}
             orgId={activeOrgId}
             discoveries={discoveryFeed.items}
             totals={discoveryFeed.totals ?? null}

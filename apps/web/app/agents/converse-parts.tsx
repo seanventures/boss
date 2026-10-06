@@ -10,6 +10,7 @@
  */
 
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import { ScopedRate } from "../improve/rate-it";
 
 import { AgentAvatar } from "../agent-avatar";
 import { Markdown } from "../markdown";
@@ -325,6 +326,9 @@ export function TurnItem({ turn, onStart, onDismiss, replyTo, live }: {
           </span>
         ) : null}
         {turn.proposal ? <ProposalCard proposal={turn.proposal} onStart={onStart} onDismiss={onDismiss} /> : null}
+        {!live && turn.status !== "streaming" && turn.kind !== "error" && turn.kind !== "summary" && text ? (
+          <ScopedRate subject="answer" id={turn.turnId} testId="ag-turn-rate" />
+        ) : null}
       </div>
     </div>
   );

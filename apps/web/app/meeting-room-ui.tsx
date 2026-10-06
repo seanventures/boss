@@ -22,6 +22,7 @@
  * shown only as the readable "Context BOSS added".
  */
 import React, { useActionState, useCallback, useEffect, useMemo, useState } from "react";
+import { RateIt } from "./improve/rate-it";
 
 import type { Meeting, MeetingRole } from "../lib/meeting-rooms";
 import { Markdown } from "./markdown";
@@ -500,7 +501,12 @@ function MeetingRoom({ id, listed, projectId, actor, onBack }: {
           {line ? <p className="rp-dh-s">{line}</p> : null}
           <Stepper stages={panelStages(meeting)} live={live} testId="meeting-stages" />
         </div>
-        <div className="rp-dh-r"><OutcomeCard meeting={meeting} search={search} projectId={projectId} /></div>
+        <div className="rp-dh-r">
+          <OutcomeCard meeting={meeting} search={search} projectId={projectId} />
+          {meeting.status === "completed" && meeting.prd_markdown ? (
+            <RateIt projectId={projectId} actor={actor} subject="panel" id={meeting.id} testId="meeting-rate" />
+          ) : null}
+        </div>
       </section>
 
       <Round meeting={meeting} round={1} seats={seats} live={live} />

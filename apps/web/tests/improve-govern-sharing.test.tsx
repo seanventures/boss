@@ -1,0 +1,119 @@
+// @vitest-environment happy-dom
+/**
+ * Govern › Sharing (docs/product/RUN_SCORECARDS.md): the switch (off by default) in the doc's own
+ * words, the heartbeat and its one opt-out, the exact next payload, the send log, export, rotate,
+ * delete, and the score's weights — within the copy budget, with short toasts, honest when the
+ * environment turns everything off.
+ */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+import React from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { setConsoleLive } from "../lib/console-live";
+import { overBudget } from "./_helpers/copy-budget";
+import { fakeGovernApi, newGovern } from "./_helpers/govern-fixtures";
+import { fakeImproveApi, newImprove } from "./_helpers/improve-fixtures";
+import { $, click, mount, settle, unmount } from "./_helpers/live-render";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const { GovernHome } = await import("../app/govern/govern-home");
+const { CONSENT_TEXT, CONSENT_TITLE } = await import("../app/improve/consent");
+
+const toasts: string[] = [];
+window.addEventListener("boss:toast", (e) => toasts.push(String((e as CustomEvent).detail?.message ?? "")));
+
+async function open(f = newImprove()) {
+  const g = newGovern();
+  vi.stubGlobal("fetch", fakeImproveApi(f, fakeGovernApi(g) as never));
+  setConsoleLive(true);
+  window.history.replaceState({}, "", "/?area=budget&tab=sharing");
+  await mount(<GovernHome projectId="p1" actor="ceo" />);
+  await settle();
+  return f;
+}
+
+afterEach(() => { unmount(); vi.unstubAllGlobals(); toasts.length = 0; });
+
+describe("Govern › Sharing", () => {
+  it("says the consent in the doc's exact words", () => {
+    const doc = readFileSync(path.resolve(__dirname, "../../../docs/product/RUN_SCORECARDS.md"), "utf8");
+    const quoted = doc.split("\n").filter((l) => l.startsWith("  >")).map((l) => l.replace(/^\s*>\s?/, "")).join(" ")
+      .replace(/\s+/g, " ").trim();
+    expect(quoted).toBe(`**${CONSENT_TITLE}** ${CONSENT_TEXT}`);
+  });
+
+  it("shows the switch off, the heartbeat on, the payload and the log — within the budget", async () => {
+    await open();
+    const root = $("[data-testid=gv-sharing]")!;
+    expect(root).toBeTruthy();
+    expect(overBudget($("[data-testid=gv]")!)).toEqual([]);
+    expect(root.querySelectorAll("p")).toHaveLength(0);
+    expect($("[data-testid=gv-switch-improve]")!.getAttribute("aria-checked")).toBe("false");
+    expect($("[data-testid=gv-switch-heartbeat]")!.getAttribute("aria-checked")).toBe("true");
+    expect($("[data-testid=im-consent]")!.textContent).toContain("Never your code, prompts, briefs");
+    const json = JSON.parse($("[data-testid=gv-payload-json]")!.textContent ?? "{}");
+    expect(Object.keys(json.heartbeat).sort()).toEqual(
+      ["age", "arch", "edition", "install_id", "install_method", "os", "version", "worked_24h"]);
+    expect(root.querySelectorAll("[data-testid=gv-send]")).toHaveLength(2);
+    expect($("[data-testid=gv-export]")!.getAttribute("href")).toContain("view=export");
+    for (const el of root.querySelectorAll("[title]")) {
+      const words = (el.getAttribute("title") ?? "").trim().split(/\s+/).length;
+      if (!el.closest("[data-user-text]")) expect(words, el.getAttribute("title") ?? "").toBeLessThanOrEqual(14);
+    }
+  });
+
+  it("flips the switch with who and when, and toasts in four words or fewer", async () => {
+    const f = await open();
+    await click($("[data-testid=gv-switch-improve]"));
+    await settle();
+    const write = f.calls.find((c) => c.op === "switch");
+    expect(write?.body).toMatchObject({ switch: "improve", on: true, project_id: "p1", actor: "ceo" });
+    await click($("[data-testid=gv-switch-heartbeat]"));
+    await settle();
+    expect(f.calls.filter((c) => c.op === "switch").map((c) => [c.body?.switch, c.body?.on]))
+      .toEqual([["improve", true], ["heartbeat", false]]);
+    expect(toasts.length).toBeGreaterThan(0);
+    for (const t of toasts) expect(t.split(/\s+/).length, t).toBeLessThanOrEqual(4);
+  });
+
+  it("deletes what was sent only after a confirm, and rotates", async () => {
+    const f = await open();
+    await click($("[data-testid=gv-forget]"));
+    expect(f.calls.some((c) => c.op === "forget")).toBe(false);
+    await click($("[data-testid=gv-forget-yes]"));
+    await settle();
+    expect(f.calls.some((c) => c.op === "forget")).toBe(true);
+    await click($("[data-testid=gv-rotate]"));
+    await settle();
+    expect(f.calls.some((c) => c.op === "rotate")).toBe(true);
+    for (const t of toasts) expect(t.split(/\s+/).length, t).toBeLessThanOrEqual(4);
+  });
+
+  it("is honest when the environment turns everything off", async () => {
+    const f = newImprove();
+    f.sharing.env_disabled = "DO_NOT_TRACK=1";
+    f.preview = { pending: null, why_not: "DO_NOT_TRACK=1", next_due_at: null };
+    await open(f);
+    expect($("[data-testid=gv-sharing-locked]")!.textContent).toContain("DO_NOT_TRACK=1");
+    expect(($("[data-testid=gv-switch-improve]") as HTMLButtonElement).disabled).toBe(true);
+    expect(($("[data-testid=gv-switch-heartbeat]") as HTMLButtonElement).disabled).toBe(true);
+    expect($("[data-testid=gv-switch-heartbeat]")!.getAttribute("aria-checked")).toBe("false");
+    expect($("[data-testid=gv-payload-none]")).toBeTruthy();
+  });
+
+  it("saves only the weights that changed", async () => {
+    const f = await open();
+    const input = $("[data-testid=gv-weight-tests]") as HTMLInputElement;
+    const { act } = await import("react");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(input, "0.7");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click($("[data-testid=gv-weights-save]"));
+    await settle();
+    expect(f.calls.find((c) => c.op === "weights")?.body?.weights).toEqual({ tests: 0.7 });
+  });
+});

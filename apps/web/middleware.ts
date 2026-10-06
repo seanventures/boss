@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
-  consoleAuthConfig, localHttp, networkTrustedConsole, sameOriginMutation, secureConsoleTransport,
+  collectorMachinePost, consoleAuthConfig, localHttp, networkTrustedConsole, sameOriginMutation,
+  secureConsoleTransport,
   sessionCookieName, validSession,
 } from "./lib/console-session";
 import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
@@ -46,6 +47,9 @@ export async function middleware(request: NextRequest) {
   const previewPage = request.method === "GET" && /^\/v1\/previews\/[^/]+\/web(\/|$)/.test(path)
     && (request.headers.get("accept") ?? "").includes("text/html");
   const api = (path.startsWith("/api/") || path.startsWith("/v1/")) && !previewPage;
+  // Another install's heartbeat to this collector: a machine POST, no session, no Origin
+  // (lib/console-session.ts collectorMachinePost). Straight to the /v1 proxy, which adds no key.
+  if (collectorMachinePost(request)) return NextResponse.next();
   if (networkTrustedConsole()) return passThrough(request);
   if (!secureConsoleTransport(request)) {
     return NextResponse.json({ error: "The console requires HTTPS for remote access." },

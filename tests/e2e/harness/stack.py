@@ -216,6 +216,12 @@ def service_env(state: StackState, *, extra: Optional[dict[str, str]] = None) ->
         "BOSS_DEFAULT_WORKSPACE_ID": "ws_boss",
         "BOSS_DEFAULT_PROJECT_ID": "boss-dogfood",
         "BOSS_CONTROL_PLANE_URL": f"http://127.0.0.1:{state.api_port}",
+        # A disposable stack is not an install to count: heartbeat and Improve BOSS are off
+        # unless a walk asks for them (BOSS_E2E_TELEMETRY=on), and then they report to this
+        # stack's own collector rather than leaving the machine.
+        "BOSS_TELEMETRY": os.environ.get("BOSS_E2E_TELEMETRY", "off"),
+        "BOSS_TELEMETRY_URL": f"http://127.0.0.1:{state.api_port}/v1/telemetry/ingest",
+        "BOSS_INSTALL_METHOD": "e2e",
         "BOSS_ARTIFACTS_DIR": str(Path(state.run_dir) / "boss-artifacts"),
         "BOSS_ENABLE_CODE_TASK": "true",
         # An operator who wants `deploy` to work turns this on; the stack plays that operator.

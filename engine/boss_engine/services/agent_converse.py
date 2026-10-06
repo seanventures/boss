@@ -1552,6 +1552,19 @@ def start_from_proposal(connection, *, project_id: str, conversation_id: str, ac
     for key, value in (inputs or {}).items():
         if isinstance(key, str) and not key.startswith("adopt_") and value is not None:
             run_input[key] = value
+    # HOW MUCH THE PERSON CHANGED THE BRIEF before starting it (run scorecards: a number,
+    # never the text). Best effort, in a savepoint: it never stops the start.
+    if inputs:
+        try:
+            from .person_feedback import record_edit
+
+            with connection.begin_nested():
+                record_edit(connection, project_id=project_id, actor=actor, doc_kind="brief",
+                            subject_id=proposal_id,
+                            before=json.dumps(proposal.get("inputs") or {}, sort_keys=True, default=str),
+                            after=json.dumps(run_input, sort_keys=True, default=str))
+        except Exception:  # noqa: BLE001
+            pass
     # THE WORKFLOW'S OWN START FORM decides each value's type, as the composer's does: the card
     # goes through the same door (`starter`) with the same input a Start press there sends.
     running = None
