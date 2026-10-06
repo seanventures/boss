@@ -30,7 +30,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.routing import Match
 from sqlalchemy import text
 from uuid import uuid4
-from sqlalchemy.exc import InterfaceError, OperationalError, ProgrammingError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, ProgrammingError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from boss_engine.ports import configure_engine_ports
@@ -1565,6 +1565,20 @@ async def programming_error_fail_closed(_request: Request, exc: ProgrammingError
     # the exact SQL and column, which is what an operator needs and what a caller must never see
     # (IDENTITY.md §8: an error body is not a data channel). The class and the request id reach
     # the caller; the message goes to the log under the same request id.
+    return _internal_error_response(_request, exc)
+
+
+@app.exception_handler(DBAPIError)
+async def identity_constraint_conflict(_request: Request, exc: DBAPIError):
+    """The identity schema's last line of defence speaks as a conflict, not a 500: the deferred
+    last-Owner trigger refuses a COMMIT that would leave the org with no active Owner, on any path
+    (people, groups, bindings, SCIM, a cascade) whose own pre-check missed the case."""
+    from boss_engine.identity.bindings import is_last_owner_violation
+
+    if is_last_owner_violation(exc):
+        return JSONResponse(status_code=409, content={"error": "last_owner",
+                                                      "message": "Add another Owner first."})
+    LOGGER.exception("database error (request %s)", getattr(_request.state, "request_id", None))
     return _internal_error_response(_request, exc)
 
 

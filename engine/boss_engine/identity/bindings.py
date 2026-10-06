@@ -54,6 +54,23 @@ def active_owners(db: Any, org_id: str, *, without_binding: Optional[str] = None
     return out
 
 
+LAST_OWNER_TRIGGER = "identity_last_owner"
+
+
+def is_last_owner_violation(exc: BaseException) -> bool:
+    """Did the database's deferred last-Owner trigger (schema.sql identity_assert_an_owner_remains)
+    refuse this commit? Every path that can remove Owner reach — SCIM, people, groups, bindings,
+    a cascade — lands here at COMMIT when its own pre-check missed a case; the API answers 409
+    `last_owner` instead of a 500."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if LAST_OWNER_TRIGGER in str(exc):
+            return True
+        exc = getattr(exc, "orig", None) or exc.__cause__ or exc.__context__
+    return False
+
+
 def assert_owner_remains(db: Any, org_id: str, **without: Any) -> None:
     """409 when the change would leave the org with no active Owner. Callers hold lock_owners.
     S1 calls this (with without_principal=) before disabling or deleting a person."""

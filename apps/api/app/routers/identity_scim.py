@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Optional
 
+from sqlalchemy.exc import DBAPIError
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
@@ -68,6 +69,15 @@ def _handle(request: Request, work: Callable[[Any, AuthContext], Any], status: i
         return _error(exc.status, exc.code)
     except scim.ScimError as exc:
         return _scim(exc.status, exc.body())
+    except DBAPIError as exc:
+        from boss_engine.identity.bindings import is_last_owner_violation
+
+        if is_last_owner_violation(exc):
+            # The change would leave the org with no active Owner (the deferred trigger refused
+            # the commit): a SCIM conflict, never a 500.
+            return _error(409, "this change would leave the organisation without an Owner",
+                          "mutability")
+        raise
 
 
 async def _with_body(request: Request, work: Callable[[Any, AuthContext, dict], Any],
