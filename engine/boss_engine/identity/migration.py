@@ -411,6 +411,8 @@ def seed(db: Any, *, settings: Any = None, org_id: Optional[str] = None,
     lock = int.from_bytes(hashlib.sha256(f"identity_seed:{org_id}".encode()).digest()[:8], "big",
                           signed=True)
     db.execute(_sql("SELECT pg_advisory_xact_lock(:k)"), {"k": lock})
+    from . import change_feed
+    change_feed.install(db)        # the epoch moves on any identity change from here on
     db.execute(_sql("INSERT INTO identity_settings (org_id) VALUES (:o) ON CONFLICT DO NOTHING"),
                {"o": org_id})
     is_claimed = claimed_at(db, org_id) is not None

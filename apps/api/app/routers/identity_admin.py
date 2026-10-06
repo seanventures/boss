@@ -1,5 +1,6 @@
-"""/v1/identity/{audit,posture,policy,shadow-report,legacy}: the security audit log, posture, the
-identity policy, the shadow -> enforce rollout report and the legacy bridges. Stream S5.
+"""/v1/identity/{audit,epoch,posture,policy,shadow-report,legacy}: the security audit log, the identity
+epoch (and its push stream), posture, the identity policy, the shadow -> enforce rollout report and
+the legacy bridges. Stream S5.
 
 IDENTITY.md §8 (audit), §9.1 (posture), §10 (routes), §12 (migration); IDENTITY_PERMISSIONS.md §5
 for each declaration. The identity routers are ALWAYS enforced (router key `identity*`).
@@ -10,6 +11,7 @@ every change below record their own event, built from the verified AuthContext a
 Include it in main.py (lead's zone, next to identity_me):
     from .routers.identity_admin import build_identity_admin_router
     app.include_router(build_identity_admin_router())
+    app.add_middleware(RequestIdMiddleware)    # boss_engine.identity.request_ids
 """
 from __future__ import annotations
 
@@ -18,11 +20,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from boss_engine.db import begin
-from boss_engine.identity import P, Scope, permit
-from boss_engine.identity import audit, migration, posture, shadow_report
+from boss_engine.identity import P, Scope, authenticated, permit
+from boss_engine.identity import audit, audit_view, change_feed, migration, posture, shadow_report
 from boss_engine.identity.legacy import LegacyKind
 from boss_engine.identity.policy import PolicyError, get_policy, put_policy, to_mapping
 from boss_engine.identity.principal import AuthContext
@@ -65,10 +67,13 @@ def build_identity_admin_router(*, start_background: Optional[bool] = None) -> A
 
     @router.get("/v1/identity/audit")
     @permit(P.AUDIT_READ, scope=Scope.org())
-    def list_audit(request: Request, actor: Optional[str] = None, kind: Optional[str] = None,
-                   event: Optional[str] = None, outcome: Optional[str] = None,
-                   grant: Optional[str] = None, since: Optional[str] = None,
-                   until: Optional[str] = None, cursor: Optional[int] = None, limit: int = 50):
+    def list_audit(request: Request, q: Optional[str] = None, outcome: Optional[str] = None,
+                   actor: Optional[str] = None, grant: Optional[str] = None,
+                   kind: Optional[str] = None, event: Optional[str] = None,
+                   since: Optional[str] = None, until: Optional[str] = None,
+                   cursor: Optional[str] = None, limit: int = 50):
+        """S4's AuditPage: {events, cursor, chain}. Filters: q, outcome (comma list), actor (the
+        actor or the person an agent acted for), grant, kind, event (`auth.*`), since, until."""
         ctx = _context(request)
         if ctx is None:
             return _refuse(401, "unauthenticated")
@@ -77,18 +82,18 @@ def build_identity_admin_router(*, start_background: Optional[bool] = None) -> A
         except ValueError:
             return _refuse(422, "invalid_time")
         with begin() as db:
-            return audit.list_events(ctx.principal.org_id, db=db, actor=actor, kind=kind,
-                                     event=event, outcome=outcome, grant=grant, since=frm,
-                                     until=to, cursor=cursor, limit=limit)
+            return audit_view.page(ctx.principal.org_id, db=db, q=q, outcome=outcome, actor=actor,
+                                   grant=grant, kind=kind, event=event, since=frm, until=to,
+                                   cursor=cursor, limit=limit)
 
     @router.get("/v1/identity/audit/{event_id}")
     @permit(P.AUDIT_READ, scope=Scope.org())
-    def get_audit_event(request: Request, event_id: int):
+    def get_audit_event(request: Request, event_id: str):
         ctx = _context(request)
         if ctx is None:
             return _refuse(401, "unauthenticated")
         with begin() as db:
-            row = audit.get_event(ctx.principal.org_id, event_id, db=db)
+            row = audit_view.one(ctx.principal.org_id, event_id, db=db)
         return row if row else _refuse(404, "not_found")
 
     @router.post("/v1/identity/audit/export")
@@ -102,7 +107,10 @@ def build_identity_admin_router(*, start_background: Optional[bool] = None) -> A
         except ValueError:
             return _refuse(422, "invalid_time")
         with begin() as db:
-            return audit.export(ctx.principal.org_id, db=db, ctx=ctx, since=frm, until=to)
+            bundle = audit.export(ctx.principal.org_id, db=db, ctx=ctx, since=frm, until=to)
+        # S4's shape ({url, events: count, anchor}) plus the bundle itself to save
+        return {"url": None, "events": len(bundle["events"]),
+                "anchor": (bundle["anchor"] or {}).get("hash"), "bundle": bundle}
 
     @router.post("/v1/identity/audit/verify")
     @permit(P.AUDIT_EXPORT, scope=Scope.org())
@@ -117,7 +125,8 @@ def build_identity_admin_router(*, start_background: Optional[bool] = None) -> A
                 audit.Outcome.SUCCESS if result.ok else audit.Outcome.FAILURE,
                 details={"checked": result.checked, "last_seq": result.last_seq,
                          "first_break_seq": result.first_break_seq}), db=db)
-        return {"ok": result.ok, "checked": result.checked, "last_seq": result.last_seq,
+        return {"ok": result.ok, "seq": result.last_seq, "first_break": result.first_break_seq,
+                "checked": result.checked, "last_seq": result.last_seq,
                 "first_break_seq": result.first_break_seq,
                 "verified_at": result.verified_at.isoformat() if result.verified_at else None}
 
@@ -135,6 +144,36 @@ def build_identity_admin_router(*, start_background: Optional[bool] = None) -> A
                                  before=datetime.now(timezone.utc) - timedelta(days=days),
                                  db=db, actor_principal_id=ctx.principal.id, ctx=ctx)
         return result.__dict__
+
+    # ---- the identity epoch: refetch when it moves --------------------------------------------
+
+    @router.get("/v1/identity/epoch")
+    @authenticated(self_only=True)
+    def get_epoch(request: Request):
+        """The same number GET /v1/identity/me carries as `epoch`, without the rest of /me."""
+        ctx = _context(request)
+        if ctx is None:
+            return _refuse(401, "unauthenticated")
+        with begin() as db:
+            return {"epoch": change_feed.current_epoch(ctx.principal.org_id, db=db)}
+
+    @router.get("/v1/identity/epoch/stream")
+    @authenticated(self_only=True)
+    async def stream_epoch(request: Request):
+        """Server-sent events: `event: epoch` with {"epoch": n} at once and whenever any identity
+        change commits; a comment line every 25 s keeps proxies open. Carries no identity data."""
+        from starlette.concurrency import run_in_threadpool
+        ctx = await run_in_threadpool(_context, request)
+        if ctx is None:
+            return _refuse(401, "unauthenticated")
+        change_feed.FEED.start()
+
+        async def events():
+            async for epoch in change_feed.FEED.changes(is_disconnected=request.is_disconnected):
+                yield change_feed.sse(epoch)
+
+        return StreamingResponse(events(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
     # ---- posture and policy ---------------------------------------------------------------------
 

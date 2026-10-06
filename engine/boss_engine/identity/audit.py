@@ -274,6 +274,9 @@ def prepare(event: SecurityEvent) -> SecurityEvent:
     fields: dict[str, Any] = {name: getattr(event, name) for name in event.__dataclass_fields__}
     fields.update(outcome=outcome, stream=stream, details=details, ip=_norm_ip(event.ip),
                   chain=list(event.chain) if event.chain else None)
+    if not fields.get("request_id"):
+        from .request_ids import current_request_id
+        fields["request_id"] = current_request_id.get()
     for column in _TEXT_COLUMNS_TO_REDACT:
         value = fields.get(column)
         if isinstance(value, str):
@@ -486,55 +489,6 @@ def to_public(row: Mapping[str, Any]) -> dict[str, Any]:
         value = row.get(key)
         out[key] = bytes(value).hex() if value is not None else None
     return out
-
-
-def list_events(org_id: str, *, db: Any, actor: Optional[str] = None,
-                kind: Optional[str] = None, event: Optional[str] = None,
-                outcome: Optional[str] = None, grant: Optional[str] = None,
-                since: Optional[datetime] = None, until: Optional[datetime] = None,
-                cursor: Optional[int] = None, limit: int = 50) -> dict[str, Any]:
-    """Newest first. `event` may end with `*` (`auth.*`). `cursor` is the last seq seen."""
-    where = ["org_id = :o"]
-    params: dict[str, Any] = {"o": org_id, "n": max(1, min(int(limit), 500)) + 1}
-    if actor:
-        where.append("actor_principal_id = :actor")
-        params["actor"] = actor
-    if kind:
-        where.append("actor_kind = :kind")
-        params["kind"] = kind
-    if event:
-        if event.endswith("*"):
-            where.append("event_type LIKE :ev")
-            params["ev"] = event[:-1].replace("%", "").replace("_", r"\_") + "%"
-        else:
-            where.append("event_type = :ev")
-            params["ev"] = event
-    if outcome:
-        where.append("outcome = :outcome")
-        params["outcome"] = outcome
-    if grant:
-        where.append("grant_id = :grant")
-        params["grant"] = grant
-    if since:
-        where.append("ts >= :since")
-        params["since"] = since
-    if until:
-        where.append("ts < :until")
-        params["until"] = until
-    if cursor:
-        where.append("seq < :cursor")
-        params["cursor"] = int(cursor)
-    rows = db.execute(_sql(_SELECT + " WHERE " + " AND ".join(where)
-                           + " ORDER BY seq DESC LIMIT :n"), params).mappings().all()
-    page = [to_public(row_from_db(r)) for r in rows[: params["n"] - 1]]
-    more = len(rows) >= params["n"]
-    return {"events": page, "next_cursor": page[-1]["seq"] if more and page else None}
-
-
-def get_event(org_id: str, event_id: int, *, db: Any) -> Optional[dict[str, Any]]:
-    row = db.execute(_sql(_SELECT + " WHERE org_id = :o AND id = :i"),
-                     {"o": org_id, "i": int(event_id)}).mappings().first()
-    return to_public(row_from_db(row)) if row else None
 
 
 def export(org_id: str, *, db: Any, ctx: Optional[AuthContext] = None,
