@@ -32,6 +32,7 @@ from enum import StrEnum
 from typing import Any, Callable, Optional, TypeVar, Union
 
 from .catalogue import CatalogueError, meta, require_known
+from .object_rules import Confine, Production
 from .scope import Scope, ScopeSource, ScopeSpec
 
 ACCESS_ATTR = "__boss_access__"
@@ -65,6 +66,16 @@ class Permit:
     permission: str
     scope: ScopeSpec
     readonly_post: bool = False
+    #: A GET that writes (seeds defaults, reaps, freezes, probes). A cookie-authenticated GET to it
+    #: is treated like a write for CSRF (the session cookie is SameSite=Lax, so a cross-site
+    #: top-level navigation carries it): it needs X-Boss-CSRF or Sec-Fetch-Site: same-origin.
+    #: Each such route also answers POST, the method its callers move to (amendment, int-b).
+    writes_on_get: bool = False
+    #: Ids in the body/query/path that must belong to the scope's project (object_rules.Confine).
+    confine: tuple[Confine, ...] = ()
+    #: Where the operation's deployment target comes from; a production target also needs
+    #: deployment:production at the target's project (object_rules.Production).
+    production: Optional[Production] = None
 
     def describe(self) -> str:
         return f"permit {self.permission} @ {self.scope.describe()}"
@@ -114,13 +125,16 @@ def _attach(fn: F, access: Access) -> F:
 
 
 def permit(permission: str, scope: Optional[ScopeSpec] = None, *,
-           readonly_post: bool = False) -> Callable[[F], F]:
+           readonly_post: bool = False, writes_on_get: bool = False,
+           confine: tuple[Confine, ...] | list[Confine] = (),
+           production: Optional[Production] = None) -> Callable[[F], F]:
     """Declare the catalogue permission an operation needs, and where to check it.
 
     `scope` may be omitted only for an org-only permission (it defaults to `Scope.org()`); a
     project-scoped permission must say how to find its project. An org-only permission cannot be
     checked at a project (IDENTITY.md §6.7). `readonly_post` marks a POST that changes nothing
-    (a search); it is the declared exception to the read-only-GET test (§15.4 R5)."""
+    (a search); it is the declared exception to the read-only-GET test (§15.4 R5).
+    `writes_on_get`, `confine` and `production` are the object rules (object_rules.py)."""
     key = require_known(str(permission))
     m = meta(key)
     if scope is None:
@@ -130,7 +144,13 @@ def permit(permission: str, scope: Optional[ScopeSpec] = None, *,
         scope = Scope.org()
     if m.org_only and scope.source != ScopeSource.ORG:
         raise CatalogueError(f"{key} is org-only and cannot be checked at {scope.describe()}")
-    declaration = Permit(permission=key, scope=scope, readonly_post=readonly_post)
+    if production is not None and not isinstance(production, Production):
+        raise CatalogueError("production= takes an object_rules.Production(...)")
+    if any(not isinstance(c, Confine) for c in confine):
+        raise CatalogueError("confine= takes object_rules.Confine entries")
+    declaration = Permit(permission=key, scope=scope, readonly_post=readonly_post,
+                         writes_on_get=writes_on_get, confine=tuple(confine),
+                         production=production)
 
     def deco(fn: F) -> F:
         return _attach(fn, declaration)

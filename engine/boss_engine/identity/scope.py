@@ -138,6 +138,15 @@ def registered_object_kinds() -> frozenset[str]:
     return frozenset(_OBJECT_LOADERS)
 
 
+def load_object(kind: str, db: Any, object_id: str) -> Optional[tuple[str, str]]:
+    """(org_id, project_id) of one object by its registered kind, or None when it does not exist.
+    Raises NotImplementedError for a kind with no loader (fail closed: the guard answers 503)."""
+    loader = _OBJECT_LOADERS.get(kind)
+    if loader is None:
+        raise NotImplementedError(f"no object loader registered for {kind!r}")
+    return loader(db, str(object_id))
+
+
 def _read(values: RequestValues, where: str, name: str) -> Optional[str]:
     if where == "path":
         raw = values.path_params.get(name)
