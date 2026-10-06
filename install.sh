@@ -1591,10 +1591,15 @@ if [[ "$WITH_WEB" -eq 1 ]]; then
   # THE ADDRESS IS WHERE SETUP FINISHES: Repo and models — paste a GitHub token, connect a
   # model, open a first pull request. The public origin when there is one.
   if [[ -n "$CONSOLE_ORIGIN" ]]; then
-    echo -e "  ${BOLD}Finish setup${NC}     ${CONSOLE_ORIGIN%/}/?area=setup"
+    _console="${CONSOLE_ORIGIN%/}"
   else
-    echo -e "  ${BOLD}Finish setup${NC}     http://127.0.0.1:${WEB_PORT}/?area=setup"
+    _console="http://127.0.0.1:${WEB_PORT}"
   fi
+  echo -e "  ${BOLD}Finish setup${NC}     ${_console}/?area=setup"
+  # NAMED ACCOUNTS (docs/community/IDENTITY_UPGRADE.md): the first visit claims the install. The
+  # console password below is the proof that you are the operator; after the claim it keeps
+  # working for 30 days as an Operator, then stops. Nothing here prints a secret.
+  echo -e "  ${BOLD}Claim${NC}            ${_console}/claim   (once: create your Owner account)"
   if [[ -n "$B" ]]; then
     echo -e "  ${BOLD}Password${NC}         $B password   (shown in a terminal only)"
   else

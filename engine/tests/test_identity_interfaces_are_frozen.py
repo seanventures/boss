@@ -253,9 +253,6 @@ STUBS = [
                                        actor=None, reason="", db=None), "S3"),
     (lambda: vault.get_credential(vault.ConnectionRef("github", "usr_alice"),
                                   vault.CredentialPurpose.GITHUB_RUN, ctx=None, db=None), "S3"),
-    (lambda: audit.record(None, db=None), "S5"),
-    (lambda: legacy.bridge(None), "S5"),
-    (lambda: policy.get_policy("org_boss", db=None), "S5"),
     (lambda: http.fetch("GET", "https://example.com", purpose="test"), "S1"),
     (lambda: ratelimit.hit("signin.ip", "1.2.3.4", limit=1, window_seconds=60, db=None), "S1"),
 ]

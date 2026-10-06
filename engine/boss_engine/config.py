@@ -1431,6 +1431,25 @@ class Settings(BaseSettings):
         default=120, alias="BOSS_RATE_LIMIT_RPM"
     )
 
+    # --- BOSS IDENTITY · stream S5 (audit, migration, legacy bridges; IDENTITY.md §8, §12) ---
+    # The shared console key the console sends today. The legacy bridge maps it to
+    # sys_legacy_console until 30 days after the first Owner is claimed (D25, M5). Never logged.
+    legacy_console_api_key: str = Field(default="", alias="BOSS_API_KEY")
+    # The shared console password: the claim credential before the first Owner, then
+    # usr_legacy_shared with the Operator role for 30 days (D25). Never logged.
+    legacy_console_password: str = Field(default="", alias="BOSS_CONSOLE_PASSWORD")
+    # `network` on a network-trusted install (goldeneye): the network bridge (D27). The console
+    # can also say so per request from a trusted proxy (X-Boss-Console-Auth: network).
+    legacy_console_auth: str = Field(default="", alias="BOSS_CONSOLE_AUTH")
+    # HMAC key for identifiers of failed sign-ins (A79). Unset: a per-process random key, so an
+    # identifier is never stored in plaintext, at the cost of correlation across restarts.
+    identity_hmac_key: str = Field(default="", alias="BOSS_IDENTITY_HMAC_KEY")
+    # Security-event retention (prune keeps a checkpoint, §8.1) and the shadow ledger flush.
+    identity_audit_retention_days: int = Field(
+        default=400, alias="BOSS_IDENTITY_AUDIT_RETENTION_DAYS")
+    identity_shadow_flush_seconds: int = Field(
+        default=60, alias="BOSS_IDENTITY_SHADOW_FLUSH_SECONDS")
+
     @property
     def repo_root(self) -> Path:
         # ``config.py`` moved from ``apps/api/app`` to

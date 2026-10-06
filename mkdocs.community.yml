@@ -65,6 +65,7 @@ nav:
       - Deploy: hostname.md
       - Deploy an app: DEPLOY_A_STACK.md
       - Sign in: CONSOLE_AUTH.md
+      - Upgrade to named accounts: IDENTITY_UPGRADE.md
       - Connect models: MODEL_CONNECTIONS.md
       - Use cases: use-cases.md
       - Walkthroughs: walkthroughs.md
@@ -79,6 +80,7 @@ nav:
   - Reference:
       - Features: FEATURES.md
       - Control surfaces: CONTROL_SURFACES.md
+      - Identity administration: IDENTITY_ADMIN.md
       - Terminal capability matrix: TERMINAL_CAPABILITY_MATRIX.md
   - Community:
       - Feedback: FEEDBACK_LOOP.md
