@@ -59,14 +59,15 @@ const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is st
 export function consentFromBody(raw: unknown): ConsentRequest | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const b = raw as Record<string, unknown>;
-  // A body wrapped by a proxy ({detail: {...}} or {consent: {...}}) is unwrapped once.
-  if (b.error !== "consent_required") {
-    for (const k of ["consent", "detail"]) {
-      const inner = b[k];
-      if (inner && typeof inner === "object" && (inner as Record<string, unknown>).error === "consent_required") return consentFromBody(inner);
-    }
-    return null;
+  // A body wrapped by a proxy ({detail: {...}} or {consent: {...}}) is unwrapped once — also
+  // when the wrapper repeats `error: "consent_required"` itself (app/api/delivery-workflows does:
+  // reading the wrapper's own empty fields asked for nothing and the grant was refused).
+  for (const k of ["consent", "detail"]) {
+    const inner = b[k];
+    if (inner && typeof inner === "object" && !Array.isArray(inner)
+        && (inner as Record<string, unknown>).error === "consent_required") return consentFromBody(inner);
   }
+  if (b.error !== "consent_required") return null;
   const agents = (Array.isArray(b.agents) ? b.agents : []).flatMap((a) => {
     if (!a || typeof a !== "object") return [];
     const x = a as Record<string, unknown>;
