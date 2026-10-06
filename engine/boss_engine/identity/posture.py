@@ -48,7 +48,9 @@ def legacy_paths(org_id: str, *, db: Any, now: Optional[datetime] = None) -> lis
             days_left = max(0, (r["retire_after"] - now).days)
         if r["retired_at"] is not None:
             status = "ok"
-        elif r["legacy_kind"] in ("network_mode", "console_api_key") and r["retire_after"] is None:
+        elif r["legacy_kind"] == "network_mode":
+            status = "critical"     # §4.12: anyone who can reach it acts as someone; always red
+        elif r["legacy_kind"] == "console_api_key" and r["retire_after"] is None:
             status = "critical"
         elif days_left is not None and days_left <= COUNTDOWN_BANNER_DAYS:
             status = "critical"
@@ -103,11 +105,12 @@ def posture(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dict[str
         "SELECT count(DISTINCT w.principal_id) FROM identity_webauthn_credentials w JOIN "
         "identity_role_bindings b ON b.subject_id = w.principal_id AND b.role_id = 'arl_owner'"),
         {})
-    checks.append(_check(
+    checks.append({**_check(
         "mfa_coverage", "critical" if missing else "ok",
         f"{len(people) - missing} of {len(people)} Owners, Admins and Auditors have MFA"
         + ("" if owners_with_passkey or not people else "; no passkey on any Owner"),
-        missing, "Ask them to enrol a passkey or TOTP (My account › Security)."))
+        missing, "Ask them to enrol a passkey or TOTP (My account › Security)."),
+        "total": len(people)})
 
     # 2. stale API keys
     stale = _scalar(db, (

@@ -1,6 +1,7 @@
-"""/v1/identity/{audit,epoch,posture,policy,shadow-report,legacy}: the security audit log, the identity
-epoch (and its push stream), posture, the identity policy, the shadow -> enforce rollout report and
-the legacy bridges. Stream S5.
+"""/v1/identity/{audit,epoch,posture,policy,shadow-report,legacy}: the security audit log, the
+identity epoch (and its push stream), posture, the identity policy, the shadow -> enforce rollout
+report and the legacy bridges. Stream S5. Posture and policy answer S4's shapes
+(boss_engine/identity/console_shapes.py, which lists where the API keeps a stricter rule).
 
 IDENTITY.md §8 (audit), §9.1 (posture), §10 (routes), §12 (migration); IDENTITY_PERMISSIONS.md §5
 for each declaration. The identity routers are ALWAYS enforced (router key `identity*`).
@@ -24,9 +25,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from boss_engine.db import begin
 from boss_engine.identity import P, Scope, authenticated, permit
-from boss_engine.identity import audit, audit_view, change_feed, migration, posture, shadow_report
+from boss_engine.identity import (audit, audit_view, change_feed, console_shapes, migration,
+                                  posture, shadow_report)
 from boss_engine.identity.legacy import LegacyKind
-from boss_engine.identity.policy import PolicyError, get_policy, put_policy, to_mapping
+from boss_engine.identity.policy import PolicyError
 from boss_engine.identity.principal import AuthContext
 
 #: the bridges an Owner can end early or extend from the console
@@ -180,39 +182,39 @@ def build_identity_admin_router(*, start_background: Optional[bool] = None) -> A
     @router.get("/v1/identity/posture")
     @permit(P.USER_READ, scope=Scope.org())
     def get_posture(request: Request):
+        """S4's Posture shape (console_shapes.posture_view)."""
         ctx = _context(request)
         if ctx is None:
             return _refuse(401, "unauthenticated")
         with begin() as db:
-            return posture.posture(ctx.principal.org_id, db=db)
+            return console_shapes.posture_view(ctx.principal.org_id, db=db)
 
     @router.get("/v1/identity/policy")
     @permit(P.SECURITY_POLICY_READ, scope=Scope.org())
     def read_policy(request: Request):
+        """S4's SecurityPolicy, plus the policy keys it lacks (console_shapes.policy_view)."""
         ctx = _context(request)
         if ctx is None:
             return _refuse(401, "unauthenticated")
         with begin() as db:
-            current = to_mapping(get_policy(ctx.principal.org_id, db=db))
-        current.pop("extra", None)     # internal bookkeeping, not an operator setting
-        return current
+            return console_shapes.policy_view(ctx.principal.org_id, db=db)
 
     @router.put("/v1/identity/policy")
     @permit(P.SECURITY_POLICY_MANAGE, scope=Scope.org())
-    def write_policy(request: Request, payload: dict = Body(...)):
+    def write_policy(request: Request, payload: Any = Body(...)):
+        """Applies only what differs from the current policy; `network_mode.active=false` is
+        Require sign-in. Unknown keys 422; network trust back on, or read-only fields, refused."""
         ctx = _context(request)
         if ctx is None:
             return _refuse(401, "unauthenticated")
-        if "extra" in payload:
-            return _refuse(422, "invalid_policy", "extra is not an operator setting")
         try:
             with begin() as db:
-                updated = put_policy(ctx.principal.org_id, payload, db=db, actor=ctx)
+                return console_shapes.apply_policy_put(ctx.principal.org_id, payload, db=db,
+                                                       ctx=ctx)
+        except console_shapes.PolicyRefused as exc:
+            return _refuse(409, "policy_refused", str(exc))
         except PolicyError as exc:
             return _refuse(422, "invalid_policy", str(exc))
-        out = to_mapping(updated)
-        out.pop("extra", None)
-        return out
 
     # ---- the shadow -> enforce rollout -----------------------------------------------------------
 

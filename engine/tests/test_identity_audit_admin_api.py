@@ -71,7 +71,8 @@ def test_audit_list_filter_get_export_and_verify(db, monkeypatch):
     first = page["events"][0]
     assert len(first["hash"]) == 64 and first["actor"]["id"] == claim.principal_id
     assert first["actor"]["name"] == "Param" and first["outcome"] == "ok"
-    assert first["id"] == f"sev_{first['seq']}" and first["raw"]["event_type"] == "bootstrap.claimed"
+    assert first["id"] == f"sev_{first['seq']}"
+    assert first["raw"]["event_type"] == "bootstrap.claimed"
     assert client.get(f"/v1/identity/audit/{first['id']}").json()["seq"] == first["seq"]
     assert client.get("/v1/identity/audit/sev_999999").status_code == 404
     assert client.get("/v1/identity/audit/nonsense").status_code == 404
@@ -219,25 +220,98 @@ def test_the_epoch_push_yields_at_once_on_change_and_heartbeats_otherwise():
     assert sse(42) == 'event: epoch\ndata: {"epoch": 42}\n\n' and sse(None).startswith(":")
 
 
-def test_policy_read_validate_write_and_posture(db, monkeypatch):
+#: S4's shapes at id/s4-console@dd992eda (apps/web/lib/identity/types.ts)
+S4_POLICY_KEYS = {"mfa_required_roles", "session_idle_minutes", "session_absolute_hours",
+                  "password_min_length", "breach_check", "key_max_days",
+                  "key_no_expiry_for_service_accounts", "delegation_max_days",
+                  "delegation_max_depth", "delegation_until_revoked",
+                  "github_require_user_repo_access", "network_mode", "signup", "smtp",
+                  "public_origin"}
+S4_POSTURE_KEYS = {"score", "headline", "summary", "checks", "counts", "acting_now", "audit",
+                   "legacy"}
+S4_CHECK_KEYS = {"id", "label", "status", "value", "unit", "detail", "fix"}
+S4_COUNTS = {"people", "active", "invited", "disabled", "agents", "suspended_agents", "groups",
+             "roles_builtin", "roles_custom", "service_accounts", "active_grants", "runs_acting",
+             "tokens_out"}
+
+
+def test_policy_has_s4s_shape_and_a_round_trip_changes_nothing(db, monkeypatch):
     claim = owner(db)
     client = TestClient(app_for(db, monkeypatch, claim.ctx))
     current = client.get("/v1/identity/policy").json()
-    assert current["legacy_cutoff_days"] == 30 and "extra" not in current
+    assert S4_POLICY_KEYS <= set(current) and "extra" not in current
+    assert current["network_mode"]["active"] is True and current["network_mode"]["ends_at"]
+    assert current["signup"] == {"enabled": False, "domains": []}
+    assert current["breach_check"] is False and current["delegation_max_depth"] == 3
+    assert current["smtp"] is False and current["github_require_user_repo_access_auto"] is True
+    assert current["github_require_user_repo_access"] is False      # one person: automatic off
+    before = len(events(db, "policy.changed"))
+    same = client.put("/v1/identity/policy", json=current)          # the console saves it all back
+    assert same.status_code == 200 and same.json() == current
+    assert len(events(db, "policy.changed")) == before               # nothing changed
+    assert same.json()["github_require_user_repo_access_auto"] is True   # D28 stays automatic
+
+    changed = client.put("/v1/identity/policy", json={
+        **current, "breach_check": True, "delegation_max_depth": 2, "legacy_cutoff_days": 45,
+        "signup": {"enabled": True, "domains": ["acme.dev"]}}).json()
+    assert changed["breach_check"] and changed["delegation_max_depth"] == 2
+    assert changed["signup"] == {"enabled": True, "domains": ["acme.dev"]}
+    diff = events(db, "policy.changed")[-1]["details"]["diff"]
+    assert set(diff) == {"hibp_check", "org_max_depth", "legacy_cutoff_days", "signup_enabled",
+                         "signup_domains"}
+    assert changed["network_mode"]["ends_at"] != current["network_mode"]["ends_at"]  # moved to 45d
+    pinned = client.put("/v1/identity/policy",
+                        json={"github_require_user_repo_access": True}).json()
+    assert pinned["github_require_user_repo_access"] and not \
+        pinned["github_require_user_repo_access_auto"]
+    auto = client.put("/v1/identity/policy", json={"github_require_user_repo_access": None}).json()
+    assert auto["github_require_user_repo_access_auto"] is True
+
+
+def test_policy_refusals(db, monkeypatch):
+    claim = owner(db)
+    client = TestClient(app_for(db, monkeypatch, claim.ctx))
     for bad in ({"nope": 1}, {"password_min_length": 3}, {"mfa_required_roles": ["god"]},
-                {"public_origin": "http://plain"}, {"extra": {"x": 1}}):
+                {"public_origin": "http://plain"}, {"extra": {"x": 1}}, {"smtp": True},
+                {"signup": {"enabled": True, "admin": True}}, ["not", "an", "object"],
+                {"network_mode": "off"}):
         response = client.put("/v1/identity/policy", json=bad)
         assert response.status_code == 422 and response.json()["error"] == "invalid_policy", bad
-    ok = client.put("/v1/identity/policy", json={"legacy_cutoff_days": 45})
-    assert ok.status_code == 200 and ok.json()["legacy_cutoff_days"] == 45
-    diff = events(db, "policy.changed")[-1]["details"]["diff"]
-    assert diff == {"legacy_cutoff_days": {"from": 30, "to": 45}}
-    paths = {p["kind"]: p for p in client.get("/v1/identity/legacy").json()["paths"]}
-    assert paths["network_mode"]["days_left"] in (44, 45)     # moved with the policy
+
+
+def test_require_sign_in_through_the_policy_and_never_back(db, monkeypatch):
+    claim = owner(db)
+    client = TestClient(app_for(db, monkeypatch, claim.ctx))
+    current = client.get("/v1/identity/policy").json()
+    off = client.put("/v1/identity/policy",
+                     json={**current, "network_mode": {"active": False, "ends_at": None}})
+    assert off.status_code == 200 and off.json()["network_mode"] == {"active": False,
+                                                                    "ends_at": None}
+    assert events(db, "legacy.path_retired")[-1]["actor_principal_id"] == claim.principal_id
+    again = client.put("/v1/identity/policy",
+                       json={"network_mode": {"active": True, "ends_at": None}})
+    assert again.status_code == 409 and again.json()["error"] == "policy_refused"
+
+
+def test_posture_has_s4s_shape(db, monkeypatch):
+    claim = owner(db)
+    client = TestClient(app_for(db, monkeypatch, claim.ctx))
     report = client.get("/v1/identity/posture").json()
-    assert {c["key"] for c in report["checks"]} == {"mfa_coverage", "stale_api_keys",
-                                                    "risky_delegations", "legacy_credentials",
-                                                    "orphans", "audit_chain"}
+    assert S4_POSTURE_KEYS <= set(report)
+    assert [c["id"] for c in report["checks"]] == ["mfa", "keys", "delegations", "legacy",
+                                                   "owners", "audit"]
+    for check in report["checks"]:
+        assert S4_CHECK_KEYS <= set(check) and check["status"] in ("ok", "warn", "bad")
+        assert check["fix"] is None or set(check["fix"]) == {"label", "href"}
+    assert set(report["counts"]) == S4_COUNTS
+    assert report["counts"]["people"] == 1 and report["counts"]["active"] == 1   # placeholders
+    mfa = report["checks"][0]                                                  # are not people
+    assert (mfa["value"], mfa["unit"], mfa["status"]) == ("1", "of 1", "ok")
+    legacy = {item["kind"]: item for item in report["legacy"]}
+    assert legacy["network_bridge"]["until"] and report["checks"][3]["status"] == "bad"
+    assert set(report["audit"]) == {"verified_at", "seq", "ok"} and report["audit"]["seq"] >= 1
+    assert 0 <= report["score"] <= 100 and report["headline"].startswith("Posture:")
+    assert report["acting_now"] == [] and len(report["summary"]) == 3
 
 
 def test_legacy_retire_and_extend(db, monkeypatch):
