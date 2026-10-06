@@ -1,8 +1,8 @@
 import { notFound } from "next/navigation";
 
 import { pageAllowed } from "../../../../components/identity/route-shell";
+import { adaptRole, adaptRoleVersions, adaptRoles, nameIndex, roleIndex } from "../../../../lib/identity/adapt-people";
 import { serverGet } from "../../../../lib/identity/server";
-import type { AccessRole, RoleVersion } from "../../../../lib/identity/types";
 import { RoleEditor } from "./role-editor";
 
 export const dynamic = "force-dynamic";
@@ -11,10 +11,16 @@ export const dynamic = "force-dynamic";
 export default async function AccessRolePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   if (!(await pageAllowed(`/identity/roles/${id}`))) return null;
-  const [role, versions] = await Promise.all([
-    serverGet<AccessRole>(`/v1/identity/access-roles/${encodeURIComponent(id)}`),
-    serverGet<{ versions: RoleVersion[] }>(`/v1/identity/access-roles/${encodeURIComponent(id)}/versions`),
+  const enc = encodeURIComponent(id);
+  const [role, versions, roles, users] = await Promise.all([
+    serverGet<unknown>(`/v1/identity/access-roles/${enc}`),
+    serverGet<{ versions: unknown[] }>(`/v1/identity/access-roles/${enc}/versions`),
+    serverGet<{ roles: unknown[] }>("/v1/identity/access-roles"),
+    serverGet<{ users: { id: string; display_name?: string; email?: string }[] }>("/v1/identity/users"),
   ]);
   if (!role.ok) notFound();
-  return <RoleEditor role={role.data} versions={versions.ok ? versions.data.versions : []} />;
+  const index = roleIndex(roles.ok ? adaptRoles(roles.data.roles) : []);
+  // Names for the impact preview's people (the API answers principal ids).
+  const names = Object.fromEntries(nameIndex(users.ok ? users.data.users : []));
+  return <RoleEditor role={adaptRole(role.data, index)} versions={versions.ok ? adaptRoleVersions(versions.data.versions) : []} names={names} />;
 }

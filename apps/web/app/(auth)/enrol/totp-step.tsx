@@ -8,7 +8,7 @@
 import React, { useEffect, useState } from "react";
 
 import { idPost } from "../../../lib/identity/api";
-import type { TotpEnrolment } from "../../../lib/identity/types-auth";
+import { codesOf, type RecoveryCodes, type TotpEnrolment } from "../../../lib/identity/types-auth";
 import { CodeInput } from "../../../components/identity/kit";
 import { sayAuth } from "../auth-flow";
 
@@ -19,7 +19,13 @@ function svgDataUri(svg: string): string {
   return `data:image/svg+xml;base64,${btoa(s)}`;
 }
 
-export function TotpStep({ onDone }: { onDone: () => void }) {
+/** `onDone(codes)`: the recovery codes the API issued with this FIRST factor, or [] (S1). */
+export function TotpStep({ onDone, guard }: {
+  onDone: (codes: string[]) => void;
+  /** My account passes useGuardedCall: starting an authenticator needs a fresh second factor. */
+  guard?: <T>(reason: string, call: () => Promise<T>) => Promise<T>;
+}) {
+  const run = <T,>(call: () => Promise<T>) => (guard ? guard("Adding an authenticator changes how you sign in.", call) : call());
   const [enrol, setEnrol] = useState<TotpEnrolment | null>(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -27,19 +33,19 @@ export function TotpStep({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     let live = true;
-    idPost<TotpEnrolment>("/v1/identity/me/mfa/totp", {})
+    run(() => idPost<TotpEnrolment>("/v1/identity/me/mfa/totp", {}))
       .then((r) => { if (live) setEnrol(r); })
       .catch((e) => { if (live) setError(sayAuth(e)); });
     return () => { live = false; };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const confirm = async (value: string) => {
     setBusy(true);
     setError(null);
     try {
-      await idPost("/v1/identity/me/mfa/totp/confirm", { code: value });
+      const confirmed = await run(() => idPost<RecoveryCodes | null>("/v1/identity/me/mfa/totp/confirm", { code: value }));
       setEnrol(null); // the secret leaves memory the moment it is confirmed
-      onDone();
+      onDone(codesOf(confirmed));
     } catch (e) {
       setError(sayAuth(e));
       setCode("");

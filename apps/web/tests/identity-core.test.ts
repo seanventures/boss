@@ -70,7 +70,7 @@ describe("the page table", () => {
     expect(pageFor("/identity/nope")).toBeNull();
   });
   it("leaves only the sign-in pages and API public", () => {
-    for (const p of ["/login", "/claim", "/invite/inv_1", "/signin/link", "/reset", "/signup", "/v1/auth/login", "/v1/auth/options", "/v1/auth/sso/idp_okta/start"]) {
+    for (const p of ["/login", "/claim", "/invite", "/signin", "/signin/link", "/v1/auth/invitations/preview", "/v1/auth/invitations/accept", "/reset", "/signup", "/v1/auth/login", "/v1/auth/options", "/v1/auth/sso/idp_okta/start"]) {
       expect(isPublicConsolePath(p), p).toBe(true);
     }
     for (const p of ["/", "/identity", "/account", "/enrol", "/v1/auth/logout", "/v1/auth/step-up", "/v1/identity/me", "/api/skills"]) {

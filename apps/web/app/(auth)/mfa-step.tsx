@@ -9,7 +9,7 @@ import { CaretRight, Fingerprint } from "@phosphor-icons/react";
 
 import { idPost } from "../../lib/identity/api";
 import type { SignInStep } from "../../lib/identity/types";
-import { getAssertion, webauthnAvailable, type AssertionOptions } from "../../lib/identity/webauthn";
+import { getAssertion, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../lib/identity/webauthn";
 import { CodeInput } from "../../components/identity/kit";
 import { sayAuth } from "./auth-flow";
 
@@ -24,7 +24,7 @@ export function MfaStep({ step, onDone }: { step: SignInStep; onDone: (next: Sig
   };
   const totp = (v: string) => run(() => idPost<SignInStep>("/v1/auth/mfa/totp", { code: v }));
   const passkey = () => run(async () => {
-    const opts = await idPost<AssertionOptions>("/v1/auth/webauthn/options", { purpose: "mfa" });
+    const opts = await idPost<Wrapped<AssertionOptions>>("/v1/auth/webauthn/options", { purpose: "mfa" });
     return idPost<SignInStep>("/v1/auth/webauthn/verify", { purpose: "mfa", credential: await getAssertion(opts) });
   });
   return (

@@ -127,7 +127,6 @@ function AddAccessSheet({ person, roles, onClose }: { person: Person; roles: Acc
   const chosen = roles.find((r) => r.key === role);
   const canProject = !chosen || chosen.bindable_scopes.includes("project");
   const missing = (r: AccessRole) => (held ? r.permissions.filter((p) => !held.has(p)) : []);
-  const scope = where === "org" ? "org" : `project:${project.trim()}`;
   return (
     <Sheet title={`Add access for ${person.display_name.split(" ")[0]}`} icon={<Plus size={18} aria-hidden />} onClose={onClose} testId="add-access-sheet">
       <div className="idn-field">
@@ -172,7 +171,9 @@ function AddAccessSheet({ person, roles, onClose }: { person: Person; roles: Acc
           onClick={async () => {
             setBusy(true);
             const out = await act("Granting access changes what they can do.",
-              () => idPost("/v1/identity/role-bindings", { subject_id: person.id, role_key: role, scope }), "Access added");
+              // The API binds by role id; a project binding goes to that project's own route.
+              () => idPost(where === "org" ? "/v1/identity/role-bindings" : `/v1/identity/projects/${encodeURIComponent(project.trim())}/role-bindings`,
+                { subject_type: "principal", subject_id: person.id, role_id: chosen?.id ?? "" }), "Access added");
             setBusy(false);
             if (out !== null) onClose();
           }}>
@@ -201,7 +202,7 @@ function ConfirmSheet({ person, kind, onClose }: { person: Person; kind: Exclude
       <div className="idn-who-s"><Face name={person.display_name} tone={person.hue} size={34} /><span><b>{person.display_name}</b><small>{person.email}</small></span></div>
       {done ? (
         <ul className="idn-cascade-list" aria-label="What happened">
-          {done.items.map((i) => <li key={i.kind}><Check size={14} className="idn-ok" aria-hidden /> <span data-copy="data">{i.label} · {i.detail}</span> <b>{i.count}</b></li>)}
+          {done.items.map((i, n) => <li key={`${i.kind}-${n}`}><Check size={14} className="idn-ok" aria-hidden /> <span data-copy="data">{i.label} · {i.detail}</span> <b>{i.count}</b></li>)}
         </ul>
       ) : (
         <ul className="idn-cascade-list" aria-label="What this does">
@@ -249,7 +250,7 @@ function Bindings({ person }: { person: Person }) {
             <RoleChip roleKey={b.role_key} name={b.role_name} scope={b.scope} />
             <span className="idn-src" data-copy="data">
               {b.via_group
-                ? `Via group ${b.via_group.name} · ${b.via_group.source === "manual" ? "managed in BOSS" : `synced from ${b.via_group.name === "Builders" ? "Okta" : "your IdP"}`}`
+                ? `Via group ${b.via_group.name} · ${b.via_group.source === "manual" ? "managed in BOSS" : `synced from ${b.via_group.source.toUpperCase()}`}`
                 : `Direct · granted by ${b.granted_by ?? "BOSS"}, ${shortDate(b.granted_at)}`}
             </span>
           </span>
@@ -258,9 +259,13 @@ function Bindings({ person }: { person: Person }) {
             b.via_group.source === "manual"
               ? <a className="idn-btn sm" href={`/identity/groups/${b.via_group.id}`}>Group</a>
               : <span className="idn-btn sm ghost" title="Change it in your identity provider">{b.via_group.source === "scim" ? "SCIM" : "IdP"}</span>
+          ) : b.synthetic ? (
+            <span className="idn-btn sm ghost" title="Bindings need role_binding:read to manage">Role</span>
           ) : (
             <CanButton permission="role_binding:assign" className="idn-btn sm" tip="Remove this binding" data-testid={`remove-${b.id}`}
-              onClick={() => act("Removing access changes what they can do.", () => idDelete(`/v1/identity/role-bindings/${encodeURIComponent(b.id)}`), "Access removed")}>
+              onClick={() => act("Removing access changes what they can do.", () => idDelete(b.scope.startsWith("project:")
+                ? `/v1/identity/projects/${encodeURIComponent(b.scope.slice(8))}/role-bindings/${encodeURIComponent(b.id)}`
+                : `/v1/identity/role-bindings/${encodeURIComponent(b.id)}`), "Access removed")}>
               Remove
             </CanButton>
           )}
@@ -520,7 +525,7 @@ function RevokeGrant({ grant, onClose }: { grant: Delegation; onClose: () => voi
       <p className="idn-lede2" data-copy="prose">Authority leaves every agent in the chain within 5 seconds. Work stops where it is.</p>
       {preview === null ? <div className="idn-dim">Checking what stops…</div> : (
         <ul className="idn-cascade-list">
-          {preview.items.map((i) => <li key={i.kind}><span data-copy="data">{i.label} · {i.detail}</span> <b>{i.count}</b></li>)}
+          {preview.items.map((i, n) => <li key={`${i.kind}-${n}`}><span data-copy="data">{i.label} · {i.detail}</span> <b>{i.count}</b></li>)}
         </ul>
       )}
       <div className="idn-mf">

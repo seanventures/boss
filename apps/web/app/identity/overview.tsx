@@ -231,7 +231,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
               <div className="idn-groups">
                 {groups.map((g) => (
                   <a key={g.id} className="idn-chip" href={`/identity/groups/${g.id}`}>
-                    <UsersThree size={13} aria-hidden /> {g.name} <b>{g.members.length}</b>
+                    <UsersThree size={13} aria-hidden /> {g.name} <b>{g.member_count ?? g.members.length}</b>
                     {g.provider ? <span className="idn-tag">{g.provider}</span> : null}
                   </a>
                 ))}

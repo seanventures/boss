@@ -3,7 +3,8 @@
 /**
  * JUST-IN-TIME CONSENT (IDENTITY.md §7.3 2): work a person starts needs more than their standing
  * grants cover. The sheet names the agents, the abilities and the repos, and creates a grant —
- * task-bound ("for this build only", ends with the run) or standing (30 days). Never more than
+ * task-bound ("for this build only", ends with the run) or standing (the policy's default days, as
+ * the API offers them). Never more than
  * the person holds: the API intersects with their live permissions and each agent's ceiling.
  *
  * Opened by `openConsent(detail)` from anywhere (the seam S3's build start uses when the API
@@ -14,22 +15,13 @@ import { GithubLogo } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../app/agent-avatar";
 import { IdentityError, idPost } from "../../lib/identity/api";
-import { PERMISSION_META, isPermission, type Permission } from "../../lib/identity/permissions.gen";
+import { CONSENT_EVENT, grantBodyFor, type ConsentDuration, type ConsentRequest } from "../../lib/identity/consent";
+import { isPermission, type Permission } from "../../lib/identity/permissions.gen";
 import { useGuardedCall } from "./identity-provider";
 import { ErrorLine, Perm, Sheet } from "./kit";
 
-export const CONSENT_EVENT = "boss:consent-required";
-
-export type ConsentRequest = {
-  agents: { id: string; name: string; roleKey?: string }[];
-  /** What the work is ("Interview Scorecard"). */
-  task: string;
-  permissions: string[];
-  projects: string[];
-  github: { repo: string; summary: string } | null;
-  /** Called with the new grant id, or null when the person cancels. */
-  onDecided?: (grantId: string | null) => void;
-};
+export { CONSENT_EVENT, askConsent, consentFromBody, consentFromError, grantBodyFor, withConsent } from "../../lib/identity/consent";
+export type { ConsentRequest } from "../../lib/identity/consent";
 
 export function openConsent(detail: ConsentRequest): void {
   window.dispatchEvent(new CustomEvent<ConsentRequest>(CONSENT_EVENT, { detail }));
@@ -41,24 +33,25 @@ function names(list: { name: string }[]): string {
 }
 
 export function ConsentSheet({ request, onClose }: { request: ConsentRequest; onClose: () => void }) {
-  const [busy, setBusy] = useState<"task" | "standing" | null>(null);
+  const [busy, setBusy] = useState<ConsentDuration["kind"] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const guarded = useGuardedCall();
-  const perms = request.permissions.filter(isPermission) as Permission[];
-  const neverDelegable = perms.filter((p) => !PERMISSION_META[p].delegable);
+  // Shown as chips when the catalogue knows them; SENT as asked, every one (grantBodyFor).
+  const known = request.permissions.filter(isPermission) as Permission[];
+  const other = request.permissions.filter((p) => !isPermission(p));
+  // The choices the API offered (a schedule offers only a standing grant).
+  const durations = request.durations.length ? request.durations : [{ kind: "standing" as const, label: "Standing", days: null }];
 
-  const decide = async (kind: "task" | "standing") => {
-    setBusy(kind);
+  const decide = async (duration: ConsentDuration) => {
+    setBusy(duration.kind);
     setError(null);
     try {
-      const grant = await guarded(`Let ${names(request.agents)} act for you.`, () => idPost<{ id: string }>("/v1/identity/me/delegations", {
-        agents: request.agents.map((a) => a.id), permissions: perms, projects: request.projects,
-        kind, days: kind === "standing" ? 30 : null, purpose: request.task,
-      }));
+      const grant = await guarded(`Let ${names(request.agents)} act for you.`, () =>
+        idPost<{ id: string }>("/v1/identity/me/delegations", grantBodyFor(request, duration)));
       request.onDecided?.(grant.id);
       onClose();
     } catch (e) {
-      setError(e instanceof IdentityError ? e.message : "That didn't work");
+      setError(e instanceof IdentityError ? (e.detail ?? e.message) : "That didn't work");
       setBusy(null);
     }
   };
@@ -66,27 +59,25 @@ export function ConsentSheet({ request, onClose }: { request: ConsentRequest; on
   return (
     <Sheet
       title={`Let ${names(request.agents)} act for you?`}
-      icon={<span className="idn-stack" aria-hidden>{request.agents.slice(0, 3).map((a) => <AgentAvatar key={a.id} agent={a.roleKey ?? a.name} size={26} />)}</span>}
+      icon={<span className="idn-stack" aria-hidden>{request.agents.slice(0, 3).map((a) => <AgentAvatar key={a.id} agent={a.role_key ?? a.name} size={26} />)}</span>}
       onClose={() => { request.onDecided?.(null); onClose(); }}
       testId="consent-sheet"
     >
       <p className="idn-lede2" data-copy="prose">
-        To build <b>{request.task}</b> they need a little of your access, and never more than you have.
+        To run <b>{request.task}</b> they need a little of your access, and never more than you have.
       </p>
       <div className="idn-need">
-        {perms.filter((p) => PERMISSION_META[p].delegable).map((p) => <Perm key={p} p={p} sm />)}
-        {request.github ? <span className="idn-chip"><GithubLogo size={13} aria-hidden /> {request.github.repo} · {request.github.summary}</span> : null}
+        {known.map((p) => <Perm key={p} p={p} sm />)}
+        {other.map((p) => <span key={p} className="idn-perm sm">{p}</span>)}
+        {request.github ? <span className="idn-chip"><GithubLogo size={13} aria-hidden /> {request.github.repos.join(", ") || request.github.repo} · {request.github.summary}</span> : null}
       </div>
-      {neverDelegable.length ? (
-        <div className="idn-note" data-copy="prose">Agents never get {neverDelegable.join(", ")}. You keep those.</div>
-      ) : null}
-      <div className="idn-opts">
-        <button type="button" className="idn-btn primary" onClick={() => decide("task")} disabled={!!busy} data-autofocus>
-          {busy === "task" ? "Granting…" : "For this build only"}
-        </button>
-        <button type="button" className="idn-btn" onClick={() => decide("standing")} disabled={!!busy}>
-          {busy === "standing" ? "Granting…" : "For 30 days"}
-        </button>
+      <div className="idn-opts" data-testid="consent-durations">
+        {durations.map((d, i) => (
+          <button key={d.kind} type="button" className={i === 0 ? "idn-btn primary" : "idn-btn"} onClick={() => decide(d)} disabled={!!busy}
+            data-autofocus={i === 0 || undefined} data-testid={`consent-${d.kind}`}>
+            {busy === d.kind ? "Granting…" : d.label}
+          </button>
+        ))}
       </div>
       <ErrorLine error={error} />
       <p className="idn-fine" data-copy="prose">They can't merge, approve or deploy to production. Revoke any time in My account › Agents.</p>

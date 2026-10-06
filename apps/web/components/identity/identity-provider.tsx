@@ -71,7 +71,13 @@ export function IdentityProvider({ me: initialMe, org: initialOrg, project: init
 
   // Set during render, not in an effect: a child's mount effect (a dry-run preview, a first
   // write) runs BEFORE this provider's effects, and would otherwise go out without the token.
-  if (me?.csrf_token) setCsrfToken(me.csrf_token);
+  // Only when the token it holds is new: a session rotated since (step-up, a new factor) has a
+  // newer token in lib/identity/api.ts, and an older render must not put the stale one back.
+  const csrfSet = useRef<string | null>(null);
+  if (me?.csrf_token && me.csrf_token !== csrfSet.current) {
+    csrfSet.current = me.csrf_token;
+    setCsrfToken(me.csrf_token);
+  }
 
   const loadPermissions = useCallback(async () => {
     const [o, p] = await Promise.all([
