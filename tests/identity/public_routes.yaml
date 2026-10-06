@@ -122,7 +122,7 @@ POST /v1/hardware/agents/enroll:
   verifier: apps.api.app.hardware_api:enroll_agent
 POST /v1/identity/introspect:
   reason: auth_endpoint
-  verifier: boss_engine.identity.tokens:egress_service_key_ok
+  verifier: boss_engine.identity.tokens:egress_caller_ok
 POST /v1/identity/token:
   reason: auth_endpoint
   verifier: boss_engine.identity.tokens:exchange_token
