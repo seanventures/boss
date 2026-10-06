@@ -4,6 +4,7 @@ import { BossApiError } from "@boss/api-client";
 
 import { client } from "../lib/client";
 import { fetchOrgs } from "../lib/orgs";
+import { declareAction } from "../lib/identity/guarded-action";
 
 /**
  * Onboard an organization and SAY what happened.
@@ -55,3 +56,8 @@ export async function onboardOrgFormAction(
     };
   }
 }
+
+// THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
+// A declaration for the console to mirror — disabled with the reason when not held — never a
+// decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
+declareAction(onboardOrgFormAction, "project:create");

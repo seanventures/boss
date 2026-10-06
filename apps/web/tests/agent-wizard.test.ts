@@ -23,7 +23,7 @@ describe("Agent creation (New agent, with the wizard's submission)", () => {
     const actions = readFileSync(resolve(__dirname, "../app/agent-studio-actions.ts"), "utf8");
     expect(DIALOG()).toContain('data-testid="aq-seed"');
     expect(DIALOG()).toContain("Adds the reviewed starter agents and panels. Starts nothing, spends nothing.");
-    expect(DIALOG()).toContain("callAction(seedStudioCatalog)(projectId, actor)");
+    expect(DIALOG()).toContain('callAction(seedStudioCatalog, undefined, "agent:create")(projectId, actor)');
     expect(actions).toContain('post("/v1/agent-studio/catalog/seed"');
     expect(actions).toContain("role_review authority");
   });

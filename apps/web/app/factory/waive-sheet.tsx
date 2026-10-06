@@ -54,7 +54,7 @@ export function WaiveSheet({ runId, app, failing, projectId, actor, onClose, onD
     form.set("reason", reason.trim());
     for (const g of picked) form.append("gate", g);
     try {
-      const r = await callAction(waiveChecksAction)(form);
+      const r = await callAction(waiveChecksAction, undefined, "code_task:override")(form);
       if (r.ok) {
         showToast("success", `${picked.size} check${picked.size === 1 ? "" : "s"} waived · opening PR`);
         notifyChanged("decisions");

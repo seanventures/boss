@@ -1,5 +1,4 @@
 
-import { redirect } from "next/navigation";
 import { networkTrustedConsole } from "../lib/console-session";
 import { accessForArea } from "../lib/identity/area-access";
 import { checkWith } from "../lib/identity/check";
@@ -558,7 +557,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // <AccessDenied> for it — so no area loads and then 403s.
   const identity = await loadIdentityCached(activeProjectId);
   if (identity.problem === "unauthenticated" && !networkTrustedConsole()) {
-    redirect(`/login?next=${encodeURIComponent(`/?area=${initialArea ?? "overview"}&org=${activeOrgId}`)}`);
+    // RENDERED, NOT REDIRECTED (see above): a session the API no longer honours gets a page that
+    // sends the browser to sign in, keeping its place. middleware.ts already sends a visitor with
+    // no session cookie there before this renders; this is the stale-cookie case.
+    const signIn = `/login?next=${encodeURIComponent(`/?area=${initialArea ?? "overview"}&org=${activeOrgId}`)}`;
+    return (
+      <main className="idn-auth" data-testid="sign-in-again">
+        <meta httpEquiv="refresh" content={`0;url=${signIn}`} />
+        <a className="idn-big p" href={signIn}>Sign in again</a>
+      </main>
+    );
   }
   const identityUnavailable = !identity.org;
   const orgSnap = identity.org ? snapshotFrom(identity.org) : null;
@@ -1064,7 +1072,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid">
             <article className="stack-card">
               <h3>Add or update org delegate</h3>
-              <ActionForm action={upsertOrgMemberAction} className="composer compact">
+              <ActionForm permission="user:update" action={upsertOrgMemberAction} className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="org_id" value={activeOrgId} />
                 <input type="hidden" name="actor" value={activeActorId} />
@@ -1182,7 +1190,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid">
             <article className="stack-card">
               <h3>Grant temporary access</h3>
-              <ActionForm action={createBreakGlassGrantAction} className="composer compact">
+              <ActionForm permission="policy:manage" action={createBreakGlassGrantAction} className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="actor" value={activeActorId} />
                 <label className="field">
@@ -1275,7 +1283,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <p className="detail">{grant.reason}</p>
                       </div>
                       {grant.status === "active" ? (
-                        <ActionForm
+                        <ActionForm permission="policy:manage"
                           action={revokeBreakGlassGrantAction}
                           className="composer compact"
                         >
@@ -1402,7 +1410,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   ? `Latest snapshot at ${formatDateTime(status.latestSnapshotAt)}.`
                   : "No persisted health snapshot yet. Refresh one from the console."}
               </p>
-              <ActionForm action={refreshHealthSnapshotAction}>
+              <ActionForm permission="system:operate" action={refreshHealthSnapshotAction}>
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="actor" value={activeActorId} />
                 <SubmitButton className="button secondary" type="submit">
@@ -1448,7 +1456,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     {opsQueue.readyJobIds.length} / stale leases{" "}
                     {opsQueue.staleLeaseJobIds.length}
                   </p>
-                  <ActionForm action={createOpsDigestAction}>
+                  <ActionForm permission="system:operate" action={createOpsDigestAction}>
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <input type="hidden" name="limit" value={25} />
@@ -1636,14 +1644,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       </span>
                     </div>
                   </div>
-                  <ActionForm action={createReplayBundleAction}>
+                  <ActionForm permission="activity:export" action={createReplayBundleAction}>
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <SubmitButton className="button secondary" type="submit">
                       Create replay bundle
                     </SubmitButton>
                   </ActionForm>
-                  <ActionForm action={createComplianceEvidenceBundleAction}>
+                  <ActionForm permission="assurance:manage" action={createComplianceEvidenceBundleAction}>
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <SubmitButton className="button secondary" type="submit">
@@ -1777,7 +1785,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <SlackToolsCard projectId={activeProjectId} />
             <article className="stack-card">
               <h3>Draft outbound message</h3>
-              <ActionForm action={submitOutboxDraftAction} className="composer compact">
+              <ActionForm permission="comms:send" action={submitOutboxDraftAction} className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="actor" value={activeActorId} />
                 <label className="field">
@@ -1858,7 +1866,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </div>
                   )}
 
-                  <ActionForm
+                  <ActionForm permission="comms:manage"
                     action={upsertCommsChannelPolicyAction}
                     className="composer compact"
                   >
@@ -1943,7 +1951,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           {message.status === "dry_run" ? (
                             <p className="detail">dry-run — no provider send</p>
                           ) : null}
-                          <ActionForm action={dryRunOutboxMessageAction}>
+                          <ActionForm permission="comms:read" action={dryRunOutboxMessageAction}>
                             <input type="hidden" name="message_id" value={message.id} />
                             <input type="hidden" name="project_id" value={activeProjectId} />
                             <input type="hidden" name="actor" value={activeActorId} />
@@ -1951,7 +1959,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               Dry-run deliver
                             </SubmitButton>
                           </ActionForm>
-                          <ActionForm action={queueOutboxMessageAction}>
+                          <ActionForm permission="comms:send" action={queueOutboxMessageAction}>
                             <input type="hidden" name="message_id" value={message.id} />
                             <input type="hidden" name="project_id" value={activeProjectId} />
                             <input type="hidden" name="actor" value={activeActorId} />
@@ -2059,7 +2067,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           />
                         </div>
                       ) : (
-                        <ActionForm action={installPackAction}>
+                        <ActionForm permission="pack:install" action={installPackAction}>
                           <input type="hidden" name="pack_id" value={pack.packId} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
@@ -2226,7 +2234,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </div>
                   )}
 
-                  <ActionForm
+                  <ActionForm permission="identity_provider:manage"
                     action={upsertEnterpriseIdentityProviderAction}
                     className="composer"
                     id="identity-provider-form"
@@ -2351,7 +2359,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </div>
                   )}
 
-                  <ActionForm
+                  <ActionForm permission="identity_provider:manage"
                     action={upsertEnterpriseIdentityRolloutPolicyAction}
                     className="composer compact"
                   >
@@ -2466,7 +2474,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     )}
                   </div>
 
-                  <ActionForm action={upsertEnterpriseScimGroupAction} className="composer">
+                  <ActionForm permission="identity_provider:manage" action={upsertEnterpriseScimGroupAction} className="composer">
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <label className="field">
@@ -2494,7 +2502,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </SubmitButton>
                   </ActionForm>
 
-                  <ActionForm action={upsertEnterpriseScimUserAction} className="composer">
+                  <ActionForm permission="identity_provider:manage" action={upsertEnterpriseScimUserAction} className="composer">
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <label className="field">
@@ -2598,7 +2606,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             ? ` ${formatDateTime(module.installedAt)}`
                             : ""}
                         </span>
-                        <ActionForm action={uninstallAgentModuleAction}>
+                        <ActionForm permission="agent:update" action={uninstallAgentModuleAction}>
                           <input type="hidden" name="module_id" value={module.moduleId} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
@@ -2611,7 +2619,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             Uninstall
                           </SubmitButton>
                         </ActionForm>
-                        <ActionForm action={rollbackAgentModuleAction}>
+                        <ActionForm permission="agent:update" action={rollbackAgentModuleAction}>
                           <input type="hidden" name="module_id" value={module.moduleId} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
@@ -2626,7 +2634,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </ActionForm>
                       </div>
                     ) : (
-                      <ActionForm action={installAgentModuleAction}>
+                      <ActionForm permission="agent:update" action={installAgentModuleAction}>
                         <input type="hidden" name="module_id" value={module.moduleId} />
                         <input type="hidden" name="project_id" value={activeProjectId} />
                         <input type="hidden" name="actor" value={activeActorId} />
@@ -3423,7 +3431,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           </p>
                         ) : null}
                         <div className="inline-actions">
-                          <ActionForm action={createDeadletterIncidentAction}>
+                          <ActionForm permission="deadletter:manage" action={createDeadletterIncidentAction}>
                             <input
                               type="hidden"
                               name="deadletter_id"
@@ -3446,7 +3454,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           </ActionForm>
                           {deadletter.sourceKind === "job" &&
                           !deadletter.requeuedJobId ? (
-                            <ActionForm action={createDeadletterRemediationAction}>
+                            <ActionForm permission="deadletter:manage" action={createDeadletterRemediationAction}>
                               <input
                                 type="hidden"
                                 name="deadletter_id"
@@ -3477,7 +3485,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               </SubmitButton>
                             </ActionForm>
                           ) : null}
-                          <ActionForm action={createDeadletterRemediationAction}>
+                          <ActionForm permission="deadletter:manage" action={createDeadletterRemediationAction}>
                             <input
                               type="hidden"
                               name="deadletter_id"
@@ -3507,7 +3515,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               Escalate
                             </SubmitButton>
                           </ActionForm>
-                          <ActionForm action={createDeadletterRemediationAction}>
+                          <ActionForm permission="deadletter:manage" action={createDeadletterRemediationAction}>
                             <input
                               type="hidden"
                               name="deadletter_id"

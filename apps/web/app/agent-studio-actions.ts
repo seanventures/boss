@@ -5,6 +5,7 @@ import { API_URL } from "../lib/client";
 import type { AgentWizardSubmission } from "../lib/agent-wizard";
 import { apiWrite, pressToken } from "../lib/api-write";
 import { refusalFrom } from "../lib/start-refusal";
+import { declareAction } from "../lib/identity/guarded-action";
 
 export type StudioActionResult = {
   ok: boolean;
@@ -323,3 +324,13 @@ export async function runStudioPanel(
 // Workflow create, publish, validate and run left with Agent Studio's Flows tab: workflows are
 // built in the Workflow editor (POST /v1/delivery-workflows/publish) and started from the Runs
 // composer, the one door that shows the readiness checklist.
+
+// THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
+// A declaration for the console to mirror — disabled with the reason when not held — never a
+// decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
+declareAction(createStudioAgent, "agent:create");
+declareAction(testStudioAgent, "agent:test");
+declareAction(runStudioCatalogSmoke, "agent:test");
+declareAction(seedStudioCatalog, "agent:create");
+declareAction(runStudioAgent, "agent:test");
+declareAction(runStudioPanel, "meeting:convene");

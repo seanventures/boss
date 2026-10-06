@@ -5,6 +5,7 @@ import { API_URL } from "../lib/client";
 import { apiWrite, pressToken } from "../lib/api-write";
 import type { ActionResult } from "../lib/action-result";
 import { act } from "../lib/server-action";
+import { declareAction } from "../lib/identity/guarded-action";
 
 async function post(path: string, body: Record<string, unknown>): Promise<void> {
   const response = await apiWrite(`${API_URL}${path}`, {
@@ -133,3 +134,13 @@ export async function upsertStatusChannelAction(formData: FormData): Promise<Act
     allowed_data_boundaries: ["public", "internal"],
   });
 }); }
+
+// THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
+// A declaration for the console to mirror — disabled with the reason when not held — never a
+// decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
+declareAction(upsertRankedWorkAction, "work_item:manage");
+declareAction(upsertResourceQuotaAction, "work_item:manage");
+declareAction(planResourceAllocationsAction, "work_item:manage");
+declareAction(syncTrackerBindingAction, "integration:manage");
+declareAction(upsertDeliveryBotAction, "integration:manage");
+declareAction(upsertStatusChannelAction, "comms:manage");

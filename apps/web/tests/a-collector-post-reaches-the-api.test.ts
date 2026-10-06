@@ -52,11 +52,12 @@ describe("a collector POST from another install", () => {
     expect(collectorMachinePost(req("/v1/telemetry/ingest/x"))).toBe(false);
   });
 
-  it("the /v1 proxy attaches no console key to them", async () => {
+  it("the /v1 proxy attaches no credential to them: no key exists, and no cookie is forwarded", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("../app/v1/[...path]/route.ts", import.meta.url), "utf8");
     expect(src).toMatch(/forwardHeaders\(req, collector !== null\)/);
-    expect(src).toMatch(/if \(API_KEY && !machine\)/);
+    expect(src).toMatch(/const cookie = machine \? "" : identityCookieHeader\(/);
+    expect(src).not.toMatch(/set\("Authorization"/);
   });
 
   it("a collector route spelled any other way is refused in middleware, connection closed", async () => {

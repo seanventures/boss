@@ -274,7 +274,7 @@ export function FlightCard({ view, projectId, actor, orgId, now, onRefresh, onSt
     form.set("project_id", projectId);
     form.set("actor", actor);
     try {
-      const r = await callAction(cleanUpOldAction)(form);
+      const r = await callAction(cleanUpOldAction, undefined, "system:operate")(form);
       if (r.ok) {
         setCleaned(r.result || "Cleaned up");
         showToast("success", r.result || "Cleaned up");

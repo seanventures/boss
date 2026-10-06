@@ -112,7 +112,7 @@ export function RetryControls(
   { runId, failingGates = [], compact = false }:
   { runId: string; failingGates?: string[]; compact?: boolean },
 ) {
-  const [state, action, pending] = useActionState(callAction(retryCodeTaskWithStateAction), null);
+  const [state, action, pending] = useActionState(callAction(retryCodeTaskWithStateAction, undefined, "code_task:retry"), null);
   // Which stages the retry will SKIP, mirroring _repair_needs_write_tests on the server, so the
   // operator knows this resumes rather than restarting. Kept in sync with _TEST_GATES.
   const TEST_GATES = ["tests_strong_enough", "tests_written_first", "coder_did_not_edit_tests",
@@ -132,7 +132,7 @@ export function RetryControls(
       <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center",
                                      flexWrap: "wrap" }} title={explains}>
         <input type="hidden" name="run_id" value={runId} />
-        <SubmitButton className="cap-btn" disabled={pending}>
+        <SubmitButton permission="feedback:submit" className="cap-btn" disabled={pending}>
           <ArrowsClockwise size={15} weight="bold" aria-hidden />
           {pending ? "Retrying…" : "Retry build"}
         </SubmitButton>
@@ -153,7 +153,7 @@ export function RetryControls(
     <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
       <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
         <input type="hidden" name="run_id" value={runId} />
-        <SubmitButton className="cap-btn" disabled={pending} title="Run this task again, resuming from where it failed">
+        <SubmitButton permission="feedback:submit" className="cap-btn" disabled={pending} title="Run this task again, resuming from where it failed">
           {pending ? "Starting retry…" : "↻ Retry"}
         </SubmitButton>
       </form>
@@ -172,13 +172,13 @@ export function RetryControls(
 }
 
 export function OverrideControls({ runId }: { runId: string }) {
-  const [state, action, pending] = useActionState(callAction(overrideCodeTaskAction), null);
+  const [state, action, pending] = useActionState(callAction(overrideCodeTaskAction, undefined, "code_task:override"), null);
   return (
     <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
       <input type="hidden" name="run_id" value={runId} />
       <input name="reason" placeholder="Reason for override (recorded)" className="cap-input"
              style={{ minWidth: 220 }} />
-      <SubmitButton className="cap-btn" disabled={pending}>
+      <SubmitButton permission="feedback:submit" className="cap-btn" disabled={pending}>
         {pending ? "Overriding…" : "⚖ Waive failing gates & open PR"}
       </SubmitButton>
       {state?.url ? (
@@ -253,7 +253,7 @@ export function PreviewLogs({ previewId }: { previewId: string }) {
 }
 
 export function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePreviews?: PreviewRec[] }) {
-  const [state, action, pending] = useActionState(callAction(startPreviewAction), null);
+  const [state, action, pending] = useActionState(callAction(startPreviewAction, undefined, "preview:manage"), null);
   const hasLive = livePreviews.some((p) => p.status === "running" && operatorPreviewOpenHref(p));
   // Defensive as well as at the call site: a second identical "Open preview" is never useful,
   // whoever passes the list.
@@ -266,7 +266,7 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
       {!hasLive ? (
         <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
           <input type="hidden" name="run_id" value={runId} />
-          <SubmitButton className="cap-btn" disabled={pending}>
+          <SubmitButton permission="feedback:submit" className="cap-btn" disabled={pending}>
             <PlayCircle size={15} weight="fill" aria-hidden />
             {pending ? "Starting preview…" : "Run preview"}
           </SubmitButton>
@@ -332,7 +332,7 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
       {hasLive ? (
         <form action={action} style={{ display: "inline-flex" }}>
           <input type="hidden" name="run_id" value={runId} />
-          <SubmitButton className="cap-btn" style={{ opacity: 0.7, fontSize: 12 }} disabled={pending}>
+          <SubmitButton permission="feedback:submit" className="cap-btn" style={{ opacity: 0.7, fontSize: 12 }} disabled={pending}>
             <ArrowsClockwise size={14} weight="bold" aria-hidden
                              className={pending ? "spin" : undefined} />
             {pending ? "Rebuilding…" : "Rebuild preview"}
@@ -379,11 +379,11 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
 }
 
 export function ConfirmFeedback({ threadId, workflowName }: { threadId: string; workflowName?: string }) {
-  const [state, action, pending] = useActionState(callAction(confirmCodeTaskFeedbackAction), null);
+  const [state, action, pending] = useActionState(callAction(confirmCodeTaskFeedbackAction, undefined, "feedback:submit"), null);
   return (
     <form action={action} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       <input type="hidden" name="thread_id" value={threadId} />
-      <SubmitButton className="cap-btn primary" disabled={pending}>
+      <SubmitButton permission="feedback:submit" className="cap-btn primary" disabled={pending}>
         {pending ? "Dispatching…"
                  : workflowName ? `Confirm & start the ${workflowName} workflow`
                                 : "Confirm & run inline"}
@@ -479,7 +479,7 @@ export function FeedbackControls({ runId, status, anchor = "", projectId }: {
   runId: string; status: string; anchor?: string; projectId: string;
 }) {
   const completed = status === "completed";
-  const [state, action, pending] = useActionState(callAction(submitCodeTaskFeedbackAction), null);
+  const [state, action, pending] = useActionState(callAction(submitCodeTaskFeedbackAction, undefined, "feedback:submit"), null);
   const workflows = useProjectWorkflows(projectId);
   const [picked, setPicked] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -554,7 +554,7 @@ export function FeedbackControls({ runId, status, anchor = "", projectId }: {
           </label>
         </div>
         <div className="ct-iterate-actions">
-          <SubmitButton className="cap-btn primary" disabled={pending}>
+          <SubmitButton permission="feedback:submit" className="cap-btn primary" disabled={pending}>
             {pending ? "Reviewing…" : completed ? "Propose the change" : "Propose retry"}
           </SubmitButton>
           <span className="detail">
@@ -788,7 +788,7 @@ export function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, def
       run_id?: string; kind?: "meeting" | "code" | "existing"; error?: string;
     } | undefined;
     try {
-      out = await callAction(startQaBenchmarkAppAction)(data);
+      out = await callAction(startQaBenchmarkAppAction, undefined, "code_task:create")(data);
     } finally {
       setSent(false);
       await onLaunched?.(benchmark.id, out?.run_id,
@@ -1568,7 +1568,7 @@ export function RebuildWithSpec({ run, projectId, actor, mode = "rebuild",
       + `required to prove them.`;
 
   return (
-    <ActionForm action={conveneMeetingAction} className="ct-change-form"
+    <ActionForm permission="meeting:convene" action={conveneMeetingAction} className="ct-change-form"
           onClick={(e) => e.stopPropagation()}>
       <input type="hidden" name="project_id" value={projectId} />
       <input type="hidden" name="actor" value={actor} />
@@ -1721,7 +1721,7 @@ export function QaBenchmarkEvidence({ runId, benchmarkName }: { runId: string; b
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    void callAction(getQaBenchmarkReportAction)(runId).then((value) => {
+    void callAction(getQaBenchmarkReportAction, undefined, "code_task:read")(runId).then((value) => {
       if (!cancelled) {
         setReport(value);
         setLoaded(true);
@@ -1860,7 +1860,7 @@ export function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, current
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      const data = await callAction(getCodeTaskActivityAction)(runId);
+      const data = await callAction(getCodeTaskActivityAction, undefined, "code_task:read")(runId);
       if (!cancelled) { setCalls(data); setLoaded(true); }
     };
     void load();

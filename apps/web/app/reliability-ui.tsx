@@ -44,6 +44,7 @@ function Pill({ text, color }: { text: string; color: string }) {
 function ActionButton({ label }: { label: string }) {
   return (
     <SubmitButton
+      permission="reliability:respond"
       type="submit"
       style={{
         background: "transparent", color: "var(--ink-soft)", border: "1px solid var(--line)",
@@ -85,19 +86,19 @@ function IncidentRow({ projectId, incident }: { projectId: string; incident: Rel
       </div>
       <Pill text={incident.status} color={STATUS_COLOR[incident.status] ?? "#8b949e"} />
       <div style={{ display: "flex", gap: 6 }}>
-        <ActionForm action={reliabilityDiagnoseAction}>
+        <ActionForm permission="reliability:respond" action={reliabilityDiagnoseAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="incident_id" value={incident.id} />
           <ActionButton label="Diagnose" />
         </ActionForm>
         {canRemediate ? (
-          <ActionForm action={reliabilityRemediateAction}>
+          <ActionForm permission="reliability:respond" action={reliabilityRemediateAction}>
             <input type="hidden" name="project_id" value={projectId} />
             <input type="hidden" name="incident_id" value={incident.id} />
             <ActionButton label="Fix PR" />
           </ActionForm>
         ) : null}
-        <ActionForm action={reliabilityFeedbackAction}>
+        <ActionForm permission="reliability:respond" action={reliabilityFeedbackAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="incident_id" value={incident.id} />
           <input type="hidden" name="verdict" value="false_alarm" />

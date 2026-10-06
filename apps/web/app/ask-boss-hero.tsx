@@ -1220,7 +1220,7 @@ export function AskBossHero({
       // as cancelled, because it may still land server-side.
       const stalled = Symbol("stalled");
       const r = await Promise.race([
-        callAction(askBossAction)(null, fd),
+        callAction(askBossAction, undefined, "assistant:chat")(null, fd),
         new Promise<typeof stalled>((res) =>
           window.setTimeout(() => res(stalled), STALL_SECONDS * 1000)),
       ]);
@@ -1310,7 +1310,7 @@ export function AskBossHero({
   const accept = useCallback((a: ProposedAction) => {
     setRanAction(a.id);
     startTransition(async () => {
-      const r = await callAction(runAgentActionAction)(projectId, actor, a.tool, a.args, threadId ?? undefined);
+      const r = await callAction(runAgentActionAction, undefined, "assistant:chat")(projectId, actor, a.tool, a.args, threadId ?? undefined);
       const data = r.data as Record<string, unknown> | undefined;
       const ok = r.ok && data?.ok !== false;
       // The Factory card, the Workflows screen and the monitoring panel render the rows this

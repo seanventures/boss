@@ -80,7 +80,7 @@ export function ProcessManager({
   };
 
   const reload = () =>
-    callAction(loadProcessManagerAction)(projectId).then((result) => {
+    callAction(loadProcessManagerAction, undefined, "autopilot:read")(projectId).then((result) => {
       if (result.ok && result.data) {
         applyResult(result.data);
         return;
@@ -97,7 +97,7 @@ export function ProcessManager({
 
   useEffect(() => {
     let alive = true;
-    callAction(loadProcessManagerAction)(projectId).then((result) => {
+    callAction(loadProcessManagerAction, undefined, "autopilot:read")(projectId).then((result) => {
       if (!alive) return;
       if (result.ok && result.data) {
         applyResult(result.data);
@@ -151,7 +151,7 @@ export function ProcessManager({
         action={(formData) => {
           setError(null);
           startTransition(async () => {
-            const result = await callAction(tickProcessManagerAction)(formData);
+            const result = await callAction(tickProcessManagerAction, undefined, "autopilot:operate")(formData);
             if (result.ok && result.data) {
               applyResult(result.data);
               await reload();
@@ -163,7 +163,7 @@ export function ProcessManager({
       >
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="actor" value={actor} />
-        <SubmitButton className="button" type="submit" disabled={pending}>
+        <SubmitButton permission="autopilot:operate" className="button" type="submit" disabled={pending}>
           Tick now
         </SubmitButton>
       </form>

@@ -47,7 +47,7 @@ function CustomProfileForm({ projectId, edition }: { projectId: string; edition:
           (set <code style={{ color: "var(--accent-text)" }}>BOSS_EDITION=enterprise</code>).
         </p>
       ) : (
-        <ActionForm action={createPipelineProfileAction} style={{ display: "grid", gap: 14 }}>
+        <ActionForm permission="pipeline:manage" action={createPipelineProfileAction} style={{ display: "grid", gap: 14 }}>
           <input type="hidden" name="project_id" value={projectId} />
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             <Field label="Name (lowercase, no spaces)"><input name="name" required placeholder="qa-heavy" style={inputStyle} /></Field>
@@ -153,7 +153,7 @@ function ProfileCard({
             DEFAULT
           </span>
         ) : (
-          <ActionForm action={setPipelineDefaultAction}>
+          <ActionForm permission="pipeline:manage" action={setPipelineDefaultAction}>
             <input type="hidden" name="project_id" value={projectId} />
             <input type="hidden" name="name" value={p.name} />
             <SubmitButton

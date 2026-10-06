@@ -149,7 +149,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
           </div>
           <details className="wo-editor" data-testid="wo-add-work">
             <summary>Add or rescore work</summary>
-            <ActionForm action={upsertRankedWorkAction}>
+            <ActionForm permission="work_item:manage" action={upsertRankedWorkAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <div className="wo-form-pair">
@@ -180,7 +180,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
         <section className="wo-column wo-capacity" aria-label="Capacity and job queue">
           <div className="wo-column-head">
             <div><Gauge size={17} /><span>Capacity envelope</span></div>
-            <ActionForm action={planResourceAllocationsAction}>
+            <ActionForm permission="work_item:manage" action={planResourceAllocationsAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <input type="hidden" name="resource_kind" value="job_concurrency" />
@@ -232,7 +232,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
           </div>
           <details className="wo-editor">
             <summary>Change quota</summary>
-            <ActionForm action={upsertResourceQuotaAction}>
+            <ActionForm permission="work_item:manage" action={upsertResourceQuotaAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <div className="wo-form-pair">
@@ -328,7 +328,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
           </div>
           <details className="wo-editor">
             <summary>Connect bot or status channel</summary>
-            <ActionForm action={upsertDeliveryBotAction}>
+            <ActionForm permission="integration:manage" action={upsertDeliveryBotAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <div className="wo-form-pair">
@@ -339,7 +339,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
               <label>External identity<input name="external_identity" placeholder="boss-product-manager" /></label>
               <SubmitButton className="button secondary" type="submit">Register bot identity</SubmitButton>
             </ActionForm>
-            <ActionForm action={upsertStatusChannelAction}>
+            <ActionForm permission="comms:manage" action={upsertStatusChannelAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <div className="wo-form-pair">
@@ -374,7 +374,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
             <div><Robot size={16} /><span>{selected.owner_actor ?? "Unassigned"} · {selected.workload_class}</span></div>
           </div>
           {selectedBinding && selectedBinding.sync_status !== "synced" ? (
-            <ActionForm action={syncTrackerBindingAction} className="wo-inline-sync">
+            <ActionForm permission="integration:manage" action={syncTrackerBindingAction} className="wo-inline-sync">
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <input type="hidden" name="work_item_id" value={selected.id} />

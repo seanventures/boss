@@ -9,6 +9,7 @@ import { BossApiError } from "@boss/api-client";
 import { revalidatePath } from "next/cache";
 
 import { client, PROJECT_ID, resolveProjectId } from "../../lib/client";
+import { declareAction } from "../../lib/identity/guarded-action";
 
 export type FloorResult = { ok: boolean; error?: string; runId?: string; attempt?: number; url?: string; workflowRunId?: string };
 
@@ -80,3 +81,10 @@ export async function startDirectChangeAction(form: FormData): Promise<FloorResu
     return { ok: false, error: said(e) };
   }
 }
+
+// THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
+// A declaration for the console to mirror — disabled with the reason when not held — never a
+// decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
+declareAction(retryBuildAction, "code_task:retry");
+declareAction(waiveChecksAction, "code_task:override");
+declareAction(startDirectChangeAction, "code_task:create");

@@ -4,30 +4,28 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 import { middleware, config as middlewareConfig } from "../middleware";
-import {
-  collectorPath, collectorPathOf, consoleAuthConfig, issueSession, passwordMatches, safeNext, SESSION_SECONDS,
-  sessionCookieName, validSession,
-} from "../lib/console-session";
-import { POST as login } from "../app/api/auth/login/route";
+import { collectorPath, collectorPathOf, safeNext } from "../lib/console-session";
 
-const PASSWORD = "a".repeat(48);
-const SECRET = "b".repeat(64);
+/**
+ * THE CONSOLE'S BOUNDARY, AFTER IDENTITY S4: the API owns the session (`__Host-boss_session`,
+ * IDENTITY.md §4.1) and middleware only routes on its presence. There is no console password,
+ * no HMAC cookie and no shared key; the transport rules (HTTPS when remote, same-origin writes,
+ * loopback tunnels, the collector's exception) are unchanged.
+ */
+const SESSION = "__Host-boss_session=bss_test";
 
 function configured() {
-  vi.stubEnv("BOSS_CONSOLE_PASSWORD", PASSWORD);
-  vi.stubEnv("BOSS_CONSOLE_SESSION_SECRET", SECRET);
   vi.stubEnv("BOSS_CONSOLE_PUBLIC_ORIGIN", "https://boss.example");
 }
 
 afterEach(() => vi.unstubAllEnvs());
 
-describe("single-operator console boundary", () => {
-  it("fails closed without separate login configuration", async () => {
+describe("the console boundary", () => {
+  it("needs no console secret: with nothing configured it still routes, and still refuses the unsigned", async () => {
     vi.stubEnv("BOSS_CONSOLE_PASSWORD", "");
     vi.stubEnv("BOSS_CONSOLE_SESSION_SECRET", "");
     vi.stubEnv("BOSS_CONSOLE_PUBLIC_ORIGIN", "https://boss.example");
-    expect(consoleAuthConfig()).toBeNull();
-    expect((await middleware(new NextRequest("https://boss.example/v1/projects"))).status).toBe(503);
+    expect((await middleware(new NextRequest("https://boss.example/v1/projects"))).status).toBe(401);
   });
 
   it.each(["/", "/v1/projects", "/api/projects-strip?project_id=other-org", "/api/skills"])(
@@ -85,38 +83,24 @@ describe("single-operator console boundary", () => {
     }
   });
 
-  it("issues a signed, expiring owner session that can navigate multiple projects", async () => {
+  it("passes a request carrying the API's session cookie, for any project — the API decides", async () => {
     configured();
-    const auth = consoleAuthConfig()!;
-    expect(await passwordMatches(PASSWORD, auth)).toBe(true);
-    expect(await passwordMatches("wrong", auth)).toBe(false);
-    const now = 1_700_000_000_000;
-    const cookie = await issueSession(auth, now, "12345678-1234-1234-1234-123456789abc");
-    expect(await validSession(cookie, auth, now + 1)).toBe(true);
-    expect(await validSession(cookie, auth, now + SESSION_SECONDS * 1000)).toBe(false);
-    expect(await validSession(cookie.slice(0, -1) + (cookie.endsWith("0") ? "1" : "0"),
-      auth, now + 1)).toBe(false);
-    expect(await validSession(cookie, { ...auth, password: "c".repeat(48) }, now + 1)).toBe(false);
-    const liveCookie = await issueSession(auth);
     for (const projectId of ["alpha", "another-org-project"]) {
-      const request = new NextRequest(
-        `https://boss.example/v1/tasks?project_id=${projectId}`,
-        { headers: { cookie: `${sessionCookieName(new Request("https://boss.example"))}=${liveCookie}` } },
-      );
+      const request = new NextRequest(`https://boss.example/v1/tasks?project_id=${projectId}`, { headers: { cookie: SESSION } });
       expect((await middleware(request)).status).toBe(200);
     }
+    // The retired console cookie is not a session any more.
+    const old = new NextRequest("https://boss.example/v1/tasks", { headers: { cookie: "__Host-boss_console_session=v1.x.y.z" } });
+    expect((await middleware(old)).status).toBe(401);
   });
 
-  it("rejects cross-origin and originless mutations even with a valid cookie", async () => {
+  it("rejects cross-origin and originless mutations even with a session", async () => {
     configured();
-    const cookie = await issueSession(consoleAuthConfig()!);
-    const headers = { cookie: `__Host-boss_console_session=${cookie}` };
+    const headers = { cookie: SESSION };
     const foreign = new NextRequest("https://boss.example/v1/commands", {
       method: "POST", headers: { ...headers, origin: "https://attacker.example" },
     });
-    const missing = new NextRequest("https://boss.example/api/builds", {
-      method: "POST", headers,
-    });
+    const missing = new NextRequest("https://boss.example/api/builds", { method: "POST", headers });
     const owner = new NextRequest("https://boss.example/v1/commands", {
       method: "POST", headers: { ...headers, origin: "https://boss.example" },
     });
@@ -125,45 +109,29 @@ describe("single-operator console boundary", () => {
     expect((await middleware(owner)).status).toBe(200);
   });
 
-  it("keeps login reachable and sets a private browser cookie without an API key", async () => {
+  it("keeps sign-in reachable: the page and the public sign-in API, still same-origin for writes", async () => {
     configured();
     expect((await middleware(new NextRequest("https://boss.example/login"))).status).toBe(200);
-    expect((await middleware(new NextRequest("https://boss.example/api/auth/login"))).status).toBe(200);
-    const form = new URLSearchParams({ password: PASSWORD, next: "/?project_id=alpha" });
-    const request = new NextRequest("https://boss.example/api/auth/login", {
-      method: "POST", headers: {
-        origin: "https://boss.example", "content-type": "application/x-www-form-urlencoded",
-      }, body: form.toString(),
+    const signIn = new NextRequest("https://boss.example/v1/auth/login", {
+      method: "POST", headers: { origin: "https://boss.example", "content-type": "application/json" }, body: "{}",
     });
-    const response = await login(request);
-    expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("/?project_id=alpha");
-    const setCookie = response.headers.get("set-cookie") ?? "";
-    expect(setCookie).toContain("__Host-boss_console_session=");
-    expect(setCookie).toContain("HttpOnly");
-    expect(setCookie).toContain("Secure");
-    expect(setCookie).toContain("SameSite=strict");
-    expect(setCookie).not.toContain(PASSWORD);
-    expect(setCookie).not.toContain("BOSS_API_KEY");
+    expect((await middleware(signIn)).status).toBe(200);
+    const forged = new NextRequest("https://boss.example/v1/auth/login", {
+      method: "POST", headers: { origin: "https://attacker.example", "content-type": "application/json" }, body: "{}",
+    });
+    expect((await middleware(forged)).status).toBe(403);
+    // The old shared-password routes are gone.
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(process.cwd(), "app", "api", "auth", "login"))).toBe(false);
+    expect(existsSync(join(process.cwd(), "app", "api", "auth", "logout"))).toBe(false);
   });
 
-  it("does not allow a login redirect to leave the console", () => {
+  it("does not allow a sign-in redirect to leave the console", () => {
     expect(safeNext("//attacker.example")).toBe("/");
     expect(safeNext("/\\attacker.example")).toBe("/");
     expect(safeNext("/\t/attacker.example")).toBe("/");
     expect(safeNext("https://attacker.example")).toBe("/");
     expect(safeNext("/?project_id=alpha")).toBe("/?project_id=alpha");
-  });
-
-  it("keeps a submitted control-character return path inside the console", async () => {
-    configured();
-    const request = new NextRequest("https://boss.example/api/auth/login", {
-      method: "POST", headers: {
-        origin: "https://boss.example", "content-type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({ password: PASSWORD, next: "/\t/attacker.example" }).toString(),
-    });
-    expect((await login(request)).headers.get("location")).toBe("/");
   });
 
   it("requires HTTPS on remote origins, including direct HTTP with forged API requests", async () => {
@@ -195,78 +163,28 @@ describe("single-operator console boundary", () => {
       .toBe("http://localhost:3000/login?next=%2Fv2");
   });
 
-  it("trusts only an explicitly configured loopback TLS proxy and sets a Secure cookie", async () => {
+  it("behind a configured TLS proxy, sends a signed-out page to sign in on the public origin", async () => {
     configured();
-    vi.stubEnv("BOSS_CONSOLE_PUBLIC_ORIGIN", "https://boss.example");
-    const headers = {
-      host: "boss.example", "x-forwarded-proto": "https",
-      "x-forwarded-host": "boss.example", origin: "https://boss.example",
-      "content-type": "application/x-www-form-urlencoded",
-    };
-    const page = await middleware(new NextRequest("http://localhost:3000/v2?area=work", {
-      headers,
-    }));
+    const headers = { host: "boss.example", "x-forwarded-proto": "https", "x-forwarded-host": "boss.example" };
+    const page = await middleware(new NextRequest("http://localhost:3000/v2?area=work", { headers }));
     expect(page.status).toBe(307);
-    expect(page.headers.get("location"))
-      .toBe("https://boss.example/login?next=%2Fv2%3Farea%3Dwork");
-    const request = new NextRequest("http://localhost:3000/api/auth/login", {
-      method: "POST", headers, body: new URLSearchParams({ password: PASSWORD }).toString(),
-    });
-    expect((await middleware(request)).status).toBe(200);
-    const response = await login(request);
-    expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("/");
-    expect(response.headers.get("set-cookie")).toContain("__Host-boss_console_session=");
-    expect(response.headers.get("set-cookie")).toContain("Secure");
+    expect(page.headers.get("location")).toBe("https://boss.example/login?next=%2Fv2%3Farea%3Dwork");
   });
 
   it("accepts local tunnel mutations even when a public HTTPS origin is configured", async () => {
     configured();
-    vi.stubEnv("BOSS_CONSOLE_PUBLIC_ORIGIN", "https://boss.example");
-    const cookie = await issueSession(consoleAuthConfig()!);
     const request = new NextRequest("http://127.0.0.1:3000/api/builds", {
-      method: "POST", headers: {
-        host: "127.0.0.1:3000",
-        cookie: `boss_console_session_local=${cookie}`,
-        origin: "http://127.0.0.1:3000",
-      },
+      method: "POST", headers: { host: "127.0.0.1:3000", cookie: SESSION, origin: "http://127.0.0.1:3000" },
     });
     expect((await middleware(request)).status).toBe(200);
     // The tunnel's browser-facing port can differ from Next's internal listener port.
     const tunneled = new NextRequest("http://127.0.0.1:3000/api/builds", {
-      method: "POST", headers: {
-        host: "127.0.0.1:3108", cookie: `boss_console_session_local=${cookie}`,
-        origin: "http://127.0.0.1:3108",
-      },
+      method: "POST", headers: { host: "127.0.0.1:3108", cookie: SESSION, origin: "http://127.0.0.1:3108" },
     });
     expect((await middleware(tunneled)).status).toBe(200);
     const otherLoopbackOrigin = new NextRequest("http://127.0.0.1:3000/api/builds", {
-      method: "POST", headers: {
-        host: "127.0.0.1:3108", cookie: `boss_console_session_local=${cookie}`,
-        origin: "http://localhost:3108",
-      },
+      method: "POST", headers: { host: "127.0.0.1:3108", cookie: SESSION, origin: "http://localhost:3108" },
     });
     expect((await middleware(otherLoopbackOrigin)).status).toBe(403);
-    const forged = new NextRequest("http://127.0.0.1:3000/api/auth/login", {
-      method: "POST", headers: {
-        host: "127.0.0.1:3000", "x-forwarded-proto": "https",
-        "x-forwarded-host": "boss.example", origin: "https://boss.example",
-        "content-type": "application/x-www-form-urlencoded",
-      }, body: new URLSearchParams({ password: PASSWORD }).toString(),
-    });
-    expect((await login(forged)).status).toBe(403);
-  });
-
-  it("keeps login redirects on the caller's loopback host", async () => {
-    configured();
-    const request = new NextRequest("http://127.0.0.1:3000/api/auth/login", {
-      method: "POST", headers: {
-        host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000",
-        "content-type": "application/x-www-form-urlencoded",
-      }, body: new URLSearchParams({ password: PASSWORD }).toString(),
-    });
-    const response = await login(request);
-    expect(response.headers.get("location")).toBe("/");
-    expect(response.headers.get("set-cookie")).toContain("boss_console_session_local=");
   });
 });

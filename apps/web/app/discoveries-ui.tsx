@@ -78,7 +78,7 @@ function PromoteOutcome({ runId, idx, promotedTaskId, promotedMeetingId, small =
   label?: string;
 }) {
   const search = useSearch();
-  const [state, action, pending] = useActionState(callAction(promoteOutcomeAction), null);
+  const [state, action, pending] = useActionState(callAction(promoteOutcomeAction, undefined, "discovery:create"), null);
   const meeting = promotedMeetingId ?? state?.meetingRunId;
   const taskId = promotedTaskId ?? state?.taskId;
   if (meeting || taskId) {
@@ -93,7 +93,7 @@ function PromoteOutcome({ runId, idx, promotedTaskId, promotedMeetingId, small =
     <form action={action}>
       <input type="hidden" name="run_id" value={runId} />
       <input type="hidden" name="outcome_index" value={idx} />
-      <SubmitButton className={`rp-btn primary${small ? " sm" : ""}`} disabled={pending}
+      <SubmitButton permission="discovery:create" className={`rp-btn primary${small ? " sm" : ""}`} disabled={pending}
                     data-testid="dossier-convene" title="Convene a PRD panel on this outcome">
         {pending ? "Convening…" : (label ?? "Convene a panel →")}
       </SubmitButton>
@@ -104,7 +104,7 @@ function PromoteOutcome({ runId, idx, promotedTaskId, promotedMeetingId, small =
 
 function DeepenButton({ runId, small = false, primary = false }: { runId: string; small?: boolean; primary?: boolean }) {
   const search = useSearch();
-  const [state, action, pending] = useActionState(callAction(deepenDiscoveryAction), null);
+  const [state, action, pending] = useActionState(callAction(deepenDiscoveryAction, undefined, "discovery:create"), null);
   if (state?.runId) {
     return (
       <a className={`rp-btn${small ? " sm" : ""}`} data-testid="dossier-deeper-started"
@@ -116,7 +116,7 @@ function DeepenButton({ runId, small = false, primary = false }: { runId: string
   return (
     <form action={action}>
       <input type="hidden" name="run_id" value={runId} />
-      <SubmitButton className={`rp-btn${primary ? " primary" : ""}${small ? " sm" : ""}`} disabled={pending}
+      <SubmitButton permission="discovery:create" className={`rp-btn${primary ? " primary" : ""}${small ? " sm" : ""}`} disabled={pending}
                     data-testid="dossier-deepen"
                     title="A multi-source scout sweep for a richer, more cited dossier">
         {pending ? "Deepening…" : "Deepen research"}
@@ -129,7 +129,7 @@ function DeepenButton({ runId, small = false, primary = false }: { runId: string
 /** Research the same seed again — a failed dossier's way forward. */
 function ResearchAgain({ projectId, seed, context }: { projectId: string; seed: string; context?: string | null }) {
   const search = useSearch();
-  const [state, action, pending] = useActionState(callAction(startDiscoveryAction), null);
+  const [state, action, pending] = useActionState(callAction(startDiscoveryAction, undefined, "discovery:create"), null);
   if (state?.runId) {
     return <a className="rp-btn" href={consoleHref(search, { area: "discovery", run: state.runId })}>Researching again →</a>;
   }
@@ -138,7 +138,7 @@ function ResearchAgain({ projectId, seed, context }: { projectId: string; seed: 
       <input type="hidden" name="project_id" value={projectId} />
       <input type="hidden" name="seed" value={seed} />
       {context ? <input type="hidden" name="context" value={context} /> : null}
-      <SubmitButton className="rp-btn primary" disabled={pending} data-testid="dossier-research-again">
+      <SubmitButton permission="discovery:create" className="rp-btn primary" disabled={pending} data-testid="dossier-research-again">
         {pending ? "Starting…" : "Research it again"}
       </SubmitButton>
       {state?.error ? <span className="rp-err" role="alert"> {state.error}</span> : null}
@@ -157,7 +157,7 @@ function ResearchHero({ projectId, researchAvailable, discoveries, totals, onSta
   totals: DiscoveryTotals | null;
   onStarted: (runId: string) => void;
 }) {
-  const [state, action, pending] = useActionState(callAction(startDiscoveryAction), null);
+  const [state, action, pending] = useActionState(callAction(startDiscoveryAction, undefined, "discovery:create"), null);
   useEffect(() => { if (state?.runId) onStarted(state.runId); }, [state?.runId, onStarted]);
   const promising = totals?.promising ?? discoveries.filter((d) => dossierVerdict(d).filter === "promising").length;
   const signals = totals?.signals ?? discoveries.reduce((n, d) => n + (d.summary?.findings ?? 0), 0);
@@ -181,7 +181,7 @@ function ResearchHero({ projectId, researchAvailable, discoveries, totals, onSta
               <label className="rp-toggle" title="A multi-source scout sweep: richer, more cited, slower">
                 <input type="checkbox" name="deep" data-testid="research-deep" /><i aria-hidden />Deep
               </label>
-              <SubmitButton className="rp-btn primary" disabled={pending} data-testid="research-start">
+              <SubmitButton permission="discovery:create" className="rp-btn primary" disabled={pending} data-testid="research-start">
                 {pending ? "Starting…" : "Research →"}
               </SubmitButton>
             </div>

@@ -14,7 +14,6 @@ let calls: Call[] = [];
 
 beforeEach(() => {
   vi.stubEnv("BOSS_API_URL", "http://api.example.test");
-  vi.stubEnv("BOSS_API_KEY", "console-key-for-tests");
   calls = [];
   vi.stubGlobal("fetch", vi.fn(async (u: unknown, init?: RequestInit) => {
     calls.push({ url: String(u), headers: new Headers(init?.headers) });
@@ -90,10 +89,12 @@ describe("a POST to the collector through the console", () => {
     expect(calls[0].headers.get("x-forwarded-for")).toBeNull();
   });
 
-  it("other /v1 writes are untouched by this rule", async () => {
-    await post({ origin: "https://boss.example.test", "sec-fetch-site": "same-origin" }, "/v1/telemetry/sharing");
+  it("other /v1 writes are untouched by this rule: the person's request, never a console key", async () => {
+    await post({ origin: "https://boss.example.test", "sec-fetch-site": "same-origin", "x-boss-csrf": "c1" }, "/v1/telemetry/sharing");
     expect(calls).toHaveLength(1);
-    expect(calls[0].headers.get("authorization")).toBe("Bearer console-key-for-tests");
+    expect(calls[0].headers.get("authorization")).toBeNull();
+    expect(calls[0].headers.get("x-boss-csrf")).toBe("c1");
+    expect(calls[0].headers.get("origin")).toBe("https://boss.example.test");
   });
 });
 

@@ -191,7 +191,7 @@ describe("the console's own areas are unaffected", () => {
     // small, and it no longer needs to be: the section is already mounted when the click lands.
     // REWRITTEN when areas went lazy: an area already opened is mounted when the click lands;
     // one opened for the first time is fetched once behind a loading state (area-loading).
-    expect(page).toContain("const shows = (area: string) => loadedAreas.has(area);");
+    expect(page).toContain("const shows = (area: string) => loadedAreas.has(area) && openable(area);");
     expect(shell).toContain('data-testid="area-loading"');
   });
 

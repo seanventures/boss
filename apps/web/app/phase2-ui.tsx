@@ -26,7 +26,7 @@ export function EvalHarnessCard({ projectId, actor, run }: { projectId: string; 
     <article className="stack-card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
         <h3 style={{ margin: 0 }}>Eval harness</h3>
-        <ActionForm action={runEvalsAction}>
+        <ActionForm permission="assurance:run" action={runEvalsAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
           <SubmitButton className="button secondary" type="submit" data-testid="eval-run">Run evals</SubmitButton>
@@ -67,7 +67,7 @@ export function AutonomyEvaluateCard({ projectId, actor }: { projectId: string; 
         Gather a role’s allowed/denied/scope-violation events since its last review and run a
         governance review — auto-proposes an upgrade decision or auto-downgrades on a violation.
       </p>
-      <ActionForm action={evaluateAutonomyAction} className="composer compact">
+      <ActionForm permission="autonomy:read" action={evaluateAutonomyAction} className="composer compact">
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="actor" value={actor} />
         <label className="field">
@@ -106,12 +106,12 @@ export function RouterHealthCard({
         </p>
       ) : null}
       <div style={{ display: "flex", gap: 8 }}>
-        <ActionForm action={pollProviderHealthAction}>
+        <ActionForm permission="model_provider:read" action={pollProviderHealthAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
           <SubmitButton className="button secondary" type="submit">Poll provider health</SubmitButton>
         </ActionForm>
-        <ActionForm action={recordRouterRationaleAction}>
+        <ActionForm permission="model_provider:manage" action={recordRouterRationaleAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
           <SubmitButton className="button secondary" type="submit">Record rationale</SubmitButton>
@@ -136,7 +136,7 @@ export function SkillInvokeCard({
         Run a skill through the runtime — per-skill permission + cost + retry enforcement, with mock
         mode (full gauntlet, zero side effects). The API drives mock only.
       </p>
-      <ActionForm action={invokeSkillAction} className="composer compact">
+      <ActionForm permission="skill:invoke" action={invokeSkillAction} className="composer compact">
         <input type="hidden" name="project_id" value={projectId} />
         <label className="field">
           <span>Skill id</span>

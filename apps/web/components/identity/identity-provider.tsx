@@ -124,6 +124,12 @@ export function IdentityProvider({ me: initialMe, org: initialOrg, project: init
 
   const stepUp = useCallback((reason: string) => new Promise<boolean>((resolve) => setAsk({ reason, resolve })), []);
 
+  // Code outside components (lib/call-action.ts) mirrors through the same check and step-up.
+  useEffect(() => {
+    installMirror({ check: (p) => check(p), stepUp, refresh });
+    return () => installMirror(null);
+  }, [check, stepUp, refresh]);
+
   const value = useMemo<Ctx>(() => ({ me, org, project, projectId, stub, mirrored, check, refresh, stepUp }),
     [me, org, project, projectId, stub, mirrored, check, refresh, stepUp]);
 

@@ -1,44 +1,44 @@
+// @vitest-environment happy-dom
 /**
- * The sign-in page says where the console password lives.
+ * The page that asks for the shared console password says where it lives.
  *
  * The installer prints the command once, at the end of a long install, and a person who missed
- * it reached a page with a password box and nothing else — "what is this console password?" was
- * the first question on a fresh v1.0-rc1 install. The page names the command, never the value.
+ * it reached a password box and nothing else. Since identity S4 the shared password is no longer
+ * a sign-in — it is the proof that you are the operator on the "Claim this BOSS" screen
+ * (IDENTITY.md §4.11, D25) — so that is where the hint lives now. It names the command, never
+ * the value, and appears only on the legacy-password claim.
  */
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../lib/console-session", () => ({
-  consoleAuthConfig: () => ({ password: "never-rendered", secret: "s" }),
-  safeNext: (next: string | null) => next ?? "/",
-}));
+import type { AuthOptions } from "../lib/identity/types";
 
-// Next compiles the page with the automatic JSX runtime; vitest here uses the classic one, which
-// expects React in scope. Supplied for the test rather than imported into a page that needs none.
-(globalThis as unknown as { React: typeof React }).React = React;
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }), useSearchParams: () => new URLSearchParams() }));
 
-async function render(error?: string) {
-  const { default: ConsoleLogin } = await import("../app/login/page");
-  return renderToStaticMarkup(await ConsoleLogin({ searchParams: Promise.resolve({ error }) }));
+async function render(path: NonNullable<AuthOptions["claim"]>["path"]) {
+  const { ClaimFlow } = await import("../app/(auth)/claim/claim");
+  const options: AuthOptions = {
+    org_name: "Acme BOSS", host: "boss.acme.dev", providers: [], smtp: false, signup: false, legacy_password: path === "legacy_password",
+    claim: { path, origin: path === "network_bridge" ? "https://shared-server.example.ts.net" : null, expires_at: null, seats: ["ceo"] },
+  };
+  return renderToStaticMarkup(<ClaimFlow options={options} />);
 }
 
-describe("the console sign-in page", () => {
+describe("the legacy-password claim", () => {
   it("tells you how to find the password on the server, and over SSH", async () => {
-    const html = await render();
+    const html = await render("legacy_password");
     expect(html).toContain('data-testid="console-password-hint"');
     expect(html).toContain("python3 scripts/install/console_password.py show");
     expect(html).toContain("ssh -t user@your-server");
-    expect(html).toContain("https://boss.sean.network/docs/CONSOLE_AUTH/");
   });
 
-  it("never renders the password itself", async () => {
-    expect(await render()).not.toContain("never-rendered");
+  it("never renders a password value", async () => {
+    const html = await render("legacy_password");
+    expect(html).not.toMatch(/BOSS_CONSOLE_PASSWORD=|value="[^"]{24,}"/);
   });
 
-  it("keeps the hint when the password was wrong — that is when it is needed most", async () => {
-    const html = await render("invalid");
-    expect(html).toContain("Incorrect password.");
-    expect(html).toContain("console_password.py show");
+  it("shows the hint only where a password is asked for", async () => {
+    expect(await render("network_bridge")).not.toContain("console_password.py");
   });
 });

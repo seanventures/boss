@@ -152,7 +152,7 @@ describe("a failure says what happened and what to do", () => {
     for (const status of [400, 401, 403, 404, 409, 422, 429, 500, 503]) {
       expect(whatToDo(status).length).toBeGreaterThan(20);
     }
-    expect(whatToDo(403)).toContain("Access and packs");
+    expect(whatToDo(403)).toContain("ask an Admin");
   });
 
   it("the server's sentence comes first and is not repeated", () => {

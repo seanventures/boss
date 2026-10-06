@@ -78,9 +78,9 @@ describe("both pages and the shell use it", () => {
     it(`${page} gates rendering and fetching on the same set`, () => {
       const src = codeOnly(page);
       expect(src).toContain("const loadedAreas = areasToRender({");
-      expect(src).toContain("const shows = (area: string) => loadedAreas.has(area);");
+      expect(src).toContain("const shows = (area: string) => loadedAreas.has(area) && openable(area);");
       expect(src).toContain(
-        "const needs = (...areas: string[]) => areas.some((area) => loadedAreas.has(area));");
+        "const needs = (...areas: string[]) => areas.some((area) => loadedAreas.has(area) && openable(area));");
       expect(src).toContain("loadedAreas={[...loadedAreas]}");
       expect(src).not.toContain("const shows = (_area: string) => true;");
     });
