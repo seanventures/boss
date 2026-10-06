@@ -38,18 +38,41 @@ describe("a collector POST through the console", () => {
     expect(process.memoryUsage().rss - rss).toBeLessThan(40 * 1024 * 1024);
   });
 
-  it("the route answers 413 and never calls the API", async () => {
-    const calls: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (u: unknown) => { calls.push(String(u)); return new Response("{}"); }));
+  // Re-check 4, item 1: every spelling of the three routes is read under the cap, not only the
+  // exact one — `/ingest/`, `delete/` and `share/?x` were buffered whole.
+  for (const path of ["/v1/telemetry/ingest", "/v1/telemetry/ingest/", "/v1/telemetry/delete/",
+                      "/v1/telemetry/share/?x", "/v1/telemetry/share?x"]) {
+    it(`the route answers 413 at ${path}, closes the connection and never calls the API`, async () => {
+      const calls: string[] = [];
+      vi.stubGlobal("fetch", vi.fn(async (u: unknown) => { calls.push(String(u)); return new Response("{}"); }));
+      const { POST } = await import("../app/v1/[...path]/route");
+      const big = hugeChunked(150);
+      const req = new Request(`http://boss.example.test${path}`, {
+        method: "POST", body: big.stream, duplex: "half",
+      } as RequestInit);
+      const rss = process.memoryUsage().rss;
+      const res = await POST(req, { params: Promise.resolve({ path: ["telemetry", "ingest"] }) });
+      expect(res.status).toBe(413);
+      expect(res.headers.get("connection")).toBe("close");
+      expect(calls).toEqual([]);
+      expect(big.pulled()).toBeLessThanOrEqual(COLLECTOR_BODY_CAP + 4 * CHUNK);
+      expect(process.memoryUsage().rss - rss).toBeLessThan(40 * 1024 * 1024);
+      vi.unstubAllGlobals();
+    });
+  }
+
+  it("a refused browser POST stops the body: not one chunk past the first is pulled", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}")));
     const { POST } = await import("../app/v1/[...path]/route");
     const big = hugeChunked(150);
-    const req = new Request("http://boss.example.test/v1/telemetry/ingest", {
-      method: "POST", body: big.stream, duplex: "half",
+    const req = new Request("http://boss.example.test/v1/telemetry/share/?x", {
+      method: "POST", body: big.stream, duplex: "half", headers: { origin: "https://evil.example.test" },
     } as RequestInit);
-    const res = await POST(req, { params: Promise.resolve({ path: ["telemetry", "ingest"] }) });
-    expect(res.status).toBe(413);
-    expect(calls).toEqual([]);
-    expect(big.pulled()).toBeLessThanOrEqual(COLLECTOR_BODY_CAP + 4 * CHUNK);
+    const res = await POST(req, { params: Promise.resolve({ path: ["telemetry", "share"] }) });
+    expect(res.status).toBe(403);
+    expect(res.headers.get("connection")).toBe("close");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(big.pulled()).toBeLessThanOrEqual(2 * CHUNK);
     vi.unstubAllGlobals();
   });
 

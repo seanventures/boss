@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
-  collectorMachinePost, consoleAuthConfig, localHttp, networkTrustedConsole, sameOriginMutation,
+  collectorMachinePost, collectorPathOf, consoleAuthConfig, localHttp, networkTrustedConsole, sameOriginMutation,
   secureConsoleTransport,
   sessionCookieName, validSession,
 } from "./lib/console-session";
@@ -47,6 +47,14 @@ export async function middleware(request: NextRequest) {
   const previewPage = request.method === "GET" && /^\/v1\/previews\/[^/]+\/web(\/|$)/.test(path)
     && (request.headers.get("accept") ?? "").includes("text/html");
   const api = (path.startsWith("/api/") || path.startsWith("/v1/")) && !previewPage;
+  // A collector route spelled any other way than plainly (`%69ngest`, `//ingest`): the matcher
+  // could not exclude it, so Next is already teeing its body here. Refused, connection closed —
+  // the plain spellings (with or without a trailing slash or a query) never reach middleware and
+  // are checked in the /v1 route (re-check 4, item 1).
+  if (collectorPathOf(request.url) && !PLAIN_COLLECTOR.test(path)) {
+    return NextResponse.json({ detail: "collector_path_not_plain" },
+      { status: 404, headers: { Connection: "close", "Cache-Control": "no-store" } });
+  }
   // Another install's heartbeat to this collector: a machine POST, no session, no Origin
   // (lib/console-session.ts collectorMachinePost). Straight to the /v1 proxy, which adds no key.
   if (collectorMachinePost(request)) return NextResponse.next();
@@ -171,4 +179,7 @@ async function passThrough(request: NextRequest) {
  * three paths need nothing from middleware: no session (another install has none), no CSRF
  * check (they carry no credential: the /v1 proxy attaches no key to them).
  */
-export const config = { matcher: ["/((?!v1/telemetry/(?:ingest|delete|share)/?$).*)"] };
+export const config = { matcher: ["/((?!v1/telemetry/(?:ingest|delete|share)/*$).*)"] };
+
+/** The spellings the matcher above excludes — the same pattern, anchored. */
+const PLAIN_COLLECTOR = /^\/v1\/telemetry\/(?:ingest|delete|share)\/*$/;

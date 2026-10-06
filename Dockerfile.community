@@ -85,7 +85,8 @@ RUN grok --version >/dev/null
 
 FROM python-runtime AS api
 EXPOSE 8000
-CMD ["uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# apps/api/serve.py: uvicorn, trusting forwarded headers only from BOSS_TRUSTED_PROXIES.
+CMD ["python", "-m", "apps.api.serve", "--host", "0.0.0.0", "--port", "8000"]
 
 FROM python-runtime AS worker
 CMD ["python", "-m", "apps.worker.boss_worker.main"]

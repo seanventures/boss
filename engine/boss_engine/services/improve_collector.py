@@ -153,9 +153,11 @@ def ingest(connection, payload: Any, *, ip: str = "") -> dict[str, Any]:
     # AN ID'S HASH IS ITS FIRST ONE, wherever it was first seen — a heartbeat or a shared run. A
     # later envelope with another hash is someone else claiming the id (re-check D): refused, so
     # it can neither register its own hash nor take over the id's delete.
+    # An envelope with NO hash for an id that has one is refused the same way (re-check 4, item
+    # 4): every BOSS client sends its hash, so a bare heartbeat is someone writing as this id.
     held = registered_hash(connection, install_id)
     offered = clean.get("secret_hash")
-    if held and offered and offered != held:
+    if held and offered != held:
         raise CollectorError(409, "install_id_taken")
     suspicious = bool(not known and not NEW_INSTALL_LIMIT.allow(ip_key(ip)))
     ctx = (batches[-1].get("context") if batches else None) or {}
@@ -248,7 +250,10 @@ def share(connection, payload: Any, *, ip: str = "") -> dict[str, Any]:
         raise CollectorError(429, "rate_limited")
     sid = make_id("tmsh")
     held = registered_hash(connection, clean["install_id"])
-    # First seen wins, as for heartbeats: a later share cannot swap the hash that deletes this id.
+    # First seen wins, as for heartbeats: a later share carrying another hash — or none — is not
+    # this install's, and is refused rather than filed under its id (re-check 4, item 4).
+    if held and clean.get("secret_hash") != held:
+        raise CollectorError(409, "install_id_taken")
     connection.execute(text(
         "INSERT INTO tm_shares (id, install_id, body, secret_hash) "
         "VALUES (:id, :i, CAST(:b AS JSONB), :h)"),

@@ -26,7 +26,7 @@ afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.resetModules(); 
 async function post(headers: Record<string, string>, path = "/v1/telemetry/ingest") {
   const { POST } = await import("../app/v1/[...path]/route");
   const req = new Request(`http://boss.example.test${path}`, { method: "POST", body: "x", headers });
-  return POST(req, { params: Promise.resolve({ path: path.split("/").slice(2) }) });
+  return POST(req, { params: Promise.resolve({ path: path.split("?")[0].split("/").slice(2) }) });
 }
 
 describe("a POST to the collector through the console", () => {
@@ -39,11 +39,34 @@ describe("a POST to the collector through the console", () => {
     "Sec-Fetch-Site alone": { "sec-fetch-site": "same-origin" },
     "Sec-Fetch-Mode alone": { "sec-fetch-mode": "cors" },
   };
+  // Re-check 4, item 1: the trailing-slash and query spellings skip middleware too, and the route
+  // compared the raw path — so they skipped this check, the cap, and got the console's key.
+  const SPELLINGS = [
+    "/v1/telemetry/ingest", "/v1/telemetry/ingest/", "/v1/telemetry/delete/", "/v1/telemetry/share/?x",
+    "/v1/telemetry/share?x=1", "/v1/telemetry/ingest//",
+  ];
   for (const [name, headers] of Object.entries(BROWSER)) {
-    it(`refuses a browser's: ${name}`, async () => {
-      const res = await post(headers);
-      expect(res.status).toBe(403);
-      expect(calls).toEqual([]);
+    for (const path of SPELLINGS) {
+      it(`refuses a browser's: ${name}, at ${path}`, async () => {
+        const res = await post(headers, path);
+        expect(res.status).toBe(403);
+        expect(res.headers.get("connection")).toBe("close");
+        expect(calls).toEqual([]);
+      });
+    }
+  }
+
+  for (const path of SPELLINGS) {
+    it(`a machine POST to ${path} goes keyless, to the plain path, and no Location comes back`, async () => {
+      vi.stubGlobal("fetch", vi.fn(async (u: unknown, init?: RequestInit) => {
+        calls.push({ url: String(u), headers: new Headers(init?.headers) });
+        return new Response("{}", { status: 307, headers: { location: "http://api.internal:8000/v1/x" } });
+      }));
+      const res = await post({ "content-type": "application/json" }, path);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].headers.get("authorization")).toBeNull();
+      expect(calls[0].url).toMatch(/^http:\/\/api\.example\.test\/v1\/telemetry\/(ingest|delete|share)$/);
+      expect(res.headers.get("location")).toBeNull();
     });
   }
 

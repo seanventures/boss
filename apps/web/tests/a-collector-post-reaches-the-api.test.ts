@@ -55,7 +55,17 @@ describe("a collector POST from another install", () => {
   it("the /v1 proxy attaches no console key to them", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("../app/v1/[...path]/route.ts", import.meta.url), "utf8");
-    expect(src).toMatch(/COLLECTOR_PATHS\.has\(new URL\(req\.url\)\.pathname\)/);
+    expect(src).toMatch(/forwardHeaders\(req, collector !== null\)/);
     expect(src).toMatch(/if \(API_KEY && !machine\)/);
+  });
+
+  it("a collector route spelled any other way is refused in middleware, connection closed", async () => {
+    vi.stubEnv("BOSS_CONSOLE_AUTH", "network");
+    vi.stubEnv("BOSS_CONSOLE_PUBLIC_ORIGIN", "");
+    for (const p of ["/v1/telemetry/%69ngest", "/v1//telemetry/share", "/v1/telemetry/delete%2F"]) {
+      const r = await middleware(req(p));
+      expect(r.status, p).toBe(404);
+      expect(r.headers.get("connection"), p).toBe("close");
+    }
   });
 });
