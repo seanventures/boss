@@ -65,12 +65,13 @@ describe("Community client", () => {
     expect(provider).not.toHaveProperty("password");
     expect(provider).not.toHaveProperty("provider_key");
     expect(fetchImpl).toHaveBeenCalledWith(
-      "https://boss.test/v1/hardware/places?project_id=p1",
-      expect.objectContaining({ method: "GET" }),
+      // Writing GETs are read through their POST twin (identity_guard.writing_get).
+      "https://boss.test/v1/hardware/places/load?project_id=p1",
+      expect.objectContaining({ method: "POST" }),
     );
     expect(fetchImpl).toHaveBeenCalledWith(
-      "https://boss.test/v1/hardware/resolve?project_id=p1",
-      expect.objectContaining({ method: "GET" }),
+      "https://boss.test/v1/hardware/resolve/load?project_id=p1",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 });

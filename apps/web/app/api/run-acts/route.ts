@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { apiWrite } from "../../../lib/api-write";
+import { loadPath, WRITING_GET_TWIN_SUFFIX } from "../../../lib/writing-get";
 
 /**
  * The run surfaces' reads of signed work: a run's chain, and one piece of work in detail.
@@ -24,9 +26,10 @@ export async function GET(req: Request) {
     const runId = (params.get("run_id") ?? "").trim();
     if (!ID.test(runId)) return NextResponse.json({ error: "missing run_id" }, { status: 400 });
     // A build (crun_…) has its own chain: its acts, in the workflow chain shape (GET /v1/code-tasks/{id}/chain).
+    // A workflow run's chain is a writing GET (it freezes the chain): read by its POST twin.
     path = runId.startsWith("crun_")
       ? `/v1/code-tasks/${encodeURIComponent(runId)}/chain`
-      : `/v1/workflow-runs/${encodeURIComponent(runId)}/chain`;
+      : loadPath(`/v1/workflow-runs/${encodeURIComponent(runId)}/chain`);
   } else if (view === "act") {
     const actId = (params.get("act_id") ?? "").trim();
     if (!ID.test(actId)) return NextResponse.json({ error: "missing act_id" }, { status: 400 });
@@ -35,8 +38,11 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "unknown view" }, { status: 400 });
   }
   try {
-    const r = await fetch(`${API_URL}${path}?project_id=${encodeURIComponent(projectId)}`,
-      { headers: authHeaders({ "Content-Type": "application/json" }), cache: "no-store" });
+    const url = `${API_URL}${path}?project_id=${encodeURIComponent(projectId)}`;
+    const headers = authHeaders({ "Content-Type": "application/json" });
+    const r = path.endsWith(WRITING_GET_TWIN_SUFFIX)
+      ? await apiWrite(url, { method: "POST", headers, cache: "no-store" })
+      : await fetch(url, { headers, cache: "no-store" });
     return NextResponse.json(await r.json(), { status: r.ok ? 200 : r.status });
   } catch {
     return NextResponse.json({ error: "the work record could not be read" }, { status: 502 });

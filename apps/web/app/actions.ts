@@ -1418,19 +1418,10 @@ export async function queueOutboxMessageAction(formData: FormData): Promise<Acti
   }
 
   const projectId = getProjectId(formData);
-  const reservation = await client.reserveBudget({
-    project_id: projectId,
-    category: "comms",
-    amount_usd_micros: 50_000,
-    reason: "Queue outbound communication from the executive console.",
-  });
-  if (reservation.status !== "reserved" || !reservation.reservation_id) {
-    throw new Error(reservation.message);
-  }
-
+  // No reservation from here: a person is refused on /v1/budget/reserve (spend:reserve is
+  // system-only). The queue route reserves the comms spend itself, under the person's comms:send.
   await client.queueOutboxDelivery(messageId, {
     project_id: projectId,
-    reservation_id: reservation.reservation_id,
     dedupe_key: `outbox-queue-${messageId}-${await pressToken()}`,
     actor: getActor(formData),
     urgency:

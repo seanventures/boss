@@ -8,6 +8,7 @@ import {
   isCaptainUnavailableStatus,
 } from "../lib/metatron-captain";
 import { apiWrite } from "../lib/api-write";
+import { loadPath } from "../lib/writing-get";
 import { declareAction } from "../lib/identity/guarded-action";
 
 export type MetatronCaptainActionResult = {
@@ -102,7 +103,8 @@ export async function loadMetatronCaptainSessionAction(
 ): Promise<MetatronCaptainActionResult> {
   const project = encodeURIComponent(projectId);
   const who = encodeURIComponent(actor);
-  return captainGet(`/v1/metatron/session?project_id=${project}&actor=${who}`);
+  // A writing GET (it opens the session): its POST twin, nothing revalidated.
+  return captainPost(loadPath(`/v1/metatron/session?project_id=${project}&actor=${who}`), {}, false);
 }
 
 export async function sendMetatronCaptainMessageAction(

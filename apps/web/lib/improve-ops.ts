@@ -3,6 +3,7 @@
  * handler app/api/improve/route.ts reads this table; the browser cannot reach any other API path
  * through it). docs/product/RUN_SCORECARDS.md, "Implementation" → "Routes".
  */
+import { loadPath } from "./writing-get";
 const str = (v: unknown) => (v === undefined || v === null ? "" : String(v));
 const enc = (v: unknown) => encodeURIComponent(str(v));
 
@@ -46,11 +47,12 @@ export const IMPROVE_OPS: Record<string, ImproveOp> = {
 };
 
 /** GET views: name → API path from the query. `raw` ones are passed through as a download. */
-export const IMPROVE_READS: Record<string, { path: (q: URLSearchParams) => string; raw?: boolean }> = {
+export const IMPROVE_READS: Record<string, { path: (q: URLSearchParams) => string; raw?: boolean; load?: true }> = {
   sharing: { path: (q) => `/v1/telemetry/sharing?project_id=${enc(q.get("project_id"))}` },
-  preview: { path: (q) => `/v1/telemetry/preview?project_id=${enc(q.get("project_id"))}` },
+  // `load`: a writing GET, read through its POST twin (lib/writing-get.ts).
+  preview: { load: true, path: (q) => loadPath(`/v1/telemetry/preview?project_id=${enc(q.get("project_id"))}`) },
   send: { path: (q) => `/v1/telemetry/sends/${enc(q.get("id"))}?project_id=${enc(q.get("project_id"))}` },
-  export: { raw: true, path: (q) => `/v1/telemetry/export?project_id=${enc(q.get("project_id"))}&actor=${enc(q.get("actor"))}` },
+  export: { raw: true, load: true, path: (q) => loadPath(`/v1/telemetry/export?project_id=${enc(q.get("project_id"))}&actor=${enc(q.get("actor"))}`) },
   scorecards: { path: (q) => `/v1/scorecards?project_id=${enc(q.get("project_id"))}&group=${enc(q.get("group") || "role")}&win=${enc(q.get("win") || "30d")}&kind=${enc(q.get("kind") || "build")}` },
   experiments: { path: (q) => `/v1/experiments?project_id=${enc(q.get("project_id"))}` },
   prompts: { path: (q) => `/v1/feedback/prompts?project_id=${enc(q.get("project_id"))}&actor=${enc(q.get("actor"))}&subjects=${enc(q.get("subjects"))}` },

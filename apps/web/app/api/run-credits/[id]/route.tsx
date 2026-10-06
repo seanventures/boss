@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 
 import type { Chain } from "../../../../lib/agent-world-types";
 import { API_URL, authHeaders } from "../../../../lib/client";
+import { apiWrite } from "../../../../lib/api-write";
+import { loadPath } from "../../../../lib/writing-get";
 import { toChain } from "../../../agents/act-wire";
 import { CARD_COLOURS as C, creditsCard, type CreditsCard } from "../../../agents/credits-card";
 
@@ -76,7 +78,7 @@ function Card({ card }: { card: CreditsCard }) {
 /** A build's credits are its own acts; a workflow run's, its chain. */
 function chainPath(id: string): string {
   return id.startsWith("crun_") ? `/v1/code-tasks/${encodeURIComponent(id)}/chain`
-    : `/v1/workflow-runs/${encodeURIComponent(id)}/chain`;
+    : loadPath(`/v1/workflow-runs/${encodeURIComponent(id)}/chain`);
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -86,8 +88,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!ID.test(id)) return NextResponse.json({ error: "missing run id" }, { status: 400 });
   let chain: Chain;
   try {
-    const r = await fetch(`${API_URL}${chainPath(id)}?project_id=${encodeURIComponent(projectId)}`,
-      { headers: authHeaders({ "Content-Type": "application/json" }), cache: "no-store" });
+    // A workflow run's chain is a writing GET: its POST twin (chainPath), through the write path.
+    const url = `${API_URL}${chainPath(id)}?project_id=${encodeURIComponent(projectId)}`;
+    const headers = authHeaders({ "Content-Type": "application/json" });
+    const r = id.startsWith("crun_")
+      ? await fetch(url, { headers, cache: "no-store" })
+      : await apiWrite(url, { method: "POST", headers, cache: "no-store" });
     if (!r.ok) return NextResponse.json({ error: "no credits for this run" }, { status: r.status });
     chain = toChain(await r.json());
   } catch {

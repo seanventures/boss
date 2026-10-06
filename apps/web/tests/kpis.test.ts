@@ -214,7 +214,6 @@ describe("client action feedback (toasts + revalidate)", async () => {
 
   it("submitCommandAction + queueOutbox (budget) call revalidate (command + budget feedback states)", async () => {
     vi.mocked(client.proposeCommand).mockResolvedValueOnce({ status: "proposed", task_id: "t1", job_id: "j_cmd", artifact_id: "a_cmd" } as any);
-    vi.mocked(client.reserveBudget).mockResolvedValueOnce({ status: "reserved", reservation_id: "br1", budget_state: "green", message: "" } as any);
     vi.mocked(client.queueOutboxDelivery).mockResolvedValueOnce({ id: "j1", project_id: "boss-dogfood", kind: "outbox_delivery", status: "queued", data_boundary: "internal", priority: 0, max_attempts: 3, attempts: 0, created_at: "2026-06-05T00:00:00Z" } as any);
 
     const cmdFd = new FormData();
@@ -230,7 +229,9 @@ describe("client action feedback (toasts + revalidate)", async () => {
     qFd.set("actor", "exec");
     qFd.set("urgency", "normal");
     await queueOutboxMessageAction(qFd);
-    expect(client.reserveBudget).toHaveBeenCalled();
+    // A person never reserves spend (system-only /v1/budget/reserve): the queue route does.
+    expect(client.reserveBudget).not.toHaveBeenCalled();
+    expect(vi.mocked(client.queueOutboxDelivery).mock.calls.at(-1)?.[1]).not.toHaveProperty("reservation_id");
     expect(revalidatePath).toHaveBeenCalledWith("/");
   });
 

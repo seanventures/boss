@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { describeApiError } from "../../../lib/api-error";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite, type WriteMethod } from "../../../lib/api-write";
+import { loadPath } from "../../../lib/writing-get";
 
 /**
  * The Kit's reads and writes (Skills & MCP, skills-mcp spec §6.3).
@@ -52,7 +53,8 @@ export async function GET(req: Request) {
     return forward(`/v1/kit/${q(ability)}?project_id=${q(projectId)}`, { method: "GET" });
   }
   const check = url.searchParams.get("check") === "none" ? "none" : "stale";
-  return forward(`/v1/kit?project_id=${q(projectId)}&check=${check}`, { method: "GET" });
+  // A writing GET (it re-checks stale abilities): its POST twin, through the write path.
+  return forward(loadPath(`/v1/kit?project_id=${q(projectId)}&check=${check}`), { method: "POST" });
 }
 
 const ACTIONS = ["connect", "disconnect", "test", "test_all", "try", "holders", "policy",
