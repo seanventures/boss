@@ -276,13 +276,42 @@ def _job_pins(connection: Any, project_id: Optional[str]) -> dict[str, tuple[str
     return pins
 
 
+def _observed(connection: Any, settings: Any, project_id: Optional[str],
+              engines: list[str]) -> dict[str, dict[str, Any]]:
+    """Observed capacity per engine from the entitlement rows that spend for it — for a source
+    connected through the environment (a CLAUDE_CODE_OAUTH_TOKEN), whose connection carries no
+    row of its own, but whose catalogue row is where telemetry records the CLI's windows."""
+    if connection is None or not project_id or not engines:
+        return {}
+    try:
+        from ..provider_limits import source_ids_for_engine
+
+        with connection.begin_nested():
+            rows = connection.execute(text(
+                "SELECT source_id, observed_capacity FROM entitlement_sources "
+                "WHERE project_id = :p"), {"p": project_id}).mappings().all()
+    except Exception:  # noqa: BLE001
+        return {}
+    by_id = {str(r["source_id"]): _json(r["observed_capacity"]) for r in rows}
+    out: dict[str, dict[str, Any]] = {}
+    for engine in engines:
+        for sid in source_ids_for_engine(settings, engine):
+            if by_id.get(sid, {}).get("windows"):
+                out[engine] = by_id[sid]
+                break
+    return out
+
+
 def sources_from(connected: Mapping[str, Mapping[str, Any]], policy: RoutingPolicy,
-                 used: Mapping[str, float], now: Optional[datetime] = None
+                 used: Mapping[str, float], now: Optional[datetime] = None,
+                 observed_by_engine: Optional[Mapping[str, dict]] = None
                  ) -> dict[str, SourceState]:
     out: dict[str, SourceState] = {}
     for engine, info in connected.items():
         capacity = info.get("capacity") or {}
         observed = capacity.get("observed") if isinstance(capacity.get("observed"), dict) else {}
+        if not observed.get("windows") and (observed_by_engine or {}).get(engine):
+            observed = {**observed, **observed_by_engine[engine]}
         kind = str(info.get("kind") or "metered")
         if kind == "env":
             kind = "local" if engine in ("ollama", "vllm") else (
@@ -318,8 +347,13 @@ def snapshot(connection: Any, settings: Any, project_id: Optional[str], *,
         policy = effective_policy(connection, settings, project_id, connected=connected)
         snap = Snapshot(
             project_id=project_id, policy=policy,
-            sources=sources_from(connected, policy,
-                                 _used_usd(connection, project_id) if policy.smart else {}),
+            sources=sources_from(
+                connected, policy, _used_usd(connection, project_id) if policy.smart else {},
+                observed_by_engine=_observed(
+                    connection, effective, project_id,
+                    [e for e, i in connected.items()
+                     if not ((i.get("capacity") or {}).get("observed") or {}).get("windows")])
+                if policy.smart else None),
             budget_state=_budget_state(connection, settings, project_id),
             job_pins=_job_pins(connection, project_id), jev_state=jev_state(effective),
             settings=effective)

@@ -21,11 +21,15 @@ const req = (path: string, headers: Record<string, string> = {}) =>
   new NextRequest(`http://127.0.0.1:3000${path}`, { headers: { host: "127.0.0.1:3000", ...headers } });
 
 describe("a retired area link", () => {
-  it("is answered with a 307 to where it lives now, as a relative Location", async () => {
+  it("is answered with a 307 to where it lives now, on the browser's own host", async () => {
     vi.stubEnv("BOSS_CONSOLE_AUTH", "network");
     const res = await middleware(req("/?org=org_boss&area=delivery"));
     expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toBe("/?org=org_boss&area=infra&view=fleet");
+    expect(res.headers.get("location")).toBe("http://127.0.0.1:3000/?org=org_boss&area=infra&view=fleet");
+    const proxied = await middleware(req("/?org=org_boss&area=pipeline", {
+      "x-forwarded-host": "boss.example.com", "x-forwarded-proto": "https" }));
+    expect(proxied.headers.get("location"))
+      .toBe("https://boss.example.com/?org=org_boss&area=setup&focus=routing");
   });
 
   it("leaves current areas, RSC fetches and server actions to the console", async () => {

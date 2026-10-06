@@ -127,3 +127,23 @@ def test_an_unreadable_store_routes_as_fixed():
                              begin_nested=lambda: (_ for _ in ()).throw(RuntimeError("down")))
     snap = store.snapshot(broken, _settings(), "p9", fresh=True)
     assert snap.policy.mode == "fixed"
+
+
+def test_an_environment_subscription_reads_its_catalogue_rows_windows(db, monkeypatch):
+    """A Claude subscription connected through CLAUDE_CODE_OAUTH_TOKEN has no connection row;
+    telemetry records its windows on the catalogue row, and the snapshot must read them there."""
+    from boss_engine.services.model_router.store import sources_from, _observed
+    from boss_engine.services.model_router.policy import RoutingPolicy
+
+    settings = _settings()
+    event = {"rate_limit_info": {"status": "allowed_warning", "rateLimitType": "seven_day",
+                                 "utilization": 0.92, "resetsAt": 4102444800}}
+    with db.begin() as c:
+        c.execute(text("UPDATE entitlement_sources SET connection_status = 'not_connected'"))
+        store.observe(c, settings, "p1", "claude_code", event=event)
+        observed = _observed(c, settings, "p1", ["claude_code"])
+    env_only = {"claude_code": {"kind": "env", "env_attr": "claude_code_oauth_token",
+                                "working": True}}
+    sources = sources_from(env_only, RoutingPolicy(), {}, observed_by_engine=observed)
+    assert sources["claude_code"].kind == "subscription"
+    assert sources["claude_code"].headroom.state == "near_limit"

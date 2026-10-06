@@ -69,6 +69,9 @@ class RouteRequest:
     session_pin: Optional[Target] = None
     #: Which workflow step / panel phase this is, for "Why this model" (not used to route).
     ref: Optional[str] = None
+    #: Floors this unit adds to the policy's: a build's own profile (a task that asked for
+    #: `strict` gets strict's floors, whatever the project's default preset is).
+    extra_floors: tuple = ()
 
     def signal(self) -> TaskSignal:
         return TaskSignal(kind=self.kind, step=self.step, text=self.text,
@@ -238,6 +241,12 @@ class Router:
         # (b) floors
         floor, floors = policy.floor_for(kind=request.kind, step=request.step, role=request.role,
                                          job=job, task_kind=request.task_kind)
+        extra = [f for f in request.extra_floors
+                 if f.matches(kind=request.kind, step=request.step, role=request.role, job=job,
+                              task_kind=request.task_kind)]
+        if extra:
+            floors = list(floors) + extra
+            floor = max((f.tier for f in floors), key=rank)
         if floor and rank(floor) > rank(tier):
             top = max(floors, key=lambda f: rank(f.tier))
             why.append(f"Floor: {top.describe()} ≥ {TIER_LABELS[floor]}")

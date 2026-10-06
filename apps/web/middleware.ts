@@ -85,8 +85,8 @@ export async function middleware(request: NextRequest) {
  * page.tsx's redirect() runs after the shell has streamed, so the browser followed it as a
  * client navigation and dropped the URL's fragment: `?area=delivery#hardware-manager` (the old
  * "Where apps install" anchor) landed on Infra › Fleet with no `#hardware-manager` left to open
- * This computer (P-I-07). A real 307 keeps the fragment (RFC 7231 §7.1.2). Relative Location, so a
- * console behind a proxy redirects to its own public host. Document loads only: an RSC fetch or
+ * This computer (P-I-07). A real 307 keeps the fragment (RFC 7231 §7.1.2). The Location is on the
+ * host the browser used (its proxy's forwarded host), so a console behind a proxy stays on it. Document loads only: an RSC fetch or
  * a server action is the client's own navigation, which the shell rewrites itself.
  */
 function legacyRedirect(request: NextRequest): NextResponse | null {
@@ -94,8 +94,17 @@ function legacyRedirect(request: NextRequest): NextResponse | null {
   if (request.headers.get("rsc") || request.headers.get("next-action")) return null;
   const legacy = resolveLegacyArea(request.nextUrl.searchParams);
   if (!legacy) return null;
+  // ABSOLUTE, ON THE HOST THE BROWSER USED. A relative Location passed the unit test and 500ed
+  // in a production build ("TypeError: Invalid URL" in Next's middleware adapter), so every
+  // retired-area link — ?area=govern, ?area=delivery, ?area=pipeline — failed on a real console.
+  // The host and scheme are the request's own (or its proxy's forwarded ones), never the API's.
+  const host = request.headers.get("x-forwarded-host") || request.headers.get("host")
+    || request.nextUrl.host;
+  const proto = (request.headers.get("x-forwarded-proto") || request.nextUrl.protocol)
+    .replace(/:$/, "");
   return new NextResponse(null, {
-    status: 307, headers: { Location: `/?${legacy}`, "Cache-Control": "no-store" },
+    status: 307,
+    headers: { Location: `${proto}://${host}/?${legacy}`, "Cache-Control": "no-store" },
   });
 }
 

@@ -104,11 +104,24 @@ class StageRouter:
             legacy=lambda: self.legacy(step, escalated=escalated_legacy, budget=budget,
                                        previous=previous),
             mode_override=self.mode_override,
-            aliases=tuple(CODING_STEPS - {step}) if step in CODING_STEPS else ())
+            aliases=tuple(CODING_STEPS - {step}) if step in CODING_STEPS else (),
+            extra_floors=self._profile_floors())
         with self._tx() as connection:
             decision = store.route(connection, self.settings, request, ledger=self.ledger)
         self.decisions[step] = decision
         return decision
+
+    def _profile_floors(self) -> tuple:
+        """The run's own profile, as floors (Decision 4) — a task that asked for `balanced`
+        keeps its adversarial review on Frontier even on a project whose preset is `lean`."""
+        if not hasattr(self, "_floors"):
+            from .policy import floors_from_profile
+
+            try:
+                self._floors = floors_from_profile(self.profile or {})
+            except Exception:  # noqa: BLE001
+                self._floors = ()
+        return self._floors
 
     def signal(self, step: str, signal: str, n: int = 1) -> int:
         """Evidence seen during a stage (tests failed, reviewers asked for changes…). It moves
