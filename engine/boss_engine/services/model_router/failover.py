@@ -52,8 +52,9 @@ def _seconds_until_reset(error: str) -> Optional[float]:
     if not soonest:
         return None
     delta = (datetime.fromisoformat(soonest) - datetime.now(timezone.utc)).total_seconds()
-    # The breaker is about the next minutes; the account's windows carry the long reset.
-    return max(30.0, min(delta, 1800.0))
+    # The breaker covers the next minute or two; the ACCOUNT's windows carry the long reset
+    # (and are what every project reads), so the breaker never outlives what it stands for.
+    return max(30.0, min(delta, 120.0))
 
 
 def note_failure(engine: str, error: BaseException | str) -> Optional[str]:
