@@ -213,6 +213,19 @@ describe("every client write is pre-greyed", () => {
     expect(all.filter((u) => u.what === "updateAgent").length).toBeGreaterThan(0);
   });
 
+  it("the kit cards' Test and Turn on are drawn greyed, gated on the permissions their writes need", () => {
+    // The press happens in the card (app/skills/ability-card.tsx), not in kit-home, so the card
+    // must receive each writing action's permission and gate the button itself with useGate.
+    const home = read("app/skills/kit-home.tsx");
+    const card = read("app/skills/ability-card.tsx");
+    const perms = /CARD_PERMISSIONS: CardPermissions = \{([^}]*)\}/.exec(home)?.[1] ?? "";
+    expect(perms).toContain(`test: "${WRITE_HELPERS["lib/kit-api.ts#kitApi.test"]}"`);
+    expect(perms).toContain(`turn_on: "${WRITE_HELPERS["lib/kit-api.ts#kitApi.enabled"]}"`);
+    expect(home).toMatch(/<AbilityCard[\s\S]{0,300}?permissions=\{CARD_PERMISSIONS\}/);
+    expect(card).toMatch(/useGate\(permission\)/);
+    expect(card).toMatch(/permissions\?\.\[action\]/);
+  });
+
   it("exemptions are still real (no stale entry hides a new press)", () => {
     const stale = [...BACKGROUND].filter((k) => !read(k.split(" ")[0]).includes(k.split(" ")[1].split(":").pop()!.replace("inline", "apiWrite")));
     expect(stale).toEqual([]);

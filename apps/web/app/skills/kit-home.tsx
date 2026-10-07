@@ -17,7 +17,10 @@ import type { Ability } from "../../lib/kit-types";
 import { kitApi, type CrewMember, type KitWithCrew } from "../../lib/kit-api";
 import { showToast } from "../client-forms";
 import { useTips } from "../workflows/flow/tip-layer";
-import { AbilityCard, type CardAction } from "./ability-card";
+import { AbilityCard, type CardAction, type CardPermissions } from "./ability-card";
+
+/** The card buttons that write: Test runs the ability (skill:invoke), Turn on enables it (skill:manage). */
+const CARD_PERMISSIONS: CardPermissions = { test: "skill:invoke", turn_on: "skill:manage" };
 import { AbilityDrawer, type DrawerFocus } from "./ability-drawer";
 import { crewKey, dismissKey, EssentialsStrip, readFlag, writeFlag } from "./essentials-strip";
 import { GROUP_LABEL, plural, shortError, TIP } from "./kit-copy";
@@ -209,7 +212,8 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
                     <div className="kit-grid">
                       {cards.map((a) => (
                         <AbilityCard key={a.key} ability={a} testing={testing.has(a.key)}
-                                     onOpen={() => openAbility(a.key)} onAction={(x) => void act(a.key, x)} />
+                                     onOpen={() => openAbility(a.key)} onAction={(x) => void act(a.key, x)}
+                                     permissions={CARD_PERMISSIONS} />
                       ))}
                     </div>
                   </section>
