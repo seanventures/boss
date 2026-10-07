@@ -51,7 +51,8 @@ Commands:
                       needs a person is still skipped without a terminal. --yes asks
                       nothing and installs nothing unless --install-ollama is given.
   upgrade [--to REF]  Back up, then move to the newest release (or REF). Never jumps to
-                      main unless you installed from main or pass --to main.
+                      main unless you installed from main or pass --to main. If the new
+                      release cannot start, the previous one is put back (--no-rollback: don't).
                       Also: --dry-run, --backup-dir PATH, --web, --no-web
   update              Re-apply configuration on the installed release: rerun the installer
                       so newly exported model keys and flags take effect. Does not change
@@ -64,6 +65,13 @@ Commands:
                       (--dedicated). Runs after every upgrade and update. Also: --dry-run
   host-sample         macOS: post this Mac's swap and biggest memory users to BOSS's system
                       doctor, which cannot see past Docker Desktop's VM
+  identity CMD        Named accounts, from the host shell:
+                        setup-link            a new one-hour link to claim this BOSS (no Owner yet)
+                        claim-status          claimed or not, and when the shared password stops
+                        recover-owner --email E   a locked-out Owner gets back in (15-minute link)
+                        host-key              issue a new key for these host tools (kept in .env)
+                        legacy status         the shared credentials still in use, with end dates
+                        posture | audit verify | migrate
   version             Installed release and commit
 
 Environment: BOSS_INSTALL_DIR selects another install.
@@ -129,6 +137,37 @@ api_url() {
   esac
 }
 
+# THE HOST TOOLS' KEY. Before named accounts every host tool used the shared BOSS_API_KEY, which
+# loses people-and-access changes when the first Owner claims BOSS and stops working when the
+# shared credentials end. These tools now use their own key: service account "Host tools", issued
+# from the host shell and kept in .env as BOSS_HOST_API_KEY. A missing or refused key is issued
+# again. Never printed, never on a command line (curl reads the header from stdin).
+host_key() {
+  local key code
+  key="$(env_value BOSS_HOST_API_KEY)"
+  if [[ -n "$key" ]]; then
+    code="$(printf 'Authorization: Bearer %s\n' "$key" | curl -s -o /dev/null -w '%{http_code}' \
+      --max-time 5 -H @- "$(api_url)/v1/identity/me" 2>/dev/null || true)"
+    # 200, or the API is down or busy: keep it. Only a refusal means "issue a new one".
+    [[ "$code" == 401 || "$code" == 403 ]] || { printf '%s' "$key"; return 0; }
+  fi
+  key="$(issue_host_key 2>/dev/null || true)"
+  if [[ "$key" == boss_sak_* ]]; then
+    printf '%s' "$key"
+    return 0
+  fi
+  # An API too old to issue one, or no Docker access: the shared key, while it still works.
+  env_value BOSS_API_KEY
+}
+
+issue_host_key() {
+  local key
+  key="$(compose exec -T -u boss api python -m boss_engine.identity.cli host-key --quiet </dev/null | tail -n 1)"
+  [[ "$key" == boss_sak_* ]] || return 1
+  set_env_value BOSS_HOST_API_KEY "$key"
+  printf '%s' "$key"
+}
+
 release_line() {
   local ref channel commit
   ref="$(grep -m 1 '^BOSS_RELEASE_REF=' "$INSTALL_DIR/.boss-release" 2>/dev/null | cut -d= -f2- || true)"
@@ -148,7 +187,7 @@ cmd_version() {
 
 # What Repo and models says (scripts/install/setup_state.py): `ready`, or the repository line.
 setup_state() {
-  BOSS_API_URL="$(api_url)" BOSS_API_KEY="$(env_value BOSS_API_KEY)" \
+  BOSS_API_URL="$(api_url)" BOSS_API_KEY="$(host_key)" \
     python3 "$INSTALL_DIR/scripts/install/setup_state.py" "$1" 2>/dev/null </dev/null
 }
 
@@ -167,7 +206,10 @@ cmd_open() {
     printf 'Mission Control on this machine: http://127.0.0.1:%s\n' "${port:-3000}"
   fi
   [[ -z "$origin" ]] || printf 'Console origin:                  %s%s\n' "${origin%/}" "$path"
-  printf 'Sign in with the password from: boss password\n'
+  case "$(identity_cli claim-status 2>/dev/null | tail -n 1 || true)" in
+    unclaimed) printf 'First visit: claim it at /claim. The password from boss password proves it is you.\n' ;;
+    *) printf 'Sign in with your own account. Teammates without one yet: boss password, until it stops.\n' ;;
+  esac
 }
 
 cmd_status() {
@@ -195,7 +237,8 @@ cmd_password() {
 
 cmd_doctor() {
   need_install
-  BOSS_ENV_FILE="$ENV_FILE" bash "$INSTALL_DIR/scripts/install/checkup.sh" "$@"
+  BOSS_ENV_FILE="$ENV_FILE" BOSS_HOST_API_KEY="$(host_key 2>/dev/null || true)" \
+    bash "$INSTALL_DIR/scripts/install/checkup.sh" "$@"
 }
 
 cmd_logs() {
@@ -218,11 +261,14 @@ cmd_upgrade() {
     case "$1" in
       --to|--ref) args+=(--ref "${2:?--to needs a ref}"); shift 2 ;;
       --backup-dir) args+=(--backup-dir "${2:?--backup-dir needs a path}"); shift 2 ;;
-      --dry-run|--web|--no-web) args+=("$1"); shift ;;
+      --dry-run|--web|--no-web|--no-rollback) args+=("$1"); shift ;;
       *) die "unknown upgrade option: $1 (see boss help)" ;;
     esac
   done
   bash "$INSTALL_DIR/scripts/install/upgrade.sh" "${args[@]}"
+  # The host tools' own key, ready before the shared key stops (best effort: the next boss
+  # command issues it otherwise).
+  [[ -n "$(env_value BOSS_HOST_API_KEY)" ]] || issue_host_key >/dev/null 2>&1 || true
   post_deploy_prune
 }
 
@@ -242,7 +288,7 @@ cmd_host_sample() {
   need_install
   [[ "$(uname -s)" == Darwin ]] || die "host-sample reads macOS memory; on Linux BOSS measures the machine itself."
   local key url body
-  key="$(env_value BOSS_API_KEY)"; [[ -n "$key" ]] || die "no BOSS_API_KEY in $ENV_FILE"
+  key="$(host_key)"; [[ -n "$key" ]] || die "no API key for the host tools: run boss identity host-key"
   url="$(api_url)"
   body="$(python3 - <<'PY'
 import json, re, subprocess
@@ -263,7 +309,7 @@ top = sorted(({"name": k[:40], "mb": round(v)} for k, v in apps.items()), key=la
 print(json.dumps({"swap_used_mb": mb("used"), "swap_total_mb": mb("total"), "top": top}))
 PY
 )"
-  curl -fsS -m 10 -X POST "$url/v1/self/host-sample" -H "Authorization: Bearer $key" \
+  printf 'Authorization: Bearer %s\n' "$key" | curl -fsS -m 10 -X POST "$url/v1/self/host-sample" -H @- \
     -H 'Content-Type: application/json' --data "$body" >/dev/null &&
     printf 'boss: host sample posted (%s)\n' "$(printf '%s' "$body" | head -c 80)…"
 }
@@ -350,8 +396,8 @@ ask_yes() {
 
 run_subscriptions() {
   local key
-  key="$(env_value BOSS_API_KEY)"
-  [[ -n "$key" ]] || die "BOSS_API_KEY is missing from $ENV_FILE; rerun the installer."
+  key="$(host_key)"
+  [[ -n "$key" ]] || die "no API key for the host tools: run boss identity host-key"
   (cd "$INSTALL_DIR" && BOSS_API_KEY="$key" python3 scripts/install/coding_subscriptions.py \
      --api-url "$(api_url)" "$@" </dev/null)
 }
@@ -858,8 +904,8 @@ register_ollama() {
   local model="$1" key port container result result_copy rc=0 args
   port="$(ollama_port)" || return 1
   container="http://host.docker.internal:$port"
-  key="$(env_value BOSS_API_KEY)"
-  [[ -n "$key" ]] || { printf '  ✗ BOSS_API_KEY is missing from %s; rerun the installer.\n' "$ENV_FILE"; return 1; }
+  key="$(host_key)"
+  [[ -n "$key" ]] || { printf '  ✗ no API key for the host tools; run boss identity host-key\n'; return 1; }
   result="$(mktemp)"
   args=(--api-url "$(api_url)" --container-url "$container/v1" --default-if-no-hosted --env-file "$ENV_FILE")
   [[ -z "$model" ]] || args+=(--model "$model")
@@ -904,7 +950,7 @@ register_ollama() {
 # A hosted model is connected: the roles the Ollama fallback set go back to their defaults.
 release_local_default() {
   local key
-  key="$(env_value BOSS_API_KEY)"
+  key="$(host_key)"
   [[ -n "$key" ]] || return 0
   BOSS_API_KEY="$key" python3 "$INSTALL_DIR/scripts/install/connect_ollama.py" --release-default \
     --api-url "$(api_url)" --env-file "$ENV_FILE" </dev/null || true
@@ -961,7 +1007,7 @@ ask_default_yes() {
 
 model_state() {
   local key rc=0
-  key="$(env_value BOSS_API_KEY)"
+  key="$(host_key)"
   BOSS_API_KEY="$key" python3 "$INSTALL_DIR/scripts/install/model_status.py" \
     --api-url "$(api_url)" --env-file "$ENV_FILE" "$@" </dev/null >/dev/null 2>&1 || rc=$?
   return "$rc"
@@ -980,7 +1026,7 @@ usable_model() {
 
 print_model_rows() {
   local found="$1" key
-  key="$(env_value BOSS_API_KEY)"
+  key="$(host_key)"
   BOSS_API_KEY="$key" python3 "$INSTALL_DIR/scripts/install/model_status.py" \
     --api-url "$(api_url)" --env-file "$ENV_FILE" ${found:+--found "$found"} </dev/null
 }
@@ -1121,8 +1167,34 @@ cmd_connect() {
   models_step
 }
 
+# ---- identity ---------------------------------------------------------------------------------
+
+# The identity CLI inside the api container, as the boss user (never root: files it writes must
+# stay the boss user's).
+identity_cli() {
+  local tty=(-T)
+  [[ -t 0 && -t 1 ]] && tty=()
+  compose exec ${tty[@]+"${tty[@]}"} -u boss api python -m boss_engine.identity.cli "$@"
+}
+
+cmd_identity() {
+  need_install
+  [[ $# -gt 0 ]] || die "identity needs a command: setup-link, claim-status, recover-owner, host-key, legacy, posture, audit, migrate (see boss help)"
+  case "$1" in
+    host-key)
+      shift
+      [[ $# -eq 0 ]] || die "host-key takes no options"
+      issue_host_key >/dev/null || die "BOSS did not issue a key. Is the api service running (boss status)?"
+      printf 'A new key for the host tools is in %s as BOSS_HOST_API_KEY. Earlier ones stopped working.\n' "$ENV_FILE" ;;
+    mcp-key|egress-key|seed-test-accounts)
+      die "$1 prints a credential, which this command never does. Use make mcp-setup for MCP, or run it in the container (see docs/community/IDENTITY_ADMIN.md)." ;;
+    *) identity_cli "$@" ;;
+  esac
+}
+
 case "$COMMAND" in
   status) cmd_status "$@" ;;
+  identity) cmd_identity "$@" ;;
   open) cmd_open "$@" ;;
   password) cmd_password "$@" ;;
   doctor|checkup) cmd_doctor "$@" ;;

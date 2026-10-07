@@ -20,7 +20,7 @@ help:
 	  '  make status  Show service status' \
 	  '  make check   Check installation health' \
 	  '  make metatron  Open the local BOSS terminal' \
-	  '  make mcp-setup  Create a dedicated project MCP credential' \
+	  '  make mcp-setup  Give an agent client its own key for one project' \
 	  '  make mcp    Start a scoped MCP stdio session for an agent client' \
 	  '  make stop    Stop services and keep data' \
 	  '  make e2e     Boot a disposable authed stack and drive every template (tests/e2e)' \
@@ -30,7 +30,7 @@ dev: .env docker-ready
 	$(COMPOSE) --profile web up -d --build
 
 seed: .env docker-ready
-	$(COMPOSE) exec -T api python -c 'from boss_engine.bootstrap import seed; seed()'
+	$(COMPOSE) exec -T -u boss api python -c 'from boss_engine.bootstrap import seed; seed()'
 
 status: .env docker-ready
 	$(COMPOSE) --profile web ps
@@ -38,12 +38,18 @@ status: .env docker-ready
 check: .env
 	./scripts/install/checkup.sh
 
+# The terminal uses the host tools' key (BOSS_HOST_API_KEY, issued once by boss identity
+# host-key), passed by name so it never appears on a command line; the shared key is retired.
 metatron: .env docker-ready
-	$(COMPOSE) exec api sh -c 'BOSS_PROJECT_ID="$${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}" python scripts/metatron_tui.py'
+	@key="$$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env | head -n 1)"; \
+	if [ -z "$$key" ]; then bash scripts/install/boss.sh --dir "$(CURDIR)" identity host-key >/dev/null 2>&1 || true; \
+	  key="$$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env | head -n 1)"; fi; \
+	if [ -n "$$key" ]; then export BOSS_API_KEY="$$key"; set -- -e BOSS_API_KEY; else set --; fi; \
+	$(COMPOSE) exec -u boss "$$@" api sh -c 'BOSS_PROJECT_ID="$${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}" python scripts/metatron_tui.py'
 
-# BOSS_PROJECT_ID=another-project selects an accessible project. Setup uses the
-# installed owner key only for member provisioning; the MCP session receives a
-# different credential and cannot use the owner or worker keys.
+# BOSS_PROJECT_ID=another-project selects an accessible project. Setup asks the host
+# shell for a service account pinned to that project and keeps its key in .env as
+# BOSS_MCP_API_KEY; the MCP session receives only that key.
 mcp-setup: .env docker-ready
 	python3 scripts/install/mcp_access.py setup --restart-api
 

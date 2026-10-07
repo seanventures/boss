@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * SIGN IN (mockup e, IDENTITY.md §9.7, D33): Kaappu's layout in BOSS style.
+ * SIGN IN (mockup e, IDENTITY.md §9.7, D33): a familiar layout in BOSS style.
  *
  *   mark and welcome → the configured provider row (hidden when none) → "Sign in with a passkey"
  *   → "or use email" → Password | Magic link | Email code (the email tabs only with SMTP)
@@ -45,7 +45,16 @@ const WORDS: Record<string, string> = {
   passkey_failed: "That passkey didn't work",
   passkey_unavailable: "Passkeys aren't set up on this BOSS yet",
   insecure_origin: "Open BOSS over its HTTPS address",
+  claim_first: "This BOSS has no Owner yet. Claim it first.",
+  shared_password_retired: "The shared password no longer works. Ask an Owner to invite you.",
 };
+
+/** "6 Nov" for the shared password's last day (local time). */
+function shortDate(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
 
 function say(e: unknown): string {
   if (e instanceof PasskeyCancelled) return "Passkey cancelled";
@@ -76,6 +85,9 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
   const [method, setMethod] = useState<Method>("password");
   const [stage, setStage] = useState<Stage>(initialStep ? { kind: "mfa", step: initialStep } : { kind: "start" });
   const [email, setEmail] = useState("");
+  // The shared console password signs in with no email (Operator, until its end date).
+  const [shared, setShared] = useState(false);
+  const sharedUntil = shortDate(options.shared_password?.until);
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -94,7 +106,12 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
 
   const after = (step: SignInStep) => {
     setCode("");
-    if (step.next === "done") { setStage({ kind: "done" }); window.location.assign(target); return; }
+    if (step.next === "done") {
+      setStage({ kind: "done" });
+      // §4.7: a recovery-code sign-in that left fewer than 3 codes goes straight to making new ones.
+      window.location.assign(step.must_regenerate_recovery_codes ? "/account" : target);
+      return;
+    }
     if (step.next === "enrol") {
       // H1: a sign-in that may not enrol says so here instead of opening a refused enrol screen.
       if (step.enrolment_grant === false) { setStage({ kind: "start" }); setError(ENROLMENT_GRANT_WORDS); return; }
@@ -255,26 +272,33 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
         <form id={`panel-${method}`} role={tabs.length > 1 ? "tabpanel" : undefined} aria-labelledby={tabs.length > 1 ? `tab-${method}` : undefined}
           onSubmit={(e) => {
             e.preventDefault();
-            if (method === "password") run(async () => after(await idPost<SignInStep>("/v1/auth/login", { email, password })));
+            if (method === "password") run(async () => after(await idPost<SignInStep>("/v1/auth/login", { email: shared ? "" : email, password })));
             if (method === "magic") run(async () => { await idPost("/v1/auth/magic-link", { email }); setStage({ kind: "magic-sent", email }); setResendIn(42); });
             if (method === "code") run(async () => { await idPost("/v1/auth/email-code", { email }); setStage({ kind: "code-entry", email }); setResendIn(60); });
           }}>
-          <div className="idn-f">
-            <label htmlFor="email">Email</label>
-            <input id="email" className="idn-i" type="email" autoComplete="username webauthn" required value={email}
-              onChange={(e) => setEmail(e.target.value)} aria-invalid={!!error || undefined} aria-describedby={error ? "signin-error" : undefined} />
-          </div>
+          {shared && method === "password" ? null : (
+            <div className="idn-f">
+              <label htmlFor="email">Email</label>
+              <input id="email" className="idn-i" type="email" autoComplete="username webauthn" required value={email}
+                onChange={(e) => setEmail(e.target.value)} aria-invalid={!!error || undefined} aria-describedby={error ? "signin-error" : undefined} />
+            </div>
+          )}
           {method === "password" ? (
             <div className="idn-f">
               <span className="idn-flabel">
-                <label htmlFor="password">Password</label>
-                {emailSignInOffered(options)
+                <label htmlFor="password">{shared ? "Shared password" : "Password"}</label>
+                {shared ? null : emailSignInOffered(options)
                   ? <a href="/reset">Forgot password?</a>
                   : <span className="idn-dim" title="An admin can send you a reset link">Ask an admin</span>}
               </span>
               <input id="password" className="idn-i" type="password" autoComplete="current-password" required value={password}
                 onChange={(e) => setPassword(e.target.value)} aria-invalid={!!error || undefined} />
             </div>
+          ) : null}
+          {shared && method === "password" ? (
+            <p className="idn-fine" data-copy="prose" data-testid="shared-password-note">
+              Signs you in as Operator{sharedUntil ? ` until ${sharedUntil}` : ""}. Then ask an Owner to invite you.
+            </p>
           ) : null}
           {error ? <div className="idn-err" id="signin-error" role="alert">{error}</div> : null}
           <button type="submit" className={`idn-big ${hasPasskeys ? "s" : "p"}`} disabled={busy} data-testid="email-submit">
@@ -283,6 +307,12 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
         </form>
       )}
 
+      {options.shared_password && method === "password" && stage.kind === "start" ? (
+        <button type="button" className="idn-link" data-testid="shared-password-toggle"
+          onClick={() => { setShared(!shared); setError(null); setPassword(""); }}>
+          {shared ? "Sign in with your email" : "Use the shared password"}
+        </button>
+      ) : null}
       <div className="idn-foot">
         {options.signup
           ? <>New here? <a href="/signup">Create account</a></>

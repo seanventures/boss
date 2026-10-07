@@ -1,6 +1,6 @@
 """THE API's enforcement point: every route goes through `enforce_access`.
 
-docs/product/IDENTITY.md §6.3/§6.6, frozen in Phase 0 (docs/product/IDENTITY_BUILD.md §2.4).
+docs/product/IDENTITY.md §6.3/§6.6, frozen in Phase 0 (docs/maintainers/IDENTITY_BUILD.md §2.4).
 
     app = FastAPI(..., dependencies=[Depends(identity_guard.enforce_access)])
 
@@ -613,7 +613,8 @@ def presents_identity_credential(conn: HTTPConnection) -> bool:
     scheme, _, value = raw.partition(" ")
     value = value.strip()
     if scheme.lower() not in ("bearer", "dpop") or not value:
-        return False
+        # a boss_ key in X-Boss-Api-Key (the rc5 host tools' header) is an identity credential too
+        return authn.api_key_header({k.lower(): v for k, v in conn.headers.items()}) is not None
     if authn.parse_api_key(value) is not None:
         return True
     return _is_run_token(value)

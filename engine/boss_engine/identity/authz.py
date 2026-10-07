@@ -312,11 +312,20 @@ def _step_up_window_seconds(org_id: str, conn: Any) -> int:
 
 
 def _step_up_exempt(ctx: AuthContext) -> bool:
-    """In-process system principals, and the legacy bridges as S5 defines them
-    (`legacy.step_up_exempt`: a bridged context with no session and no run token)."""
+    """In-process system principals, a service account's own key, and the legacy bridges as S5
+    defines them (`legacy.step_up_exempt`: a bridged context with no session and no run token).
+
+    IDENTITY.md §4.6: bearer credentials cannot step up, so step-up permissions "cannot be used by
+    API keys unless the key's owner is a service account and the permission is in its scopes" —
+    the key's scopes were already applied to the base set (step 3), so here it is the owner and
+    the key kind. A person's PAT never is (A26): a stolen PAT cannot rotate SSO."""
     if ctx.run_token is not None:
         return False
     if ctx.method == AuthMethod.SYSTEM:
+        return True
+    cred = ctx.credential
+    if (ctx.method == AuthMethod.API_KEY and cred is not None and cred.kind == "sak"
+            and ctx.principal.kind == PrincipalKind.SERVICE_ACCOUNT and ctx.session is None):
         return True
     from . import legacy
 

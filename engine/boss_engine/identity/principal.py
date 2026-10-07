@@ -1,6 +1,6 @@
 """Who is acting: Principal, the agent ActorChain with RFC 8693 `act` nesting, and AuthContext.
 
-FROZEN IN PHASE 0 (docs/product/IDENTITY_BUILD.md). Every stream builds against these types; a change
+FROZEN IN PHASE 0 (docs/maintainers/IDENTITY_BUILD.md). Every stream builds against these types; a change
 needs a written amendment in IDENTITY_BUILD.md §7.
 
 A request has exactly one AuthContext, built by `identity.authn.authenticate` from ONE verified
