@@ -24,6 +24,14 @@ def _bearer(key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"}
 
 
+def _provisioned(engine, pid: str, provider: str = "okta") -> str:
+    """Mark a person as created by this SCIM connection: SCIM writes only to its own (F3/M2)."""
+    with engine.begin() as db:
+        db.execute(text("UPDATE identity_principals SET created_by = :by WHERE id = :id"),
+                   {"by": f"sys_scim_{provider}", "id": pid})
+    return pid
+
+
 def test_scim_creates_pending_people_and_finds_them_by_username(world, engine):
     key = make_scim_key(engine)
     client = fresh_client()
@@ -49,7 +57,7 @@ def test_scim_creates_pending_people_and_finds_them_by_username(world, engine):
 
 def test_scim_active_false_disables_with_the_cascade_and_true_reenables(world, engine):
     key = make_scim_key(engine)
-    pid = make_user(engine, "oli@example.test")
+    pid = _provisioned(engine, make_user(engine, "oli@example.test"))
     person = fresh_client()
     assert sign_in(person, "oli@example.test").status_code == 200
     scim_client = fresh_client()
@@ -70,7 +78,7 @@ def test_scim_active_false_disables_with_the_cascade_and_true_reenables(world, e
 
 def test_scim_delete_disables_and_never_erases(world, engine):
     key = make_scim_key(engine)
-    pid = make_user(engine, "pia@example.test")
+    pid = _provisioned(engine, make_user(engine, "pia@example.test"))
     assert fresh_client().delete(f"/scim/v2/Users/{pid}", headers=_bearer(key)).status_code == 204
     with engine.begin() as db:
         assert db.execute(text("SELECT status FROM identity_principals WHERE id = :id"), {"id": pid}).scalar() == "disabled"
@@ -82,7 +90,7 @@ def test_scim_can_never_assign_access_roles(world, engine):
     res = client.post("/scim/v2/Users", headers=_bearer(key), json={
         "userName": "quin@example.test", "roles": [{"value": "owner"}]})
     assert res.status_code == 400 and res.json()["scimType"] == "invalidValue"
-    pid = make_user(engine, "rae@example.test", role="viewer")
+    pid = _provisioned(engine, make_user(engine, "rae@example.test", role="viewer"))
     for payload in ({"Operations": [{"op": "add", "path": "roles", "value": [{"value": "owner"}]}]},
                     {"Operations": [{"op": "replace", "value": {"entitlements": [{"value": "admin"}]}}]}):
         assert client.patch(f"/scim/v2/Users/{pid}", headers=_bearer(key), json=payload).status_code == 400
