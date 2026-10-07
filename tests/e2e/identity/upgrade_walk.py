@@ -806,7 +806,9 @@ def sandbox_uid_activity(env: Env) -> dict[str, Any]:
             "locks": [x for x in lines[1:] if x.startswith("uid-")], "shim": lines[1:]}
 
 
-BUILD_BODY = {"instructions": "Add one line to the README.", "owner": "fxd-org", "repo": "fxd-none"}
+# No repository: the fence holds the build before it would clone one, and a repo the Owner's own
+# GitHub cannot reach would make the grant refuse (D28) before the fence is ever reached.
+BUILD_BODY = {"instructions": "Add one line to the README."}
 
 
 def start_build(env: Env, j: Journey, title: str) -> tuple[int, str]:
@@ -824,10 +826,11 @@ def start_build(env: Env, j: Journey, title: str) -> tuple[int, str]:
         grant = {"agents": [a["id"] for a in offer.get("agents") or []], "permissions": offer.get("permissions") or [],
                  "projects": offer.get("projects") or [PROJECT], "kind": "standing", "days": days, "purpose": title}
         gh = offer.get("github") or None
-        if gh:
-            grant["github"] = {"repos": gh.get("repos") or [gh.get("repo")], **(gh.get("permissions") or {})}
+        if gh and [r for r in gh.get("repos") or [] if r and r != "/"]:
+            grant["github"] = {"repos": gh["repos"], **(gh.get("permissions") or {})}
         g = K.stepped(page, env.A["owner"], "POST", "/v1/identity/me/delegations", grant, j)
-        j.note(f"the Owner's standing grant for the build: {g['status']}")
+        j.check("the Owner's standing grant for the build is created", g["status"] == 201,
+                expect="201", actual=f"{g['status']} {K.short(g.get('body'))}")
         r = K.api(page, "POST", "/v1/code-tasks", body)
     ctx.close()
     out = r.get("body") if isinstance(r.get("body"), dict) else {}
