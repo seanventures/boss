@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { AREA_IDS } from "../lib/area-ids";
+import { resolveLegacyArea } from "../app/legacy-areas";
 import { areaVisibilityCss } from "../lib/area-visibility";
 import { codeOnly, cssOnly } from "./_helpers/source";
 
@@ -32,8 +33,12 @@ function navAreas(): string[] {
 
 /** Every AreaId. The ids moved out of a type union in ConsoleShell into lib/area-ids.ts (a value
  *  and a type) so link targets can be checked; this reads the same list from there. */
+/** Every AreaId the console renders. The legacy aliases (`delivery`, `monitoring` …) stay in
+ *  AREA_IDS so old links type-check, and are always rewritten to the area that replaced them
+ *  (Infra and Observability, Phase 0): they render nothing, so they need no rule. */
+const isAlias = (id: string) => resolveLegacyArea(new URLSearchParams(`area=${id}`)) !== null;
 function unionAreas(): string[] {
-  return [...AREA_IDS];
+  return AREA_IDS.filter((id) => !isAlias(id));
 }
 
 /** Every area that actually renders a section in the page. */
@@ -49,6 +54,16 @@ describe("every navigable area can actually be seen", () => {
       expect(css).toContain(`[data-area="${id}"]`);
     }
     expect(css).toContain('[data-active="ai-sre"]');
+  });
+
+  it("every legacy alias is rewritten to an area that has a rule", () => {
+    const nav = new Set(navAreas());
+    const aliases = AREA_IDS.filter(isAlias);
+    expect(aliases.length).toBeGreaterThan(0);
+    for (const id of aliases) {
+      const to = resolveLegacyArea(new URLSearchParams(`area=${id}`))!.get("area")!;
+      expect(nav.has(to) || isAlias(to), `${id} → ${to}`).toBe(true);
+    }
   });
 
   it("has every AreaId in the nav list the rule is generated from", () => {

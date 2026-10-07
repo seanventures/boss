@@ -78,6 +78,12 @@ const KNOWN_AGENT_WRITERS = [
   // through lib/agents and the Kit with the signed-in actor they are handed; the org board
   // client only READS /v1/agents/org-board. The Activity client only READS /v1/agents/activity.
   "app/agents/org-actions.ts",
+  // The Passport's Loadout grants (Give/Remove a skill or MCP server, holders): lib/agents and
+  // the Kit, with the signed-in actor the Passport hands it.
+  "app/skills/agent-abilities.tsx",
+  // The read gate (lib/identity/read-gates.ts) names /api/kit and /api/mcp in its table of
+  // proxies it judges GETs for; it sends nothing itself, so it carries no actor to check.
+  "lib/identity/read-gates.ts",
   "lib/agents-org-board.ts",
   "lib/agents-activity.ts",
 ];

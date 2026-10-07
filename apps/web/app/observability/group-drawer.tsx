@@ -17,6 +17,7 @@ import { Drawer, DrawerSection, Skeleton } from "../infra/kit";
 import { leaveTo } from "./obs-util";
 import { obsRead } from "./obs-write";
 import { useLocalTime } from "../../lib/local-time";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 export const PAGE = 20;
 
@@ -44,6 +45,7 @@ export function spendWord(spendMicros: number, included: boolean, estimated: boo
 export function GroupDrawer({ projectId, group, keyName, row, since, onClose }: {
   projectId: string; group: Group; keyName: string; row: ModelGroupRow | null; since: string | null; onClose: () => void;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const lt = useLocalTime();
   const [calls, setCalls] = useState<LlmCall[] | null>(null);
   const [total, setTotal] = useState(0);

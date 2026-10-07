@@ -4,6 +4,7 @@
  * render agree, and an elapsed time moves without a poll).
  */
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { localFull, markHydrated } from "../../lib/local-time";
 
 /** The current URL with `patch` applied (null deletes). Keeps the org and everything else. */
 export function hrefWith(patch: Record<string, string | null>): string {
@@ -74,14 +75,15 @@ export function span(seconds: number | null | undefined): string {
 /** Local time, for a tooltip beside a relative age. */
 export function localTime(iso: string | null | undefined): string {
   if (!iso) return "";
-  const t = new Date(iso);
-  return Number.isFinite(t.getTime()) ? t.toLocaleString() : iso;
+  // Hydration-safe (lib/local-time.ts localFull): UTC text until mounted, then the viewer's own.
+  return Number.isFinite(Date.parse(iso)) ? localFull(iso) : iso;
 }
 
 /** A clock, null until mounted, ticking every `ms`. */
 export function useNow(ms = 1000): number | null {
   const [now, setNow] = useState<number | null>(null);
   useEffect(() => {
+    markHydrated();
     setNow(Date.now());
     const t = window.setInterval(() => setNow(Date.now()), ms);
     return () => window.clearInterval(t);

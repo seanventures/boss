@@ -40,9 +40,12 @@ describe("the cockpit answers at once", () => {
   it("D1 Stop: Stopped by you and Build stopped before the API answers", async () => {
     stubFetch(cockpit());
     const inner = globalThis.fetch;
-    // The cancel never answers while the test looks: the worker holds the row.
+    // The cancel does not answer while the test looks: the worker holds the row. It answers at
+    // the end, so the press leaves lib/api-write.ts's in-flight registry (a press still in flight
+    // is JOINED by the next identical one — the next test's Stop would wait on this one).
+    let answer: (r: Response) => void = () => {};
     vi.stubGlobal("fetch", vi.fn((input: unknown, init?: RequestInit) =>
-      String(input).includes("/cancel") ? new Promise(() => {}) : inner(input as RequestInfo, init)));
+      String(input).includes("/cancel") ? new Promise<Response>((r) => { answer = r; }) : inner(input as RequestInfo, init)));
     await mount(view());
     await click($('[data-testid="fx-stop"]'));
     await click($('[data-testid="fx-stop-yes"]'));
@@ -50,6 +53,8 @@ describe("the cockpit answers at once", () => {
     expect(toasts).toContain("Build stopped");
     expect($('[data-testid="fx-stop"]')).toBeNull();
     expect($('[data-testid="fx-cockpit"]')?.dataset.still).toBe("true");
+    answer(Response.json({ status: "cancelled" }));
+    await settle();
   });
 
   it("D1 Stop refused: the press is undone and the API's sentence shown", async () => {

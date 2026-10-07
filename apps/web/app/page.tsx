@@ -1771,7 +1771,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         ) : null}
 
         {shows("ops") ? (
-        <section className="panel-stack" data-area="ops" aria-label="Improvement programs">
+        <section className="panel-stack" data-area="ops" aria-label="Improvement programs" data-testid="improvement-programs-panel">
           <ImprovementProgramsPanel
             programs={selfImprovement.improvementPrograms}
             programsApiReachable={selfImprovement.programsApiReachable}

@@ -12,6 +12,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DotsThree } from "@phosphor-icons/react";
+import { GatedButton } from "../../components/gated";
 
 import {
   effectiveOf, governWrite, money, readNumber, rightsFor, type CapPreview as CapPreviewData, type Control, type Envelope,
@@ -486,8 +487,8 @@ function TokenGuides({ view, projectId, actor, disabled, onSaved }: {
           <span className="gv-enforced" data-advisory title="Shapes alerts and tips. Doesn't stop model calls.">Advisory</span>
           <span className="gv-evidence"><span title="BOSS doesn't record when this bites">—</span></span>
           <span className="gv-act">
-            <button type="button" className="ag-btn" data-testid="gv-token-edit" disabled={disabled}
-                    onClick={() => setEditing((e) => !e)}>Edit</button>
+            <GatedButton permission="policy:manage" type="button" className="ag-btn" data-testid="gv-token-edit" disabled={disabled}
+                    onClick={() => setEditing((e) => !e)}>Edit</GatedButton>
           </span>
           {editing ? (
             <form className="gv-edit gv-edit-form" noValidate data-testid="gv-token-form"

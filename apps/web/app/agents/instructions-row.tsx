@@ -73,9 +73,10 @@ export function InstructionsRow({ projectId, roleKey, actor, onVersion, onMakeSk
   const load = useCallback(async () => {
     const r = await instructionsApi.list(projectId, roleKey, actor);
     if (r.ok) { setList(r.data); setFailed(""); onAccess?.(r.data.canEdit); } else setFailed(r.error);
-    setNow(Date.now());
   }, [projectId, roleKey, actor]); // eslint-disable-line react-hooks/exhaustive-deps -- onAccess is a setter
   useEffect(() => { void load(); }, [load, reloadKey]);
+  // Ages are measured from when the list arrived, read in an effect (never during render).
+  useEffect(() => { setNow(Date.now()); }, [list]);
 
   const changed = (version: number, verb: string) => {
     showToast("success", `${verb} · v${version} · applies to new work`);

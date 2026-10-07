@@ -19,8 +19,10 @@ import type { ReviewComment, StoryAct, StoryBoss, StoryRow, StoryYou, NowLine } 
 import { plural, type Station, type StationKey } from "../../lib/factory-floor";
 import type { ToolCalls } from "../../lib/agents-live-board";
 import { nameOf, RunFace } from "../agents/run-face";
+import { useNow } from "../agents/live-util";
 import { fetchTools } from "./cockpit-actions";
 import { areaHref, clockOf, costWord, secondsWord, spanOf, whoName } from "./cockpit-util";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 
 
@@ -112,14 +114,17 @@ function CommentList({ items }: { items: ReviewComment[] }) {
 }
 
 function ActRow({ row, props, live, enter }: { row: StoryAct; props: StoryProps; live: NowLine | null; enter?: boolean }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const face = useRef<HTMLButtonElement>(null);
+  // A running act's span ticks from a clock that exists only after mount (hydration-safe).
+  const now = useNow(1000);
   const state = ACT_STATE[row.status] ?? "idle";
   const still = props.still || state === "idle";
   // `round n` only on a build that went round (walk D15): a stage re-opened for another reason
   // on a build with no repair rounds is not a round.
   const looped = props.stations.some((st) => st.rounds > 0);
   const title = [row.title, row.seat ? `seat ${row.seat}` : "", looped && row.round > 1 ? `round ${row.round}` : ""].filter(Boolean).join(" · ");
-  const right = [row.word, spanOf(row.startedAt, row.endedAt ?? null, row.endedAt ? null : Date.now()),
+  const right = [row.word, spanOf(row.startedAt, row.endedAt ?? null, row.endedAt ? null : now),
     costWord(row.costUsd)].filter(Boolean);
   const authored = row.commentsAuthored > 0
     ? props.comments.filter((c) => c.authorRoleKey && c.authorRoleKey === row.roleKey && (!row.round || c.round === row.round))
@@ -176,6 +181,7 @@ const YOU_WORDS: Record<string, string> = {
 };
 
 function YouRow({ row, viewer, enter }: { row: StoryYou; viewer: string; enter?: boolean }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const mine = !row.actor || row.actor === viewer;
   const word = row.what === "waived" ? (row.count ? `Waived ${plural(row.count, "check")}` : "Waived checks") : YOU_WORDS[row.what] ?? row.what;
   return (

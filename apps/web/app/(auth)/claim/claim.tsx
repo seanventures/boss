@@ -41,9 +41,9 @@ const SEAT_WORDS: Record<string, string> = {
   release_manager: "release_manager · releases will show your name",
 };
 
-function minutesLeft(iso: string | null): number | null {
+function minutesLeft(iso: string | null, now: number): number | null {
   if (!iso) return null;
-  return Math.max(0, Math.round((Date.parse(iso) - Date.now()) / 60_000));
+  return Math.max(0, Math.round((Date.parse(iso) - now) / 60_000));
 }
 
 export function ClaimFlow({ options }: { options: AuthOptions }) {
@@ -79,7 +79,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
   useEffect(() => {
     setPasskeys(webauthnAvailable());
     setToken(fragmentToken());
-    setMins(minutesLeft(claim.expires_at));
+    setMins(minutesLeft(claim.expires_at, Date.now()));
   }, [claim.expires_at]);
 
   const network = claim.path === "network_bridge";

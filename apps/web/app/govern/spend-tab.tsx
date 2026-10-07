@@ -120,15 +120,15 @@ export function SpendTab({ projectId, paused }: { projectId: string; paused: boo
                 <span className="gv-low" title="Under 30% of input came from cache">Low</span>
               ) : null}
               <span className="gv-tile-sub" title="Fresh and cached input tokens">
-                {Number(card.prompt_tokens ?? 0).toLocaleString()} fresh · {Number(card.cache_read_tokens ?? 0).toLocaleString()} cached
+                {Number(card.prompt_tokens ?? 0).toLocaleString("en-US")} fresh · {Number(card.cache_read_tokens ?? 0).toLocaleString("en-US")} cached
               </span>
             </section>
             <section className="gv-tile" data-testid="gv-scorecard">
               <span className="gv-tile-label">SCORECARD</span>
-              <span>Calls {Number(card.calls ?? 0).toLocaleString()}</span>
-              <span title="Calls that failed">Failed {Number(card.failed_calls ?? 0).toLocaleString()}</span>
+              <span>Calls {Number(card.calls ?? 0).toLocaleString("en-US")}</span>
+              <span title="Calls that failed">Failed {Number(card.failed_calls ?? 0).toLocaleString("en-US")}</span>
               <span title="Money spent on failed calls">Failed burn {money(Number(card.failed_burn_usd_micros ?? 0))}</span>
-              <span title="Average tokens per call">Avg {Math.round(Number(card.avg_tokens_per_call ?? 0)).toLocaleString()} tok</span>
+              <span title="Average tokens per call">Avg {Math.round(Number(card.avg_tokens_per_call ?? 0)).toLocaleString("en-US")} tok</span>
               <span title="Money per successful call">Per ok call {money(Number(card.cost_per_ok_call_usd_micros ?? 0))}</span>
             </section>
           </div>

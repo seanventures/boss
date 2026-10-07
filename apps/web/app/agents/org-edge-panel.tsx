@@ -12,6 +12,8 @@ import {
 } from "../../lib/agents-org-board";
 import { AgFace } from "./agent-face";
 import { Drawer, consoleHref, nameOf, runHref, teamLabel } from "./org-shared";
+import { localFull } from "../../lib/local-time";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 export type EdgeFocus = { from: string; to: string; level: "team" | "agent" };
 
@@ -41,6 +43,7 @@ export function edgeSummary(e: Pick<OrgEdge, "handoffs" | "failed" | "waiting" |
 export function OrgEdgePanel({ projectId, board, focus, days, onClose }: {
   projectId: string; board: OrgBoard; focus: EdgeFocus; days: OrgDays; onClose: () => void;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const team = focus.level === "team";
   const label = (k: string) => (team ? teamLabel(k, board) : nameOf(k));
   const edge: OrgEdge | undefined = team
@@ -90,7 +93,7 @@ export function OrgEdgePanel({ projectId, board, focus, days, onClose }: {
         {error ? <li className="ag-bad" title={error}>Can&apos;t reach BOSS</li> : null}
         {rows?.map((r) => (
           <li key={r.actId} data-status={r.status}>
-            <span className="ag-muted" title={r.startedAt ? new Date(r.startedAt).toLocaleString() : undefined}>
+            <span className="ag-muted" title={r.startedAt ? localFull(r.startedAt) : undefined}>
               {ageWords(r.startedAt)}
             </span>
             {r.from === "person" ? <span className="ag-org-you" aria-hidden>●</span> : <AgFace roleKey={r.from} size={24} decorative />}

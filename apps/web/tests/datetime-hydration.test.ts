@@ -111,8 +111,8 @@ describe("datetime helpers are hydration-safe", () => {
       "reports-ui.tsx",
       "pipeline-ui.tsx",
       "org-gate.tsx",
+      // The Community tree has one page: the private repo's page-community.tsx ships as page.tsx.
       "page.tsx",
-      "page-community.tsx",
       "client-relative-time.tsx",
     ];
     for (const file of files) {
@@ -144,9 +144,8 @@ describe("datetime helpers are hydration-safe", () => {
       "actions.ts",
       // This server-only route uses deadlines to bound upstream lookups; it renders no UI.
       "api/run-deployments/route.ts",
+      // The console's page is a server component; the count is computed before hydration.
       "page.tsx",
-      // Community's page is a server component; the count is computed before hydration.
-      "page-community.tsx",
     ]);
     const files: string[] = [];
     const walk = (dir: string) => {

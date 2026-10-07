@@ -25,6 +25,7 @@ import { GatedButton } from "../../components/gated";
 import {
   Drawer, MenuPop, WaitItem, kitHref, liveState, nameOf, teamLabel, workflowHref,
 } from "./org-shared";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 const ROWS_MAX = 5;
 
@@ -32,6 +33,7 @@ export function OrgAgentPanel({ board, live, roleKey, days, actions, onClose }: 
   board: OrgBoard; live: LiveMap; roleKey: string; days: OrgDays; actions: OrgActions | null;
   onClose: () => void;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const [moveOpen, setMoveOpen] = useState(false);
   const agent = board.agents.find((a) => a.roleKey === roleKey);
   const team = board.teams.find((t) => t.members.includes(roleKey));
@@ -210,6 +212,7 @@ export function OrgAgentPanel({ board, live, roleKey, days, actions, onClose }: 
 }
 
 function Partners({ title, keys }: { title: string; keys: [string, number][] }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const shown = keys.slice(0, ROWS_MAX);
   return (
     <div className="ag-org-partners">

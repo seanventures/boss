@@ -194,6 +194,7 @@ export type FloorViewProps = {
 };
 
 export function FloorView({ projectId, actor, floor, error, loading, refresh, paused, query = "", orgId, band: bandProp, onOpen, onPlan, onDirect, onApps }: FloorViewProps) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const now = useNow(1000);
   const measured = useBand();
   const band = bandProp ?? measured;

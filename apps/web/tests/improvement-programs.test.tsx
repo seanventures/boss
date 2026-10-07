@@ -161,16 +161,17 @@ describe("Community improvement programs panel", () => {
   });
 
   it("wires the Community panel in Mission Control without touching the enterprise SIM propose form", () => {
+    // The Community tree ships no enterprise SIM propose form at all (it lives only in the
+    // private repo, where this test was written): the panel is the whole of it, in Operations.
     const page = readFileSync(join(ROOT, "app/page.tsx"), "utf8");
     expect(page).toContain('data-testid="improvement-programs-panel"');
-    expect(page).toContain("ImprovementProgramsPanel");
-    expect(page).toContain("submitSelfImprovementProposalAction");
-
     const communitySlice = page
       .split('data-testid="improvement-programs-panel"')[1]
-      .split("Propose an improvement")[0];
-    expect(communitySlice).toContain("ImprovementProgramsPanel");
-    expect(communitySlice).not.toContain("submitSelfImprovementProposalAction");
-    expect(communitySlice).not.toContain("/v1/self-improvement");
+      .split("</section>")[0];
+    expect(communitySlice).toContain("<ImprovementProgramsPanel");
+    expect(page.slice(page.lastIndexOf("<section", page.indexOf('data-testid="improvement-programs-panel"')),
+      page.indexOf('data-testid="improvement-programs-panel"'))).toContain('data-area="ops"');
+    expect(page).not.toContain("submitSelfImprovementProposalAction");
+    expect(page).not.toContain("/v1/self-improvement");
   });
 });

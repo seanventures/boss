@@ -174,7 +174,7 @@ export function QueryBar({ tokens, q, labels, names, facets, error, onTokens, on
                       onMouseDown={(e) => { e.preventDefault(); onAdd(s.token); setText(""); }}>
                 {s.token.key === "agent" ? <RunFace roleKey={s.token.value} size={16} /> : null}
                 <span data-user-text>{s.label}</span>
-                {typeof s.count === "number" ? <span className="lx-count">{s.count.toLocaleString()}</span> : null}
+                {typeof s.count === "number" ? <span className="lx-count">{s.count.toLocaleString("en-US")}</span> : null}
               </button>
             </li>
           ))}
