@@ -215,6 +215,12 @@ def _settle(page, area: Optional[str]) -> Optional[str]:
         while True:
             if page.query_selector(f'main[data-active="{area}"]'):
                 break
+            # A RETIRED AREA REDIRECTS (app/legacy-areas.ts: `capabilities` → Skills & MCP). The
+            # URL no longer names this area, and the area it now names has rendered: settled.
+            landed = re.search(r"[?&]area=([^&#]+)", page.url)
+            if landed and landed.group(1) != area and page.query_selector(
+                    f'main[data-active="{landed.group(1)}"]'):
+                break
             text = page.evaluate("() => document.body ? document.body.innerText.slice(0, 2000) : ''") or ""
             if RECONNECTING in text:
                 stuck_since = stuck_since or time.time()
