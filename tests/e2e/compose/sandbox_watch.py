@@ -70,7 +70,18 @@ def probe_push_main(pid: str, uid: int, gid: int, root: str) -> dict:
         os.setgid(gid)
         os.setuid(uid)
     res = {}
-    for name, ref in (("main", "HEAD:refs/heads/main"),):
+    # A NEW commit (on HEAD's tree, referenced by nothing, the checkout untouched): pushing HEAD
+    # itself is a no-op while the run has not committed — git answers "up to date" without asking
+    # the remote, which round 3's first run of this probe took for an accepted push to main.
+    made = subprocess.run(["git", "-C", root, "-c", "user.name=fxd-probe", "-c", "user.email=probe@fxd.test",
+                           "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "fxd probe: a push to main must be refused"],
+                          env=env, preexec_fn=as_run, capture_output=True, text=True, timeout=30)
+    sha = made.stdout.strip()
+    res["probe_commit"] = bool(sha) and made.returncode == 0
+    if not res["probe_commit"]:
+        res["main"] = {"error": "could not make the probe commit: " + redact(made.stderr[-200:])}
+        return res
+    for name, ref in (("main", f"{sha}:refs/heads/main"),):
         try:
             done = subprocess.run(["git", "-C", root, "push", "--porcelain", "origin", ref], env=env, preexec_fn=as_run,
                                   capture_output=True, text=True, timeout=60)
