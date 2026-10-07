@@ -141,6 +141,25 @@ def journey(jid: str, title: str, proves: str):
     return deco
 
 
+_CATALOGUE: dict[str, dict[str, Any]] = {}
+
+
+def _perm(page: Any, key: str) -> dict[str, Any]:
+    """A permission's catalogue entry (title, roles) from the API under test: the console names a
+    permission by its title and keeps the key in `title`/`data-permission` (lib/identity/words.ts)."""
+    if not _CATALOGUE:
+        for m in (api(page, "GET", "/v1/identity/catalogue").get("body") or {}).get("permissions", []):
+            _CATALOGUE[m["key"]] = m
+    return _CATALOGUE.get(key) or {}
+
+
+def _needs_words(page: Any, key: str) -> str:
+    """The disabled control's reason, as lib/identity/words.ts needsWords says it."""
+    m = _perm(page, key)
+    who = "ask an Admin" if "admin" in (m.get("roles") or []) else "ask an Owner"
+    return f"Needs “{m.get('title') or key}” · {who}"
+
+
 def _role_id(page: Any, key: str) -> str:
     for r in (api(page, "GET", "/v1/identity/access-roles").get("body") or {}).get("roles", []):
         if r.get("key") == key:
@@ -688,27 +707,39 @@ def j11(env: Env, j: Journey) -> None:
     nb = vpage.get_by_role("button", name=re.compile("New build"))
     if "code_task:create" not in held and nb.count():
         b = nb.first
+        gate = b.get_attribute("data-permission") or ""
         j.check("“New build” is disabled for a Viewer (no code_task:create)",
-                b.is_disabled() or b.get_attribute("aria-disabled") == "true",
-                expect="disabled with the permission tooltip",
-                actual=f"enabled (title={b.get_attribute('title')!r})", known="FX-C P1-18 (pre-grey actions the person cannot take)",
+                (b.is_disabled() or b.get_attribute("aria-disabled") == "true") and bool(gate) and gate not in held
+                and (b.get_attribute("title") or "") == _needs_words(vpage, gate),
+                expect="disabled, gated on a permission the Viewer lacks, titled with its Needs “…” · ask an Admin",
+                actual=f"aria-disabled={b.get_attribute('aria-disabled')} data-permission={gate!r} title={b.get_attribute('title')!r}",
+                known="FX-C P1-18 (pre-grey actions the person cannot take)",
                 repro=f"{env.web}/ as seed-viewer: top bar “+ New build”")
     vpage.goto(f"{env.web}/identity", wait_until="domcontentloaded")
     vpage.wait_for_selector("[data-testid=overview-invite]", timeout=30000)
     j.shot(vpage, "viewer-identity-overview")
     inv = vpage.locator("[data-testid=overview-invite]").first
     title = inv.get_attribute("title") or ""
+    want = _needs_words(vpage, "user:invite")
     j.check("Invite is disabled and names user:invite and who to ask",
-            (inv.get_attribute("aria-disabled") == "true" or inv.is_disabled()) and "user:invite" in title,
-            expect="aria-disabled, title “Needs user:invite · ask an Admin”", actual=f"aria-disabled={inv.get_attribute('aria-disabled')} title={title!r}")
+            (inv.get_attribute("aria-disabled") == "true" or inv.is_disabled())
+            and inv.get_attribute("data-permission") == "user:invite" and title == want,
+            expect=f"aria-disabled, data-permission user:invite, title “{want}”",
+            actual=f"aria-disabled={inv.get_attribute('aria-disabled')} data-permission={inv.get_attribute('data-permission')} title={title!r}")
     vpage.goto(f"{env.web}/identity/people", wait_until="domcontentloaded")
     vpage.wait_for_selector("[data-testid=access-denied], [data-testid=page-denied]", timeout=30000)
     vpage.wait_for_timeout(1000)
     j.shot(vpage, "viewer-people-denied")
     txt = K.body_text(vpage)
+    denied = vpage.locator("[data-testid=access-denied]")
+    dtxt = denied.first.inner_text() if denied.count() else ""
+    named = (_perm(vpage, "user:read").get("title") or "user:read")
     j.check("People answers Access denied naming the page and user:read",
-            "People" in txt and "user:read" in txt and ("can't open" in txt or "can’t open" in txt),
-            expect="“You can't open People” · Needs user:read", actual=txt[:300])
+            denied.count() == 1 and denied.first.get_attribute("data-permission") == "user:read"
+            and re.search(r"You can['’]t open People", dtxt) is not None and "Needs" in dtxt and named in dtxt,
+            expect=f"“You can't open People” · Needs “{named}” (data-permission user:read)",
+            actual=f"denied={denied.count()} data-permission={denied.first.get_attribute('data-permission') if denied.count() else None} "
+                   f"text={(dtxt or txt)[:300]!r}")
     j.check("the denial names who can grant it and offers Request access",
             vpage.locator("[data-testid=access-denied-grantors]").count() > 0
             and vpage.locator("[data-testid=request-access]").count() > 0,
@@ -787,8 +818,13 @@ def j12(env: Env, j: Journey) -> None:
     diff = apage.locator("[data-testid=diff]").inner_text()
     impact = apage.locator("[data-testid=impact]").inner_text()
     j.shot(apage, "diff-and-impact")
-    j.check("Changes shows −deployment:create", "deployment:create" in diff and "−" in diff,
-            expect="−deployment:create", actual=diff[:200])
+    # The row names the permission by its title and keeps the key in `title` (lib/identity/words.ts).
+    removed = apage.locator("[data-testid=diff] .idn-dl.m[title='deployment:create']")
+    rtxt = removed.first.inner_text() if removed.count() else ""
+    dname = _perm(apage, "deployment:create").get("title") or "deployment:create"
+    j.check("Changes shows −deployment:create", removed.count() == 1 and rtxt.replace(" ", "").startswith("−")
+            and dname in rtxt and apage.locator("[data-testid=diff] .idn-dl.p").count() == 0,
+            expect=f"one removed row “−{dname}” (title deployment:create), nothing added", actual=diff[:200])
     j.check("the impact preview names the holder and counts people", "Affects 1 person" in impact
             and holder.name in impact, expect=f"Affects 1 person · {holder.name}", actual=impact[:300])
     lost = re.search(r"[−-](\d+)\s*\n?\s*API operations", impact)
@@ -898,13 +934,16 @@ def j13(env: Env, j: Journey) -> None:
     apage.wait_for_selector("#key-name", timeout=10000)
     apage.fill("#key-name", "fxd-j13 deploy")
     apage.locator("[data-testid=key-form]").get_by_role("button", name="CI deploy").click()
-    K.wait_for(lambda: "deployment:create" in apage.locator("[data-testid=scopes]").inner_text(), 10)
-    scopes = apage.locator("[data-testid=scopes]").inner_text()
+    # Each scope chip names its permission and carries the key in data-permission (kit.tsx Perm).
+    picked = lambda: {apage.locator("[data-testid=scopes] [data-permission]").nth(i).get_attribute("data-permission")  # noqa: E731
+                      for i in range(apage.locator("[data-testid=scopes] [data-permission]").count())}
+    K.wait_for(lambda: "deployment:create" in picked(), 10)
+    scopes = picked()
     if "deployment:create" not in scopes:
         j.note("SA scopes view: " + short(api(apage, "GET", f"/v1/identity/service-accounts/{sa_id}/scopes").get("body"), 300))
-    j.check("the CI deploy preset picks deployment:create, deployment:read, code_task:read",
-            all(x in scopes for x in ("deployment:create", "deployment:read", "code_task:read")),
-            expect="the three CI scopes", actual=scopes[:200])
+    ci = {"deployment:create", "deployment:read", "code_task:read"}
+    j.check("the CI deploy preset picks deployment:create, deployment:read, code_task:read", ci <= scopes,
+            expect="the three CI scopes", actual=f"{sorted(scopes)} · {apage.locator('[data-testid=scopes]').inner_text()[:160]!r}")
     j.shot(apage, "key-form")
     apage.click("[data-testid=create-key]")
     K.answer_step_up_sheet(apage, admin, timeout_ms=5000)
