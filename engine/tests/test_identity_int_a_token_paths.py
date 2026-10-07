@@ -209,8 +209,11 @@ def test_round2_e_no_grant_clones_as_the_audited_system_reader_never_the_shared_
                if e.event_type == "role_binding.added" and e.target_id == runs.SYSTEM_REPO_READER]
     assert ceiling == set(runs.SYSTEM_GIT_SCOPE) and len(audited) == 1
     # enforce, no egress: refused
+    from boss_engine.config import get_settings
+
     monkeypatch.delenv("BOSS_EGRESS_URL")
     monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
+    monkeypatch.setattr(get_settings(), "authz_mode", "enforce")
     with pytest.raises(runs.NoAuthority):
         with runs.repo_access(env.engine, host="github", owner="acme", repo="web", project_id=env.project,
                               token=never):
