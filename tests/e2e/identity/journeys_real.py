@@ -2139,7 +2139,7 @@ def j14(env: Env, j: Journey) -> None:
 @journey("J16", "An install reached by an IP address: the authenticator app, never a passkey prompt",
          "WebAuthn forbids an IP address as the RP ID, so at https://<ip> the claim's passkey step "
          "failed before Touch ID with a bare error (boss-1). At an IP origin the API offers no "
-         "passkey (passkey_reason needs_domain), the claim makes the authenticator app the way in "
+         "passkey (passkey_reason passkey_needs_domain), the claim makes the authenticator app the way in "
          "and says why in one line, sign-in shows no passkey button, and My account offers none.")
 def j16(env: Env, j: Journey) -> None:
     ip = "127.0.0.1"
@@ -2156,8 +2156,8 @@ def j16(env: Env, j: Journey) -> None:
     page.goto(f"{origin}/login", wait_until="domcontentloaded")
     opts = K.raw_fetch(page, "GET", "/v1/auth/options", csrf=False).get("body") or {}
     j.check("API: at an IP origin no passkey is offered, and it says why", opts.get("passkey") is False
-            and opts.get("passkey_reason") == "needs_domain",
-            expect="passkey false, passkey_reason needs_domain", actual=short({k: opts.get(k) for k in ("passkey", "passkey_reason", "host")}))
+            and opts.get("passkey_reason") == "passkey_needs_domain",
+            expect="passkey false, passkey_reason passkey_needs_domain", actual=short({k: opts.get(k) for k in ("passkey", "passkey_reason", "host")}))
 
     token = K.secret(I.setup_token(s2.host())) or ""
     page.goto(f"{origin}/claim#t={token}", wait_until="domcontentloaded")
