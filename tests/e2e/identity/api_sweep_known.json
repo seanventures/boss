@@ -1,0 +1,5 @@
+{
+ "* GET /v1/mcp-confirmations": "unassigned (FX-B, legacy member checks): _require_human_mcp_reviewer reads the legacy org_members table, so NO identity person - not even the Owner - can list or review MCP confirmations under enforce (403 'Actor usr_... is not an active member of org').",
+ "* GET /v1/mcp-confirmations/{confirmation_id}": "unassigned (FX-B, legacy member checks): same handler check as the list.",
+ "* GET /v1/sandboxes/helpers": "environment: the community compose stack has no sandbox-service on 127.0.0.1:8088, so every allowed caller gets 503; not an authz defect."
+}

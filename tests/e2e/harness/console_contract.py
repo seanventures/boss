@@ -39,9 +39,12 @@ class Press:
     grows: Optional[str] = None     # selector whose count must increase instead
     fill: tuple[tuple[str, str], ...] = ()   # (testid, text) typed before the press
     then: tuple[str, ...] = ()      # testids pressed after it (a suggestion fills, Send sends)
+    then_source: str = ""           # file declaring the `then` testids (default source): a press
+                                    # that opens a dialog and then presses inside it
     opens: bool = False             # a <details>: open it (click only when closed)
     write: bool = False
     unless: Optional[str] = None    # visible → the action was already done; not a failure
+    unless_source: str = ""         # file declaring the testids in `unless` (default expect_source)
     # Declared in a file the Community export removes (scripts/community_export_manifest.json):
     # not pressed when the API says it is Community, and its source may be absent there.
     paid_only: bool = False
@@ -72,9 +75,10 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
               expect=_tid("askboss-default-workflow"),
               why="the ask box's worked examples; asking itself starts real work"),
         # The Command Center's own presses (cc v2).
-        Press("cc-templates-all", "app/command-center/rails.tsx", expect=_tid("askboss-ideas"),
-              expect_source="app/ask-boss-hero.tsx",
-              why="All 16 opens the composer's template gallery"),
+        # All n opens the templates' own gallery page (rails.tsx `Gallery`), not the composer's
+        # Ideas popover any more: the live walk waited 30s for [askboss-ideas] after it.
+        Press("cc-templates-all", "app/command-center/rails.tsx", expect=_tid("cc-gallery"),
+              why="All n opens the template gallery"),
         Press("cc-dot-budget", "app/command-center/cards.tsx",
               why="a Systems dot opens the area that fixes it (Budget)"),
         Journey("command_center_fits"),
@@ -88,19 +92,33 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
               expect_source="app/factory/floor.tsx"),
         Press("fx-build-row-*", "app/factory/build-row.tsx", expect=_tid("fx-cockpit"),
               expect_source="app/factory/cockpit.tsx",
-              unless=_tid("fx-nothing-building"),
+              # Nothing to open: "Nothing building", or on an install with no build ever,
+              # "No builds yet" (both on the Floor).
+              unless=f'{_tid("fx-nothing-building")}, {_tid("fx-no-builds")}',
+              unless_source="app/factory/floor.tsx",
               why="a build row opens that build's cockpit"),
     ),
     "delivery_workflows": (
-        Press("dw-tab-design", "app/delivery-workflows-ui.tsx", expect=_tid("dw-design-ways")),
+        # Workflow Studio S4: the five tabs became Runs and Library; designing starts in the
+        # Library (+ New workflow, and its Steps view for steps of your own).
+        Press("dw-tab-library", "app/delivery-workflows-ui.tsx", expect=_tid("wf-library"),
+              expect_source="app/workflows/library.tsx"),
         Journey("step_bindings"),
         Journey("step_agents"),
         Journey("workflow_build"),
         Journey("advance_now"),
     ),
     "workforce": (
-        Press("wf-new-agent", "app/workforce-ui.tsx", expect=_tid("aw-dialog"),
-              expect_source="app/agent-creation-wizard.tsx"),
+        # One + New agent dialog (Workflow Studio S4) replaced the wizard and Agent Studio's
+        # Create agent (the retired `studio` area's press).
+        Press("wf-new-agent", "app/workforce-ui.tsx", expect=_tid("agent-quick-create"),
+              expect_source="app/agent-quick-create.tsx"),
+        # MOVED HERE: the retired Team structure area (`org_chart`) pressed "Add agent from
+        # template"; its templates are the New agent dialog's From template tab now.
+        Press("wf-new-agent", "app/workforce-ui.tsx", then=("aq-tab-template",),
+              then_source="app/agent-quick-create.tsx", expect=_tid("aq-templates"),
+              expect_source="app/agent-quick-create.tsx",
+              why="agent templates: + New agent › From template"),
         # Agents home (agents-home spec §3.1): four tabs, each with the surface it must show.
         Press("agents-view-live", "app/workforce-ui.tsx", expect=_tid("ag-live"),
               expect_source="app/agents/live-board.tsx"),
@@ -109,24 +127,22 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
         Press("agents-view-org", "app/workforce-ui.tsx", expect=_tid("ag-zones"),
               expect_source="app/agents/org-teams.tsx"),
         # Organization (org-view spec §7.3): Teams · Flow · Lines and the window chips.
-        Press("ag-org-flow", "app/agents/org-view.tsx", expect=_tid("ag-flow"),
+        # Agents opens on Live, so each Organization control is reached through its tab (the
+        # live walk found these three "not on screen" when pressed from a fresh load).
+        Press("agents-view-org", "app/workforce-ui.tsx", then=("ag-org-flow",),
+              then_source="app/agents/org-view.tsx", expect=_tid("ag-flow"),
               expect_source="app/agents/org-flow.tsx"),
-        Press("ag-org-lines", "app/agents/org-view.tsx",
+        Press("agents-view-org", "app/workforce-ui.tsx", then=("ag-org-lines",),
+              then_source="app/agents/org-view.tsx",
               expect=f'{_tid("org-tree")}, {_tid("org-empty")}', expect_source="app/workforce-ui.tsx"),
-        Press("ag-org-days-30", "app/agents/org-view.tsx", expect=_tid("ag-orgteams"),
+        Press("agents-view-org", "app/workforce-ui.tsx", then=("ag-org-days-30",),
+              then_source="app/agents/org-view.tsx", expect=_tid("ag-orgteams"),
               expect_source="app/agents/org-teams.tsx"),
         Press("agents-view-activity", "app/workforce-ui.tsx", expect=_tid("ag-river"),
               expect_source="app/agents/activity-river.tsx"),
         Journey("agent_with_skill"),
         Journey("agent_update"),
         Journey("live_gate"),
-    ),
-    "org_chart": (
-        Press("org-template-toggle", "app/workforce-ui.tsx", expect=_tid("org-templates")),
-    ),
-    "studio": (
-        Press("as-create-agent", "app/agent-studio-ui.tsx", expect=_tid("aw-dialog"),
-              expect_source="app/agent-creation-wizard.tsx"),
     ),
     "decisions": (
         Press("decision-filter-all", "app/decision-inbox-ui.tsx",
@@ -194,10 +210,17 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
     "reports": (
         Press("rep-tab-*", "app/reports-ui.tsx", expect=".rep-tab.active"),
     ),
+    # Skills & MCP is the one home for skills and MCP servers ("kit links"): the Kit, Who can
+    # and the Library. The old screen's "ask the agent to write a skill" is Library › Describe.
     "skills": (
-        Press("skill-agent-open", "app/skills-ui.tsx", expect=_tid("agent-send"),
-              expect_source="app/agent-ui.tsx"),
+        Press("kit-tab-library", "app/skills/kit-home.tsx", expect=_tid("kit-library"),
+              expect_source="app/skills/library.tsx"),
+        Press("kit-tab-library", "app/skills/kit-home.tsx", then=("kit-lib-describe",),
+              then_source="app/skills/library.tsx", expect=_tid("agent-send"),
+              expect_source="app/agent-ui.tsx",
+              why="Describe asks BOSS to draft a skill: the dock must open on that question"),
         Journey("skill_create"),
+        Journey("mcp_register"),
     ),
     "setup": (
         Press("su-test-all", "app/setup/setup-board.tsx", expect=_tid("su-verdict"),
@@ -237,8 +260,11 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
         Press("ghx-setup", "app/github-operations-ui.tsx", opens=True,
               expect='[data-testid="ghx-setup"] form'),
     ),
+    # ?area=capabilities lands on Skills & MCP › Library › MCP (app/legacy-areas.ts): servers
+    # are registered there. Its press is that screen's Add MCP; mcp_register runs from Skills.
     "capabilities": (
-        Journey("mcp_register"),
+        Press("kit-lib-add-mcp", "app/skills/library.tsx", expect=_tid("kit-add-mcp"),
+              expect_source="app/skills/add-mcp-sheet.tsx"),
     ),
     "sandboxes": (
         NothingToPress("Lists live sandboxes, each opening its working tree; a stack with no "
@@ -282,6 +308,8 @@ def declared_in_source(source_text: str, testid: str) -> bool:
         return True   # a component prop forwarded to data-testid (phase3-ui's <Result testid=…>)
     if f'testId="{testid}"' in source_text or f'testId: "{testid}"' in source_text:
         return True   # a testId prop or menu-item field forwarded to data-testid (infra/kit's Sheet, Menu)
+    if f'testid: "{testid}"' in source_text:
+        return True   # a tab list's field rendered as data-testid={t.testid} (Agents' view tabs)
     return any(prefix and testid.startswith(prefix)
                for prefix in _TEMPLATE_PREFIX.findall(source_text))
 

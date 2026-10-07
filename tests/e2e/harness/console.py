@@ -55,7 +55,9 @@ from typing import Optional
 from .console_contract import PRIMARY_ACTIONS, Press, selector_for
 from .discover import console_areas, console_dynamic_routes, console_routes
 from .journeys import JOURNEYS, Context as JourneyContext, run_journey
-from .target import Target
+from .identity import SIGN_IN_SELECTORS, IdentitySetupError, load_accounts
+from .identity import sign_in as sign_in_as
+from .target import Target, TargetError
 
 DESTRUCTIVE = re.compile(
     r"\b(delete|remove|retire|purge|stop|cancel|disconnect|reset|revoke|discard|archive|"
@@ -63,7 +65,10 @@ DESTRUCTIVE = re.compile(
 # Routes that cannot be walked as a page: an OAuth landing that needs a provider's query string,
 # and the sign-in page the walk has already used.
 UNWALKABLE_ROUTES = {"/cloud/callback": "an OAuth return URL; needs the provider's code",
-                     "/login": "used to sign in"}
+                     "/login": "used to sign in",
+                     "/invite": "needs an invitation token from an email",
+                     "/signin/link": "needs a magic-link token from an email",
+                     "/signup/verify": "needs a sign-up token from an email"}
 ERROR_TEXT = re.compile(r"(Application error|Unhandled Runtime Error|Internal Server Error|"
                         r"Something went wrong|This page could not be found)", re.I)
 SETTLE_TIMEOUT_MS = 90_000
@@ -74,7 +79,8 @@ ACTION_OUTCOME_SECONDS = 30
 # enumerates this table, so renaming one of these breaks a fast test with this sentence instead
 # of turning the whole walk into timeouts.
 SOURCE_CONTRACT = (
-    ("app/login/page.tsx", 'id="console-password"', "typing the console password"),
+    # Signing in as a seeded person (harness/identity.py): email, password, then the code.
+    *((path, literal, f"signing in: {use}") for path, literal, use in SIGN_IN_SELECTORS),
     ("app/org-gate.tsx", "data-testid={`org-card-${o.org_id}`}", "choosing the org"),
     ("app/ConsoleShell.tsx", 'data-testid="console-area" data-active={active}',
      "knowing which area rendered (main[data-active=<area>])"),
@@ -209,6 +215,12 @@ def _settle(page, area: Optional[str]) -> Optional[str]:
         while True:
             if page.query_selector(f'main[data-active="{area}"]'):
                 break
+            # A RETIRED AREA REDIRECTS (app/legacy-areas.ts: `capabilities` → Skills & MCP). The
+            # URL no longer names this area, and the area it now names has rendered: settled.
+            landed = re.search(r"[?&]area=([^&#]+)", page.url)
+            if landed and landed.group(1) != area and page.query_selector(
+                    f'main[data-active="{landed.group(1)}"]'):
+                break
             text = page.evaluate("() => document.body ? document.body.innerText.slice(0, 2000) : ''") or ""
             if RECONNECTING in text:
                 stuck_since = stuck_since or time.time()
@@ -311,10 +323,16 @@ class Walk:
         return result
 
     def sign_in(self, page, rec: Recorder) -> None:
-        page.goto(f"{self.origin}/login", wait_until="domcontentloaded")
-        page.fill("#console-password", self.target.console_password or "")
-        page.click("button[type=submit]")
-        page.wait_for_url(lambda url: "/login" not in url, timeout=60_000)
+        """Sign in through the real /login as the target's seeded `walk_role` (owner by default):
+        email + password, then the authenticator code (harness/identity.py)."""
+        accounts = load_accounts(Path(self.target.accounts_file or ""))
+        account = accounts.get(self.target.walk_role)
+        if account is None:
+            raise TargetError(f"The accounts file has no {self.target.walk_role!r} account.")
+        try:
+            sign_in_as(page, self.origin, account)
+        except IdentitySetupError as exc:
+            raise TargetError(f"Signing in to the console failed: {exc}") from None
         rec.take()  # sign-in noise (the 401 that sends you to /login) is not a finding
         self.choose_org(page, rec)
 
@@ -556,9 +574,10 @@ class Walk:
 
 def walk(target: Target, report_dir: Path, *, only: list[str] | None = None,
          headed: bool = False, allow_writes: bool = False, capture_bodies: bool = False) -> int:
-    if not target.console_url or not target.console_password:
+    if not target.console_url or not target.accounts_file:
         print("e2e: no console to walk — the stack was started with --no-web, or the live "
-              "target has no BOSS_E2E_CONSOLE_URL / BOSS_E2E_CONSOLE_PASSWORD.", file=sys.stderr)
+              "target has no BOSS_E2E_CONSOLE_URL / BOSS_E2E_ACCOUNTS_FILE (the 0600 file "
+              "`seed-test-accounts` writes; see target.py).", file=sys.stderr)
         return 2
     results = Walk(target, report_dir, allow_writes=allow_writes, headed=headed,
                    capture_bodies=capture_bodies).run(only or [])
