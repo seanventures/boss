@@ -20,7 +20,7 @@ import { CanButton, useGuardedCall, useIdentity } from "../../../../components/i
 import { Ago, clock, ErrorLine, Face, Perm, Pill, RoleChip, Sheet, shortDate, useNow, daysUntil } from "../../../../components/identity/kit";
 import { Locked, SignIn } from "../../../../components/identity/parts";
 import { ErrorState, type ReadFailure } from "../../../../components/identity/states";
-import { eventWords, permissionName } from "../../../../lib/identity/words";
+import { eventWords, methodWords, permissionName, seatName } from "../../../../lib/identity/words";
 import type { ProjectChoice } from "../../../../lib/identity/types-people";
 import { ProjectPicker } from "../../groups/group-sheets";
 import { ExpiryField, expiresAt, type ExpiryChoice } from "../expiry";
@@ -113,7 +113,7 @@ function Header({ person, roles, emailVerified, onSheet }: { person: Person; rol
               <UsersThree size={12} aria-hidden /> {g.name}{g.provider ? <span className="idn-tag">{g.provider}</span> : null}
             </a>
           ))}
-          {p.seat ? <span className="idn-chip" title="The approval seat this person holds"><ShieldCheck size={12} aria-hidden /> Seat: {p.seat}</span> : null}
+          {p.seat ? <span className="idn-chip" title="The approval seat this person holds"><ShieldCheck size={12} aria-hidden /> Approves as {seatName(p.seat)}</span> : null}
         </div>
       </div>
       <div className="idn-acts">
@@ -469,7 +469,7 @@ function Sessions({ person, sessions, full = false }: { person: Person; sessions
           <span className="idn-d">{s.device === "phone" ? <DeviceMobile size={16} aria-hidden /> : <Desktop size={16} aria-hidden />}</span>
           <span>
             <b>{s.client}</b> {s.current ? <span className="idn-pill info">this one</span> : null}
-            <small data-copy="data">{[s.location, s.methods.join(" + "), full && s.ip ? s.ip : null].filter(Boolean).join(" · ")} · <Ago iso={s.started_at} /></small>
+            <small data-copy="data">{[s.location, s.methods.map(methodWords).join(" + "), full && s.ip ? s.ip : null].filter(Boolean).join(" · ")} · <Ago iso={s.started_at} /></small>
           </span>
           {s.current ? <span /> : (
             <CanButton permission="session:revoke" className="idn-btn sm" tip="End this session now" data-testid={`end-${s.id}`}
@@ -637,7 +637,7 @@ function OverviewTab({ person }: { person: Person }) {
           <dt>SSO links</dt><dd>{p.sign_in.sso ?? "none"}</dd>
           <dt>Last sign-in</dt><dd><Ago iso={p.last_seen_at} />{p.last_seen_from ? ` · ${p.last_seen_from}` : ""}</dd>
           <dt>Joined</dt><dd>{shortDate(p.joined_at)}{p.joined_by ? ` by ${p.joined_by}` : ""}</dd>
-          <dt>Seat</dt><dd>{p.seat ?? "none"}</dd>
+          <dt>Approval seat</dt><dd>{p.seat ? seatName(p.seat) : "none"}</dd>
         </dl>
       </section>
       <section className="idn-card" aria-labelledby="idn-ovg-h">

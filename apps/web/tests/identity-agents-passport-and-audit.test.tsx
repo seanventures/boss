@@ -179,7 +179,7 @@ describe("a delegation", () => {
 
   it("egress answers are words; plain text drops ids and set notation", () => {
     expect([200, 201, 403, 401, 404, 429, 500].map(egressWords)).toEqual(["allowed", "allowed", "refused", "refused", "not found", "rate limited", "failed"]);
-    expect(plainText("∩ ceiling(Forge) · rt_7P · DPoP")).toBe("within Forge's limit · DPoP");
+    expect(plainText("∩ ceiling(Forge) · rt_7P · DPoP")).toBe("within Forge's limit · key-bound token");
     expect(plainText("+code_task:create −github:merge")).toBe("+Create builds −Merge pull requests".replace("Create builds", plainText("code_task:create")).replace("Merge pull requests", plainText("github:merge")));
     expect(plainText("key_7f3k2q · 140.82.112.4 · GitHub")).toBe("140.82.112.4 · GitHub");
   });

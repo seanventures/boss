@@ -121,7 +121,7 @@ describe("a person's profile", () => {
   it("explains every permission: via which role, at which scope, or why not", async () => {
     const { el } = await mount(<PersonProfile {...samProps("access")} />);
     expect(el.querySelector("h1")?.textContent).toContain("Sam Okafor");
-    expect(el.textContent).toContain("Seat: release_manager");
+    expect(el.textContent).toContain("Approves as Release manager");
     // inherited bindings name their group, direct ones can be removed
     expect(el.querySelector("[data-testid='binding-rb_6']")?.textContent).toContain("Via group Builders");
     expect(el.querySelector("[data-testid='remove-rb_6']")).toBeNull();

@@ -29,3 +29,8 @@
   .idn-sso-map > span { display: none; }
   .idn-sso-map select { grid-column: 1 / 2; }
 }
+/* A long provider name truncates instead of pushing Test/Edit onto their own line. */
+.idn-prov > .idn-card-h { flex-wrap: nowrap; align-items: center; }
+.idn-prov > .idn-card-h h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.idn-prov > .idn-card-h > .idn-btn, .idn-prov > .idn-card-h > .idn-tag, .idn-prov > .idn-card-h > .idn-pill { flex: none; }
+@media (max-width: 480px) { .idn-prov > .idn-card-h { flex-wrap: wrap; } }

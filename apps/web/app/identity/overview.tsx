@@ -19,7 +19,7 @@ import { Ago, Face, Perm, RoleChip, useNow, agoText } from "../../components/ide
 import { BindingChips, Locked, SignIn } from "../../components/identity/parts";
 import { EmptyState, ErrorState, type ReadFailure } from "../../components/identity/states";
 import type { Permission } from "../../lib/identity/permissions.gen";
-import { eventWords } from "../../lib/identity/words";
+import { eventWords, keyCount } from "../../lib/identity/words";
 import type { AccessRole, AuditEvent, Group, Passport, Person, Posture, PostureCheck, ServiceAccount } from "../../lib/identity/types";
 
 const CHECK_ICON: Record<PostureCheck["id"], React.ReactNode> = {
@@ -294,7 +294,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
                     <span className={`idn-ico${sa.kind === "legacy" ? " warn" : ""}`}>
                       {sa.kind === "legacy" ? <Warning size={15} aria-hidden /> : sa.kind === "scim" ? <UsersThree size={15} aria-hidden /> : sa.name.includes("github") ? <GitBranch size={15} aria-hidden /> : <Key size={15} aria-hidden />}
                     </span>
-                    <span><b>{sa.name}</b><small data-copy="data">{sa.kind === "scim" ? "SCIM only" : sa.kind === "legacy" ? sa.description : `${sa.keys.filter((k) => k.status !== "revoked").length} keys · owner ${sa.owners[0]?.name ?? "none"}`}</small></span>
+                    <span><b>{sa.name}</b><small data-copy="data">{sa.kind === "scim" ? "Directory sync only" : sa.kind === "legacy" ? sa.description : `${keyCount(sa.keys.filter((k) => k.status !== "revoked").length)} · owner ${sa.owners[0]?.name ?? "none"}`}</small></span>
                     <span className="idn-r">
                       {sa.kind === "legacy" ? <span className="idn-pill bad">legacy</span>
                         : sa.kind === "scim" ? <span className="idn-pill ok">synced <Ago iso={sa.last_used?.at} bare /></span>

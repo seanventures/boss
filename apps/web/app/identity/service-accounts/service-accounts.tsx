@@ -17,7 +17,7 @@ import {
 
 import { CanButton, useGuardedCall, useIdentity } from "../../../components/identity/identity-provider";
 import { EmptyState } from "../../../components/identity/states";
-import { permissionName } from "../../../lib/identity/words";
+import { keyCount, permissionName } from "../../../lib/identity/words";
 import { PeoplePick, type PickPerson } from "./people-pick";
 import { adaptBinding, adaptServiceAccount, roleIndex, type NameIndex } from "../../../lib/identity/adapt-people";
 import { Ago, ErrorLine, Face, Perm, RoleChip, Sheet, daysUntil, shortDate, useNow } from "../../../components/identity/kit";
@@ -454,7 +454,7 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
               <span>
                 <b>{x.name}</b>
                 <small data-copy="data">{x.kind === "scim" ? "System · directory sync only" : x.kind === "legacy" ? x.description
-                  : `Owner ${x.owners.map((o) => o.name).join(", ") || "none"} · ${x.keys.filter((k) => k.status !== "revoked").length} keys${x.bindings[0] ? ` · ${x.bindings[0].role_name}` : ""}`}</small>
+                  : `Owner ${x.owners.map((o) => o.name).join(", ") || "none"} · ${keyCount(x.keys.filter((k) => k.status !== "revoked").length)}${x.bindings[0] ? ` · ${x.bindings[0].role_name}` : ""}`}</small>
               </span>
               <Badge sa={x} />
             </button>
