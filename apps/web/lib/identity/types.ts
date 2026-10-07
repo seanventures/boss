@@ -446,6 +446,9 @@ export interface AuthOptions {
   public_origin_source?: "env" | "claim" | null;
   claim: null | {
     path: "setup_token" | "legacy_password" | "network_bridge";
+    /** Every proof this browser may claim with (the API's `available_paths`): a page holding a
+     *  setup link (`#t=`) uses it even where `path` names the shared password (lib/identity/claim-path). */
+    paths?: ("setup_token" | "legacy_password" | "network")[];
     origin: string | null;
     expires_at: string | null;
     seats: string[];
