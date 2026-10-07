@@ -1,0 +1,119 @@
+# The console BUILD walk on a real compose stack, every outside service faked
+# (tests/e2e/identity/build_walk.py). Layer it on the installer's file:
+#
+#   docker compose -p <project> --env-file <stack.env> \
+#     -f scripts/install/community-compose.yml -f tests/e2e/compose/build-override.yml \
+#     up -d api worker egress fakegh
+#
+# Relative paths below resolve from the FIRST file's directory (scripts/install), as compose does.
+#
+# Nothing in BOSS is pointed at a fake by URL:
+#   * api, worker and egress send HTTP(S) through `fakegh`'s intercepting proxy (HTTPS_PROXY) and
+#     trust ONLY the fake's CA (SSL_CERT_FILE & co.), so api.github.com and github.com are answered
+#     by tests/e2e/stubs and any other host gets a 502 that lands in the blocked-egress log;
+#   * BOSS's SSRF-safe identity client (engine/boss_engine/identity/http.py) does not use a proxy:
+#     it resolves the name itself and pins the IP. For it the compose network aliases
+#     api.github.com and github.com to `fakegh` (direct TLS on :443, same CA), and
+#     BOSS_OUTBOUND_ALLOW_PRIVATE names those two hosts so a private address is allowed for them.
+#   * the code agent is the e2e stub `claude` (tests/fxd/tests/e2e/stubs/bin/claude) asking the scripted
+#     model on the api container's loopback (api-entry.sh), the only address besides api/egress a
+#     per-run sandbox uid may reach. BOSS_AGENT_ENV_ALLOW passes its URL into the agent's env.
+
+x-fake-world: &fake-world
+  HTTPS_PROXY: http://fakegh:8080
+  https_proxy: http://fakegh:8080
+  HTTP_PROXY: http://fakegh:8080
+  http_proxy: http://fakegh:8080
+  NO_PROXY: localhost,127.0.0.1,::1,db,api,worker,egress,web,mcp-tools,fakegh,infisical,infisical-redis
+  no_proxy: localhost,127.0.0.1,::1,db,api,worker,egress,web,mcp-tools,fakegh,infisical,infisical-redis
+  SSL_CERT_FILE: /e2e-ca/ca.pem
+  REQUESTS_CA_BUNDLE: /e2e-ca/ca.pem
+  CURL_CA_BUNDLE: /e2e-ca/ca.pem
+  GIT_SSL_CAINFO: /e2e-ca/ca.pem
+  NODE_EXTRA_CA_CERTS: /e2e-ca/ca.pem
+  BOSS_OUTBOUND_ALLOW_PRIVATE: api.github.com,github.com
+
+services:
+  fakegh:
+    image: boss-community-api:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    user: "0:0"
+    init: true
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        python /fxd/tests/e2e/stubs/model_stub.py --host 0.0.0.0 --port 58700 >/srv/fakegh-model.log 2>&1 &
+        exec python /fxd/tests/e2e/compose/fakegh.py
+    environment:
+      PYTHONPATH: ""
+      FAKEGH_STATE: /srv/fakegh
+      FAKEGH_CA_OUT: /e2e-ca
+      FAKEGH_ACCOUNT: fxd-org
+      FAKEGH_REPOS: fxd-org/fxd-build-app
+    networks:
+      default:
+        aliases: [api.github.com, github.com]
+    ports:
+      - "127.0.0.1:${FXD_FAKEGH_PORT:-58180}:8080"
+    volumes:
+      - ../../tests/e2e/stubs:/fxd/tests/e2e/stubs:ro
+      - ../../tests/e2e/compose:/fxd/tests/e2e/compose:ro
+      - e2e_fakegh_state:/srv/fakegh
+      - e2e_fake_ca:/e2e-ca
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; os.stat('/e2e-ca/ca.pem'); urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  api:
+    entrypoint: ["/bin/sh", "/fxd/tests/e2e/compose/api-entry.sh"]
+    command: ["python", "-m", "apps.api.serve", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      fakegh:
+        condition: service_healthy
+    environment:
+      <<: *fake-world
+      BOSS_CLAUDE_CLI_PATH: /fxd/tests/e2e/stubs/bin/claude
+      BOSS_E2E_MODEL_STUB_URL: http://127.0.0.1:58700
+      BOSS_AGENT_ENV_ALLOW: BOSS_E2E_MODEL_STUB_URL
+      BOSS_LLM_ENGINE: openai
+      BOSS_CHAT_LLM_ENGINE: openai
+      OPENAI_API_KEY: e2e-stub-key
+      OPENAI_BASE_URL: http://127.0.0.1:58700/v1
+      OPENAI_MODEL: e2e-stub
+    volumes:
+      - ../../tests/e2e/stubs:/fxd/tests/e2e/stubs:ro
+      - ../../tests/e2e/compose:/fxd/tests/e2e/compose:ro
+      - e2e_fake_ca:/e2e-ca:ro
+
+  worker:
+    depends_on:
+      fakegh:
+        condition: service_healthy
+    environment:
+      <<: *fake-world
+      BOSS_CLAUDE_CLI_PATH: /fxd/tests/e2e/stubs/bin/claude
+      BOSS_E2E_MODEL_STUB_URL: http://fakegh:58700
+      BOSS_AGENT_ENV_ALLOW: BOSS_E2E_MODEL_STUB_URL
+      BOSS_LLM_ENGINE: openai
+      BOSS_CHAT_LLM_ENGINE: openai
+      OPENAI_API_KEY: e2e-stub-key
+      OPENAI_BASE_URL: http://fakegh:58700/v1
+      OPENAI_MODEL: e2e-stub
+    volumes:
+      - ../../tests/e2e/stubs:/fxd/tests/e2e/stubs:ro
+      - e2e_fake_ca:/e2e-ca:ro
+
+  egress:
+    depends_on:
+      fakegh:
+        condition: service_healthy
+    environment:
+      <<: *fake-world
+    volumes:
+      - e2e_fake_ca:/e2e-ca:ro
+
+volumes:
+  e2e_fakegh_state:
+  e2e_fake_ca:
