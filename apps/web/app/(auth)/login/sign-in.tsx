@@ -18,7 +18,9 @@ import { ArrowRight, CaretRight, EnvelopeSimple, Fingerprint, Key, LockSimple, S
 import { IdentityError, idPost } from "../../../lib/identity/api";
 import type { AuthOptions, SignInStep } from "../../../lib/identity/types";
 import { emailSignInOffered } from "../../../lib/identity/email-sign-in";
-import { getAssertion, PasskeyCancelled, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../../lib/identity/webauthn";
+import { getAssertion, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../../lib/identity/webauthn";
+import { sayAuth } from "../auth-flow";
+import { passkeyBlockWords } from "../../../lib/identity/passkey-support";
 import { CodeInput, Face } from "../../../components/identity/kit";
 import { AuthStage, Live, Logo, MethodTabs, ProviderRow, safeNextClient } from "../auth-parts";
 import { localWith } from "../../../lib/local-time";
@@ -58,12 +60,11 @@ function shortDate(iso: string | null | undefined): string | null {
 }
 
 function say(e: unknown): string {
-  if (e instanceof PasskeyCancelled) return "Passkey cancelled";
   if (e instanceof IdentityError) {
     if (e.code === "invalid_code" && e.attemptsLeft !== null) return `That code didn't work · ${e.attemptsLeft} left`;
-    return WORDS[e.code] ?? e.message;
+    return WORDS[e.code] ?? sayAuth(e);
   }
-  return "That didn't work";
+  return sayAuth(e);
 }
 
 /**
@@ -89,7 +90,10 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
   const target = safeNextClient(next);
 
   // The API offers passkeys only once a public origin is bound (S1 `passkey`); the stub omits it.
-  useEffect(() => { setHasPasskeys(webauthnAvailable() && options.passkey !== false); }, [options.passkey]);
+  // …and never on an address a browser can't hold a passkey for (an IP, plain http: passkey-support).
+  useEffect(() => {
+    setHasPasskeys(webauthnAvailable() && options.passkey !== false && !passkeyBlockWords(options.passkey_reason, window.location));
+  }, [options.passkey, options.passkey_reason]);
   useEffect(() => {
     if (resendIn <= 0) return;
     const t = window.setTimeout(() => setResendIn((n) => n - 1), 1000);

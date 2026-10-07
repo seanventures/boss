@@ -117,7 +117,15 @@ def _qr_svg(uri: str) -> Optional[str]:
         import segno
     except ImportError:
         return None
-    return segno.make_qr(uri, error="m").svg_inline(scale=4, dark="#111", light="#fff")
+    # A STANDALONE SVG, with its namespace. The console draws it through <img src="data:image/svg+xml…">,
+    # and an SVG without xmlns="http://www.w3.org/2000/svg" (what svg_inline() writes, for pasting
+    # into HTML) is not an image: boss-1 showed a broken one where the QR should be.
+    import io
+
+    out = io.BytesIO()
+    segno.make_qr(uri, error="m").save(out, kind="svg", xmldecl=False, svgns=True, nl=False,
+                                       scale=4, dark="#111", light="#fff")
+    return out.getvalue().decode("utf-8")
 
 
 def _epoch(db: Any, org_id: str) -> int:
@@ -608,7 +616,7 @@ def build_identity_me_router() -> APIRouter:
                         display_name=ctx.principal.display_name, origin=public_origin(db),
                         binding_secret=token)
                 except passkeys.PasskeyError as exc:
-                    return error(409 if exc.code in ("unavailable", "limit_reached") else 400,
+                    return error(409 if exc.code in ("unavailable", "limit_reached", "needs_domain", "needs_https") else 400,
                                  f"passkey_{exc.code}")
                 return JSONResponse({"publicKey": options}, headers={"Cache-Control": "no-store"})
         except AuthnError as exc:

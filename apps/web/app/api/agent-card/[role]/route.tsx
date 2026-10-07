@@ -13,6 +13,7 @@ import { ImageResponse } from "next/og";
 
 import { API_URL, authHeaders } from "../../../../lib/client";
 import { avatarSvg } from "../../../../lib/agent-avatar";
+import { svgDataUri } from "../../../../lib/svg-data-uri";
 import type { AvatarSpec } from "../../../../lib/agent-world-types";
 import { bornDate, humanise, mrz, resolveAvatar, toPassport } from "../../../../lib/agent-world";
 
@@ -31,7 +32,7 @@ async function getJson(path: string): Promise<unknown> {
 
 function faceDataUri(spec: AvatarSpec): string {
   const svg = avatarSvg(spec, { size: 320, state: "idle" });
-  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+  return svgDataUri(svg);
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ role: string }> }) {
