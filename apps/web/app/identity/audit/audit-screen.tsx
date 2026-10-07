@@ -220,20 +220,25 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialEvent]);
 
-  const verify = useCallback(async () => {
+  // Verifying walks the whole chain under audit:export, which asks for a fresh sign-in (step-up):
+  // a press opens the step-up sheet (guarded) instead of failing with "Confirm it's you"; the
+  // automatic check on opening (?verify=1) never prompts and stays quiet when step-up is needed.
+  const verify = useCallback(async (pressed = true) => {
     setVerifying(true);
+    const call = () => idPost<{ ok: boolean; seq: number; verified_at: string | null; first_break: number | null }>("/v1/identity/audit/verify", {});
     try {
-      const r = await idPost<{ ok: boolean; seq: number; verified_at: string | null; first_break: number | null }>("/v1/identity/audit/verify", {});
+      const r = pressed ? await guarded("Verifying reads the whole security log.", call) : await call();
       setPage((p) => (p ? { ...p, chain: { verified_at: r.verified_at, seq: r.seq, ok: r.ok, first_break: r.first_break } } : p));
       showToast(r.ok ? "success" : "error", r.ok ? "Chain verified" : "Chain broken");
     } catch (e) {
-      showToast("error", e instanceof IdentityError ? e.message : "Not verified");
+      const quiet = e instanceof IdentityError && (e.code === "step_up_cancelled" || (!pressed && e.code === "step_up_required"));
+      if (!quiet) showToast("error", e instanceof IdentityError ? e.message : "Not verified");
     } finally {
       setVerifying(false);
     }
-  }, []);
+  }, [guarded]);
 
-  useEffect(() => { if (verifyOnOpen) verify(); }, [verifyOnOpen, verify]);
+  useEffect(() => { if (verifyOnOpen) verify(false); }, [verifyOnOpen, verify]);
 
   const exportLog = async () => {
     try {
@@ -294,7 +299,7 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
         ) : null}
         <span className="idn-spacer" />
         <div className="idn-acts">
-          <CanButton permission="audit:export" className="idn-btn" onClick={verify} disabled={verifying} tip="Walk the hash chain and report the first break" data-testid="verify-chain">
+          <CanButton permission="audit:export" className="idn-btn" onClick={() => verify(true)} disabled={verifying} tip="Walk the hash chain and report the first break" data-testid="verify-chain">
             <Check size={15} aria-hidden /> {verifying ? "Verifying…" : "Verify now"}
           </CanButton>
           <CanButton permission="audit:export" className="idn-btn" onClick={exportLog} tip="Asks you to confirm it's you first" data-testid="export-audit">

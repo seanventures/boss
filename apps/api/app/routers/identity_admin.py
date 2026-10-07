@@ -58,6 +58,9 @@ def _when(value: Optional[str]) -> Optional[datetime]:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+from apps.api.app.identity_guard import actor_is_a_filter as _actor_is_a_filter  # noqa: E402
+
+
 def build_identity_admin_router(*, start_background: Optional[bool] = None) -> APIRouter:
     router = APIRouter(tags=["identity"])
     if start_background is None:
@@ -69,6 +72,7 @@ def build_identity_admin_router(*, start_background: Optional[bool] = None) -> A
 
     @router.get("/v1/identity/audit")
     @permit(P.AUDIT_READ, scope=Scope.org())
+    @_actor_is_a_filter
     def list_audit(request: Request, q: Optional[str] = None, outcome: Optional[str] = None,
                    actor: Optional[str] = None, grant: Optional[str] = None,
                    kind: Optional[str] = None, event: Optional[str] = None,

@@ -81,3 +81,28 @@ def test_f_under_enforce_the_legacy_key_acts_as_its_legacy_principal_not_ceo(eng
     res = TestClient(main.app).get("/v1/auth/session", headers={"Authorization": f"Bearer {key}"})
     assert res.status_code == 200, res.text
     assert res.json()["principal_member_id"] == legacy.LEGACY_CONSOLE_PRINCIPAL
+
+
+def test_the_audit_logs_actor_filter_is_not_the_actor_rule(engine):
+    """Compose walk: the actor rule (F2/H7) rewrote EVERY `actor` query parameter to the caller's
+    own actor — including the audit log's "who did it" FILTER, so an Owner's audit log showed only
+    the Owner's own events (empty on a fresh install). A filter is marked and left alone."""
+    from fastapi.testclient import TestClient
+
+    from apps.api.app.main import app
+    from apps.api.tests.identity_fixtures import IdentityWorld
+    from boss_engine.identity import audit
+
+    world = IdentityWorld.create(engine)
+    owner, other = world.person("owner"), world.person("someone")
+    world.bind(owner, "owner")
+    with engine.begin() as db:
+        audit.record(audit.SecurityEvent(org_id=world.org, event_type="user.invited",
+                                         outcome=audit.Outcome.SUCCESS, actor_principal_id=other.id,
+                                         actor_kind="user", target_type="user", target_id="usr_x"), db=db)
+    client = TestClient(app)
+    with world.acting_as(world.ctx(owner)):
+        everyone = client.get("/v1/identity/audit").json()["events"]
+        only_other = client.get(f"/v1/identity/audit?actor={other.id}").json()["events"]
+    assert any(e["actor"]["id"] == other.id for e in everyone)
+    assert only_other and all(e["actor"]["id"] == other.id for e in only_other)
