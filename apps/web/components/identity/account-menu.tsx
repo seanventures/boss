@@ -68,6 +68,7 @@ export function IdentityBanners() {
           {b.kind === "network_bridge" && !b.until ? <a href="/claim">Claim this BOSS</a> : null}
           {b.kind === "mfa_enrolment_required" ? <a href="/enrol">Add a passkey</a> : null}
           {b.kind === "recovery_codes_low" ? <a href="/account">Make new codes</a> : null}
+          {b.kind === "api_key_expiring" ? <a href="/account/keys">API keys</a> : null}
           {b.kind === "owner_recovered" ? <a href="/identity/audit">Open the audit log</a> : null}
         </div>
       ))}

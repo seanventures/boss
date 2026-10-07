@@ -314,10 +314,41 @@ def may_enrol(db: Any, row: sessions.SessionRow, user: users.UserRow) -> Optiona
     return None
 
 
+def sso_refusal(db: Any, user: users.UserRow, facts: RequestFacts, *,
+                method: str) -> Optional[Answer]:
+    """Enforce SSO (IDENTITY.md §4.8), for EVERY first factor in one place: when an active
+    provider enforces SSO for the person's email domain, only that provider signs them in — not a
+    password, an email link or code, or another provider. A passkey still works for an Owner (the
+    break-glass), for nobody else. None: this method may proceed."""
+    from sqlalchemy import text
+
+    domain = user.email.rsplit("@", 1)[-1].lower() if user.email and "@" in user.email else ""
+    if not domain:
+        return None
+    enforcing = {r[0] for r in db.execute(text(
+        "SELECT id FROM identity_providers WHERE status = 'active' AND enforce_sso AND "
+        ":d = ANY(domains)"), {"d": domain})}
+    if not enforcing:
+        return None
+    if method.startswith("sso:") and method[4:] in enforcing:
+        return None
+    if method == "passkey" and users.is_owner(db, user.principal_id, user.org_id):
+        return None
+    emit(db, org_id=user.org_id, event_type="auth.login.failed", outcome=Outcome.DENIED,
+         target_type="user", target_id=user.principal_id, ip=facts.ip,
+         user_agent=facts.user_agent, request_id=facts.request_id,
+         details={"reason": "sso_required", "method": method.split(":", 1)[0]})
+    return Answer(403, {"error": "sso_required"})
+
+
 def finish_first_factor(db: Any, user: users.UserRow, facts: RequestFacts, *, method: str,
                         email_method: bool = False, idp_mfa: bool = False) -> Answer:
     """After a first factor: MFA if the person has a second factor (or the IdP vouched for MFA),
-    otherwise a session. An email method never satisfies an MFA-required role (A87)."""
+    otherwise a session. An email method never satisfies an MFA-required role (A87). Enforce SSO
+    is checked here, so every first factor (password, email link or code, any provider) obeys it."""
+    refused = sso_refusal(db, user, facts, method=method)
+    if refused is not None:
+        return refused
     f = users.factors(db, user.principal_id)
     if idp_mfa:
         return finish(db, user, facts, methods=[method], mfa=True)
@@ -664,6 +695,9 @@ def passkey_verify(db: Any, facts: RequestFacts, *, credential: Any, purpose: st
     emit(db, org_id=user.org_id, event_type="auth.passkey.succeeded", outcome=Outcome.SUCCESS,
          ctx=ctx, target_type="passkey", target_id=verified.passkey_id, details={"purpose": purpose})
     if purpose == "login":
+        refused = sso_refusal(db, user, facts, method="passkey")
+        if refused is not None:
+            return refused
         return finish(db, user, facts, methods=["passkey"], mfa=True)
     if purpose == "mfa":
         ch = _mfa_challenge(db, facts)
