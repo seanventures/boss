@@ -512,6 +512,19 @@ def build_identity_agents_router() -> APIRouter:
                              {"o": ctx.principal.org_id, "u": user}).scalars().all()
             return {"delegations": [_grant_json(grants.load(i, db=db), db) for i in ids]}
 
+    @router.get("/v1/identity/delegations/{grant_id}")
+    @authenticated()
+    def one_delegation(grant_id: str, request: Request):
+        """One grant, in exactly the shape the lists answer (_grant_json), for the person who
+        granted it or a reader of every grant (`delegation:read_all`); 404 otherwise — another
+        org's grant and an unknown id read the same."""
+        ctx = _ctx(request)
+        with _engine().begin() as db:
+            g = grants.load(grant_id, db=db)
+            if not _may_read_grant(ctx, g, db):
+                return _err("not_found", 404)
+            return _grant_json(g, db)
+
     @router.delete("/v1/identity/delegations/{grant_id}")
     @permit(P.DELEGATION_REVOKE_ANY, scope=Scope.org())
     def revoke_any_delegation(grant_id: str, request: Request):
