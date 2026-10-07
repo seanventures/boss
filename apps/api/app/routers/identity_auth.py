@@ -132,7 +132,8 @@ class _Body(BaseModel):
 
 
 class LoginBody(_Body):
-    email: str = Field(max_length=320)
+    #: blank: the shared console password (Operator for 30 days after the claim)
+    email: str = Field(default="", max_length=320)
     password: str = Field(max_length=1024)
 
 
@@ -248,6 +249,7 @@ def build_identity_auth_router() -> APIRouter:
                                          else "claim" if bound else None),
                 "providers": providers, "smtp": smtp, "signup": email_signin.signup_enabled(db),
                 "legacy_password": bool(claim_module.legacy_password_configured()),
+                "shared_password": _shared_password_offer(db, org) if claim_info is None else None,
                 "passkey": bool(public_origin(db)), "claim": claim_info,
             }, headers={"Cache-Control": "no-store"})
 
@@ -479,6 +481,25 @@ def build_identity_auth_router() -> APIRouter:
             return refusal(exc)
 
     return router
+
+
+def _shared_password_offer(db: Any, org: Optional[str]) -> Optional[dict[str, Any]]:
+    """After the claim, while the shared console password still signs in (as Operator): the date
+    it stops, so the sign-in page can offer it. None when it is not configured or has ended."""
+    from datetime import datetime, timezone
+
+    from boss_engine.identity import migration
+    from boss_engine.identity.legacy import LegacyKind
+
+    if not org or not claim_module.legacy_password_configured():
+        return None
+    m = migration.mapping(db, org, LegacyKind.SHARED_PASSWORD, "BOSS_CONSOLE_PASSWORD")
+    if not m or m["retired_at"] is not None:
+        return None
+    until = m["retire_after"]
+    if until is not None and until <= datetime.now(timezone.utc):
+        return None
+    return {"until": until.isoformat() if until else None}
 
 
 def _bridged(request: Request) -> Optional[AuthContext]:

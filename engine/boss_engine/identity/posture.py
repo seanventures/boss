@@ -287,11 +287,10 @@ def banners(ctx: Any, *, db: Any, now: Optional[datetime] = None) -> list[dict[s
     if ctx.principal.id == LEGACY_SHARED_PRINCIPAL or ctx.legacy == LegacyKind.SHARED_PASSWORD:
         m = migration.mapping(db, org_id, LegacyKind.SHARED_PASSWORD, "BOSS_CONSOLE_PASSWORD")
         until = m["retire_after"] if m else None
-        if until and until - now <= timedelta(days=COUNTDOWN_BANNER_DAYS):
+        if until:
+            # Every page, for the whole window (the upgrade promise): a visible countdown.
             out.append({"kind": "legacy_password", "until": until,
-                        "message": f"The shared password stops working in "
-                                   f"{max(0, (until - now).days)} days. "
-                                   "Ask an Owner to invite you."})
+                        "message": _shared_countdown(until, now)})
     if ctx.legacy in (LegacyKind.CONSOLE_API_KEY, LegacyKind.ENV_API_KEY):
         m = migration.mapping(db, org_id, LegacyKind.CONSOLE_API_KEY, "BOSS_API_KEY")
         until = m["retire_after"] if m else None
@@ -299,6 +298,12 @@ def banners(ctx: Any, *, db: Any, now: Optional[datetime] = None) -> list[dict[s
             out.append({"kind": "legacy_api_key", "until": until,
                         "message": "The shared API key stops working soon. Switch to a personal "
                                    "or service-account key."})
+    from .recovery import must_regenerate
+
+    if ctx.principal.kind.value == "user" and must_regenerate(db, ctx.principal.id):
+        # §4.7: fewer than 3 recovery codes left forces new ones; every page says so until done.
+        out.append({"kind": "recovery_codes_low", "until": None,
+                    "message": "You have fewer than 3 recovery codes left. Make new ones now."})
     recovered = db.execute(_sql(
         "SELECT ts FROM identity_security_events WHERE org_id = :o AND event_type = "
         "'owner.recovered_by_host' AND ts > :since ORDER BY seq DESC LIMIT 1"),
@@ -308,6 +313,13 @@ def banners(ctx: Any, *, db: Any, now: Optional[datetime] = None) -> list[dict[s
             days=OWNER_RECOVERED_BANNER_DAYS), "message": "An Owner account was recovered from "
                     "the host shell. Check Identity › Audit."})
     return out
+
+
+def _shared_countdown(until: datetime, now: datetime) -> str:
+    days = max(0, (until - now).days)
+    when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
+    return (f"You're signed in with the shared password. It stops working {when} "
+            f"({until.date().isoformat()}). Ask an Owner to invite you.")
 
 
 def _holds_owner(db: Any, principal_id: str, now: datetime) -> bool:
