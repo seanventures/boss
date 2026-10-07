@@ -54,7 +54,7 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "passkey.removed", "passkey.counter_regressed",
     # admin
     "user.invited", "user.updated", "user.disabled", "user.enabled", "user.deleted",
-    "user.mfa_reset", "group.created", "group.updated", "group.deleted", "group.member_added",
+    "user.mfa_reset", "user.email_verified", "group.created", "group.updated", "group.deleted", "group.member_added",
     "group.member_removed", "access_role.created", "access_role.updated", "access_role.deleted",
     "role_binding.added", "role_binding.removed", "owner.added", "owner.removed",
     # keys
