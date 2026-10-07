@@ -7734,6 +7734,12 @@ ALTER TABLE identity_sessions ADD COLUMN IF NOT EXISTS enrol_grant_until TIMESTA
 ALTER TABLE identity_users ADD COLUMN IF NOT EXISTS first_factor_grant_until TIMESTAMPTZ;
 -- M2: an invitation that was EMAILED proves the mailbox: accepting it verifies the address.
 ALTER TABLE identity_invitations ADD COLUMN IF NOT EXISTS emailed BOOLEAN NOT NULL DEFAULT false;
+-- M1: a federated identity is keyed by its PROVIDER plus (issuer, subject), and an issuer names one
+-- provider per org (a second provider claiming the same issuer could sign in as the first's people).
+CREATE UNIQUE INDEX IF NOT EXISTS identity_providers_issuer_per_org ON identity_providers (org_id, lower(issuer))
+  WHERE issuer IS NOT NULL AND issuer <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS identity_user_identities_provider_subject
+  ON identity_user_identities (provider_id, issuer, subject);
 -- L4: an org is claimed once. The advisory lock serialises claims; this makes a second
 -- `bootstrap.claimed` impossible even if a code path forgets the lock.
 CREATE UNIQUE INDEX IF NOT EXISTS identity_one_claim_per_org ON identity_security_events (org_id)

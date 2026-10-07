@@ -337,6 +337,11 @@ def build_identity_sso_router() -> APIRouter:
                     return error(422, "invalid_provider", detail="SAML needs an https SSO URL and a certificate")
                 pid = ids.new_id("idp")
                 org = ctx.principal.org_id
+                if issuer and db.execute(text(
+                        "SELECT 1 FROM identity_providers WHERE org_id = :o AND lower(issuer) = lower(:i)"),
+                        {"o": org, "i": issuer}).first() is not None:
+                    # M1: one provider per issuer, or a second one could answer for the first's people.
+                    return error(409, "issuer_in_use")
                 secret_ref = _store_secret(db, org, pid, body.client_secret) if body.client_secret else None
                 db.execute(text(
                     "INSERT INTO identity_providers (id, org_id, protocol, preset, name, issuer, client_id, "

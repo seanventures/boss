@@ -32,8 +32,8 @@ def _provider(engine, idp: SamlIdP, *, contexts: Optional[list[str]], trust: boo
     with engine.begin() as db:
         db.execute(text(
             "INSERT INTO identity_providers (id, org_id, protocol, name, issuer, client_id, saml_sso_url, "
-            "trusted_authn_contexts, trust_idp_mfa, saml_certificates) VALUES (:id, :o, 'saml', 'Corp SAML', :i, "
-            "NULL, :sso, :ctx, :t, :c)"),
+            "trusted_authn_contexts, trust_idp_mfa, saml_certificates, domains) VALUES (:id, :o, 'saml', "
+            "'Corp SAML', :i, NULL, :sso, :ctx, :t, :c, '{corp.test}')"),
             {"id": pid, "o": default_org_id(db), "i": IDP_ENTITY, "sso": SSO_URL, "ctx": contexts, "t": trust,
              "c": [idp.pem]})
     return pid
