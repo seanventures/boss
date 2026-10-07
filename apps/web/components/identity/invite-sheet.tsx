@@ -6,18 +6,25 @@
  * invitations are emailed; without it the sheet shows each single-use link to hand over.
  */
 import React, { useState } from "react";
-import { EnvelopeSimple, Copy } from "@phosphor-icons/react";
+import { Check, EnvelopeSimple, Copy, UsersThree } from "@phosphor-icons/react";
 
 import { IdentityError, idPost } from "../../lib/identity/api";
-import type { AccessRole } from "../../lib/identity/types";
+import type { AccessRole, Group } from "../../lib/identity/types";
 import { useGuardedCall, useIdentity } from "./identity-provider";
 import { ErrorLine, RoleChip, Sheet } from "./kit";
 import { showToast } from "../../app/client-forms";
 
-export function InviteSheet({ roles, onClose, onInvited }: { roles: AccessRole[]; onClose: () => void; onInvited?: () => void }) {
+export function InviteSheet({ roles, groups = [], onClose, onInvited }: {
+  roles: AccessRole[];
+  /** Groups they join on accepting. Only groups managed in BOSS: an IdP's groups are synced, not chosen. */
+  groups?: Group[];
+  onClose: () => void; onInvited?: () => void;
+}) {
   const { org } = useIdentity();
   const [emails, setEmails] = useState("");
   const [role, setRole] = useState("operator");
+  const [picked, setPicked] = useState<string[]>([]);
+  const pickable = groups.filter((g) => g.source === "manual");
   const [links, setLinks] = useState<{ email: string; link: string | null }[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +45,7 @@ export function InviteSheet({ roles, onClose, onInvited }: { roles: AccessRole[]
         for (const email of list) {
           if (invited.some((i) => i.email === email)) continue;
           const r = await idPost<{ invitation_id: string; emailed: boolean; link?: string | null }>("/v1/identity/users", {
-            email, bindings: [{ role_key: role, scope_type: "org" }], group_ids: [],
+            email, bindings: [{ role_key: role, scope_type: "org" }], group_ids: picked,
           });
           invited.push({ email, link: r.link ?? null });
         }
@@ -96,6 +103,23 @@ export function InviteSheet({ roles, onClose, onInvited }: { roles: AccessRole[]
           })}
         </div>
       </div>
+      {pickable.length ? (
+        <div className="idn-field">
+          <span className="idn-label" id="invite-groups">Groups <span className="idn-dim">optional</span></span>
+          <div className="idn-row idn-wrap" role="group" aria-labelledby="invite-groups" data-testid="invite-groups">
+            {pickable.map((g) => {
+              const on = picked.includes(g.id);
+              return (
+                <button key={g.id} type="button" className="idn-chip idn-chip-btn" aria-pressed={on} data-on={on || undefined}
+                  title={g.bindings.length ? `Also inherits ${g.bindings.map((b) => b.role_name).join(", ")}` : "Adds no access by itself"}
+                  onClick={() => setPicked((x) => (on ? x.filter((i) => i !== g.id) : [...x, g.id]))} data-testid={`invite-group-${g.id}`}>
+                  {on ? <Check size={12} aria-hidden /> : <UsersThree size={12} aria-hidden />} {g.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
       <ErrorLine error={error} />
       <div className="idn-mf">
         <span className="idn-dim">{list.length ? `${list.length} ${list.length === 1 ? "person" : "people"}` : "Add an email"}</span>

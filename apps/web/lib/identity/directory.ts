@@ -7,6 +7,7 @@
 import { adaptServiceAccount, assembleDirectory, nameIndex, type Directory } from "./adapt-people";
 import { serverGet } from "./server";
 import type { ApiKey, ServiceAccount } from "./types";
+import type { DirectoryFailures } from "./types-people";
 
 type List<K extends string> = Record<K, unknown[]>;
 
@@ -14,7 +15,11 @@ type List<K extends string> = Record<K, unknown[]>;
  * Read and join. A part the viewer may not read (403) or the API does not serve is left out
  * — bindings then fall back to each person's `access_roles` — rather than failing the page.
  */
-export async function loadDirectory(opts: { groupMembers?: boolean } = {}): Promise<Directory & { ok: boolean; invited: number | null; readable: { roles: boolean; groups: boolean } }> {
+export async function loadDirectory(opts: { groupMembers?: boolean } = {}): Promise<Directory & {
+  ok: boolean; invited: number | null; readable: { roles: boolean; groups: boolean };
+  /** Each part that did not load, with why: a 403 is "you can't see this", anything else an error. */
+  failures: DirectoryFailures;
+}> {
   const [users, roles, groups, bindings, invitations] = await Promise.all([
     serverGet<List<"users">>("/v1/identity/users"),
     serverGet<List<"roles">>("/v1/identity/access-roles"),
@@ -36,8 +41,12 @@ export async function loadDirectory(opts: { groupMembers?: boolean } = {}): Prom
     groupDetails: details,
     bindings: bindings.ok ? bindings.data.bindings : null,
   });
+  const failures: DirectoryFailures = {};
+  for (const [k, r] of [["users", users], ["roles", roles], ["groups", groups], ["bindings", bindings]] as const) {
+    if (!r.ok) failures[k] = { status: r.status, code: r.code, permission: r.permission };
+  }
   return { ...dir, ok: users.ok, invited: invitations.ok ? (invitations.data.invitations ?? []).length : null,
-    readable: { roles: roles.ok, groups: groups.ok } };
+    readable: { roles: roles.ok, groups: groups.ok }, failures };
 }
 
 /**

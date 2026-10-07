@@ -27,7 +27,7 @@ import { registerRoleRoutes } from "./routes-roles";
 import { registerAgentRoutes } from "./routes-agents";
 import { registerAuthRoutes } from "./routes-auth";
 import { registerSsoRoutes } from "./routes-sso";
-import { registerGroupRoutes } from "./routes-groups";
+import { bindGroup, groupsOf, registerGroupRoutes, unbindGroup } from "./routes-groups";
 import { registerAccountRoutes } from "./routes-account";
 
 export type StubRequest = {
@@ -519,9 +519,9 @@ on("POST", "/v1/identity/access-requests", "self", ({ req }) => {
 
 // ---- groups, roles, bindings -----------------------------------------------------------------
 
-on("GET", "/v1/identity/groups", "group:read", ({ s }) => ok({ groups: F.groups(s.t0, s.people) }));
+on("GET", "/v1/identity/groups", "group:read", ({ s }) => ok({ groups: groupsOf(s) }));
 on("GET", "/v1/identity/groups/([^/]+)", "group:read", ({ s, m }) => {
-  const g = F.groups(s.t0, s.people).find((x) => x.id === m[1]);
+  const g = groupsOf(s).find((x) => x.id === m[1]);
   return g ? ok(g) : notFound();
 });
 on("POST", "/v1/identity/groups/([^/]+)/members", "group:manage_members", ({ s, m, req, who, now }) => {
@@ -586,7 +586,15 @@ on("POST", "/v1/identity/access-roles/([^/]+)/clone", "access_role:manage", ({ s
   return ok(c, 201);
 });
 on("POST", "/v1/identity/role-bindings", "role_binding:assign", ({ s, req, who, now }) => {
-  const b = body<{ subject_id: string; role_key: string; scope: string }>(req);
+  const b = body<{ subject_id: string; subject_type: string; role_key: string; role_id: string; scope: string; expires_at: string | null }>(req);
+  // The API binds by role_id (BindingCreate); older console code sent role_key.
+  if (!b.role_key && b.role_id) b.role_key = s.roles.find((r) => r.id === b.role_id)?.key ?? "";
+  if (b.subject_type === "group") {
+    const over = rolePerms(s, String(b.role_key)).find((p) => !holds(s, who, p));
+    if (over) return err(403, "forbidden", { permission: over });
+    const out = bindGroup(s, String(b.subject_id), String(b.role_key), "org", s.people.find((x) => x.id === who)?.display_name.split(" ")[0] ?? "BOSS", now, b.expires_at ?? null);
+    return out ? ok(out, 201) : notFound();
+  }
   if (b.subject_id === who) return err(409, "cannot_bind_self");
   if (b.role_key === "owner" && !holds(s, who, "owner:assign")) return err(403, "forbidden", { permission: "owner:assign" });
   const over = rolePerms(s, String(b.role_key)).find((p) => !holds(s, who, p));
@@ -595,11 +603,12 @@ on("POST", "/v1/identity/role-bindings", "role_binding:assign", ({ s, req, who, 
   const role = s.roles.find((r) => r.key === b.role_key);
   if (!p || !role) return notFound();
   p.bindings.push({ id: `rb_${token("").slice(0, 6)}`, role_id: role.id, role_key: role.key, role_name: role.name, scope: (b.scope || "org") as ScopeLabel,
-    subject_id: p.id, via_group: null, granted_by: s.people.find((x) => x.id === who)?.display_name.split(" ")[0] ?? null, granted_at: new Date(now).toISOString(), expires_at: null });
+    subject_id: p.id, via_group: null, granted_by: s.people.find((x) => x.id === who)?.display_name.split(" ")[0] ?? null, granted_at: new Date(now).toISOString(), expires_at: b.expires_at ?? null });
   audit(s, now, { event_type: "role_binding.added", what: `${role.name} → ${p.display_name}`, headline: "An access role was granted" }, who);
   return ok({ ok: true }, 201);
 });
 on("DELETE", "/v1/identity/role-bindings/([^/]+)", "role_binding:assign", ({ s, m, who, now }) => {
+  if (unbindGroup(s, m[1])) return ok({ ok: true });
   for (const p of s.people) {
     const b = p.bindings.find((x) => x.id === m[1]);
     if (!b) continue;
