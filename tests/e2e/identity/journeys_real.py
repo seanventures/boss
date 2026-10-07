@@ -1972,16 +1972,23 @@ def j7(env: Env, j: Journey) -> None:
 TLS_PORT = 58243
 
 
-def _tls_front(dirpath: Path) -> tuple[dict[str, Any], str]:
-    """An nginx TLS terminator in front of the console (Origin == Host, https), a throwaway cert,
-    and the SPKI hash Chromium is told to trust (so WebAuthn sees a secure, error-free origin)."""
+def _tls_front(dirpath: Path, host: str = "localhost") -> tuple[dict[str, Any], str]:
+    """An nginx TLS terminator in front of the console (Origin == Host, https), a throwaway cert
+    for `host` (a DNS name, or an IP literal like boss-1's), and the SPKI hash Chromium is told to
+    trust (so the origin is secure and error-free, and only WebAuthn's own rules decide)."""
     import base64
     import hashlib
+    import ipaddress as _ip
     import subprocess
 
+    try:
+        _ip.ip_address(host)
+        san = f"subjectAltName=IP:{host}"
+    except ValueError:
+        san = f"subjectAltName=DNS:{host}"
     dirpath.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=localhost",
-                    "-addext", "subjectAltName=DNS:localhost", "-keyout", str(dirpath / "key.pem"),
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", f"/CN={host}",
+                    "-addext", san, "-keyout", str(dirpath / "key.pem"),
                     "-out", str(dirpath / "cert.pem")], check=True, capture_output=True)
     (dirpath / "key.pem").chmod(0o644)
     der = subprocess.run(["openssl", "x509", "-in", str(dirpath / "cert.pem"), "-pubkey", "-noout"],
@@ -1993,6 +2000,7 @@ def _tls_front(dirpath: Path) -> tuple[dict[str, Any], str]:
         "server {\n  listen 443 ssl;\n  ssl_certificate /tls/cert.pem;\n  ssl_certificate_key /tls/key.pem;\n"
         "  location / {\n    proxy_pass http://web:3000;\n    proxy_http_version 1.1;\n"
         "    proxy_set_header Host $http_host;\n    proxy_set_header X-Forwarded-Proto https;\n"
+        "    proxy_set_header X-Forwarded-Host $http_host;\n"
         "    proxy_set_header Upgrade $http_upgrade;\n    proxy_set_header Connection \"upgrade\";\n"
         "    proxy_buffering off;\n    proxy_read_timeout 300s;\n  }\n}\n")
     service = {"image": "nginx:alpine", "depends_on": ["web"], "ports": [f"127.0.0.1:{TLS_PORT}:443"],
@@ -2122,6 +2130,84 @@ def j14(env: Env, j: Journey) -> None:
             actual=short([((e.get("actor") or {}).get("name"), e.get("event_type"), e.get("source")) for e in hist[:4]]))
     for c in (bctx, actx, vctx):
         c.close()
+
+
+# =================================================================================================
+# J16 — an install reached by an IP address (boss-1 rehearsal): no passkey, the authenticator app
+# =================================================================================================
+
+@journey("J16", "An install reached by an IP address: the authenticator app, never a passkey prompt",
+         "WebAuthn forbids an IP address as the RP ID, so at https://<ip> the claim's passkey step "
+         "failed before Touch ID with a bare error (boss-1). At an IP origin the API offers no "
+         "passkey (passkey_reason needs_domain), the claim makes the authenticator app the way in "
+         "and says why in one line, sign-in shows no passkey button, and My account offers none.")
+def j16(env: Env, j: Journey) -> None:
+    ip = "127.0.0.1"
+    origin = f"https://{ip}:{TLS_PORT}"
+    front, pin = _tls_front(Path(env.args.out) / "j16-tls", host=ip)
+    s2 = _s2(env, j, fresh=True, api_env={"BOSS_CONSOLE_PASSWORD": ""}, extra={"fxdtls": front},
+             env_values={"BOSS_CONSOLE_PUBLIC_ORIGIN": origin})
+    b = env.pw.chromium.launch(headless=not env.args.headed, args=[f"--ignore-certificate-errors-spki-list={pin}"])
+    env.shared.setdefault("_cleanup", []).insert(0, lambda: b.close())
+    deadline = time.time() + 60
+    while time.time() < deadline and K.http("GET", f"http://{ip}:{TLS_PORT}/")[0] == 0:
+        time.sleep(2)
+    ctx, page = K.new_page(b, j)
+    page.goto(f"{origin}/login", wait_until="domcontentloaded")
+    opts = K.raw_fetch(page, "GET", "/v1/auth/options", csrf=False).get("body") or {}
+    j.check("API: at an IP origin no passkey is offered, and it says why", opts.get("passkey") is False
+            and opts.get("passkey_reason") == "needs_domain",
+            expect="passkey false, passkey_reason needs_domain", actual=short({k: opts.get(k) for k in ("passkey", "passkey_reason", "host")}))
+
+    token = K.secret(I.setup_token(s2.host())) or ""
+    page.goto(f"{origin}/claim#t={token}", wait_until="domcontentloaded")
+    page.wait_for_selector("[data-testid=claim-submit]", timeout=30000)
+    K.settle(page)
+    j.shot(page, "ip-claim")
+    note = page.locator("[data-testid=no-passkey-here]")
+    said = note.first.inner_text() if note.count() else ""
+    j.check("the claim says in one line why there is no passkey here", "domain name" in said and "IP address" in said,
+            expect="“Passkeys need a domain name. This BOSS is reached by an IP address.”", actual=said or K.body_text(page, 300))
+    submit = page.locator("[data-testid=claim-submit]").inner_text()
+    j.check("the authenticator app is the primary way in (no passkey prompt offered)",
+            "authenticator" in submit.lower() and "passkey" not in submit.lower() and page.locator("#claim-pw").count() == 1,
+            expect="“Claim and add an authenticator” + a password field", actual=submit)
+    p = K.Person(role="owner", email=f"fxd-j16-owner-{int(time.time()) % 100000}@example.test", name="FXD J16 Owner",
+                 password=K.strong_password("j16owner"))
+    page.fill("#claim-name", p.name)
+    page.fill("#claim-email", p.email)
+    if page.locator("#claim-seat").count():
+        page.select_option("#claim-seat", index=0)
+    page.fill("#claim-pw", p.password)
+    page.click("[data-testid=claim-submit]")
+    page.wait_for_selector("[aria-label='Authenticator key']", timeout=30000)
+    p.totp_secret = K.secret(page.locator("[aria-label='Authenticator key']").inner_text().strip().replace(" ", ""))
+    j.shot(page, "ip-claim-authenticator")
+    K.code_box(page, "Code from your app").first.fill(I.fresh_totp(p.totp_secret))
+    codes = _claim_codes_and_land(page, j)
+    m = me(page).get("body") or {}
+    j.check("the IP-origin claim makes an Owner with an authenticator app", "owner" in (m.get("access_roles") or [])
+            and (m.get("sign_in") or {}).get("totp") is True and not (m.get("sign_in") or {}).get("passkeys"),
+            expect="owner, totp on, no passkeys", actual=short({k: m.get(k) for k in ("access_roles", "sign_in")}))
+    j.check("recovery codes were issued with the authenticator", len(codes) == 10, expect="10", actual=len(codes))
+
+    page.goto(f"{origin}/account", wait_until="domcontentloaded")
+    page.wait_for_selector("[data-testid=no-passkey-here], [data-testid=add-passkey]", timeout=30000)
+    K.settle(page)
+    j.shot(page, "ip-account")
+    j.check("My account offers no passkey here and says why", page.locator("[data-testid=add-passkey]").count() == 0
+            and "domain name" in (page.locator("[data-testid=no-passkey-here]").first.inner_text() or ""),
+            expect="no Add a passkey; the reason line", actual=K.body_text(page, 400))
+
+    fctx, fresh = K.new_page(b, j)
+    fresh.goto(f"{origin}/login", wait_until="domcontentloaded")
+    fresh.wait_for_selector("#email", timeout=30000)
+    K.settle(fresh)
+    j.shot(fresh, "ip-sign-in")
+    j.check("sign-in shows no passkey button at an IP origin", fresh.locator("[data-testid=passkey-sign-in]").count() == 0,
+            expect="no “Sign in with a passkey”", actual=K.body_text(fresh, 300))
+    fctx.close()
+    ctx.close()
 
 
 # =================================================================================================
