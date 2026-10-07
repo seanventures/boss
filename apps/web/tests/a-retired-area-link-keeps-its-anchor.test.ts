@@ -30,6 +30,8 @@ describe("a retired area link", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("location")).toBeNull();  // the browser stays where it is
     expect(new URL(res.headers.get("x-middleware-rewrite")!).search).toBe("?org=org_boss&area=infra&view=fleet");
+    const pipeline = await middleware(req("/?org=org_boss&area=pipeline"));
+    expect(new URL(pipeline.headers.get("x-middleware-rewrite")!).search).toBe("?org=org_boss&area=setup&focus=routing");
   });
 
   it("leaves current areas, RSC fetches and server actions to the console", async () => {

@@ -30,7 +30,6 @@ export const AREA_IDS = [
   "ai-sre",
   "reports",
   "budget",
-  "pipeline",
   "comms",
   "github",
   "infra",

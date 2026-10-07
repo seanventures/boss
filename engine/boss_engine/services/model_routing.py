@@ -329,6 +329,9 @@ def _resolve_decisions(connection: Any, settings: Any, project_id: Optional[str]
     if not claude:
         return JobResolution("", None, "nothing this project holds can decide")
     kind = claude.get("kind") or "subscription"
+    # An install token (CLAUDE_CODE_OAUTH_TOKEN) is the subscription, not a metered key: the
+    # same reading `resolve_job` gives every other job (`_env_kind`).
+    kind = _env_kind("claude_code", claude) if kind == "env" else kind
     return JobResolution("claude_code", str(model) if model else None, why,
                          claude.get("source_id"), "metered" if kind == "env" else kind)
 
@@ -361,7 +364,7 @@ def _bound(settings: Any, engine: str, connection: Any, project_id: Optional[str
 
 
 def adapter_for(choice: ModelChoice, connection: Any, settings: Any,
-                project_id: Optional[str]):
+                project_id: Optional[str], *, model: Optional[str] = None):
     """The chat adapter for `choice`, on that source's own credential and endpoint.
 
     No paid fallback is wrapped around a subscription: an agent turn that silently moved from
@@ -377,7 +380,8 @@ def adapter_for(choice: ModelChoice, connection: Any, settings: Any,
         # what reaches the step, and model_failures explains it as "no connected model".
         return OpenAIAdapter(settings)
     bound = _bound(settings, engine, connection, project_id)
-    model = (getattr(settings, "chat_model", "") or "").strip() or None
+    # The router's model wins (a Smart route names one); otherwise the chat model knob.
+    model = model or (getattr(settings, "chat_model", "") or "").strip() or None
     if engine == "claude_code":
         return ClaudeCliAdapter(bound, model=model)
     if engine == "codex":
@@ -395,19 +399,138 @@ def adapter_for(choice: ModelChoice, connection: Any, settings: Any,
             "azure_openai_key": None, "azure_openai_endpoint": None,
             "azure_openai_deployment": None,
         })
+        if model and engine in ("openrouter", "groq", "deepseek", "gemini", "xai", "vllm",
+                                "ollama"):
+            lane = lane.model_copy(update={"openai_model": model})
         return OpenAIAdapter(lane, provider=engine)
+    if model and engine == "native" and hasattr(bound, "model_copy"):
+        bound = bound.model_copy(update={"openai_model": model})
     return OpenAIAdapter(bound)
 
 
-def project_chat_adapter(connection: Any, settings: Any, project_id: Optional[str]):
+from contextlib import contextmanager as _contextmanager
+from contextvars import ContextVar as _ContextVar
+
+#: What the work at hand is (a `model_router.RouteRequest`), set around a model call by the code
+#: that knows — an agent run, a panel phase, a skill — so `project_chat_adapter`'s signature,
+#: and every caller and test double of it, stays exactly as it was.
+_PURPOSE: "_ContextVar[Any]" = _ContextVar("model_route_purpose", default=None)
+
+
+@_contextmanager
+def routing_purpose(request: Any):
+    """`with routing_purpose(RouteRequest(...)): adapter = project_chat_adapter(...)`."""
+    token = _PURPOSE.set(request)
+    try:
+        yield request
+    finally:
+        _PURPOSE.reset(token)
+
+
+def project_chat_adapter(connection: Any, settings: Any, project_id: Optional[str], *,
+                         purpose: Any = None):
     """The model this project connected, as a chat adapter.
 
     Every adapter it returns implements `create_chat_completion` (tool-calling turns, the agent
     loop) and `create_text_response` (one-shot), and reports usage the caller records.
+
+    THE MODEL ROUTER DECIDES (docs/product/MODEL_ROUTER.md). `purpose` is the boundary's
+    `model_router.RouteRequest` — what the work is (a chat thread, an agent step, a panel
+    seat), so a Smart route can pick its tier. In Fixed mode (the default) the answer is
+    exactly `choose`'s, as it always was; a call site that names its purpose has the decision
+    recorded either way, so "Why this model" can answer.
     """
+    purpose = purpose if purpose is not None else _PURPOSE.get()
     resolved = routed_settings(connection, settings, project_id)
-    return adapter_for(choose(connection, resolved, project_id), connection, resolved,
-                       project_id)
+    decision = route_call(connection, settings, project_id, purpose)
+    if decision is not None and decision.refused:
+        # LOCAL MEANS LOCAL; FRONTIER NEVER SILENTLY GOES LOCAL; NO METERED SPEND WHILE THE
+        # BUDGET IS SPENT. A route that may not run anywhere refuses, in words — it never falls
+        # through to whatever `choose` would have picked (docs/product/MODEL_ROUTER.md).
+        from .model_router.failover import RouteRefused
+
+        raise RouteRefused(decision.refusal)
+    if decision is not None and decision.engine and (decision.mode == "smart"
+                                                     or decision.binding):
+        choice = ModelChoice(decision.engine, decision.reason, decision.source_id)
+        adapter = adapter_for(choice, connection, resolved, project_id, model=decision.model)
+        adapter = _failover(adapter, decision, settings, project_id, purpose)
+    else:
+        choice = choose(connection, resolved, project_id)
+        adapter = adapter_for(choice, connection, resolved, project_id)
+    try:
+        adapter._boss_choice = choice
+        adapter._boss_route = decision
+    except Exception:  # noqa: BLE001 — a slotted adapter just goes unannotated
+        pass
+    return adapter
+
+
+def _failover(adapter: Any, decision: Any, settings: Any, project_id: Optional[str],
+              purpose: Any) -> Any:
+    """The adapter, recorded against its route and retried on the next source when its own
+    fails (model_router.failover). A call that needs a new source builds it on a fresh
+    connection: the adapter may outlive the one it was built on (a chat thread's)."""
+    from dataclasses import replace
+
+    from .model_router import store
+    from .model_router.failover import FailoverChatAdapter
+
+    def reroute(failed_engine: str):
+        from ..db import begin
+
+        store.invalidate(project_id)
+        again = replace(purpose, session_pin=None, sticky=False) if purpose is not None \
+            else None
+        with begin() as c:
+            nxt = route_call(c, settings, project_id, again)
+            if nxt is None or nxt.refused or not nxt.engine or nxt.engine == failed_engine:
+                return None, nxt
+            resolved = routed_settings(c, settings, project_id)
+            inner = adapter_for(ModelChoice(nxt.engine, nxt.reason, nxt.source_id), c,
+                                resolved, project_id, model=nxt.model)
+        return inner, nxt
+
+    stage = getattr(purpose, "step", None) or "chat"
+    # agent_converse records its own turns; everything that names a purpose is recorded here.
+    return FailoverChatAdapter(adapter, decision, reroute, stage=stage,
+                               record=purpose is not None)
+
+
+def route_call(connection: Any, settings: Any, project_id: Optional[str], purpose: Any = None):
+    """The router's decision for a chat-shaped call, or None when routing has nothing to add
+    (Fixed mode with no named purpose: the legacy answer, unrecorded, as before)."""
+    try:
+        from .model_router import store
+        from .model_router.router import LegacyRoute, RouteRequest
+
+        if purpose is None:
+            if store.mode_of(connection, settings, project_id) != "smart":
+                return None
+            purpose = RouteRequest(kind="workflow_step", step="model_call",
+                                   project_id=project_id)
+        elif not getattr(purpose, "project_id", None):
+            from dataclasses import replace
+
+            purpose = replace(purpose, project_id=project_id)
+        if purpose.legacy is None:
+            from dataclasses import replace
+
+            def legacy() -> LegacyRoute:
+                picked = choose(connection, routed_settings(connection, settings, project_id),
+                                project_id)
+                knob = chat_model_knob(picked.engine)
+                model = _chosen(connection, project_id, knob) or getattr(settings, knob, None)
+                return LegacyRoute(picked.engine, str(model) if model else None,
+                                   f"Chat → {picked.describe()}")
+            purpose = replace(purpose, legacy=legacy)
+        return store.route(connection, settings, purpose,
+                           record_it=purpose.step != "model_call")
+    except Exception:  # noqa: BLE001 — routing must never fail the call it serves
+        import logging
+
+        logging.getLogger("boss.model_router").warning("route_call failed", exc_info=True)
+        return None
 
 
 # ── Spend: a model turn is reserved against the budget and receipted ─────────────────────────
@@ -617,7 +740,10 @@ def governed(adapter: Any, connection: Any, settings: Any, project_id: str, *,
     if connection is None or not project_id:
         raise IntegrationConfigurationError(
             f"{skill_id} needs a project and a connection to reserve its model spend")
-    choice = choose(connection, routed_settings(connection, settings, project_id), project_id)
+    # The source the adapter was built for (a Smart route), else the project's chat source.
+    choice = getattr(adapter, "_boss_choice", None)
+    if not isinstance(choice, ModelChoice):
+        choice = choose(connection, routed_settings(connection, settings, project_id), project_id)
     return GovernedChatAdapter(adapter, connection, settings, project_id,
                                skill_id=skill_id, ref=ref,
                                estimate_usd_micros=turn_estimate_usd_micros(choice, settings),

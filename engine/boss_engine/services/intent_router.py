@@ -1470,15 +1470,34 @@ class IntentRouter:
         from . import model_routing
 
         try:
-            choice = model_routing.choose(
-                connection, model_routing.routed_settings(connection, self.settings, project_id),
-                project_id)
-            key = (project_id, choice.engine, choice.source_id)
+            # THE ROUTER PICKS ONCE PER THREAD, from the thread's first message (LangChain's
+            # harness router; docs/product/MODEL_ROUTER.md) — sticky for the thread, so a
+            # conversation never switches model mid-way. Fixed mode: `choose`, as before.
+            messages = getattr(self, "_turn_messages", None)
+            thread_id = getattr(self, "_turn_thread", None)
+            purpose = None
+            if thread_id:
+                from .model_router.router import RouteRequest
+
+                first = next((m.get("content") for m in (messages or [])
+                              if isinstance(m, dict) and m.get("role") == "user"), "")
+                purpose = RouteRequest(kind="chat", step="chat", project_id=project_id,
+                                       unit_id=thread_id, text=str(first or "")[:6000],
+                                       sticky=True)
+            decision = model_routing.route_call(connection, self.settings, project_id, purpose) \
+                if purpose is not None else None
+            if decision is not None and decision.mode == "smart" and decision.engine:
+                key = (project_id, decision.engine, decision.model)
+            else:
+                choice = model_routing.choose(
+                    connection, model_routing.routed_settings(connection, self.settings,
+                                                              project_id), project_id)
+                key = (project_id, choice.engine, choice.source_id)
             if key != self._chat_engine_applied or self._answer_adapter is None:
                 # The adapter is built here, while the turn's connection is open, on the chosen
                 # source's own stored credential (model_routing.project_chat_adapter).
                 self._answer_adapter = model_routing.project_chat_adapter(
-                    connection, self.settings, project_id)
+                    connection, self.settings, project_id, purpose=purpose)
                 self._answer_agent_obj = None
             self._chat_engine_applied = key
         except Exception:  # noqa: BLE001 — a settings lookup must not end a conversation
@@ -1543,6 +1562,8 @@ class IntentRouter:
         # BEFORE ANYTHING ELSE IN THE TURN: whichever model this project connected is the one
         # that should answer, and the router is the first place that knows both the project and
         # the database.
+        # The thread and its first message: what the model router picks a model from, once.
+        self._turn_messages, self._turn_thread = messages, thread_id
         self._use_project_chat_model(connection, project_id)
         latest = str(messages[-1].get("content") or "").strip() if messages else ""
         if confirm_plan_id:

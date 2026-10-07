@@ -632,6 +632,7 @@ def run(
     skills: Optional[list[str]] = None,
     mcp: Optional[list[str]] = None,
     chosen: Optional[dict[str, Any]] = None,
+    route_ref: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
     """Hand one instruction to one agent and let it work.
 
@@ -763,6 +764,11 @@ def run(
                 # resume, and one added mid-run is not picked up by a run already under way.
                 "mcp_server_ids": [str(s["id"]) for s in servers],
                 "actor": actor,
+                # The workflow run and step this agent works for: the model router records its
+                # route under them, so the step's "Why this model" can read it — and routes on
+                # the operator's own instruction, not on BOSS's framing around it.
+                **{k: v for k, v in (route_ref or {}).items() if v},
+                "brief": str(said or "")[:4000],
             },
         },
     )

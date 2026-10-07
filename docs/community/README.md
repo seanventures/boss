@@ -9,7 +9,7 @@ hide:
 
 <div class="boss-hero__copy" markdown="1">
 
-<p class="boss-eyebrow">Open source · Apache 2.0 · v1.0-rc4</p>
+<p class="boss-eyebrow">Open source · Apache 2.0 · v1.0-rc5</p>
 
 # The control plane for AI software work
 

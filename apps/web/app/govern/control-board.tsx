@@ -181,7 +181,7 @@ export function ControlBoard({ view, projectId, actor, unreachable, focus, onSav
         <span className="gv-links">
           <a className="ag-link" href={consoleHref(search, { area: "decisions" })} title="Which actions need a person">Approval rules ↗</a>
           <a className="ag-link" href={consoleHref(search, { area: "org" })} title="Who may change what">Access ↗</a>
-          <a className="ag-link" href={consoleHref(search, { area: "pipeline" })} title="Which models each step may use">Model tiers ↗</a>
+          <a className="ag-link" href={consoleHref(search, { area: "setup", focus: "routing" })} title="Which model runs each piece of work">Model routing ↗</a>
         </span>
       </section>
     </div>

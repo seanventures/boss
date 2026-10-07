@@ -108,9 +108,9 @@ function identityRedirect(request: NextRequest): NextResponse | null {
  * page.tsx's redirect() runs after the shell has streamed, so the browser followed it as a
  * client navigation and dropped the URL's fragment: `?area=delivery#hardware-manager` (the old
  * "Where apps install" anchor) landed on Infra › Fleet with no `#hardware-manager` left to open
- * This computer (P-I-07). A real 307 keeps the fragment (RFC 7231 §7.1.2). Relative Location, so a
- * console behind a proxy redirects to its own public host. Document loads only: an RSC fetch or
- * a server action is the client's own navigation, which the shell rewrites itself.
+ * This computer (P-I-07). The answer is a small page that moves itself (`location.replace`, which
+ * keeps the fragment and the origin; see below for why not a 307). Document loads only: an RSC
+ * fetch or a server action is the client's own navigation, which the shell rewrites itself.
  */
 function legacyRedirect(request: NextRequest): NextResponse | null {
   if (request.method !== "GET" || request.nextUrl.pathname !== "/") return null;

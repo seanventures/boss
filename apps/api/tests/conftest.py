@@ -96,6 +96,11 @@ def clean_tables(engine):
             "api_idempotency_keys",
             # Run scorecards, experiments, person feedback, Improve BOSS (client and collector).
             "run_scorecards",
+            # The model router: its policy, its route records and OpenRouter's catalogue.
+            "model_routes",
+            "model_routing_policies",
+            "subscription_accounts",
+            "provider_model_catalog",
             "experiment_assignments",
             "experiments",
             "person_feedback",
@@ -444,3 +449,22 @@ def _no_real_cli_model_catalog(monkeypatch):
     monkeypatch.setattr(cli_harness, "_read_model_catalog",
                         lambda spec: reported.get(spec.name, ()))
     monkeypatch.setattr(cli_harness, "_catalog_cache", {})
+
+
+@pytest.fixture(autouse=True)
+def _fresh_model_router():
+    """The model router caches snapshots and classifications per process; a test's project
+    must not inherit another test's mode or policy (docs/product/MODEL_ROUTER.md)."""
+    from boss_engine.services.model_router import store
+    from boss_engine.services.model_router.classifier import CLASSIFIER
+
+    from boss_engine.services.model_router import accounts, breaker
+
+    store.invalidate()
+    CLASSIFIER.clear()
+    accounts.reset_caches()
+    breaker.reset()
+    yield
+    store.invalidate()
+    accounts.reset_caches()
+    breaker.reset()

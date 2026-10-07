@@ -228,6 +228,14 @@ class JobBody(_Body):
     choice: Optional[JobChoice] = None
 
 
+class RoutingBody(_Body):
+    """A change to the model routing policy (docs/product/MODEL_ROUTER.md): any subset of
+    mode, tiers, floors, floor_preset, headroom, thresholds, budget, escalation,
+    allowed_sources, classifier, weekly_allowance_usd. `version` is the one the edit read."""
+    policy: dict[str, Any]
+    version: Optional[int] = None
+
+
 class BudgetBody(_Body):
     monthly_cap_usd: float
     #: Which screen wrote it, for the `budget.monthly_cap_set` record: Setup's row or Govern.

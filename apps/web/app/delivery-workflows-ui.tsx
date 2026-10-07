@@ -1,5 +1,6 @@
 "use client";
 
+import { routeForStep, useRunRoutes } from "./why-this-model";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ShareRunButton } from "./improve/share-run";
 
@@ -2965,6 +2966,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   // line (model, cost) and the Activity section, so they cannot disagree.
   const activity = useStepActivity(projectId, workflowRunId, step.step_id, phase === "now",
                                    `${step.status}:${step.attempt}`);
+  // WHY THIS MODEL: the model router's route for this step (docs/product/MODEL_ROUTER.md).
+  const stepRoutes = useRunRoutes(projectId, workflowRunId, phase === "now");
   const logHref = workflowRunId
     ? stepLogHref(typeof window !== "undefined" ? window.location.search : "", workflowRunId, step.step_id,
                   { step: capability?.label ?? step.capability ?? step.step_id,
@@ -3070,6 +3073,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                   failure={phase === "failed" ? step.error : null} question={question}
                   cost={activity.cost} calls={activity.calls} model={activity.model}
                   onAsk={ask} askBossTip="Ask BOSS about this step" stepId={step.step_id} facts={facts}
+                  route={routeForStep(stepRoutes, step.step_id)}
                   skipped={phase === "skipped" ? (skippedBy(step) || skipReason(step) || "Did not apply to this run") : undefined} />
 
       {/* A STEP THAT SUCCEEDED IS NOT SHOWING YOU A FAILURE.
