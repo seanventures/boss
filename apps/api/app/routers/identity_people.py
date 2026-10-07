@@ -22,6 +22,7 @@ from sqlalchemy import text
 from boss_engine.db import begin
 from boss_engine.identity import P, permit
 from boss_engine.identity import api_keys, invitations, recovery, service_accounts, sessions, signin, users
+from boss_engine.identity import links as auth_links
 from boss_engine.identity.audit import Outcome
 from boss_engine.identity.authn import AuthnError
 from boss_engine.identity.authn_support import emit, public_origin, send_mail, smtp_configured
@@ -211,7 +212,7 @@ def build_identity_people_router() -> APIRouter:
                 ctx = current_context(request, db)
                 inv, token = invitations.create(db, inviter=ctx, email=body.email, bindings=body.bindings,
                                                 group_ids=body.group_ids)
-                link = f"{public_origin(db) or ''}/invite#t={token}"
+                link = auth_links.url("invite", public_origin(db) or "", token)
                 # H2 (F3): an invitation is emailed only on the BOUND public origin; without one the
                 # link is shown once to the inviter instead. M1: an emailed invitation proves the
                 # mailbox, so accepting it verifies the address (identity_invitations.emailed).
@@ -489,7 +490,7 @@ def build_identity_people_router() -> APIRouter:
                 emit(db, org_id=ctx.principal.org_id, event_type="password.reset_requested",
                      outcome=Outcome.INFO, ctx=ctx, target_type="user", target_id=u.principal_id,
                      details={"by_admin": True})
-                return JSONResponse({"link": f"{public_origin(db) or ''}/reset#t={token}", "shown_once": True,
+                return JSONResponse({"link": auth_links.url("reset", public_origin(db) or "", token), "shown_once": True,
                                      "expires_in_seconds": recovery.RESET_TTL_SECONDS},
                                     headers={"Cache-Control": "no-store"})
         except AuthnError as exc:

@@ -39,8 +39,8 @@ def test_recover_owner_restores_a_locked_out_owner_in_one_audited_step(db):
 
     done = cli.recover_owner("PARAM@example.com", db=db, now=NOW)
     assert done.principal_id == pid and done.reactivated
-    assert done.link.startswith("https://boss.example.com/auth/recover#token=")
-    token = done.link.split("#token=", 1)[1]
+    assert done.link.startswith("https://boss.example.com/reset#t=")   # links.AUTH_LINKS["recover_owner"]
+    token = done.link.split("#t=", 1)[1]
     row = db.execute(text("SELECT kind, principal_id, expires_at FROM identity_auth_challenges "
                           "WHERE id_hash = :h"), {"h": token_hash(token)}).first()
     assert tuple(row) == ("password_reset", pid, NOW + timedelta(minutes=15))

@@ -11,6 +11,18 @@
  */
 import { AREA_ACCESS } from "./areas";
 import type { Permission } from "./permissions.gen";
+import { AUTH_LINKS, LEGACY_LINK_ALIASES } from "./auth-links.gen";
+
+/**
+ * EVERY PAGE A VISITOR WITHOUT A SESSION MAY OPEN: the sign-in screens, every page a minted link
+ * lands on (AUTH_LINKS, the engine's one table) and every alias an older build printed. None of
+ * them is ever sent to /login — a link's token would ride into a page that ignores it.
+ */
+export const PUBLIC_AUTH_PATHS: readonly string[] = [...new Set([
+  "/login", "/signin", "/signup",
+  ...Object.values(AUTH_LINKS).map((l) => l.path),
+  ...Object.keys(LEGACY_LINK_ALIASES),
+])];
 
 /** Set by middleware.ts on every page request: the pathname, for a layout's guard. */
 export const PATH_HEADER = "x-boss-path";
@@ -76,7 +88,7 @@ export const CONSOLE_PAGES: readonly IdentityPage[] = [
   { path: "/v2/infra", label: "Infra & Models", tip: "Hosts, deploys and models", access: area("delivery") },
   { path: "/v2/settings", label: "Settings", tip: "Repo and models", access: area("setup") },
   { path: "/github-app", label: "GitHub App", tip: "Hands the App's manifest to GitHub", access: area("setup") },
-  ...["/login", "/claim", "/invite", "/signin", "/signin/link", "/reset", "/signup", "/signup/verify"].map(
+  ...PUBLIC_AUTH_PATHS.map(
     (path) => ({ path, label: "Sign in", tip: "Public: signing in needs no session", access: PUBLIC })),
 ];
 
@@ -99,7 +111,7 @@ export const ACCOUNT_TABS = IDENTITY_PAGES.filter((p) => p.tab && p.path.startsW
  * Pages and API paths a visitor with no session may open: the sign-in screens and the public
  * sign-in API (IDENTITY.md §10 "Sign-in"). Routing only; the API declares its own `@public`.
  */
-const PUBLIC_PAGES = [/^\/login\/?$/, /^\/claim\/?$/, /^\/invite\/?$/, /^\/signin(\/link)?\/?$/, /^\/reset\/?$/, /^\/signup(\/verify)?\/?$/];
+const PUBLIC_PAGES = PUBLIC_AUTH_PATHS.map((p) => new RegExp(`^${p.replace(/\//g, "\\/")}\\/?$`));
 const PUBLIC_API = /^\/v1\/auth\/(options|login|mfa\/(totp|recovery)|webauthn\/(options|verify)|magic-link(\/verify)?|email-code(\/verify)?|signup(\/verify)?|password\/(forgot|reset)|setup\/(claim|status)|invitations\/(preview|accept)|sso\/[^/]+\/(start|callback))\/?$/;
 const PUBLIC_ASSETS = new Set(["/boss-mark.png", "/BOSS-logo.png", "/boss-lockup.png", "/icon.png"]);
 

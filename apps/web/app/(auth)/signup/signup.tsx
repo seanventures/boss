@@ -9,7 +9,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { EnvelopeSimple, ShieldCheck } from "@phosphor-icons/react";
 
 import { idPost } from "../../../lib/identity/api";
-import { AuthStage, Live, Logo, fragmentToken } from "../auth-parts";
+import { AuthStage, Live, Logo, linkToken } from "../auth-parts";
 import { sayAuth } from "../auth-flow";
 
 export function SignUp({ host, org, enabled }: { host: string; org: string; enabled: boolean }) {
@@ -78,7 +78,7 @@ export function SignUpVerify({ host }: { host: string }) {
   useEffect(() => {
     if (once.current) return;
     once.current = true;
-    const token = fragmentToken();
+    const token = linkToken("signup_verify");
     try { window.history.replaceState(null, "", window.location.pathname); } catch { /* fine */ }
     if (!token) { setState("failed"); return; }
     idPost<{ next?: string } | null>("/v1/auth/signup/verify", { token })

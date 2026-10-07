@@ -16,7 +16,7 @@ import { Key, UserPlus } from "@phosphor-icons/react";
 import { IdentityError, idPost } from "../../../lib/identity/api";
 import type { AuthOptions, SignInStep } from "../../../lib/identity/types";
 import type { InvitationPreview } from "../../../lib/identity/types-auth";
-import { AuthStage, Live, Logo, fragmentToken } from "../auth-parts";
+import { AuthStage, Live, Logo, linkToken } from "../auth-parts";
 import { sayAuth } from "../auth-flow";
 
 /** Read the fragment once, preview the invitation, then hand over to InviteAccept. */
@@ -26,7 +26,7 @@ export function InviteLanding({ options }: { options: AuthOptions }) {
   useEffect(() => {
     if (once.current) return;
     once.current = true;
-    const token = fragmentToken();
+    const token = linkToken("invite");
     try { window.history.replaceState(null, "", window.location.pathname); } catch { /* keep going */ }
     if (!token) { setState({ kind: "ready", token: "", invitation: null }); return; }
     idPost<InvitationPreview>("/v1/auth/invitations/preview", { token })
