@@ -79,7 +79,10 @@ class Stack2:
 
     # ---- compose -------------------------------------------------------------------------------------
     def _base(self) -> list[str]:
-        cmd = ["docker", "compose", "-p", self.project, "--env-file", str(self.env_file), "-f", str(K.COMPOSE_FILE)]
+        # The console is behind the `web` profile; the main stack's installer enables it, but a copied
+        # env file does not carry that (round 2: J14's TLS proxy "depends on undefined service web").
+        cmd = ["docker", "compose", "-p", self.project, "--profile", "web", "--env-file", str(self.env_file),
+               "-f", str(K.COMPOSE_FILE)]
         if self.override_file.exists():
             cmd += ["-f", str(self.override_file)]
         return cmd
