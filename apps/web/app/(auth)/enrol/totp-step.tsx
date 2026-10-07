@@ -5,9 +5,10 @@
  * code from the app to confirm. The QR is drawn by the API (`qr_svg`, a seam for S1) so the
  * console ships no QR encoder; without it the secret is shown large enough to type.
  */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
-import { idPost } from "../../../lib/identity/api";
+import { IdentityError, idPost } from "../../../lib/identity/api";
+import { ENROLMENT_EXPIRED, ENROLMENT_EXPIRED_WORDS } from "../../../lib/identity/enrolment";
 import { codesOf, type RecoveryCodes, type TotpEnrolment } from "../../../lib/identity/types-auth";
 import { CodeInput } from "../../../components/identity/kit";
 import { sayAuth } from "../auth-flow";
@@ -27,12 +28,15 @@ export function TotpStep({ onDone, guard }: {
   const [error, setError] = useState<string | null>(null);
   const [qrBroken, setQrBroken] = useState(false);
 
+  const liveRef = useRef(true);
+  /** Start (or restart) an enrolment: a new key and QR, bound to this browser's session. */
+  const start = () => run(() => idPost<TotpEnrolment>("/v1/identity/me/mfa/totp", {}))
+    .then((r) => { if (liveRef.current) { setEnrol(r); setQrBroken(false); } });
+
   useEffect(() => {
-    let live = true;
-    run(() => idPost<TotpEnrolment>("/v1/identity/me/mfa/totp", {}))
-      .then((r) => { if (live) setEnrol(r); })
-      .catch((e) => { if (live) setError(sayAuth(e)); });
-    return () => { live = false; };
+    liveRef.current = true;
+    start().catch((e) => { if (liveRef.current) setError(sayAuth(e)); });
+    return () => { liveRef.current = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const confirm = async (value: string) => {
@@ -43,8 +47,15 @@ export function TotpStep({ onDone, guard }: {
       setEnrol(null); // the secret leaves memory the moment it is confirmed
       onDone(codesOf(confirmed));
     } catch (e) {
-      setError(sayAuth(e));
       setCode("");
+      if (e instanceof IdentityError && e.code === ENROLMENT_EXPIRED) {
+        // No key to check the code against (it expired, or another tab began a new one): not a
+        // wrong code. Show a NEW key at once and say so, never "That code didn't work" forever.
+        setEnrol(null);
+        try { await start(); setError(ENROLMENT_EXPIRED_WORDS); } catch (again) { setError(sayAuth(again)); }
+      } else {
+        setError(sayAuth(e));
+      }
     } finally {
       setBusy(false);
     }

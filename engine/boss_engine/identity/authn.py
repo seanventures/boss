@@ -39,7 +39,7 @@ API_KEY_CHECKSUM_LEN = 6
 
 #: Sign-in methods recorded on a session (identity_sessions.auth_methods).
 SIGN_IN_METHODS = frozenset({"pwd", "totp", "passkey", "recovery_code", "magic_link", "email_code",
-                             "legacy_password", "network"})   # plus "sso:<provider_id>"
+                             "legacy_password", "network", "setup_link"})   # plus "sso:<provider_id>"
 
 STEP_UP_WINDOW_SECONDS = 600
 #: The refusal of every route but enrolment, sign-out and "me" to an enrolment-only session (H1).

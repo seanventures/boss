@@ -91,6 +91,16 @@ def begin_enrolment(db: Any, *, principal_id: str, account: str, session_token: 
     return secret, otpauth_uri(secret, account)
 
 
+def has_pending_enrolment(db: Any, *, principal: Principal, session_token: str) -> bool:
+    """Is there a live enrolment, begun by THIS browser's session, for this person? Without one a
+    code cannot be checked at all (the key expired after ENROL_TTL_SECONDS, a newer "begin"
+    replaced it, or the session changed) — which is not a wrong code and must never be answered
+    as one: the person would retype a correct code forever, and nothing would count or say why."""
+    pending = latest_bound_challenge(db, kind="mfa", binding_secret=session_token, lock=False)
+    return (pending is not None and pending.principal_id == principal.id
+            and "enrol_totp" in pending.payload)
+
+
 def confirm_enrolment(db: Any, *, principal: Principal, session_token: str, code: str) -> bool:
     """Store the pending secret in the vault once a valid code proves the authenticator has it."""
     pending = latest_bound_challenge(db, kind="mfa", binding_secret=session_token)
