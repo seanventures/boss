@@ -260,8 +260,8 @@ export function FloorView({ projectId, actor, floor, error, loading, refresh, pa
       <div className="fx-floor" data-testid="fx-floor">
         <div className="ag-empty fx-empty" data-testid="fx-no-builds">
           <span>No builds yet</span>
-          <button type="button" className="ag-btn ag-btn-primary" onClick={onPlan} data-testid="fx-empty-plan">Plan it with Juno</button>
-          <button type="button" className="ag-btn" onClick={onDirect} data-testid="fx-empty-direct">Direct change</button>
+          <GatedButton permission="meeting:convene" type="button" className="ag-btn ag-btn-primary" onClick={onPlan} data-testid="fx-empty-plan">Plan it with Juno</GatedButton>
+          <GatedButton permission="code_task:create" type="button" className="ag-btn" onClick={onDirect} data-testid="fx-empty-direct">Direct change</GatedButton>
         </div>
       </div>
     );
