@@ -38,6 +38,14 @@ def _env_lines(path: Path) -> list[tuple[str, str]]:
     return out
 
 
+def image_tag_of(project: str) -> str:
+    """The image tag the compose project's api container runs (boss-community-api:<tag>)."""
+    done = subprocess.run(["docker", "inspect", f"{project}-api-1", "--format", "{{.Config.Image}}"],
+                          capture_output=True, text=True, timeout=30)
+    image = done.stdout.strip()
+    return image.rsplit(":", 1)[1] if done.returncode == 0 and ":" in image else ""
+
+
 class Stack2:
     def __init__(self, project: str, env_file: Path, override_file: Path, ports: dict[str, str]):
         self.project = project
@@ -50,12 +58,23 @@ class Stack2:
 
     @classmethod
     def from_main(cls, main_env: Path, *, project: str = "bossfxd2", ports: Optional[dict[str, str]] = None,
-                  out_dir: Optional[Path] = None) -> "Stack2":
+                  out_dir: Optional[Path] = None, main_project: Optional[str] = None) -> "Stack2":
         ports = dict(ports or PORTS)
         out_dir = out_dir or main_env.parent
         env_file = out_dir / "stack2.env"
         values = dict(_env_lines(main_env))
         values.update(ports)
+        # THE SAME IMAGES AS THE MAIN STACK — read from its running api container, never from its
+        # env file. An installer's .env says BOSS_COMMUNITY_IMAGE_TAG=boss-community; a test stack is
+        # built under its own tag passed in the environment, so the copied file pointed the second
+        # stack at the OPERATOR's images (an older build): round 2's J7 SCIM finding was measured on
+        # them, not on the code under test.
+        tag = image_tag_of(main_project) if main_project else ""
+        if tag:
+            values["BOSS_COMMUNITY_IMAGE_TAG"] = tag
+        if values.get("BOSS_COMMUNITY_IMAGE_TAG", "boss-community") in ("", "boss-community"):
+            raise RuntimeError(f"{project}: refusing to run a test stack on the operator's boss-community images; "
+                               "pass the main stack's compose project (main_project) so its image tag is used")
         values["BOSS_CONSOLE_PUBLIC_ORIGIN"] = f"http://localhost:{ports['BOSS_WEB_PORT']}"
         values["BOSS_PREVIEW_ORIGIN"] = f"http://127.0.0.1:{ports['BOSS_PREVIEW_PORT']}"
         for k in FRESH:
