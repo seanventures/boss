@@ -113,6 +113,11 @@ class Caller:
     permissions: frozenset[str] = frozenset()
     via_console: bool = True
 
+    @property
+    def is_person(self) -> bool:
+        """A person's own session (a cookie), not a key or token."""
+        return "Cookie" in self.headers
+
     def call(self, method: str, path: str, body: Any = None,
              query: Optional[dict[str, str]] = None) -> tuple[int, dict[str, Any]]:
         from urllib.parse import urlencode
@@ -250,7 +255,10 @@ def judge(op: Op, c: Caller, *, sysonly: frozenset[str], stepup: frozenset[str])
         return Result(c.name, key, "?", 0, "skipped", "a stream (server-sent events) is held open, not called")
     perm = op.permission
     if op.decl.startswith("authenticated"):
-        allowed = True
+        # `authenticated:…:people` is a person's own session only (@authenticated(people_only=True)):
+        # a service account or any other bearer is refused 403 people_only BY DESIGN — e.g. GET
+        # /v1/identity/me/profile is a person's name, email and avatar; an API key has none.
+        allowed = not (":people" in op.decl.split(" ", 1)[0] and not c.is_person)
     else:
         allowed = bool(perm) and perm in c.permissions and perm not in sysonly
     if allowed and op.method not in ("GET", "HEAD"):

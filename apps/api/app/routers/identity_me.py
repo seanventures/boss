@@ -358,7 +358,7 @@ def build_identity_me_router() -> APIRouter:
         return {"display_name": row.display_name, "email": row.email, "avatar_seed": row.avatar_seed} if row else {}
 
     @router.get("/v1/identity/me/profile")
-    @authenticated(self_only=True)
+    @authenticated(self_only=True, people_only=True)
     def my_profile(request: Request):
         try:
             with begin() as db:
@@ -371,7 +371,7 @@ def build_identity_me_router() -> APIRouter:
             return refusal(exc)
 
     @router.patch("/v1/identity/me")
-    @authenticated(self_only=True)
+    @authenticated(self_only=True, people_only=True)
     def update_me(body: ProfileBody, request: Request):
         """Rename yourself, or pick your avatar colour. Only the caller, only these two fields;
         your email and access are an admin's (PATCH /v1/identity/users/{id})."""
@@ -463,7 +463,7 @@ def build_identity_me_router() -> APIRouter:
     # ---- password -----------------------------------------------------------------------------------
 
     @router.post("/v1/identity/me/password")
-    @authenticated(self_only=True)
+    @authenticated(self_only=True, people_only=True)
     def change_password(body: PasswordChangeBody, request: Request):
         try:
             with begin() as db:
@@ -503,7 +503,7 @@ def build_identity_me_router() -> APIRouter:
     # ---- TOTP --------------------------------------------------------------------------------------
 
     @router.post("/v1/identity/me/mfa/totp")
-    @authenticated(self_only=True)
+    @authenticated(self_only=True, people_only=True)
     def totp_begin(request: Request):
         try:
             with begin() as db:
@@ -527,7 +527,7 @@ def build_identity_me_router() -> APIRouter:
             return refusal(exc)
 
     @router.post("/v1/identity/me/mfa/totp/confirm")
-    @authenticated(self_only=True)
+    @authenticated(self_only=True, people_only=True)
     def totp_confirm(body: CodeBody, request: Request):
         try:
             with begin() as db:
@@ -549,7 +549,7 @@ def build_identity_me_router() -> APIRouter:
             return refusal(exc)
 
     @router.delete("/v1/identity/me/mfa/totp")
-    @authenticated(self_only=True)
+    @authenticated(self_only=True, people_only=True)
     def totp_remove(request: Request):
         try:
             with begin() as db:
@@ -578,7 +578,7 @@ def build_identity_me_router() -> APIRouter:
             return refusal(exc)
 
     @router.post("/v1/identity/me/passkeys/options")
-    @authenticated(self_only=True)
+    @authenticated(self_only=True, people_only=True)
     def passkey_registration_options(request: Request):
         try:
             with begin() as db:
@@ -607,7 +607,7 @@ def build_identity_me_router() -> APIRouter:
             return refusal(exc)
 
     @router.post("/v1/identity/me/passkeys")
-    @authenticated(self_only=True)
+    @authenticated(self_only=True, people_only=True)
     def passkey_register(body: PasskeyRegisterBody, request: Request):
         try:
             with begin() as db:
@@ -644,7 +644,7 @@ def build_identity_me_router() -> APIRouter:
             return refusal(exc)
 
     @router.delete("/v1/identity/me/passkeys/{passkey_id}")
-    @authenticated(self_only=True)
+    @authenticated(self_only=True, people_only=True)
     def passkey_remove(passkey_id: str, request: Request):
         try:
             with begin() as db:
@@ -664,7 +664,7 @@ def build_identity_me_router() -> APIRouter:
     # ---- recovery codes ---------------------------------------------------------------------------------
 
     @router.post("/v1/identity/me/recovery-codes")
-    @authenticated(self_only=True)
+    @authenticated(self_only=True, people_only=True)
     def regenerate_recovery_codes(request: Request):
         try:
             with begin() as db:
@@ -703,7 +703,7 @@ def build_identity_me_router() -> APIRouter:
             return refusal(exc)
 
     @router.delete("/v1/identity/me/identities/{identity_id}")
-    @authenticated(self_only=True)
+    @authenticated(self_only=True, people_only=True)
     def unlink_identity(identity_id: str, request: Request):
         try:
             with begin() as db:

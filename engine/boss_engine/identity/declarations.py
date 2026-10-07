@@ -101,14 +101,20 @@ class Public:
 @dataclass(frozen=True)
 class Authenticated:
     """Any ACTIVE principal. For `/me/*` (self_only) and composite console views (composite: the
-    handler must filter every section by that section's own permission)."""
+    handler must filter every section by that section's own permission).
+
+    `people_only`: a PERSON signed in with a session, never a service account, API key, run token
+    or bridge (the handler's `need_person_session` answers anyone else 403 people_only). Declared,
+    so the catalogue, the matrix and the e2e API sweep know it; test_identity_people_only_declared
+    holds the declaration and the handler's gate to each other."""
     composite: bool = False
     self_only: bool = False
     note: str = ""
+    people_only: bool = False
 
     def describe(self) -> str:
         return "authenticated" + (":composite_view" if self.composite else "") + (
-            ":self" if self.self_only else "")
+            ":self" if self.self_only else "") + (":people" if self.people_only else "")
 
 
 Access = Union[Permit, Public, Authenticated]
@@ -184,9 +190,11 @@ def public(*, reason: PublicReason | str,
 
 
 def authenticated(*, composite: bool = False, self_only: bool = False,
-                  note: str = "") -> Callable[[F], F]:
-    """Declare an operation open to any active principal (see `Authenticated`)."""
-    declaration = Authenticated(composite=composite, self_only=self_only, note=note)
+                  note: str = "", people_only: bool = False) -> Callable[[F], F]:
+    """Declare an operation open to any active principal (see `Authenticated`); `people_only`
+    narrows it to a person's own session."""
+    declaration = Authenticated(composite=composite, self_only=self_only, note=note,
+                                people_only=people_only)
 
     def deco(fn: F) -> F:
         return _attach(fn, declaration)
