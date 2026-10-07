@@ -14,6 +14,7 @@
  * cell it names. Built-in roles are read-only: clone one to change it. The API re-checks it all.
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { plainText } from "../../../../lib/identity/plain";
 import { ArrowCounterClockwise, CaretDown, CaretRight, ClockCounterClockwise, CopySimple, Key, LockSimple, MagnifyingGlass, ShieldCheck, Trash, Warning } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../../agent-avatar";
@@ -344,7 +345,7 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
                 <button key={v.version} type="button" onClick={() => loadVersion(v)} disabled={readOnly}
                   title={readOnly ? readOnlyWhy : `Load v${v.version} as a new draft`}>
                   <b>v{v.version}</b>
-                  <span>{nameMap.get(v.by)?.name ?? v.by} · {shortDate(v.at)} · <span className="idn-mono" data-copy="data">{v.summary}</span></span>
+                  <span>{nameMap.get(v.by)?.name ?? v.by} · {shortDate(v.at)} · <span data-copy="data" title={v.summary}>{plainText(v.summary)}</span></span>
                 </button>
               )) : <span className="idn-dim">v1 · built in</span>}
             </div>

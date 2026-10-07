@@ -603,8 +603,6 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn-pk .w3 { width: 190px; height: 190px; animation-delay: 1.2s; border-color: color-mix(in srgb, var(--idn-violet) 25%, transparent); }
 @keyframes idn-pulse { 0% { transform: scale(0.9); opacity: 1; } 100% { transform: scale(1.08); opacity: 0.25; } }
 .idn-pk .idn-core { width: 86px; height: 86px; border-radius: 50%; display: grid; place-items: center; color: var(--idn-white); background: radial-gradient(circle at 30% 25%, var(--idn-mint), var(--accent)); box-shadow: 0 20px 50px -10px color-mix(in srgb, var(--accent) 80%, transparent); }
-.idn-state { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13.5px; color: var(--muted); margin-bottom: 16px; }
-.idn-state .idn-blink { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); animation: idn-blink 1s infinite; }
 @keyframes idn-blink { 50% { opacity: 0; } }
 .idn-codes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; font: 500 14px var(--mono); padding: 14px 16px; border: 1px dashed var(--border-strong); border-radius: 12px; background: var(--idn-well); margin: 0 0 12px; list-style: none; }
 .idn-codes li { color: var(--ink-soft); }

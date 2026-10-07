@@ -205,7 +205,7 @@ on("GET", "/v1/auth/options", "public", ({ s, req }) => {
     smtp: bare ? false : s.policy.smtp, signup: !bare && (s.policy.signup.enabled || req.cookies.boss_stub_signup === "1"),
     legacy_password: false, claim,
   };
-  return ok(options);
+  return ok({ ...options, password_min_length: s.policy.password_min_length });
 });
 
 on("POST", "/v1/auth/login", "public", ({ s, req, now }) => {
@@ -595,6 +595,18 @@ on("POST", "/v1/identity/role-bindings", "role_binding:assign", ({ s, req, who, 
     const out = bindGroup(s, String(b.subject_id), String(b.role_key), "org", s.people.find((x) => x.id === who)?.display_name.split(" ")[0] ?? "BOSS", now, b.expires_at ?? null);
     return out ? ok(out, 201) : notFound();
   }
+  const svc = s.sas.find((x) => x.id === b.subject_id);
+  if (svc) {
+    const role = s.roles.find((r) => r.key === b.role_key);
+    if (!role) return notFound();
+    const over = rolePerms(s, role.key).find((p) => !holds(s, who, p));
+    if (over) return err(403, "forbidden", { permission: over });
+    const binding = { id: `rb_${token("").slice(0, 6)}`, role_id: role.id, role_key: role.key, role_name: role.name, scope: (b.scope || "org") as ScopeLabel,
+      subject_id: svc.id, via_group: null, granted_by: s.people.find((x) => x.id === who)?.display_name.split(" ")[0] ?? null, granted_at: new Date(now).toISOString(), expires_at: b.expires_at ?? null };
+    svc.bindings.push(binding);
+    svc.effective = new Set(svc.bindings.flatMap((x) => rolePerms(s, x.role_key))).size;
+    return ok(binding, 201);
+  }
   if (b.subject_id === who) return err(409, "cannot_bind_self");
   if (b.role_key === "owner" && !holds(s, who, "owner:assign")) return err(403, "forbidden", { permission: "owner:assign" });
   const over = rolePerms(s, String(b.role_key)).find((p) => !holds(s, who, p));
@@ -609,6 +621,12 @@ on("POST", "/v1/identity/role-bindings", "role_binding:assign", ({ s, req, who, 
 });
 on("DELETE", "/v1/identity/role-bindings/([^/]+)", "role_binding:assign", ({ s, m, who, now }) => {
   if (unbindGroup(s, m[1])) return ok({ ok: true });
+  for (const svc of s.sas) {
+    if (!svc.bindings.some((x) => x.id === m[1])) continue;
+    svc.bindings = svc.bindings.filter((x) => x.id !== m[1]);
+    svc.effective = new Set(svc.bindings.flatMap((x) => rolePerms(s, x.role_key))).size;
+    return ok({ ok: true });
+  }
   for (const p of s.people) {
     const b = p.bindings.find((x) => x.id === m[1]);
     if (!b) continue;
@@ -631,12 +649,15 @@ on("GET", "/v1/identity/service-accounts/([^/]+)", "service_account:read", ({ s,
   return sa ? ok(sa) : notFound();
 });
 on("POST", "/v1/identity/service-accounts", "service_account:manage", ({ s, req, who, now }) => {
-  const b = body<{ name: string; description: string; role_key: string }>(req);
-  const over = rolePerms(s, String(b.role_key || "viewer")).find((p) => !holds(s, who, p));
+  const b = body<{ name: string; description: string; role_key: string; owner_principal_ids?: string[] }>(req);
+  const over = b.role_key ? rolePerms(s, String(b.role_key)).find((p) => !holds(s, who, p)) : undefined;
   if (over) return err(403, "forbidden", { permission: over });
   const me = s.people.find((x) => x.id === who)!;
+  const ownerIds = Array.isArray(b.owner_principal_ids) && b.owner_principal_ids.length ? b.owner_principal_ids : [who];
+  const owners = ownerIds.flatMap((id) => { const p = s.people.find((x) => x.id === id); return p ? [{ id: p.id, name: p.display_name.split(" ")[0], hue: p.hue }] : []; });
+  if (!owners.length) return err(422, "owner_required");
   const sa: ServiceAccount = { id: `sva_${token("").slice(0, 8)}`, name: String(b.name || "new-account"), description: String(b.description || ""), kind: "service",
-    owners: [{ id: who, name: me.display_name.split(" ")[0], hue: me.hue }], bindings: [], keys: [], status: "active", created_by: me.display_name.split(" ")[0],
+    owners, bindings: [], keys: [], status: "active", created_by: me.display_name.split(" ")[0],
     created_at: new Date(now).toISOString(), last_used: null, effective: rolePerms(s, String(b.role_key || "viewer")).length, orphaned: false };
   s.sas.unshift(sa);
   return ok(sa, 201);

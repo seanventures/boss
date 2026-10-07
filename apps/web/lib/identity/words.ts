@@ -36,7 +36,7 @@ export function needsWords(p: string): string {
 
 /** "access_role.updated" → "Access role updated"; "sso.provider.created" → "Sign-in provider created". */
 const EVENT_NOUNS: Record<string, string> = {
-  sso: "Sign-in", scim: "Directory sync", mfa: "Second factor", api_key: "API key", access_role: "Access role",
+  sso: "Sign-in", authz: "Access", auth: "Sign-in", authn: "Sign-in", scim: "Directory sync", mfa: "Second factor", api_key: "API key", access_role: "Access role",
   role_binding: "Access", jit: "Just-in-time", idp: "Sign-in provider", provider: "provider", totp: "authenticator app",
   webauthn: "passkey", oidc: "single sign-on", saml: "single sign-on",
 };
