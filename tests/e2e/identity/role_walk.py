@@ -77,9 +77,9 @@ KNOWN: list[tuple[str, str, str]] = [
      "unassigned (FX-C P1-18?)", "Improve-BOSS sharing card fetched without the permission check"),
     (r"^http-error\|developer\|[^|]+\|GET /v1/agents/identities 403$", "unassigned (FX-C P1-18?)",
      "the shell's agent-face resolver needs agent_passport:read; a custom role without it 403s on every page"),
-    (r"^http-error\|developer\|(setup|/v2/settings)\|GET /v1/(entitlements/sources|entitlement-connection-sessions) 403$",
+    (r"^http-error\|developer\|(setup|/v2/settings|skills)\|GET /v1/(entitlements/sources|entitlement-connection-sessions) 403$",
      "unassigned (FX-C P1-18?)", "Setup fetches entitlements (entitlement:read) for a role that may open setup"),
-    (r"^http-error\|developer\|(delivery_workflows|/v2/boss)\|GET /api/(deployment-targets|deployment-hosts|model-routes) 403$",
+    (r"^http-error\|developer\|(delivery_workflows|/v2/boss|workforce|/v2/timeline)\|GET /api/(deployment-targets|deployment-hosts|model-routes) 403$",
      "unassigned (FX-C P1-18?)", "Workflows fetches infra/model routes the developer role does not hold"),
 ]
 
@@ -91,6 +91,15 @@ BENIGN: list[tuple[str, str]] = [
      "readonly_post: /v1/delivery-workflows/check and /wire are @permit(workflow:read, readonly_post=True)"),
     (r"^mutation-2xx\|(viewer|auditor)\|org :: Export\|server-action /$",
      "a read: exportPackAction returns the pack's YAML (app/actions.ts exportPackYaml)"),
+    # Triaged by the lead after the final run:
+    (r"^mutation-2xx\|(viewer|auditor)\|code_tasks :: [^|]*\|POST /api/improve$",
+     "self-service, held: opening a build shows the rate-it card, which records improve op "
+     "prompt_shown -> POST /v1/feedback/prompts/shown, permit feedback:submit (Viewer and Auditor hold it)"),
+    (r"^mutation-2xx\|(viewer|auditor)\|ops :: Run merge check\|server-action /$",
+     "readonly_post: mergeCheckAction -> POST /v1/factory/merge-check is "
+     "@permit(code_task:read, readonly_post=True) and only evaluates the gate"),
+    (r"^mutation-2xx\|(viewer|auditor)\|processes :: [^|]*\|server-action /$",
+     "a read: opening a process row loads its view through a server action (same as on page load)"),
 ]
 
 
