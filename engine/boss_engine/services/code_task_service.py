@@ -564,8 +564,22 @@ def start_code_task(
     if not simulated:
         from boss_engine.identity import consent as _consent
 
+        from boss_engine.identity import runs as _identity_runs
+
+        builder = (_identity_runs.code_task_builder({"role_key": role}, finalize_ctx)
+                   or _consent.DEFAULT_BUILDER)
+        parent_run = str((finalize_ctx or {}).get("parent_run_id") or "").strip()
+        if parent_run:
+            # A retry keeps the grant its parent ran under (never the re-enqueuer's identity).
+            identity_acting = _consent.carry_retry_authority(
+                connection, parent_run_id=parent_run, new_run_id=run_id, project_id=project_id,
+                role_keys=[builder], permissions=_consent.CODE_TASK_PERMISSIONS,
+                repos=[f"{owner}/{repo}"] if (repo_host or "github") == "github" else [])
+    if not simulated and identity_acting is None:
+        from boss_engine.identity import consent as _consent
+
         identity_acting = _consent.require_authority(
-            org_id=None, project_id=project_id, role_keys=[role or "forge"],
+            org_id=None, project_id=project_id, role_keys=[builder],
             permissions=_consent.CODE_TASK_PERMISSIONS, repos=[f"{owner}/{repo}"] if (repo_host or "github") == "github" else [],
             task=title, run_id=f"run_ct:{run_id}", db=connection)
     if substrate:  # per-run substrate override (retry fallback: microvm infra-failure -> local)
@@ -1614,6 +1628,9 @@ def retry_code_task(
                           # Carried across every attempt: a retry is the same outcome, and a
                           # console that loses that shows one app as several.
                           **({"origin": fctx_prev["origin"]} if fctx_prev.get("origin") else {}),
+                          # The same BUILDER across every attempt (runs.code_task_builder): the
+                          # agent the parent ran as, which the carried grant names.
+                          **({"agent": fctx_prev["agent"]} if fctx_prev.get("agent") else {}),
                           # Same app across every attempt; see start_followup_task.
                           "app_id": (fctx_prev.get("app_id") or fctx_prev.get("root_run_id")
                                      or run_id),
@@ -2300,7 +2317,8 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
             try:
                 identity_run = identity_runs.start_code_task_run(
                     engine, task_run_id=run_id, project_id=project_id, owner=owner, repo=repo,
-                    role_key=spec.get("role_key"), job_id=fctx.get("created_by_job_id"))
+                    role_key=identity_runs.code_task_builder(spec, fctx),
+                    job_id=fctx.get("created_by_job_id"))
             except Exception as exc:  # noqa: BLE001 — refused authority fails the build, never widens
                 raise RuntimeError(f"authority refused: {getattr(exc, 'reason', None) or type(exc).__name__}") from exc
             if identity_run is not None:
