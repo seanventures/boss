@@ -1494,15 +1494,6 @@ async def lifespan(_: FastAPI):
     except Exception as exc:  # noqa: BLE001 — never block startup on host care
         print(f"[lifespan] system threads not started: {exc}")
     _warm_read_paths()
-    # IDENTITY (S1-3): an install with no Owner prints its one-hour claim link once at boot. The
-    # token rides in the URL fragment, so it never reaches an access log.
-    try:
-        from boss_engine.identity import claim as _identity_claim
-
-        with begin(engine) as _connection:
-            _identity_claim.announce_setup_link(_connection)
-    except Exception as exc:  # noqa: BLE001 — never block startup on the claim link
-        print(f"[identity] claim link not announced: {type(exc).__name__}")
     # IDENTITY VAULT AND SIGNING KEYS (A53, §7.8): register the master key's check value (or refuse
     # a key that does not match the registered one — never decrypt with a wrong key), then make
     # sure the run-token and actor signing keys exist, so the first delegated run can be minted.
@@ -1544,6 +1535,25 @@ async def lifespan(_: FastAPI):
     except Exception as exc:  # noqa: BLE001 — e.g. identity tables not migrated yet
         print(f"[identity] VAULT NOT READY: {type(exc).__name__}: {exc}. Delegated runs, TOTP "
               "and connected accounts are unavailable until the master key is fixed.", flush=True)
+    # THE SERVER KEY (CSRF, hashed identifiers, rate limits) must exist before anything below uses it.
+    # It comes from BOSS_IDENTITY_SERVER_KEY or the vault master key, which vault.boot just created
+    # on a first compose install. Neither: say exactly what to set (identity refuses to sign anyone
+    # in on a per-process key) — after the vault, so a first install never trips on it.
+    try:
+        from boss_engine.identity.authn_support import ServerKeyMissing, server_key as _server_key
+
+        _server_key()
+    except ServerKeyMissing as exc:
+        print(f"[identity] NO SERVER KEY: {exc}", flush=True)
+    # IDENTITY (S1-3): an install with no Owner prints its one-hour claim link once at boot. The
+    # token rides in the URL fragment, so it never reaches an access log.
+    try:
+        from boss_engine.identity import claim as _identity_claim
+
+        with begin(engine) as _connection:
+            _identity_claim.announce_setup_link(_connection)
+    except Exception as exc:  # noqa: BLE001 — never block startup on the claim link
+        print(f"[identity] claim link not announced: {type(exc).__name__}")
     yield
 
 

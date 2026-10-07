@@ -199,10 +199,14 @@ services:
       BOSS_COMMUNITY_SECRET_STORE: ${BOSS_COMMUNITY_SECRET_STORE:-}
       BOSS_KMS_MASTER_KEY: ${BOSS_KMS_MASTER_KEY:-}
       # BOSS IDENTITY (docs/product/IDENTITY.md). The vault's key-encryption key lives in a file
-      # on its own volume (never in Postgres, so a database dump is not a key compromise); the
-      # API creates it on first boot when it is absent, and api and worker share it. The
-      # server key (CSRF, hashed identifiers) is derived from it unless set. Back this file up
-      # with the database: without it, stored TOTP secrets and connections cannot be decrypted.
+      # on its own volume (never in Postgres, so a database dump is not a key compromise). The API
+      # creates it ONCE, at the first boot of an EMPTY vault (a fresh install, or an upgrade from
+      # a release without identity), and never again: a vault that has data and no matching key
+      # refuses to start. api, worker and egress share it. BOSS_IDENTITY_SERVER_KEY (CSRF, hashed
+      # identifiers, rate limits) is derived from it unless you set one; identity never runs on a
+      # per-process key. Back this volume up with the database: without it, stored TOTP secrets
+      # and connections cannot be decrypted. To bring your own key, create the file (32 random
+      # bytes, base64) before the first start, or set BOSS_MASTER_KEY_AUTOCREATE=0 to require it.
       BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
       BOSS_IDENTITY_SERVER_KEY: ${BOSS_IDENTITY_SERVER_KEY:-}
       BOSS_AUTHZ_MODE: ${BOSS_AUTHZ_MODE:-enforce}
@@ -358,10 +362,14 @@ services:
       BOSS_COMMUNITY_SECRET_STORE: ${BOSS_COMMUNITY_SECRET_STORE:-}
       BOSS_KMS_MASTER_KEY: ${BOSS_KMS_MASTER_KEY:-}
       # BOSS IDENTITY (docs/product/IDENTITY.md). The vault's key-encryption key lives in a file
-      # on its own volume (never in Postgres, so a database dump is not a key compromise); the
-      # API creates it on first boot when it is absent, and api and worker share it. The
-      # server key (CSRF, hashed identifiers) is derived from it unless set. Back this file up
-      # with the database: without it, stored TOTP secrets and connections cannot be decrypted.
+      # on its own volume (never in Postgres, so a database dump is not a key compromise). The API
+      # creates it ONCE, at the first boot of an EMPTY vault (a fresh install, or an upgrade from
+      # a release without identity), and never again: a vault that has data and no matching key
+      # refuses to start. api, worker and egress share it. BOSS_IDENTITY_SERVER_KEY (CSRF, hashed
+      # identifiers, rate limits) is derived from it unless you set one; identity never runs on a
+      # per-process key. Back this volume up with the database: without it, stored TOTP secrets
+      # and connections cannot be decrypted. To bring your own key, create the file (32 random
+      # bytes, base64) before the first start, or set BOSS_MASTER_KEY_AUTOCREATE=0 to require it.
       BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
       BOSS_IDENTITY_SERVER_KEY: ${BOSS_IDENTITY_SERVER_KEY:-}
       BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
