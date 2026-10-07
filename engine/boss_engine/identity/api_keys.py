@@ -271,9 +271,18 @@ def rotate(db: Any, *, actor: AuthContext, key_id: str, owner: Any, grace: str =
     refused. Both are listed during the overlap (§5.3)."""
     if grace not in GRACE_CHOICES:
         raise KeyRefused("invalid_grace", 422, {"choices": sorted(GRACE_CHOICES)})
+    # Locked: two concurrent rotations of one key cannot both pass the checks below.
+    db.execute(text("SELECT 1 FROM identity_api_credentials WHERE id = :id FOR UPDATE"), {"id": key_id})
     old = get(db, key_id)
     if old is None or old.principal_id != owner.id or old.revoked_at is not None:
         raise KeyRefused("not_found", 404)
+    now = utcnow()
+    if old.grace_until is not None:
+        # M4: a key already rotated (in its grace window, or past it) is never rotated again, so
+        # the grace window can neither be extended nor restarted; rotate its successor instead.
+        raise KeyRefused("already_rotated", 409)
+    if old.suspended_at is not None or (old.expires_at is not None and old.expires_at <= now):
+        raise KeyRefused("key_not_active", 409)
     created = create(db, creator=actor, owner=owner, kind=old.kind, name=old.name, scopes=old.scopes,
                      project_ids=old.project_ids, cidrs=old.cidrs, rotated_from=old.id,
                      expires_in_days=None if old.expires_at else 0)

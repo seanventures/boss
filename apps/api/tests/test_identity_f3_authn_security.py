@@ -438,3 +438,33 @@ def test_m2_mail_sign_in_and_reset_need_a_verified_address(world, engine):
     r = fresh_client().post("/v1/auth/password/forgot", json={"email": "unverified@example.test"}, headers=HEADERS)
     assert r.status_code == 202
     assert world.mail == []
+
+
+# ---- M4: no rotation of a key in its grace window or expired; grace never extends -----------------
+
+def test_m4_a_key_in_grace_or_expired_cannot_be_rotated_again(world, engine):
+    from apps.api.tests.identity_s1_world import promote_fresh_mfa
+
+    make_user(engine, "keys@example.test", role="owner")
+    client = fresh_client()
+    assert sign_in(client, "keys@example.test").status_code == 200
+    promote_fresh_mfa(engine, client.cookies.get(authn.SESSION_COOKIE))
+    made = client.post("/v1/identity/me/api-keys", json={"name": "ci", "scopes": ["user:read"]},
+                       headers=_me_csrf(client))
+    assert made.status_code == 201, made.text
+    old = made.json()["key"]["id"]
+    first = client.post(f"/v1/identity/me/api-keys/{old}/rotate", json={"grace": "7d"}, headers=_me_csrf(client))
+    assert first.status_code == 201, first.text
+    with engine.begin() as db:
+        grace = db.execute(text("SELECT grace_until FROM identity_api_credentials WHERE id = :i"), {"i": old}).scalar()
+    again = client.post(f"/v1/identity/me/api-keys/{old}/rotate", json={"grace": "7d"}, headers=_me_csrf(client))
+    assert again.status_code == 409 and again.json()["error"] == "already_rotated", again.text
+    with engine.begin() as db:
+        assert db.execute(text("SELECT grace_until FROM identity_api_credentials WHERE id = :i"),
+                          {"i": old}).scalar() == grace          # the grace window did not move
+    new = first.json()["key"]["id"]
+    with engine.begin() as db:
+        db.execute(text("UPDATE identity_api_credentials SET expires_at = now() - interval '1 second' "
+                        "WHERE id = :i"), {"i": new})
+    expired = client.post(f"/v1/identity/me/api-keys/{new}/rotate", json={"grace": "1h"}, headers=_me_csrf(client))
+    assert expired.status_code == 409 and expired.json()["error"] == "key_not_active", expired.text

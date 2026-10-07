@@ -170,6 +170,8 @@ _CHECK = {  # my check key -> (S4 id, label, fix label, href)
     "legacy_credentials": ("legacy", "Legacy paths", "Retire them", "/identity/sign-in#legacy"),
     "orphans": ("owners", "Owners & sponsors", "Assign owners", "/identity/people"),
     "audit_chain": ("audit", "Audit chain", "Verify now", "/identity/audit?verify=1"),
+    # F3/H2: without a bound public origin BOSS sends no emailed links and offers no passkeys/SSO
+    "public_origin": ("origin", "Public URL", "Set BOSS_PUBLIC_URL", "/identity/sign-in#public-url"),
 }
 _LEGACY_LABEL = {
     "shared_password": ("legacy_password", "Shared console password"),
