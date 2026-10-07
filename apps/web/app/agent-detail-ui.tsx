@@ -243,9 +243,9 @@ export function AgentDetail({ projectId, roleKey, actor, onClose, onDeleted, stu
             own Ask, below: one door for one action. */}
         {detail?.registered ? (
           <span className="ag-head-acts" style={{ marginLeft: "auto" }}>
-            <button type="button" className="ag-btn" data-testid="agent-detail-plan"
+            <GatedButton permission="meeting:convene" type="button" className="ag-btn" data-testid="agent-detail-plan"
                     title="Discuss a piece of work, then start it"
-                    onClick={() => openPlan(roleKey, { from: "passport" })}>Plan it</button>
+                    onClick={() => openPlan(roleKey, { from: "passport" })}>Plan it</GatedButton>
           </span>
         ) : null}
       </header>
