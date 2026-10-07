@@ -89,7 +89,8 @@ def test_14_a_workflow_runs_this_run_grant_ends_with_the_run(env):
     g = env.grant(agents=(env.forge,), children=(), task_run_id="run_wf:wfr_done")
     with env.db() as c:
         c.execute(text("INSERT INTO workflow_runs (id, status) VALUES ('wfr_done', 'running')"))
-    assert maintenance.end_finished_workflow_grants(db=env.engine.connect()) == []
+    with env.engine.connect() as c:            # closed: an open read would block the teardown TRUNCATE
+        assert maintenance.end_finished_workflow_grants(db=c) == []
     with env.db() as c:
         c.execute(text("UPDATE workflow_runs SET status = 'completed' WHERE id = 'wfr_done'"))
     with env.db() as c:

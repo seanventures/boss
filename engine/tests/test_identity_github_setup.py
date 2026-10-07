@@ -354,8 +354,9 @@ def test_every_github_setup_route_is_declared_and_changes_need_github_connect():
         assert access is not None, route.path
         if route.path.endswith(("/created", "/installed")):
             assert type(access).__name__ == "Public"
-        elif route.path == "/v1/identity/github":
-            assert access.permission == "github:read"
+        elif route.methods == {"GET"}:
+            # a read (the status, the installation picker) needs only github:read
+            assert access.permission == "github:read", route.path
         else:
             assert access.permission == "github:connect", route.path
 

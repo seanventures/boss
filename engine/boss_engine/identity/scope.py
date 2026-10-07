@@ -180,4 +180,7 @@ def resolve(spec: ScopeSpec, values: RequestValues, *, org_id: str, db: Any = No
     found = loader(db, value)
     if found is None or found[0] != org_id:
         raise ScopeNotFound(f"{spec.object_kind} {value!r}")
+    if found[1] is None:
+        # An object that lives at org level (an org-wide access request): decided at the org.
+        return ResolvedScope(ScopeKind.ORG, org_id, None, spec.object_kind, value)
     return ResolvedScope.in_project(org_id, found[1], object_kind=spec.object_kind, object_id=value)
