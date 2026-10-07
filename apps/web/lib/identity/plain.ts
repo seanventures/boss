@@ -18,6 +18,8 @@ export function plainText(text: string | null | undefined): string {
     .replace(/ceiling\(([^)]+)\)/gi, "$1's limit")
     .replace(/\bceilings?\b/gi, (w) => (w[0] === "C" ? "Limit" : "limit") + (w.endsWith("s") ? "s" : ""))
     .replace(/∩/g, "within")
+    .replace(/\bDPoP\b/g, "key-bound token")
+    .replace(/\bmax depth\b/gi, "deepest allowed")
     .replace(/∪/g, "or")
     .replace(/\bmay_act\b/g, "may act for")
     .replace(/\bjti\b/gi, "token")

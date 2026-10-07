@@ -34,15 +34,19 @@ export function needsWords(p: string): string {
   return `Needs “${permissionName(p)}” · ${askWho(p)}`;
 }
 
-/** "access_role.updated" → "Access role updated"; "sso.provider.created" → "Sign-in provider created". */
+/** "access_role.updated" → "Access role updated"; "auth.login.failed" → "Sign-in failed". */
 const EVENT_NOUNS: Record<string, string> = {
-  sso: "Sign-in", authz: "Access", auth: "Sign-in", authn: "Sign-in", scim: "Directory sync", mfa: "Second factor", api_key: "API key", access_role: "Access role",
-  role_binding: "Access", jit: "Just-in-time", idp: "Sign-in provider", provider: "provider", totp: "authenticator app",
-  webauthn: "passkey", oidc: "single sign-on", saml: "single sign-on",
+  auth: "", authn: "", authz: "access", sso: "single sign-on", scim: "directory sync", mfa: "second factor",
+  api_key: "API key", access_role: "access role", role_binding: "access", idp: "sign-in provider",
+  provider: "provider", totp: "authenticator app", webauthn: "passkey", oidc: "single sign-on", saml: "single sign-on",
+  login: "sign-in", step_up: "identity confirmed", egress: "outbound call", vault: "", jit: "just-in-time",
+  passport: "Passport", ceiling_changed: "access limit changed", shadow_deny: "would be denied", new_device: "new device",
+  used_from_new_ip: "used from a new address", email_code: "email code", magic_link: "email link", pr_opened: "PR opened",
 };
 export function eventWords(type: string): string {
-  const parts = type.split(".").filter(Boolean).map((p) => EVENT_NOUNS[p] ?? p.replace(/_/g, " "));
-  return humanise(parts.join(" ").replace(/\s+/g, " "));
+  const parts = type.split(".").filter(Boolean).map((p) => (p in EVENT_NOUNS ? EVENT_NOUNS[p] : p.replace(/_/g, " "))).filter(Boolean);
+  const s = parts.join(" ").replace(/\s+/g, " ").trim();
+  return s ? s[0].toUpperCase() + s.slice(1) : humanise(type);
 }
 
 /** "identity_unavailable" → "Identity unavailable". For a code nobody mapped; prefer a sentence. */
@@ -66,4 +70,27 @@ export function loadFailureWords(what: string, status: number, code: string, per
 
 function cap(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+/** An approval seat's key as a title: "release_manager" → "Release manager", "ceo" → "CEO". */
+const SEATS: Record<string, string> = { ceo: "CEO", cto: "CTO", cao: "CAO", cfo: "CFO", vp_agents: "VP of Agents", release_manager: "Release manager" };
+export function seatName(key: string): string {
+  return SEATS[key] ?? humanise(key);
+}
+
+/** How a session signed in, in words: "pwd" → "password", "sso:okta" → "Okta SSO". */
+const METHODS: Record<string, string> = {
+  pwd: "password", password: "password", totp: "authenticator app", passkey: "passkey", webauthn: "passkey", hwk: "security key",
+  recovery: "recovery code", email_code: "email code", magic_link: "email link", otp: "one-time code", mfa: "second factor",
+  network: "trusted network", setup_token: "setup link", legacy_password: "shared password",
+};
+export function methodWords(m: string): string {
+  // `sso:<provider id>`: an id is not a name, so it reads "SSO" unless it is a plain word.
+  if (m.startsWith("sso:")) { const n = m.slice(4); return /^[a-z]+$/.test(n) ? `${n[0].toUpperCase()}${n.slice(1)} SSO` : "SSO"; }
+  return METHODS[m] ?? humanise(m).toLowerCase();
+}
+
+/** "1 key", "3 keys". */
+export function keyCount(n: number): string {
+  return `${n} ${n === 1 ? "key" : "keys"}`;
 }

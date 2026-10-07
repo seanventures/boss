@@ -17,7 +17,7 @@ const CODES = [
   "invalid_provider", "issuer_in_use", "field_not_allowed", "name_required", "invalid_email", "email_in_use",
   "unknown_permission", "role_exists", "role_in_use", "group_exists", "revoked_is_terminal", "too_long",
   "no_second_factor", "mfa_enrolment_required", "enrolment_grant_required", "invalid_code", "code_invalid",
-  "unauthenticated", "forbidden", "discovery_failed", "jwks_failed", "not_invited", "needs_reauth",
+  "unauthenticated", "forbidden", "discovery_failed", "jwks_failed", "not_invited", "needs_reauth", "release_manager", "vp_agents",
 ];
 const CODE = new RegExp(`(^|[^\\w])(${CODES.join("|")})(?!\\w)`);
 const EVENT = /(^|[^\w.@/])((user|group|access_role|role_binding|api_key|service_account|session|delegation|passport|agent|sso|scim|policy|audit|access|mfa|passkey|login|connection|token|invitation|identity)\.[a-z_]+(\.[a-z_]+)?)(?![\w@/])/;
