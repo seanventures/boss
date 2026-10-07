@@ -340,7 +340,6 @@ class Walk:
                     "GitHub" in sheet.split("For 30 days", 1)[-1] and "didn't work" not in sheet,
                     expect="an explanation: connect your GitHub / you lack push on fxd-org/fxd-build-app",
                     actual=sheet[sheet.find("For this run only"):][:240],
-                    known="FX-C P1-12 (real error states, no raw codes): the sheet shows only 'That didn't work'",
                     repro="seed-owner (no own GitHub connection) › New project › Fast fix › Start › For this run only: "
                           "POST /v1/identity/me/delegations answers 403 github_access_lacking; the sheet says 'That didn't work'")
             if self.my_github_connected():
@@ -497,8 +496,7 @@ class Walk:
                 repro="see 'the Fast fix build's builder resolves to an agent with a Passport'" if "passport" in err else "")
         j.check("a refused build tells the person why in words (no raw 500 / internal URL)",
                 not any(x in f"{wf} {err}" for x in ("500 Internal Server Error", "api:8000")),
-                expect="e.g. 'The builder has no agent identity; …'", actual=f"code task: {err[:160]} | run: {wf[:160]}",
-                known="FX-C P1-12 (real error states, no raw codes)")
+                expect="e.g. 'The builder has no agent identity; …'", actual=f"code task: {err[:160]} | run: {wf[:160]}")
         self.state["build_reached"] = bool(crun) and not last.startswith("failed")
         tok = self.psql("SELECT string_agg(run_id || ' ' || aud || CASE WHEN revoked_at IS NULL THEN ' live' "
                         "ELSE ' revoked' END, ', ') FROM identity_run_credentials WHERE grant_id = :'g'", g=grant)
@@ -552,9 +550,13 @@ class Walk:
                 expect="remotes seen, none with user:pass@", actual=rems[:4])
         probe = w.get("probe") or {}
         main = probe.get("main") or {}
-        refused = main.get("rc") not in (0, None)
+        refused = main.get("rc") not in (0, None) and bool(probe.get("probe_commit"))
         j.check("a push to main from inside the run (its uid, its env, its checkout) is refused", refused,
-                expect="git push HEAD:main fails (egress refuses the ref)", actual=probe)
+                expect="git push <new commit>:main fails (egress refuses the ref)", actual=probe)
+        mainlog = self.in_container("fakegh", ["git", "--git-dir", f"/srv/fakegh/git/{REPO}.git", "log", "--format=%s",
+                                               "-20", "main"]).stdout
+        j.check("…and GitHub's main never received the probe commit", "fxd probe" not in mainlog,
+                expect="no 'fxd probe' commit on main", actual=mainlog[:200])
         self.state["probe"] = probe
 
     # ---- 5. PR + Factory ----------------------------------------------------------------------------
@@ -583,17 +585,36 @@ class Walk:
                                             f"main..{pr['head']}"]).stdout
         has = "On-behalf-of:" in msgs and "Boss-Lineage:" in msgs
         j.check("the PR's commits carry BOSS's trailers (On-behalf-of + Boss-Lineage)", has,
-                expect="On-behalf-of: Seed Owner <…> / Boss-Lineage: dlg_…/run_…", actual=msgs[:300],
-                known="FX-B P1-14 (commit_trailers on PRs: github_app.commit_trailers has no caller)")
+                expect="On-behalf-of: Seed Owner <…> / Boss-Lineage: dlg_…/run_…", actual=msgs[:300])
+        self.build_finished()
         self.factory_view(page, pr)
+
+    def build_finished(self) -> None:
+        """The PR opens before the build ends (the serve check, the artifacts): it must END well too.
+        Round 3 found every fresh install's first build failing AFTER its PR, on a root-owned
+        artifact directory — a walk that stopped at the PR could not see it."""
+        crun = self.state.get("code_task_run")
+        if not crun:
+            return
+        final = K.wait_for(lambda: (lambda st: st if st.split("|")[0] in (
+            "completed", "succeeded", "failed", "cancelled", "blocked", "awaiting_review", "done", "error") else None)(
+            self.psql("SELECT status || '|' || coalesce(phase,'') || '|' || left(coalesce(error::text,''), 200) "
+                      "FROM code_task_runs WHERE id = :'c'", c=crun) or ""), timeout_s=300, every_s=3) or ""
+        self.state["code_task_final"] = final
+        self.j.check("the build's code task finishes without failing (after its PR)",
+                     bool(final) and final.split("|")[0] not in ("failed", "error", "cancelled"),
+                     expect="completed / awaiting_review", actual=final or "still running after 300 s")
 
     def factory_view(self, page: Any, pr: Optional[dict[str, Any]]) -> None:
         j = self.j
-        page.goto(f"{self.web}/?area=factory", wait_until="domcontentloaded", timeout=90000)
+        # The rail's "Factory" is the code_tasks area (?area=factory now lands there too).
+        page.goto(f"{self.web}/?area=code_tasks", wait_until="domcontentloaded", timeout=90000)
         K.settle(page)
         page.wait_for_timeout(2500)
         self.shot(page, "factory")
         txt = K.body_text(page, 20000)
+        j.check("the console does not say the control plane is offline while it answers",
+                "Control plane offline" not in txt, expect="Control plane online", actual=txt[:300])
         j.check("the Factory shows the build", self.state["stamp"] in txt,
                 expect=f"the build titled fxd-build-{self.state['stamp']}…", actual=txt[:500])
         if pr is not None:
