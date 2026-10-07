@@ -8,6 +8,8 @@
  */
 import { useEffect, useState } from "react";
 
+import { formatDateTime } from "./datetime";
+
 export type LocalTime = {
   /** True once mounted in the browser; before that every formatter answers "". */
   ready: boolean;
@@ -42,6 +44,34 @@ export const NOT_YET: LocalTime = { ready: false, hhmm: () => "", day: () => "",
 
 export function useLocalTime(): LocalTime {
   const [ready, setReady] = useState(false);
-  useEffect(() => { setReady(true); }, []);
+  useEffect(() => { markHydrated(); setReady(true); }, []);
   return ready ? LOCAL : NOT_YET;
+}
+
+/**
+ * THE FULL LOCAL TIME FOR A TOOLTIP, FROM CODE THAT IS NOT A HOOK (round 2 triage). A `title=` or
+ * a helper called at render painted `new Date(x).toLocaleString()` on the server in ITS zone and
+ * locale, and the browser disagreed on hydration. Until the page has hydrated (a mount effect
+ * here, useLocalTime or useNow, has run) this answers the deterministic UTC text the server
+ * painted; after it, the viewer's own local text. The server never marks itself hydrated.
+ */
+let hydrated = false;
+export function markHydrated(): void {
+  if (typeof window !== "undefined") hydrated = true;
+}
+export function localFull(v: number | string | null | undefined): string {
+  if (hydrated && typeof window !== "undefined") return LOCAL.full(v);
+  const ms = typeof v === "number" ? v : v ? Date.parse(v) : NaN;
+  return Number.isFinite(ms) ? formatDateTime(new Date(ms).toISOString(), "") : "";
+}
+
+/** A date or time in the viewer's zone and locale with `options`, hydration-safe like localFull:
+ *  pinned to en-US in UTC until the page has hydrated, the viewer's own after. */
+export function localWith(v: number | string | null | undefined, options: Intl.DateTimeFormatOptions): string {
+  const ms = typeof v === "number" ? v : v ? Date.parse(v) : NaN;
+  if (!Number.isFinite(ms)) return "";
+  const d = new Date(ms);
+  return hydrated && typeof window !== "undefined"
+    ? d.toLocaleString([], options)
+    : d.toLocaleString("en-US", { ...options, timeZone: "UTC" });
 }

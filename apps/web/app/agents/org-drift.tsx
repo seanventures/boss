@@ -14,12 +14,14 @@ import React, { useState } from "react";
 
 import type { OrgDrift, OrgUnplannedPair } from "../../lib/agents-org-board";
 import { nameOf } from "./org-shared";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 export function PlanVsWork({ drift, busy, onPlan, declared = {} }: {
   drift: OrgDrift; busy: boolean; onPlan: (child: string, parent: string) => void;
   /** The plan as it stands: `Plan it` says which line it replaces before it saves (walk D14). */
   declared?: Record<string, { reports_to?: string | null } | undefined>;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   if (!drift.plannedUnused.length && !drift.unplannedPairs.length) return null;
   return (
     <section className="org-drift" data-testid="org-drift" aria-labelledby="org-drift-title">
@@ -55,6 +57,7 @@ export function PlanVsWork({ drift, busy, onPlan, declared = {} }: {
 function PairRow({ pair, busy, onPlan, declared }: { pair: OrgUnplannedPair; busy: boolean;
                                                       onPlan: (child: string, parent: string) => void;
                                                       declared: Record<string, { reports_to?: string | null } | undefined> }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const [parent, setParent] = useState(pair.parent);
   const child = parent === pair.a ? pair.b : pair.a;
   const current = declared[child]?.reports_to;

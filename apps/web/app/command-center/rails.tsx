@@ -22,6 +22,7 @@ import { AgentAvatar } from "../agent-avatar";
 import { nameOf } from "../agents/run-face";
 import { addFeaturePatch } from "../../lib/compose-links";
 import { Go, dollars } from "./hero";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 /** One scrolling row. The › button scrolls a card's width; it hides at the end. */
 export function Rail({ label, children, testId, resetKey }: {
@@ -195,6 +196,7 @@ export function filterApps(apps: CcApp[], f: ShelfFilter, needOf: (a: CcApp) => 
 export function AppsShelf({ apps, attention = [], orgId }: {
   apps: CcApp[] | null; attention?: AttentionItem[]; orgId?: string | null;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const [filter, setFilter] = useState<ShelfFilter>("all");
   if (apps && apps.length === 0) return null;
   const needOf = (a: CcApp) => appNeed(a, attention);

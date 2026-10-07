@@ -12,6 +12,7 @@ import { mapActivityLog } from "../../lib/activity-log";
 import { parseToolCalls, type ToolCalls } from "../../lib/agents-live-board";
 import { stepLogSentence } from "../workflows/step-run";
 import { declareAction } from "../../lib/identity/guarded-action";
+import { apiWrite } from "../../lib/api-write";
 
 export type Posted<T = Record<string, unknown>> = { ok: boolean; data?: T; error?: string; status?: number };
 
@@ -27,7 +28,8 @@ async function said(r: Response): Promise<string> {
 
 export async function postJson<T = Record<string, unknown>>(path: string, body: Record<string, unknown>): Promise<Posted<T>> {
   try {
-    const r = await fetch(path, {
+    // Through the write path (lib/api-write.ts): one press, one effect, keyed for the API.
+    const r = await apiWrite(path, {
       method: "POST", cache: "no-store",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });

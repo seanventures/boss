@@ -15,6 +15,7 @@ import { fetchAct, type ActDetail } from "../agents/run-acts";
 import { nameOf, RunFace } from "../agents/run-face";
 import { consoleHref } from "../url-intent";
 import type { AreaId } from "../../lib/area-ids";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 /**
  * A link to another console area that KEEPS WHO YOU ARE (`org=`). The cockpit built these from
@@ -42,6 +43,7 @@ export const BOSS_TIP = "BOSS machinery. No agent at this station.";
 
 /** Who stands at a station, exactly as the server said: an agent, a hollow next face, BOSS, You, or nobody. */
 export function StationFaceView({ station, size = 24, still }: { station: Station; size?: 16 | 20 | 24 | 32 | 48; still?: boolean }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const state = still && (station.status === "working" || station.status === "needs_you") ? "idle" : faceState(station.status);
   if (station.status === "waiting") {
     return (

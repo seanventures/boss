@@ -22,6 +22,7 @@ import { showToast } from "../../client-forms";
 import { JsonView } from "../json-view";
 import { ErrorState, type ReadFailure } from "../../../components/identity/states";
 import { eventWords, REQUESTS_PATH } from "../../../lib/identity/words";
+import { formatUtcStamp } from "../../../lib/datetime";
 import { plainText } from "../../../lib/identity/plain";
 import { EMPTY_FILTERS, EVENT_GROUPS, apiQuery, inGroup, parseSearch, queryFrom, searchText, type AuditFilters, type EventGroup } from "./audit-query";
 
@@ -98,7 +99,7 @@ function Drawer({ e, onFilter }: { e: AuditEvent; onFilter: (f: Partial<AuditFil
           <a className="idn-link" href={REQUESTS_PATH} title="Grant or decline it in Access requests" data-testid="audit-review-request">Review request</a>
         ) : null}
         <div className="idn-row idn-dim idn-small">
-          <span title={requestId ? `Request ${requestId}` : undefined}>{new Date(e.at).toISOString().replace("T", " ").slice(0, 23)} UTC</span>
+          <span title={requestId ? `Request ${requestId}` : undefined}>{formatUtcStamp(e.at)} UTC</span>
         </div>
       </div>
       <div className="idn-dr-b">
@@ -192,7 +193,7 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
   const load = useCallback(async (f: AuditFilters, view = { group, kind, rangeMs }, cursor: string | null = null) => {
     setLoading(true);
     try {
-      const next = await idGet<AuditPage>(`/v1/identity/audit?${apiQuery(f, view, Date.now(), cursor)}`);
+      const next = await idGet<AuditPage>(`/v1/identity/audit?${apiQuery(f, view, new Date().getTime(), cursor)}`);
       // "Load more" appends the older page; a new filter replaces it.
       setPage((p) => (cursor && p ? { ...next, events: [...p.events, ...next.events] } : next));
       try {

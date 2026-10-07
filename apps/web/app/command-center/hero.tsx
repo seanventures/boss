@@ -21,6 +21,7 @@ import type { SystemDot } from "../../lib/command-center-view";
 import { AgentAvatar } from "../agent-avatar";
 import { nameOf } from "../agents/run-face";
 import { linkTo, navigate, plainClick } from "../agents/live-util";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 /** Each team's hue (the approved look). Unknown teams take the accent. */
 export const TEAM_HUE: Record<string, string> = {
@@ -127,6 +128,7 @@ export function TeamGrid({ teams, agents, waiting, working: live, orgId, still }
   /** Motion off: faces hold still. */
   still: boolean;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const byKey = new Map(agents.map((a) => [a.roleKey, a]));
   const [open, setOpen] = useState<{ key: string; at: DOMRect } | null>(null);
   // ONE SOURCE (re-check R6): the board's own agent state, which the server sets from open
@@ -206,6 +208,7 @@ export function TeamGrid({ teams, agents, waiting, working: live, orgId, still }
 function FaceCard({ agent, word, orgId, at, onClose }: {
   agent: BoardAgent; word: string; orgId?: string | null; at: DOMRect; onClose: () => void;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const outside = (e: PointerEvent) => {

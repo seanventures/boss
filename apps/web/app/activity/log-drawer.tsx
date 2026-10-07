@@ -187,7 +187,7 @@ export function LogDrawer({ item, labels, gone, projectId, viewer, onClose, onFi
             <section className="lx-body-sec">
               {item.data.truncated === true ? (
                 <span className="lx-clip" title="A clipped line is not a short one" data-testid="lx-clip">
-                  Clipped when stored · {Number(item.data.content_bytes ?? 0).toLocaleString()} bytes captured
+                  Clipped when stored · {Number(item.data.content_bytes ?? 0).toLocaleString("en-US")} bytes captured
                 </span>
               ) : null}
               <pre className="lx-text" data-user-text data-testid="lx-body">{item.body}</pre>

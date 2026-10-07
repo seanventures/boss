@@ -14,6 +14,8 @@ import { identityOf } from "../../lib/agent-world";
 import type { LiveMap } from "../../lib/agents-live";
 import { TEAM_LABELS } from "../../lib/agents-live-board";
 import { ageWords, openStatusWord, type OrgBoard, type OrgOpenItem } from "../../lib/agents-org-board";
+import { localFull } from "../../lib/local-time";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 /** An agent's short name: its callsign, else its name; an unregistered key, humanised. */
 export function nameOf(roleKey: string): string {
@@ -146,6 +148,7 @@ export function StuckItem({ roleKey, age, ageTip, state, word, label, action, te
   roleKey: string | null; age: string; ageTip?: string; state: string; word: string; label: string;
   action: React.ReactNode; testid?: string;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   return (
     <span className="org-wait" data-testid={testid}>
       <span className="org-wait-head">
@@ -163,7 +166,7 @@ export function StuckItem({ roleKey, age, ageTip, state, word, label, action, te
 export function WaitItem({ item, who = true, testid }: { item: OrgOpenItem; who?: boolean; testid?: string }) {
   return (
     <StuckItem roleKey={who ? item.roleKey : null} age={ageWords(item.since)}
-               ageTip={`Open since ${item.since ? new Date(item.since).toLocaleString() : "unknown"}`}
+               ageTip={`Open since ${item.since ? localFull(item.since) : "unknown"}`}
                state={item.status} word={openStatusWord(item.status)} label={item.label}
                action={<OpenItemLink item={item} />} testid={testid} />
   );

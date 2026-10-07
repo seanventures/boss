@@ -8,6 +8,8 @@
  * Shapes are the API's own (snake_case), typed here once.
  */
 
+import { apiWrite } from "./api-write";
+
 export type Enforced = { word: string; effect_key: string };
 export type Evidence = { word: string; count_7d: number; log: { kind: string } } | null;
 export type Control = {
@@ -132,7 +134,7 @@ export type WriteResult =
 /** One Govern write. `ifMatch` is the version the screen showed; a stale one comes back 412. */
 export async function governWrite(op: string, body: Record<string, unknown>, ifMatch?: string | null): Promise<WriteResult> {
   try {
-    const r = await fetch("/api/govern", {
+    const r = await apiWrite("/api/govern", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(ifMatch ? { "If-Match": ifMatch } : {}) },
       body: JSON.stringify({ op, ...body }),

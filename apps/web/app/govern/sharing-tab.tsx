@@ -26,6 +26,7 @@ import { usePolledRead } from "../../lib/log-stream";
 import { showToast } from "../client-forms";
 import { ConsentText, HeartbeatFields } from "../improve/consent";
 import "../improve/improve.css";
+import { localFull, localWith } from "../../lib/local-time";
 
 const STATUS: Record<string, { word: string; tone: string }> = {
   sent: { word: "Sent", tone: "green" }, failed: { word: "Failed", tone: "red" },
@@ -37,8 +38,7 @@ const records = (n: number) => `${n} record${n === 1 ? "" : "s"}`;
 
 function whenWords(iso: string | null): string {
   if (!iso) return "";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+  return localWith(iso, { weekday: "short", hour: "2-digit", minute: "2-digit" });
 }
 
 function Toggle({ on, label, disabled, onFlip, testId, tip }: {
@@ -239,7 +239,7 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
             <>
               <span className="im-payload-line">
                 <span title="Uncompressed JSON">{kb(p.bytes_raw)} JSON</span>
-                <span title={`Cut ${new Date(p.cut_at).toLocaleString()}. Later work goes in the next one.`}>Frozen {ago(p.cut_at)}</span>
+                <span title={`Cut ${localFull(p.cut_at)}. Later work goes in the next one.`}>Frozen {ago(p.cut_at)}</span>
                 {preview?.next_due_at && !stop ? <span title="A random time each day; one send a day at most">Sends ~{whenWords(preview.next_due_at)}</span>
                   : stop ? <span className="gv-value-note" title="It is shown and exportable; nothing goes out">Not sent · {locked ? "off" : "no collector"}</span> : null}
                 {Object.keys(p.aggregated ?? {}).length ? <span className="gv-value-note" title="Over the size cap or many runs: sent as counts">Aggregated</span> : null}

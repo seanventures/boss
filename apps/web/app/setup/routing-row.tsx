@@ -22,6 +22,7 @@ import { JobLine } from "./jobs-row";
 import { toast, useBoard } from "./parts";
 import { Tip } from "./pill";
 import { SetupRow } from "./setup-row";
+import { localWith } from "../../lib/local-time";
 
 const TIERS: Tier[] = ["fast", "balanced", "frontier"];
 const TIER_LABEL: Record<Tier, string> = { fast: "Fast", balanced: "Balanced", frontier: "Frontier" };
@@ -214,9 +215,7 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
 
 function Meter({ h }: { h: Routing["headroom"][number] }) {
   const left = h.left == null ? null : Math.round(h.left * 100);
-  const resets = h.resets_at ? new Date(h.resets_at) : null;
-  const when = resets && !Number.isNaN(resets.getTime())
-    ? resets.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : null;
+  const when = localWith(h.resets_at, { weekday: "short", hour: "2-digit", minute: "2-digit" }) || null;
   const tip = `${h.source_label}: ${h.describe}${when ? ` · resets ${when}` : ""}`
     + (h.basis === "estimate" ? " (estimated from calls)" : h.basis === "unknown" ? " (not reported yet)" : "");
   return (

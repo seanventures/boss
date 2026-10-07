@@ -52,6 +52,18 @@ export function formatDateTime(value?: string | null, fallback = "Unknown time")
   return `${month} ${day}, ${year}, ${hours}:${minutes} ${ampm} UTC`;
 }
 
+/** "2026-08-12 01:25:15.648" — a log stamp in UTC, to the millisecond (no zone suffix). */
+export function formatUtcStamp(value?: string | number | null, fallback = ""): string {
+  const ms = typeof value === "number" ? value : value ? Date.parse(value) : NaN;
+  return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 23).replace("T", " ") : fallback;
+}
+
+/** "Aug 12" — month and day in UTC (one locale, so the server and the browser agree). */
+export function formatMonthDay(value?: string | null, fallback = ""): string {
+  const date = parseDate(value);
+  return date ? `${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}` : fallback;
+}
+
 /** "Aug 12, 2026" — calendar day in UTC. */
 export function formatDate(value?: string | null, fallback = "Never"): string {
   const date = parseDate(value);

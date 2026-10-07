@@ -85,6 +85,7 @@ export function WaitGlyph({ size = 24, tip }: { size?: number; tip?: string }) {
 }
 
 function Face({ s, size, still, viewer }: { s: Station; size: 16 | 24 | 32; still: boolean; viewer: string }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const state = still && (s.status === "working" || s.status === "needs_you") ? "idle" : AVATAR[s.status];
   if (s.status === "waiting" && s.face !== "agent") return <WaitGlyph size={size} tip={s.tip} />;
   if (s.key === "review" && s.seats.length > 1) {

@@ -25,6 +25,7 @@ import { groupRunsIntoApps } from "../app-grouping";
 import { appIdentity } from "../app-identity";
 import { previewWebHref } from "../../lib/browser-links";
 import { areaHref, costWord } from "./cockpit-util";
+import { formatMonthDay } from "../../lib/datetime";
 
 /** Where "＋ Add a feature" goes: New project, in add mode, with this app chosen. */
 export function addFeatureHref(appKey: string, previewId?: string | null): string {
@@ -172,6 +173,7 @@ const CREW_MAX = 5;
 
 /** The agents who built it, side by side — never overlapped into a smudge — each named. */
 function Crew({ roleKeys }: { roleKeys: string[] }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const shown = roleKeys.slice(0, CREW_MAX);
   const rest = roleKeys.slice(CREW_MAX);
   if (!shown.length) return <span className="fx-muted" title="No agent has signed work on it yet">—</span>;
@@ -209,8 +211,7 @@ function spendOf(a: { costUsd?: number; included?: boolean }): { text: string; t
 /** A build's date, pinned to one locale (the console renders on the server too). */
 function dayOf(iso?: string): string {
   if (!iso) return "";
-  const d = new Date(iso);
-  return Number.isFinite(d.getTime()) ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }) : "";
+  return formatMonthDay(iso);
 }
 
 /** The stations a build actually reached: never a ring for a station it never ran. */

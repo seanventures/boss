@@ -9,6 +9,7 @@ import React, { type ReactNode } from "react";
 import { ArrowSquareOut, CircleNotch } from "@phosphor-icons/react";
 
 import type { Pill as PillT, Tone } from "../../lib/setup-types";
+import { localWith } from "../../lib/local-time";
 
 /** Text with a tooltip. `data-tip` and `title` both carry it; the copy budget skips them. */
 export function Tip({ tip, children, className, as = "span", testid }: {
@@ -32,7 +33,7 @@ export function localPill<T extends PillT>(pill: T): T {
   if (!pill.at) return pill;
   const when = new Date(pill.at);
   if (Number.isNaN(when.getTime())) return pill;
-  const hhmm = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  const hhmm = localWith(when.getTime(), { hour: "2-digit", minute: "2-digit", hour12: false });
   const swap = (text: string) => text.replace(/\b\d{2}:\d{2}\b/g, hhmm);
   return { ...pill, label: swap(pill.label), tip: swap(pill.tip) };
 }

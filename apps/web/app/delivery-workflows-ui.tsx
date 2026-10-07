@@ -1849,13 +1849,17 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   }, []);
   useEffect(() => {
     const onPop = () => {
-      const asked = new URLSearchParams(window.location.search).get("step");
+      const q = new URLSearchParams(window.location.search);
+      const asked = q.get("step");
+      // Only THIS run's step: `?wfr=<another run>&step=build` names that run's build, not ours.
+      const run_ = q.get("wfr");
+      if (run_ && run_ !== run.id) return;
       if (asked && steps.some((s) => s.step_id === asked)) setPickedState(asked);
     };
     onPop();
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [steps]);
+  }, [steps, run.id]);
   const current = steps.find((s) => s.step_id === picked) ?? initial;
   // A LINK TO ONE STEP LANDS ON THAT STEP (`?wfr=<this run>&step=<id>` — the Log's Step ↗, a
   // step panel's link). It opened on the run's own choice above, so every such link showed

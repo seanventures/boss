@@ -30,7 +30,7 @@ const RUNS_SHOWN = 8;
 
 function count(n: number | undefined, exact: boolean): string {
   if (typeof n !== "number") return "";
-  return `${exact ? "" : "≥"}${n >= 10_000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k` : n.toLocaleString()}`;
+  return `${exact ? "" : "≥"}${n >= 10_000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k` : n.toLocaleString("en-US")}`;
 }
 
 function Section({ id, label, open, onToggle, children }: {

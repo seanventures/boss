@@ -21,6 +21,7 @@ import { emailSignInOffered } from "../../../lib/identity/email-sign-in";
 import { getAssertion, PasskeyCancelled, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../../lib/identity/webauthn";
 import { CodeInput, Face } from "../../../components/identity/kit";
 import { AuthStage, Live, Logo, MethodTabs, ProviderRow, safeNextClient } from "../auth-parts";
+import { localWith } from "../../../lib/local-time";
 
 type Method = "password" | "magic" | "code";
 type Stage =
@@ -53,8 +54,7 @@ const WORDS: Record<string, string> = {
 /** "6 Nov" for the shared password's last day (local time). */
 function shortDate(iso: string | null | undefined): string | null {
   if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  return localWith(iso, { day: "numeric", month: "short" }) || null;
 }
 
 function say(e: unknown): string {
