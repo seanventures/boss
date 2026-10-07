@@ -67,7 +67,6 @@ OTHER_PROJECT = "fxd-other"
 SCENARIOS = ("shared_password", "host_key", "mcp_setup", "sandbox_fence", "upgrade_rollback")
 FENCE_OVERRIDE = K.REPO / "tests" / "e2e" / "compose" / "fence-off.yml"
 SAK = re.compile(r"boss_sak_[A-Za-z0-9]+")
-KNOWN = "FX-A"
 CACHE_S = 6   # > the 5 s caches: the console's feed cache (lib/feed-cache.ts) and legacy._CACHE_TTL
 
 #: the pages walked for the countdown banner (all render inside ConsoleShell)
@@ -376,9 +375,6 @@ def j_shared_password(env: Env, j: Journey) -> None:
         r = K.api(page, "POST", path, payload)
         j.check(f"the shared session cannot give itself a credential: POST {path} is refused (4xx)",
                 400 <= r["status"] < 500, expect="4xx (people_only / not a person with an account)", actual=r,
-                known=(f"{KNOWN} (P0-1): POST /v1/identity/me/password from the shared-password session is a 500 "
-                       "(identity_me.change_password asserts users.by_id(usr_legacy_shared), which has no user row)"
-                       if path.endswith("/password") else None),
                 repro="sign in with the shared password; POST /v1/identity/me/password {new: <strong>} with the CSRF header → 500")
     pat = K.api(page, "POST", "/v1/identity/me/api-keys", {"name": "fxd3-shared-pat", "scopes": ["project:read"]})
     shared_pat = K.secret(((pat.get("body") or {}).get("key") or (pat.get("body") or {}).get("token"))) if pat["status"] == 201 else None
@@ -483,8 +479,6 @@ def j_shared_password(env: Env, j: Journey) -> None:
     K.settle(page)
     j.check("the console sends the ended session to /login", "/login" in page.url or "/signin" in page.url,
             expect="redirect to /login", actual=page.url,
-            known="FX-C (P1-17 dead ends): middleware only checks that a session cookie is PRESENT; with a refused one "
-                  "the console renders 'Select your organization / Onboard a new organization' (no orgs) instead of /login",
             repro="sign in with the shared password; boss identity legacy retire --path shared_password; wait 6 s; open / "
                   "→ the empty org picker, not /login")
     j.shot(page, "after-cli-retire-existing-session")
@@ -575,8 +569,6 @@ COMMIT;""")
     j.shot(page, "cutoff-existing-session-sent-to-login")
     j.check("the console sends the old session to /login", "/login" in page.url or "/signin" in page.url,
             expect="/login", actual=page.url,
-            known="FX-C (P1-17 dead ends): middleware only checks that a session cookie is PRESENT; with a refused one "
-                  "the console renders 'Select your organization / Onboard a new organization' (no orgs) instead of /login",
             repro="sign in with the shared password; boss identity legacy retire --path shared_password; wait 6 s; open / "
                   "→ the empty org picker, not /login")
     _, fresh = K.new_page(env.browser, j)
@@ -776,10 +768,7 @@ def j_mcp_setup(env: Env, j: Journey) -> None:
                                                           "want_n": len(want_set),
                                                           "extra": sorted(set((mp[1] or {}).get("permissions") or []) - want_set),
                                                           "missing": sorted(want_set - set((mp[1] or {}).get("permissions") or [])),
-                                                          "org": (org[1] or {}).get("permissions")},
-            known=f"{KNOWN} (P0-1): host_tools.mcp_permissions adds MEMBER_BASELINE's org-scope permissions (org:read, "
-                  "directory:read, access_role:read, api_key:manage_own) to a role bound at PROJECT scope, where they never "
-                  "apply: the role and key list 64 permissions, the key can use 60")
+                                                          "org": (org[1] or {}).get("permissions")})
     env.psql("INSERT INTO projects (id, workspace_id, name, slug, created_at) SELECT :'o', workspace_id, 'FXD other', :'o', now() "
              "FROM projects WHERE id = :'p' ON CONFLICT DO NOTHING", o=OTHER_PROJECT, p=PROJECT)
     here = st.stack.bearer("GET", f"/v1/settings?project_id={PROJECT}", key)
@@ -795,8 +784,6 @@ def j_mcp_setup(env: Env, j: Journey) -> None:
     lst = st.stack.bearer("GET", f"/v1/code-tasks?project_id={PROJECT}", key)
     j.check("it can list its own project's code tasks (it holds code_task:read there)", lst[0] == 200,
             expect="GET /v1/code-tasks?project_id=boss-dogfood → 200", actual=lst,
-            known=f"{KNOWN} (P0-1): GET /v1/code-tasks is permitted at Scope.org() (apps/api/app/main.py list_code_tasks_endpoint), "
-                  "so a project-pinned MCP key with code_task:read in its project gets 403",
             repro="make mcp-setup → curl -H 'Authorization: Bearer $BOSS_MCP_API_KEY' :API/v1/code-tasks?project_id=boss-dogfood → 403 code_task:read")
     again = U.run_tool(["make", "mcp-setup"], env.tools(), env.inst, timeout=600)
     j.check("running make mcp-setup again keeps the same key (idempotent)", again["rc"] == 0 and U.read_env(st.env_file).get("BOSS_MCP_API_KEY") == key,
@@ -819,11 +806,32 @@ def sandbox_uid_activity(env: Env) -> dict[str, Any]:
             "locks": [x for x in lines[1:] if x.startswith("uid-")], "shim": lines[1:]}
 
 
-def start_build(env: Env, key: str, title: str) -> tuple[int, str]:
-    r = env.st.stack.bearer("POST", "/v1/code-tasks", key, {"project_id": PROJECT, "title": title,
-                                                             "instructions": "Add one line to the README.",
-                                                             "owner": "fxd-org", "repo": "fxd-none"})
-    return r[0], ((r[1] or {}).get("run_id") or "") if isinstance(r[1], dict) else ""
+BUILD_BODY = {"instructions": "Add one line to the README.", "owner": "fxd-org", "repo": "fxd-none"}
+
+
+def start_build(env: Env, j: Journey, title: str) -> tuple[int, str]:
+    """A REAL build, started by the Owner under a grant of their own. Under enforce a key (the Host
+    tools service account) is answered 409 consent_required — by design (consent.require_authority
+    #5): no grant of the key's own covers an agent's build, and the shared credential is never the
+    alternative. So the Owner starts it: the 409's offer becomes a standing grant (step-up when
+    asked), and the same start is sent again."""
+    ctx, page = env.owner_page(j)
+    body = {"project_id": PROJECT, "title": title, **BUILD_BODY}
+    r = K.api(page, "POST", "/v1/code-tasks", body)
+    offer = r.get("body") if isinstance(r.get("body"), dict) else {}
+    if r["status"] == 409 and offer.get("error") == "consent_required":
+        days = next((d.get("days") for d in offer.get("durations") or [] if d.get("kind") == "standing"), 30)
+        grant = {"agents": [a["id"] for a in offer.get("agents") or []], "permissions": offer.get("permissions") or [],
+                 "projects": offer.get("projects") or [PROJECT], "kind": "standing", "days": days, "purpose": title}
+        gh = offer.get("github") or None
+        if gh:
+            grant["github"] = {"repos": gh.get("repos") or [gh.get("repo")], **(gh.get("permissions") or {})}
+        g = K.stepped(page, env.A["owner"], "POST", "/v1/identity/me/delegations", grant, j)
+        j.note(f"the Owner's standing grant for the build: {g['status']}")
+        r = K.api(page, "POST", "/v1/code-tasks", body)
+    ctx.close()
+    out = r.get("body") if isinstance(r.get("body"), dict) else {}
+    return r["status"], (out.get("run_id") or "")
 
 
 def run_state(env: Env, run_id: str) -> tuple[str, str]:
@@ -834,7 +842,7 @@ def run_state(env: Env, run_id: str) -> tuple[str, str]:
 
 def j_sandbox_fence(env: Env, j: Journey) -> None:
     override = FENCE_OVERRIDE.read_text()
-    st = env.fresh_stack(override=override, seed_people=False)
+    st = env.fresh_stack(override=override, seed_people=True)
     env.state = "dirty"
     health = st.api_health()
     j.check("without NET_ADMIN, under the default BOSS_SANDBOX_NETWORK=enforce, the api starts and is healthy",
@@ -860,8 +868,8 @@ def j_sandbox_fence(env: Env, j: Journey) -> None:
             expect="rc 1, 'FAIL sandbox: this host cannot fence the build network … BOSS_SANDBOX_NETWORK=off …'",
             actual={"rc": doc["rc"], "line": re.sub(r"\x1b\[[0-9;]*m", "", line)})
     before = sandbox_uid_activity(env)
-    code, run_id = start_build(env, key, "fxd3 fence held")
-    j.check("a build can be started (the Host tools key, POST /v1/code-tasks)", code == 200 and bool(run_id),
+    code, run_id = start_build(env, j, "fxd3 fence held")
+    j.check("a build can be started (the Owner, under a standing grant, POST /v1/code-tasks)", code == 200 and bool(run_id),
             expect="200 queued", actual=code, fatal=True)
     deadline = time.time() + 180
     status, err = "", ""
@@ -911,7 +919,7 @@ def j_sandbox_fence(env: Env, j: Journey) -> None:
     j.check("with the fence off by choice, boss doctor no longer fails the sandbox check",
             "cannot fence" not in doc["out"], expect="no sandbox FAIL line", actual={"rc": doc["rc"]})
     key = env.env_value("BOSS_HOST_API_KEY")
-    code, run_id = start_build(env, key, "fxd3 fence off")
+    code, run_id = start_build(env, j, "fxd3 fence off")
     deadline = time.time() + 90
     leased, status, err = False, "", ""
     while time.time() < deadline:
@@ -1004,10 +1012,6 @@ def j_upgrade_rollback(env: Env, j: Journey) -> None:
     probe = next((l.strip() for l in (default["out"] + default["err"]).splitlines() if "Edition probe" in l), "")
     j.check("a fresh install of this branch with the defaults (BOSS_AUTHZ_MODE=enforce) succeeds", default["rc"] == 0,
             expect="install.sh rc 0", actual={"rc": default["rc"], "seconds": round(time.time() - t0), "line": K.scrub(probe)},
-            known="unassigned (P0, pre-existing since 29624fad 'enforce by default'): install.sh's last check GET "
-                  "/v1/edition?project_id=boss-dogfood with BOSS_API_KEY answers 403 \"Actor 'sys_legacy_console' is not an "
-                  "active member of org 'org_boss'\" under enforce (200 under shadow), so install.sh exits 1 'Stopped during: "
-                  "Verifying Community independence' with BOSS up",
             repro="fresh compose stack of this branch, enforce, bootstrap seed; curl -H 'Authorization: Bearer $BOSS_API_KEY' "
                   ":API/v1/edition?project_id=boss-dogfood → 403")
     if default["rc"] != 0:
