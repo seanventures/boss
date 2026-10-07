@@ -108,6 +108,8 @@ class StackState:
     # has since handed to something else.
     fingerprints: dict[str, str] = field(default_factory=dict)
     stopped: bool = False
+    # The seeded people (harness/identity.py): a 0600 file in the run dir, empty until claimed.
+    accounts_file: str = ""
 
     def __post_init__(self) -> None:
         if not self.run_id:
@@ -124,6 +126,7 @@ class StackState:
             owner_key=self.owner_key, worker_key=self.worker_key,
             console_url=f"http://127.0.0.1:{self.web_port}" if self.web_port else None,
             console_password=self.console_password,
+            accounts_file=self.accounts_file or None,
             model_stub_url=f"http://127.0.0.1:{self.model_port}",
             fakes_url=f"http://127.0.0.1:{self.fakes_port}", smtp_port=self.smtp_port,
             database_url=self.database_url,
@@ -438,6 +441,25 @@ class LocalStack:
         wait_http(f"http://127.0.0.1:{port}/login", timeout=300, what="console",
                   log=self._log("web"), proc=web)
 
+    def claim_and_seed_people(self) -> None:
+        """Make the stack an installed BOSS with people (IDENTITY.md §4.11): claim the first
+        Owner through the CONSOLE's origin with a setup link minted on the host shell — the claim
+        binds the public origin to where it was made — then seed one account per role. Every
+        credential lands only in run_dir/seed-accounts.json (0600); nothing is printed."""
+        from . import identity
+
+        host = identity.local_host(service_env(self.state), REPO_ROOT)
+        origin = f"http://127.0.0.1:{self.state.web_port}"
+        claimant = identity.Claimant(password=identity.claim_password())
+        try:
+            if not identity.setup_status(origin).get("claimed"):
+                identity.claim_owner(origin, identity.setup_token(host), claimant)
+            out = Path(self.run_dir) / "seed-accounts.json"
+            identity.seed_accounts(host, claimant.email, out)
+        except identity.IdentitySetupError as exc:
+            raise TargetError(f"Could not give the e2e stack its people: {exc}") from None
+        self.state.accounts_file = str(out)
+
     # ------------------------------------------------------------------ lifecycle
     def up(self) -> Target:
         try:
@@ -448,6 +470,7 @@ class LocalStack:
             self.start_worker()
             if self.with_web:
                 self.start_web()
+                self.claim_and_seed_people()
         except BaseException:
             self.down()
             raise

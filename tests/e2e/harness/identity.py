@@ -2,7 +2,7 @@
 per role, and sign a browser in as any of them through the real sign-in page.
 
 WHY THIS EXISTS. The console used to sit behind one shared password (`app/login/page.tsx`,
-`#console-password`). That page is gone: an installed BOSS now has people. The first Owner claims
+its password field). That page is gone: an installed BOSS now has people. The first Owner claims
 the install (a setup link from the host shell, or the legacy shared password), and everyone after
 signs in with email + password + a second factor (Owner and Admin must have one). A walk that
 types the old console password into a page that no longer exists times out on every screen.
