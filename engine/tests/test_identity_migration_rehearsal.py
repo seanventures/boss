@@ -276,6 +276,12 @@ def test_boss1_password_install_claims_with_the_shared_password_and_every_path_k
                             "identity_group_members m ON m.group_id = g.id WHERE g.name = "
                             "'Builders' GROUP BY g.source")).first()
     assert tuple(group) == ("scim", 1)
+    # round 2 (g): the legacy group's capabilities were attacker-settable through the old shared
+    # bearer, so they are NOT bound — written on the group for an Owner to review instead
+    builders = db.execute(text("SELECT id, description FROM identity_groups WHERE name = 'Builders'")).first()
+    assert db.execute(text("SELECT count(*) FROM identity_role_bindings WHERE subject_type = 'group' AND "
+                           "subject_id = :g"), {"g": builders[0]}).scalar() == 0
+    assert "NOT granted" in builders[1]
     scim = legacy.scim_bearer(SCIM_TOKEN, db=db)
     assert scim is not None and fake_check(db, scim, "scim:provision").allowed
     assert legacy.scim_bearer("not-the-token", db=db) is None

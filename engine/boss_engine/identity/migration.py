@@ -831,12 +831,25 @@ def _seed_scim(db: Any, org_id: str, settings: Any, report: SeedReport) -> None:
                  "ext": g["external_id"], "d": "Imported from SCIM by the identity migration."})
             report.scim_groups += 1
         if g["status"] == "active":
+            # NOT GRANTED (round 2 g). Before F2 the legacy project-path SCIM bearer could set any
+            # group's roleKeys/permissions, so what a legacy SCIM group "had" is attacker-settable:
+            # it is imported as a group with NO binding, and what it used to carry is written on
+            # the group for an Owner to review and grant by hand. A binding an earlier seed made
+            # from it is removed.
             perms = capability_permissions(_json_list(g["permissions"]))
-            if perms:
-                role_id = legacy_role_for(db, org_id, perms | MEMBER_BASELINE,
-                                          f"SCIM group {g['display_name']}")
-                bind(db, org_id, gid, role_id, "project", g["project_id"], subject_type="group",
-                     reason=f"legacy: SCIM group {g['id']}")
+            legacy_keys = sorted(set(_json_list(g["role_keys"])))
+            if perms or legacy_keys:
+                note = ("Imported from legacy SCIM. NOT granted, for an Owner to review: "
+                        + ", ".join(legacy_keys + sorted(perms)))[:1000]
+                db.execute(_sql("UPDATE identity_groups SET description = :d WHERE id = :g"),
+                           {"d": note, "g": gid})
+                report.notes.append(f"SCIM group {g['id']}: legacy capabilities left for Owner review")
+            dropped = db.execute(_sql(
+                "DELETE FROM identity_role_bindings WHERE subject_type = 'group' AND subject_id = :g "
+                "AND reason = :r RETURNING id"), {"g": gid, "r": f"legacy: SCIM group {g['id']}"}).all()
+            if dropped:
+                report.notes.append(f"SCIM group {g['id']}: removed {len(dropped)} binding(s) an earlier "
+                                    "seed granted from legacy SCIM capabilities")
         tokens = {g["id"], g["display_name"], g["external_id"]} - {None}
         for u in users:
             if u["project_id"] != g["project_id"] or not tokens & set(_json_list(u["groups"])):
