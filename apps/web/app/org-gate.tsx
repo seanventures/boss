@@ -8,6 +8,7 @@ import { callAction } from "../lib/call-action";
 import { SubmitButton } from "./submit-button";
 import { ActionForm } from "./client-forms";
 import { useConsoleRefresh } from "./use-console-refresh";
+import { ORG_ONBOARD_PERMISSION } from "./org-gate-permission";
 
 const ORG_KEY = "boss.org";
 
@@ -66,12 +67,17 @@ function openOrg(orgId: string, replace = false) {
   else window.location.assign(url);
 }
 
-export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
+export function OrgGate({ orgs, canOnboard }: {
+  orgs: OrgSummary[];
+  /** The page's mirror of POST /v1/orgs (`org:update`); absent when identity was unreadable. */
+  canOnboard?: { allowed: boolean; reason: string };
+}) {
   const params = useSearchParams();
-  const [showOnboard, setShowOnboard] = useState(orgs.length === 0);
+  const mayOnboard = canOnboard?.allowed ?? true;
+  const [showOnboard, setShowOnboard] = useState(orgs.length === 0 && mayOnboard);
   const [opening, setOpening] = useState<string | null>(null);
   const [onboarded, onboard] = useActionState<OnboardOrgResult | null, FormData>(
-    callAction(onboardOrgFormAction, undefined, "project:create"), null,
+    callAction(onboardOrgFormAction, undefined, "org:update"), null,
   );
 
   // Returning users skip the picker (unless they explicitly chose to switch).
@@ -134,27 +140,34 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
               <span className="org-card-go">{opening === o.org_id ? "Opening…" : "Enter →"}</span>
             </button>
           ))}
-          <button type="button" className="org-card org-card-add" data-testid="org-card-onboard"
-                  onClick={() => setShowOnboard((v) => !v)}>
-            <span className="org-card-mark add">＋</span>
-            <span className="org-card-body">
-              <span className="org-card-name">Onboard a new organization</span>
-              <span className="org-card-meta">Admin · creates a fresh workspace with the common setup</span>
-            </span>
-          </button>
+          {mayOnboard ? (
+            <button type="button" className="org-card org-card-add" data-testid="org-card-onboard"
+                    onClick={() => setShowOnboard((v) => !v)}>
+              <span className="org-card-mark add">＋</span>
+              <span className="org-card-body">
+                <span className="org-card-name">Onboard a new organization</span>
+                <span className="org-card-meta">Admin · creates a fresh workspace with the common setup</span>
+              </span>
+            </button>
+          ) : null}
         </div>
+        {!mayOnboard && orgs.length === 0 ? (
+          <p className="org-onboard-note" role="status" data-testid="org-onboard-not-yours">
+            No organization yet, and creating one needs an Owner or Admin. Ask one to onboard it.
+          </p>
+        ) : null}
 
         {onboarded?.ok ? (
           <p className="org-onboard-note" role="status" data-testid="org-onboard-done">
             Created {onboarded.name}. Opening its workspace…
           </p>
-        ) : showOnboard ? (
+        ) : showOnboard && mayOnboard ? (
           <form action={onboard} className="org-onboard">
             <label>
               Organization name
               <input name="name" placeholder="e.g. Northwind Robotics" required autoFocus={orgs.length > 0} />
             </label>
-            <SubmitButton permission="project:create" type="submit" className="cap-btn primary">Onboard organization</SubmitButton>
+            <SubmitButton permission={ORG_ONBOARD_PERMISSION} type="submit" className="cap-btn primary">Onboard organization</SubmitButton>
             {onboarded && !onboarded.ok ? (
               <p className="error-banner" role="alert" data-testid="org-onboard-error">{onboarded.error}</p>
             ) : null}

@@ -560,7 +560,7 @@ export function DecisionInbox({
               Creates a durable digest artifact. Optional channel creates an
               outbox draft only; sending still requires a budgeted queue action.
             </p>
-            <ActionForm permission="decision:read" action={createDecisionDigestAction} className="decision-actions">
+            <ActionForm permission="system:operate" action={createDecisionDigestAction} className="decision-actions">
               <input type="hidden" name="project_id" value={projectId} />
               <input type="hidden" name="actor" value={actorId} />
               <label className="field">
