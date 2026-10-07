@@ -146,6 +146,9 @@ def add_member(db: Any, ctx: AuthContext, group_id: str, principal_id: str) -> d
     if kind == "system":
         raise AccessError(422, "system_principal")
     membership_ceilings(db, ctx, [group_id], for_self=principal_id == ctx.principal.id)  # A34, A33
+    from . import signin as _signin
+
+    before = _signin.mfa_required_now(db, [principal_id])
     inserted = db.execute(text(
         "INSERT INTO identity_group_members (group_id, principal_id, source, added_by) "
         "VALUES (:g, :p, 'manual', :b) ON CONFLICT DO NOTHING"),
@@ -154,6 +157,7 @@ def add_member(db: Any, ctx: AuthContext, group_id: str, principal_id: str) -> d
         audit_event(ctx, "group.member_added", db=db, target_type="principal",
                     target_id=principal_id, details={"group_id": group_id})
         authz.bump_epoch(org, db=db, reason="group.member_added")
+        _signin.grant_first_factor_on_promotion(db, [principal_id], was_required=before)
     return get_group(db, org, group_id)
 
 
