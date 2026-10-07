@@ -1,14 +1,20 @@
 """Passkeys (WebAuthn; IDENTITY.md §4.5), on py_webauthn.
 
-  - RP ID = host of the public origin; the origin must match exactly. Attestation `none`; an
-    optional AAGUID allowlist (BOSS_WEBAUTHN_AAGUIDS).
+  - RP ID = host of the BOUND public origin (never the request's Host, F3/H2); the origin must
+    match exactly. Attestation `none`; an optional AAGUID allowlist (BOSS_WEBAUTHN_AAGUIDS).
+    AAGUID LIMIT (F3/L3): with attestation `none` the AAGUID is the authenticator's own unsigned
+    claim, so the allowlist steers honest authenticators (and keeps out accidental ones); it is
+    NOT a security boundary against a hostile client, which can claim any AAGUID. Enforcing a
+    hardware model needs attestation verified against the FIDO MDS, which BOSS does not do.
   - userVerification REQUIRED and discoverable credentials: a passkey is a complete sign-in on
     its own, and also satisfies MFA after a password.
   - Challenges: 32 random bytes, stored hashed, 5 minutes, single use, bound to the browser that
     asked (pre-auth cookie, or the session token for registration and step-up).
   - Authentication: the credential's user handle must map to the principal the challenge resolves
-    to (A6). A sign-count regression is recorded (event + posture flag) but does not block,
-    because synced passkeys report 0.
+    to (A6). A sign-count regression (F3/L3) BLOCKS a device-bound authenticator (not backup
+    eligible: a counter going backwards there means a cloned key) and is flagged on the
+    credential (counter_regressed_at) and in the audit log; a synced passkey (backup eligible,
+    which may report 0 or a per-device counter) is flagged but not blocked.
   - Up to 10 passkeys per person.
 """
 from __future__ import annotations
@@ -37,11 +43,13 @@ PURPOSES = frozenset({"login", "mfa", "step_up", "register"})
 
 class PasskeyError(Exception):
     """`code`: unavailable | challenge_invalid | verification_failed | unknown_credential |
-    user_mismatch | limit_reached | aaguid_not_allowed."""
+    user_mismatch | limit_reached | aaguid_not_allowed | counter_regressed (`regressed` names the
+    blocked credential: its principal and id, so the caller can record it)."""
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, regressed: Optional["VerifiedPasskey"] = None):
         super().__init__(code)
         self.code = code
+        self.regressed = regressed
 
 
 @dataclass(frozen=True)
@@ -49,6 +57,13 @@ class VerifiedPasskey:
     principal_id: str
     passkey_id: str
     counter_regressed: bool
+
+
+def _multi_device(verified: Any) -> bool:
+    """py_webauthn's credential_device_type is an enum whose str() is its NAME
+    ("CredentialDeviceType.MULTI_DEVICE"): compare its value, case-insensitively."""
+    kind = getattr(verified, "credential_device_type", "")
+    return str(getattr(kind, "value", kind)).lower().endswith("multi_device")
 
 
 def rp_for(origin: Optional[str]) -> tuple[str, str]:
@@ -153,7 +168,7 @@ def verify_registration(db: Any, *, principal_id: str, origin: Optional[str], bi
          "pk": verified.credential_public_key, "sc": int(verified.sign_count),
          "aaguid": aaguid if aaguid and aaguid != "00000000-0000-0000-0000-000000000000" else None,
          "tr": list(transports) if transports else None,
-         "be": str(getattr(verified, "credential_device_type", "")).endswith("multi_device"),
+         "be": _multi_device(verified),
          "bs": bool(getattr(verified, "credential_backed_up", False)),
          "n": (name or "Passkey").strip()[:80] or "Passkey"})
     return pid
@@ -202,7 +217,7 @@ def verify_authentication(db: Any, *, purpose: str, origin: Optional[str], bindi
             credential if isinstance(credential, str) else json.dumps(credential))
     except Exception as exc:  # noqa: BLE001
         raise PasskeyError("verification_failed") from exc
-    row = db.execute(text("SELECT id, principal_id, public_key, sign_count FROM "
+    row = db.execute(text("SELECT id, principal_id, public_key, sign_count, backup_eligible FROM "
                           "identity_webauthn_credentials WHERE credential_id = :c"),
                      {"c": bytes(parsed.raw_id)}).first()
     if row is None:
@@ -229,6 +244,14 @@ def verify_authentication(db: Any, *, purpose: str, origin: Optional[str], bindi
     stored = int(row.sign_count)
     new = int(verified.new_sign_count)
     regressed = (stored > 0 or new > 0) and new <= stored
+    synced = bool(row.backup_eligible) or _multi_device(verified)
+    if regressed:
+        # Flagged either way (posture and the person's passkey list show it).
+        db.execute(text("UPDATE identity_webauthn_credentials SET counter_regressed_at = now() "
+                        "WHERE id = :id"), {"id": row.id})
+        if not synced:
+            # A device-bound key whose counter went backwards is a clone: refused (L3).
+            raise PasskeyError("counter_regressed", VerifiedPasskey(row.principal_id, row.id, True))
     db.execute(text("UPDATE identity_webauthn_credentials SET sign_count = GREATEST(sign_count, :n), "
                     "last_used_at = now(), backup_state = :bs WHERE id = :id"),
                {"n": new, "bs": bool(verified.credential_backed_up), "id": row.id})

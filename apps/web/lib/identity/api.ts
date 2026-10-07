@@ -7,6 +7,7 @@
 import { CSRF_HEADER, ME_PATH } from "./contract";
 import { isPermission, type Permission } from "./permissions.gen";
 import { apiWrite, type WriteMethod } from "../api-write";
+import { sendToEnrolment } from "./enrolment";
 
 export type IdentityErrorCode =
   | "unauthenticated" | "step_up_required" | "forbidden" | "csrf_failed" | "not_found" | "invalid_credentials"
@@ -50,7 +51,8 @@ export function errorSentence(status: number, code: string, permission?: unknown
   if (code === "invalid_policy") return "Check the fields";
   if (code === "confirmation_required") return "Confirm critical changes";
   if (code === "consent_required") return "Needs your consent";
-  if (code === "no_second_factor") return "Add a second factor first";
+  if (code === "no_second_factor" || code === "mfa_enrolment_required") return "Add a second factor first";
+  if (code === "enrolment_grant_required") return "Ask an admin to reset your second factor";
   if (code === "task_grants_end_with_their_run") return "Ends with its run";
   if (code === "revoked_is_terminal") return "Already ended";
   if (code === "too_long") return "Longer than policy allows";
@@ -122,6 +124,8 @@ async function idFetchOnce<T>(method: string, path: string, body?: unknown, init
     const code = typeof d.error === "string" ? d.error : typeof d.detail === "string" ? d.detail : res.status === 429 ? "rate_limited" : "error";
     const retry = Number(res.headers.get("retry-after"));
     const body = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
+    // An enrolment-only session: the one thing to do is enrol (lib/identity/enrolment.ts).
+    if (res.status === 403) sendToEnrolment(code);
     throw new IdentityError(res.status, code, { permission: d.permission, attempts_left: d.attempts_left, retryAfter: Number.isFinite(retry) && retry > 0 ? retry : null, body });
   }
   return data as T;

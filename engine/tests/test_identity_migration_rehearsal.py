@@ -148,7 +148,7 @@ def test_goldeneye_upgrades_claims_by_passkey_and_the_network_bridge_ends(db):
     assert fake_check(db, visitor, "code_task:create", project=PROJECT, now=day29).allowed
 
     # the console keeps polling with the shared key, as it does today, right up to the date
-    day30 = NOW + timedelta(days=30, hours=12)
+    day30 = NOW + timedelta(days=29, hours=23)
     assert legacy.bridge(console_request(), db=db, now=day30, settings=cfg) is not None
 
     # the cutoff: the network bridge refuses; its principal is disabled; history keeps its name
@@ -164,18 +164,9 @@ def test_goldeneye_upgrades_claims_by_passkey_and_the_network_bridge_ends(db):
         NETWORK_OPERATOR_PRINCIPAL
     assert events(db, "legacy.path_retired")[-1]["details"]["path"] == "network_mode"
 
-    # the console key: still used and nobody has a session yet -> retirement waits (no lockout)
-    still = legacy.bridge(console_request(), db=db, now=day31, settings=cfg)
-    assert still.principal.id == LEGACY_CONSOLE_PRINCIPAL
+    # the console key: still used and nobody has a session yet — but the claim + 30 days is the
+    # ABSOLUTE end of every people bridge (F3/M3): no deferral outlives it, no lockout excuse
     shadow_report.flush(db, settings=cfg)
-    deferred = migration.retire_due(ORG, db=db, now=day31)
-    assert deferred and not deferred[0].retired and "deferred" in deferred[0].reason
-    # once the Owner signs in with a session (S4's console), the key goes at its date
-    db.execute(text(
-        "INSERT INTO identity_sessions (id, token_hash, principal_id, auth_methods, mfa_at, "
-        "last_seen_at, idle_expires_at, absolute_expires_at) VALUES ('ses_x', 'h', :p, "
-        "ARRAY['passkey'], :t, :t, :t2, :t2)"),
-        {"p": claim.principal_id, "t": day31, "t2": day31 + timedelta(hours=8)})
     legacy.invalidate_cache()
     with pytest.raises(AuthnError):
         legacy.bridge(console_request(), db=db, now=day31, settings=cfg)
@@ -322,13 +313,21 @@ def test_boss1_password_install_claims_with_the_shared_password_and_every_path_k
         legacy.bridge(creds(method="legacy_password"), db=db, now=day41, settings=cfg)
     assert not fake_check(db, shared, "code_task:create", project=PROJECT, now=day41).allowed
 
-    # env keys have no date: the MCP key works until it is rotated or removed from the env
-    assert legacy.bridge(creds(method="api_key", member="cto", key=MCP_KEY), db=db, now=day41,
-                         settings=cfg) is not None
-    removed = boss1_settings(api_key_principal_map={CONSOLE_KEY: "ceo", WORKER_KEY: "system"})
-    migration.seed(db, settings=removed, now=day41)
+    # an env key a PERSON's member holds (the MCP key acts as cto) is a people bridge: it ends at
+    # the absolute cutoff with the others (F3/M3; claim + 30 + the one extension); the worker's
+    # machine key does not
+    day39 = NOW + timedelta(days=39)
     legacy.invalidate_cache()
-    assert legacy.bridge(creds(method="api_key", member="cto", key=MCP_KEY), db=db, now=day41,
+    assert legacy.bridge(creds(method="api_key", member="cto", key=MCP_KEY), db=db, now=day39,
+                         settings=cfg) is not None
+    legacy.invalidate_cache()
+    with pytest.raises(AuthnError):
+        legacy.bridge(creds(method="api_key", member="cto", key=MCP_KEY), db=db, now=day41,
+                      settings=cfg)
+    removed = boss1_settings(api_key_principal_map={CONSOLE_KEY: "ceo", WORKER_KEY: "system"})
+    migration.seed(db, settings=removed, now=day39)
+    legacy.invalidate_cache()
+    assert legacy.bridge(creds(method="api_key", member="cto", key=MCP_KEY), db=db, now=day39,
                          settings=removed) is None
 
     assert audit.verify_chain(ORG, db=db).ok

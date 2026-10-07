@@ -101,6 +101,11 @@ def recover_owner(email: str, *, db: Any, origin: Optional[str] = None,
     bind(db, org_id, pid, "arl_owner", "org", org_id, granted_by=HOST_CLI_PRINCIPAL,
          reason="recovered by host shell (boss identity recover-owner)")
     db.execute(_sql("DELETE FROM identity_totp WHERE principal_id = :p"), {"p": pid})
+    # F3/H1: the host shell is proof enough: the next sign-in may enrol a FIRST second factor
+    # (a later password-only sign-in never can).
+    from .signin import grant_first_factor_after_reset
+
+    grant_first_factor_after_reset(db, pid)
     db.execute(_sql("UPDATE identity_recovery_codes SET used_at = :now WHERE principal_id = :p "
                     "AND used_at IS NULL"), {"now": now, "p": pid})
     db.execute(_sql("UPDATE identity_sessions SET revoked_at = :now, revoked_by = :by, "

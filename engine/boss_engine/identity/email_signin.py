@@ -50,6 +50,10 @@ PER_IP_PER_HOUR = 20
 UNIFORM_FLOOR_SECONDS = 0.35
 SENT = {"sent": True}
 NOT_FOUND = {"error": "not_found"}
+#: H2: no emailed link while BOSS has no bound public origin (BOSS_PUBLIC_URL or the claim's).
+#: The same answer for every address, so it is no oracle; posture says why and how to fix it.
+NO_PUBLIC_ORIGIN = {"error": "public_origin_unset",
+                    "message": "BOSS has no public URL yet, so it sends no links. Set BOSS_PUBLIC_URL."}
 
 
 def available() -> bool:
@@ -87,8 +91,19 @@ def _new_preauth() -> tuple[str, str]:
 
 
 def _eligible(db: Any, email: str) -> Optional[users.UserRow]:
+    """An active person whose address is VERIFIED (M2): mail sign-in and reset go only to an
+    address someone proved they read, never to one an admin, SCIM or an IdP merely asserted.
+    An unverified address is treated exactly like an unknown one."""
     user = users.by_email(db, email) if email and "@" in email else None
-    return user if user and user.status == "active" else None
+    if user is None or user.status != "active" or user.email_verified_at is None:
+        return None
+    return user
+
+
+def link_origin(facts: RequestFacts) -> Optional[str]:
+    """The origin an emailed link points at: the BOUND public origin only, never the request's
+    Host (H2, A11)."""
+    return facts.origin or None
 
 
 # ---- magic link and email code --------------------------------------------------------------------
@@ -102,6 +117,8 @@ def request_sign_in(db: Any, facts: RequestFacts, *, kind: str, email: str) -> A
     pol = get_policy(org_id, db=db) if org_id else None
     if pol is not None and not (pol.email_magic_link if kind == "magic_link" else pol.email_code):
         return Answer(404, dict(NOT_FOUND))
+    if kind == "magic_link" and not link_origin(facts):
+        return Answer(409, dict(NO_PUBLIC_ORIGIN))
     email = (email or "").strip()
     limited = _limited(db, "email_signin", email, facts.ip)
     if limited:
@@ -118,7 +135,7 @@ def request_sign_in(db: Any, facts: RequestFacts, *, kind: str, email: str) -> A
         if user:
             create_challenge(db, kind="magic_link", binding_secret=secret, ttl_seconds=EMAIL_TTL_SECONDS,
                              principal_id=user.principal_id, secret=token)
-            link = f"{facts.origin}/signin/link#t={token}"
+            link = f"{link_origin(facts)}/signin/link#t={token}"
             DELIVER(user.email, "Your BOSS sign-in link",
                     f"Sign in to BOSS with this link. It works once, for 10 minutes, in the browser "
                     f"where you asked for it:\n\n{link}\n\nIf you did not ask, ignore this email.")
@@ -192,6 +209,8 @@ def forgot_password(db: Any, facts: RequestFacts, *, email: str) -> Answer:
     """Always 202 (anti-enumeration). With SMTP, an existing active person gets a 30-minute,
     single-use link on the bound public origin — never the request's Host (A11)."""
     started = time.monotonic()
+    if available() and not link_origin(facts):
+        return Answer(409, dict(NO_PUBLIC_ORIGIN))
     email = (email or "").strip()
     for bucket, ident, limit in (("reset.account", email.lower(), 5), ("reset.ip", facts.ip or "unknown", 20)):
         decision = ratelimit.hit(bucket, ident, limit=limit, window_seconds=3600, db=db)
@@ -206,7 +225,7 @@ def forgot_password(db: Any, facts: RequestFacts, *, email: str) -> Answer:
              user_agent=facts.user_agent, request_id=facts.request_id)
         DELIVER(user.email, "Reset your BOSS password",
                 f"Reset your BOSS password with this link (30 minutes, once):\n\n"
-                f"{facts.origin}/reset#t={token}\n\nIf you did not ask, ignore this email.")
+                f"{link_origin(facts)}/reset#t={token}\n\nIf you did not ask, ignore this email.")
     else:
         sha256_hex(token)
     return _uniform(started)
@@ -257,6 +276,8 @@ def request_signup(db: Any, facts: RequestFacts, *, name: str, email: str) -> An
     started = time.monotonic()
     if not signup_enabled(db):
         return Answer(404, dict(NOT_FOUND))
+    if not link_origin(facts):
+        return Answer(409, dict(NO_PUBLIC_ORIGIN))
     org_id = default_org_id(db)
     assert org_id
     email = (email or "").strip()
@@ -277,7 +298,7 @@ def request_signup(db: Any, facts: RequestFacts, *, name: str, email: str) -> An
              details={"identifier": identifier_hash(email)})
         DELIVER(email, "Finish creating your BOSS account",
                 f"Finish creating your BOSS account with this link (10 minutes, once, in the "
-                f"browser where you asked):\n\n{facts.origin}/signup/verify#t={token}\n\n"
+                f"browser where you asked):\n\n{link_origin(facts)}/signup/verify#t={token}\n\n"
                 f"If you did not ask, ignore this email.")
     else:
         sha256_hex(token)

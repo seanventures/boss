@@ -73,7 +73,7 @@ BOSS runs on a server you control, and your team reaches Mission Control over HT
 curl -fsSL https://boss.sean.network/install.sh | bash -s -- --console-origin https://boss.example.com
 ```
 
-Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. The installer records the release, so reruns and `boss upgrade` never move it to `main`. Want to read the script first? `curl -fsSL https://boss.sean.network/install.sh -o install.sh`, then `bash install.sh`.
+Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. That address becomes BOSS's public URL (`BOSS_PUBLIC_URL` in `.env`): every emailed link, passkey and SSO redirect uses it and never a request's `Host`, so without one BOSS sends no sign-in or reset emails. Setup shows the URL BOSS uses. The installer records the release, so reruns and `boss upgrade` never move it to `main`. Want to read the script first? `curl -fsSL https://boss.sean.network/install.sh -o install.sh`, then `bash install.sh`.
 
 Prefer git? Clone the release and install it in place. `--ref` keeps the install on that release instead of moving it to `main`:
 

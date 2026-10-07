@@ -158,6 +158,52 @@ LEGACY_BRIDGE_ROLE_KEY = "legacy_bridge"
 ROLE_ORDER = ("viewer", "operator", "admin", "owner")
 LIVE_SESSION_GRACE = timedelta(hours=24)
 
+#: M3 (F3): the ABSOLUTE end of every legacy bridge a person uses (shared password, console key,
+#: network mode, a human member's env key or OIDC bearer): the claim + 30 days, plus at most ONE
+#: audited Owner extension of at most 30 days. Nothing — policy, a deferral, keep_legacy_console_key
+#: — moves a bridge past it. Machine members' env keys (the worker's) are not people bridges.
+LEGACY_MAX_DAYS = 30
+LEGACY_MAX_EXTENSION_DAYS = 30
+EXTENSION_KEY = "legacy_extension_days"
+
+
+WINDOW_START_KEY = "legacy_window_start"
+
+
+def window_start(db: Any, org_id: str) -> Optional[datetime]:
+    """When the legacy window opened: the claim time on_claimed recorded (policy.extra), else the
+    `bootstrap.claimed` event's time. None before the claim."""
+    raw = (get_policy(org_id, db=db).extra or {}).get(WINDOW_START_KEY)
+    if raw:
+        try:
+            when = datetime.fromisoformat(str(raw))
+            return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return claimed_at(db, org_id)
+
+
+def hard_cutoff(db: Any, org_id: str) -> Optional[datetime]:
+    """claim + 30 days + the one Owner extension (if any). None before the claim."""
+    started = window_start(db, org_id)
+    if started is None:
+        return None
+    return started + timedelta(days=LEGACY_MAX_DAYS + _extension_days(db, org_id))
+
+
+def _extension_days(db: Any, org_id: str) -> int:
+    raw = (get_policy(org_id, db=db).extra or {}).get(EXTENSION_KEY) or 0
+    try:
+        return max(0, min(int(raw), LEGACY_MAX_EXTENSION_DAYS))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _capped(when: Optional[datetime], hard: Optional[datetime]) -> Optional[datetime]:
+    if hard is None:
+        return when
+    return hard if when is None else min(when, hard)
+
 #: system members of today and the principal each becomes
 SYSTEM_MEMBER_PRINCIPALS = {
     "executive_console": LEGACY_CONSOLE_PRINCIPAL,
@@ -856,8 +902,14 @@ def on_claimed(org_id: str, owner_principal_id: str, *, db: Any, now: Optional[d
 def _apply_claimed_state(db: Any, org_id: str, settings: Any, now: datetime,
                          started: Optional[datetime] = None) -> datetime:
     policy = get_policy(org_id, db=db)
-    started = started or claimed_at(db, org_id) or now
-    cutoff = started + timedelta(days=policy.legacy_cutoff_days)
+    if started is not None and not (policy.extra or {}).get(WINDOW_START_KEY):
+        from .policy import set_extra
+
+        set_extra(org_id, WINDOW_START_KEY, started.isoformat(), db=db)
+        policy = get_policy(org_id, db=db)
+    started = started or window_start(db, org_id) or now
+    hard = hard_cutoff(db, org_id) or (started + timedelta(days=LEGACY_MAX_DAYS))
+    cutoff = min(started + timedelta(days=policy.legacy_cutoff_days), hard)
     operator_role = "arl_operator"
     bridge_role = db.execute(_sql("SELECT id FROM identity_access_roles WHERE org_id = :o AND "
                                   "key = :k"), {"o": org_id, "k": LEGACY_BRIDGE_ROLE_KEY}).first()
@@ -866,9 +918,10 @@ def _apply_claimed_state(db: Any, org_id: str, settings: Any, now: datetime,
                       (LegacyKind.CONSOLE_API_KEY, "BOSS_API_KEY"),
                       (LegacyKind.NETWORK_MODE, "BOSS_CONSOLE_AUTH=network")):
         if kind == LegacyKind.CONSOLE_API_KEY and keep_console:
-            db.execute(_sql("UPDATE identity_legacy_mappings SET retire_after = NULL WHERE "
+            # Kept as long as anything may be kept: the absolute cutoff, never "forever" (M3).
+            db.execute(_sql("UPDATE identity_legacy_mappings SET retire_after = :h WHERE "
                             "org_id = :o AND legacy_kind = :k AND legacy_ref = :r"),
-                       {"o": org_id, "k": kind.value, "r": ref})
+                       {"o": org_id, "k": kind.value, "r": ref, "h": hard})
             continue
         until = cutoff
         if kind == LegacyKind.NETWORK_MODE and not policy.network_bridge_enabled:
@@ -877,6 +930,12 @@ def _apply_claimed_state(db: Any, org_id: str, settings: Any, now: datetime,
             "UPDATE identity_legacy_mappings SET retire_after = COALESCE(retire_after, :c) "
             "WHERE org_id = :o AND legacy_kind = :k AND legacy_ref = :r AND retired_at IS NULL"),
             {"o": org_id, "k": kind.value, "r": ref, "c": until})
+    # M3: a person's env key and OIDC bearer end at the absolute cutoff too: put the date on
+    # their mappings so posture shows the countdown (the bridge enforces it either way).
+    db.execute(_sql(
+        "UPDATE identity_legacy_mappings SET retire_after = LEAST(COALESCE(retire_after, :h), :h) "
+        "WHERE org_id = :o AND legacy_kind IN ('env_api_key', 'oidc_bearer') AND retired_at IS NULL "
+        "AND principal_id NOT LIKE 'sys\\_%'"), {"o": org_id, "h": hard})
     shared = mapping(db, org_id, LegacyKind.SHARED_PASSWORD, "BOSS_CONSOLE_PASSWORD")
     if shared and shared["retired_at"] is None:
         db.execute(_sql("UPDATE identity_principals SET status = 'active', updated_at = now() "
@@ -963,9 +1022,13 @@ def retire_due(org_id: str, *, db: Any, now: Optional[datetime] = None,
         if not m or m["retired_at"] is not None or m["retire_after"] is None \
                 or m["retire_after"] > now:
             continue
+        hard = hard_cutoff(db, org_id)
         if (kind == LegacyKind.CONSOLE_API_KEY and m["last_used_at"] is not None
                 and m["last_used_at"] > now - LIVE_SESSION_GRACE
-                and not people_sessions_exist(db, org_id, now)):
+                and not people_sessions_exist(db, org_id, now)
+                and (hard is None or now < hard)):
+            # The deferral never outlives the absolute cutoff (M3): before, a console still
+            # sending the key with nobody signed in refreshed it forever.
             out.append(Retirement(kind.value, False, "deferred: the console still uses the "
                                   "shared key and nobody has signed in with a session yet"))
             continue
@@ -1023,8 +1086,10 @@ def retire_path(org_id: str, kind: LegacyKind, *, db: Any, now: Optional[datetim
 
 def extend_path(org_id: str, kind: LegacyKind, until: datetime, *, db: Any, actor_ctx: Any,
                 now: Optional[datetime] = None) -> datetime:
-    """An Owner moves a bridge's cutoff (D25: step-up, audited). At most 90 days from now; a
-    retired path cannot be brought back (the decisions say so)."""
+    """An Owner moves a bridge's cutoff (D25: step-up, audited). Never past the absolute cutoff
+    (M3): the claim + 30 days, plus ONE Owner extension of at most 30 days, used once for the
+    install; a retired path cannot be brought back (the decisions say so). Raises PermissionError
+    for a non-Owner, ValueError otherwise."""
     now = _now(now)
     ref, pid = {k: (r, p) for k, r, p in BRIDGE_PATHS}[kind]
     m = mapping(db, org_id, kind, ref)
@@ -1032,7 +1097,34 @@ def extend_path(org_id: str, kind: LegacyKind, until: datetime, *, db: Any, acto
         raise ValueError(f"{kind.value} is not in use on this install")
     if m["retired_at"] is not None:
         raise ValueError(f"{kind.value} is already retired")
-    until = min(until, now + timedelta(days=90))
+    actor_id = getattr(getattr(actor_ctx, "principal", None), "id", None)
+    if not actor_id or db.execute(_sql(
+            "SELECT 1 FROM identity_role_bindings WHERE subject_type = 'principal' AND subject_id = :p "
+            "AND role_id = 'arl_owner' AND (expires_at IS NULL OR expires_at > now())"),
+            {"p": actor_id}).first() is None:
+        raise PermissionError("only an Owner extends a legacy cutoff")
+    started = window_start(db, org_id)
+    if started is None:
+        raise ValueError("claim the first Owner first")
+    base = started + timedelta(days=LEGACY_MAX_DAYS)
+    hard = hard_cutoff(db, org_id) or base
+    extension = 0
+    if until > hard:
+        if _extension_days(db, org_id):
+            raise ValueError("the legacy cutoff was already extended once; it ends on "
+                             + hard.date().isoformat())
+        extension = min(LEGACY_MAX_EXTENSION_DAYS,
+                        -(-int((until - base).total_seconds()) // 86400))
+        from .policy import set_extra
+
+        set_extra(org_id, EXTENSION_KEY, extension, db=db)
+        hard = base + timedelta(days=extension)
+        # the absolute cutoff moved: a person's env keys and OIDC bearers end with it
+        db.execute(_sql(
+            "UPDATE identity_legacy_mappings SET retire_after = :h WHERE org_id = :o AND "
+            "legacy_kind IN ('env_api_key', 'oidc_bearer') AND retired_at IS NULL AND "
+            "principal_id NOT LIKE 'sys\\_%'"), {"o": org_id, "h": hard})
+    until = min(until, hard)
     db.execute(_sql("UPDATE identity_legacy_mappings SET retire_after = :u WHERE org_id = :o AND "
                     "legacy_kind = :k AND legacy_ref = :r"),
                {"u": until, "o": org_id, "k": kind.value, "r": ref})
@@ -1043,7 +1135,7 @@ def extend_path(org_id: str, kind: LegacyKind, until: datetime, *, db: Any, acto
         actor_ctx, "policy.changed", Outcome.SUCCESS, target_type="legacy_path",
         target_id=kind.value, details={"legacy_cutoff": {
             "from": m["retire_after"].isoformat() if m["retire_after"] else None,
-            "to": until.isoformat()}}), db=db)
+            "to": until.isoformat(), "extension_days": extension or None}}), db=db)
     bump_epoch(db, org_id)
     from . import legacy as _legacy
     _legacy.invalidate_cache()
@@ -1057,7 +1149,7 @@ def reschedule_cutoffs(org_id: str, *, db: Any) -> None:
     if started is None:
         return
     policy = get_policy(org_id, db=db)
-    until = started + timedelta(days=policy.legacy_cutoff_days)
+    until = _capped(started + timedelta(days=policy.legacy_cutoff_days), hard_cutoff(db, org_id))
     for kind, ref, pid in BRIDGE_PATHS:
         db.execute(_sql("UPDATE identity_legacy_mappings SET retire_after = :u WHERE org_id = :o "
                         "AND legacy_kind = :k AND legacy_ref = :r AND retired_at IS NULL AND "

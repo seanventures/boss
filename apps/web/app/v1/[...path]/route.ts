@@ -1,7 +1,7 @@
 import { API_URL } from "../../../lib/client";
 import {
   CONSOLE_AUTH_HEADER_LC, CSRF_HEADER_LC, SPEAKS_FOR_NOBODY_HEADER, consoleAuthMarker, identityCookieHeader,
-  isPreviewCapabilityPath, isStrippedHeader, untrustedBrowserContext,
+  isPreviewCapabilityPath, isStrippedHeader, normalisePath, previewOrigin, untrustedBrowserContext,
 } from "../../../lib/identity/forward";
 import { identityStubEnabled, isIdentityPath } from "../../../lib/identity/stub/enabled";
 import { answerFromStub } from "../../../lib/identity/server-fetch";
@@ -84,8 +84,37 @@ function forwardHeaders(req: Request, speaks: Speaks): Headers {
   return out;
 }
 
+/**
+ * A PREVIEW IS NEVER SERVED ON THE CONSOLE'S ORIGIN (security finding #4). Any spelling of a
+ * preview path — judged on the normalised path (lib/identity/forward.ts normalisePath) — is sent
+ * to the preview origin, where a preview-only listener strips every cookie
+ * (apps/api/app/preview_origin.py). Nothing is forwarded upstream for it: no cookie, no CSRF, no
+ * console-auth marker, no body. A link the console renders as `/v1/previews/<id>/web/` keeps
+ * working; it just lands on the other origin.
+ */
+function toPreviewOrigin(req: Request): Response {
+  const url = new URL(req.url);
+  if (req.body && !req.body.locked) req.body.cancel().catch(() => undefined);
+  const forwardedProto = (req.headers.get("x-forwarded-proto") ?? "").split(",")[0].trim();
+  const origin = previewOrigin(req.headers.get("host") ?? url.host, forwardedProto || url.protocol);
+  const headers = { "Cache-Control": "no-store", "Content-Security-Policy": PREVIEW_REFUSAL_CSP };
+  if (!origin) {
+    return Response.json({ detail: "previews are served from the preview origin (BOSS_PREVIEW_ORIGIN / BOSS_PREVIEW_PORT), which is switched off" },
+      { status: 404, headers });
+  }
+  // The path as sent when it is already plain; otherwise its normal form, so an odd spelling
+  // still opens the preview it names.
+  const plain = /^\/v1\/previews\/[^/]+\/(?:web(?:\/.*)?|feedback\/?)$/.test(url.pathname);
+  const path = plain ? url.pathname : encodeURI(normalisePath(url.pathname));
+  return new Response(null, { status: 307, headers: { ...headers, Location: `${origin}${path}${url.search}` } });
+}
+
+/** What the console's own refusal/redirect for a preview path carries: nothing may run here. */
+const PREVIEW_REFUSAL_CSP = "sandbox; default-src 'none'";
+
 async function proxy(req: Request, path: string[]): Promise<Response> {
   const pathname = new URL(req.url).pathname;
+  if (isPreviewCapabilityPath(pathname)) return toPreviewOrigin(req);
   if (identityStubEnabled() && isIdentityPath(pathname)) {
     // The identity stub (lib/identity/stub) answers in process while S1–S5 build the real routes.
     const method = req.method.toUpperCase();
@@ -161,19 +190,19 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
   // internal address, and an anonymous caller is owed nothing but the status and the JSON.
   const relayed = ["content-type", "cache-control", "etag", "content-disposition", "retry-after"];
   if (!collector) relayed.push("location");
-  // A preview's isolation travels with it: the API's sandbox CSP and its (credential-less) CORS
-  // answer must reach the browser, or the previewed app runs with the console's origin.
-  const preview = isPreviewCapabilityPath(incoming.pathname);
-  if (preview) relayed.push("content-security-policy", "access-control-allow-origin");
+  // THE API'S CSP REACHES THE BROWSER ON EVERY ANSWER, not only on paths this file recognises:
+  // whatever spelling reached a sandboxed handler, its sandbox comes with it.
+  relayed.push("content-security-policy");
   for (const name of relayed) {
     const value = upstream.headers.get(name);
     if (value) headers.set(name, value);
   }
   // THE API OWNS THE SESSION COOKIE (§4.1): sign-in, MFA, step-up and sign-out set or clear it,
   // and the browser must receive exactly what the API said. Never for a collector request.
-  // Never for a preview either: a previewed app must not set (or overwrite) a cookie on the
-  // console's origin, least of all `__Host-boss_session`.
-  if (!collector && !preview) {
+  // Never from an answer the API sandboxed (a preview's, however its path was spelled): a
+  // previewed app must not set (or overwrite) a cookie on the console's origin.
+  const sandboxed = /(^|[;,\s])sandbox(\s|;|,|$)/i.test(upstream.headers.get("content-security-policy") ?? "");
+  if (!collector && !sandboxed) {
     for (const c of upstream.headers.getSetCookie?.() ?? []) headers.append("set-cookie", c);
   }
   // Streamed straight through: a proxy that buffers defeats SSE and long reads.
@@ -203,21 +232,11 @@ export const DELETE = handler;
 export const HEAD = handler;
 
 /**
- * A sandboxed preview has an opaque origin, so its JSON POST to its own backend (or the feedback
- * overlay's) is cross-origin and preflighted. Answered here, for preview capability paths only,
- * without credentials; every other path has no cross-origin callers to serve.
+ * No cross-origin caller is served here: a preview's preflight goes to the preview origin, which
+ * answers it (apps/api/app/preview_origin.py). A preview path asked here gets the same redirect
+ * as any other method would — which a preflight does not follow, by design.
  */
 export async function OPTIONS(req: Request): Promise<Response> {
-  if (!isPreviewCapabilityPath(new URL(req.url).pathname)) return new Response(null, { status: 405 });
-  const asked = req.headers.get("access-control-request-headers") ?? "";
-  // Never a credential header: the preview's capability URL carries none.
-  const allowed = asked.split(",").map((h) => h.trim()).filter((h) => h && !isStrippedHeader(h) && h.toLowerCase() !== CSRF_HEADER_LC);
-  const headers = new Headers({
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE",
-    "Access-Control-Max-Age": "600",
-    "Cache-Control": "no-store",
-  });
-  if (allowed.length) headers.set("Access-Control-Allow-Headers", allowed.join(", "));
-  return new Response(null, { status: 204, headers });
+  if (isPreviewCapabilityPath(new URL(req.url).pathname)) return toPreviewOrigin(req);
+  return new Response(null, { status: 405 });
 }

@@ -221,7 +221,7 @@ export function ActionForm({
 
 export function KpiCreateForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm permission="improvement:manage"
+    <ActionForm permission="work_item:manage"
       action={createKpiAction}
       successMessage="KPI saved. Registry revalidated; event feed updated (kpi.upserted)."
       className={className}
@@ -253,7 +253,7 @@ export function DecisionResolveForm({
 
 export function CommandSubmitForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm permission="budget:manage"
+    <ActionForm permission="work_item:manage"
       action={submitCommandAction}
       successMessage="Command submitted. Task/plan created + planning job leased (budget gated)."
       className={className}
@@ -266,7 +266,7 @@ export function CommandSubmitForm({ children, className }: { children: ReactNode
 
 export function ProviderCreateForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm permission="cloud_account:manage"
+    <ActionForm permission="model_provider:manage"
       action={createProviderAccountAction}
       successMessage="Provider account registered. Use Test/Sync for inventory + receipts."
       className={className}
@@ -354,7 +354,7 @@ export function BudgetReserveQueueForm({ children, className }: { children: Reac
 // Additional for >5 coverage (provider test/sync, self-imp canary/rollout, changeset apply)
 export function ProviderTestForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm permission="cloud_account:manage"
+    <ActionForm permission="model_provider:manage"
       action={testProviderAccountAction}
       successMessage="Provider test executed. Status and receipt recorded."
       className={className}
@@ -367,7 +367,7 @@ export function ProviderTestForm({ children, className }: { children: ReactNode;
 
 export function ProviderSyncForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm permission="cloud_account:manage"
+    <ActionForm permission="system:operate"
       action={syncProviderResourcesAction}
       successMessage="Provider sync started. Inventory + costs reconciled with receipts."
       className={className}
@@ -380,7 +380,7 @@ export function ProviderSyncForm({ children, className }: { children: ReactNode;
 
 export function ChangeSetApplyForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <ActionForm permission="infra:provision"
+    <ActionForm permission="changeset:approve"
       action={applyChangeSetAction}
       successMessage="ChangeSet applied via ResourceReceipt. Provider state updated."
       className={className}

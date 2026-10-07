@@ -2,6 +2,7 @@
  * Steps the auth screens share once a session exists: learn its CSRF token (auth pages have no
  * IdentityProvider to do it), register a passkey on this device, and words for a refusal.
  */
+import { ENROLMENT_GRANT_REQUIRED, ENROLMENT_GRANT_WORDS } from "../../lib/identity/enrolment";
 import { IdentityError, idGet, idPost, setCsrfToken } from "../../lib/identity/api";
 import { ME_PATH, type MeResponse } from "../../lib/identity/contract";
 import { codesOf, type RecoveryCodes } from "../../lib/identity/types-auth";
@@ -57,6 +58,9 @@ const WORDS: Record<string, string> = {
   not_found: "This link no longer works",
   identity_unavailable: "BOSS can't be reached",
   last_factor: "Add another factor first",
+  mfa_enrolment_required: "Add a second factor first",
+  // Enrolment itself refused: this session may not add a factor (lib/identity/enrolment.ts).
+  [ENROLMENT_GRANT_REQUIRED]: ENROLMENT_GRANT_WORDS,
 };
 
 /**
@@ -75,6 +79,7 @@ const SSO_WORDS: Record<string, string> = {
   issuer_mismatch: "The identity provider answered for someone else. Ask an admin to check it.",
   token_failed: "The identity provider refused BOSS. Ask an admin to check it.",
   sso_required: "Your organisation signs in with single sign-on only.",
+  [ENROLMENT_GRANT_REQUIRED]: ENROLMENT_GRANT_WORDS,
 };
 
 export function ssoErrorWords(code: string | null | undefined): string | null {

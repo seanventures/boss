@@ -42,6 +42,8 @@ SIGN_IN_METHODS = frozenset({"pwd", "totp", "passkey", "recovery_code", "magic_l
                              "legacy_password", "network"})   # plus "sso:<provider_id>"
 
 STEP_UP_WINDOW_SECONDS = 600
+#: The refusal of every route but enrolment, sign-out and "me" to an enrolment-only session (H1).
+ENROLMENT_REQUIRED = "mfa_enrolment_required"
 
 
 @dataclass(frozen=True)
@@ -272,6 +274,12 @@ def _bridge(creds: RequestCredentials, db: Any, *, presented: bool) -> Optional[
     return ctx
 
 
+def _enrolment_routes() -> frozenset:
+    from .signin import ENROLMENT_ONLY_ROUTES
+
+    return ENROLMENT_ONLY_ROUTES
+
+
 def _from_session(creds: RequestCredentials, db: Any, token: str, ip: Optional[str],
                   ua: Optional[str]) -> AuthContext:
     from . import sessions, users
@@ -287,6 +295,13 @@ def _from_session(creds: RequestCredentials, db: Any, token: str, ip: Optional[s
     if creds.method.upper() in _UNSAFE_METHODS:
         expected = public_origin(db, principal.org_id) or request_origin(creds)
         check_csrf(creds, session_id=row.id, public_origin=expected or "")
+    if row.mfa_at is None and (creds.method.upper(), creds.path) not in _enrolment_routes():
+        # H1: a password-only session of a person whose roles require MFA can do nothing but
+        # enrol a factor (and read who it is, and sign out) — in every authz mode.
+        from .signin import enrolment_only
+
+        if enrolment_only(db, principal.id, row.mfa_at):
+            raise AuthnError(ENROLMENT_REQUIRED, 403)
     sessions.touch(db, row, org_id=principal.org_id)
     return AuthContext(principal=principal, method=AuthMethod.SESSION, session=row.ref(), ip=ip,
                        user_agent=ua, request_id=creds.request_id)
