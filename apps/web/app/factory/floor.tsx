@@ -16,6 +16,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import type { BuildRow as Build, Floor, FloorOutcome, PreBuild, StoppedRow } from "../../lib/factory-floor";
 import { callAction } from "../../lib/call-action";
+import { GatedButton } from "../../components/gated";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AttentionCard } from "../agents/attention-card";
 import { splitAttention } from "../agents/live-board";
@@ -147,9 +148,9 @@ function StoppedLine({ s, projectId, actor, onOpen, onRetried }: {
         <span className={`fx-word fx-word-${s.state}`} title={s.tip}>{s.word}</span>
         {error ? <span className="ag-att-error" role="alert" data-user-text title={error}> · {error.slice(0, 40)}</span> : null}
       </span>
-      <button type="button" className="ag-btn fx-retry" disabled={!s.retryable || busy} data-testid={`fx-retry-${s.runId}`}
+      <GatedButton permission="code_task:retry" type="button" className="ag-btn fx-retry" disabled={!s.retryable || busy} data-testid={`fx-retry-${s.runId}`}
               title={!s.retryable ? s.retryReason : "A new attempt on the same branch"} aria-busy={busy || undefined}
-              onClick={() => void retry()}>Retry</button>
+              onClick={() => void retry()}>Retry</GatedButton>
       <button type="button" className="ag-icon-btn fx-row-go" aria-label={`Open ${s.app}`} title="Open the build"
               onClick={(e) => onOpen(s.runId, e.currentTarget.closest("li"))}>↗</button>
     </li>

@@ -9,6 +9,7 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 
 import { callAction } from "../../lib/call-action";
+import { GatedButton, useGate } from "../../components/gated";
 import { confirmCodeTaskFeedbackAction, conveneMeetingAction, submitCodeTaskFeedbackAction, type FeedbackActionResult } from "../actions";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
@@ -91,6 +92,9 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
   const titleId = useId();
   const box = useRef<HTMLDivElement>(null);
   const workflows = useWorkflows(projectId);
+  // Propose steers the build, or convenes a panel when the change is specced first (P1-18).
+  const steerGate = useGate("code_task:steer");
+  const conveneGate = useGate("meeting:convene");
   const [picked, setPicked] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [expected, setExpected] = useState("");
@@ -185,7 +189,7 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
             </span>
             <pre className="fx-log fx-log-small" data-user-text>{proposal.proposal.fix_note}</pre>
             <span className="fx-out-links">
-              <button type="button" className="ag-btn ag-btn-primary" disabled={busy} data-testid="fx-change-start" onClick={() => void start()}>Start</button>
+              <GatedButton permission="code_task:steer" type="button" className="ag-btn ag-btn-primary" disabled={busy} data-testid="fx-change-start" onClick={() => void start()}>Start</GatedButton>
               <button type="button" className="ag-link" disabled={busy} onClick={() => setProposal(null)}>Edit</button>
             </span>
           </div>
@@ -220,9 +224,14 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
             </label>
             {proposal?.question ? <span className="fx-ask" data-user-text title="The agent needs this answered">{proposal.question}</span> : null}
             <span className="fx-out-links">
-              <button type="button" className="ag-btn ag-btn-primary" disabled={busy || !message.trim()} data-testid="fx-change-propose"
-                      title={panel ? "Costs a panel and a build" : undefined}
-                      onClick={() => void propose()}>{panel ? "Convene panel" : "Propose"}</button>
+              {(() => {
+                const g = panel ? conveneGate : steerGate;
+                return (
+                  <button type="button" className="ag-btn ag-btn-primary" disabled={busy || !message.trim()} data-testid="fx-change-propose"
+                          title={panel ? "Costs a panel and a build" : undefined} {...g.props}
+                          onClick={g.guard(() => void propose())}>{panel ? "Convene panel" : "Propose"}{g.sr}</button>
+                );
+              })()}
             </span>
           </div>
         )}

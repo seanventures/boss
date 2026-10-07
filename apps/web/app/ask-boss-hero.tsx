@@ -38,6 +38,7 @@ import { addFeaturePatch } from "../lib/compose-links";
 import { linkTo, navigate, plainClick } from "./agents/live-util";
 
 import { callAction } from "../lib/call-action";
+import { GatedButton } from "../components/gated";
 const NORMAL_SECONDS = 20;
 // The same bound the dock uses. A deep turn is genuinely longer since the answering agent
 // moved to Opus — 192s for 27 lookups, measured — and 120 handed control back in the middle of
@@ -1723,8 +1724,9 @@ export function AskBossHero({
                  role={ideasInline ? "region" : "dialog"} aria-label="Need an example?">
             <div className="askboss-openers">
               {OPENERS.map((o) => (
-                <button
+                <GatedButton
                   key={o.text}
+                  permission="assistant:chat"
                   type="button"
                   className="askboss-opener"
                   onClick={() => { setInput(o.text); ask(o.text); }}
@@ -1732,7 +1734,7 @@ export function AskBossHero({
                   <span className={`mr-avatar tone-${o.tone}`} aria-hidden>{o.badge}</span>
                   {/* An example of what YOU would ask: the words go into the composer as yours. */}
                   <span data-user-text>{o.text}</span>
-                </button>
+                </GatedButton>
               ))}
             </div>
             <div className="askboss-ideas">
@@ -2141,8 +2143,9 @@ export function AskBossHero({
                title="BOSS can do this for you — nothing runs until you choose.">BOSS can do this:</p>
             <div className="askboss-actions-row">
               {proposed.map((a) => (
-                <button
+                <GatedButton
                   key={a.id}
+                  permission="assistant:chat"
                   type="button"
                   className="button agent-proposal-btn"
                   disabled={busy}
@@ -2152,7 +2155,7 @@ export function AskBossHero({
                   data-testid={`askboss-action-${a.tool}`}
                 >
                   {ranAction === a.id ? "…" : a.label}
-                </button>
+                </GatedButton>
               ))}
             </div>
           </div>

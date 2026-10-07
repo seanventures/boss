@@ -31,6 +31,7 @@ import { IDEAS, IdeaCover } from "../ask-boss-hero";
 import { consoleHref } from "../url-intent";
 import { apiWrite } from "../../lib/api-write";
 import { callAction } from "../../lib/call-action";
+import { useGate } from "../../components/gated";
 import { confirmCodeTaskFeedbackAction, conveneFeaturePanelAction, submitCodeTaskFeedbackAction,
          type FeedbackActionResult } from "../actions";
 import { showToast } from "../client-forms";
@@ -779,8 +780,16 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     if (started.ok) onStarted(started.id);
   };
 
+  // Pre-greyed (P1-18) by what the primary press will do: steer a quick change, convene a
+  // spec-first panel, or start a workflow run.
+  const steerGate = useGate("code_task:steer");
+  const conveneGate = useGate("meeting:convene");
+  const runGate = useGate("workflow_run:start");
+  const primaryGate = adding && addPath === QUICK ? steerGate : adding && addPath === SPEC ? conveneGate : runGate;
+
   const primary = async () => {
     if (busy || (blocked && !(adding && proposal?.proposal))) return;
+    if (!primaryGate.allowed) { showToast("error", primaryGate.reason); return; }
     setBusy(true);
     setError(null);
     try {
@@ -1328,9 +1337,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
               <button type="button" className="np-btn" data-testid="np-cancel" onClick={onCancel}>Cancel</button>
             ) : null}
             <button type="button" className="np-btn np-primary" data-testid="dw-new-start"
-                    disabled={busy || (!!blocked && !(adding && proposal?.proposal))}
-                    onClick={() => void primary()}>
-              {startLabel}<span className="np-kbd" aria-hidden>⌘↵</span>
+                    disabled={busy || (!!blocked && !(adding && proposal?.proposal))} {...primaryGate.props}
+                    onClick={primaryGate.guard(() => void primary())}>
+              {startLabel}<span className="np-kbd" aria-hidden>⌘↵</span>{primaryGate.sr}
             </button>
           </span>
         </span>

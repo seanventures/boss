@@ -74,6 +74,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { SubmitButton } from "../submit-button";
+import { GatedButton } from "../../components/gated";
 import { apiWrite } from "../../lib/api-write";
 import { openDockAbout } from "../../lib/dock-subject";
 import { ActionForm } from "../client-forms";
@@ -132,7 +133,7 @@ export function RetryControls(
       <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center",
                                      flexWrap: "wrap" }} title={explains}>
         <input type="hidden" name="run_id" value={runId} />
-        <SubmitButton permission="feedback:submit" className="cap-btn" disabled={pending}>
+        <SubmitButton permission="code_task:retry" className="cap-btn" disabled={pending}>
           <ArrowsClockwise size={15} weight="bold" aria-hidden />
           {pending ? "Retrying…" : "Retry build"}
         </SubmitButton>
@@ -153,7 +154,7 @@ export function RetryControls(
     <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
       <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
         <input type="hidden" name="run_id" value={runId} />
-        <SubmitButton permission="feedback:submit" className="cap-btn" disabled={pending} title="Run this task again, resuming from where it failed">
+        <SubmitButton permission="code_task:retry" className="cap-btn" disabled={pending} title="Run this task again, resuming from where it failed">
           {pending ? "Starting retry…" : "↻ Retry"}
         </SubmitButton>
       </form>
@@ -178,7 +179,7 @@ export function OverrideControls({ runId }: { runId: string }) {
       <input type="hidden" name="run_id" value={runId} />
       <input name="reason" placeholder="Reason for override (recorded)" className="cap-input"
              style={{ minWidth: 220 }} />
-      <SubmitButton permission="feedback:submit" className="cap-btn" disabled={pending}>
+      <SubmitButton permission="code_task:override" className="cap-btn" disabled={pending}>
         {pending ? "Overriding…" : "⚖ Waive failing gates & open PR"}
       </SubmitButton>
       {state?.url ? (
@@ -266,7 +267,7 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
       {!hasLive ? (
         <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
           <input type="hidden" name="run_id" value={runId} />
-          <SubmitButton permission="feedback:submit" className="cap-btn" disabled={pending}>
+          <SubmitButton permission="preview:manage" className="cap-btn" disabled={pending}>
             <PlayCircle size={15} weight="fill" aria-hidden />
             {pending ? "Starting preview…" : "Run preview"}
           </SubmitButton>
@@ -332,7 +333,7 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
       {hasLive ? (
         <form action={action} style={{ display: "inline-flex" }}>
           <input type="hidden" name="run_id" value={runId} />
-          <SubmitButton permission="feedback:submit" className="cap-btn" style={{ opacity: 0.7, fontSize: 12 }} disabled={pending}>
+          <SubmitButton permission="preview:manage" className="cap-btn" style={{ opacity: 0.7, fontSize: 12 }} disabled={pending}>
             <ArrowsClockwise size={14} weight="bold" aria-hidden
                              className={pending ? "spin" : undefined} />
             {pending ? "Rebuilding…" : "Rebuild preview"}
@@ -383,7 +384,7 @@ export function ConfirmFeedback({ threadId, workflowName }: { threadId: string; 
   return (
     <form action={action} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       <input type="hidden" name="thread_id" value={threadId} />
-      <SubmitButton permission="feedback:submit" className="cap-btn primary" disabled={pending}>
+      <SubmitButton permission="code_task:steer" className="cap-btn primary" disabled={pending}>
         {pending ? "Dispatching…"
                  : workflowName ? `Confirm & start the ${workflowName} workflow`
                                 : "Confirm & run inline"}
@@ -554,7 +555,7 @@ export function FeedbackControls({ runId, status, anchor = "", projectId }: {
           </label>
         </div>
         <div className="ct-iterate-actions">
-          <SubmitButton permission="feedback:submit" className="cap-btn primary" disabled={pending}>
+          <SubmitButton permission="code_task:steer" className="cap-btn primary" disabled={pending}>
             {pending ? "Reviewing…" : completed ? "Propose the change" : "Propose retry"}
           </SubmitButton>
           <span className="detail">
@@ -819,10 +820,10 @@ export function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, def
               View {benchmark.name} →
             </button>
           )}
-          <button className="cap-btn" disabled={sent} onClick={() => void launch(true)}
+          <GatedButton permission="code_task:create" className="cap-btn" disabled={sent} onClick={() => void launch(true)}
                   title="Convene a new panel and build a second copy — this costs a full run">
             {sent ? "Starting…" : "Build it again"}
-          </button>
+          </GatedButton>
         </>
       ) : startedId ? (
         startedKind === "meeting" ? (
@@ -839,9 +840,9 @@ export function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, def
           </button>
         )
       ) : (
-        <button className="cap-btn primary" disabled={sent} onClick={() => void launch(false)}>
+        <GatedButton permission="code_task:create" className="cap-btn primary" disabled={sent} onClick={() => void launch(false)}>
           {sent ? "Starting…" : `Launch ${benchmark.name}`}
-        </button>
+        </GatedButton>
       )}
       <span className="detail">
         {sent ? "starting…"

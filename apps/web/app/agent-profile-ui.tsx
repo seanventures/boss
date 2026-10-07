@@ -21,6 +21,7 @@ import { CheckCircle, Flask, Play, Warning } from "@phosphor-icons/react";
 
 import type { AgentStudioFeed, StudioAgent, StudioPanel, StudioRun } from "../lib/agent-studio";
 import { callAction } from "../lib/call-action";
+import { GatedButton } from "../components/gated";
 import { AgentChip } from "./agent-chip";
 import { ClientRelativeTime } from "./client-relative-time";
 import { HelpTip } from "./help-tip";
@@ -114,7 +115,7 @@ function ProfileRow({ agent, feed, actor }: { agent: StudioAgent; feed: AgentStu
           {version ? `v${version.version}` : "No version"}
         </span>
         <span className="wf-tag" data-status={agent.status}>{words(agent.status)}</span>
-        <button type="button" className="wf-btn wf-btn-sm" disabled={pending || !version}
+        <GatedButton permission="agent:test" type="button" className="wf-btn wf-btn-sm" disabled={pending || !version}
                 data-testid={`agent-profile-check-${agent.agent_key}`}
                 title="Compile it and check what it may do. Runs no model."
                 onClick={() => {
@@ -125,7 +126,7 @@ function ProfileRow({ agent, feed, actor }: { agent: StudioAgent; feed: AgentStu
                   });
                 }}>
           <Flask size={12} aria-hidden /> {pending ? "Checking…" : "Check"}
-        </button>
+        </GatedButton>
       </div>
       {version ? (
         <dl className="wf-ag-facts">
@@ -201,10 +202,10 @@ function PanelCard({ panel, feed, actor }: { panel: StudioPanel; feed: AgentStud
       <form className="wf-ag-run" onSubmit={(e) => { e.preventDefault(); run(); }}>
         <input value={objective} placeholder="What should it decide?" aria-label="Question for the panel"
                onChange={(e) => setObjective(e.target.value)} />
-        <button type="submit" className="wf-btn wf-btn-sm wf-btn-primary"
+        <GatedButton permission="meeting:convene" type="submit" className="wf-btn wf-btn-sm wf-btn-primary"
                 disabled={pending || !version || !objective.trim()}>
           <Play size={12} aria-hidden /> {pending ? "Starting…" : "Run"}
-        </button>
+        </GatedButton>
       </form>
       <Result result={result} />
       {refusal ? (
