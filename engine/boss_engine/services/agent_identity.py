@@ -300,7 +300,25 @@ def _seal(connection: Connection, project_id: str, role_key: str, change_kind: s
                     "prev_fingerprint": previous,
                     "change_kind": change_kind if previous is not None else "born",
                     "canonical": document})
+        if previous is not None and row.get("agent_id"):
+            # The agent's Passport changed: it goes in the security log's lineage stream too
+            # (`agent.passport.sealed`, IDENTITY.md §8.2), never failing the change it rides on.
+            quietly(connection, _passport_sealed, str(row["agent_id"]), actor, version,
+                    fingerprint, previous, change_kind)
     return version, fingerprint
+
+
+def _passport_sealed(connection: Connection, agent_id: str, actor: Optional[str], version: int,
+                     fingerprint: str, previous: Optional[str], change_kind: str) -> None:
+    from ..identity import passports
+    from ..identity.lineage import passport_event
+
+    passport = passports.get(agent_id, db=connection)
+    if passport is None:
+        return
+    passport_event(connection, passport, "agent.passport.sealed", actor_id=actor or "system",
+                   details={"version": version, "fingerprint": fingerprint,
+                            "prev_fingerprint": previous, "change_kind": change_kind})
 
 
 def quietly(connection: Connection, fn: Any, *args: Any, **kwargs: Any) -> Any:

@@ -9,7 +9,7 @@ Effective permission for a run token, evaluated LIVE on every use and at every h
     person_live(scope) ∩ ceiling(agent_1) ∩ … ∩ ceiling(agent_n) ∩ grant ∩ token.scope ∩ task
     and permission.delegable and depth ≤ min(org, grant, every passport) and no cycle.
 Narrowing only: an exchange computes requested ∩ parent.scope ∩ ceiling(child) (∩ the live
-intersection), and an empty result is a refusal, never "the requested set" (Kaappu flaw #5).
+intersection), and an empty result is a refusal, never "the requested set" (a common flaw).
 A child token never outlives its parent token, its grant, or (on renewal) its parent run.
 
 Every failure is uniform to the caller (401 `unauthenticated`, 400 `invalid_grant` /

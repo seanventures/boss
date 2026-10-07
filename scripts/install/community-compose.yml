@@ -213,7 +213,9 @@ services:
       BOSS_AUTHZ_ROUTER_MODES: ${BOSS_AUTHZ_ROUTER_MODES:-}
       BOSS_AUTHZ_COVERAGE: ${BOSS_AUTHZ_COVERAGE:-}
       # The sandbox: required (a build never runs as the API's uid), network fenced, and every
-      # GitHub call through boss-egress, which holds the only GitHub credentials.
+      # GitHub call through boss-egress, which holds the only GitHub credentials. A host that
+      # cannot fence (no iptables owner match) still starts; builds are held until it is fixed
+      # (BOSS_SANDBOX_NETWORK=required refuses to start; off skips the fence). SANDBOX.md.
       BOSS_SANDBOX_ISOLATION: ${BOSS_SANDBOX_ISOLATION:-required}
       BOSS_SANDBOX_NETWORK: ${BOSS_SANDBOX_NETWORK:-enforce}
       BOSS_SANDBOX_ROOT_PATH: /var/lib/boss/sandboxes

@@ -8,7 +8,7 @@ A Passport is the TEMPLATE (`agt_…`, an `identity_principals` row of kind `age
 Rules this module keeps:
   - a sponsor is REQUIRED and must be an active person (`usr_…`);
   - the ceiling holds delegable permissions only (checked here, and again by the DB trigger);
-  - `revoked` is terminal: there is no resume or reactivate from it (Kaappu flaw: `reactivate`
+  - `revoked` is terminal: there is no resume or reactivate from it (a common flaw: `reactivate`
     undid revocation). Re-issuing creates a NEW Passport with `reissued_from`;
   - only a person in a human session with `agent_passport:*` changes a Passport; an agent token
     never can (the permissions are not delegable, and `_require_human` refuses any run token);

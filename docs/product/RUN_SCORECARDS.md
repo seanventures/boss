@@ -315,7 +315,7 @@ section disagree, the code is wrong.
    (`off 0 false no disabled disable none`) and `DNT_ON_WORDS` (`1 true yes on`), used by the
    engine and by `checkup.sh` alike, with surrounding quotes ignored. Govern › Sharing shows the switches locked and why.
 4. **The collector is part of BOSS,** active only when **Collector mode** is on (a console toggle in
-   Govern › Sharing; shared-server's ops API cannot set env).
+   Govern › Sharing; a deploy-API-only host cannot set env).
 5. **No default collector** (2026-10-05, after the independent test). With no collector URL
    configured nothing is sent, the heartbeat included, and Govern says "No collector set". The
    URL is set by `BOSS_TELEMETRY_URL` (which then locks the field) or in Govern › Sharing (by a

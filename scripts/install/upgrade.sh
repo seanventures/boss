@@ -69,11 +69,12 @@ REF="${BOSS_REPO_REF:-}"
 BACKUP_DIR=""
 WEB_MODE=""
 DRY_RUN=0
+ROLLBACK=1
 
 usage() {
   cat <<'EOF'
 Usage: upgrade.sh [--dir INSTALL_DIR] [--ref REF] [--backup-dir PATH]
-                  [--web | --no-web] [--dry-run]
+                  [--web | --no-web] [--dry-run] [--no-rollback]
 
 Without --ref, an install stays on the channel it was installed from:
   release  moves to the newest published release tag (v*), never to main
@@ -87,6 +88,8 @@ The backup path is printed before any source or container change.
 The installer remembers whether Mission Control was enabled. For installs
 created before that setting was recorded, pass --no-web once to keep it off.
 Use --web or --no-web to change the existing choice deliberately.
+If the new release fails to start, the previous release is put back and
+started again (data volumes are kept). --no-rollback leaves it as it is.
 EOF
 }
 while [[ $# -gt 0 ]]; do
@@ -98,6 +101,7 @@ while [[ $# -gt 0 ]]; do
       [[ -z "$WEB_MODE" ]] || { echo 'Choose only one of --web and --no-web.' >&2; exit 2; }
       WEB_MODE="$1"; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --no-rollback) ROLLBACK=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -162,6 +166,28 @@ install_args=(--dir "$INSTALL_DIR" --ref "$NEW_COMMIT" --yes --skip-model-key)
 [[ -n "$WEB_MODE" ]] && install_args+=("$WEB_MODE")
 if ! BOSS_RELEASE_REF_NAME="$REF" bash "$FETCHED_INSTALLER" "${install_args[@]}" </dev/null; then
   echo 'Upgrade failed. The installer reports the recovery backup path above if it created one.' >&2
+  # ROLL BACK: put the previous source back and start it again, so a release that cannot start on
+  # this host (an API that refuses to boot, a build that fails) never leaves BOSS down. Volumes
+  # are kept as they are; the new release only adds tables, which the old one ignores.
+  if [[ "$ROLLBACK" -eq 1 && "$(git -C "$INSTALL_DIR" rev-parse HEAD)" != "$OLD_COMMIT" ]]; then
+    echo "Putting back the previous release ($OLD_COMMIT) and starting it again..." >&2
+    if git -C "$INSTALL_DIR" symbolic-ref -q HEAD >/dev/null 2>&1; then
+      git -C "$INSTALL_DIR" reset -q --hard "$OLD_COMMIT" </dev/null
+    else
+      git -C "$INSTALL_DIR" checkout -q --detach "$OLD_COMMIT" </dev/null
+    fi
+    OLD_INSTALLER="$(mktemp)"
+    trap 'rm -f "$FETCHED_INSTALLER" "$OLD_INSTALLER"' EXIT
+    git -C "$INSTALL_DIR" show "$OLD_COMMIT:install.sh" > "$OLD_INSTALLER"
+    if BOSS_RELEASE_REF_NAME="$CURRENT_REF" bash "$OLD_INSTALLER" --dir "$INSTALL_DIR" \
+         --ref "$OLD_COMMIT" --yes --skip-model-key </dev/null; then
+      echo "Rolled back: $CURRENT_REF is running again. Nothing was lost." >&2
+      echo "Read the error above, then see scripts/install/README.md (upgrade problems) before retrying." >&2
+    else
+      echo 'The rollback did not start either. Restore the recovery backup: scripts/install/README.md (restore).' >&2
+    fi
+    exit 1
+  fi
   echo 'Inspect Compose logs before retrying. See scripts/install/README.md for the recovery procedure.' >&2
   exit 1
 fi

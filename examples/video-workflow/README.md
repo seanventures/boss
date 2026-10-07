@@ -98,7 +98,7 @@ python3 examples/video-workflow/setup.py \
 | Parameter | What it is | Default |
 |---|---|---|
 | `--api` | Your BOSS API. On a remote VM, open the SSH tunnel described in [Examples](../README.md) first | `http://127.0.0.1:8000` |
-| `BOSS_API_KEY` | API key in your environment; keep it out of command arguments | required |
+| `BOSS_API_KEY` | Your BOSS API key (a personal key, or the host tools' key: see [Examples](../README.md)) in your environment; keep it out of command arguments | required |
 | `--project` | Which project to build it in | `boss-dogfood` |
 | `--actor` | Who is doing this. Must be a principal your API key may act as — the API names the right one when it refuses | `ceo` |
 | `--no-agents` | Leave steps unassigned, so each runs as the workflow itself | off |

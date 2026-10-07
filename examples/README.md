@@ -28,9 +28,15 @@ examples/<name>/
 
 ## First: your API key
 
-Every command below needs `BOSS_API_KEY`. The installer generates it and writes it to the
-install's `.env`. It is not shown again, so here is how to get it back, depending on where BOSS
-runs.
+Every command below reads a BOSS API key from `BOSS_API_KEY`. Use one of:
+
+- **a personal key**: in the console, **My account › API keys › New key**. It acts as you, with
+  your access. It is shown once, so copy it into `BOSS_API_KEY` straight away;
+- **the host tools' key**, on the BOSS machine: `BOSS_HOST_API_KEY` in the install's `.env`
+  (the `boss` command issues it; `boss identity host-key` makes a new one).
+
+Do not use the old shared `BOSS_API_KEY` line from `.env`: it stops working 30 days after the
+install is claimed. Here is how to get a key into your shell, depending on where BOSS runs.
 
 **BOSS on a server, and you are on your laptop.** If you also have a checkout of this repository
 on the laptop, start an SSH tunnel in a separate terminal. The installer binds the API to the
@@ -52,29 +58,25 @@ export BOSS_API_KEY=…
 export BOSS_PROJECT=boss-dogfood
 ```
 
-Paste those lines into your shell while the tunnel is open. `env` prints a secret, so keep its
-output out of tickets and shared logs.
+Paste those lines into your shell while the tunnel is open. The key is the server's host tools'
+key. `env` prints a secret, so keep its output out of tickets and shared logs.
 
 **On the server itself** (the simplest path after a one-line install):
 
 ```bash
 cd ~/boss
+grep -q '^BOSS_HOST_API_KEY=' .env || boss identity host-key
 source ./boss-community.env.sh
 export BOSS_API="$BOSS_API_URL" BOSS_PROJECT="$BOSS_PROJECT_ID"
+export BOSS_API_KEY="$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env)"
 ```
 
-The generated shell file is private and supplies the API key without printing it. If you
-installed to another directory, change to that directory first.
+Nothing here prints the key. If you installed to another directory, change to that directory
+first.
 
-**BOSS on this machine, from a checkout without the installer shell file:**
-
-```bash
-export BOSS_API_KEY="$(sed -n 's/^BOSS_API_KEY=//p' .env)"
-```
-
-> The key is a secret and grants full API access. Keep it in the environment, not in a `--key`
-> argument or a ticket. If it leaks, change `BOSS_API_KEY` in the install's `.env` and restart
-> the API.
+> A key is a secret. Keep it in the environment, not in a `--key` argument or a ticket. If a
+> personal key leaks, revoke it in **My account › API keys**. If the host tools' key leaks, run
+> `boss identity host-key`: the old one stops at once.
 
 Every script prints these instructions if you run it without a key.
 

@@ -10,14 +10,19 @@ Postgres always stays on loopback. The API and worker reach it over the install'
 
 ## Authenticate every call
 
-Every remote call needs the API key from the `.env` on the install machine. `BOSS_REQUIRE_API_AUTH` stays on, and calls with a missing or wrong key are rejected. The `Host` header never substitutes for the key, even when it names a machine other than loopback.
+Every remote call needs an API key. `BOSS_REQUIRE_API_AUTH` stays on, and calls with a missing or wrong key are rejected. Use one of:
+
+- a **personal key** from **My account › API keys** (`boss_pat_…`): it acts as you, with your access, and can be narrowed to some permissions and projects;
+- a **service-account key** from **Identity › Service accounts** (`boss_sak_…`): for CI, scripts and integrations, with only the access you give it.
+
+The old shared key (`BOSS_API_KEY` in `.env`) stops working 30 days after the install is claimed. Calls made with it carry `Deprecation` and `Sunset` headers until then. The `Host` header never substitutes for the key, even when it names a machine other than loopback.
 
 Send the key in a header, as either `Authorization: Bearer` or `X-Boss-Api-Key`.
 
 !!! warning
     Never put the key in a URL, a query string, or a command-line argument. Those end up in shell history, proxy logs, and process listings.
 
-On the install machine, running `source ./boss-community.env.sh` from the install directory loads `BOSS_API_KEY` into your shell. Pass that variable only in the header:
+Keep the key in an environment variable and pass it only in the header:
 
 ```bash
 curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" \

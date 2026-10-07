@@ -97,7 +97,7 @@ boss open
 
 ```text
 Mission Control on this machine: http://127.0.0.1:3000
-Sign in with the password from: boss password
+First visit: claim it at /claim. The password from boss password proves it is you.
 ```
 
 Then show the console password:
@@ -106,7 +106,7 @@ Then show the console password:
 boss password
 ```
 
-It prints one line: the password. Copy it. The password is separate from the API key and is never written to a log.
+It prints one line: the password. Copy it. It is never written to a log. You use it once, to claim the install. (Or run `boss identity setup-link` for a one-hour claim link instead.)
 
 ### Open the console
 
@@ -122,7 +122,9 @@ Then open `http://127.0.0.1:3000` on the computer that ran `ssh`. If ports 3000 
 
 **For your team, on a domain or private IP:** see [Deploy](hostname.md).
 
-The sign-in page shows **BOSS Mission Control**, a **Console password** field, and a **Sign in** button. Paste the password and sign in. Mission Control opens on **Command Center**. More about sessions is in [Sign in to Mission Control](CONSOLE_AUTH.md).
+The first time, the sign-in page says **This BOSS has no Owner yet. Claim it.** Click it, paste the password, enter your name and email, and add a passkey (or a password and an authenticator app). You are now the Owner, and you sign in as yourself from then on. Mission Control opens on **Command Center**.
+
+Invite your team in **Identity › People** ([People and access](PEOPLE_AND_ACCESS.md)). More about sign-in is in [Sign in to Mission Control](CONSOLE_AUTH.md).
 
 ### If something goes wrong
 
@@ -236,11 +238,12 @@ The **+ New project** button in the top bar does the same thing as a four-step f
 
 ### From a terminal instead
 
-The same start, through the API. Run it from the install directory; `boss-community.env.sh` loads the API address, key, and project without printing the key.
+The same start, through the API. Run it from the install directory; `boss-community.env.sh` loads the API address and project, and the next line uses the host tools' key (`boss` issues it; nothing is printed).
 
 ```bash
 cd ~/boss
 source ./boss-community.env.sh
+export BOSS_API_KEY="$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env)"
 curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" -H "Content-Type: application/json" \
   -d "{\"project_id\":\"$BOSS_PROJECT_ID\",\"actor\":\"ceo\",\"work_class\":\"project.new\",\"input\":{\"title\":\"Tip calculator\",\"directive\":\"A tiny command-line tip calculator in Python with a pytest test.\"}}" \
   "$BOSS_API_URL/v1/delivery-workflows/start"
