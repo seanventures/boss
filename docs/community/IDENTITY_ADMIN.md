@@ -124,6 +124,38 @@ To step back, move a router to `shadow` in `BOSS_AUTHZ_ROUTER_MODES`, or set `BO
 
 Shadow refusals are counted, not logged one by one. The audit log gets one `authz.shadow_deny` event per new route, reason and kind of caller each day.
 
+## GitHub for builds
+
+Under `BOSS_AUTHZ_MODE=enforce` a build's sandbox holds no GitHub credential: boss-egress adds one to each git and API request and applies every rule (the run's branch only, no merges, no admin endpoints). **Setup › GitHub access** says which credential that is and sets it up. Posture check `github` shows the same answer.
+
+| Way | What egress uses | How to set it up |
+| --- | --- | --- |
+| **GitHub App** (recommended) | A token per build, for that build's repositories and permissions only, revoked when the build ends. | **Create the App on GitHub**: BOSS posts an App manifest (contents and pull requests write; checks, statuses, metadata, issues and actions read; never administration or workflows). GitHub sends you back; the App's private key and client secret go into the vault. Then **Install on GitHub** and pick the repositories, or **Pick installation**. In **Repository**, **Use the GitHub App** lists the repositories it can reach; no token is pasted. |
+| **As me** | The person's own GitHub connection (My account › Agents for me), only for runs whose grant says "act as me on GitHub". | Each person connects their own account. |
+| **Fine-grained token** (less safe) | The token, from the vault, only for the repositories it was given. It is long-lived and acts as whoever made it. | Paste it in **Repository**; it is kept as the org's connection for the repositories you pick. |
+
+**Moving `BOSS_GITHUB_TOKEN`.** An install that still sets `BOSS_GITHUB_TOKEN` shows **Move it into the vault** (API: `POST /v1/identity/github/token/migrate-env`). The token becomes the org's connection for the bound repositories; under enforce, the API and worker stop reading the variable at once and at every later start. Remove it from `.env` when convenient.
+
+BOSS's own GitHub writes for a build (opening its pull request) use an App token for that one repository, bound to the build and revoked when it ends; outside a build such a token is revoked after 10 minutes.
+
+## Passing environment variables to a build's agent
+
+A build's agent gets a filtered environment: anything shaped like a secret (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*` …) is removed, and a fixed list of names can never pass. To let an extra, non-secret variable through (a test harness's stub URL, a feature flag the agent's tools read), name it in `BOSS_AGENT_ENV_ALLOW`, comma-separated, on the API and worker:
+
+```bash
+BOSS_AGENT_ENV_ALLOW=BOSS_E2E_MODEL_STUB_URL,BOSS_E2E_FAKES_URL
+```
+
+It cannot reopen the never-pass list, and previews strip these names again. It is for test and integration environments; do not use it to hand a build a credential (connect the credential instead, so egress holds it).
+
+## A passkey that stops working ("counter regressed")
+
+A device-bound passkey whose signature counter goes backwards looks like a cloned key, so BOSS refuses it, flags it in the person's passkey list and records `passkey.counter_regressed`. A synced passkey (iCloud, Google, 1Password) is flagged but still accepted. Restoring a device from a backup, or a test harness that re-creates a virtual authenticator without its counter, causes the same thing.
+
+**The person** signs in with another factor (password with their authenticator app, or a recovery code), opens **My account › Security**, removes the flagged passkey and adds it again.
+
+**When they have no other factor**, an Admin (or another Owner, for an Owner) opens **Identity › People ›** the person **› Reset MFA** (`user:reset_mfa`, step-up). That removes every second factor and recovery code and gives a one-time link; the person signs in and enrols again. If the person is the only Owner, run `recover-owner` from the host shell (below).
+
 ## Host-shell commands
 
 These commands run on the machine where BOSS runs, against its database. No console page, API route or MCP tool can run them.
@@ -143,6 +175,7 @@ docker compose exec api python -m boss_engine.identity.cli <command>
 | `shadow-report [--json]` | Prints the per-router shadow report. |
 | `posture` | Prints the posture checks. |
 | `claim-status` | One line: `unclaimed`, or when the install was claimed and when the shared credentials stop. `boss doctor` prints it. |
+| `seed-test-accounts --org O --owner-email E --out F [--domain D] [--i-know]` | Creates (or refreshes) one person per access role (Owner, Admin, Operator, Viewer, Auditor), the custom role `developer` with a person, and the service account `seed-ci` with a key, all as the Owner E. Passwords, TOTP secrets for roles that need MFA, and the key are written only to F, created with mode 0600; nothing secret is printed. Refused when the install looks like production (no `BOSS_ENVIRONMENT=dev/test/e2e/ci/staging` and a public origin that is not localhost or `.test`/`.local`) unless `--i-know`. Running it again gives the same accounts new credentials. Delete F when you are done. |
 | `migrate` | Re-runs the mapping of legacy members, keys, grants and SCIM data. It runs by itself at startup, and running it again changes nothing that is already mapped. |
 
 ## Next steps
