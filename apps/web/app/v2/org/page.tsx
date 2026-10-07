@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 
 import { resolveLegacyRoute, searchParamsFrom } from "../../legacy-areas";
+import { consolePageAllowed } from "../../../components/identity/route-shell";
+import { PageDenied } from "../../../components/identity/page-denied";
 
 /**
  * Retired: this v2 screen is a console area now (Workflow Studio spec 2.9). The visitor's org
@@ -11,6 +13,7 @@ export const dynamic = "force-dynamic";
 type Params = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
 export default async function RetiredV2Screen({ searchParams }: Params) {
+  if (!(await consolePageAllowed("/v2/org"))) return <PageDenied path="/v2/org" />;
   const params = searchParamsFrom(searchParams ? await searchParams : undefined);
   redirect(resolveLegacyRoute("/v2/org", params) ?? "/");
 }

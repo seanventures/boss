@@ -9,6 +9,7 @@
  * tests/identity-every-page-declares.test.ts walks app/identity/** and app/account/** and
  * fails on a page.tsx with no entry here.
  */
+import { AREA_ACCESS } from "./areas";
 import type { Permission } from "./permissions.gen";
 
 /** Set by middleware.ts on every page request: the pathname, for a layout's guard. */
@@ -47,11 +48,39 @@ export const IDENTITY_PAGES: readonly IdentityPage[] = [
   { path: "/account/keys", label: "API keys", tip: "Personal access tokens for the CLI and MCP", access: { permission: "api_key:manage_own" }, tab: true },
 ];
 
+/**
+ * EVERY OTHER PAGE OF THE CONSOLE. `/` is the area shell: each area there is opened by its own
+ * AREA_ACCESS entry (areas.ts), so the page itself needs only a session. The /v2 screens are the
+ * v1 areas they show (components/v2/Shell.tsx `v1Area`) and need exactly that area's permission;
+ * the retired ones only redirect to their area, and are guarded the same way. The sign-in pages
+ * are public (isPublicConsolePath) and declared here so the walk in
+ * tests/identity-every-page-declares.test.ts finds every page.tsx under app/ declared.
+ */
+const area = (id: keyof typeof AREA_ACCESS): PageAccess => AREA_ACCESS[id];
+const PUBLIC: PageAccess = { authenticated: true };    // routing makes them public; no session check here
+export const CONSOLE_PAGES: readonly IdentityPage[] = [
+  { path: "/", label: "Console", tip: "Every area; each opens with its own permission", access: { authenticated: true } },
+  { path: "/launch", label: "Launch", tip: "What BOSS is, and how to install it", access: { authenticated: true } },
+  { path: "/enrol", label: "Enrol", tip: "Add the second factor your role needs", access: { authenticated: true } },
+  { path: "/v2", label: "Factory", tip: "Projects and the builds in them", access: area("code_tasks") },
+  { path: "/v2/missions/[id]", label: "Build", tip: "One build's workspace", access: area("code_tasks") },
+  { path: "/v2/hive", label: "Hive", tip: "Ask BOSS", access: area("agent") },
+  { path: "/v2/factory", label: "Agent Studio", tip: "Your agents", access: area("workforce") },
+  { path: "/v2/org", label: "Team structure", tip: "Who reports to whom", access: area("workforce") },
+  { path: "/v2/panels", label: "Approvals", tip: "Decisions waiting for you", access: area("decisions") },
+  { path: "/v2/boss", label: "Workflows", tip: "Delivery workflows", access: area("delivery_workflows") },
+  { path: "/v2/timeline", label: "Receipts", tip: "What happened, with evidence", access: area("activity") },
+  { path: "/v2/infra", label: "Infra & Models", tip: "Hosts, deploys and models", access: area("delivery") },
+  { path: "/v2/settings", label: "Settings", tip: "Repo and models", access: area("setup") },
+  ...["/login", "/claim", "/invite", "/signin", "/signin/link", "/reset", "/signup", "/signup/verify"].map(
+    (path) => ({ path, label: "Sign in", tip: "Public: signing in needs no session", access: PUBLIC })),
+];
+
 /** The page a pathname is, or null. */
 export function pageFor(pathname: string): IdentityPage | null {
   const clean = pathname.replace(/\/+$/, "") || "/";
   const parts = clean.split("/");
-  for (const page of IDENTITY_PAGES) {
+  for (const page of [...IDENTITY_PAGES, ...CONSOLE_PAGES]) {
     const want = page.path.split("/");
     if (want.length !== parts.length) continue;
     if (want.every((w, i) => w === "[id]" ? parts[i].length > 0 : w === parts[i])) return page;

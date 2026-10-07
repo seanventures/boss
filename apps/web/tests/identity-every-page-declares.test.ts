@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { IDENTITY_PAGES, isPublicConsolePath, pageFor } from "../lib/identity/pages";
+import { AREA_ACCESS } from "../lib/identity/areas";
 import { isPermission } from "../lib/identity/permissions.gen";
 
 const ROOT = process.cwd();
@@ -53,5 +54,36 @@ describe("the sign-in pages are public, and only they", () => {
 
   it("enrolment, identity and account pages need a session", () => {
     for (const r of ["/enrol", "/identity", "/identity/people", "/account", "/account/keys", "/"]) expect(isPublicConsolePath(r), r).toBe(false);
+  });
+});
+
+describe("every page of the console declares what opening it needs", () => {
+  const all = pages("app");
+  const route = (file: string) => (file === "app/page.tsx" ? "/" : routeOf(file));
+
+  it("finds every page.tsx under app/", () => {
+    expect(all.length).toBeGreaterThanOrEqual(35);
+  });
+
+  it.each(all)("%s is declared", (file) => {
+    const page = pageFor(route(file));
+    expect(page, `${route(file)} has no entry in lib/identity/pages.ts`).not.toBeNull();
+    if (page && "permission" in page.access) expect(isPermission(page.access.permission)).toBe(true);
+  });
+
+  it.each(pages("app/v2"))("%s is guarded before it loads anything", (file) => {
+    const src = readFileSync(join(ROOT, file), "utf8");
+    const body = src.slice(src.indexOf("export default"));
+    expect(body).toMatch(/^export default async function \w+\([^)]*\)[^{]*\{\s*(const \{[^}]*\} = await params;\s*)?if \(!\(await consolePageAllowed\(/);
+    const page = pageFor(routeOf(file));
+    expect(page && "permission" in page.access, `${routeOf(file)} needs a permission, not only a session`).toBe(true);
+  });
+
+  it("each /v2 screen needs exactly the permission of the v1 area it is", () => {
+    const shell = readFileSync(join(ROOT, "components/v2/Shell.tsx"), "utf8");
+    for (const m of shell.matchAll(/href: "(\/v2[^"]*)", built: true, v1Area: "([a-z_-]+)"/g)) {
+      const page = pageFor(m[1]);
+      expect(page?.access, m[1]).toEqual(AREA_ACCESS[m[2] as keyof typeof AREA_ACCESS]);
+    }
   });
 });
