@@ -63,10 +63,12 @@ def grant_event(db: Any, grant: Any, event_type: str, *, ctx: Optional[AuthConte
     _record(db, event)
 
 
-def token_event(db: Any, claims: RunTokenClaims, event_type: str) -> None:
-    """`token.issued` / `token.exchanged`: jti, parent_jti, sub, chain, grant, run, aud, scope hash."""
+def token_event(db: Any, claims: RunTokenClaims, event_type: str, *, renewed_from: Optional[str] = None) -> None:
+    """`token.issued` / `token.exchanged`: jti, parent_jti, sub, chain, grant, run, aud, scope hash —
+    and, for a renewal, the jti it renewed (`renewed_from`), so the walk back never breaks."""
     from . import audit
 
+    extra = {"renewed_from": renewed_from} if renewed_from else {}
     current = claims.chain.current
     _record(db, audit.SecurityEvent(
         org_id=claims.org_id, event_type=event_type, outcome=audit.Outcome.SUCCESS,
@@ -76,7 +78,7 @@ def token_event(db: Any, claims: RunTokenClaims, event_type: str) -> None:
         target_type="run", target_id=claims.task.run_id,
         details={"parent_jti": claims.parent_jti, "aud": claims.aud, "depth": claims.depth,
                  "scope_hash": scope_hash(claims.scope), "mode": claims.mode.value,
-                 "project": claims.task.project_id, "step": claims.task.step}))
+                 "project": claims.task.project_id, "step": claims.task.step, **extra}))
 
 
 def denied(db: Any, *, org_id: str, event_type: str, reason: str, run_id: Optional[str] = None,

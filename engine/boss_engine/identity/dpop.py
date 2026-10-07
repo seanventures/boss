@@ -94,7 +94,9 @@ def verify_proof(proof: Optional[str], *, htm: str, htu: str, access_token: Opti
         raise DPoPError("dpop_htu")
     now = time.time() if now is None else now
     iat = claims.get("iat")
-    if not isinstance(iat, int) or abs(now - iat) > MAX_AGE_SECONDS + CLOCK_SKEW_SECONDS:
+    # Past: at most MAX_AGE + skew old. Future: at most the clock skew (a proof dated ahead would
+    # otherwise stay valid for longer than its replay record is kept).
+    if not isinstance(iat, int) or now - iat > MAX_AGE_SECONDS + CLOCK_SKEW_SECONDS or iat - now > CLOCK_SKEW_SECONDS:
         raise DPoPError("dpop_iat")
     if access_token is not None:
         if claims.get("ath") != ath_of(access_token):
@@ -102,15 +104,17 @@ def verify_proof(proof: Optional[str], *, htm: str, htu: str, access_token: Opti
     jti = claims.get("jti")
     if not isinstance(jti, str) or not (8 <= len(jti) <= 128):
         raise DPoPError("dpop_jti")
-    _remember(db, jkt, jti, now)
+    _remember(db, jkt, jti, now, iat=iat)
     return jkt
 
 
-def _remember(db: Any, jkt: str, jti: str, now: float) -> None:
-    """Insert (jkt, jti); a second insert of the same pair is a replay (A42)."""
+def _remember(db: Any, jkt: str, jti: str, now: float, *, iat: Optional[float] = None) -> None:
+    """Insert (jkt, jti); a second insert of the same pair is a replay (A42). The record is kept
+    at least as long as the proof could still be accepted (iat + MAX_AGE + skew), plus margin."""
     from sqlalchemy import text
 
-    expires = datetime.fromtimestamp(now, timezone.utc) + timedelta(seconds=MAX_AGE_SECONDS + 2 * CLOCK_SKEW_SECONDS)
+    valid_until = max(now, iat if iat is not None else now) + MAX_AGE_SECONDS + 2 * CLOCK_SKEW_SECONDS
+    expires = datetime.fromtimestamp(valid_until, timezone.utc)
     inserted = db.execute(text(
         "INSERT INTO identity_dpop_replay (jkt, jti, expires_at) VALUES (:k, :j, :e) "
         "ON CONFLICT (jkt, jti) DO NOTHING RETURNING 1"), {"k": jkt, "j": jti, "e": expires}).scalar()
