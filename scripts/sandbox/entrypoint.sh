@@ -97,7 +97,13 @@ mkdir -p "$RUN_ROOT" "$SHIM_ROOT"
 chown boss:boss "$RUN_ROOT" "$SHIM_ROOT"
 chmod 0711 "$RUN_ROOT" "$SHIM_ROOT"
 for d in /var/lib/boss/identity /var/lib/boss/artifacts; do
-  if [ -d "$d" ]; then chown boss:boss "$d"; chmod 0750 "$d"; fi
+  if [ -d "$d" ]; then
+    chown boss:boss "$d"; chmod 0750 "$d"
+    # Heal what a root `docker compose exec api …` wrote before BOSS code dropped root on import
+    # (boss_engine/_runtime_user.py): an install seeded as root failed its first build on a
+    # root-owned artifact directory.
+    find "$d" -mindepth 1 ! -user boss -exec chown boss:boss {} + 2>/dev/null || true
+  fi
 done
 chmod 0700 /var/lib/boss/identity 2>/dev/null || true
 
