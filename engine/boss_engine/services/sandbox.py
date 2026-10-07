@@ -282,9 +282,18 @@ class EphemeralSandbox:
         (IDENTITY.md §7.10). ``token`` is then ignored."""
         if self.path is not None:
             raise SandboxError("Sandbox already provisioned.")
-        root = self._root()
-        # mkdtemp gives us a unique, private directory we fully own.
-        self.path = Path(tempfile.mkdtemp(prefix=f"{self.task_id}-", dir=root))
+        # THE RUN'S OWN UID (sandbox_identity): inside a run that holds a sandbox uid, the clone
+        # lives in that run's 2770 directory, and BOSS's own git writes it with umask 0 so the
+        # run's uid can edit it while no other run's uid can reach it.
+        from .sandbox_identity import current as _sandbox
+
+        self._sandbox = _sandbox()
+        if self._sandbox is not None:
+            self.path = self._sandbox.workspace(f"{self.task_id}-")
+        else:
+            root = self._root()
+            # mkdtemp gives us a unique, private directory we fully own.
+            self.path = Path(tempfile.mkdtemp(prefix=f"{self.task_id}-", dir=root))
         self._owns_dir = True
         # Claimed while in use: the reaper sweeps unclaimed sandboxes a crash left behind.
         from .resource_ledger import claim_dir
@@ -306,6 +315,12 @@ class EphemeralSandbox:
             clone_url = egress.clone_url
             for key, value in egress.git_config:
                 egress_config += ["-c", f"{key}={value}"]
+            # BOSS's OWN git (this object's) asks for the credential through its own environment:
+            # the shim socket belongs to the run's uid, and the credential never touches disk.
+            own = getattr(egress, "own_git", None)
+            if own is not None:
+                self._git_env = dict(own.env)
+                self._git_own_config = list(own.config)
 
         depth = max(1, int(self.settings.sandbox_clone_depth or 1))
         self._git(
@@ -617,12 +632,20 @@ class EphemeralSandbox:
         assert self.path is not None
         try:
             extra_env = getattr(self, "_git_env", None)
+            own_config: list[str] = []
+            for key, value in getattr(self, "_git_own_config", ()):
+                own_config += ["-c", f"{key}={value}"]
+            isolated = getattr(self, "_sandbox", None) is not None
             completed = owned_process.run(
-                ["git", "-C", str(self.path), *args],
+                ["git", "-C", str(self.path), *own_config, *args],
                 capture_output=True,
                 text=True,
                 timeout=max(self.settings.sandbox_validation_timeout_seconds, 120),
                 check=False,
+                # BOSS's own git: never as the run's uid (it may carry a credential), and with
+                # umask 0 inside an isolated run so the run's uid can edit what it wrote.
+                sandboxed=False,
+                **({"umask": 0, "cwd": str(self.path)} if isolated else {}),
                 **({"env": {**os.environ, **extra_env}} if extra_env else {}),
             )
         except subprocess.TimeoutExpired as error:

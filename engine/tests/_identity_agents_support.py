@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DB_ENV = "BOSS_IDENTITY_TEST_DATABASE_URL"
 MASTER_KEY = base64.b64encode(b"k" * 32).decode()
 ISSUER = "https://boss.test"
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 BASE = "https://boss.test"
 
 
@@ -51,6 +52,7 @@ CREATE TABLE IF NOT EXISTS roles (id TEXT PRIMARY KEY, role_key TEXT, agent_id T
   project_id TEXT, display_name TEXT, sponsor TEXT, spec JSONB);
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS spec JSONB;
 CREATE TABLE IF NOT EXISTS code_task_runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running');
+ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS spec JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE TABLE IF NOT EXISTS code_task_stop_requests (run_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, actor TEXT NOT NULL,
   reason TEXT, phase TEXT, requested_at TIMESTAMPTZ NOT NULL DEFAULT now(), honoured_at TIMESTAMPTZ);
 CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, paused_at TIMESTAMPTZ,
@@ -59,6 +61,7 @@ CREATE TABLE IF NOT EXISTS workflow_schedules (id TEXT PRIMARY KEY, enabled BOOL
   input JSONB NOT NULL DEFAULT '{}'::jsonb, last_error TEXT, updated_at TIMESTAMPTZ);
 CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, project_id TEXT, kind TEXT, payload JSONB NOT NULL DEFAULT '{}'::jsonb,
   status TEXT NOT NULL DEFAULT 'queued', last_error JSONB, updated_at TIMESTAMPTZ);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp();
 """
 
 _TRUNCATE = ("identity_security_events", "identity_egress_log", "identity_egress_credentials", "identity_dpop_replay",
@@ -66,7 +69,7 @@ _TRUNCATE = ("identity_security_events", "identity_egress_log", "identity_egress
              "identity_agent_ceilings", "identity_agent_passports", "identity_signing_keys", "identity_vault_items",
              "identity_vault_keks", "identity_sessions", "identity_api_credentials", "identity_principals",
              "code_task_stop_requests", "code_task_runs", "workflow_runs", "workflow_schedules", "roles", "jobs",
-             "identity_legacy_mappings", "projects", "workspaces")
+             "identity_legacy_mappings", "projects", "workspaces", "identity_revocation_notices", "identity_rate_limits")
 
 _schema_ready = False
 
@@ -277,14 +280,15 @@ def build_env(monkeypatch) -> Env:
 
 
 def start(env: Env, grant_id: str, *, agent=None, run="run_ct:task1", scope=BUILDER, repos=(), audiences=None,
-          person=None):
+          person=None, github_needs=None):
     from boss_engine.identity import runs
     from boss_engine.identity.delegation import AUD_API
 
     with env.db() as c:
         return runs.start_run(session_ctx(person or env.alice),
                               runs.RunStart(run_id=run, agent_id=agent or env.atlas, project_id=env.project,
-                                            repos=tuple(repos), scope=frozenset(scope)),
+                                            repos=tuple(repos), scope=frozenset(scope),
+                                            github_needs=github_needs),
                               grant_id=grant_id, db=c, audiences=audiences or (AUD_API,))
 
 
@@ -321,6 +325,12 @@ class FakeGitHub:
         self.rotating_refresh = itertools.count(1)
         self.compare_status = "ahead"
         self.mint_status = 201
+        #: The remote's git objects the egress push check may ask about: commit -> tree, and
+        #: tree -> [{"mode", "path", "sha"}]. An unknown commit's tree is the empty tree.
+        self.remote_commits: dict[str, str] = {}
+        self.remote_trees: dict[str, list[dict]] = {EMPTY_TREE: []}
+        self.remote_blobs: dict[str, bytes] = {}
+        self.pull_heads: dict[int, str] = {}
 
     def __call__(self, method, url, headers, body):
         import json as _json
@@ -340,6 +350,29 @@ class FakeGitHub:
         if method == "DELETE" and url.endswith("/installation/token"):
             self.deleted.append(auth.split(" ", 1)[1])
             return Response(204, b"")
+        if method == "GET" and "/git/commits/" in url:
+            sha = url.rsplit("/", 1)[1]
+            return Response(200, _json.dumps({"sha": sha, "tree": {"sha": self.remote_commits.get(sha, EMPTY_TREE)}}).encode())
+        if method == "GET" and "/git/trees/" in url:
+            sha = url.rsplit("/", 1)[1]
+            if sha not in self.remote_trees:
+                return Response(404, b"{}")
+            return Response(200, _json.dumps({"sha": sha, "tree": self.remote_trees[sha], "truncated": False}).encode())
+        if method == "GET" and "/git/blobs/" in url:
+            import base64 as _b64
+
+            sha = url.rsplit("/", 1)[1]
+            if sha not in self.remote_blobs:
+                return Response(404, b"{}")
+            return Response(200, _json.dumps({"sha": sha, "encoding": "base64",
+                                              "content": _b64.b64encode(self.remote_blobs[sha]).decode()}).encode())
+        if method == "GET" and "/pulls/" in url:
+            n = int(url.rsplit("/", 1)[1])
+            repo = url.split("/repos/", 1)[1].rsplit("/pulls/", 1)[0]
+            if n not in self.pull_heads:
+                return Response(404, b"{}")
+            return Response(200, _json.dumps({"number": n, "head": {"ref": self.pull_heads[n],
+                                                                    "repo": {"full_name": repo}}}).encode())
         if method == "GET" and "/compare/" in url:
             return Response(200, _json.dumps({"status": self.compare_status}).encode())
         if method == "GET" and "/repos/" in url:

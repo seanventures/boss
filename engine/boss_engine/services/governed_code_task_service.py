@@ -1752,8 +1752,15 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     try:
         # EVERYTHING THIS BUILD STARTS IS ITS OWN (stability spec §4a): agents, review seats,
         # commands, the serve proof — so Stop ends all of it, and nothing it started outlives it.
+        # AND RUNS AS ITS OWN UID (sandbox_identity, IDENTITY.md §7.6): the agent, its commands
+        # and its seats never run as the control plane's uid.
+        from .sandbox_identity import bind as _sandbox_bind
+
         with owned_process.owner_scope("code_run", run_id,
-                                       project_id=(run or {}).get("project_id"), fresh=True):
+                                       project_id=(run or {}).get("project_id"), fresh=True), \
+                _sandbox_bind(run_id) as _sbx:
+            if mcp is not None and _sbx is not None:
+                mcp.move_into(_sbx)
             return _run_governed_code_task(engine, settings, jobs, run_id,
                                            fencing_token=fencing_token, mcp=mcp)
     finally:

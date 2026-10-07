@@ -48,10 +48,13 @@ def test_s1_1_a_csrf_failure_is_403_and_a_cookie_plus_bearer_is_400_not_401():
 
 
 def test_a_compose_install_gets_a_persistent_master_key_file_and_server_key(tmp_path, monkeypatch):
-    """No installer step: the vault creates the key file once (0600), every process reads the same
-    one, and the server key (CSRF, hashed identifiers) derived from it survives a restart."""
+    """No installer step: at FIRST INSTALL the vault's boot step creates the key file once (0600),
+    every process reads the same one, and the server key (CSRF, hashed identifiers) derived from it
+    survives a restart. A runtime read never creates it (#10)."""
     import os
     import stat
+
+    import pytest as _pytest
 
     from boss_engine.config import get_settings
     from boss_engine.identity import authn_support, vault
@@ -61,6 +64,10 @@ def test_a_compose_install_gets_a_persistent_master_key_file_and_server_key(tmp_
     monkeypatch.setenv("BOSS_MASTER_KEY_FILE", str(key_file))
     monkeypatch.setattr(get_settings(), "identity_server_key", "")
     vault.reset_master_key_cache()
+    with _pytest.raises(vault.MasterKeyMissing):
+        vault._read_master_key()                  # a runtime read: no key appears
+    assert not key_file.exists()
+    vault._provision_key_file(key_file)           # what boot() does at first install
     authn_support.reset_server_key_for_tests()
     first = authn_support.server_key()
     assert key_file.exists() and stat.S_IMODE(os.stat(key_file).st_mode) == 0o600

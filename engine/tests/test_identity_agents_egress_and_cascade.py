@@ -59,7 +59,10 @@ def _setup(env, monkeypatch, *, repos=("acme/web",), gh=None, run="run_ct:task1"
     hub = install_github(monkeypatch, env)
     github_app.install_cascade_hook()
     g = env.grant(agents=(env.forge,), children=(env.vera,), repos=repos, gh=gh)
-    shim = start(env, g.id, agent=env.forge, repos=repos, run=run)
+    # A build declares what it writes on GitHub (a run with no declared needs only reads).
+    shim = start(env, g.id, agent=env.forge, repos=repos, run=run,
+                 github_needs={"contents": "write", "pull_requests": "write", "workflows": "write",
+                               "issues": "write"})
     up = Upstream()
     return hub, g, shim, up, EgressProxy(env.engine, upstream=up)
 
@@ -355,8 +358,11 @@ def test_a_disabled_person_suspends_their_grants_and_kills_their_runs(env):
     shim = start(env, g.id)
     with env.db() as c:
         c.execute(text("UPDATE identity_principals SET status = 'disabled' WHERE id = :u"), {"u": env.alice})
-    with env.db() as c:                                       # live check: refused even before the cascade
-        assert not tokens.decide(verify(env, shim), "code_task:read", None, db=c).allowed
+    # Live check at AUTHENTICATION: refused even before the cascade (verification re-checks the
+    # person, the grant and every agent, not only a later permission decision).
+    with pytest.raises(tokens.TokenError):
+        verify(env, shim)
+    with env.db() as c:
         report = cascade.revoke_cascade(CascadeTrigger.PERSON_DISABLED, env.alice,
                                         actor=cascade.system_actor("org_boss"), reason="scim", db=c)
     assert g.id in report.grants_suspended and report.run_tokens_revoked >= 1

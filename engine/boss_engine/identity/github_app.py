@@ -171,6 +171,11 @@ def run_repos(task: TaskBinding) -> list[str]:
     return [r for r in repos if isinstance(r, str)]
 
 
+#: What a run with no declared GitHub needs may do: read.
+DEFAULT_NEEDS: Mapping[str, str] = {"contents": "read", "pull_requests": "read", "issues": "read",
+                                    "checks": "read", "statuses": "read", "actions": "read"}
+
+
 def run_permissions(claims: RunTokenClaims, *, db: Any) -> dict[str, str]:
     """grant.github ∩ external_ceiling(every agent in the chain) ∩ step needs. Min level per key."""
     from . import grants, passports
@@ -184,8 +189,9 @@ def run_permissions(claims: RunTokenClaims, *, db: Any) -> dict[str, str]:
         p = passports.get(aid, db=db)
         sources.append(((p.external_ceiling if p else {}) or {}).get("github") or {})
     needs = (claims.task.resources or {}).get("github_permissions")
-    if isinstance(needs, Mapping):
-        sources.append(needs)
+    # A run that declared no needs gets READ ONLY, never the grant's full GitHub authority (#M):
+    # a build declares what it writes (runs.BUILD_GITHUB_NEEDS); a step that says nothing reads.
+    sources.append(needs if isinstance(needs, Mapping) else DEFAULT_NEEDS)
     keys = set().union(*[set(s) for s in sources]) if sources else set()
     out: dict[str, str] = {}
     for key in keys:
@@ -223,7 +229,9 @@ def mint_for_run(claims: RunTokenClaims, *, task: TaskBinding, db: Any):
         gh = grants.github_resources(grant)
         if not set(repos) <= set(gh.get("repos") or ()):
             raise GitHubRefused("repo_outside_grant")
-        grants.check_user_repo_access(claims.org_id, claims.sub, gh, db=db)
+        # At run start the guard asks GitHub NOW (no 15-minute cache): access the person lost a
+        # minute ago is not lent to their agent.
+        grants.check_user_repo_access(claims.org_id, claims.sub, gh, db=db, use_cache=False)
     perms = run_permissions(claims, db=db)
     if set(perms) == {"metadata"}:
         raise GitHubRefused("no_github_permissions")

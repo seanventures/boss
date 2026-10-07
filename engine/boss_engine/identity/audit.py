@@ -8,11 +8,13 @@ fails too (D22, A76). There is no write API; events come only from code paths.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import ipaddress
 import json
 import secrets
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -66,7 +68,8 @@ EVENT_TYPES: frozenset[str] = frozenset({
     # agents (stream = lineage for passport/grant/token events)
     "agent.passport.born", "agent.passport.sealed", "agent.passport.ceiling_changed",
     "agent.passport.sponsor_changed", "agent.passport.suspended", "agent.passport.resumed",
-    "agent.passport.revoked", "agent.passport.reissued",
+    "agent.passport.revoked", "agent.passport.reissued", "agent.passport.rules_changed",
+    "agent.passport.flagged",
     "delegation.created", "delegation.used_first", "delegation.narrowed", "delegation.revoked",
     "delegation.expired", "delegation.suspended", "delegation.extended",
     "token.issued", "token.exchanged", "token.denied", "credential.handed_out",
@@ -164,8 +167,73 @@ def canonical_json(row: Mapping[str, Any]) -> bytes:
                       default=str).encode("utf-8")
 
 
-def chain_hash(prev_hash: bytes, row: Mapping[str, Any]) -> bytes:
-    """hash = SHA-256(prev_hash ‖ canonical_json(row))."""
+#: hash_alg values: 1 = SHA-256 (rows from before the keyed chain), 2 = HMAC-SHA-256 keyed (#13).
+ALG_SHA256 = 1
+ALG_HMAC = 2
+
+
+CHAIN_KEY_CONNECTION = "audit-chain-key"
+_chain_keys: dict[str, bytes] = {}
+_chain_key_guard = threading.local()
+
+
+def reset_chain_key_cache() -> None:
+    _chain_keys.clear()
+
+
+def chain_key(org_id: Optional[str] = None, *, db: Any = None) -> Optional[bytes]:
+    """The org's chain HMAC key (#13): 32 random bytes held IN THE VAULT (envelope-encrypted under
+    the master key, which the database never holds), created on first use. So a row cannot be
+    rewritten consistently by anyone who has only the database — and rotating the master key
+    re-wraps it without changing it, so the chain stays verifiable. None when no master key is
+    configured (a dev process without a vault): the chain is then unkeyed (hash_alg 1)."""
+    if not org_id:
+        return None
+    if db is None or getattr(_chain_key_guard, "busy", False):
+        return None
+    from . import vault
+
+    try:
+        vault._kek()
+    except vault.MasterKeyMissing:
+        return None
+    _chain_key_guard.busy = True
+    created = False
+    try:
+        # In the CALLER's transaction, under a per-org lock: a key created here lives or dies with
+        # the events hashed under it (a rollback takes both), and a concurrent writer waits on the
+        # lock and then reads the committed key.
+        db.execute(_sql("SELECT pg_advisory_xact_lock(:k)"), {"k": _lock_key(f"chain-key:{org_id}")})
+        item = db.execute(_sql(
+            "SELECT id FROM identity_vault_items WHERE org_id = :o AND owner_principal_id IS NULL AND "
+            "provider = 'boss' AND connection_name = :n AND status = 'active' ORDER BY created_at LIMIT 1"),
+            {"o": org_id, "n": CHAIN_KEY_CONNECTION}).scalar()
+        if item is None:
+            if not db.execute(_sql("SELECT 1 FROM orgs WHERE id = :o"), {"o": org_id}).first():
+                return None
+            raw = secrets.token_bytes(32).hex()
+            vault.store(org_id=org_id, owner_principal_id=None, kind=vault.VaultItemKind.PROVIDER_CREDENTIAL,
+                        provider="boss", secret=raw, db=db, connection_name=CHAIN_KEY_CONNECTION)
+            created = True
+        else:
+            raw = vault.read_secret(item, db=db, kind=vault.VaultItemKind.PROVIDER_CREDENTIAL)
+        key = bytes.fromhex(raw)
+    finally:
+        _chain_key_guard.busy = False
+    del created          # never cached: a key read inside a transaction may yet be rolled back
+    return key
+
+
+def chain_hash(prev_hash: bytes, row: Mapping[str, Any], *, alg: Optional[int] = None,
+               key: Optional[bytes] = None) -> bytes:
+    """alg 2 (given a key): HMAC-SHA-256(chain key, prev_hash ‖ canonical_json(row)).
+    alg 1 (the default without a key): SHA-256(prev_hash ‖ canonical_json(row))."""
+    if alg is None:
+        alg = ALG_HMAC if key else ALG_SHA256
+    if alg == ALG_HMAC:
+        if not key:
+            raise AuditWriteRefused("the keyed audit chain needs its chain key")
+        return hmac.new(key, prev_hash + canonical_json(row), hashlib.sha256).digest()
     return hashlib.sha256(prev_hash + canonical_json(row)).digest()
 
 
@@ -303,6 +371,9 @@ def record(event: SecurityEvent, *, db: Any) -> RecordedEvent:
     if db is None:
         raise AuditWriteRefused("audit.record writes in the caller's transaction: pass db=")
     clean = prepare(event)
+    # The chain key BEFORE the org's lock: fetching it may itself write an event (a vault decrypt
+    # failure, in a side transaction) that needs that lock.
+    key = chain_key(clean.org_id, db=db)
     db.execute(_sql("SELECT pg_advisory_xact_lock(:k)"), {"k": _lock_key(clean.org_id)})
     last = db.execute(_sql(
         "SELECT seq, hash FROM identity_security_events WHERE org_id = :o "
@@ -312,23 +383,24 @@ def record(event: SecurityEvent, *, db: Any) -> RecordedEvent:
     ts = datetime.now(timezone.utc)
     row = event_row(clean, seq=seq, ts=ts)
     row["details"] = clean.details
-    digest = chain_hash(prev_hash, row)
+    alg = ALG_HMAC if key else ALG_SHA256
+    digest = chain_hash(prev_hash, row, alg=alg, key=key)
     params = {k: row.get(k) for k in HASHED_FIELDS}
     params.update(outcome=clean.outcome.value, stream=clean.stream.value,
                   chain=None if row.get("chain") is None else json.dumps(row["chain"]),
                   details=json.dumps(row["details"], ensure_ascii=False),
-                  prev_hash=prev_hash, hash=digest)
+                  prev_hash=prev_hash, hash=digest, hash_alg=alg)
     inserted = db.execute(_sql(
-        "INSERT INTO identity_security_events (" + ", ".join(_INSERT_COLUMNS) + ") VALUES ("
+        "INSERT INTO identity_security_events (" + ", ".join(_INSERT_COLUMNS) + ", hash_alg) VALUES ("
         + ", ".join(f"CAST(:{c} AS JSONB)" if c in ("chain", "details")
                     else f"CAST(:{c} AS INET)" if c == "ip" else f":{c}"
-                    for c in _INSERT_COLUMNS) + ") RETURNING id"), params).first()
+                    for c in _INSERT_COLUMNS) + ", :hash_alg) RETURNING id"), params).first()
     return RecordedEvent(id=int(inserted[0]), seq=seq, hash=digest)
 
 
 # ---- reading rows back -------------------------------------------------------------------------
 
-_SELECT = ("SELECT id, " + ", ".join(HASHED_FIELDS) + ", prev_hash, hash "
+_SELECT = ("SELECT id, " + ", ".join(HASHED_FIELDS) + ", prev_hash, hash, hash_alg "
            "FROM identity_security_events")
 
 
@@ -399,11 +471,16 @@ def verify_chain(org_id: str, *, db: Any, from_seq: Optional[int] = None) -> Cha
 
     checked = 0
     last_seq = 0
+    key = chain_key(org_id, db=db)
     for row in _iter_rows(db, org_id, from_seq=from_seq or 0):
         seq = int(row["seq"])
         last_seq = seq
         checked += 1
-        broken = chain_hash(row["prev_hash"], row) != row["hash"]
+        alg = int(row.get("hash_alg") or ALG_SHA256)
+        if key is not None and alg != ALG_HMAC:
+            broken = True                 # an unkeyed row in a keyed chain: never accepted (#13)
+        else:
+            broken = chain_hash(row["prev_hash"], row, alg=alg, key=key) != row["hash"]
         if not broken and seq <= pruned_through and expected_prev is None:
             # a row kept by a prune: it must be exactly the one the checkpoint recorded
             broken = retained.get(seq) != row["hash"].hex()
@@ -421,8 +498,75 @@ def verify_chain(org_id: str, *, db: Any, from_seq: Optional[int] = None) -> Cha
             return ChainVerification(False, org_id, checked, seq, first_break_seq=seq,
                                      verified_at=datetime.now(timezone.utc))
         expected_seq, expected_prev = seq + 1, row["hash"]
+    # THE ANCHORS (#13): every published daily anchor must still be in the chain — a row with that
+    # seq and that hash, or a pruned range a checkpoint accounts for. A chain cut back to before
+    # an anchor (rows deleted from the end) breaks here even though what is left links up.
+    for anchor_seq, anchor_hex in _anchors(db, org_id):
+        if from_seq and anchor_seq < from_seq:
+            continue
+        if anchor_seq > last_seq:
+            return ChainVerification(False, org_id, checked, last_seq, first_break_seq=last_seq + 1,
+                                     verified_at=datetime.now(timezone.utc))
+        if anchor_seq <= pruned_through and anchor_seq not in retained:
+            if anchor_seq in anchor_hash and anchor_hash[anchor_seq].hex() != anchor_hex:
+                return ChainVerification(False, org_id, checked, last_seq, first_break_seq=anchor_seq,
+                                         verified_at=datetime.now(timezone.utc))
+            continue
+        stored = db.execute(_sql("SELECT hash FROM identity_security_events WHERE org_id = :o AND seq = :s"),
+                            {"o": org_id, "s": anchor_seq}).first()
+        if stored is None or bytes(stored[0]).hex() != anchor_hex:
+            return ChainVerification(False, org_id, checked, last_seq, first_break_seq=anchor_seq,
+                                     verified_at=datetime.now(timezone.utc))
     return ChainVerification(True, org_id, checked, last_seq,
                              verified_at=datetime.now(timezone.utc))
+
+
+def _anchors(db: Any, org_id: str) -> list[tuple[int, str]]:
+    """(seq, hash hex) of every daily anchor published for this org (the activity log)."""
+    if not db.execute(_sql("SELECT to_regclass('events') IS NOT NULL")).scalar():
+        return []
+    rows = db.execute(_sql("SELECT data FROM events WHERE event_type = 'identity.audit_anchor' "
+                           "AND data->>'org_id' = :o"), {"o": org_id}).scalars().all()
+    out = []
+    for data in rows:
+        d = data if isinstance(data, dict) else json.loads(data or "{}")
+        try:
+            out.append((int(d["seq"]), str(d["hash"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return sorted(out)
+
+
+def rekey(org_id: str, *, db: Any) -> int:
+    """Once, at boot: re-hash the rows written before the keyed chain (hash_alg 1) with the chain
+    key, IF their old chain verifies. Only their hash columns change (the table's trigger checks
+    it), through identity_audit_rekey. Returns the number of rows re-keyed."""
+    key = chain_key(org_id, db=db)
+    if key is None:
+        return 0
+    if not db.execute(_sql("SELECT 1 FROM identity_security_events WHERE org_id = :o AND hash_alg = 1 LIMIT 1"),
+                      {"o": org_id}).first():
+        return 0
+    db.execute(_sql("SELECT pg_advisory_xact_lock(:k)"), {"k": _lock_key(org_id)})
+    rows = list(_iter_rows(db, org_id))
+    prev = GENESIS_HASH
+    seqs, prevs, hashes = [], [], []
+    for row in rows:
+        alg = int(row.get("hash_alg") or ALG_SHA256)
+        if alg != ALG_SHA256:
+            return 0                              # a mixed chain is not re-keyed: verify reports it
+        if chain_hash(row["prev_hash"], row, alg=ALG_SHA256) != row["hash"]:
+            return 0                              # a broken old chain is never laundered into a keyed one
+        new = chain_hash(prev, row, alg=ALG_HMAC, key=key)
+        seqs.append(int(row["seq"]))
+        prevs.append(prev)
+        hashes.append(new)
+        prev = new
+    if not seqs or seqs[0] != 1:
+        return 0                                  # pruned history: left for an operator decision
+    db.execute(_sql("SELECT identity_audit_rekey(:o, :s, :p, :h)"),
+               {"o": org_id, "s": seqs, "p": prevs, "h": hashes})
+    return len(seqs)
 
 
 def head(org_id: str, *, db: Any) -> Optional[tuple[int, bytes]]:
@@ -446,7 +590,7 @@ def prune(org_id: str, *, before: datetime, db: Any, actor_principal_id: str,
           actor_kind: Optional[str] = None, ctx: Optional[AuthContext] = None) -> PruneResult:
     """Delete the events older than `before`, after writing an `audit.checkpoint` that holds the
     hash of the pruned range, so the chain still verifies. `bootstrap.claimed` and earlier
-    checkpoints are kept (KEEP_ON_PRUNE). The DELETE is allowed only inside this transaction."""
+    checkpoints are kept (KEEP_ON_PRUNE). The DELETE happens only inside identity_audit_prune."""
     db.execute(_sql("SELECT pg_advisory_xact_lock(:k)"), {"k": _lock_key(org_id)})
     newest_kept = db.execute(_sql(
         "SELECT min(seq) FROM identity_security_events WHERE org_id = :o AND ts >= :b"),
@@ -477,14 +621,10 @@ def prune(org_id: str, *, before: datetime, db: Any, actor_principal_id: str,
                               actor_principal_id=actor_principal_id, actor_kind=actor_kind,
                               details=details)
     checkpoint = record(event, db=db)
-    db.execute(_sql("SELECT set_config('boss.identity_audit_prune', 'on', true)"))
-    try:
-        db.execute(_sql(
-            "DELETE FROM identity_security_events WHERE org_id = :o AND seq <= :u "
-            "AND event_type <> ALL(:keep)"),
-            {"o": org_id, "u": upper, "keep": sorted(KEEP_ON_PRUNE)})
-    finally:
-        db.execute(_sql("SELECT set_config('boss.identity_audit_prune', 'off', true)"))
+    # The DELETE runs inside identity_audit_prune, as boss_audit_owner: it deletes only the range
+    # the checkpoint just written names. No session switch exists for an app session to set (#13).
+    db.execute(_sql("SELECT identity_audit_prune(:o, :u, :keep)"),
+               {"o": org_id, "u": upper, "keep": sorted(KEEP_ON_PRUNE)})
     return PruneResult(len(doomed), int(upper), checkpoint.seq, len(retained))
 
 
@@ -498,6 +638,7 @@ def to_public(row: Mapping[str, Any]) -> dict[str, Any]:
     for key in ("prev_hash", "hash"):
         value = row.get(key)
         out[key] = bytes(value).hex() if value is not None else None
+    out["hash_alg"] = int(row.get("hash_alg") or ALG_SHA256)
     return out
 
 
@@ -534,8 +675,9 @@ def export(org_id: str, *, db: Any, ctx: Optional[AuthContext] = None,
         "org_id": org_id,
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "format": "boss-identity-audit/1",
-        "hash": "sha256(prev_hash || canonical_json(row)); canonical_json = HASHED_FIELDS, sorted "
-                "keys, no whitespace, UTF-8, ts ISO-8601 UTC with microseconds",
+        "hash": "hash_alg 2: hmac_sha256(org chain key, prev_hash || canonical_json(row)) — re-verify with "
+                "the chain key (vault); hash_alg 1: sha256(prev_hash || canonical_json(row)); canonical_json = "
+                "HASHED_FIELDS, sorted keys, no whitespace, UTF-8, ts ISO-8601 UTC with microseconds",
         "verification": {"ok": verification.ok, "checked": verification.checked,
                          "last_seq": verification.last_seq,
                          "first_break_seq": verification.first_break_seq},

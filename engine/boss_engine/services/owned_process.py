@@ -554,8 +554,21 @@ class OwnedPopen(subprocess.Popen):
     def __init__(self, args: Any, *, owner: Optional[Owner] = None,
                  resource: str = "process_group", record: bool = True,
                  keep_tree_on_exit: bool = False, expires_at: Any = None,
-                 refuse_when_stopped: bool = True, **kwargs: Any) -> None:
+                 refuse_when_stopped: bool = True, sandboxed: Optional[bool] = None,
+                 **kwargs: Any) -> None:
         self.owner = owner or current_owner()
+        # THE SANDBOX BOUNDARY (sandbox_identity, IDENTITY.md §7.6): a workload spawned for a run
+        # that holds a sandbox uid runs AS that uid, never as the control plane's. `sandboxed=False`
+        # is for BOSS's own operations on the run (its git with a credential the agent must not see).
+        self.sandbox = None
+        if sandboxed is not False and self.owner is not None and self.owner.kind in WORKLOAD_KINDS:
+            from . import sandbox_identity
+
+            self.sandbox = sandbox_identity.for_owner(self.owner)
+            if self.sandbox is not None:
+                args = self.sandbox.wrap(args, shell=bool(kwargs.pop("shell", False)))
+                kwargs["env"] = self.sandbox.env(kwargs.get("env"))
+                kwargs["cwd"] = self.sandbox.cwd(kwargs.get("cwd"))
         if self.owner is not None and refuse_when_stopped:
             stopped = next((i for i in self.owner.ids() if i in _CANCELLED), None)
             if stopped:
@@ -611,6 +624,8 @@ class OwnedPopen(subprocess.Popen):
         with self._end_lock:
             if self._ended and self.end_result is not None and not self.end_result.get("alive"):
                 return self.end_result
+            if self.sandbox is not None:
+                self._end_sandboxed(grace)
             result = terminate_tree(self.pgid, self.token, grace=grace, reap=self._reap_leader)
             self._reap_leader()
             self.end_reason = self.end_reason or reason
@@ -621,6 +636,22 @@ class OwnedPopen(subprocess.Popen):
         with contextlib.suppress(Exception):
             _LEDGER.release(self.ledger_id, self.end_reason or reason)
         return result
+
+    def _end_sandboxed(self, grace: float) -> None:
+        """The leader is boss-sandbox-exec; the command under it runs as the run's uid, which this
+        process may not signal. The helper relays: SIGTERM (it SIGKILLs after its own grace) or,
+        with no grace, SIGUSR1 (SIGKILL now). It must still be alive to relay, so it is never
+        SIGKILLed first."""
+        if self.returncode is not None:
+            return
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.kill(self.pid, signal.SIGTERM if grace > 0 else signal.SIGUSR1)
+        deadline = time.monotonic() + max(grace, 0.0) + 4.0
+        while time.monotonic() < deadline:
+            self._reap_leader()
+            if self.returncode is not None:
+                return
+            time.sleep(0.05)
 
     def _reap_leader(self) -> None:
         if self.returncode is None:
@@ -762,6 +793,8 @@ def communicate(proc: OwnedPopen, input: Any = None,  # noqa: A002
 
 
 def popen(args: Any, **kwargs: Any) -> OwnedPopen:
+    """`sandboxed=False` keeps a workload spawn (BOSS's own git on a run's checkout) out of the
+    run's sandbox uid; by default a run's workload runs as the run's sandbox uid."""
     return OwnedPopen(args, **kwargs)
 
 
@@ -804,12 +837,18 @@ def run(args: Any, *, timeout: Optional[float] = None, input: Any = None,  # noq
     return completed
 
 
+def boss_run(args: Any, **kwargs: Any) -> subprocess.CompletedProcess:
+    """`run` for BOSS's OWN operations on a run's behalf — the docker CLI, a clone with BOSS's
+    credential, process inspection: never as the run's sandbox uid (sandbox_identity)."""
+    return run(args, sandboxed=False, **kwargs)
+
+
 __all__ = [
     "DEFAULT_GRACE_SECONDS", "Owner", "OwnedPopen", "ProcInfo", "TOKEN_ENV", "current_owner",
     "ledger", "live", "live_owner_ids", "members", "owner_scope", "pids_with_token", "popen",
     "processes", "run", "set_ledger", "terminate_all", "terminate_owner", "terminate_tree",
     "was_cancelled", "zombie_count", "OwnerCancelled", "begin_drain", "draining", "orphan_trees", "poll_all",
-    "sweep_orphans", "token_census",
+    "sweep_orphans", "token_census", "boss_run",
 ]
 
 

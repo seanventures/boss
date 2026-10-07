@@ -199,8 +199,11 @@ def _fake_cascade(world: World):
 def wipe(db: Any) -> None:
     for table in IDENTITY_TABLES_CHILD_FIRST:
         db.execute(text(f"DELETE FROM {table}"))
-    db.execute(text("SET LOCAL boss.identity_audit_prune = 'on'"))
+    # The log is append-only for every session (no switch opens it): a test wipe bypasses the
+    # trigger as the superuser test role, in this transaction only.
+    db.execute(text("SET LOCAL session_replication_role = replica"))
     db.execute(text("DELETE FROM identity_security_events"))
+    db.execute(text("SET LOCAL session_replication_role = origin"))
     db.execute(text("DELETE FROM identity_principals WHERE kind <> 'agent'"))
 
 

@@ -63,10 +63,12 @@ def grant_event(db: Any, grant: Any, event_type: str, *, ctx: Optional[AuthConte
     _record(db, event)
 
 
-def token_event(db: Any, claims: RunTokenClaims, event_type: str) -> None:
-    """`token.issued` / `token.exchanged`: jti, parent_jti, sub, chain, grant, run, aud, scope hash."""
+def token_event(db: Any, claims: RunTokenClaims, event_type: str, *, renewed_from: Optional[str] = None) -> None:
+    """`token.issued` / `token.exchanged`: jti, parent_jti, sub, chain, grant, run, aud, scope hash —
+    and, for a renewal, the jti it renewed (`renewed_from`), so the walk back never breaks."""
     from . import audit
 
+    extra = {"renewed_from": renewed_from} if renewed_from else {}
     current = claims.chain.current
     _record(db, audit.SecurityEvent(
         org_id=claims.org_id, event_type=event_type, outcome=audit.Outcome.SUCCESS,
@@ -76,7 +78,7 @@ def token_event(db: Any, claims: RunTokenClaims, event_type: str) -> None:
         target_type="run", target_id=claims.task.run_id,
         details={"parent_jti": claims.parent_jti, "aud": claims.aud, "depth": claims.depth,
                  "scope_hash": scope_hash(claims.scope), "mode": claims.mode.value,
-                 "project": claims.task.project_id, "step": claims.task.step}))
+                 "project": claims.task.project_id, "step": claims.task.step, **extra}))
 
 
 def denied(db: Any, *, org_id: str, event_type: str, reason: str, run_id: Optional[str] = None,
@@ -224,7 +226,15 @@ SYSTEM_PRINCIPAL = "sys_worker"
 SYSTEM_ACTING = Acting(principal_id=SYSTEM_PRINCIPAL, org_id="", system=True)
 
 
-def stamp_job(payload: dict[str, Any], who: Optional[Acting] = None) -> dict[str, Any]:
+#: Job kinds that ACT ON SOMEONE'S BEHALF (a build, a PR, an agent turn, a skill): one with no
+#: principal fails closed at enqueue under enforcement, and is never quietly stamped sys_worker
+#: (#8). Other kinds (sweeps, deliveries) are BOSS's own work.
+DELEGATED_JOB_KINDS = frozenset({"code.task", "software_factory.propose_pr", "github.pull_request.merge",
+                                 "github.repository.reconcile", "agent.resume", "agent.studio.execute",
+                                 "agent.orchestrator.next_move", "skill.execute"})
+
+
+def stamp_job(payload: dict[str, Any], who: Optional[Acting] = None, *, kind: Optional[str] = None) -> dict[str, Any]:
     """Stamp `payload["_identity"]` from `who` or the ambient context. A payload may not bring its
     own `_identity` (that would be an asserted identity): it is always overwritten.
 
@@ -238,6 +248,14 @@ def stamp_job(payload: dict[str, Any], who: Optional[Acting] = None) -> dict[str
     jobs goes through that, so the columns and the payload never disagree."""
     payload.pop(JOB_IDENTITY_KEY, None)
     acting_now = who if who is not None else current()
+    if acting_now is None and kind in DELEGATED_JOB_KINDS:
+        import logging
+
+        if _enforced():
+            raise PrincipalRequired(f"a {kind} job acts on someone's behalf and nobody is acting here")
+        logging.getLogger(__name__).warning(
+            "[identity] SHADOW: a %s job was enqueued with no principal; under BOSS_AUTHZ_MODE=enforce it "
+            "is refused. It is stamped as system work and will hold no grant.", kind)
     if acting_now is None:
         import inspect
         import logging
@@ -256,15 +274,15 @@ def stamp_job(payload: dict[str, Any], who: Optional[Acting] = None) -> dict[str
 JOB_IDENTITY_COLUMNS = ("on_behalf_of", "grant_id", "chain", "on_behalf_system")
 
 
-def stamp_job_row(payload: Optional[Mapping[str, Any]], who: Optional[Acting] = None
-                  ) -> tuple[dict[str, Any], dict[str, Any]]:
+def stamp_job_row(payload: Optional[Mapping[str, Any]], who: Optional[Acting] = None, *,
+                  kind: Optional[str] = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """(payload, columns) for one `INSERT INTO jobs`: the payload stamped by `stamp_job`, and the
     values for the row's `on_behalf_of`, `grant_id`, `chain` (JSON text, bind it with
     `CAST(:chain AS JSONB)`) and `on_behalf_system`. Every job enqueue path uses this; a raw
     INSERT that skipped it would be a job with no principal (R8)."""
     import json
 
-    stamped = stamp_job(dict(payload or {}), who)
+    stamped = stamp_job(dict(payload or {}), who, kind=kind)
     data = stamped.get(JOB_IDENTITY_KEY) or {}
     chain = list(data.get("chain") or [])
     return stamped, {"on_behalf_of": data.get("on_behalf_of"), "grant_id": data.get("grant_id"),
