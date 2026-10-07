@@ -168,7 +168,7 @@ import {
   extractSoftwareFactoryDecisionEvidence,
 } from "../lib/software-factory";
 import { fetchSkillFeed } from "../lib/skills";
-import { fetchStatus } from "../lib/status";
+import { controlPlaneOnline, fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
 import { API_URL, PROJECT_ID } from "../lib/client";
 import { SubmitButton } from "./submit-button";
@@ -886,7 +886,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   return (
     <ConsoleShell
       status={{
-        apiReachable: status.apiReachable,
+        // Online when the API answered at all: a refused status read is not an outage (lib/status).
+        apiReachable: controlPlaneOnline(status),
         budgetState: status.budgetState,
         deadletters: deadletterCount,
         pendingDecisions: status.pendingDecisions,

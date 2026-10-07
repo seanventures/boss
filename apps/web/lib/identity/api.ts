@@ -9,6 +9,7 @@ import { isPermission, type Permission } from "./permissions.gen";
 import { apiWrite, type WriteMethod } from "../api-write";
 import { sendToEnrolment } from "./enrolment";
 import { needsWords } from "./words";
+import { refusalCode } from "./refusal-code";
 
 export type IdentityErrorCode =
   | "unauthenticated" | "step_up_required" | "forbidden" | "csrf_failed" | "not_found" | "invalid_credentials"
@@ -122,7 +123,7 @@ async function idFetchOnce<T>(method: string, path: string, body?: unknown, init
   try { data = await res.json(); } catch { data = null; }
   if (!res.ok) {
     const d = (data ?? {}) as { error?: unknown; detail?: unknown; permission?: unknown; attempts_left?: unknown };
-    const code = typeof d.error === "string" ? d.error : typeof d.detail === "string" ? d.detail : res.status === 429 ? "rate_limited" : "error";
+    const code = refusalCode(res.status, d);
     const retry = Number(res.headers.get("retry-after"));
     const body = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : {};
     // An enrolment-only session: the one thing to do is enrol (lib/identity/enrolment.ts).
