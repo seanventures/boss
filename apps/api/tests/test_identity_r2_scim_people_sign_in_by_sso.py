@@ -97,3 +97,32 @@ def test_an_idp_synced_membership_cannot_be_removed_by_hand(world, engine):
         manual = client.delete(f"/v1/identity/groups/{gid}/members/{carla.id}", headers={"sec-fetch-site": "same-origin"})
     assert synced.status_code == 409 and synced.json()["error"] == "idp_membership_read_only", synced.text
     assert manual.status_code == 200, manual.text
+
+
+def test_scim_deactivating_a_signed_in_person_ends_their_session(world, engine, idp):
+    from boss_engine.identity import scim
+    from boss_engine.identity.principal import AuthContext, AuthMethod
+    from boss_engine.identity.users import load_principal
+
+    provider = make_provider(engine)
+    eve = _scim_person(engine, "eve@corp.test", provider)
+    idp.claims = {"email": "eve@corp.test", "email_verified": True, "sub": "eve-sub"}
+    client = fresh_client()
+    assert_signed_in(login_via(client, provider, idp)[0])
+    assert client.get("/v1/identity/me").status_code == 200
+    with engine.begin() as db:
+        ctx = AuthContext(load_principal(db, provisioning_principal(provider)) or
+                          _scim_principal(db, provider), AuthMethod.API_KEY)
+        scim.patch_user(db, ctx, eve, {"schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+                                       "Operations": [{"op": "replace", "path": "active", "value": False}]})
+    assert client.get("/v1/identity/me").status_code == 401
+
+
+def _scim_principal(db, provider):
+    from boss_engine.identity.principal import Principal, PrincipalKind, PrincipalStatus
+
+    org = default_org_id(db)
+    pid = provisioning_principal(provider)
+    db.execute(text("INSERT INTO identity_principals (id, org_id, kind, status, display_name) "
+                    "VALUES (:p, :o, 'system', 'active', 'SCIM') ON CONFLICT DO NOTHING"), {"p": pid, "o": org})
+    return Principal(pid, PrincipalKind.SYSTEM, org, PrincipalStatus.ACTIVE, "SCIM")
