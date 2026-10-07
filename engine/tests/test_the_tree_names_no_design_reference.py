@@ -1,9 +1,10 @@
-"""BOSS HAS NO CONNECTION TO KAAPPU (operator rule, round 3).
+"""BOSS HAS NO CONNECTION TO THE PRODUCT ITS IDENTITY SCREENS WERE MODELLED ON (operator rule).
 
-Kaappu was a design reference for BOSS Identity, nothing more: no code, comment, fixture, test
-account or document in the tracked tree names it. Fixtures use a neutral fake domain
-(example.com, example.test, boss.test). This test is the one place the word is spelled, and it
-assembles it so the scan below never finds itself.
+That product was a design reference for BOSS Identity and its sign-in layout, nothing more: no
+code, comment, fixture, test account, asset or document in the tracked tree names it. Fixtures
+use a neutral fake domain (example.com, example.test, boss.test). The word is assembled below so
+the scan never finds this file itself (this docstring used to spell it, and the test failed on
+its own text). The web suite has a twin: apps/web/tests/the-tree-names-no-design-reference.test.ts.
 """
 from __future__ import annotations
 

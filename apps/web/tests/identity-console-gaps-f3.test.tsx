@@ -202,14 +202,16 @@ describe("G13/G14 · the public URL", () => {
     expect(read("app/setup/setup-board.tsx")).toContain("<PublicUrlRow />");
   });
 
-  it("email sign-in is offered only with SMTP and a public URL", async () => {
+  it("email sign-in is offered only with SMTP and a public URL (otherwise shown disabled, saying why)", async () => {
     expect(emailSignInOffered({ smtp: true, public_origin: "https://boss.acme.dev" })).toBe(true);
     expect(emailSignInOffered({ smtp: true, public_origin: undefined })).toBe(true);   // an API that does not say
     expect(emailSignInOffered({ smtp: true, public_origin: null })).toBe(false);
     expect(emailSignInOffered({ smtp: false, public_origin: "https://x" })).toBe(false);
     const el = await mount(<SignIn options={{ ...OPTIONS, public_origin: null }} next="/" />);
-    expect(el.textContent).not.toContain("Magic link");
-    expect(el.textContent).not.toContain("Email code");
+    // The methods keep their place but are off, and their tooltip names the missing public address.
+    const off = [...el.querySelectorAll("[role='tab'][aria-disabled='true']")];
+    expect(off.map((t) => t.textContent)).toEqual(["Magic link", "Email code"]);
+    expect(document.getElementById(off[0].getAttribute("aria-describedby") ?? "")?.textContent).toBe("Magic links need BOSS's public address set");
     expect(el.querySelector("a[href='/reset']")).toBeNull();
   });
 });

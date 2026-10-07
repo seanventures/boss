@@ -103,36 +103,41 @@ const FULL: AuthOptions = {
 };
 
 describe("sign-in (D33)", () => {
-  it("shows the configured providers, the passkey first and three email tabs with SMTP", async () => {
+  it("shows the configured providers live, the passkey first and three email tabs with SMTP", async () => {
     vi.stubGlobal("PublicKeyCredential", function PublicKeyCredential() {});
     if (!navigator.credentials) Object.defineProperty(navigator, "credentials", { value: {}, configurable: true });
     const el = await mount(<SignIn options={FULL} next="/" />);
-    expect(el.querySelectorAll(".idn-pv").length).toBe(3);
-    expect(el.querySelector("[aria-label='Continue with Google']")).not.toBeNull();
-    expect(el.textContent).toContain("Acme SSO");
+    // Google, GitHub, Microsoft, Apple always; then the configured OIDC/SAML provider.
+    expect(el.querySelectorAll(".idn-idp").length).toBe(5);
+    expect(el.querySelectorAll("a.idn-idp").length).toBe(3);
+    expect(el.querySelector("a[aria-label='Continue with Google']")).not.toBeNull();
+    expect(el.querySelector("a[aria-label='Continue with Acme SSO']")).not.toBeNull();
+    expect(el.querySelector("[data-testid='sso-off-microsoft']")?.getAttribute("aria-disabled")).toBe("true");
     expect([...el.querySelectorAll("[role='tab']")].map((t) => t.textContent)).toEqual(["Password", "Magic link", "Email code"]);
-    expect(el.querySelector("[data-testid='passkey-sign-in']")).not.toBeNull();
-    expect(el.textContent).toContain("Ask an admin to invite you");
-    expect(el.textContent).toContain("Forgot password?");
+    expect(el.querySelectorAll("[role='tab'][aria-disabled='true']").length).toBe(0);
+    expect(el.querySelector("[data-testid='passkey-sign-in']")?.getAttribute("aria-disabled")).toBeNull();
+    expect(el.querySelector("a[data-testid='forgot']")?.getAttribute("href")).toBe("/reset");
+    expect(el.querySelector("[data-testid='create-account']")?.textContent).toBe("Create account");
     expect(el.querySelectorAll("h1").length).toBe(1);
     for (const input of el.querySelectorAll("input")) expect(el.querySelector(`label[for='${input.id}']`), input.id).not.toBeNull();
     expect(identityCopyAudit(el)).toEqual({ labels: [], prose: [], tips: [] });
     expect(el.textContent).not.toMatch(/phone|SMS/i);
   });
 
-  it("with nothing configured: no icon row, no tabs, and 'Ask an admin' instead of Forgot", async () => {
+  it("with nothing configured: the same shape, each option disabled with what turns it on", async () => {
     const el = await mount(<SignIn options={{ ...FULL, providers: [], smtp: false }} next="/" />);
-    expect(el.querySelector(".idn-provs")).toBeNull();
-    expect(el.querySelector("[role='tablist']")).toBeNull();
-    expect(el.textContent).not.toContain("Forgot password?");
-    expect(el.textContent).toContain("Ask an admin");
+    expect(el.querySelectorAll("button.idn-idp[aria-disabled='true']").length).toBe(4);
+    expect(el.querySelector("a.idn-idp")).toBeNull();
+    expect(el.querySelector("[role='tablist']")).not.toBeNull();
+    expect([...el.querySelectorAll("[role='tab'][aria-disabled='true']")].map((t) => t.textContent)).toEqual(["Magic link", "Email code"]);
+    expect(el.querySelector("button[data-testid='forgot']")).not.toBeNull();
+    expect(el.querySelector("a[href='/reset']")).toBeNull();
   });
 
-  it("one provider is a full-width Continue with X; self sign-up changes the footer", async () => {
-    const el = await mount(<SignIn options={{ ...FULL, providers: [FULL.providers[2]], signup: true }} next="/" />);
-    expect(el.querySelector(".idn-pv.full")?.textContent).toContain("Continue with Acme SSO");
+  it("self sign-up makes Create account a link to /signup", async () => {
+    const el = await mount(<SignIn options={{ ...FULL, signup: true }} next="/" />);
     expect(el.textContent).toContain("New here?");
-    expect(el.querySelector("a[href='/signup']")).not.toBeNull();
+    expect(el.querySelector("a[href='/signup']")?.textContent).toBe("Create account");
   });
 
   it("the tabs are a keyboard tablist", async () => {
