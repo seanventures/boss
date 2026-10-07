@@ -207,7 +207,24 @@ export type ForwardedIdentity = {
   csrf: string | null;
   /** The browser's origin (a same-origin write already passed middleware's check). */
   origin: string | null;
+  /** The console's origin as the browser addressed it (consoleOriginOf), for every call: sent as
+   *  X-Forwarded-Host/Proto, so the API answers about the browser's address — /v1/auth/options'
+   *  host and claim origin — never about the `api:8000` a server-side fetch dials (round 3, W1).
+   *  The API believes it only from a trusted proxy, as it does the /v1 proxy's. */
+  consoleOrigin?: string | null;
 };
+
+/** X-Forwarded-Host/Proto for an origin, or null when it is not one. */
+export function forwardedHostHeaders(origin: string | null | undefined): { host: string; proto: string } | null {
+  if (!origin) return null;
+  try {
+    const url = new URL(origin);
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || !url.host) return null;
+    return { host: url.host, proto: url.protocol.replace(":", "") };
+  } catch {
+    return null;
+  }
+}
 
 export type IdentityResolver = (write: boolean) => Promise<ForwardedIdentity | null>;
 
@@ -257,6 +274,11 @@ export async function withForwardedIdentity(method: string, given: HeadersInit |
   const write = WRITES.has(method.toUpperCase());
   const who = await resolveForwardedIdentity(write);
   if (who?.cookie) out.set("cookie", who.cookie);
+  const addressed = forwardedHostHeaders(who?.consoleOrigin);
+  if (addressed && !out.has("x-forwarded-host")) {
+    out.set("x-forwarded-host", addressed.host);
+    out.set("x-forwarded-proto", addressed.proto);
+  }
   if (write && who) {
     if (who.csrf && !out.has(CSRF_HEADER_LC)) out.set(CSRF_HEADER_LC, who.csrf);
     if (who.origin) {

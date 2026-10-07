@@ -12,6 +12,7 @@ import { ME_PATH, ME_PERMISSIONS_PATH } from "./contract";
 import { withForwardedIdentity } from "./forward";
 import { answerFromStub } from "./server-fetch";
 import { identityStubEnabled } from "./stub/enabled";
+import { refusalCode } from "./refusal-code";
 
 export type ServerRead<T> =
   | { ok: true; data: T }
@@ -29,7 +30,7 @@ export async function serverGet<T>(path: string): Promise<ServerRead<T>> {
     }
     const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     if (!res.ok) {
-      return { ok: false, status: res.status, code: String(data?.error ?? data?.detail ?? "error"),
+      return { ok: false, status: res.status, code: refusalCode(res.status, data),
         permission: typeof data?.permission === "string" ? data.permission : null };
     }
     return { ok: true, data: data as T };

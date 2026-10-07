@@ -54,6 +54,6 @@ export async function register(): Promise<void> {
         }
       }
     }
-    return { cookie, csrf: csrf ?? null, origin };
+    return { cookie, csrf: csrf ?? null, origin, consoleOrigin: forward.consoleOriginOf(incoming) };
   });
 }

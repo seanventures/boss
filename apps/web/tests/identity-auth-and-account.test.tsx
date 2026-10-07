@@ -142,6 +142,27 @@ describe("Claim this BOSS", () => {
     accessible(el);
   });
 
+  it("a setup link on a shared-password install is the proof: no password asked, the token is sent (J2)", async () => {
+    routes({ "POST /v1/auth/setup/claim": { body: { next: "enrol", methods: ["passkey"], who: null } } });
+    window.history.replaceState(null, "", "/claim#t=setup_abc");
+    const el = await mount(<ClaimFlow options={options({ path: "legacy_password", paths: ["setup_token", "legacy_password"], origin: null, expires_at: null, seats: [] })} />);
+    expect(el.querySelector("[data-testid='claim-legacy-password']")).toBeNull();
+    expect(el.querySelector("[data-testid='console-password-hint']")).toBeNull();
+    type(el.querySelector("#claim-name"), "Param Gnanaguru");
+    type(el.querySelector("#claim-email"), "param@example.com");
+    await click(el.querySelector("[data-testid='claim-submit']"));
+    const claim = calls.find((c) => c.url === "/v1/auth/setup/claim");
+    expect(claim?.body).toMatchObject({ setup_token: "setup_abc" });
+    expect(claim?.body).not.toHaveProperty("legacy_password");
+    window.history.replaceState(null, "", "/claim");
+  });
+
+  it("network bridge with no origin from the API binds the page's own (J14)", async () => {
+    window.history.replaceState(null, "", "/claim");
+    const el = await mount(<ClaimFlow options={options({ path: "network_bridge", paths: ["setup_token", "network"], origin: null, expires_at: null, seats: [] })} />);
+    expect(el.querySelector("[data-testid='claim-origin'] code")?.textContent).toBe(window.location.origin);
+  });
+
   it("network bridge: shows the origin it binds to and will not go on until it is confirmed", async () => {
     routes({
       "POST /v1/auth/setup/claim": { body: { next: "enrol", methods: ["passkey"], who: null } },
@@ -161,7 +182,7 @@ describe("Claim this BOSS", () => {
     expect(submit.disabled).toBe(false);
     await click(submit);
     const claim = calls.find((c) => c.url === "/v1/auth/setup/claim");
-    expect(claim?.body).toMatchObject({ origin, name: "Param Gnanaguru", email: "param@example.com", seat: "ceo" });
+    expect(claim?.body).toMatchObject({ confirm_origin: origin, name: "Param Gnanaguru", email: "param@example.com", seat: "ceo" });
     expect(calls.some((c) => c.url === "/v1/identity/me/passkeys" && c.method === "POST")).toBe(true);
     expect(el.querySelector("[data-testid='recovery-codes']")?.textContent).toContain(CODES[0]);
   });

@@ -19,6 +19,7 @@ import { Fingerprint, ShieldCheck, Warning } from "@phosphor-icons/react";
 import { idPost } from "../../../lib/identity/api";
 import type { AuthOptions } from "../../../lib/identity/types";
 import { codesOf, type RecoveryCodes } from "../../../lib/identity/types-auth";
+import { claimOrigin, claimPathFor, claimProof } from "../../../lib/identity/claim-path";
 import { webauthnAvailable } from "../../../lib/identity/webauthn";
 import { AuthStage, Live, Logo, fragmentToken } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
@@ -75,17 +76,22 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mins, setMins] = useState<number | null>(null);
+  const [pageOrigin, setPageOrigin] = useState<string | null>(null);
 
   useEffect(() => {
     setPasskeys(webauthnAvailable());
     setToken(fragmentToken());
+    setPageOrigin(window.location.origin);
     setMins(minutesLeft(claim.expires_at, Date.now()));
   }, [claim.expires_at]);
 
-  const network = claim.path === "network_bridge";
+  // A setup link in the fragment is the proof whenever the API accepts one (lib/identity/claim-path).
+  const path = claimPathFor(claim, token);
+  const origin = claimOrigin(claim, pageOrigin);
+  const network = path === "network_bridge";
   const fallback = !passkeys; // no WebAuthn here: password + authenticator app instead
-  const proofMissing = (claim.path === "setup_token" && !token) || (claim.path === "legacy_password" && !legacy)
-    || (network && !originOk) || (fallback && password.length < minPw);
+  const proofMissing = (path === "setup_token" && !token) || (path === "legacy_password" && !legacy)
+    || (network && (!originOk || !origin)) || (fallback && password.length < minPw);
   const ready = name.trim() && email.includes("@") && !proofMissing;
 
   /** The codes issued with the first factor; only when there were none, ask for a set. */
@@ -112,9 +118,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
     setBusy(true);
     setError(null);
     try {
-      const proof = claim.path === "setup_token" ? { setup_token: token }
-        : claim.path === "legacy_password" ? { legacy_password: legacy }
-        : { origin: claim.origin };
+      const proof = claimProof(path, { token, legacy, origin });
       await idPost("/v1/auth/setup/claim", { ...proof, name: name.trim(), email: email.trim(), seat: seat || null, ...(fallback ? { password } : {}) });
       setLegacy("");
       await primeCsrf();
@@ -176,28 +180,28 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
 
   return (
     <AuthStage label="Claim this BOSS" wide>
-      <Logo host={options.host} right={claim.path === "setup_token" && mins !== null ? `setup link · expires in ${mins} min` : network ? "network bridge" : options.host} />
+      <Logo host={options.host} right={path === "setup_token" && mins !== null ? `setup link · expires in ${mins} min` : network ? "network bridge" : options.host} />
       <h1>Claim this BOSS</h1>
       <p className="idn-s" data-copy="prose">
-        {claim.path === "legacy_password"
+        {path === "legacy_password"
           ? "You'll be its first Owner. The shared console password works once, to prove it's you. From now on everyone signs in as themselves."
           : network
             ? "You'll be its first Owner. Being on this network proves you run it. From now on everyone signs in as themselves."
             : "You'll be its first Owner. The setup link proves you installed it. From now on everyone signs in as themselves."}
       </p>
       <form onSubmit={(e) => { e.preventDefault(); if (ready) submit(); }} noValidate>
-        {claim.path === "setup_token" && !token ? (
+        {path === "setup_token" && !token ? (
           <div className="idn-note bad" role="alert" data-testid="claim-no-token">
             <Warning size={15} aria-hidden />
             <span data-copy="prose">Open the setup link from the install output. To print a new one:</span>
           </div>
         ) : null}
-        {claim.path === "setup_token" && !token ? <CopyCommand command={SETUP_LINK} /> : null}
+        {path === "setup_token" && !token ? <CopyCommand command={SETUP_LINK} /> : null}
 
         {network ? (
           <div className="idn-f" data-testid="claim-origin">
             <span className="idn-flabel">This BOSS will be bound to</span>
-            <div className="idn-origin"><ShieldCheck size={16} aria-hidden /><code data-copy="data">{claim.origin}</code></div>
+            <div className="idn-origin"><ShieldCheck size={16} aria-hidden /><code data-copy="data">{origin ?? ""}</code></div>
             <label className="idn-check">
               <input type="checkbox" checked={originOk} onChange={(e) => setOriginOk(e.target.checked)} data-testid="claim-origin-confirm" />
               That&apos;s the address I use
@@ -223,7 +227,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
           </div>
         ) : null}
 
-        {claim.path === "legacy_password" ? (
+        {path === "legacy_password" ? (
           <div className="idn-f">
             <label htmlFor="claim-legacy">Shared console password</label>
             <input id="claim-legacy" className="idn-i" type="password" autoComplete="current-password" required value={legacy}
@@ -246,7 +250,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         </button>
       </form>
 
-      {claim.path === "legacy_password" ? (
+      {path === "legacy_password" ? (
         <details className="idn-help" data-testid="console-password-hint">
           <summary>Where&apos;s my password?</summary>
           <p className="idn-s" data-copy="prose">The installer kept it on the server. Print it from the install directory:</p>
