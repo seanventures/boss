@@ -171,12 +171,17 @@ def finish(db: Any, user: users.UserRow, facts: RequestFacts, *, methods: list[s
                sessions.clear_cookie_header(PREAUTH_COOKIE)]
     enrol = users.mfa_required(db, user) and not users.factors(db, user.principal_id).any_second_factor
     # SignInStep (the console's contract): "enrol" when the person must add a second factor now.
+    # A passkey is offered only where a browser can make one (webauthn.passkey_blocker): never on
+    # an IP-address or plain-http origin, where the authenticator app is the way in.
+    passkey_reason = passkeys.passkey_blocker(facts.origin or facts.request_origin)
     body: dict[str, Any] = {"next": "enrol" if enrol else "done",
-                            "methods": ["passkey", "totp"] if enrol else [], "who": who_of(user),
+                            "methods": ((["totp"] if passkey_reason else ["passkey", "totp"]) if enrol else []),
+                            "who": who_of(user),
                             "session_id": issued.session_id,
                             "expires_at": issued.absolute_expires_at.isoformat()}
     if enrol:
         body["mfa_enrolment_required"] = True
+        body["passkey_reason"] = f"passkey_{passkey_reason}" if passkey_reason else None
         # H1: the session is ENROLMENT-ONLY. Say whether it can enrol the first factor itself, or
         # the person needs an admin's MFA reset (a later password-only sign-in never can).
         body["enrolment_grant"] = grant is not None
@@ -681,7 +686,7 @@ def passkey_options(db: Any, facts: RequestFacts, *, purpose: str) -> Answer:
                                                       principal_id=row.principal_id)
             return Answer(200, {"publicKey": options})
     except passkeys.PasskeyError as exc:
-        return Answer(409 if exc.code == "unavailable" else 400, {"error": f"passkey_{exc.code}"})
+        return Answer(409 if exc.code in ("unavailable", "needs_domain", "needs_https") else 400, {"error": f"passkey_{exc.code}"})
     return Answer(422, {"error": "invalid_purpose"})
 
 

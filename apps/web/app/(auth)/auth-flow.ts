@@ -6,7 +6,8 @@ import { ENROLMENT_GRANT_REQUIRED, ENROLMENT_GRANT_WORDS } from "../../lib/ident
 import { IdentityError, idGet, idPost, setCsrfToken } from "../../lib/identity/api";
 import { ME_PATH, type MeResponse } from "../../lib/identity/contract";
 import { codesOf, type RecoveryCodes } from "../../lib/identity/types-auth";
-import { createCredential, PasskeyCancelled, type RegistrationOptions, type Wrapped } from "../../lib/identity/webauthn";
+import { createCredential, type RegistrationOptions, type Wrapped } from "../../lib/identity/webauthn";
+import { PASSKEY_NEEDS_DOMAIN_WORDS, PASSKEY_NEEDS_HTTPS_WORDS, passkeyFailureWords } from "../../lib/identity/passkey-support";
 
 /** Read /me once a session was just issued, so the writes that follow carry X-Boss-CSRF. */
 export async function primeCsrf(): Promise<MeResponse> {
@@ -59,6 +60,17 @@ const WORDS: Record<string, string> = {
   identity_unavailable: "BOSS can't be reached",
   last_factor: "Add another factor first",
   mfa_enrolment_required: "Add a second factor first",
+  // The API refused passkey options (engine webauthn.passkey_blocker / its PasskeyError codes).
+  passkey_needs_domain: PASSKEY_NEEDS_DOMAIN_WORDS,
+  passkey_needs_https: PASSKEY_NEEDS_HTTPS_WORDS,
+  passkey_unavailable: "Passkeys aren't set up on this BOSS yet. Use an authenticator app",
+  passkey_limit_reached: "You already have 10 passkeys. Remove one first",
+  passkey_verification_failed: "The device's answer didn't check out. Try again",
+  passkey_challenge_invalid: "The passkey request expired. Try again",
+  passkey_unknown_credential: "BOSS doesn't know that passkey",
+  passkey_user_mismatch: "That passkey belongs to someone else",
+  passkey_aaguid_not_allowed: "This kind of authenticator isn't allowed here",
+  passkey_counter_regressed: "That passkey looks copied, so it's blocked. Ask an admin",
   // Enrolment itself refused: this session may not add a factor (lib/identity/enrolment.ts).
   [ENROLMENT_GRANT_REQUIRED]: ENROLMENT_GRANT_WORDS,
 };
@@ -91,11 +103,12 @@ export function ssoErrorWords(code: string | null | undefined): string | null {
 }
 
 export function sayAuth(e: unknown): string {
-  if (e instanceof PasskeyCancelled) return "Passkey cancelled";
+  const passkey = passkeyFailureWords(e);
+  if (passkey) return passkey;
   if (e instanceof IdentityError) {
     if (e.code === "invalid_code" && e.attemptsLeft !== null) return `That code didn't work · ${e.attemptsLeft} left`;
     return WORDS[e.code] ?? e.message;
   }
-  if (e instanceof Error && e.message === "webauthn_unavailable") return "This browser has no passkeys";
-  return "That didn't work";
+  // Never the bare sentence: whatever failed says its name.
+  return e instanceof Error && e.message ? `That didn't work · ${e.message}` : "That didn't work · no answer";
 }
