@@ -7061,7 +7061,7 @@ def build_web_app_endpoint(payload: WebAppBuildBody):
 
 
 @app.get("/v1/qa/benchmark-apps")
-@permit(P.ASSURANCE_READ, scope=Scope.org())
+@permit(P.ASSURANCE_READ, scope=Scope.project_or_org(query="project_id"))
 def list_qa_benchmark_apps_endpoint(project_id: str = ""):
     """List pinned end-to-end application contracts used to evaluate BOSS itself.
 
@@ -8110,7 +8110,7 @@ def project_preflight_endpoint(project_id: str) -> dict:
 
 
 @app.get("/v1/projects/{project_id}/host-advice")
-@permit(P.SYSTEM_READ, scope=Scope.org())
+@permit(P.SYSTEM_READ, scope=Scope.project(path="project_id"))
 def project_host_advice_endpoint(project_id: str) -> dict:
     """Whether to tell the person at the screen that their machine needs attention.
 
@@ -8966,7 +8966,7 @@ def delivery_defaults_endpoint():
 
 
 @app.get("/v1/delivery/repos")
-@permit(P.REPOSITORY_READ, scope=Scope.org())
+@permit(P.REPOSITORY_READ, scope=Scope.project_or_org(query="project_id"))
 def delivery_repos_endpoint(project_id: Optional[str] = None):
     """Repositories BOSS has built in or deployed from — so nobody types one from memory."""
     if not database_is_reachable(engine):
@@ -8979,7 +8979,7 @@ def delivery_repos_endpoint(project_id: Optional[str] = None):
 
 
 @app.get("/v1/delivery/repos/{owner}/{repo}/refs")
-@permit(P.REPOSITORY_READ, scope=Scope.org())
+@permit(P.REPOSITORY_READ, scope=Scope.project_or_org(query="project_id"))
 def delivery_repo_refs_endpoint(owner: str, repo: str, project_id: Optional[str] = None):
     """Branches available to deploy, plus what BOSS has already shipped from this repo."""
     if not database_is_reachable(engine):
@@ -8998,7 +8998,7 @@ def delivery_repo_refs_endpoint(owner: str, repo: str, project_id: Optional[str]
 
 
 @app.get("/v1/delivery/repos/{owner}/{repo}/apps")
-@permit(P.REPOSITORY_READ, scope=Scope.org())
+@permit(P.REPOSITORY_READ, scope=Scope.project_or_org(query="project_id"))
 def delivery_repo_apps_endpoint(
     owner: str, repo: str, ref: str = "", project_id: Optional[str] = None,
 ):
@@ -9172,7 +9172,7 @@ def delivery_health_endpoint(project_id: str):
 
 
 @app.get("/v1/shepherd/readiness")
-@permit(P.AUTOPILOT_READ, scope=Scope.org())
+@permit(P.AUTOPILOT_READ, scope=Scope.project_or_org(query="project_id"))
 def shepherd_readiness_endpoint(project_id: Optional[str] = None, days: int = 30):
     """Per watch class: what it judged, how often it was overruled, and whether to trust it.
 
@@ -9187,7 +9187,7 @@ def shepherd_readiness_endpoint(project_id: Optional[str] = None, days: int = 30
 
 
 @app.post("/v1/shepherd/watch")
-@permit(P.AUTOPILOT_OPERATE, scope=Scope.org())
+@permit(P.AUTOPILOT_OPERATE, scope=Scope.project_or_org(query="project_id"))
 def shepherd_watch_endpoint(project_id: Optional[str] = None, dry_run: bool = False):
     """Look at everything currently RUNNING and deal with what is obviously wrong.
 
@@ -11246,7 +11246,7 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
 
 
 @writing_get(app, "/v1/previews")
-@permit(P.PREVIEW_READ, scope=Scope.org(), writes_on_get=True)
+@permit(P.PREVIEW_READ, scope=Scope.project_or_org(query="project_id"), writes_on_get=True)
 def list_previews_endpoint(project_id: Optional[str] = None, limit: int = 50):
     """List app previews for a project (reaps expired ones)."""
     project_id = resolve_list_project_id(project_id)
@@ -11702,7 +11702,7 @@ def set_code_task_origin_endpoint(run_id: str, payload: open_bodies.CodeTaskOrig
 
 
 @app.get("/v1/code-tasks")
-@permit(P.CODE_TASK_READ, scope=Scope.org())
+@permit(P.CODE_TASK_READ, scope=Scope.project_or_org(query="project_id"))
 def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50,
                              exclude_internal: bool = False):
     """List code-task runs for a project (newest first) for the Code Tasks view.
@@ -13340,7 +13340,7 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
 
 
 @app.get("/v1/tasks", response_model=TaskListResponse)
-@permit(P.WORK_ITEM_READ, scope=Scope.org())
+@permit(P.WORK_ITEM_READ, scope=Scope.project_or_org(query="project_id"))
 def list_tasks(
     project_id: Optional[str] = None, limit: int = 50, offset: int = 0
 ) -> TaskListResponse:
@@ -13919,7 +13919,7 @@ def chaos_list(project_id: str, limit: int = 20) -> dict:
 
 
 @app.get("/v1/dashboard")
-@permit(P.WORK_ITEM_READ, scope=Scope.org())
+@permit(P.WORK_ITEM_READ, scope=Scope.project_or_org(query="project_id"))
 def get_dashboard(project_id: Optional[str] = None) -> dict:
     """Consolidated real-time dashboard snapshot with a monotonic cursor (spec §F). Clients re-render
     only when the cursor advances."""
@@ -13939,7 +13939,7 @@ def poll_dashboard(project_id: str, cursor: Optional[str] = None, timeout_ms: in
 
 
 @app.get("/v1/factory/wip")
-@permit(P.CODE_TASK_READ, scope=Scope.org())
+@permit(P.CODE_TASK_READ, scope=Scope.project_or_org(query="project_id"))
 def factory_wip(
     project_id: Optional[str] = None,
     wip_limit: int = factory_scale.DEFAULT_WIP_LIMIT,
@@ -14048,7 +14048,7 @@ def factory_chunk_plan(payload: FactoryChunkPlanRequest) -> dict:
 
 
 @app.get("/v1/jobs", response_model=JobListResponse)
-@permit(P.JOB_READ, scope=Scope.org())
+@permit(P.JOB_READ, scope=Scope.project_or_org(query="project_id"))
 def list_jobs(
     project_id: Optional[str] = None,
     status: Optional[str] = None,
@@ -15932,7 +15932,7 @@ def pack_toolchain_context(payload: ToolchainContextPackRequest) -> dict:
 
 
 @app.get("/v1/knowledge/status")
-@permit(P.RELIABILITY_READ, scope=Scope.org())
+@permit(P.RELIABILITY_READ, scope=Scope.project_or_org(query="project_id"))
 def knowledge_pack_status(project_id: Optional[str] = None) -> dict:
     """Lightweight knowledge packing availability (BOSS-356).
 
@@ -16278,7 +16278,7 @@ def knowledge_retrieval_eval(
 
 
 @app.get("/v1/skills", response_model=SkillListResponse)
-@permit(P.SKILL_READ, scope=Scope.org())
+@permit(P.SKILL_READ, scope=Scope.project_or_org(query="project_id"))
 def list_skills(project_id: Optional[str] = None) -> SkillListResponse:
     if project_id is None:
         skills = entitlements.list_skills()
@@ -17479,7 +17479,7 @@ def setup_model_providers(response: Response) -> dict:
 
 
 @app.get("/v1/setup/coding-agents")
-@permit(P.SETUP_READ, scope=Scope.org())
+@permit(P.SETUP_READ, scope=Scope.project_or_org(query="project_id"))
 def setup_coding_agents(response: Response, project_id: str = "") -> dict:
     """DEPRECATED: `detected` in GET /v1/setup. Which coding-agent CLIs this machine has, what
     each still needs, and which were recorded as connected."""
@@ -23681,7 +23681,7 @@ def queue_sandbox_deployment(payload: SandboxDeploymentJobRequest) -> JobSummary
 
 
 @app.get("/v1/events", response_model=EventFeedResponse)
-@permit(P.ACTIVITY_READ, scope=Scope.org())
+@permit(P.ACTIVITY_READ, scope=Scope.project_or_org(query="project_id"))
 def event_feed(
     project_id: Optional[str] = None, limit: int = 50, offset: int = 0
 ) -> EventFeedResponse:
@@ -24417,7 +24417,7 @@ def tick_workflow_schedules(payload: open_bodies.WorkflowSchedulesTickBody) -> d
 
 
 @app.get("/v1/delivery-workflows/capabilities")
-@permit(P.WORKFLOW_READ, scope=Scope.org())
+@permit(P.WORKFLOW_READ, scope=Scope.project_or_org(query="project_id"))
 def list_delivery_capabilities(project_id: str | None = None) -> dict:
     """What a step can be. Feeds the builder palette and documents the risk floor."""
     from boss_engine.services.workflow_capabilities import (
@@ -28522,7 +28522,7 @@ def mark_feature_documented(
 
 
 @app.get("/v1/capability-manifest", response_model=CapabilityManifestResponse)
-@permit(P.SKILL_READ, scope=Scope.org())
+@permit(P.SKILL_READ, scope=Scope.project_or_org(query="project_id"))
 def get_capability_manifest(
     project_id: Optional[str] = None,
 ) -> CapabilityManifestResponse:
@@ -28555,7 +28555,7 @@ def get_capability_manifest(
 
 
 @app.get("/v1/capability-manifest/table")
-@permit(P.SKILL_READ, scope=Scope.org())
+@permit(P.SKILL_READ, scope=Scope.project_or_org(query="project_id"))
 def get_capability_manifest_table(
     request: Request,
     project_id: Optional[str] = None,
@@ -28854,7 +28854,7 @@ def change_correlation_correlate(payload: ChangeCorrelateRequest) -> ChangeCorre
     "/v1/model-gateway/rate-limits",
     response_model=ModelRateLimitsResponse,
 )
-@permit(P.MODEL_PROVIDER_READ, scope=Scope.org())
+@permit(P.MODEL_PROVIDER_READ, scope=Scope.project_or_org(query="project_id"))
 def get_model_gateway_rate_limits(
     project_id: Optional[str] = None,
 ) -> ModelRateLimitsResponse:
@@ -28955,7 +28955,7 @@ def redaction_redact(payload: RedactRequest) -> RedactResponse:
 
 
 @app.get("/v1/platform-standards", response_model=PlatformStandardsCatalogResponse)
-@permit(P.POLICY_READ, scope=Scope.org())
+@permit(P.POLICY_READ, scope=Scope.project_or_org(query="project_id"))
 def platform_standards_catalog(project_id: str = "") -> PlatformStandardsCatalogResponse:
     """List BOSS platform standards that agents must apply when building apps.
 

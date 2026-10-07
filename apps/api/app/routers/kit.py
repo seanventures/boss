@@ -378,7 +378,7 @@ def build_kit_router(
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.get("/v1/mcp/catalogue")
-    @permit(P.MCP_SERVER_READ, scope=Scope.org())
+    @permit(P.MCP_SERVER_READ, scope=Scope.project_or_org(query="project_id"))
     def catalogue(project_id: Optional[str] = None) -> dict[str, Any]:
         items = kit_connections.catalogue(settings())
         if project_id:

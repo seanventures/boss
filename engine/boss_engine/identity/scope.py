@@ -37,6 +37,8 @@ class ScopeSpec:
     path: Optional[str] = None
     body: Optional[str] = None
     query: Optional[str] = None
+    #: PROJECT only (Scope.project_or_org): a request that names no project is decided at the org.
+    org_when_absent: bool = False
 
     @property
     def location(self) -> tuple[str, str] | None:
@@ -51,7 +53,7 @@ class ScopeSpec:
             return "org"
         where, name = self.location or ("?", "?")
         if self.source == ScopeSource.PROJECT:
-            return f"project({where}={name})"
+            return f"project({where}={name})" + ("|org" if self.org_when_absent else "")
         return f"{self.object_kind}({where}={name})"
 
 
@@ -72,6 +74,14 @@ class Scope:
                 query: Optional[str] = None) -> ScopeSpec:
         _one_location(path, body, query)
         return ScopeSpec(ScopeSource.PROJECT, path=path, body=body, query=query)
+
+    @staticmethod
+    def project_or_org(*, query: str) -> ScopeSpec:
+        """A list or read whose `project_id` is optional: checked AT THE PROJECT it names (so a
+        person bound to that project only reaches it), and at the org when it names none (the
+        handler then reads the default project, or every project — an org-wide question)."""
+        _one_location(None, None, query)
+        return ScopeSpec(ScopeSource.PROJECT, query=query, org_when_absent=True)
 
     @staticmethod
     def of(kind: str, *, path: Optional[str] = None, body: Optional[str] = None,
@@ -170,6 +180,8 @@ def resolve(spec: ScopeSpec, values: RequestValues, *, org_id: str, db: Any = No
         return ResolvedScope.org_level(org_id)
     where, name = spec.location or ("", "")
     value = _read(values, where, name)
+    if value is None and spec.org_when_absent:
+        return ResolvedScope.org_level(org_id)
     if value is None:
         raise ScopeUnresolved(f"{where} value {name!r} is missing")
     if spec.source == ScopeSource.PROJECT:
