@@ -253,6 +253,9 @@ def reset_master_key_cache() -> None:
     global _kek_cache
     with _kek_lock:
         _kek_cache = None
+    from . import audit
+
+    audit.reset_chain_key_cache()
 
 
 def derived_key(label: str) -> bytes:

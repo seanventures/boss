@@ -8,11 +8,13 @@ fails too (D22, A76). There is no write API; events come only from code paths.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import ipaddress
 import json
 import secrets
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -170,46 +172,68 @@ ALG_SHA256 = 1
 ALG_HMAC = 2
 
 
-def chain_key() -> Optional[bytes]:
-    """The chain's HMAC key: derived from the identity server key (BOSS_IDENTITY_SERVER_KEY, else
-    the vault master key) — material the database never holds, so a row cannot be rewritten
-    consistently by anyone who has only the database. None when neither is configured (a dev
-    process with no vault): the chain is then unkeyed, and posture says so."""
-    configured = ""
-    try:
-        from ..config import get_settings
+CHAIN_KEY_CONNECTION = "audit-chain-key"
+_chain_keys: dict[str, bytes] = {}
+_chain_key_guard = threading.local()
 
-        configured = (get_settings().identity_server_key or "").strip()
-    except Exception:  # noqa: BLE001
-        configured = ""
-    base: Optional[bytes] = None
-    if configured:
-        try:
-            import base64
 
-            base = base64.b64decode(configured, validate=True)
-        except ValueError:
-            base = None
-    if base is None:
-        from .authn_support import _master_key_bytes
+def reset_chain_key_cache() -> None:
+    _chain_keys.clear()
 
-        base = _master_key_bytes()
-    if not base:
+
+def chain_key(org_id: Optional[str] = None, *, db: Any = None) -> Optional[bytes]:
+    """The org's chain HMAC key (#13): 32 random bytes held IN THE VAULT (envelope-encrypted under
+    the master key, which the database never holds), created on first use. So a row cannot be
+    rewritten consistently by anyone who has only the database — and rotating the master key
+    re-wraps it without changing it, so the chain stays verifiable. None when no master key is
+    configured (a dev process without a vault): the chain is then unkeyed (hash_alg 1)."""
+    if not org_id:
         return None
-    return hmac.new(base, b"boss identity audit chain v2", hashlib.sha256).digest()
+    if org_id in _chain_keys:
+        return _chain_keys[org_id]
+    if db is None or getattr(_chain_key_guard, "busy", False):
+        return None
+    from . import vault
+
+    try:
+        vault._kek()
+    except vault.MasterKeyMissing:
+        return None
+    _chain_key_guard.busy = True
+    try:
+        # In a transaction of its OWN, committed before the event is hashed: a key created inside a
+        # caller's transaction that then rolls back would be gone for every other process.
+        engine = getattr(db, "engine", None)
+        with (engine.begin() if engine is not None else contextlib.nullcontext(db)) as own:
+            own.execute(_sql("SELECT pg_advisory_xact_lock(:k)"), {"k": _lock_key(f"chain-key:{org_id}")})
+            item = own.execute(_sql(
+                "SELECT id FROM identity_vault_items WHERE org_id = :o AND owner_principal_id IS NULL AND "
+                "provider = 'boss' AND connection_name = :n AND status = 'active' ORDER BY created_at LIMIT 1"),
+                {"o": org_id, "n": CHAIN_KEY_CONNECTION}).scalar()
+            if item is None:
+                if not own.execute(_sql("SELECT 1 FROM orgs WHERE id = :o"), {"o": org_id}).first():
+                    return None
+                raw = secrets.token_bytes(32).hex()
+                vault.store(org_id=org_id, owner_principal_id=None, kind=vault.VaultItemKind.PROVIDER_CREDENTIAL,
+                            provider="boss", secret=raw, db=own, connection_name=CHAIN_KEY_CONNECTION)
+            else:
+                raw = vault.read_secret(item, db=own, kind=vault.VaultItemKind.PROVIDER_CREDENTIAL)
+        key = bytes.fromhex(raw)
+    finally:
+        _chain_key_guard.busy = False
+    _chain_keys[org_id] = key
+    return key
 
 
 def chain_hash(prev_hash: bytes, row: Mapping[str, Any], *, alg: Optional[int] = None,
                key: Optional[bytes] = None) -> bytes:
-    """hash = HMAC-SHA-256(chain key, prev_hash ‖ canonical_json(row)) (alg 2, the default when a
-    chain key exists); SHA-256(prev_hash ‖ canonical_json(row)) for alg 1."""
+    """alg 2 (given a key): HMAC-SHA-256(chain key, prev_hash ‖ canonical_json(row)).
+    alg 1 (the default without a key): SHA-256(prev_hash ‖ canonical_json(row))."""
     if alg is None:
-        key = key if key is not None else chain_key()
         alg = ALG_HMAC if key else ALG_SHA256
     if alg == ALG_HMAC:
-        key = key if key is not None else chain_key()
         if not key:
-            raise AuditWriteRefused("the keyed audit chain needs the identity server key")
+            raise AuditWriteRefused("the keyed audit chain needs its chain key")
         return hmac.new(key, prev_hash + canonical_json(row), hashlib.sha256).digest()
     return hashlib.sha256(prev_hash + canonical_json(row)).digest()
 
@@ -348,6 +372,9 @@ def record(event: SecurityEvent, *, db: Any) -> RecordedEvent:
     if db is None:
         raise AuditWriteRefused("audit.record writes in the caller's transaction: pass db=")
     clean = prepare(event)
+    # The chain key BEFORE the org's lock: fetching it may itself write an event (a vault decrypt
+    # failure, in a side transaction) that needs that lock.
+    key = chain_key(clean.org_id, db=db)
     db.execute(_sql("SELECT pg_advisory_xact_lock(:k)"), {"k": _lock_key(clean.org_id)})
     last = db.execute(_sql(
         "SELECT seq, hash FROM identity_security_events WHERE org_id = :o "
@@ -357,7 +384,6 @@ def record(event: SecurityEvent, *, db: Any) -> RecordedEvent:
     ts = datetime.now(timezone.utc)
     row = event_row(clean, seq=seq, ts=ts)
     row["details"] = clean.details
-    key = chain_key()
     alg = ALG_HMAC if key else ALG_SHA256
     digest = chain_hash(prev_hash, row, alg=alg, key=key)
     params = {k: row.get(k) for k in HASHED_FIELDS}
@@ -446,7 +472,7 @@ def verify_chain(org_id: str, *, db: Any, from_seq: Optional[int] = None) -> Cha
 
     checked = 0
     last_seq = 0
-    key = chain_key()
+    key = chain_key(org_id, db=db)
     for row in _iter_rows(db, org_id, from_seq=from_seq or 0):
         seq = int(row["seq"])
         last_seq = seq
@@ -516,7 +542,7 @@ def rekey(org_id: str, *, db: Any) -> int:
     """Once, at boot: re-hash the rows written before the keyed chain (hash_alg 1) with the chain
     key, IF their old chain verifies. Only their hash columns change (the table's trigger checks
     it), through identity_audit_rekey. Returns the number of rows re-keyed."""
-    key = chain_key()
+    key = chain_key(org_id, db=db)
     if key is None:
         return 0
     if not db.execute(_sql("SELECT 1 FROM identity_security_events WHERE org_id = :o AND hash_alg = 1 LIMIT 1"),
