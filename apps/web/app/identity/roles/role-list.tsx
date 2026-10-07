@@ -10,6 +10,7 @@ import { CopySimple, LockSimple, PencilSimple, ShieldCheck } from "@phosphor-ico
 
 import { CanButton, useGuardedCall } from "../../../components/identity/identity-provider";
 import { ErrorLine, RoleChip } from "../../../components/identity/kit";
+import { EmptyState } from "../../../components/identity/states";
 import { IdentityError, idPost } from "../../../lib/identity/api";
 import { PERMISSION_META } from "../../../lib/identity/permissions.gen";
 import type { AccessRole } from "../../../lib/identity/types";
@@ -70,7 +71,7 @@ function Row({ role, onClone, busy }: { role: AccessRole; onClone: (r: AccessRol
         </a>
       </td>
       <td className="idn-mono">{role.permissions.length} / {ROLE_PERMS.length}</td>
-      <td>{role.bindable_scopes.join(" · ")}</td>
+      <td>{role.bindable_scopes.map((x) => (x === "org" ? "Org" : "Project")).join(" · ")}</td>
       <td className="idn-mono">{role.holders}</td>
       <td>
         <span className="idn-row">
@@ -118,7 +119,11 @@ export function RoleList({ roles }: { roles: AccessRole[] }) {
           <h2 id="idn-custom-h">Custom</h2>
           <span className="idn-sub">Versioned · previewed before save</span>
         </div>
-        {custom.length ? table(custom, "Custom access roles") : <span className="idn-dim">No custom roles yet · clone a built-in</span>}
+        {custom.length ? table(custom, "Custom access roles") : (
+          <EmptyState compact icon={<CopySimple size={18} />} title="No custom roles yet" testId="roles-empty">
+            Clone a built-in role above, then change what it grants.
+          </EmptyState>
+        )}
       </section>
     </>
   );
