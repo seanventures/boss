@@ -1520,11 +1520,11 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
             </button>
           ))}
         </div>
-        <button type="button" className="cap-btn" onClick={onAdvance} disabled={!!busy}
+        <GatedButton permission="workflow_run:control" type="button" className="cap-btn" onClick={onAdvance} disabled={!!busy}
                 data-testid="dw-advance"
                 title="Re-test what stopped each live run and put back what can now move. A failed run is re-checked from its own page.">
           {busy === "Advance" ? "Checking…" : "Check every run again"}
-        </button>
+        </GatedButton>
       </div>
       {shown.length === 0 ? (
         <p className="dw-empty detail" data-testid="dw-none-in-bucket">
@@ -2692,11 +2692,11 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
     <div className="dw-step-decide" data-testid={`${idPrefix}-decide`}>
       {retry ? (
         <>
-          <button type="button" className="cap-btn primary" onClick={onRetry}
+          <GatedButton permission="workflow_run:control" type="button" className="cap-btn primary" onClick={onRetry}
                   disabled={!!busy || !retry.enabled} title={retry.reason ?? undefined}
                   data-testid={`${idPrefix}-retry`}>
             {busy === "Retry" ? "Queueing…" : retry.label}
-          </button>
+          </GatedButton>
           <Explain label="What retrying this step does">
             {retry.enabled ? "Runs this step only; everything before it stays done."
               : `Not available: ${retry.reason}.`}
@@ -2704,11 +2704,11 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
         </>
       ) : null}
       {skip ? (
-        <button type="button" className="cap-btn" onClick={() => setSkipOpen(true)}
+        <GatedButton permission="workflow_run:control" type="button" className="cap-btn" onClick={() => setSkipOpen(true)}
                 disabled={!!busy || skipOpen || !skip.enabled} title={skip.reason ?? undefined}
                 data-testid={`${idPrefix}-skip`}>
           {busy === "Skip" ? "Skipping…" : skip.label}
-        </button>
+        </GatedButton>
       ) : null}
       {skip ? (
         <Explain label="What skipping this step does">

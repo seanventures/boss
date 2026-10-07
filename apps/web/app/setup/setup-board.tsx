@@ -13,7 +13,7 @@
  * model on that provider, `&source=<id>` opens that model's menu, legacy `step=github|model` maps
  * to focus. Rows whose last check is over a day old are re-checked in the background on open.
  */
-import { GatedButton } from "../../components/gated";
+import { GatedButton, useGate } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowClockwise } from "@phosphor-icons/react";
 
@@ -111,8 +111,10 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
 
   // STALE ROWS ARE RE-CHECKED IN THE BACKGROUND, once per open, so a token that expired or was
   // revoked overnight says so without anybody pressing Test.
+  // A viewer who may not run checks (setup:manage) is not made to: the API would refuse it.
+  const mayCheck = useGate("setup:manage").allowed;
   useEffect(() => {
-    if (!view || autoChecked.current) return;
+    if (!view || autoChecked.current || !mayCheck) return;
     autoChecked.current = true;
     const stale = staleTargets(view);
     if (!stale.length) return;
@@ -121,7 +123,7 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
       .then(setView)
       .catch(() => undefined)
       .finally(() => stale.forEach((key) => setChecking(key, false)));
-  }, [view, projectId, setChecking]);
+  }, [view, projectId, setChecking, mayCheck]);
 
   // THE RAIL BADGE FOLLOWS THE BOARD: every new view tells the shell, so connecting the last
   // thing clears the badge without a reload.
