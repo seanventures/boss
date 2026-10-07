@@ -357,11 +357,16 @@ class Walk:
         return self.owner_tokens[url]
 
     # -- one role --
-    def walk_role(self, browser: Any, role: str) -> None:
+    def walk_role(self, browser: Any, role: str, width: int = 1440) -> None:
+        """One role's walk. `width` < 1440 is the phone walk (Owner and Viewer at 390 px): the same
+        checks, reported as "<role>@<width>", plus no page may scroll sideways; no presses."""
+        label = role if width >= 1440 else f"{role}@{width}"
+        narrow = width < 1440
         acct = self.accounts[role]
-        rep: dict[str, Any] = {"areas": [], "pages": [], "clicks": [], "mutations": [], "rail": {}}
-        self.report["roles"][role] = rep
-        ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+        rep: dict[str, Any] = {"areas": [], "pages": [], "clicks": [], "mutations": [], "rail": {}, "width": width}
+        self.report["roles"][label] = rep
+        ctx = browser.new_context(viewport={"width": width, "height": 844 if narrow else 900},
+                                  is_mobile=narrow, has_touch=narrow)
         page = ctx.new_page()
         navigated: list[str] = []
         page.on("framenavigated", lambda fr: navigated.append(fr.url) if fr == page.main_frame else None)
@@ -428,25 +433,25 @@ class Walk:
 
         # 1. sign in (the real /login), watching every URL
         if not self.wait_healthy(ctx, signed_in=False):
-            self.find("stack-unavailable", role, "signin", "outage", self.origin, "the API did not answer for 4 minutes", "a healthy stack", severity="info")
+            self.find("stack-unavailable", label, "signin", "outage", self.origin, "the API did not answer for 4 minutes", "a healthy stack", severity="info")
             ctx.close()
             return
         err = self.sign_in(page, ctx, acct)
         if err:
-            self.find("signin", role, "/login", "refused", f"{self.origin}/login", err, "the seeded person signs in")
+            self.find("signin", label, "/login", "refused", f"{self.origin}/login", err, "the seeded person signs in")
             ctx.close()
             return
         self.settle(page)
-        self.check_urls(role, navigated, rep)
+        self.check_urls(label, navigated, rep)
         me = I.api_in_page(page, "GET", "/v1/identity/me")
         if me["status"] != 200:
-            self.find("signin", role, "/v1/identity/me", str(me["status"]), self.origin, f"/me answered {me['status']}", "200")
+            self.find("signin", label, "/v1/identity/me", str(me["status"]), self.origin, f"/me answered {me['status']}", "200")
             ctx.close()
             return
         rs = RoleState(role, me=me["body"] or {})
-        self.check_storage(page, role, rs, rep)
+        self.check_storage(page, label, rs, rep)
         self.check_perms(page, role, rs, rep)
-        if role == "owner":
+        if role == "owner" and not narrow:
             self.owner_baseline(page, ctx)
 
         # the role's own layout tokens: what it may see on /account
@@ -481,7 +486,7 @@ class Walk:
                     if not self.wait_healthy(ctx):
                         break
                     state["console"].clear(); state["bad"].clear()
-                    if role == "owner":
+                    if role == "owner" and not narrow:
                         self.owner_tokens.pop(url, None)
                         self.owner_tokens_for(ctx, page, url)
                     self.goto(page, url)
@@ -490,7 +495,7 @@ class Walk:
                         break
                     self.outages += 1
                 if not stable:
-                    self.find("stack-unavailable", role, key, "outage", url, "the API was down or restarting while this page loaded",
+                    self.find("stack-unavailable", label, key, "outage", url, "the API was down or restarting while this page loaded",
                               "a healthy stack", severity="info")
                     entry["skipped"] = "stack unavailable"
                     rep["areas" if kind == "area" else "pages"].append(entry)
@@ -501,28 +506,30 @@ class Walk:
                 if may:
                     dom_toks = tokens_of(page.content(), self.emails)
                     allowed_tokens |= dom_toks
-                    entry["shot"] = self.shot(page, role, f"allowed_{kind}_{key}")
-                    self.check_allowed(page, role, kind, key, url, perm, scan, state, entry, rs, at_project)
+                    entry["shot"] = self.shot(page, label, f"allowed_{kind}_{key}")
+                    self.check_allowed(page, label, kind, key, url, perm, scan, state, entry, rs, at_project)
                 else:
                     raw = ctx.request.get(url).text()
-                    entry["shot"] = self.shot(page, role, f"denied_{kind}_{key}")
+                    entry["shot"] = self.shot(page, label, f"denied_{kind}_{key}")
                     forbidden_samples.append({"kind": kind, "key": key, "url": url, "perm": perm,
                                               "raw": tokens_of(raw, self.emails), "dom": tokens_of(page.content(), self.emails),
                                               "denied": scan["denied"], "entry": entry})
-                    self.check_denied_render(role, kind, key, url, perm, scan, entry)
+                    self.check_denied_render(label, kind, key, url, perm, scan, entry)
+                if narrow:
+                    self.check_no_sideways_scroll(page, label, key, url, entry)
                 if state["bad"]:
                     entry["v1_errors"] = list(state["bad"])
             except Exception as e:  # noqa: BLE001
-                self.find("walk", role, key, "exception", url, f"{type(e).__name__}: {str(e)[:200]}", "the page opens")
+                self.find("walk", label, key, "exception", url, f"{type(e).__name__}: {str(e)[:200]}", "the page opens")
                 entry["error"] = str(e)[:200]
             rep["areas" if kind == "area" else "pages"].append(entry)
 
         # 3. rail
-        self.check_rail(role, rs, rail_seen, rep)
+        self.check_rail(label, rs, rail_seen, rep)
         # 4. no data on forbidden pages (after allowed pages, so tokens it may see elsewhere are known)
-        self.check_leaks(role, forbidden_samples, own, allowed_tokens)
+        self.check_leaks(label, forbidden_samples, own, allowed_tokens)
         # 5. click everything (viewer, auditor)
-        if role in CLICK_ROLES and not self.args.no_click:
+        if role in CLICK_ROLES and not self.args.no_click and not narrow:
             for kind, url, perm, at_project, key in targets:
                 if perm is None or rs.holds(perm, at_project, self.cat.scope):
                     try:
@@ -532,7 +539,7 @@ class Walk:
                                   "every control on the page pressed", severity="soft")
                         state["press"] = None
         # 6. mutations seen at any time in this role's session
-        self.judge_mutations(role, state["mut"], rep)
+        self.judge_mutations(label, state["mut"], rep)
         ctx.close()
 
     def sign_in(self, page: Any, ctx: Any, acct: Any) -> str:
@@ -605,6 +612,17 @@ class Walk:
                           f"extra={extra} missing={missing}", f"exactly the {src} set for {role}")
             else:
                 self.ok()
+
+    def check_no_sideways_scroll(self, page: Any, role: str, key: str, url: str, entry: dict[str, Any]) -> None:
+        """At phone width the PAGE never scrolls sideways (a wide table may scroll inside its card)."""
+        m = page.evaluate("() => ({doc: document.scrollingElement ? document.scrollingElement.scrollWidth : 0, "
+                          "view: window.innerWidth})")
+        entry["scroll_width"] = m
+        if m["doc"] > m["view"] + 1:
+            self.find("sideways-scroll", role, key, "page", url, f"the page is {m['doc']} px wide in a {m['view']} px viewport",
+                      "no horizontal page scroll at phone width")
+        else:
+            self.ok()
 
     def check_denied_render(self, role, kind, key, url, perm, scan, entry) -> None:
         entry["denied_permissions"] = scan["denied"]
@@ -687,7 +705,7 @@ class Walk:
                       "every rail entry declared", severity="info")
 
     def check_leaks(self, role: str, samples: list[dict[str, Any]], own: set[str], allowed_tokens: set[str]) -> None:
-        mine = self.accounts[role].email
+        mine = self.accounts[role.split("@", 1)[0]].email
         for s in samples:
             owner = self.owner_tokens.get(s["url"])
             if owner is None:
@@ -827,6 +845,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--only", nargs="*", default=None, help="area ids / page patterns to walk (debugging)")
     ap.add_argument("--no-click", action="store_true")
     ap.add_argument("--page-budget", type=int, default=150, help="seconds of pressing per page (viewer/auditor)")
+    ap.add_argument("--narrow-roles", nargs="*", default=["owner", "viewer"],
+                    help="roles walked again at phone width (--narrow-width); none: --narrow-roles with no value")
+    ap.add_argument("--narrow-width", type=int, default=390)
     args = ap.parse_args(argv)
     try:
         sys.stdout.reconfigure(line_buffering=True)   # progress shows when piped to a log
@@ -860,6 +881,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                     walk.find("walk", role, "role", "crashed", args.console, f"{type(e).__name__}: {e}"[:300], "the walk finishes")
                     traceback.print_exc()
                 print(f"   {role} done in {time.time() - t:.0f}s", flush=True)
+            for role in [r for r in args.narrow_roles if r in roles]:
+                print(f"== {role} @ {args.narrow_width}px", flush=True)
+                t = time.time()
+                try:
+                    walk.walk_role(browser, role, width=args.narrow_width)
+                except Exception as e:  # noqa: BLE001
+                    walk.find("walk", f"{role}@{args.narrow_width}", "role", "crashed", args.console, f"{type(e).__name__}: {e}"[:300], "the walk finishes")
+                    traceback.print_exc()
+                print(f"   {role}@{args.narrow_width} done in {time.time() - t:.0f}s", flush=True)
         finally:
             browser.close()
 

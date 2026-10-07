@@ -160,7 +160,7 @@ describe("a person's profile", () => {
 
   it("an Owner's admin actions are live; a Viewer's say what they need and do nothing", async () => {
     const owner = await mount(<PersonProfile {...samProps("access")} />);
-    for (const id of ["person-add-access", "person-sign-out", "person-reset-mfa", "person-disable"]) {
+    for (const id of ["person-add-access", "person-sign-out", "person-reset-mfa", "person-reset-link", "person-disable"]) {
       expect(owner.el.querySelector(`[data-testid='${id}']`)?.getAttribute("aria-disabled"), id).toBeNull();
     }
     await act(async () => { (owner.el.querySelector("[data-testid='person-disable']") as HTMLButtonElement).click(); });
@@ -171,7 +171,7 @@ describe("a person's profile", () => {
     const viewer = await mount(<PersonProfile {...samProps("access")} />, "viewer");
     const want: Record<string, string> = {
       "person-add-access": "role_binding:assign", "person-sign-out": "user:revoke_sessions",
-      "person-reset-mfa": "user:reset_mfa", "person-disable": "user:disable",
+      "person-reset-mfa": "user:reset_mfa", "person-reset-link": "user:reset_mfa", "person-disable": "user:disable",
     };
     for (const [id, p] of Object.entries(want)) {
       const b = viewer.el.querySelector(`[data-testid='${id}']`)!;
@@ -181,6 +181,18 @@ describe("a person's profile", () => {
     await act(async () => { (viewer.el.querySelector("[data-testid='person-disable']") as HTMLButtonElement).click(); });
     expect(document.querySelector("[data-testid='confirm-disable']")).toBeNull();
     expect(viewer.fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("an admin issues a reset link, shown once in the sheet (the /reset page's promise, FX-C P1-17)", async () => {
+    const { el } = await mount(<PersonProfile {...samProps("access")} />, "admin");
+    const link = "https://boss.example/reset#t=rst_once";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ link, shown_once: true }), { status: 200 })));
+    await act(async () => { (el.querySelector("[data-testid='person-reset-link']") as HTMLButtonElement).click(); });
+    const sheet = document.querySelector("[data-testid='reset-link-sheet']")!;
+    expect(sheet.textContent).toContain("30 minutes");
+    await act(async () => { (sheet.querySelector("[data-testid='reset-link-go']") as HTMLButtonElement).click(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect((document.querySelector("[data-testid='reset-link-value']") as HTMLInputElement).value).toBe(link);
   });
 
   it("Add access locks the roles you don't fully hold", async () => {
