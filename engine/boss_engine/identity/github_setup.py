@@ -331,6 +331,31 @@ def forget_env_token_if_moved(engine: Any, settings: Any) -> bool:
     return moved
 
 
+# ---- the control plane's own GitHub writes (opening the PR, reading checks) -----------------------------
+
+#: What BOSS's worker needs to open and follow a pull request; never admin, never workflows.
+CONTROL_PLANE_PERMISSIONS = {"contents": "write", "pull_requests": "write", "metadata": "read",
+                             "checks": "read", "statuses": "read"}
+
+
+def control_plane_token(db: Any, owner: str, repo: str) -> Optional[str]:
+    """The credential the WORKER uses for one repo when the operator connected GitHub in Setup ›
+    GitHub access: an installation token of the Setup-created App (1 hour, this repo only), else
+    the org's fine-grained token when it was given for this repo. None when neither covers it.
+    (An App configured in the environment is the legacy adapter's own; it is not read here.)"""
+    full = f"{owner}/{repo}".lower()
+    cfg = app_config(db)
+    if cfg["source"] == "setup" and app_ready(db):
+        try:
+            return github_app.mint_installation_token([full], CONTROL_PLANE_PERMISSIONS, db=db).token
+        except github_app.GitHubRefused:
+            pass
+    token = org_token(db)
+    if token is not None and full in token["repos"]:
+        return vault.org_github_token(token["id"], db=db)
+    return None
+
+
 # ---- what egress uses, and what posture says ----------------------------------------------------------------
 
 def mode(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:

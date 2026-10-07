@@ -358,3 +358,18 @@ def test_every_github_setup_route_is_declared_and_changes_need_github_connect():
             assert access.permission == "github:read"
         else:
             assert access.permission == "github:connect", route.path
+
+
+def test_the_worker_opens_its_pr_with_the_setup_app_or_the_org_token_for_that_repo_only(env):
+    with env.db() as c:
+        assert github_setup.control_plane_token(c, "acme", "web") is None
+        github_setup.store_org_token(token=PAT, repos=["acme/web"], org_id="org_boss", db=c, by=env.alice)
+        assert github_setup.control_plane_token(c, "acme", "web") == PAT
+        assert github_setup.control_plane_token(c, "acme", "api") is None
+    _connect_app(env)
+    with env.db() as c:
+        tok = github_setup.control_plane_token(c, "acme", "web")
+    assert tok == env.hub.issued[-1]
+    mint = json.loads([b for m, u, _, b in env.hub.calls if u.endswith("/access_tokens")][-1])
+    assert mint["repositories"] == ["web"] and "administration" not in mint["permissions"]
+    assert "workflows" not in mint["permissions"]
