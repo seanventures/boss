@@ -338,6 +338,8 @@ function meOf(s: State, who: string, sess: Sess): MeResponse {
     mfa_at: sess.freshUntil ? new Date(sess.freshUntil - 600_000).toISOString() : null,
     session_id: `ses_${sess.created}`, session_expires_at: new Date(sess.created + 7 * 86_400_000).toISOString(),
     csrf_token: sess.csrf, epoch: s.epoch, network_bound: false, banners: [],
+    // The fixture's colour is the person's chosen one, so the menu matches every list.
+    avatar_seed: String(((p.hue % 8) + 8) % 8),
   };
 }
 

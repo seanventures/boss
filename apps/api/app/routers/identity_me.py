@@ -219,7 +219,7 @@ def build_me_response(db: Any, ctx: AuthContext) -> MeResponse:
         mfa_required=required, mfa_at=s.mfa_at if s else None, session_id=s.id if s else None,
         session_expires_at=s.absolute_expires_at if s else None,
         csrf_token=csrf_token(s.id) if s else "", epoch=_epoch(db, p.org_id),
-        network_bound=p.network_bound, banners=banners)
+        network_bound=p.network_bound, banners=banners, avatar_seed=user.avatar_seed if user else None)
 
 
 

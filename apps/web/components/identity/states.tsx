@@ -51,3 +51,23 @@ export function EmptyState({ icon, title, children, action, compact = false, tes
     </div>
   );
 }
+
+/**
+ * A page whose access could not be checked (the identity API is unreachable): calm, says what
+ * happened, offers Retry — and the page itself is not drawn (fail closed).
+ */
+export function AccessUnchecked({ page }: { page: string }) {
+  const router = useRouter();
+  return (
+    <div className="idn-denied" data-testid="access-unchecked">
+      <div className="idn-denied-card">
+        <div className="idn-lock" aria-hidden><WarningCircle size={24} weight="duotone" /></div>
+        <h1>Can't check your access right now</h1>
+        <p className="idn-why-line idn-dim" data-copy="prose">BOSS could not reach its identity service, so {page} stays closed until it can.</p>
+        <div className="idn-acts">
+          <button type="button" className="idn-btn primary" onClick={() => router.refresh()}><ArrowClockwise size={13} aria-hidden /> Retry</button>
+        </div>
+      </div>
+    </div>
+  );
+}

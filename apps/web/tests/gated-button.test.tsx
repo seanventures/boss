@@ -29,7 +29,7 @@ function perms(role: keyof typeof ROLE_PERMISSIONS): MePermissionsResponse {
 const ME = {
   principal_id: "usr_x", kind: "user", display_name: "Vee", email: "v@acme.dev", org: { id: "org_1", name: "Acme" }, status: "active",
   access_roles: ["viewer"], sign_in: { password: true, totp: false, passkeys: 0, recovery_codes_remaining: 0, sso_links: [] },
-  mfa_required: false, mfa_at: null, session_id: "s", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [],
+  mfa_required: false, mfa_at: null, session_id: "s", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [], avatar_seed: null
 } as MeResponse;
 
 async function mount(node: React.ReactElement, role: keyof typeof ROLE_PERMISSIONS) {

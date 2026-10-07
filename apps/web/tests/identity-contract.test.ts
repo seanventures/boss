@@ -118,7 +118,7 @@ describe("can()", () => {
       org: { id: "org_boss", name: "BOSS" }, status: "active", access_roles: ["owner"],
       sign_in: { password: true, totp: false, passkeys: 1, recovery_codes_remaining: 10, sso_links: [] },
       mfa_required: true, mfa_at: null, session_id: "ses_1", session_expires_at: null,
-      csrf_token: "c", epoch: 4, network_bound: false, banners: [],
+      csrf_token: "c", epoch: 4, network_bound: false, banners: [], avatar_seed: null
     };
     expect(me.kind).toBe("user");
   });

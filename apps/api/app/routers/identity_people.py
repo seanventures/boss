@@ -82,7 +82,7 @@ def _person_view(db: Any, u: users.UserRow, *, detail: bool = False) -> dict[str
         "id": u.principal_id, "display_name": u.display_name, "email": u.email, "status": u.status,
         "access_roles": users.role_keys(db, u.principal_id), "mfa": f.any_second_factor,
         "mfa_required": users.mfa_required(db, u), "password": bool(u.password_hash),
-        "self_signed_up": u.self_signed_up, "network_bound": u.network_bound,
+        "self_signed_up": u.self_signed_up, "network_bound": u.network_bound, "avatar_seed": u.avatar_seed,
         "email_verified": u.email_verified_at is not None,
         "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None}
     if detail:

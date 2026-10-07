@@ -35,6 +35,8 @@ def test_a_person_renames_themselves_and_picks_an_avatar_colour(world, engine):
     assert r.json()["display_name"] == "New Name" and r.json()["avatar_seed"] == "5"
     assert c.get("/v1/identity/me").json()["display_name"] == "New Name"
     assert c.get("/v1/identity/me/profile").json()["avatar_seed"] == "5"
+    # The chosen colour travels with the person: /me draws the account menu's face.
+    assert c.get("/v1/identity/me").json()["avatar_seed"] == "5"
     events = world.events_of("user.updated")
     assert events and events[-1].target_id == pid and events[-1].details["fields"] == ["avatar_seed", "display_name"]
 

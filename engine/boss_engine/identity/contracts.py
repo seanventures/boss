@@ -57,6 +57,7 @@ class MeResponse(_Frozen):
     epoch: int                          # identity epoch; refetch permissions when it changes
     network_bound: bool = False
     banners: list[MeBanner] = []
+    avatar_seed: Optional[str] = None   # the person's chosen avatar colour, "0"–"7" (None: from the id)
 
 
 class MePermissionsResponse(_Frozen):
