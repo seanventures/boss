@@ -7,8 +7,8 @@
  * delegations they granted, their keys and their audit trail. Admin actions are mirrored: a
  * viewer without the permission sees them disabled with the reason, never hidden.
  */
+import { useConsoleRefresh } from "../../../use-console-refresh";
 import React, { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   ArrowsClockwise, ArrowUpRight, CaretDown, Check, Clock, Desktop, DeviceMobile, EnvelopeSimple, Fingerprint, GithubLogo,
   Key, LinkSimple, LockSimple, MagnifyingGlass, Plus, Prohibit, SealCheck, ShieldCheck, ShieldWarning, User, UsersThree, X,
@@ -24,6 +24,7 @@ import { eventWords, methodWords, permissionName, seatName } from "../../../../l
 import type { ProjectChoice } from "../../../../lib/identity/types-people";
 import { ProjectPicker } from "../../groups/group-sheets";
 import { ExpiryField, expiresAt, type ExpiryChoice } from "../expiry";
+import { grantReach } from "../../../../lib/identity/grant-limit";
 import { IdentityError, idDelete, idPost } from "../../../../lib/identity/api";
 import { PERMISSION_META, PERMISSIONS, type Permission } from "../../../../lib/identity/permissions.gen";
 import type {
@@ -62,12 +63,12 @@ function refusal(e: unknown): string {
 /** A write from this page: step-up when asked, a ≤4-word toast either way, then a fresh render. */
 function useAct() {
   const guarded = useGuardedCall();
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   return async <T,>(reason: string, call: () => Promise<T>, done: string): Promise<T | null> => {
     try {
       const out = await guarded(reason, call);
       showToast("success", done);
-      router.refresh();
+      refresh("now");
       return out;
     } catch (e) {
       showToast("error", refusal(e));
@@ -153,19 +154,18 @@ function AddAccessSheet({ person, roles, projects, onClose }: { person: Person; 
   const [busy, setBusy] = useState(false);
   const chosen = roles.find((r) => r.key === role);
   const canProject = !chosen || chosen.bindable_scopes.includes("project");
-  const missing = (r: AccessRole) => (held ? r.permissions.filter((p) => !held.has(p)) : []);
   return (
     <Sheet title={`Add access for ${person.display_name.split(" ")[0]}`} icon={<Plus size={18} aria-hidden />} onClose={onClose} testId="add-access-sheet">
       <div className="idn-field">
         <span className="idn-label" id="aa-role">Access role</span>
         <div className="idn-pick" role="radiogroup" aria-labelledby="aa-role">
           {roles.filter((r) => r.key !== "owner" || held?.has("owner:assign")).map((r) => {
-            const lack = missing(r);
-            const locked = lack.length > 0;
+            const { ok, reason } = grantReach(held, r);
+            const locked = !ok;
             return (
               <button key={r.id} type="button" role="radio" aria-checked={role === r.key} aria-disabled={locked || undefined}
                 className="idn-pick-row" data-selected={role === r.key || undefined}
-                title={locked ? `You don't hold this: ${lack.length} missing` : r.description}
+                title={reason || undefined}
                 onClick={() => { if (!locked) setRole(r.key); }}>
                 <RoleChip roleKey={r.key} name={r.name} />
                 <span className="idn-dim">{r.permissions.length} permissions</span>

@@ -114,6 +114,11 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     set_input: "workflow_run:control", prepare_target: "deployment_target:manage",
     start_preview: "preview:manage", stop: "workflow_run:control",
   },
+  // lib/govern.ts `governWrite(op, …)` → /api/govern → lib/govern-ops.ts (the two previews only read)
+  "lib/govern.ts#governWrite": {
+    setting: "settings:update", pace: "budget:manage", pace_preview: "self", cap_preview: "self", // budget:read, which opening Govern needs
+    monthly_cap: "budget:manage", token_cap: "policy:manage", reconcile: "budget:manage", initiative: "budget:manage",
+  },
   // lib/setup-client.ts `setupWrite(projectId, op, …)` → /api/setup → /v1/setup/*
   "lib/setup-client.ts#setupWrite": {
     checks: "setup:manage", repo_token: "github:connect", repo_select: "repository:register",

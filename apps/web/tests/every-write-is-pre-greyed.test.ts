@@ -132,7 +132,9 @@ function uses(): Use[] {
         const op = m[1];
         const gate = ops[op] ?? Object.entries(ops).find(([k]) => k.endsWith("/") && op.startsWith(k))?.[1];
         if (BACKGROUND.has(`${file} ${fn}:${op}`)) continue;
-        out.push({ file, what: `${fn}:${op}`, permission: gate ?? `UNREGISTERED op ${op}` });
+        // "self" (no permission beyond reaching the screen) needs no gate, as for a helper.
+        if (!gate) out.push({ file, what: `${fn}:${op}`, permission: `UNREGISTERED op ${op}` });
+        else for (const p of needs(gate)) out.push({ file, what: `${fn}:${op}`, permission: p });
       }
     }
   }

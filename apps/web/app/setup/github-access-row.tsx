@@ -17,6 +17,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { CircleNotch, GithubLogo } from "@phosphor-icons/react";
 
 import { IdentityError, idDelete, idGet, idPost } from "../../lib/identity/api";
+import { HANDOFF_KEY, HANDOFF_PATH } from "../../lib/identity/github-manifest";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { SectionLabel } from "../section-label";
 import { toast, useBoard } from "./parts";
@@ -63,19 +64,16 @@ function sentence(error: unknown): string {
   return "That didn't work";
 }
 
-/** POST the manifest to GitHub as a form (GitHub's manifest flow): the browser leaves for GitHub. */
+/** Hand the manifest to /github-app, the one page whose CSP lets a form go to GitHub
+ *  (lib/identity/github-manifest.ts); it posts it there (GitHub's manifest flow). */
 function postManifest(postUrl: string, manifest: unknown): void {
-  const form = document.createElement("form");
-  form.method = "POST";
-  form.action = postUrl;
-  form.style.display = "none";
-  const field = document.createElement("input");
-  field.type = "hidden";
-  field.name = "manifest";
-  field.value = JSON.stringify(manifest);
-  form.append(field);
-  document.body.append(form);
-  form.submit();
+  try {
+    window.sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({ post_url: postUrl, manifest }));
+  } catch {
+    toast("This browser blocks site storage, so GitHub cannot be opened from here.", "error");
+    return;
+  }
+  window.location.assign(HANDOFF_PATH);
 }
 
 function AppCard({ status, reload }: { status: GitHubStatus; reload: () => void }) {

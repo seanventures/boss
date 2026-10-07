@@ -19,7 +19,7 @@ const LEVEL_ORDER = ["verbose", "info", "warn", "error"] as const;
 
 export function pulseTip(b: ActivityHistogram["buckets"][number], seconds: number): string {
   const lines = b.error + b.warn + b.info + b.verbose;
-  const parts = [spanLabel(b.t, seconds), `${lines.toLocaleString()} line${lines === 1 ? "" : "s"}`];
+  const parts = [spanLabel(b.t, seconds), `${lines.toLocaleString("en-US")} line${lines === 1 ? "" : "s"}`];
   if (b.error) parts.push(`${b.error} error${b.error === 1 ? "" : "s"}`);
   return parts.join(" · ");
 }

@@ -31,6 +31,7 @@ const PAGE_RAW = readFileSync(join(process.cwd(), "app", "page.tsx"), "utf8");
  */
 const PLATFORM_OPS_FEEDS: ReadonlyArray<readonly [string, string]> = [
   ["fetchIdentityProvidersFeed", "enterprise"],
+  ["fetchIdentityRegistryFeed", "enterprise"],
   ["fetchOncallSreStatus", "reliability"],
   ["fetchReleaseStatus", "portfolio"],
   ["fetchReleaseBoard", "portfolio"],
@@ -89,7 +90,11 @@ describe("only the requested area is fetched", () => {
       .split("\n")
       .slice(1)
       .findIndex((l) => l.trim().startsWith("]"));
-    expect(entries).toBe(10);
+    expect(entries).toBe(11);
+    // …and the destructuring names exactly as many, so each name still meets its own feed.
+    const names = /const \[([^\]]*)\] = await platformOpsWaveP;/.exec(PAGE_RAW)?.[1]
+      .split(",").map((n) => n.trim()).filter(Boolean) ?? [];
+    expect(names.length).toBe(entries);
   });
 
   it("the main wave gates the feeds that only one area reads", () => {
@@ -152,7 +157,10 @@ describe("only the requested area is fetched", () => {
       .map((m) => m[1])
       // Gated by a ternary outside its own parens rather than by an `active` argument,
       // so the per-call check above cannot see it. The assertion for it is in the test above.
-      .filter((fn) => fn !== "fetchAuditSummary");
+      .filter((fn) => fn !== "fetchAuditSummary")
+      // Passed a literal `false` (asserted below): it returns the empty shape and fetches nothing.
+      .filter((fn) => fn !== "fetchPipelineData");
+    expect(wave).toContain("fetchPipelineData(activeProjectId, false)");
     // These are read outside any `shows(...)` block — header counts, the nav rail, the "what
     // needs you" badge — so they are genuinely needed no matter which area renders. Adding to
     // this list is a real cost paid by all forty areas; do it deliberately.
@@ -167,8 +175,6 @@ describe("only the requested area is fetched", () => {
         "fetchDeadletterFeed",
         "fetchPackFeed",
         "fetchRoleFeed",
-        "fetchCommercialFeed",
-        "fetchEnterpriseFeed",
         "fetchSkillFeed",
         "fetchReceiptFeed",
         "fetchSelfImprovementFeed",

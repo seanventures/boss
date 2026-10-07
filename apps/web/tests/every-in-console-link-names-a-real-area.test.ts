@@ -11,6 +11,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { codeOnly } from "./_helpers/source";
+
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     if (name === "node_modules" || name.startsWith(".")) continue;
@@ -44,9 +46,14 @@ describe("in-console links", () => {
     const bad: string[] = [];
     let seen = 0;
     for (const file of [...walk("app"), ...walk("lib"), ...walk("components")]) {
-      const src = readFileSync(file, "utf8");
+      // Code only: a comment recalling an old URL (`?area=govern` reached the browser as a 500)
+      // is history, not a link.
+      const src = codeOnly(file);
       for (const pattern of TARGETS) {
         for (const m of src.matchAll(pattern)) {
+          // An OLD link kept as the input of a redirect check (`from: "?area=monitoring…"`) is a
+          // fixture proving it still lands, not a link to follow.
+          if (/from:\s*["'`][^"'`]*$/.test(src.slice(Math.max(0, m.index! - 60), m.index!))) continue;
           seen += 1;
           if (!AREAS.has(m[1])) {
             bad.push(`${relative(".", file)}:${src.slice(0, m.index).split("\n").length} → ${m[1]}`);

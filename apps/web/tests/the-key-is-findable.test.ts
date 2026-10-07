@@ -14,7 +14,9 @@ const remote = readFileSync(join(root, "scripts/install/remote.sh"), "utf8");
 
 describe("a missing API key explains itself", () => {
   it("covers the three places BOSS is ever run from", () => {
-    for (const where of ["ON THE SERVER", "FROM YOUR LAPTOP", "BOSS ON THIS MACHINE"]) {
+    // 215a6a54 (identity docs): the shared env-file key is gone; a personal key from My account
+    // works on ANY MACHINE, and the server line mints the host tools' key.
+    for (const where of ["ANY MACHINE", "My account › API keys › New key", "ON THE SERVER", "boss identity host-key", "FROM YOUR LAPTOP"]) {
       expect(common).toContain(where);
     }
     expect(common).toContain("source ./boss-community.env.sh");
@@ -22,7 +24,7 @@ describe("a missing API key explains itself", () => {
   });
 
   it("says it is a secret, on a command that prints one", () => {
-    expect(common).toContain("do not paste that output");
+    expect(common).toContain("The key is a secret: do not paste `env` output");
   });
 
   it("is shared, not copied, between the scripts", () => {

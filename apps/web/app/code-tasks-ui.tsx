@@ -179,8 +179,8 @@ function NewBuildButton({ open, setOpen, onPlan, onDirect, onBenchmark, hasBench
   const pick = (fn: () => void) => () => { setOpen(false); fn(); };
   return (
     <span className="fx-split" ref={box}>
-      <button type="button" className="ag-btn ag-btn-primary fx-split-main" data-testid="fx-new-plan"
-              title="Plan it with Juno: a PRD first, then the build" onClick={onPlan}>+ New build</button>
+      <GatedButton permission="meeting:convene" type="button" className="ag-btn ag-btn-primary fx-split-main" data-testid="fx-new-plan"
+              title="Plan it with Juno: a PRD first, then the build" onClick={onPlan}>+ New build</GatedButton>
       <button type="button" className="ag-btn ag-btn-primary fx-split-more" data-testid="fx-new-build"
               aria-haspopup="menu" aria-expanded={open} aria-label="More ways to start a build"
               onClick={() => setOpen(!open)}>

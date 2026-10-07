@@ -24,7 +24,7 @@ v2_nav:
   panels: {v1Area: decisions}
   boss: {v1Area: delivery_workflows}
   timeline: {v1Area: activity, label_differs_because: "v2 shows receipts — the recorded effects — not the whole activity log."}
-  infra: {v1Area: delivery, label_differs_because: "v2 puts model spend beside hosts and targets; v1 keeps models in Repo and models."}
+  infra: {v1Area: infra, label_differs_because: "v2 puts model spend beside hosts and targets; v1 keeps models in Repo and models."}
   settings: {v1Area: setup, label_differs_because: "/v2/settings redirects to v1 Repo and models, where the repository, models, who does what and the budget live."}
 
 overview:

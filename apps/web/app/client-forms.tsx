@@ -294,7 +294,7 @@ export function ProviderEasyConnectForm({ children, className }: { children: Rea
     if (!gate.allowed) { showToast("error", gate.reason); return; }
     startTransition(async () => {
       try {
-        const result = await callAction(easyConnectProviderAction, undefined, "cloud_account:manage")(formData);
+        const result = await callAction(easyConnectProviderAction, undefined, "model_provider:manage")(formData);
         formRef.current?.reset();
         setSecretRefId(result.secret_ref_id);
         showToast("success", pasteConnectSuccessCopy(result.secret_ref_id));

@@ -52,6 +52,7 @@ import {
   youApproveWord, type ComposeMode, type CostHistory, type TimelineStep,
 } from "./compose-plan";
 import type { CatalogueEntry, Installed } from "../delivery-workflows-ui";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 /** A repository this project can build in, from its registry. */
 type Repo = { id: string; full_name: string; role?: string | null; default_branch?: string };
@@ -420,6 +421,7 @@ function Links({ links, onChange, testid }: { links: string[]; onChange: (next: 
 
 /** Who does a step, drawn: the captain's face and callsign, BOSS, or an amber "You approve". */
 function WhoCell({ step }: { step: TimelineStep }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   if (step.who.kind === "you") {
     return <span className="np-who np-who-you"><span className="np-you">You</span>approve</span>;
   }
@@ -477,6 +479,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   previewId?: string | null;
   onCancel?: () => void;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const schemaOf = (key: string) =>
     workflows.find((w) => w.workflow_key === key)?.input_schema
       ?? catalogue.find((c) => c.key === key)?.input_schema;

@@ -15,7 +15,7 @@ async function read<T>(url: string): Promise<Result<T>> {
   try {
     const r = await fetch(url, { cache: "no-store" });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) return { ok: false, error: String(data?.error ?? `HTTP ${r.status}`), status: r.status };
+    if (!r.ok) return { ok: false, error: String(data?.reason ?? data?.error ?? `HTTP ${r.status}`), status: r.status };
     return { ok: true, data: data as T };
   } catch (e) {
     return { ok: false, error: String((e as Error)?.message ?? e), status: 0 };

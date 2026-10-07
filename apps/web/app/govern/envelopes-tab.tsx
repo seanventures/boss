@@ -7,11 +7,14 @@
  */
 import React, { useState } from "react";
 
+import { GatedButton } from "../../components/gated";
+
 import { governWrite, money, readGovern, readNumber, rightsFor, type Allocation, type EnvelopesView } from "../../lib/govern";
 import { usePolledRead } from "../../lib/log-stream";
 import { showToast } from "../client-forms";
 import { consoleHref } from "../url-intent";
 import { plural } from "../../lib/factory-floor";
+import { localWith } from "../../lib/local-time";
 
 const HONESTY: Record<string, { word: string; tip: string }> = {
   not_loaded: { word: "Not loaded · not $0", tip: "Cloud spend is not loaded. This is not $0.00." },
@@ -31,8 +34,7 @@ function verdictWord(v: string): string {
 }
 
 function dayWords(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  return localWith(iso, { day: "numeric", month: "short" });
 }
 
 function Tree({ items, parent, depth }: { items: Allocation[]; parent: string | null; depth: number }) {
@@ -138,7 +140,7 @@ export function EnvelopesTab({ projectId, actor, paused }: { projectId: string; 
                            onChange={(e) => setTier(e.target.value)} data-testid="gv-init-tier" /></label>
           <label>Amount ($)<input className="gv-input" type="number" min={0} step="any" value={amount}
                                  onChange={(e) => setAmount(e.target.value)} data-testid="gv-init-amount" /></label>
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={busy === "initiative"} data-testid="gv-init-request">Request</button>
+          <GatedButton permission="budget:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy === "initiative"} data-testid="gv-init-request">Request</GatedButton>
         </form>
         <span className="gv-rule" data-testid="gv-init-rule" title="Above this, a person approves first">
           Tier {rule.tier_min}+ over {money(rule.amount_usd_micros)} needs approval
@@ -155,8 +157,8 @@ export function EnvelopesTab({ projectId, actor, paused }: { projectId: string; 
       <section className="gv-card" aria-labelledby="gv-commit-h">
         <h3 id="gv-commit-h" className="gv-sec-head">
           COMMITMENTS
-          <button type="button" className="ag-btn" disabled={busy === "reconcile"} data-testid="gv-reconcile"
-                  onClick={() => void reconcile()}>Reconcile</button>
+          <GatedButton permission="budget:manage" type="button" className="ag-btn" disabled={busy === "reconcile"} data-testid="gv-reconcile"
+                  onClick={() => void reconcile()}>Reconcile</GatedButton>
         </h3>
         <span className="gv-honesty" data-testid="gv-finops-honesty" data-state={v.finops.state} title={honesty.tip}>
           {honesty.word}

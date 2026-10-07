@@ -34,7 +34,9 @@ export async function register(): Promise<void> {
     if (forward.untrustedBrowserContext(incoming)) return { cookie: "", csrf: null, origin: null };
     const stub = (await import("./lib/identity/stub/enabled")).identityStubEnabled();
     const cookie = forward.identityCookieHeader(incoming.get("cookie"), { stub });
-    const origin = incoming.get("origin");
+    // A browser GET that needs a writing GET's POST twin carries no Origin: derived from its
+    // same-origin proof, or none (lib/identity/forward.ts forwardedWriteOrigin).
+    const origin = forward.forwardedWriteOrigin(incoming);
     let csrf = incoming.get(forward.CSRF_HEADER_LC);
     const session = forward.parseIdentityCookies(cookie)[forward.SESSION_COOKIE];
     if (writing && !csrf && session && API_URL) {

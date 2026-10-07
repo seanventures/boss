@@ -21,6 +21,7 @@ import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { ActFace } from "./act-card";
 import { RunFace, nameOf } from "./run-face";
 import { ANIMATED_STATES, linkTo, navigate, plainClick, runPatch, span, type Band } from "./live-util";
+import { localFull } from "../../lib/local-time";
 
 type Hop = Extract<MissionHop, { kind: "hop" }>;
 
@@ -177,7 +178,7 @@ export function MissionRow({ mission: m, density = "lane", band = "wide", now, s
   const parts = nowParts(m, stepSeconds);
   const name = m.subject || m.workflowName;
   const nameTip = [`${m.workflowName}${m.version ? ` v${m.version}` : ""}`,
-                   m.actor ? `started by ${m.actor}` : "", m.startedAt ? new Date(m.startedAt).toLocaleString() : ""]
+                   m.actor ? `started by ${m.actor}` : "", m.startedAt ? localFull(m.startedAt) : ""]
     .filter(Boolean).join(" · ");
   const cost = m.costUsd > 0 ? `$${m.costUsd.toFixed(2)}` : "";
   const runHref = linkTo(runPatch(m.runId), orgId);

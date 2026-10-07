@@ -29,6 +29,8 @@ import { AgFaceStack } from "../agents/agent-face";
 import { nameOf, RunFace } from "../agents/run-face";
 import { fetchCalls, resolveComment, stopPreview, type ModelCall } from "./cockpit-actions";
 import { areaHref, costWord, kilo, money, secondsWord, whoName } from "./cockpit-util";
+import { localWith } from "../../lib/local-time";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 export type OutputKey = "brief" | "pr" | "checks" | "tests" | "changes" | "comments" | "preview" | "deploy" | "cost";
 
@@ -49,6 +51,7 @@ export function defaultOpen(c: Pick<Cockpit, "state" | "outputs">): OutputKey | 
 }
 
 function Maker({ roleKey, boss }: { roleKey?: string | null; boss?: boolean }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   if (roleKey) {
     return <span className="fx-maker" data-role={roleKey} title={`Made by ${nameOf(roleKey).name}`}><RunFace roleKey={roleKey} size={20} state="idle" /></span>;
   }
@@ -488,7 +491,7 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
       <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy} data-testid="fx-preview-restart" onClick={() => void start()}>Restart</GatedButton>
       {running ? <GatedButton permission="preview:manage" type="button" className="ag-link" disabled={busy} data-testid="fx-preview-stop" onClick={() => void stop()}>Stop</GatedButton> : null}
       <button type="button" className="ag-link" onClick={onLogs} data-testid="fx-preview-logs">Logs ▾</button>
-      {p.expiresAt ? <span className="fx-muted" title={p.expiresAt}>Expires {new Date(p.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span> : null}
+      {p.expiresAt ? <span className="fx-muted" title={p.expiresAt}>Expires {localWith(p.expiresAt, { hour: "numeric", minute: "2-digit" })}</span> : null}
       {p.substrate ? <span className="fx-muted" title="Where the preview runs">{p.substrate}</span> : null}
       {typeof p.stepsDone === "number" && p.stepsTotal ? (
         <button type="button" className="ag-link" aria-expanded={showSteps} data-testid="fx-preview-steps"
@@ -532,6 +535,7 @@ function DeployBody({ c, projectId, actor, onLogs }: { c: Cockpit; projectId: st
 }
 
 function CallsFold({ projectId, runId, metered }: { projectId: string; runId: string; metered: boolean }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const [open, setOpen] = useState(false);
   const [calls, setCalls] = useState<ModelCall[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -571,6 +575,7 @@ function CallsFold({ projectId, runId, metered }: { projectId: string; runId: st
 }
 
 function CostBody({ c, projectId }: { c: Cockpit; projectId: string }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const cost = c.outputs.cost;
   const stations = Object.entries(cost.byStation).filter(([, v]) => (v ?? 0) > 0);
   return (

@@ -30,6 +30,7 @@ import { notifyChanged } from "../changed";
 import { cleanUpOldAction } from "./actions";
 import { GatedButton } from "../../components/gated";
 import { Go } from "./hero";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 /** Rows a card shows before `+n more` (the copy and row budgets of the approved look). */
 export const NEEDS_ROWS = 3;
@@ -135,6 +136,7 @@ export function NeedsCard({ view, lead, olderStopped, needsYou, projectId, actor
   needsYou: number | null; projectId: string; actor: string; orgId?: string | null; now: number | null;
   reachable: boolean; onGone: (id: string) => void; onRefresh: () => void;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const [openId, setOpenId] = useState<string | null>(null);
   const [more, setMore] = useState(false);
   const all = lead.map((i) => needRow(i, now));
@@ -225,6 +227,7 @@ function currentAgent(m: Mission): string | null {
 }
 
 function FlightRow({ m, now, orgId }: { m: Mission; now: number | null; orgId?: string | null }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   // Before the client clock exists (the server's paint), the server's own elapsed time.
   const since = now === null ? (m.stepElapsedSeconds ?? null)
     : m.stepSince ? Math.max(0, (now - Date.parse(m.stepSince)) / 1000) : null;

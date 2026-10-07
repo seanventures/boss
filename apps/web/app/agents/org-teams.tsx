@@ -164,6 +164,7 @@ function TeamGrid(props: OrgTeamsProps & { teams: OrgTeam[] }) {
 }
 
 function SrTable({ teams, live, board }: { teams: OrgTeam[]; live: LiveMap; board: OrgBoard }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   return (
     <table className="ag-sr" tabIndex={0} aria-label="Teams" data-testid="ag-zones-table">
       <thead><tr><th>Team</th><th>Agent</th><th>State</th><th>Now</th></tr></thead>
@@ -185,6 +186,7 @@ type CardProps = OrgTeamsProps & {
 };
 
 function TeamCard(p: CardProps) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const { team, board, live, search, days, selected, onSelect, order, active, setActive, faces, missing } = p;
   const label = teamLabel(team.key, board);
   const people = liveFirst(team.members, live);
@@ -336,6 +338,7 @@ function WaitingRow({ team }: { team: OrgTeam }) {
 }
 
 function LoadRow({ team, days }: { team: OrgTeam; days: OrgDays }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const rows = team.membersLoad.slice(0, LOAD_MAX);
   const max = Math.max(1, ...rows.map((r) => r.busySeconds));
   const more = team.membersLoad.length - rows.length;
@@ -357,6 +360,7 @@ function LoadRow({ team, days }: { team: OrgTeam; days: OrgDays }) {
 }
 
 function GapsRow({ team, actions }: { team: OrgTeam; actions: OrgActions | null }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const [open, setOpen] = useState(false);
   if (!team.gaps.kitOk) {
     return (
@@ -447,6 +451,7 @@ function MissingFace({ role, team, onMakeAgent }: { role: OrgMissingRole; team: 
 }
 
 function TeamMenu(p: CardProps) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const { team, board, live, actions } = p;
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState(false);
@@ -509,6 +514,7 @@ function TeamMenu(p: CardProps) {
 // ── Under 640px: the drill-down list ────────────────────────────────────────────────────────
 
 function TeamList(props: OrgTeamsProps & { teams: OrgTeam[] }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const { teams, live, board, search, onSelect, focusTeam } = props;
   const [open, setOpen] = useState<string | null>(focusTeam ?? null);
   return (

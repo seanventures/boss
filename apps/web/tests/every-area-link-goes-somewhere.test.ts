@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { AREA_IDS, isAreaId, toAreaId } from "../lib/area-ids";
+import { resolveLegacyArea } from "../app/legacy-areas";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -42,6 +43,9 @@ function linkTargets(): Array<{ file: string; area: string }> {
       found.push({ file, area: m[1] });
     }
     for (const m of code.matchAll(new RegExp(`[?&]area=(${ID})`, "g"))) {
+      // An OLD link kept as the input of a redirect check (`from: "?area=monitoring…"`, the
+      // Infra/Observability parity table) is a fixture proving it still lands, not a link.
+      if (/from:\s*["'`][^"'`]*$/.test(code.slice(Math.max(0, m.index! - 60), m.index!))) continue;
       found.push({ file, area: m[1] });
     }
   }
@@ -59,9 +63,11 @@ describe("every area link goes somewhere", () => {
     expect(dead, `links to areas the console does not have:\n${dead.join("\n")}`).toEqual([]);
   });
 
-  it("every AreaId is a nav area", () => {
+  it("every AreaId is a nav area, or a legacy alias rewritten to one", () => {
     const nav = navAreas();
-    expect(AREA_IDS.filter((id) => !nav.has(id))).toEqual([]);
+    const alias = (id: string) => resolveLegacyArea(new URLSearchParams(`area=${id}`))?.get("area") ?? null;
+    const lost = AREA_IDS.filter((id) => !nav.has(id) && !(alias(id) && nav.has(alias(id)!)));
+    expect(lost).toEqual([]);
   });
 
   it("an area id from the API that the console does not have falls back instead of dying", () => {

@@ -31,6 +31,7 @@ import { Spark } from "./spark";
 import { TokenStream, slotOf } from "./token-stream";
 import { Empty, Skeleton, ZoneHead } from "../infra/kit";
 import { useLocalTime } from "../../lib/local-time";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 // ── the stat strip ──────────────────────────────────────────────────────────────────────────
 
@@ -90,6 +91,7 @@ export function sortRows(rows: ModelGroupRow[], key: SortKey, dir: 1 | -1): Mode
 function GroupTable({ m, group, selected, onSelect, slots }: {
   m: Models; group: Group; selected: string | null; onSelect: (key: string) => void; slots: Map<string, string>;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "spend", dir: -1 });
   const rows = useMemo(() => sortRows(m.groups, sort.key, sort.dir), [m.groups, sort]);
   const head = GROUPS.find((g) => g.key === group)?.head ?? "MODELS";

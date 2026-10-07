@@ -179,7 +179,12 @@ describe("nothing refreshes the console behind the coordinator's back", () => {
   it("the only router.refresh() calls are the coordinator's", () => {
     const offenders: string[] = [];
     for (const file of [...sources("app"), ...sources("lib"), ...sources("components")]) {
-      const n = (codeOnly(file).match(/\.refresh\(\s*\)/g) ?? []).length;
+      // A ROUTER refresh: `router.refresh()`, or `.refresh()` on any name bound to useRouter().
+      // A polled hook's own `.refresh()` (usePolled, the identity mirror) re-reads one feed and
+      // never re-renders the console, so it is not one (the hooks came after this rule).
+      const code = codeOnly(file);
+      const routers = new Set(["router", ...[...code.matchAll(/\b(?:const|let)\s+(\w+)\s*=\s*useRouter\(\)/g)].map((m) => m[1])]);
+      const n = [...code.matchAll(/\b(\w+)\.refresh\(\s*\)/g)].filter((m) => routers.has(m[1])).length;
       const allowed = file === "lib/console-refresh.ts" || file === "app/ConsoleShell.tsx" ? 1 : 0;
       if (n > allowed) offenders.push(`${file} (${n})`);
     }

@@ -12,6 +12,7 @@
 
 import { arr, num, obj, opt, str, usePolled, type Polled } from "./factory-floor";
 import { parseAttention, type AttentionItem } from "./agents-live-board";
+import { logHref } from "./log-url";
 
 // ── one state language (§4.2) ───────────────────────────────────────────────────────────────
 
@@ -459,13 +460,11 @@ export const useCloud = (projectId: string, view: CloudView, filters: Record<str
 
 // ── links into the sibling areas (§6.7) ─────────────────────────────────────────────────────
 
-/** The Activity log, pre-filtered. `source` and `subject` are the contract the Activity spec
- *  honours (it rewrites `source` → `src`); a test pins this shape. */
-export function logsHref(source: "deployment" | "llm_call" | "app_log" | "event", subject?: string | null, since?: string | null): string {
-  const p = new URLSearchParams({ area: "activity", source });
-  if (subject) p.set("subject", subject);
-  if (since) p.set("since", since);
-  return `?${p.toString()}`;
+/** The Activity log, pre-filtered: through logHref (lib/log-url.ts), the one way into the Log,
+ *  so the org is kept and the scope uses the Log's own names (src, subject, from). */
+export function logsHref(source: "deployment" | "llm_call" | "app_log" | "event", subject?: string | null,
+  since?: string | null, search?: string): string {
+  return logHref({ src: source, subject: subject ?? null, since: since ?? null }, search);
 }
 export const buildHref = (runId: string) => `?area=code_tasks&build=${encodeURIComponent(runId)}`;
 export const deployHref = (deployRef: string) => `?area=infra&view=deploys&deploy=${encodeURIComponent(deployRef)}`;

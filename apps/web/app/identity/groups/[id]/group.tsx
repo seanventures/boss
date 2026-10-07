@@ -6,8 +6,8 @@
  * here (group:manage_members; the API also requires you to hold every permission the group's
  * roles carry). A group synced from the IdP is read-only: change it there.
  */
+import { useConsoleRefresh } from "../../../use-console-refresh";
 import React, { useState } from "react";
-import { useRouter } from "next/navigation";
 import { ArrowsClockwise, Info, PencilSimple, Plus, Trash, UsersThree } from "@phosphor-icons/react";
 
 import { showToast } from "../../../client-forms";
@@ -22,12 +22,12 @@ import { BindRoleSheet, DeleteGroupSheet, GroupFormSheet, UnbindRoleSheet } from
 
 function useAct() {
   const guarded = useGuardedCall();
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   return async (reason: string, call: () => Promise<unknown>, done: string) => {
     try {
       await guarded(reason, call);
       showToast("success", done);
-      router.refresh();
+      refresh("now");
       return true;
     } catch (e) {
       showToast("error", e instanceof IdentityError ? (e.code === "step_up_cancelled" ? "Not confirmed" : e.message) : "That didn't work");

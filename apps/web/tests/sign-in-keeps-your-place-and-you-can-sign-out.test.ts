@@ -28,7 +28,10 @@ describe("the place you were going", () => {
     expect(page).toContain("safeNext(params.next ?? null)");
     const flow = codeOnly("app/(auth)/login/sign-in.tsx");
     expect(flow).toContain("const target = safeNextClient(next);");
-    expect(flow).toContain("window.location.assign(target)");
+    // Done lands on the target; the one exception is §4.7's forced regeneration (fewer than 3
+    // recovery codes left), which goes to /account to make new ones (d89a07d1). Enrolment keeps it.
+    expect(flow).toContain('window.location.assign(step.must_regenerate_recovery_codes ? "/account" : target)');
+    expect(flow).toContain("window.location.assign(afterEnrolStep(step, target))");
     expect(safeNextClient("/?area=code_tasks&run=crun_1")).toBe("/?area=code_tasks&run=crun_1");
     expect(safeNextClient("//evil.example")).toBe("/");
     expect(safeNextClient("https://evil.example")).toBe("/");

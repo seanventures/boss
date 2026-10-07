@@ -11,6 +11,8 @@ export type Mirror = {
   check: (permission: Permission) => CanResult;
   stepUp: (reason: string) => Promise<boolean>;
   refresh: () => Promise<void>;
+  /** The project the check mirrors (lib/identity/read-gates.ts judges only calls naming it). */
+  projectId?: string | null;
 };
 
 const KEY = "__bossIdentityMirror";

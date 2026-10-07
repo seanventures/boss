@@ -86,6 +86,58 @@ describe("every control mirrors the permission the API checks", () => {
     expect(wrong).toEqual([]);
   });
 
+  // Round 2 (R2-WEB): the walk pressed enabled buttons the API refused — "Poll provider health"
+  // declared model_provider:read while POST /v1/provider-health/poll checks system:operate. The
+  // check above saw only typed-client calls; an action that posts a literal path is held too.
+  it("an action that posts a literal /v1 path declares a permission that route checks", () => {
+    const route = (method: string, path: string): string | undefined => {
+      const segs = path.split("?")[0].split("/").filter(Boolean);
+      let best: { literal: number; check: string } | null = null;
+      for (const [key, check] of MATRIX) {
+        const [m, p] = key.split(" ");
+        if (m !== method) continue;
+        const ks = p.split("/").filter(Boolean);
+        if (ks.length !== segs.length || !ks.every((k, i) => k === "{}" || k === segs[i])) continue;
+        const literal = ks.filter((k) => k !== "{}").length;
+        if (!best || literal > best.literal) best = { literal, check };
+      }
+      return best?.check;
+    };
+    const flat = (t: string) => t.replace(/\$\{[^}]*\}/g, "x");
+    const wrong: string[] = [];
+    let checked = 0;
+    for (const [key, declared] of Object.entries(ACTION_PERMISSIONS)) {
+      const [file, name] = key.split("#");
+      const src = readFileSync(join(WEB, file), "utf8");
+      let start = src.indexOf(`function ${name}(`);
+      if (start < 0) start = src.indexOf(`const ${name} `);
+      if (start < 0) continue;
+      const end = src.indexOf("\nexport ", start + 10);
+      const body = src.slice(start, end > 0 ? end : undefined);
+      const checks = new Set<string>();
+      for (const call of body.matchAll(/client\.(\w+)\(/g)) {
+        const r = CLIENT_ROUTES.get(call[1]);
+        const check = r ? MATRIX.get(r) : undefined;
+        if (check) checks.add(check);
+      }
+      for (const m of body.matchAll(/\b(?:postJson|postJsonReturn)\s*(?:<[^>]*>)?\(\s*[`"](\/v1\/[^`"]*)[`"]/g)) {
+        const check = route("POST", flat(m[1]));
+        if (check) checks.add(check);
+      }
+      for (const m of body.matchAll(/\b(?:apiWrite|apiFetch|fetch)\(\s*`\$\{API_URL\}(\/v1\/[^`]*)`\s*,\s*\{[^}]*?method:\s*"(\w+)"/g)) {
+        const check = route(m[2], flat(m[1]));
+        if (check) checks.add(check);
+      }
+      if (!checks.size) continue;
+      checked += 1;
+      if (![...checks].some((c) => c.startsWith(`permit ${declared} @`))) {
+        wrong.push(`${key} declares ${declared}; the API checks ${[...checks].join(" | ")}`);
+      }
+    }
+    expect(checked).toBeGreaterThan(100);
+    expect(wrong).toEqual([]);
+  });
+
   it("an ActionForm's permission is its action's", () => {
     const wrong: string[] = [];
     for (const file of FILES.filter((f) => f.endsWith(".tsx"))) {

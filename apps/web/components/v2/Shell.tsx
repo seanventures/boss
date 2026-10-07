@@ -41,7 +41,7 @@ export const V2_NAV = [
   { id: "panels", label: "Approvals", href: "/v2/panels", built: true, v1Area: "decisions" },
   { id: "boss", label: "Workflows", href: "/v2/boss", built: true, v1Area: "delivery_workflows" },
   { id: "timeline", label: "Receipts", href: "/v2/timeline", built: true, v1Area: "activity" },
-  { id: "infra", label: "Infra & Models", href: "/v2/infra", built: true, v1Area: "delivery" },
+  { id: "infra", label: "Infra & Models", href: "/v2/infra", built: true, v1Area: "infra" },
   { id: "settings", label: "Settings", href: "/v2/settings", built: true, v1Area: "setup" },
 ] as const;
 

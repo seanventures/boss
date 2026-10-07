@@ -217,7 +217,7 @@ describe("(f) the console always mounts the identity provider", () => {
   });
 
   it("the client mirror reaches non-component code (lib/call-action.ts)", () => {
-    expect(read("components/identity/identity-provider.tsx")).toMatch(/installMirror\(\{ check:/);
+    expect(read("components/identity/identity-provider.tsx")).toMatch(/\{ check: \(p: Permission\) => check\(p\)[\s\S]*installMirror\(mirror\)/);
     expect(read("lib/call-action.ts")).toMatch(/currentMirror\(\)/);
   });
 });

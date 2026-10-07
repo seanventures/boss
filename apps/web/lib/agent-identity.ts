@@ -239,6 +239,9 @@ export function loadIdentities(projectId: string, fetcher: typeof fetch = fetch)
   const p: Promise<void> = (async () => {
     try {
       const r = await fetcher(`/v1/agents/identities?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+      // A viewer who may not read the install's agents (the read gate's LOCKED answer, or the
+      // API's 403) keeps the shipped cast: asking again would only be refused again.
+      if (r.status === 403) return;
       if (!r.ok) { retryLater(projectId, fetcher, mine); return; }
       const data = await r.json() as unknown;
       if (mine !== generation) return; // a switch or refresh came after this request

@@ -18,6 +18,7 @@ import { checkWith } from "../../lib/identity/check";
 import { snapshotFrom } from "../../lib/identity/contract";
 import { enrolHref, needsEnrolment } from "../../lib/identity/enrolment";
 import { ACCOUNT_TABS, IDENTITY_TABS, PATH_HEADER, pageFor, type IdentityPage } from "../../lib/identity/pages";
+import { heldAnywhere, heldSomewhere } from "../../lib/identity/held-anywhere";
 import { serverGet } from "../../lib/identity/server";
 import { loadIdentityCached } from "../../lib/identity/server-cache";
 import { identityStubEnabled } from "../../lib/identity/stub/enabled";
@@ -34,8 +35,17 @@ export async function RouteShell({ section, children }: { section: "identity" | 
   if (needsEnrolment(boot.me, boot.problem)) redirect(enrolHref(path));
   const org = boot.org ? snapshotFrom(boot.org) : null;
   const unavailable = !boot.org;
-  const allowed = (page: IdentityPage) => unavailable || !("permission" in page.access) || checkWith(org, null, null, page.access.permission).allowed;
   const page = pageFor(path);
+  // A page held at the org OR any project (a project Admin's Access requests): asked once each.
+  const anyScope = new Map<string, boolean>();
+  for (const p of [...(section === "identity" ? IDENTITY_TABS : ACCOUNT_TABS), ...(page ? [page] : [])]) {
+    if ("anyScope" in p.access && !anyScope.has(p.access.anyScope)) {
+      anyScope.set(p.access.anyScope, heldSomewhere(await heldAnywhere(p.access.anyScope)));
+    }
+  }
+  const allowed = (page: IdentityPage) => unavailable
+    || ("anyScope" in page.access ? anyScope.get(page.access.anyScope) !== false
+      : !("permission" in page.access) || checkWith(org, null, null, page.access.permission).allowed);
   const tabs = (section === "identity" ? IDENTITY_TABS : ACCOUNT_TABS).filter(allowed);
 
   // Tab counts (People 7, Groups 4 …) from posture, when the viewer may read it.
@@ -49,7 +59,8 @@ export async function RouteShell({ section, children }: { section: "identity" | 
     }
   }
 
-  const denied = page && !allowed(page) && "permission" in page.access ? page.access.permission : null;
+  const denied = page && !allowed(page)
+    ? ("permission" in page.access ? page.access.permission : "anyScope" in page.access ? page.access.anyScope : null) : null;
   const meName = boot.me?.display_name ?? "";
   return (
     <ConsoleShell
@@ -76,6 +87,7 @@ export async function RouteShell({ section, children }: { section: "identity" | 
 /** For a page: may this request load the page's data? (The layout already chose to render it.) */
 export async function pageAllowed(path: string): Promise<boolean> {
   const page = pageFor(path);
+  if (page && "anyScope" in page.access) return heldSomewhere(await heldAnywhere(page.access.anyScope));
   if (!page || !("permission" in page.access)) return true;
   const boot = await loadIdentityCached(null);
   if (!boot.org) return true;

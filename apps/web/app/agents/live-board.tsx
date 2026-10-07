@@ -126,6 +126,7 @@ export type LiveBoardProps = {
 };
 
 export function LiveBoardView({ projectId, actor, live, paused, focusId, search, onOpenMap, onActivity, onDirectory, onNewAgent, orgId }: LiveBoardProps) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const { board, error, loading, refresh } = live;
   const now = useNow(1000);
   const band = useBand();
