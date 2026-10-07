@@ -50,7 +50,7 @@ describe("a browser link never names the API host", () => {
   });
 });
 
-describe("a preview page travels through the console unchanged", () => {
+describe("a preview link on the console lands on the preview origin", () => {
   const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 
   it("does not strip the trailing slash an app redirects to (no 308 loop)", () => {
@@ -58,11 +58,13 @@ describe("a preview page travels through the console unchanged", () => {
     expect(read("app/v1/[...path]/route.ts")).toContain("`${API_URL}${incoming.pathname}${incoming.search}`");
   });
 
-  it("passes a previewed app's redirect target through", () => {
-    expect(read("app/v1/[...path]/route.ts")).toMatch(/"location"\]/);
+  it("sends every preview path to the preview origin instead of serving it (security finding #4)", () => {
+    // The previewed app's own redirects are rewritten by the API on the preview origin; the
+    // console never proxies a preview, so it has none to pass through.
+    expect(read("app/v1/[...path]/route.ts")).toMatch(/if \(isPreviewCapabilityPath\(pathname\)\) return toPreviewOrigin\(req\)/);
   });
 
-  it("sends a signed-out preview tab to the login page, not a JSON 401", () => {
-    expect(read("middleware.ts")).toMatch(/previewPage[\s\S]*text\/html/);
+  it("lets a preview tab through middleware to that redirect, signed in or not", () => {
+    expect(read("middleware.ts")).toMatch(/if \(isPreviewCapabilityPath\(path\)\) return NextResponse\.next\(\);/);
   });
 });

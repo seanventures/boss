@@ -53,16 +53,78 @@ export function isStrippedHeader(name: string): boolean {
 }
 
 /**
- * A PREVIEW IS A CAPABILITY URL, NOT A SESSION (IDENTITY.md §4.1). `/v1/previews/<id>/web/…`
- * (and the overlay's `/feedback`) serve someone else's app on the console's origin. The id is
- * the credential; nothing the person holds is ever sent there — no identity cookie, no CSRF
- * token, no network-trust marker — and nothing the previewed app answers may set a cookie on the
- * console's origin. The API sandboxes every answer (CSP `sandbox` without allow-same-origin).
+ * A PREVIEW IS A CAPABILITY URL, NOT A SESSION (IDENTITY.md §4.1), AND IT LIVES ON ITS OWN ORIGIN
+ * (security finding #4). `/v1/previews/<id>/web/…` (and the overlay's `/feedback`) serve someone
+ * else's app. They used to be proxied on the console's origin, where `/v1/previews/x/%77eb/` slipped
+ * past this matcher: the sandbox CSP was not relayed and the app read the CSRF token from
+ * /v1/identity/me. Now the console never serves one: app/v1/[...path] redirects every preview path
+ * to the preview origin (previewOrigin below; apps/api/app/preview_origin.py serves it, stripped of
+ * every cookie), and nothing — cookie, CSRF, network marker — is forwarded for it.
+ *
+ * Matching happens on the NORMALISED path (normalisePath): percent-decoded until stable, `\` read
+ * as `/`, repeated slashes collapsed, dot segments removed, and case-insensitive — every spelling
+ * a server might route as a preview is judged as one.
  */
-export const PREVIEW_CAPABILITY_PATH = /^\/v1\/previews\/[^/]+\/(?:web(?:\/.*)?|feedback\/?)$/;
+export const PREVIEW_CAPABILITY_PATH = /^\/v1\/previews\/[^/]+\/(?:web(?:\/.*)?|feedback\/?)$/is;
+
+/**
+ * A request path as a server could come to read it. Decoded repeatedly (`%2577` → `%77` → `w`;
+ * `%2F`/`%2f` → `/`), backslashes as slashes, `//` collapsed, `.`/`..` segments resolved (never
+ * above the root). A malformed escape stops the decoding where it is; the result is still judged.
+ */
+export function normalisePath(pathname: string): string {
+  let path = pathname.split("?")[0].split("#")[0];
+  for (let i = 0; i < 8; i += 1) {
+    let next: string;
+    try {
+      next = decodeURIComponent(path);
+    } catch {
+      next = path.replace(/%([0-9a-f]{2})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    }
+    if (next === path) break;
+    path = next;
+  }
+  path = path.replace(/\\/g, "/").replace(/[\t\n\r\0]/g, "");
+  const out: string[] = [];
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") { out.pop(); continue; }
+    out.push(segment);
+  }
+  const trailing = /\/(?:\.{1,2})?$/.test(path) && out.length > 0 ? "/" : "";
+  return `/${out.join("/")}${trailing}`;
+}
 
 export function isPreviewCapabilityPath(pathname: string): boolean {
-  return PREVIEW_CAPABILITY_PATH.test(pathname);
+  return PREVIEW_CAPABILITY_PATH.test(pathname) || PREVIEW_CAPABILITY_PATH.test(normalisePath(pathname));
+}
+
+/** BOSS_PREVIEW_PORT, or null when previews are switched off ("0"/"off"). Default 3001. */
+export function previewPort(): number | null {
+  const raw = (process.env.BOSS_PREVIEW_PORT ?? "").trim().toLowerCase();
+  if (["0", "off", "false", "no", "none"].includes(raw)) return null;
+  const port = Number(raw || "3001");
+  return Number.isInteger(port) && port > 0 && port < 65536 ? port : 3001;
+}
+
+/**
+ * Where a browser that reached the console at `host` opens previews: BOSS_PREVIEW_ORIGIN, or the
+ * console's own host on BOSS_PREVIEW_PORT (console http://localhost:3000 → previews
+ * http://localhost:3001). Null when neither can be said. Mirrors preview_service.preview_origin_for.
+ */
+export function previewOrigin(host: string | null | undefined, protocol: string): string | null {
+  const configured = (process.env.BOSS_PREVIEW_ORIGIN ?? "").trim();
+  if (configured) {
+    try {
+      const url = new URL(configured);
+      if ((url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password) return url.origin;
+    } catch { /* fall through to the derived origin */ }
+  }
+  const port = previewPort();
+  if (port === null) return null;
+  const found = /^(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::\d{1,5})?$/i.exec((host ?? "").trim());
+  if (!found) return null;
+  return `${protocol === "https" || protocol === "https:" ? "https" : "http"}://${found[1]}:${port}`;
 }
 
 /**
