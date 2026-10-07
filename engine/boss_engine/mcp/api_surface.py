@@ -14,7 +14,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import quote, unquote, urlsplit
 
 import httpx
@@ -547,6 +547,24 @@ class ApiSurface:
             "mounted_input_schema_quality": self.mounted_input_schema_quality(op),
         }
 
+    @staticmethod
+    def _run_auth() -> Any:
+        """The verified tool-call identity when it is an agent run (a run token), else None."""
+        from ..tools.registry import CURRENT_TOOL_AUTH
+
+        auth = CURRENT_TOOL_AUTH.get()
+        return auth if getattr(auth, "run_token", None) is not None else None
+
+    def _run_headers(self, auth: Any, method: str, path: str) -> Optional[dict[str, str]]:
+        from ..db import get_engine
+        from ..identity import runs
+
+        base = str(getattr(self.client, "base_url", "") or "").rstrip("/")
+        try:
+            return runs.bridge_headers(auth, method, path, engine=get_engine(), request_origin=base)
+        except Exception:  # noqa: BLE001 — a run that cannot be bridged is refused, never widened
+            return None
+
     def _body_schema(self, op: ApiOperation) -> dict:
         mounted = _mounted_body_schema(op.definition)
         if _loose_json_body(mounted):
@@ -648,11 +666,14 @@ class ApiSurface:
                                 or not re.fullmatch(r"mcpconf_[a-f0-9]{20}", confirmation_id)):
             return {"ok": False, "error": "invalid_confirmation_id", "operation": alias}
         caller = (CALLER_AUTHORIZATION.get() or "").strip()
+        run_auth = self._run_auth()
+        if run_auth is not None:
+            caller = "run-token"          # replaced per request by the run's DPoP headers below
         if not caller:
             return {"ok": False, "error": "caller_identity_required", "operation": alias,
                     "reason": "Present your own BOSS API key or run token; the MCP server's "
                               "key never acts for a caller."}
-        if self.revalidate_scope and caller == (self.launch_authorization or ""):
+        if run_auth is None and self.revalidate_scope and caller == (self.launch_authorization or ""):
             assert self.client is not None and self.principal is not None
             try:
                 current_principal, scope_reason = _verify_api_scope(self.client, project_id)
@@ -710,7 +731,18 @@ class ApiSurface:
         if (op.definition.get("requestBody") or {}).get("required") and body is None:
             return {"ok": False, "error": "missing_body"}
         # AS THE CALLER: their credential replaces the client's configured one on this request.
-        headers = {"X-BOSS-MCP-Operation": alias, "Authorization": caller}
+        # An agent run presents a boss:api run token of its own run with a fresh DPoP proof.
+        def caller_headers(method: str, path_: str) -> Optional[dict[str, str]]:
+            if run_auth is None:
+                return {"Authorization": caller}
+            return self._run_headers(run_auth, method, path_)
+
+        auth_headers = caller_headers(op.method, unquote(rendered_path))
+        if auth_headers is None:
+            return {"ok": False, "error": "caller_identity_required", "operation": alias,
+                    "reason": "this agent run cannot call the API from here (only a run's first hop "
+                              "is bridged)"}
+        headers = {"X-BOSS-MCP-Operation": alias, **auth_headers}
         if confirmation_id:
             headers.update({
                 "X-BOSS-MCP-Confirmation": confirmation_id,
@@ -723,7 +755,7 @@ class ApiSurface:
                     "method": op.method, "path": unquote(rendered_path),
                     "query": dict(httpx.QueryParams(query_args).multi_items()),
                     "body": body,
-                }, headers={"Authorization": caller})
+                }, headers=caller_headers("POST", "/v1/mcp-confirmations") or {})
             else:
                 response = self.client.request(
                     op.method, rendered_path, params=query_args,
