@@ -11,7 +11,6 @@ Every read requires a reader of the project (it used to require nothing). Every 
 strong ETag built from the filters and the newest row of each stream, so a live tail that has
 nothing new costs one index probe per stream and answers 304.
 """
-from __future__ import annotations
 
 import csv
 import io
