@@ -22,6 +22,17 @@ import httpx
 from ..services.api_catalog import classify_path
 from ..tools.registry import ToolRegistry, ToolSpec
 
+from contextvars import ContextVar
+
+#: THE CALLER'S OWN CREDENTIAL for the API call a tool makes (M8: no confused deputy). The MCP
+#: transport sets it per call to the `Authorization` value the CALLER presented (its BOSS API key,
+#: or its run token) — over HTTP the request's own bearer, over stdio the key the session was
+#: launched with. The bridge sends exactly this to the API, so the route decides as the caller;
+#: the key the server was configured with (BOSS_MCP_API_KEY) is used only to read the catalogue.
+#: None: no caller identity, and the call is refused — never sent under the server's key.
+CALLER_AUTHORIZATION: ContextVar[str | None] = ContextVar("boss_mcp_caller_authorization",
+                                                          default=None)
+
 _METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _RESPONSE_LIMIT = 128_000
@@ -418,6 +429,9 @@ class ApiSurface:
         self.scope_reason = scope_reason
         self.pinned_project_id = pinned_project_id
         self.revalidate_scope = revalidate_scope
+        #: The Authorization the surface was launched with (stdio: the session's own key). Only
+        #: a call made AS that same credential re-runs the launch-time scope check.
+        self.launch_authorization: str | None = None
         self.curated_request_bodies = _curated_request_bodies()
         self.operations: dict[str, ApiOperation] = {}
         for path, methods in (schema.get("paths") or {}).items():
@@ -478,9 +492,11 @@ class ApiSurface:
                 edition = str(status.json().get("edition") or "unknown")
         except (httpx.HTTPError, ValueError, TypeError):
             pass
-        return cls(schema, client=session, principal=principal,
-                   edition=edition, scope_reason=scope_reason,
-                   pinned_project_id=project_id, revalidate_scope=bool(api_key))
+        surface = cls(schema, client=session, principal=principal,
+                      edition=edition, scope_reason=scope_reason,
+                      pinned_project_id=project_id, revalidate_scope=bool(api_key))
+        surface.launch_authorization = f"Bearer {api_key}" if api_key else None
+        return surface
 
     def availability(self, operation: ApiOperation, *, read_only: bool = False) -> str:
         if operation.excluded_reason:
@@ -631,7 +647,12 @@ class ApiSurface:
                                 or not isinstance(confirmation_id, str)
                                 or not re.fullmatch(r"mcpconf_[a-f0-9]{20}", confirmation_id)):
             return {"ok": False, "error": "invalid_confirmation_id", "operation": alias}
-        if self.revalidate_scope:
+        caller = (CALLER_AUTHORIZATION.get() or "").strip()
+        if not caller:
+            return {"ok": False, "error": "caller_identity_required", "operation": alias,
+                    "reason": "Present your own BOSS API key or run token; the MCP server's "
+                              "key never acts for a caller."}
+        if self.revalidate_scope and caller == (self.launch_authorization or ""):
             assert self.client is not None and self.principal is not None
             try:
                 current_principal, scope_reason = _verify_api_scope(self.client, project_id)
@@ -688,7 +709,8 @@ class ApiSurface:
             return {"ok": False, "error": "invalid_json_body"}
         if (op.definition.get("requestBody") or {}).get("required") and body is None:
             return {"ok": False, "error": "missing_body"}
-        headers = {"X-BOSS-MCP-Operation": alias}
+        # AS THE CALLER: their credential replaces the client's configured one on this request.
+        headers = {"X-BOSS-MCP-Operation": alias, "Authorization": caller}
         if confirmation_id:
             headers.update({
                 "X-BOSS-MCP-Confirmation": confirmation_id,
@@ -701,7 +723,7 @@ class ApiSurface:
                     "method": op.method, "path": unquote(rendered_path),
                     "query": dict(httpx.QueryParams(query_args).multi_items()),
                     "body": body,
-                })
+                }, headers={"Authorization": caller})
             else:
                 response = self.client.request(
                     op.method, rendered_path, params=query_args,

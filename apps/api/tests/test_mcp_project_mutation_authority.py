@@ -8,6 +8,28 @@ from sqlalchemy import text
 from apps.api.app import main as api_main
 from boss_engine.mcp.api_surface import ApiSurface, operation_alias
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _caller_is_the_launch_key(monkeypatch):
+    """The bridge calls the API as its CALLER (M8); these tests drive it as a stdio session,
+    whose caller is the key it was launched with."""
+    from boss_engine.mcp import api_surface
+
+    original = ApiSurface.invoke
+
+    def invoke(self, *args, **kwargs):
+        if api_surface.CALLER_AUTHORIZATION.get():
+            return original(self, *args, **kwargs)
+        token = api_surface.CALLER_AUTHORIZATION.set(self.launch_authorization)
+        try:
+            return original(self, *args, **kwargs)
+        finally:
+            api_surface.CALLER_AUTHORIZATION.reset(token)
+
+    monkeypatch.setattr(ApiSurface, "invoke", invoke)
+
 
 PROJECT = "boss-dogfood"
 

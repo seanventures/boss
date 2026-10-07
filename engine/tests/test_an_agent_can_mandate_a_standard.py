@@ -79,6 +79,10 @@ class FakeConn:
             return _Rows([])
         if "FROM deployment_targets" in sql:
             return _Rows(self.targets)
+        if "FROM deployment_hosts" in sql:
+            # M10: a probe goes only to a host registered in the project; these tests' hosts are.
+            return _Rows([{"id": "h", "name": params.get("h"), "address": params.get("h"),
+                           "port_min": 1, "port_max": 65535}])
         if "SELECT id FROM engineering_standards" in sql:
             return _Rows([])
         return _Rows(self.rows)
@@ -234,6 +238,18 @@ class TestScopingToOneProjectOrAllOfThem:
 
 class TestSecurityCanActuallyRunTheCheckItMandates:
     """Mandating a check nobody can perform is a request, not a control."""
+
+    def test_it_never_probes_a_host_the_project_has_not_registered(self, tools):
+        class Unregistered(FakeConn):
+            def execute(self, statement, params=None):
+                if "FROM deployment_hosts" in " ".join(str(statement).split()):
+                    return _Rows([])
+                return super().execute(statement, params)
+
+        out = tools["check_port_exposure"].handler(
+            FakeCtx(Unregistered()), project_id="p", actor="Security",
+            args={"host": "169.254.169.254", "ports": [80]})
+        assert out["ok"] is False and "registered" in out["error"]
 
     def test_the_port_check_exists_as_a_tool(self, tools):
         assert "check_port_exposure" in tools

@@ -159,15 +159,20 @@ def test_project_run_pull_request_ignores_foreign_repo_override(monkeypatch):
 
 @pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown"])
 def test_community_logs_use_only_project_rows_and_never_open_shared_files(edition, monkeypatch):
+    # Build first: the registry's lazy imports (pydantic, zoneinfo) stat files themselves, and
+    # whether an earlier test already imported them must not decide this one.
+    registry = build_default_registry()
     monkeypatch.setattr(builtin._os.path, "isfile", _no_external)
     stamp = datetime.now(timezone.utc)
     conn = _Connection(logs=[{
         "created_at": stamp, "level": "INFO", "logger": "api",
         "message": "own project event", "project_id": "project-a", "run_id": None,
     }])
-    result = build_default_registry().invoke(
-        "read_logs", _Ctx(edition, conn), project_id="project-a", actor="member",
-        args={"service": "api", "project_id": "project-b"},
+    # The call acts in ONE project — the one the identity gate decided (H1): an explicit
+    # project_id argument names it, and the handler reads that project's rows only.
+    result = registry.invoke(
+        "read_logs", _Ctx(edition, conn), project_id="project-z", actor="member",
+        args={"service": "api", "project_id": "project-a"},
     )
     assert result["ok"] is True
     assert result["source"] == "app_logs (BOSS's own capture)"
