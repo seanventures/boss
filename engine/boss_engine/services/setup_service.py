@@ -289,7 +289,9 @@ def connected_engines(
               capacity={"available": is_available(capacity),
                         "exhausted": bool(capacity.get("exhausted")),
                         "retry_at": capacity.get("retry_at"),
-                        "detail": capacity.get("detail") or ""},
+                        "detail": capacity.get("detail") or "",
+                        # The router's headroom reads the raw windows (model_router.headroom).
+                        "observed": capacity},
               saved_at=(row["updated_at"].isoformat()
                         if hasattr(row["updated_at"], "isoformat")
                         else str(row["updated_at"] or "")) or None)
@@ -303,7 +305,8 @@ def connected_engines(
               capacity={"available": is_available(capacity),
                         "exhausted": bool(capacity.get("exhausted")),
                         "retry_at": capacity.get("retry_at"),
-                        "detail": capacity.get("detail") or ""},
+                        "detail": capacity.get("detail") or "",
+                        "observed": capacity},
               saved_at=None)
     # And the environment, for an install that was set up before any of this existed.
     for engine, entry in environment_engines(settings).items():
@@ -714,10 +717,21 @@ def governed_proof(engine, settings: Settings, project_id: str, provider: str, a
                      "amount": amount}
     if refused is not None:
         return {"ok": False, "error": refused, "budget_refused": True}
+    # THE PROOF IS A MODEL CALL TOO: it gets a route record (why this source answered — the
+    # operator asked to check it) and its llm_calls row carries that route.
+    from .llm_telemetry import get_llm_context, set_llm_context
+
+    route_id = _proof_route(engine, project_id, provider)
+    before = get_llm_context()
+    set_llm_context(route_id=route_id, stage="connection_proof", project_id=project_id,
+                    db_engine=before.get("db_engine") or engine)
     try:
         proof = prove()
     except Exception as exc:  # noqa: BLE001 — recorded below, then reported
         proof = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        set_llm_context(route_id=before.get("route_id"), stage=before.get("stage"),
+                        project_id=before.get("project_id"), db_engine=before.get("db_engine"))
     with engine.begin() as connection:
         if proof.get("ok"):
             receipts.mark_succeeded(connection, spend["receipt_id"], f"{provider}:proof",
@@ -732,6 +746,25 @@ def governed_proof(engine, settings: Settings, project_id: str, provider: str, a
                            "Connection proof did not complete a turn.")
     proof["receipt_id"] = spend["receipt_id"]
     return proof
+
+
+def _proof_route(engine, project_id: str, provider: str):
+    """A `model_routes` record for a connection proof. None if it cannot be written."""
+    try:
+        from .model_router.router import RouteDecision, _new_id
+        from .model_router.store import record
+
+        decision = RouteDecision(
+            id=_new_id(), mode="fixed", kind="decision", step="connection_proof",
+            tier="fast", engine=provider, model=None,
+            reason="Fixed: the operator asked Setup to check this source",
+            why=("Fixed: the operator asked Setup to check this source",), rules=("probe",),
+            unit_id=f"setup:{project_id}", project_id=project_id)
+        with engine.begin() as connection:
+            record(connection, decision)
+        return decision.id
+    except Exception:  # noqa: BLE001 — a proof never fails because its record did
+        return None
 
 
 def connect_coding_agent(

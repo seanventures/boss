@@ -1999,7 +1999,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     agents: dict[str, object] = {}  # one CodeAgent per engine name, reused across steps
     stage_routes: dict[str, dict] = {}  # step -> {"engine", "model"} resolved (evidence)
 
+    _agents_lock = threading.RLock()
+
     def _agent_for(engine_name: str):
+        with _agents_lock:
+            return _agent_for_locked(engine_name)
+
+    def _agent_for_locked(engine_name: str):
         a = agents.get(engine_name)
         if a is None:
             with _transaction(engine) as c:
@@ -2036,48 +2042,113 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     except Exception:
         _budget_state = "green"
 
+    # THE MODEL ROUTER (docs/product/MODEL_ROUTER.md). Every stage boundary asks it. In Fixed
+    # mode (the default) it answers with exactly the pre-router resolution — route_for_step →
+    # apply_budget_pressure → materialize_route, and the hard-problems lane on escalation — and
+    # records why; in Smart mode it picks a tier from the task, floors and the escalation
+    # ledger, then a source with headroom.
+    from .model_router.stages import StageRouter
+
+    stage_router = StageRouter(
+        transaction=lambda: _transaction(engine), settings=settings, project_id=project_id,
+        run_id=run_id, spec=spec, title=title, profile=profile, build_engine=build_engine,
+        review_engine=review_engine, budget_state=_budget_state, fctx=fctx,
+        risk_tier=risk_tier)
+
+    def _take(step: str, decision) -> tuple:
+        if decision.refused:
+            # No source may take this stage under the policy — in words, never a silent
+            # fallback (docs/product/MODEL_ROUTER.md).
+            from .model_router.failover import RouteRefused
+
+            raise RouteRefused(f"{step}: {decision.refusal}")
+        stage_routes[step] = {"engine": decision.engine, "model": decision.model,
+                              "route_id": decision.id, "tier": decision.tier,
+                              **({"budget_lite": True} if decision.budget_lite else {}),
+                              **({"escalated": True} if decision.escalation else {})}
+        # Every llm_calls row of this boundary carries the route that chose its model: by its
+        # stage (`routes`), which also reaches the panel's worker threads, else the last one.
+        set_llm_context(route_id=decision.id, routes=_route_ids())
+        return decision.engine, decision.model
+
+    def _route_ids() -> dict:
+        return {s: r["route_id"] for s, r in stage_routes.items() if r.get("route_id")}
+
+    def _await_route(step: str, **kw):
+        """The stage's route — and NEVER STRANDED BY A TEMPORARY OUTAGE: a refusal only because
+        its sources are out for now waits (bounded backoff, a half-open trial each time) and
+        asks again, saying so in words, instead of failing the stage (Decision 21)."""
+        from .model_router.failover import wait_for_route, waiting_words
+
+        def on_wait(decision, pause: float, waited: float) -> None:
+            words = waiting_words(decision, pause, step)
+            logger.info("run %s: %s", run_id, words)
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.stage_waiting", "boss", "code_task_run",
+                           run_id, {"step": step, "why": words, "retry_in_s": round(pause),
+                                    "waited_s": round(waited)})
+
+        return wait_for_route(lambda: stage_router.route(step, **kw), on_wait=on_wait)
+
+    def _routed_agent(step: str, decision):
+        """(agent, model) for a decision. Smart mode wraps the agent so a limit or a
+        transient failure at call time retries the SAME stage on the next source at once
+        (model_router.failover); Fixed mode is exactly as before."""
+        eng, model = _take(step, decision)
+        agent = _agent_for(eng)
+        if decision.mode != "smart":
+            return agent, model
+        from .model_router import store as _route_store
+        from .model_router.failover import FailoverAgent
+
+        def reroute():
+            _route_store.invalidate(project_id)
+            nxt = _await_route(step)
+            if nxt.refused:
+                return None, None, nxt
+            e2, m2 = _take(step, nxt)
+            return _agent_for(e2), m2, nxt
+
+        def on_hop(failed: str, nxt, kind: str) -> None:
+            try:
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.stage_rerouted", "boss",
+                               "code_task_run", run_id,
+                               {"step": step, "from": failed, "to": nxt.engine,
+                                "model": nxt.model, "why": kind})
+            except Exception:  # noqa: BLE001 — the record of a reroute is not the reroute
+                pass
+
+        return FailoverAgent(agent, model, eng, reroute, on_hop), model
+
     def _route(step: str):
-        """Resolve a step to (agent, model). Precedence: spec model_config > profile
-        routing > class defaults; engine falls back to the step's lane default. Call
-        from the MAIN thread only (the agent cache is not locked)."""
-        r = route_for_step(profile, step, spec.get("model_config"))
-        r, _lite = apply_budget_pressure(r, step, _budget_state)
-        eng, model = materialize_route(
-            r, build_engine=build_engine, review_engine=review_engine,
-            strong_engine=settings.code_agent_strong_engine,
-            low_cost_engine=settings.code_agent_low_cost_engine,
-            strong_model=settings.code_agent_strong_model,
-            low_cost_model=settings.code_agent_low_cost_model,
-            build_model=getattr(settings, "code_agent_model", "") or "",
-            review_model=getattr(settings, "code_review_model", "") or "")
-        stage_routes[step] = {"engine": eng, "model": model,
-                              **({"budget_lite": True} if _lite else {})}
-        return _agent_for(eng), model
+        """Resolve a step to (agent, model) through the router."""
+        return _routed_agent(step, _await_route(step))
 
     def _route_escalated(step: str):
-        """Force the STRONG (frontier) engine/model for a step — auto-recovery when the
-        default route produced no usable output. Call from the MAIN thread only."""
-        eng = (settings.code_agent_strong_engine
-               or stage_routes.get(step, {}).get("engine") or build_engine)
-        model = (settings.code_agent_strong_model
-                 or stage_routes.get(step, {}).get("model"))
-        stage_routes[step] = {"engine": eng, "model": model, "escalated": True}
-        return _agent_for(eng), model
+        """The step again, one boundary later, on the evidence that its route produced no
+        usable output (write_tests) or that this is the final attempt (implement). Fixed mode:
+        the hard-problems lane, as before; Smart mode: the escalation rules."""
+        signal = "no_output" if step == "write_tests" else "final_attempt"
+        return _routed_agent(step, _await_route(step, signal=signal,
+                                                previous=stage_routes.get(step)))
+
+    def _vm_escalation(step: str, escalate: bool, signal: str) -> str:
+        """A micro-VM stage's escalation. Fixed: the hard-problems engine override, as before.
+        Smart: the signal goes on the ledger and the stage routes normally (_route_names),
+        so the escalation rules decide the tier."""
+        if not escalate:
+            return ""
+        if stage_router.is_smart():
+            stage_router.signal(step, signal)
+            return ""
+        return settings.code_agent_strong_engine
 
     def _route_names(step: str):
         """Like _route but returns (engine_name, model) without building a host agent —
-        the micro-VM substrate maps the route onto guest engine env instead."""
-        r = route_for_step(profile, step, spec.get("model_config"))
-        eng, model = materialize_route(
-            r, build_engine=build_engine, review_engine=review_engine,
-            strong_engine=settings.code_agent_strong_engine,
-            low_cost_engine=settings.code_agent_low_cost_engine,
-            strong_model=settings.code_agent_strong_model,
-            low_cost_model=settings.code_agent_low_cost_model,
-            build_model=getattr(settings, "code_agent_model", "") or "",
-            review_model=getattr(settings, "code_review_model", "") or "")
-        stage_routes[step] = {"engine": eng, "model": model}
-        return eng, model
+        the micro-VM substrate maps the route onto guest engine env instead. (No budget
+        pressure here, as before.)"""
+        return _take(step, _await_route(step, budget=False))
 
     # ---- Hybrid substrate (VAG / sandbox spec §2): the governed pipeline's WORKING
     # stages (write tests / implement / regression / mutation — the ones that EXECUTE
@@ -3150,7 +3221,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     res = _guest_stage(
                         "write_tests", "write_tests", prompt, test_cmds=[],
                         stage_title=f"QA: author tests — {title}",
-                        engine_override=(settings.code_agent_strong_engine if escalate else ""),
+                        engine_override=_vm_escalation("write_tests", escalate, "no_output"),
                     )
                     r = {"cost_usd_micros": res.cost_usd_micros, "summary": res.summary,
                          "usage": res.usage, "model": stage_routes["write_tests"]["model"]}
@@ -3316,7 +3387,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "implement", "implement" if do_separate_tests else "solo", impl_prompt,
                     test_cmds=list(verify_commands),
                     stage_title=f"SE: implement — {title}" + (f" (repair {attempt})" if attempt else ""),
-                    engine_override=(settings.code_agent_strong_engine if escalate_impl else ""))
+                    engine_override=_vm_escalation("implement", escalate_impl, "final_attempt"))
                 r2 = {"cost_usd_micros": res2.cost_usd_micros, "summary": res2.summary,
                       "usage": res2.usage, "model": stage_routes["implement"]["model"]}
                 if do_separate_tests:
@@ -3360,12 +3431,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 fail_output = (res2.tests[0].stdout if res2.tests else "") or ""
             else:
                 set_llm_context(stage="implement" if do_separate_tests else "solo")
+                _prev_route = dict(stage_routes.get("implement") or {})
                 a, m = _route_escalated("implement") if escalate_impl else _route("implement")
                 # Resume-based repair: continue the implementer's own session so the
                 # repair rides the warm prompt cache (task context + its prior work are
                 # cache READS, not fresh ingestion). Escalated attempts stay cold —
                 # different model, fresh eyes. Cold full-prompt fallback if resume fails.
-                resume_sid = impl_session_id if (attempt and not escalate_impl) else None
+                # A session is never switched to another model mid-flight: a route that
+                # moved (the router escalated after repeated failures) starts cold too.
+                _same_route = (_prev_route.get("engine"), _prev_route.get("model")) == (
+                    stage_routes["implement"].get("engine"), stage_routes["implement"].get("model"))
+                resume_sid = impl_session_id if (attempt and not escalate_impl
+                                                 and _same_route) else None
                 if resume_sid:
                     try:
                         r2 = a.run_role(
@@ -3445,6 +3522,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if ok or attempt == max_repair + 1:
                 break
             repair_attempts += 1
+            # Evidence for the router: the next implement boundary may move up a tier
+            # (Smart mode's escalation rules; Fixed mode ignores the ledger).
+            stage_router.signal("implement", "tests_failed")
             if not impl_files:
                 evidence_text = ("No implementation file was produced. You must create or modify "
                                  "implementation source file(s) (never the test files) so the "
@@ -3635,7 +3715,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 def _run():
                     # Each seat of a real panel signs its own act (factory §6.4); a panel of
                     # one is just the review.
-                    set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
+                    set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
                                     stage="review_code",
                                     seat=(seat + 1) if panel_size > 1 else None)
                     rr = seat_agent.run_role(
@@ -3649,7 +3729,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             review_checks = [_make_review(i, a, m) for i, (a, m) in enumerate(review_members)]
 
             def _do_security():
-                set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
+                set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="security_check")
                 rr = security_agent.run_role(_security_prompt(title, instructions=instructions, criteria=criteria, change=change_block),
                                              review_root, read_only=True, model=security_model)
@@ -3661,7 +3741,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 if use_microvm:
                     # Full-suite regression runs in its OWN VM (echo engine = no agent,
                     # just clone the work branch and execute the suite).
-                    set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
+                    set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
                                     stage="regression")
                     rr = _guest_stage("run_all_tests", "regression", "Run the full test suite.",
                                       test_cmds=list(verify_commands),   # APP-3: web-aware regression target
@@ -3678,7 +3758,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         panel["full"] = bool(_run_verify(record=False).ok)
 
             def _do_consistency():
-                set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
+                set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="consistency_check")
                 rr = consistency_agent.run_role(
                     _consistency_prompt(title, criteria, design, instructions=instructions, change=change_block),
@@ -4127,6 +4207,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 for s, r in stage_routes.items()
             },
             "stage_engines": {s: r.get("engine") for s, r in stage_routes.items()},
+            # Every stage's route (model_router): tier, reason, escalation, and the signals.
+            "routing": stage_router.evidence(),
             "engine": stage_routes.get("implement", {}).get("engine", build_engine),
             "build_engine": build_engine,
             "review_engine": review_engine,
@@ -4234,7 +4316,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         if not _tr.ok:
                             with _transaction(engine) as c:
                                 _phase(c, "test_arbitration")
-                            set_llm_context(db_engine=engine, project_id=project_id,
+                            set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                             run_id=run_id, stage="review_code")
                             a_arb, m_arb = _route("review_code")
                             r_arb = a_arb.run_role(
@@ -4258,7 +4340,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 # implementer's session, so `coder_did_not_edit_tests` keeps meaning.
                                 with _transaction(engine) as c:
                                     _phase(c, "write_tests")
-                                set_llm_context(db_engine=engine, project_id=project_id,
+                                set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                                 run_id=run_id, stage="write_tests")
                                 a_ta, m_ta = _route("write_tests")
                                 r_ta = a_ta.run_role(
@@ -4306,7 +4388,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     # A TEST_WRONG round amends only the oracle — there is nothing for the
                     # implementer to do, and resuming it with an empty brief invites churn.
                     if finding_bits:
-                        set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
+                        set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
                                         stage="implement")
                         a_fix, m_fix = _route("implement")
                         # A ROUND THAT CHANGES NOTHING IS NOT A ROUND OF PROGRESS.
@@ -4365,7 +4447,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if "code_review_passed" in failing:
                         with _transaction(engine) as c:
                             _phase(c, "review_code")
-                        set_llm_context(db_engine=engine, project_id=project_id,
+                        set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                         run_id=run_id, stage="review_code")
                         rr = review_agent.run_role(
                             _review_prompt(title, criteria, instructions=instructions,
@@ -4388,7 +4470,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if "consistent" in failing:
                         with _transaction(engine) as c:
                             _phase(c, "consistency_check")
-                        set_llm_context(db_engine=engine, project_id=project_id,
+                        set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                         run_id=run_id, stage="consistency_check")
                         rc2 = consistency_agent.run_role(
                             _consistency_prompt(title, criteria, design,
@@ -4480,7 +4562,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             continue
                         with _transaction(engine) as c:
                             _phase(c, "review_code")
-                        set_llm_context(db_engine=engine, project_id=project_id,
+                        set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                         run_id=run_id, stage="review_code")
                         rr = review_agent.run_role(
                             _review_prompt(title, criteria, instructions=instructions,

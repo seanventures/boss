@@ -111,11 +111,37 @@ def model_ready(connection, settings: Any, project_id: str) -> bool:
         return False
 
 
-def make_adapter(connection, settings: Any, project_id: str):
-    """The project's chat model: the one model_routing chooses, as every model call does."""
-    from . import model_routing
+def make_adapter(connection, settings: Any, project_id: str, *, role_key: Optional[str] = None,
+                 conversation_id: Optional[str] = None, text: str = ""):
+    """The speaking agent's model: the one model_routing chooses, as every model call does.
 
-    return model_routing.project_chat_adapter(connection, settings, project_id)
+    LOCAL MEANS LOCAL IN TALK TOO (re-check H1): the router is told WHO is speaking (its role,
+    so the agent's Agent Studio model policy — Local, Pinned — binds in Smart and Fixed), WHAT
+    about (the message, for the tier) and in which conversation (a sticky session per seat). A
+    policy nothing may satisfy raises RouteRefused, in words; it never falls back to the cloud."""
+    from . import model_routing
+    from .model_router.router import RouteRequest
+    from .model_router.store import agent_model_policy
+
+    purpose = RouteRequest(kind="chat", step="chat", project_id=project_id,
+                           unit_id=conversation_id, ref=role_key, role=role_key,
+                           text=str(text or "")[:6000],
+                           agent_policy=agent_model_policy(connection, project_id, role_key),
+                           sticky=bool(conversation_id))
+    adapter = model_routing.project_chat_adapter(connection, settings, project_id,
+                                                 purpose=purpose)
+    if hasattr(adapter, "_record"):
+        adapter._record = False          # this module records its own turns (record() below)
+    return adapter
+
+
+def _routed_engine(adapter: Any) -> Optional[str]:
+    """The engine the router put this turn on, when it chose one (Smart, or a binding policy)."""
+    route = getattr(adapter, "route", None) or getattr(adapter, "_boss_route", None)
+    if route is not None and getattr(route, "engine", None) and (
+            getattr(route, "mode", "") == "smart" or getattr(route, "binding", False)):
+        return str(route.engine)
+    return None
 
 
 def _engine_name(connection, settings: Any, project_id: str) -> str:
@@ -1160,8 +1186,11 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
             memory=memory,
             instructions=agent_instructions.for_prompt(
                 c, plan.project_id, speaker.role_key, "panel" if is_room else "chat"))
-        adapter = make_adapter(c, settings, plan.project_id)
-        engine_name = _engine_name(c, settings, plan.project_id)
+        adapter = make_adapter(c, settings, plan.project_id, role_key=speaker.role_key,
+                               conversation_id=plan.conversation_id,
+                               text=(transcript or "")[-3000:])
+        # Telemetry names the engine that ANSWERS — the routed one, not the legacy choice.
+        engine_name = _routed_engine(adapter) or _engine_name(c, settings, plan.project_id)
     turn_id = turn["turn_id"]
     # Once the turn exists it is settled exactly once, whatever happens next: completed below,
     # failed with a reason (`fail`), or — if the stream is closed mid-answer (Stop, a closed
@@ -1187,7 +1216,9 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                         act_id=act_id, role_key=speaker.role_key, settings=settings)
         try:
             record_llm_call(engine_name=engine_name, stage="converse",
-                            latency_ms=int((time.monotonic() - started) * 1000), **call)
+                            latency_ms=int((time.monotonic() - started) * 1000),
+                            route_id=getattr(getattr(adapter, "_boss_route", None), "id", None),
+                            **call)
         finally:
             set_llm_context(act_id=None, role_key=None)
 

@@ -26,9 +26,13 @@ ARM_KNOBS: dict[str, dict[str, Any]] = {
     "harness": {"label": "Harness", "setting": "code_agent_engine", "kind": "harness"},
     "review_rounds": {"label": "Review rounds", "setting": "code_review_inrun_max_rounds",
                       "kind": "int", "min": 0, "max": 5},
+    # SMART ROUTING VS FIXED (docs/product/MODEL_ROUTER.md, "(e) Learning"): the router's own
+    # value, measured on the same score as every other harness change rather than asserted.
+    "routing": {"label": "Model routing", "setting": "model_routing_mode", "kind": "choice",
+                "choices": ("fixed", "smart")},
 }
 #: Spec keys an arm writes. Asserted disjoint from APPROVAL_KEYS by a test.
-ARM_SPEC_KEYS = frozenset({"model_config", "review_rounds", "experiment"})
+ARM_SPEC_KEYS = frozenset({"model_config", "review_rounds", "routing_mode", "experiment"})
 APPROVAL_KEYS = frozenset({"risk_tier", "profile", "open_pr", "auto_merge", "auto_approve",
                            "approval", "approvals", "gates", "waived_gates", "data_boundary"})
 #: Promote needs this many finished units in EACH arm and a verdict that is not "too close to
@@ -60,6 +64,11 @@ def _coerce(knob: str, value: Any) -> Any:
         name = str(value or "").strip().lower()
         if name not in _harnesses():
             raise ExperimentError(f"'{name}' is not a harness BOSS can drive.")
+        return name
+    if spec["kind"] == "choice":
+        name = str(value or "").strip().lower()
+        if name not in spec["choices"]:
+            raise ExperimentError(f"{spec['label']} is one of: {', '.join(spec['choices'])}.")
         return name
     try:
         number = int(value)
@@ -168,6 +177,8 @@ def apply_arm(connection, *, project_id: str, run_id: str, spec: dict[str, Any],
             continue  # pinned by the caller: an explicit choice is never overruled
         if knob == "review_rounds" and spec.get("review_rounds") is not None:
             continue
+        if knob == "routing" and spec.get("routing_mode"):
+            continue
         capped = list(exp["capped_arms"] or [])
         arm = _arm_for(exp["id"], run_id, float(exp["split_b"]), capped)
         if arm is None:
@@ -177,6 +188,8 @@ def apply_arm(connection, *, project_id: str, run_id: str, spec: dict[str, Any],
             spec["model_config"] = {"default": {"engine": str(value)}}
         elif knob == "review_rounds":
             spec["review_rounds"] = int(value)
+        elif knob == "routing":
+            spec["routing_mode"] = str(value)
         spec["experiment"] = {"id": exp["id"], "arm": arm}
         connection.execute(text(
             "INSERT INTO experiment_assignments (experiment_id, unit_kind, unit_id, arm) "
@@ -291,7 +304,8 @@ def list_all(connection, project_id: str) -> dict[str, Any]:
             "targets": {"role": [{"key": r[0], "name": r[1]} for r in roles],
                         "workflow": [{"key": r[0], "name": r[1]} for r in flows]},
             "knobs": [{"key": k, "label": v["label"], "kind": v["kind"],
-                       "choices": _harnesses() if v["kind"] == "harness" else None,
+                       "choices": _harnesses() if v["kind"] == "harness"
+                       else list(v["choices"]) if v["kind"] == "choice" else None,
                        "min": v.get("min"), "max": v.get("max")} for k, v in ARM_KNOBS.items()]}
 
 

@@ -416,7 +416,45 @@ def _ask(adapter, system_prompt: str, user_prompt: str) -> tuple[str, int, Optio
     return text_out, estimate_cost_usd_micros(usage), usage.get("model")
 
 
-def _ask_panel(adapter, personas: list[dict], make_prompt) -> tuple[dict, int, Optional[str]]:
+class _RefusedSeat:
+    """A seat the router may not seat (its agent is Local-only and no local model can run): it
+    says so in the minutes instead of speaking through another model."""
+
+    def __init__(self, title: str, refusal: str):
+        self.title, self.refusal = title, refusal
+
+    def create_text_response(self, *_a, **_k):
+        return "", f"_{self.title} did not speak: {self.refusal}_", {}
+
+
+def _seat_adapters(c, settings, project_id: str, personas: list[dict], purpose) -> dict:
+    """LOCAL MEANS LOCAL ON A PANEL TOO (model router, re-check H1): a seat whose agent has a
+    Local or Pinned model policy speaks through its OWN route; every other seat shares the
+    phase's adapter."""
+    from dataclasses import replace
+
+    from . import model_routing
+    from .model_router.failover import RouteRefused
+    from .model_router.store import agent_model_policy
+
+    out: dict = {}
+    for p in personas:
+        key = p.get("key")
+        policy = agent_model_policy(c, project_id, key)
+        if str((policy or {}).get("selection_mode") or "router").lower() not in ("local",
+                                                                              "pinned"):
+            continue
+        try:
+            out[key] = model_routing.project_chat_adapter(
+                c, settings, project_id,
+                purpose=replace(purpose, role=key, agent_policy=policy))
+        except RouteRefused as refused:
+            out[key] = _RefusedSeat(p.get("title") or key, str(refused))
+    return out
+
+
+def _ask_panel(adapter, personas: list[dict], make_prompt, seats: Optional[dict] = None
+               ) -> tuple[dict, int, Optional[str]]:
     out: dict[str, str] = {}
     cost = 0
     model = None
@@ -424,7 +462,8 @@ def _ask_panel(adapter, personas: list[dict], make_prompt) -> tuple[dict, int, O
 
     def one(p):
         nonlocal cost, model
-        txt, c, m = _ask(adapter, _persona_system(p), make_prompt(p))
+        txt, c, m = _ask((seats or {}).get(p.get("key"), adapter), _persona_system(p),
+                         make_prompt(p))
         with lock:
             cost += c
             model = m or model
@@ -1064,8 +1103,21 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
     # built on that source's own credential. This was the sixth pasted copy of it.
     from . import model_routing
 
-    with begin(engine) as c:
+    # EACH PHASE IS A BOUNDARY, AND THE FACILITATOR IS NOT A PANELIST (model router): the
+    # synthesis and the PRD are judgment — Frontier by the default floor — while each seat's
+    # round argues one view. Panel rounds and the facilitator are routed separately.
+    from .model_router.router import RouteRequest
+
+    facilitating = phase in ("synthesis", "draft")
+    purpose = RouteRequest(
+        kind="panel", step="panel_facilitator" if facilitating else "panel_member",
+        project_id=run["project_id"], unit_id=run_id,
+        role="facilitator" if facilitating else None,
+        text=str(run.get("directive") or "")[:6000])
+    with begin(engine) as c, model_routing.routing_purpose(purpose):
         adapter = model_routing.project_chat_adapter(c, settings, run["project_id"])
+        seats = {} if facilitating else _seat_adapters(c, settings, run["project_id"],
+                                                         personas, purpose)
     add_cost = 0
     model = (run["usage"] or {}).get("model")
 
@@ -1079,7 +1131,7 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
         next_phase = "round1"
     elif phase == "round1":
         base = _make_base(run["directive"], run["constraints"], state.get("research") or {}, run["url"])
-        r1, add_cost, model = _ask_panel(adapter, personas,
+        r1, add_cost, model = _ask_panel(adapter, personas, seats=seats, make_prompt=
             lambda p: base + f"\nAs the {p['title']}, give your initial perspective on building this. "
                              "List your top priorities, requirements, and concerns from your lens."
                              + GIST_INSTRUCTION)
@@ -1090,7 +1142,7 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
     elif phase == "round2":
         base = _make_base(run["directive"], run["constraints"], state.get("research") or {}, run["url"])
         r1_blob = _panel_blob(personas, state.get("round1") or {})
-        r2, add_cost, model = _ask_panel(adapter, personas,
+        r2, add_cost, model = _ask_panel(adapter, personas, seats=seats, make_prompt=
             lambda p: base + f"\nHere is what the whole panel said in round 1:\n\n{r1_blob}\n\n"
                              f"As the {p['title']}, respond: where do you AGREE, where do you DISAGREE or see "
                              "risk in your colleagues' points, and what is your refined position? Be specific."

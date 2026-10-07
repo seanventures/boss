@@ -254,6 +254,18 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
             "href": None, "retry": True,
             "detail": technical_summary(error),
         }
+    # THE ROUTER REFUSED, IN WORDS (model_router: Local means local, no metered spend while the
+    # budget is red): its sentence IS the explanation — never "couldn't finish this turn".
+    from .model_router.failover import RouteRefused
+
+    if isinstance(error, RouteRefused):
+        local = "local" in lowered
+        return {
+            "kind": "route_refused", "headline": text.strip(),
+            "action": ("Its model policy is in Agent Studio; local models are in Setup."
+                       if local else "Pins and the budget are in Setup › Model routing."),
+            "href": "/?area=setup", "retry": False, "detail": text.strip(),
+        }
     who = provider_name(source_id)
     #: "the Claude Code subscription", or "the model" when the source is not known.
     the_source = who if who.startswith("the ") else f"the {who}"

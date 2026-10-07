@@ -228,7 +228,6 @@ const AREAS: AreaDef[] = [
   // skill and MCP server. Second in Settings: a repo and a model come first.
   { id: "skills", label: "Skills & MCP", sub: "What your crew can do", group: "Settings", icon: ICONS.capabilities },
   { id: "budget", label: "Govern", sub: "Spend caps, pace and limits", group: "Settings", icon: ICONS.budget },
-  { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Settings", icon: ICONS.pipeline },
   { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Settings", icon: ICONS.comms },
   { id: "ops", label: "Operations", sub: "Health, audit, replay, and self-improvement", group: "Settings", icon: ICONS.ops },
   { id: "assurance", label: "Assurance", sub: "Ground truth, proof gates, and security scanning", group: "Settings", icon: ICONS.assurance },

@@ -51,6 +51,9 @@ MODEL_NAME = "e2e-stub"
 class Script:
     """Ordered rules plus per-test overrides. Thread-safe: the server is threaded."""
 
+    #: The `rate_limit_event` every CLI answer carries (POST /_rate_limit), or None.
+    rate_limit: Optional[dict[str, Any]] = None
+
     def __init__(self, path: Path = DEFAULT_SCRIPT):
         self.path = path
         self._lock = threading.Lock()
@@ -367,8 +370,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": str(exc)})
                 return
             self._send(200, {"ok": True})
+        elif path == "/_rate_limit":
+            # What Claude Code's stream-json says about the subscription's windows on every call
+            # (a `rate_limit_event`): set here, sent with every CLI answer, so a test can walk
+            # the model router's headroom (docs/product/MODEL_ROUTER.md). `{}` stops it.
+            event = body.get("event")
+            self.script.rate_limit = event if isinstance(event, dict) and event else None
+            self._send(200, {"ok": True})
         elif path == "/_reset":
             self.script.reset()
+            self.script.rate_limit = None
             self._send(200, {"ok": True})
         else:
             self._send(404, {"error": {"message": f"no route {path}"}})
@@ -433,6 +444,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _cli(self, body: dict[str, Any]) -> None:
         prompt = str(body.get("prompt") or "")
+        # A rule can tell models apart: `[[model:<name>]]` is matched against the CLI's
+        # --model, so a script can answer the model the router chose differently.
+        argv = [str(a) for a in (body.get("argv") or [])]
+        model = argv[argv.index("--model") + 1] if "--model" in argv[:-1] else ""
+        prompt = f"{prompt}\n[[model:{model or 'default'}]]"
         rule, reply = self._answer(prompt, "cli", "cli", {
             "argv": [a for a in (body.get("argv") or []) if len(str(a)) < 200][:24],
             "cwd": body.get("cwd"),
@@ -442,6 +458,8 @@ class Handler(BaseHTTPRequestHandler):
             "result": reply, "files": files, "rule": rule.get("id"),
             "exit_code": int(rule.get("exit_code") or 0),
             "stderr": str(rule.get("stderr") or ""),
+            **({"rate_limit_event": self.script.rate_limit}
+               if getattr(self.script, "rate_limit", None) else {}),
         })
 
 
