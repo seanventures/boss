@@ -57,3 +57,27 @@ def test_b_a_person_already_required_gets_no_new_window(world, engine, monkeypat
         bindings.add_binding(db, ctx, subject_type="principal", subject_id=pid, role_id=admin, scope_type="org")
         assert db.execute(text("SELECT first_factor_grant_until FROM identity_users WHERE principal_id = :p"),
                           {"p": pid}).scalar() is None
+
+
+def test_f_under_enforce_the_legacy_key_acts_as_its_legacy_principal_not_ceo(engine, monkeypatch):
+    """Round 2 (f): with the console's legacy key, the transport set current_api_principal='ceo'
+    and every enforced handler recorded the person seat as the actor. Under enforce it is now the
+    legacy principal identity mapped the key to."""
+    from fastapi.testclient import TestClient
+
+    from apps.api.app import main
+    from boss_engine.config import get_settings
+    from boss_engine.identity import legacy, migration
+
+    key = "legacy-console-key-round2-0000000000000"
+    for settings in (main.settings, get_settings()):
+        monkeypatch.setattr(settings, "require_api_auth", True)
+        monkeypatch.setattr(settings, "api_keys", key)
+        monkeypatch.setattr(settings, "api_key_principals", f"{key}:ceo")
+        monkeypatch.setattr(settings, "legacy_console_api_key", key)
+        monkeypatch.setattr(settings, "authz_mode", "enforce")
+    legacy.invalidate_cache()
+    migration.forget_seeded()
+    res = TestClient(main.app).get("/v1/auth/session", headers={"Authorization": f"Bearer {key}"})
+    assert res.status_code == 200, res.text
+    assert res.json()["principal_member_id"] == legacy.LEGACY_CONSOLE_PRINCIPAL
