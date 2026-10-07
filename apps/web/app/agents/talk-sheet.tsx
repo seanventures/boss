@@ -120,8 +120,8 @@ function TalkHead({ roleKey, state, conversation, plan, onClose, onPlan, onNew }
         ) : null}
       </div>
       <span className="ag-head-acts">
-        {onPlan ? <button type="button" className="ag-btn" data-testid="ag-plan-it" onClick={onPlan}
-                          title="Scope a piece of work, then start it">Plan it</button> : null}
+        {onPlan ? <GatedButton permission="meeting:convene" type="button" className="ag-btn" data-testid="ag-plan-it" onClick={onPlan}
+                          title="Scope a piece of work, then start it">Plan it</GatedButton> : null}
         {onNew ? <button type="button" className="ag-icon-btn" onClick={onNew} title="New talk"
                          aria-label="New talk">＋</button> : null}
         <button type="button" className="ag-icon-btn" onClick={onClose} aria-label="Close" title="Close">×</button>

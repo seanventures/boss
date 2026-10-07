@@ -10,6 +10,7 @@
  * manager in the plan by default, else whoever sends the other more work — and the select
  * changes it before anything is saved.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 
 import type { OrgDrift, OrgUnplannedPair } from "../../lib/agents-org-board";
@@ -79,10 +80,10 @@ function PairRow({ pair, busy, onPlan, declared }: { pair: OrgUnplannedPair; bus
           Replaces <span data-user-text>{nameOf(child)}</span> → <span data-user-text>{nameOf(current)}</span>
         </span>
       ) : null}
-      <button type="button" className="org-node-act" disabled={busy} data-testid={`org-drift-plan-${pair.a}-${pair.b}`}
+      <GatedButton permission="agent:update" type="button" className="org-node-act" disabled={busy} data-testid={`org-drift-plan-${pair.a}-${pair.b}`}
               title={`${nameOf(child)} reports to ${nameOf(parent)}`} onClick={() => onPlan(child, parent)}>
         Plan it
-      </button>
+      </GatedButton>
     </li>
   );
 }
