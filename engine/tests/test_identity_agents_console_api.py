@@ -275,3 +275,24 @@ def test_connecting_github_redirects_and_the_callback_binds_the_same_person_once
     conns = api.get("/v1/identity/me/connections").json()["connections"]
     assert conns[0]["provider"] == "GitHub" and conns[0]["account"] == "alice-gh" and "gho_LINKED" not in json.dumps(conns)
     assert api.post("/v1/identity/me/connections", json={"provider": "myspace"}).status_code == 404
+
+
+def test_the_github_callback_is_the_public_origin_never_the_request_host(env, api, monkeypatch):
+    """R2: behind the console the API is addressed as http://api:8000, and the OAuth redirect_uri
+    was built from that Host: GitHub sent the person to an address no browser can reach, and
+    Connect GitHub never came back. It is the public origin (BOSS_PUBLIC_URL, else the origin
+    bound at the claim), or a refusal with words — never the Host (H2)."""
+    from boss_engine.identity import authn_support, github_app
+
+    install_github(monkeypatch, env)
+    monkeypatch.delenv("BOSS_PUBLIC_URL", raising=False)
+    monkeypatch.setattr(authn_support, "public_origin", lambda db, org_id=None: "https://boss.example.test")
+    r = api.post("/v1/identity/me/connections", json={"provider": "github"},
+                 headers={"host": "api:8000"})
+    assert r.status_code == 200, r.text
+    redirect_uri = parse_qs(urlsplit(r.json()["redirect"]).query)["redirect_uri"][0]
+    assert redirect_uri == "https://boss.example.test/v1/identity/me/connections/github/callback"
+    monkeypatch.setattr(authn_support, "public_origin", lambda db, org_id=None: None)
+    refused = api.post("/v1/identity/me/connections", json={"provider": "github"})
+    assert refused.status_code == 409 and refused.json()["error"] == "public_origin_required"
+    del github_app
