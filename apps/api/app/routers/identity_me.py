@@ -356,10 +356,14 @@ def build_identity_me_router() -> APIRouter:
     # ---- profile: your own name and avatar colour -----------------------------------------------------
 
     def _profile(db: Any, principal_id: str) -> dict[str, Any]:
+        """Always the full shape. A person principal with no account row (the shared console
+        password's usr_legacy_shared) has a name and nothing else — `{}` crashed My account."""
         row = db.execute(text(
             "SELECT p.display_name, u.email, u.avatar_seed FROM identity_principals p "
-            "JOIN identity_users u ON u.principal_id = p.id WHERE p.id = :id"), {"id": principal_id}).first()
-        return {"display_name": row.display_name, "email": row.email, "avatar_seed": row.avatar_seed} if row else {}
+            "LEFT JOIN identity_users u ON u.principal_id = p.id WHERE p.id = :id"), {"id": principal_id}).first()
+        if row is None:
+            return {"display_name": "", "email": None, "avatar_seed": None}
+        return {"display_name": row.display_name or "", "email": row.email, "avatar_seed": row.avatar_seed}
 
     @router.get("/v1/identity/me/profile")
     @authenticated(self_only=True, people_only=True)

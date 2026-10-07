@@ -4,7 +4,7 @@ import { ME_PATH, type MeResponse } from "../../lib/identity/contract";
 import { serverGet } from "../../lib/identity/server";
 import type { Factor } from "../../lib/identity/types";
 import type { LinkedIdentity } from "../../lib/identity/types-auth";
-import { passwordMin, type MyProfile } from "../../lib/identity/types-account";
+import { asProfile, passwordMin, type MyProfile } from "../../lib/identity/types-account";
 import { loadAuthOptions } from "../(auth)/auth-options";
 import { AccountSecurity } from "./security";
 
@@ -36,7 +36,7 @@ export default async function AccountSecurityPage({ searchParams }: Props) {
       linked={linked === "1"}
       providers={options.providers}
       passwordMin={passwordMin(options)}
-      profile={profile.ok ? profile.data : null}
+      profile={profile.ok ? asProfile(profile.data) : null}
     />
   );
 }
