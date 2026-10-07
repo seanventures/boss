@@ -218,7 +218,7 @@ describe("G15 · the posture's public URL check, and where its fix lands", () =>
     const overview = read("app/identity/overview.tsx");
     expect(overview).toMatch(/origin: <Globe/);
     expect(overview).toContain("data-status={tone(c.status)}");
-    expect(read("lib/identity/types.ts")).toMatch(/"audit" \| "origin"/);
+    expect(read("lib/identity/types.ts")).toMatch(/"audit" \| (?:"enforcement" \| )?"origin"/);
   });
 
   it("the sign-in settings show the bound URL under #public-url, or how to set it", async () => {
