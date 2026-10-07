@@ -6,9 +6,9 @@
  * 1.0) and say `Not measurable here` where the machine gave nothing; a shadow stall reads
  * `would … (shadow)`; the host advice line is here too.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
-import { systemWire, unmeasuredSystemWire } from "./_helpers/obs-fixtures";
+import { NOW_MS, systemWire, unmeasuredSystemWire } from "./_helpers/obs-fixtures";
 import { $, $$, click, unmount } from "./_helpers/live-render";
 import { openObs, text } from "./_helpers/obs-render";
 
@@ -51,6 +51,10 @@ describe("findings", () => {
 
 describe("BOSS MACHINE", () => {
   it("gauges from the bands, the build, and which machine it measured", async () => {
+    // The build's age is read against the clock: pin it to the fixture's NOW (built 2h before),
+    // or the "· 2h" turns into "· 3d" as the calendar moves past the fixture date.
+    vi.useFakeTimers({ toFake: ["Date"], now: NOW_MS });
+    onTestFinished(() => { vi.useRealTimers(); });
     await openObs("?view=system");
     const mem = $("[data-testid='obs-gauge-memory']")!;
     expect(text(mem)).toBe("Memory78%High");
@@ -60,7 +64,7 @@ describe("BOSS MACHINE", () => {
     // Swap has no percent: a value, no bar.
     expect($("[data-testid='obs-gauge-swap'] svg")).toBeNull();
     expect(text($("[data-testid='obs-gauge-swap']"))).toBe("Swap0 MBOK");
-    expect(text($("[data-testid='obs-build']"))).toMatch(/^build 4c1d2e9 · \d+h$/);
+    expect(text($("[data-testid='obs-build']"))).toBe("build 4c1d2e9 · 2h");
     expect($("[data-testid='obs-machine-scope']")?.getAttribute("title")).toContain("not your deploy hosts");
     expect(text($("[data-testid='obs-oom']"))).toBe("New OOM kills0");
   });

@@ -38,13 +38,14 @@ describe("one home for MCP servers", () => {
                              "skills/mcp-drawer.tsx", "skills/tools-section.tsx"]);
   });
 
-  it("System Configuration and Capabilities show a link to it, and no panel", () => {
+  it("Capabilities shows a link to it, and no screen carries an MCP panel", () => {
+    // System Configuration and its link were retired with the old Infra screens (14d0f8a8,
+    // 73dc4562); the console page renders no MCP panel of its own.
     const page = codeOnly("app/page.tsx");
     const caps = codeOnly("app/capabilities-ui.tsx");
-    for (const src of [page, caps]) {
-      expect(src).not.toContain("McpServersPanel");
-      expect(src).toContain('href="?area=skills&tab=library&lib=mcp"');
-    }
+    expect(page).not.toContain("McpServersPanel");
+    expect(caps).not.toContain("McpServersPanel");
+    expect(caps).toContain('href="?area=skills&tab=library&lib=mcp"');
   });
 
   it("no screen tells an operator to call the API", () => {

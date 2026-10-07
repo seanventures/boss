@@ -96,7 +96,8 @@ describe("an open run is a different object, not a thicker stripe", () => {
   });
 
   it("and there is real air between cards", () => {
-    expect(CSS).toContain(".dw-runs { display: grid; gap: 16px; }");
+    // a5f939fa added a single shrinkable column (a run's lane scrolls inside itself); the gap stays.
+    expect(CSS).toContain(".dw-runs { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }");
   });
 });
 

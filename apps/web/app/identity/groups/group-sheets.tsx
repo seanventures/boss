@@ -5,6 +5,7 @@
  * role. Each is one sheet that says what it changes before it is made. The API re-checks every
  * rule (you must hold what you grant; an IdP group's members are not edited here).
  */
+import { useConsoleRefresh } from "../../use-console-refresh";
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { LockSimple, PencilSimple, Plus, Trash, UsersThree } from "@phosphor-icons/react";
@@ -38,12 +39,12 @@ export function groupKey(name: string): string {
 
 function useWrite() {
   const guarded = useGuardedCall();
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   return async <T,>(reason: string, call: () => Promise<T>, done: string): Promise<{ ok: true; value: T } | { ok: false; error: string }> => {
     try {
       const value = await guarded(reason, call);
       showToast("success", done);
-      router.refresh();
+      refresh("now");
       return { ok: true, value };
     } catch (e) {
       return { ok: false, error: refusalWords(e) };
