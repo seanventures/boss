@@ -169,12 +169,20 @@ def test_a_failed_sign_in_is_recorded_by_the_real_audit_log_not_refused(db, shar
     500 whose rollback also dropped the backoff count."""
     from engine.tests.identity_s5_support import events
 
+    import random
+
     community_install(db)
-    answer = signin.password_login(db, _facts(), email=email, password="wrong")
+    # a fresh source: the per-source backoff of earlier runs must not turn this into a soft lock
+    facts = signin.RequestFacts(ip=f"10.{random.randint(0, 255)}.{random.randint(0, 255)}.7",
+                                user_agent="pytest", request_origin="http://localhost:3000")
+    answer = signin.password_login(db, facts, email=email, password="wrong")
     assert answer.status in (401, 409)
     if answer.status == 401:
-        failed = events(db, "auth.login.failed")
-        assert failed and str(failed[-1]["details"]["identifier"]).startswith("hmac:")
+        # (whichever org the database's default is: other suites may have left one behind)
+        failed = db.execute(text("SELECT details FROM identity_security_events WHERE event_type = "
+                                 "'auth.login.failed' AND ip = CAST(:ip AS inet) ORDER BY id DESC "
+                                 "LIMIT 1"), {"ip": facts.ip}).scalar()
+        assert failed and str(failed["identifier"]).startswith("hmac:"), failed
 
 
 # ---- the host tools keep working: their own service-account keys, never the shared key ---------
