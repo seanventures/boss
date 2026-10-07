@@ -186,9 +186,70 @@ def repository_token(connection: Connection, settings: Any, project_id: str, tok
             "repos": found["repos"], "connection_id": current["id"], "rechecked": rechecked}
 
 
+APP_LABEL = "GitHub App"
+APP_CREDENTIAL_REF = "identity_github:app"
+
+
+def repository_from_app(connection: Connection, settings: Any, project_id: str, *,
+                        actor: str = "ceo") -> dict[str, Any]:
+    """Use the GitHub App connected in Setup › GitHub access: no token to paste. The project gets
+    one connection whose credential is the App itself (`identity_github:app`, a fresh installation
+    token at each use) and the picker lists the repositories the App is installed on."""
+    from ..identity import github_setup
+
+    try:
+        repos = github_setup.installation_repositories(connection)
+    except github_setup.GitHubSetupError as error:
+        if error.code == "app_not_connected":
+            raise SetupActionError(409, "app_not_connected", "Connect the App",
+                                   "Connect a GitHub App in GitHub access first.") from None
+        raise SetupActionError(502, "unreachable", "GitHub unreachable",
+                               "GitHub did not list the App's repositories. Try again.") from None
+    service = _service(settings)
+    ref_kind, _, ref_key = APP_CREDENTIAL_REF.partition(":")
+    have_ref = connection.execute(
+        text("SELECT id FROM secret_refs WHERE project_id = :p AND ref_kind = :k AND ref_key = :r"),
+        {"p": project_id, "k": ref_kind, "r": ref_key}).scalar()
+    if have_ref is None:
+        service.secret_refs.create_secret_ref(
+            connection, project_id=project_id, ref_kind=ref_kind, ref_key=ref_key, provider="github",
+            status="active", metadata={"source": "github_app"}, actor=actor)
+    else:
+        connection.execute(text("UPDATE secret_refs SET status = 'active', revoked_at = NULL WHERE id = :i"),
+                           {"i": have_ref})
+    existing = service._connection_by_label(connection, project_id, APP_LABEL)
+    if existing is None:
+        current = service.create_connection(
+            connection, project_id=project_id, connection_label=APP_LABEL,
+            auth_method="personal_access_token", credential_ref=APP_CREDENTIAL_REF, app_id=None,
+            installation_id=None, api_base_url=_api_base(settings),
+            required_permissions=["pull", "push", "triage"],
+            metadata={"setup": "repo_and_models", "source": "github_app"}, actor=actor)
+    else:
+        current = existing
+        if current["status"] in ("disabled", "revoked", "error"):
+            connection.execute(text("UPDATE github_connections SET status = 'configured', "
+                                    "disabled_at = NULL, revoked_at = NULL WHERE id = :id"),
+                               {"id": current["id"]})
+    account = github_setup.app_config(connection)["account_login"]
+    connection.execute(text("UPDATE github_connections SET account_login = :l, updated_at = now() "
+                            "WHERE id = :id"), {"l": account, "id": current["id"]})
+    return {"account_login": account, "expires_at": None, "repos": repos,
+            "connection_id": current["id"], "rechecked": [], "source": "github_app"}
+
+
+def _is_app_connection(connection: Connection, project_id: str, connection_id: str) -> bool:
+    ref = connection.execute(text("SELECT credential_ref FROM github_connections WHERE project_id = :p "
+                                  "AND id = :c"), {"p": project_id, "c": connection_id}).scalar()
+    return ref == APP_CREDENTIAL_REF
+
+
 def connection_repos(connection: Connection, settings: Any, project_id: str,
                      connection_id: str, *, http: Optional[Http] = None) -> dict[str, Any]:
     """`+ Add repo`: the repositories the STORED token can see (no paste needed)."""
+    if _is_app_connection(connection, project_id, connection_id):
+        out = repository_from_app(connection, settings, project_id)
+        return {k: out[k] for k in ("account_login", "expires_at", "repos", "connection_id")}
     service = _service(settings)
     try:
         ref = service.secret_refs.require_usable(
@@ -260,6 +321,8 @@ def _mirror_token_into_vault(connection: Connection, service: Any, project_id: s
     from the vault, the sandbox never sees it (identity/github_setup.py)."""
     from ..identity import github_setup, vault
 
+    if _is_app_connection(connection, project_id, connection_id):
+        return                             # the App's own tokens: nothing to keep
     try:
         ref = service.secret_refs.require_usable(
             connection, project_id=project_id,

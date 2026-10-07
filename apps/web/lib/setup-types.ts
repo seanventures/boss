@@ -153,6 +153,8 @@ export type TokenFound = {
   account_login: string | null;
   expires_at: string | null;
   connection_id: string;
+  /** "github_app": the App connected in GitHub access, not a pasted token. */
+  source?: "github_app";
   repos: Array<{ full_name: string; private: boolean; default_branch: string | null;
                  owner_type: string }>;
 };

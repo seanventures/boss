@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { click, fakeApi, flush, mountBoard, type FakeApi, type Mounted } from "./_helpers/setup-board";
-import { board } from "./_helpers/setup-fixtures";
+import { board, firstRun } from "./_helpers/setup-fixtures";
 
 let mounted: Mounted | null = null;
 afterEach(() => { mounted?.unmount(); mounted = null; vi.restoreAllMocks(); });
@@ -89,5 +89,31 @@ describe("GitHub access", () => {
     withGitHub(api, { something: "else" });
     mounted = await mountBoard(board());
     expect(document.querySelector('[data-testid="su-row-github-access"]')!.textContent).toContain("Not reported");
+  });
+
+  it("with the App installed, Repository offers it first and lists what it can reach — no token", async () => {
+    const view = firstRun();
+    const api = fakeApi(view);
+    const installed = { ...NONE, mode: "app",
+      verdict: { tone: "green", label: "GitHub App · @acme", tip: "t" },
+      app: { configured: true, installed: true, slug: "boss-x", html_url: "https://github.com/apps/boss-x",
+             account: "acme", source: "setup" } };
+    api.answer = (call) => {
+      if (call.url.includes("/v1/identity/github")) return { status: 200, body: installed };
+      if (call.op === "repo_app") {
+        return { status: 200, body: { account_login: "acme", expires_at: null, connection_id: "ghconn_app",
+                                      source: "github_app", rechecked: [],
+                                      repos: [{ full_name: "acme/web", private: true, default_branch: "main",
+                                                owner_type: "Organization" }] } };
+      }
+      return null;
+    };
+    mounted = await mountBoard(view);
+    const use = document.querySelector('[data-testid="su-use-app"]')!;
+    expect(use.textContent).toContain("@acme");
+    await click(use);
+    expect(api.calls.some((c) => c.op === "repo_app")).toBe(true);
+    expect(document.querySelector('[data-testid="su-token-found"]')!.textContent).toContain("GitHub App on");
+    expect(document.body.textContent).toContain("acme/web");
   });
 });
