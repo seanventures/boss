@@ -53,7 +53,7 @@ export function AccessDenied({ permission, page, home = "/" }: { permission: Per
               try {
                 await idPost("/v1/identity/access-requests", { permission, reason: `From ${page}` });
                 setSent(true);
-                showToast("success", "Request sent");
+                showToast("success", "Request sent · it waits in Access requests for whoever can grant it");
               } catch (e) {
                 showToast("error", e instanceof IdentityError ? e.message : "Not sent");
               } finally {

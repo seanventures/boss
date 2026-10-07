@@ -19,7 +19,7 @@ import { Ago, Face, Perm, RoleChip, useNow, agoText } from "../../components/ide
 import { BindingChips, Locked, SignIn } from "../../components/identity/parts";
 import { EmptyState, ErrorState, type ReadFailure } from "../../components/identity/states";
 import type { Permission } from "../../lib/identity/permissions.gen";
-import { eventWords, keyCount, outcomeWords } from "../../lib/identity/words";
+import { eventHref, eventWords, keyCount, outcomeWords } from "../../lib/identity/words";
 import type { AccessRole, AuditEvent, Group, Passport, Person, Posture, PostureCheck, ServiceAccount } from "../../lib/identity/types";
 
 const CHECK_ICON: Record<PostureCheck["id"], React.ReactNode> = {
@@ -347,7 +347,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
           ) : events ? (
             <div className="idn-feed">
               {events.map((e) => (
-                <a key={e.id} className="idn-ev" href={`/identity/audit?event=${e.id}`}>
+                <a key={e.id} className="idn-ev" href={eventHref(e)}>
                   {e.actor.kind === "agent"
                     ? <AgentAvatar agent={e.actor.id.replace(/^agt_/, "")} size={30} />
                     : <Face name={e.actor.name} tone={e.actor.hue} size={30} />}

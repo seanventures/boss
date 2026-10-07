@@ -111,3 +111,10 @@ const OUTCOMES: Record<string, string> = { ok: "done", denied: "refused", failed
 export function outcomeWords(outcome: string): string {
   return OUTCOMES[outcome] ?? humanise(outcome).toLowerCase();
 }
+
+/** Where a security event's row opens: a request for access opens the queue that answers it
+ *  (Identity › Access requests); every other event opens in the audit log. */
+export const REQUESTS_PATH = "/identity/requests";
+export function eventHref(e: { id: string; event_type: string }): string {
+  return e.event_type === "access.requested" ? REQUESTS_PATH : `/identity/audit?event=${encodeURIComponent(e.id)}`;
+}
