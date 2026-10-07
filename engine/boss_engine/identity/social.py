@@ -136,6 +136,20 @@ def _create(db: Any, provider: Provider, ident: FederatedIdentity, *, self_signe
                              self_signed_up=self_signed_up)
 
 
+def _provisioned_here(db: Any, provider: Provider, principal_id: str) -> bool:
+    """Did THIS provider's SCIM connection create the account, and is it linked to no identity of
+    this provider yet (so an existing link is never replaced)?"""
+    from .scim import provisioning_principal
+
+    row = db.execute(text(
+        "SELECT p.created_by, p.org_id, EXISTS (SELECT 1 FROM identity_user_identities i "
+        "WHERE i.principal_id = p.id AND i.provider_id = :prov) AS linked "
+        "FROM identity_principals p WHERE p.id = :id AND p.kind = 'user'"),
+        {"id": principal_id, "prov": provider.id}).mappings().first()
+    return bool(row and row["org_id"] == provider.org_id and not row["linked"]
+                and row["created_by"] == provisioning_principal(provider.id))
+
+
 def resolve(db: Any, provider: Provider, ident: FederatedIdentity, facts: RequestFacts, *,
             purpose: str = "login", link_principal: Optional[str] = None) -> Answer:
     """Sign in (or link) a verified federated identity. Returns the sign-in Answer, or a refusal
@@ -184,7 +198,24 @@ def resolve(db: Any, provider: Provider, ident: FederatedIdentity, facts: Reques
     if not email or not ident.email_verified:
         _refuse(db, provider, facts, ident, "unverified_email")
         return Answer(403, dict(NOT_INVITED))
-    if users.by_email(db, email) is not None:
+    holder = users.by_email(db, email)
+    if holder is not None and _provisioned_here(db, provider, holder.principal_id):
+        # THIS provider's SCIM connection made the account (R2 #11): the IdP vouched for the
+        # person twice — by provisioning them and by this verified sign-in — so the first SSO
+        # sign-in links it (once; a subject already linked here never re-links) and activates a
+        # pending one. A disabled one is refused with words.
+        if holder.status == "disabled":
+            _refuse(db, provider, facts, ident, "disabled")
+            return Answer(403, {"error": "account_disabled", "message": "This account is disabled. Ask an admin."})
+        link(db, principal_id=holder.principal_id, provider=provider, ident=ident)
+        if holder.status == "pending":
+            users.set_status(db, holder.principal_id, "active", by=f"sso:{provider.id}",
+                             reason="first SSO sign-in (SCIM-provisioned)")
+        user = users.by_id(db, holder.principal_id)
+        if user is None or user.status != "active":
+            return Answer(401, {"error": "sso_failed"})
+        return _sign_in(db, provider, ident, user, facts)
+    if holder is not None:
         _refuse(db, provider, facts, ident, "email_belongs_to_unlinked_account")
         return Answer(403, dict(NOT_INVITED))
     inv = invitations.open_for_email(db, email)

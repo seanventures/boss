@@ -410,8 +410,21 @@ def on_decision_approved(connection: Connection, settings: Settings, decision: d
     rp = ResourcePlaneService(settings)
     changeset = rp.get_changeset(connection, row["project_id"], row["changeset_id"])
     if changeset.get("status") != "approved":
+        from ..identity import viewer as _viewer
+
+        approver_roles = None
+        if _viewer.enforced():
+            # Dual control under identity: the approver roles this person holds through the PDP
+            # (never the legacy members table, which names none of them).
+            required = rp.required_approvers_for_changeset(connection, row["changeset_id"])
+            approver_roles = (_viewer.roles_granting(row["project_id"], "changeset:approve", required)
+                              if required else None)
+            if required and not approver_roles:
+                raise InvalidDecisionTransitionError(
+                    "Dual control: approving this host write needs one of the approver roles "
+                    + ", ".join(required) + ".")
         changeset = rp.approve_changeset(connection, changeset_id=row["changeset_id"],
-                                         actor=actor, phased_owner=True)
+                                         actor=actor, phased_owner=True, approver_roles=approver_roles)
     if changeset.get("status") != "approved":
         return None  # dual control: another approver role is still to sign
     job = enqueue_job(

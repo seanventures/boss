@@ -695,8 +695,24 @@ class DatabaseBackend:
             # against casual inspection and file-level leaks, NOT against someone who has the
             # database. `health()` reports which mode is in effect rather than implying the
             # stronger one.
-            self._key = self._ensure_provisioned_key()
+            #
+            # PROVISIONED ON THE FIRST WRITE, never on a read (R5: every GET is read-only — a
+            # Viewer's first GET /v1/settings minted the key). Until something is stored there
+            # is nothing to decrypt, so a read needs no key; `put` makes it.
+            self._key = None
             self._provisioned_key = True
+
+    def _read_key(self) -> Optional[bytes]:
+        """The key a READ decrypts with: the configured one, else the provisioned one if it was
+        ever made (None: nothing was ever stored under a provisioned key). Writes nothing."""
+        if self._key is None:
+            self._key = self._provisioned_key_if_present()
+        return self._key
+
+    def _write_key(self) -> bytes:
+        if self._key is None:
+            self._key = self._ensure_provisioned_key()
+        return self._key
 
     def _ensure_provisioned_key(self) -> bytes:
         import base64
@@ -729,8 +745,11 @@ class DatabaseBackend:
         if not row:
             raise SecretNotFound(f"{key} does not exist")
         blob = bytes(row["ciphertext"])
+        key_now = self._read_key()
+        if key_now is None:
+            raise SecretUnavailable(f"{key} cannot be decrypted with this install's key")
         try:
-            return _aes_gcm_decrypt(self._key, blob).decode("utf-8")
+            return _aes_gcm_decrypt(key_now, blob).decode("utf-8")
         except Exception:  # noqa: BLE001
             # An operator who starts without BOSS_KMS_MASTER_KEY and sets one later would
             # otherwise find every previously-stored secret undecryptable. Fall back to the
@@ -757,7 +776,7 @@ class DatabaseBackend:
         return base64.urlsafe_b64decode(bytes(row["ciphertext"])) if row else None
 
     def put(self, key: str, value: str) -> None:
-        blob = _aes_gcm_encrypt(self._key, value.encode("utf-8"))
+        blob = _aes_gcm_encrypt(self._write_key(), value.encode("utf-8"))
         with self._conn() as c:
             c.execute(sql(
                 "INSERT INTO secret_material (ref_key, ciphertext, updated_at) "

@@ -3212,7 +3212,11 @@ class ResourcePlaneService:
         changeset_id: str,
         actor: str,
         phased_owner: bool = False,
+        approver_roles: Optional[list[str]] = None,
     ) -> dict[str, Any]:
+        """`approver_roles` (identity, enforced): the required approver roles the verified
+        principal `actor` holds (through its role bindings). Each person fills ONE role: the
+        first of theirs still unfilled — so dual control still takes two different people."""
         row = self._get_changeset_any_project(connection, changeset_id)
         if not phased_owner:
             self._refuse_phased(row)
@@ -3224,7 +3228,18 @@ class ResourcePlaneService:
         required = self._required_approvers_for_operations(row.get("operations") or [])
         policy_result = dict(row.get("policy_result") or {})
         approvals = list(policy_result.get("approvals") or [])
-        if actor not in approvals:
+        if approver_roles is not None:
+            approved_by = dict(policy_result.get("approved_by_role") or {})
+            if actor in approved_by.values():
+                raise ValueError("This person has already approved this ChangeSet; dual control "
+                                 "needs a different person for the next approver role.")
+            open_roles = [r for r in sorted(approver_roles) if r in required and r not in approvals]
+            if not open_roles:
+                raise ValueError("Every approver role this person holds has already approved.")
+            approvals.append(open_roles[0])
+            approved_by[open_roles[0]] = actor
+            policy_result["approved_by_role"] = approved_by
+        elif actor not in approvals:
             approvals.append(actor)
         policy_result["required_approvers"] = required
         policy_result["approvals"] = approvals

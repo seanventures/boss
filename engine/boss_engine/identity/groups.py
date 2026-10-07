@@ -165,10 +165,16 @@ def remove_member(db: Any, ctx: AuthContext, group_id: str, principal_id: str) -
     org = ctx.principal.org_id
     row = _row(db, org, group_id)
     _manual(row)
-    present = db.execute(text("SELECT 1 FROM identity_group_members WHERE group_id = :g "
+    present = db.execute(text("SELECT source FROM identity_group_members WHERE group_id = :g "
                               "AND principal_id = :p"), {"g": group_id, "p": principal_id}).first()
     if present is None:
         raise AccessError(404, "not_found")
+    if (present[0] or "manual") != "manual":
+        # R2 #11: a membership the identity provider syncs (an OIDC group claim mapped to this
+        # group) is the IdP's: removed here, the next sign-in puts it back. Change it there.
+        raise AccessError(409, "idp_membership_read_only",
+                          f"This membership comes from {str(present[0]).upper()} at sign-in; change it "
+                          "in the identity provider.")
     _binding_ceilings(db, ctx, group_id)
     guard_membership_removals(db, org, [(group_id, principal_id)])
     db.execute(text("DELETE FROM identity_group_members WHERE group_id = :g AND principal_id = :p"),

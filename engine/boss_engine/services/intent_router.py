@@ -2870,7 +2870,7 @@ class IntentRouter:
         external_ref: Optional[str] = None,
     ) -> RouterTurn:
         if name == "create_code_task":
-            self._require(connection, project_id, actor, "task_create")
+            self._require(connection, project_id, actor, "task_create", "code_task:create")
             title = str(arguments.get("title") or "Code task")[:300]
             instructions = str(arguments.get("instructions") or title)
             # BUILD-ON-EXISTING: if the chat is scoped to a task that already shipped an app, extend
@@ -2927,7 +2927,7 @@ class IntentRouter:
             )
 
         if name == "create_meeting":
-            self._require(connection, project_id, actor, "task_create")
+            self._require(connection, project_id, actor, "task_create", "meeting:convene")
             title = str(arguments.get("title") or "Decision meeting")[:300]
             purpose = str(arguments.get("purpose") or title)
             meeting = self.canonical.create_meeting(
@@ -2951,7 +2951,7 @@ class IntentRouter:
             )
 
         if name == "create_prd":
-            self._require(connection, project_id, actor, "task_create")
+            self._require(connection, project_id, actor, "task_create", "meeting:convene")
             directive = str(arguments.get("directive") or "").strip()
             task = self.intake.create_task(
                 connection,
@@ -3037,7 +3037,7 @@ class IntentRouter:
             )
 
         if name == "run_discovery":
-            self._require(connection, project_id, actor, "task_create")
+            self._require(connection, project_id, actor, "task_create", "discovery:create")
             seed = str(arguments.get("seed") or "").strip()
             title = str(arguments.get("title") or seed[:120] or "Discovery")
             from .discovery_service import _research_runs_as_a_job
@@ -3111,7 +3111,7 @@ class IntentRouter:
             )
 
         if name == "propose_command":
-            self._require(connection, project_id, actor, "command_submit")
+            self._require(connection, project_id, actor, "command_submit", "work_item:manage")
             command = str(arguments.get("command") or "").strip()
             proposed = self.intake.propose_command(connection, project_id, command, {})
             plan_id = str(proposed["plan_id"])
@@ -3142,7 +3142,7 @@ class IntentRouter:
             )
 
         if name == "create_agent_process":
-            self._require(connection, project_id, actor, "task_create")
+            self._require(connection, project_id, actor, "task_create", "autopilot:configure")
             text_in = str(arguments.get("text") or "").strip()
             if not text_in:
                 raise ValueError("process text is required")
@@ -3178,7 +3178,7 @@ class IntentRouter:
             )
 
         if name == "start_agent_process":
-            self._require(connection, project_id, actor, "task_create")
+            self._require(connection, project_id, actor, "task_create", "autopilot:operate")
             prd = str(arguments.get("prd") or "").strip()
             if not prd:
                 raise ValueError("prd is required")
@@ -3235,7 +3235,7 @@ class IntentRouter:
                 reply="I didn’t dispatch anything because that plan is not the thread’s pending proposal."
             )
         try:
-            self._require(connection, project_id, actor, "task_create")
+            self._require(connection, project_id, actor, "task_create", "code_task:create")
             dispatched = self.intake.dispatch_plan(
                 connection,
                 confirm_plan_id,
@@ -3281,8 +3281,21 @@ class IntentRouter:
         }
 
     def _require(
-        self, connection: Connection, project_id: str, actor: str, permission: str
+        self, connection: Connection, project_id: str, actor: str, permission: str,
+        catalogue_permission: str,
     ) -> None:
+        """Gate one actuation. Under an enforced request: the PDP decides `catalogue_permission`
+        (what the same action's own route declares) for the verified principal — never the
+        legacy members table, which names no identity person (R2 #1)."""
+        from ..identity import viewer as _viewer
+
+        decision = _viewer.decide(project_id, catalogue_permission)
+        if decision is not None:
+            if not decision:
+                raise ProjectMemberPermissionError(
+                    f"Actor '{actor}' lacks permission '{catalogue_permission}' for project "
+                    f"'{project_id}'.")
+            return
         self.members.require_member(
             connection, project_id, actor, permission=permission
         )

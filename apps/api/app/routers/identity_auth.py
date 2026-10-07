@@ -201,6 +201,22 @@ class StepUpBody(_Body):
 AUTH = PublicReason.AUTH_ENDPOINT
 
 
+def _browser_origin(request: Request) -> Optional[str]:
+    """The origin the browser is on: its Origin header, else X-Forwarded-Host/Proto from a trusted
+    proxy (the console). Never the Host header a server-side fetch carries."""
+    from boss_engine.identity.authn_support import is_trusted_proxy
+
+    said = origin_of(request.headers.get("origin", ""))
+    if said:
+        return said
+    creds = credentials(request)
+    host = request.headers.get("x-forwarded-host")
+    if host and is_trusted_proxy(creds.peer_ip or creds.client_ip):
+        proto = (request.headers.get("x-forwarded-proto") or "http").split(",")[0].strip()
+        return origin_of(f"{proto}://{host.split(',')[0].strip()}")
+    return None
+
+
 def build_identity_auth_router() -> APIRouter:
     router = APIRouter(tags=["identity-auth"])
 
@@ -227,14 +243,21 @@ def build_identity_auth_router() -> APIRouter:
             origin = public_origin(db) or authn.request_origin(credentials(request)) or ""
             claim_info = None
             if not claim_module.is_claimed(db):
-                claim_module.announce_setup_link(db)
+                # read-only (R5): the API's lifespan keeps a live claim link printed
                 paths = claim_module.available_paths(db, bridged)
                 path = ("network_bridge" if "network" in paths
                         else "legacy_password" if "legacy_password" in paths else "setup_token")
                 claim_info = {
                     "path": path,
-                    "origin": (origin_of(request.headers.get("origin", "")) or origin) if path == "network_bridge" else None,
-                    "expires_at": claim_module.setup_expires_at(db) if path == "setup_token" else None,
+                    # every way this browser may claim: a page holding a setup link (`#t=`, which
+                    # never reaches the API) uses setup_token even where a shared password is set
+                    # (compose always sets BOSS_CONSOLE_PASSWORD, R2 #10)
+                    "paths": paths,
+                    # the origin the claim will bind: the BROWSER's (its Origin, or the host a
+                    # trusted proxy forwarded) — never the Host a server-side fetch addressed
+                    # (http://api:8000 on compose, R2 #10). None: the page shows its own origin.
+                    "origin": _browser_origin(request) if path == "network_bridge" else None,
+                    "expires_at": claim_module.setup_expires_at(db) if "setup_token" in paths else None,
                     "seats": claim_module.legacy_seats(db),
                 }
             from boss_engine.config import get_settings
@@ -358,12 +381,11 @@ def build_identity_auth_router() -> APIRouter:
     @public(reason=AUTH, verifier=verify_auth_request)
     def setup_status(request: Request):
         """Whether this BOSS still needs its first Owner, and which claim paths apply to this
-        browser. When unclaimed and no setup link is live, a fresh one is printed to the logs."""
+        browser. Read-only (R5): while unclaimed, the API itself keeps a live setup link printed
+        to its logs (main.lifespan: at boot and whenever the last one expires)."""
         bridged = _bridged(request)
         with begin() as db:
             claimed = claim_module.is_claimed(db)
-            if not claimed:
-                claim_module.announce_setup_link(db)
             body: dict[str, Any] = {"claimed": claimed}
             if not claimed:
                 body["paths"] = claim_module.available_paths(db, bridged)

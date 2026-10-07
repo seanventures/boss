@@ -144,11 +144,17 @@ class IdentityWorld:
 
     def claimed(self) -> None:
         """Record bootstrap.claimed, which arms the DB's last-Owner trigger (amendment A9)."""
+        from boss_engine.identity import audit
+
         with self.engine.begin() as db:
+            # under audit.record's own per-org lock, at the next seq (seq 1 collided with, or was
+            # silently skipped behind, an event already written for the org)
+            db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": audit._lock_key(self.org)})  # noqa: SLF001
             db.execute(text(
                 "INSERT INTO identity_security_events (org_id, seq, stream, event_type, outcome, "
-                "prev_hash, hash) VALUES (:o, 1, 'security', 'bootstrap.claimed', 'success', "
-                "'\\x00'::bytea, '\\x00'::bytea) ON CONFLICT DO NOTHING"), {"o": self.org})
+                "prev_hash, hash) SELECT :o, coalesce(max(seq), 0) + 1, 'security', 'bootstrap.claimed', "
+                "'success', '\\x00'::bytea, '\\x00'::bytea FROM identity_security_events WHERE org_id = :o "
+                "HAVING NOT bool_or(event_type = 'bootstrap.claimed') OR count(*) = 0"), {"o": self.org})
 
     # ---- contexts ------------------------------------------------------------------------------
     def ctx(self, principal: Principal, *, mfa: bool = True,

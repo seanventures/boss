@@ -162,8 +162,9 @@ def _console_pages_from_typescript():
             legacy.add(m.group(1))
     rows = []
     for m in re.finditer(r'\{ path: "([^"]+)", label: "([^"]+)", tip: "[^"]*", access: '
-                         r'(\{ permission: "([^"]+)" \}|\{ authenticated: true \}|area\("([^"]+)"\))', pages):
-        permission = m.group(4) or (amap.get(m.group(5)) if m.group(5) else None)
+                         r'(\{ permission: "([^"]+)" \}|\{ anyScope: "([^"]+)" \}|\{ authenticated: true \}'
+                         r'|area\("([^"]+)"\))', pages):
+        permission = m.group(4) or m.group(5) or (amap.get(m.group(6)) if m.group(6) else None)
         if permission:
             rows.append((m.group(1), permission))
     rows += [(f"area:{k}", v) for k, v in amap.items() if k not in legacy]

@@ -110,6 +110,12 @@ def _user_row(db: Any, org_id: str, user_id: str) -> Optional[users.UserRow]:
     return user
 
 
+def provisioning_principal(provider_id: str) -> str:
+    """The `sys_scim_<provider>` principal a provider's SCIM keys belong to: `created_by` of every
+    person that connection provisioned."""
+    return "sys_scim_" + str(provider_id).split("_", 1)[-1]
+
+
 #: Roles a SCIM key can never touch the holder of (M2): their account is BOSS's to manage.
 PROTECTED_ROLES = frozenset({"owner", "admin"})
 

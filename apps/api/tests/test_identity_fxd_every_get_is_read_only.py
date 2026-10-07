@@ -177,26 +177,28 @@ def _table_names(engine) -> set[str]:
             "WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')"))}
 
 
-#: Undeclared writing GETs found by this sweep (2026-10-07). Each is a bug to fix (make it a POST,
-#: declare it writes_on_get with its POST twin, or stop writing); the strict xfail below fails
-#: once the list can shrink, and the guard test fails if a NEW one appears.
-KNOWN_UNDECLARED_WRITERS = {
-    "GET /v1/auth/options": "public: inserts an identity_auth_challenges row per anonymous call",
-    "GET /v1/capabilities": "updates mcp_servers",
-    "GET /v1/work-orchestration/overview": "updates resource_quotas and work_tracker_providers, inserts events",
-    "GET /v1/work-trackers": "updates resource_quotas and work_tracker_providers, inserts events",
-    "GET /v1/settings": "inserts secret_material on a first read (mints a secret lazily)",
-}
-#: GETs that CREATE TABLE on first read (lazy ensure_tables): DDL under a Viewer's read.
-KNOWN_DDL_ON_GET = {
-    "GET /v1/factory/flow": "creates factory_flow_findings",
-    "GET /v1/work-plane/board": "creates the wp_* work-plane tables (WorkPlaneService.ensure_tables)",
-}
+#: Undeclared writing GETs (none since R2 #7: /v1/auth/options and /v1/auth/setup/status no
+#: longer mint the claim link — main.lifespan keeps it printed; /v1/capabilities reads the recorded
+#: MCP state; the tracker reads no longer seed; the secret store provisions its key on the first
+#: write). A NEW one fails test_every_get_that_writes_rows_is_declared.
+KNOWN_UNDECLARED_WRITERS: dict[str, str] = {}
+#: GETs that CREATE TABLE (none since R2 #7: db.SERVICE_SCHEMAS applies the service-owned tables
+#: at boot, and the lazy ensure runs DDL only when a table is really missing).
+KNOWN_DDL_ON_GET: dict[str, str] = {}
 
 
 @pytest.fixture(scope="module")
 def sweep_result(engine, install, write_log):
     world, viewer = install
+    # The identity background loop (shadow_report's flusher: ledger flush, legacy retirement, the
+    # audit anchor) writes on its own clock; paused, so a write is attributed to the GET that made
+    # it and never to whichever GET happened to be in flight.
+    from boss_engine.identity import shadow_report
+
+    flusher = shadow_report._flusher  # noqa: SLF001
+    shadow_report.stop_flusher()
+    if flusher is not None:
+        flusher.join(timeout=30)
     client = TestClient(app, raise_server_exceptions=False)
     writers: dict[str, list[str]] = {}
     creators: dict[str, list[str]] = {}
@@ -219,6 +221,8 @@ def sweep_result(engine, install, write_log):
                     if before.get(t) != after.get(t) and t not in seen and t not in created)
     undeclared = {label: tables for label, tables in writers.items() if label not in GETS_THAT_WRITE}
     ddl = {label: tables for label, tables in creators.items() if label not in GETS_THAT_WRITE}
+    if flusher is not None:
+        shadow_report.start_flusher()
     return {"writers": writers, "undeclared": undeclared, "ddl": ddl, "unseen": unseen}
 
 
@@ -235,12 +239,6 @@ def test_no_new_get_writes_rows_without_being_declared(sweep_result):
         f"{label}: {tables}" for label, tables in sorted(new.items()))
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "unassigned: R5 — GET /v1/auth/options (public, inserts identity_auth_challenges), "
-    "GET /v1/capabilities (updates mcp_servers), GET /v1/work-orchestration/overview and "
-    "GET /v1/work-trackers (update resource_quotas + work_tracker_providers, insert events) and "
-    "GET /v1/settings (inserts secret_material on a first read) write "
-    "without writes_on_get, so they are CSRF-able by a cross-site GET and break 'every GET is read-only'"))
 def test_every_get_that_writes_rows_is_declared(sweep_result):
     assert not sweep_result["undeclared"], sweep_result["undeclared"]
 
@@ -256,8 +254,5 @@ def test_the_streams_skipped_are_few_and_none_is_a_declared_writer():
     assert not set(STREAMS) & GETS_THAT_WRITE, STREAMS
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "unassigned: R5 — GET /v1/factory/flow and GET /v1/work-plane/board run CREATE TABLE on a "
-    "Viewer's first read (lazy ensure_tables): DDL, and its locks, on a read path"))
 def test_no_get_creates_tables(sweep_result):
     assert not sweep_result["ddl"], sweep_result["ddl"]

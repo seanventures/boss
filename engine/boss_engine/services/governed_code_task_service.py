@@ -2692,7 +2692,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     try:
         identity_run = identity_runs.start_code_task_run(
             engine, task_run_id=run_id, project_id=project_id, owner=owner, repo=repo,
-            role_key=spec.get("role_key"), job_id=job_id)
+            role_key=identity_runs.code_task_builder(spec, fctx), job_id=job_id)
     except Exception as exc:  # noqa: BLE001 — refused authority fails the build, never widens
         raise RuntimeError(f"authority refused: {getattr(exc, 'reason', None) or type(exc).__name__}") from exc
     egress_access = identity_run[1] if identity_run is not None else None
