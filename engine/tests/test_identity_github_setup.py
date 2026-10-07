@@ -373,3 +373,33 @@ def test_the_worker_opens_its_pr_with_the_setup_app_or_the_org_token_for_that_re
     mint = json.loads([b for m, u, _, b in env.hub.calls if u.endswith("/access_tokens")][-1])
     assert mint["repositories"] == ["web"] and "administration" not in mint["permissions"]
     assert "workflows" not in mint["permissions"]
+
+
+def test_the_workers_pr_tokens_are_bound_to_the_build_and_revoked_when_it_ends(env):
+    """Audit finding on 4637cba8: a control-plane token must not outlive the build that used it,
+    and egress must never pick it up as the run's token."""
+    _connect_app(env)
+    github_setup.bind_control_plane_run("run_ct:pr1")
+    try:
+        with env.db() as c:
+            tok = github_setup.control_plane_token(c, "acme", "web")
+        assert github_app.cached_for_run("run_ct:pr1") is None              # never egress's token
+    finally:
+        github_setup.unbind_control_plane_run("run_ct:pr1")
+    with env.db() as c:
+        from boss_engine.identity import runs
+
+        runs.end_run("run_ct:pr1", db=c, org_id="org_boss")
+    assert tok in env.hub.deleted                                           # revoked at GitHub
+
+
+def test_outside_a_build_they_are_revoked_once_due(env, monkeypatch):
+    _connect_app(env)
+    with env.db() as c:
+        first = github_setup.control_plane_token(c, "acme", "web")
+    assert first not in env.hub.deleted
+    monkeypatch.setattr(github_setup, "CONTROL_PLANE_TTL_SECONDS", 0)
+    with env.db() as c:
+        github_setup.control_plane_token(c, "acme", "web")                  # the next mint sweeps
+    assert first in env.hub.deleted
+    assert github_setup.sweep_control_plane_tokens(everything=True) >= 0
