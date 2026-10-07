@@ -202,6 +202,10 @@ def test_compose_ships_the_boundary_and_no_default_database_password():
     assert "NET_ADMIN" in api["cap_add"] and api["user"] == "0:0"
     env = api["environment"]
     assert env["BOSS_SANDBOX_ISOLATION"].endswith("required}") and env["BOSS_EGRESS_URL"]
+    # every service that runs BOSS's engine fails closed (round 3: the worker had no setting, so
+    # it defaulted to `auto` — unisolated with a warning — had it ever been handed a build)
+    for name in ("api", "worker"):
+        assert compose["services"][name]["environment"]["BOSS_SANDBOX_ISOLATION"].endswith("required}"), name
     raw = (ROOT / "scripts/install/community-compose.yml").read_text()
     assert "BOSS_DB_PASSWORD:-boss" not in raw and ":-boss}" not in raw
     assert "ports" not in compose["services"]["egress"]                   # only the compose network
