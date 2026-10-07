@@ -13,6 +13,7 @@ import { ArrowSquareOut, CheckCircle, XCircle } from "@phosphor-icons/react";
 
 import type { Ability, Provider, ProviderField } from "../../lib/kit-types";
 import { kitApi } from "../../lib/kit-api";
+import { GatedButton } from "../../components/gated";
 import { showToast } from "../client-forms";
 import { REPO_HREF } from "./ability-card";
 import { shortError, TIP } from "./kit-copy";
@@ -231,14 +232,14 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
       ) : null}
       {onStored ? <TestRow test={ability.last_test} /> : null}
       <div className="kit-actions">
-        <button type="button" className="kit-btn kit-btn-primary" disabled={busy || (reused && ability.status === "needs_repo")}
+        <GatedButton permission="integration:manage" className="kit-btn kit-btn-primary" disabled={busy || (reused && ability.status === "needs_repo")}
                 data-testid="kit-save-test" onClick={() => void save()}>
           {busy ? "Testing…" : "Save & test"}
-        </button>
+        </GatedButton>
         {canDisconnect && onStored ? (
           <span className="kit-confirm-wrap">
-            <button type="button" className="kit-btn" disabled={busy} data-testid="kit-disconnect"
-                    onClick={() => setConfirm(true)}>Disconnect</button>
+            <GatedButton permission="integration:manage" className="kit-btn" disabled={busy} data-testid="kit-disconnect"
+                    onClick={() => setConfirm(true)}>Disconnect</GatedButton>
             {confirm ? (
               <span className="kit-pop" role="dialog" aria-label="Confirm disconnect" data-testid="kit-disconnect-confirm">
                 <strong>Disconnect {chosen?.label}?</strong>

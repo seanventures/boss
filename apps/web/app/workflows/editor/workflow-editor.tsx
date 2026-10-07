@@ -37,6 +37,7 @@ import { useSaveFlow } from "./save/use-save-flow";
 import { StartsWith } from "./starts-with";
 import { SummaryChips } from "./summary-chips";
 import { NO_DELETE_TIP, TopBar } from "./top-bar";
+import { useCan } from "../../../components/identity/identity-provider";
 
 const PALETTE_W = 240;
 /** What the lane loses to its column beyond the palette: the grid gap and the lane's border. */
@@ -119,6 +120,8 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     setKey(next);
   }, []);
   const saveFlow = useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, actor, standardUsedFor: usedFor });
+  // Saving publishes the workflow (POST /v1/delivery-workflows/save needs workflow:publish).
+  const publishGate = useCan("workflow:publish");
   useAutoCheck(state, dispatch, projectId);
 
   /* ── The URL ── */
@@ -369,7 +372,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
-      if (mod && k === "s") { e.preventDefault(); void saveFlow.save(); return; }
+      if (mod && k === "s") { e.preventDefault(); if (publishGate.allowed) void saveFlow.save(); return; }
       if (typing(e.target) || e.defaultPrevented) return;
       if (mod && k === "z") { e.preventDefault(); dispatch({ type: e.shiftKey ? "REDO" : "UNDO" }); return; }
       if (mod && k === "y") { e.preventDefault(); dispatch({ type: "REDO" }); return; }
@@ -391,7 +394,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [saveFlow, dispatch, state.selection, readOnly, view, remove, settingsOpen, closeDrawer]);
+  }, [saveFlow, publishGate.allowed, dispatch, state.selection, readOnly, view, remove, settingsOpen, closeDrawer]);
 
   /* ── Render ── */
   const gapAction = useCallback((at: number) => (
@@ -433,7 +436,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
               onStart={saveFlow.start} startRef={saveFlow.startRef}
               startBlocked={readOnly ? `Viewing v${meta.readOnlyVersion}` : noSteps ? "Add a step first" : null}
               onSave={() => void saveFlow.save()} saveLabel={saveFlow.label} saveRef={saveFlow.saveRef}
-              saveBlocked={saveFlow.canSave ? null : saveFlow.saving ? "Saving…" : saveFlow.saveTip}
+              saveBlocked={!publishGate.allowed ? publishGate.reason : saveFlow.canSave ? null : saveFlow.saving ? "Saving…" : saveFlow.saveTip}
               saveTip={saveFlow.saveTip} saving={saveFlow.saving}
               onDuplicate={duplicate} duplicateBlocked={meta.workflow_key ? null : "Not saved yet"}
               onUseFor={openSettings} onChanges={showChanges}

@@ -405,7 +405,7 @@ function Effective({ eff, projects }: { eff: EffectiveAccess; projects: Effectiv
       </div>
       <div className="idn-legend">
         <span><Check size={12} className="idn-ok" aria-hidden /> held, with its binding</span>
-        <span><code className="idn-perm crit">critical</code> typed confirm to grant</span>
+        <span><span className="idn-perm crit">critical</span> typed confirm to grant</span>
         <span><Key size={12} className="idn-warn" aria-hidden /> step-up at use</span>
       </div>
       {byCat.map((c) => <Category key={c.name} name={c.name} rows={c.rows} filtering={filtering} open={filtering || expandAll || defaults.includes(c.name)} />)}
@@ -488,7 +488,7 @@ function grantLine(d: Delegation, now: number): string {
   const left = daysUntil(d.expires_at, now);
   const parts = [d.kind === "task" ? "this build only" : d.expires_at ? `${left !== null && left > 0 ? `${left} days left` : "expired"}` : "until revoked"];
   if (d.subdelegation.allowed) parts.push(`sub-delegation → ${d.subdelegation.to.join(", ")}`);
-  if (d.last_used_run) parts.push(d.last_used_run);
+  if (d.last_used_run) parts.push("used by a build");
   return parts.join(" · ");
 }
 

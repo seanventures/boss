@@ -6,6 +6,7 @@
  * the directory (people, access roles, groups, service accounts, agents) and the live feed of
  * security events. A panel the viewer cannot read says which permission it needs.
  */
+import { plainText } from "../../lib/identity/plain";
 import React, { useState } from "react";
 import {
   ArrowRight, ArrowUpRight, Fingerprint, GitBranch, Globe, Key, Plus, Robot, ShieldCheck, Users, UsersThree, Warning, LinkSimple,
@@ -125,7 +126,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
               <Ring score={posture.score} />
               <div className="idn-score-t">
                 <b>{posture.headline}</b>
-                {posture.summary.map((line) => <span key={line} data-copy="data">{line}</span>)}
+                {posture.summary.map((line) => <span key={line} data-copy="data">{plainText(line)}</span>)}
               </div>
             </div>
           ) : null}
@@ -176,7 +177,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
               <div key={c.id} className="idn-pc" data-status={tone(c.status)} data-testid={`posture-${c.id}`}>
                 <span className="idn-label">{CHECK_ICON[c.id] ?? <Warning size={13} aria-hidden />} {c.label}</span>
                 <span className="idn-num">{c.value}{c.unit ? <small>{c.unit}</small> : null}</span>
-                <span className="idn-txt" data-copy="data">{c.detail}</span>
+                <span className="idn-txt" data-copy="data">{plainText(c.detail)}</span>
                 {c.fix
                   ? <a className="idn-fix" href={c.fix.href}>{c.fix.label} →</a>
                   : <span className="idn-fix done">All good</span>}
@@ -364,7 +365,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
             : <Needs icon={<Fingerprint size={14} aria-hidden />} what="Events" p="audit:read" />}
         </section>
       </div>
-      {inviting && roles ? <InviteSheet roles={roles} onClose={() => setInviting(false)} onInvited={() => undefined} /> : null}
+      {inviting && roles ? <InviteSheet roles={roles} groups={groups ?? []} onClose={() => setInviting(false)} onInvited={() => undefined} /> : null}
     </>
   );
 }
