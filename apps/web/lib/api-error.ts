@@ -14,6 +14,8 @@ export function apiErrorText(body: unknown, status: number): string {
   if (typeof body === "string") return body.trim() || fallback;
   if (typeof body !== "object") return fallback;
   const record = body as Record<string, unknown>;
+  // A read the console's gate kept back (lib/identity/read-gates.ts): its reason, in useCan's words.
+  if (record.error === "locked" && typeof record.reason === "string" && record.reason) return record.reason;
   const detail = "detail" in record ? record.detail : record.error;
   return describe(detail) || fallback;
 }

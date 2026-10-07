@@ -10,6 +10,7 @@
  * and any custom server. Everything is driven by GET /v1/kit, whose statuses the API computes.
  */
 import { useGate, GatedButton } from "../../components/gated";
+import { ReadFailure } from "../../components/locked-panel";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { DotsThree, MagnifyingGlass, Sparkle } from "@phosphor-icons/react";
 
@@ -37,6 +38,7 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
   const [tab, setTab] = useState<KitTab>("kit");
   const [kit, setKit] = useState<KitWithCrew | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState(0);
   const [open, setOpen] = useState<string | null>(null);
   const [focus, setFocus] = useState<DrawerFocus>(null);
   const [testing, setTesting] = useState<Set<string>>(new Set());
@@ -54,7 +56,7 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
 
   const load = useCallback(async (check: "stale" | "none" = "stale") => {
     const r = await kitApi.load(projectId, check);
-    if (!r.ok) { setError(r.error); return; }
+    if (!r.ok) { setError(r.error); setErrorStatus(r.status ?? 0); return; }
     setError(null);
     setKit(r.data);
   }, [projectId]);
@@ -174,10 +176,7 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
       </div>
 
       {error && !kit ? (
-        <div className="kit-bar-err" role="alert" data-testid="kit-api-error">
-          <span data-tip={error}>Can&apos;t reach BOSS API</span>
-          <button type="button" className="kit-link" onClick={() => void load()}>Retry</button>
-        </div>
+        <ReadFailure problem={{ text: error, status: errorStatus }} onRetry={() => void load()} testId="kit-api-error" />
       ) : null}
 
       {tab === "kit" ? (
