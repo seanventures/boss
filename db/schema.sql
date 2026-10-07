@@ -7419,6 +7419,21 @@ CREATE UNLOGGED TABLE IF NOT EXISTS identity_rate_limits (
   PRIMARY KEY (bucket, key_hash, window_start)
 );
 
+-- The org's GitHub App (Setup › Repo › Connect a GitHub App, created from a manifest). Secrets are
+-- in the vault (app_private_key, the OAuth client secret); this row holds only what names the App.
+CREATE TABLE IF NOT EXISTS identity_github_app (
+  org_id          TEXT PRIMARY KEY REFERENCES orgs(id),
+  app_id          TEXT NOT NULL,
+  slug            TEXT,
+  html_url        TEXT,
+  client_id       TEXT,
+  installation_id TEXT,
+  account_login   TEXT,
+  created_by      TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- "Request access" from a refusal (amendment A13): who asked for which permission where, kept so
 -- an admin can see open requests and the requester is never asked twice. Decided by a binding.
 CREATE TABLE IF NOT EXISTS identity_access_requests (

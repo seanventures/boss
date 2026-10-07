@@ -1523,6 +1523,10 @@ async def lifespan(_: FastAPI):
                     _identity_passports.upgrade_from_roles(org_id=_org, db=_connection,
                                                            default_sponsor=_owners[0])
         print(f"[identity] vault ready (key {_kek or 'none configured, empty vault'}); signing keys provisioned")
+        from boss_engine.identity import github_setup as _identity_github
+
+        if _identity_github.forget_env_token_if_moved(engine, settings):
+            print("[identity] BOSS_GITHUB_TOKEN was moved into the vault: the environment copy is not read")
         # The scheduled half of the cascade (grant expiry, workflow-run grants), key rotation,
         # provider-revoke retries and the audit re-key (identity/maintenance.py).
         from boss_engine.identity import maintenance as _identity_maintenance
@@ -30047,6 +30051,7 @@ from .routers.identity_scim import build_identity_scim_router  # noqa: E402  (id
 from .routers.identity_admin import build_identity_admin_router  # noqa: E402  (identity S5)
 from .routers.identity_agents import build_identity_agents_router  # noqa: E402  (identity S3)
 from .routers.identity_agents import install_consent_handler  # noqa: E402  (identity S3)
+from .routers.identity_github import build_identity_github_router  # noqa: E402  (Setup › Repo: GitHub)
 from boss_engine.identity.request_ids import RequestIdMiddleware  # noqa: E402  (identity S5)
 
 app.include_router(build_identity_me_router())
@@ -30058,6 +30063,7 @@ app.include_router(build_identity_scim_router())
 # ledger's flusher (not under pytest).
 app.include_router(build_identity_admin_router())
 app.include_router(build_identity_agents_router())
+app.include_router(build_identity_github_router())
 # A covering grant is missing: a flat 409 {"error": "consent_required", ...} the console's consent
 # sheet reads, wherever a build or run start raises it.
 install_consent_handler(app)

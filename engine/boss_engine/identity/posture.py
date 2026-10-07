@@ -205,6 +205,9 @@ def posture(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dict[str
     checks.append(enforcement_check())
     # 8. a bound public origin (F3/H2): emailed links, passkeys and SSO need one
     checks.append(public_origin_check(org_id, db=db))
+    # 9. how builds reach GitHub (Setup › Repo): the App is ok, the org token is a warning, a
+    #    person-only setup or nothing at all is critical (builds cannot clone or push)
+    checks.append(github_check(org_id, db=db))
 
     claimed = migration.claimed_at(db, org_id)
     return {"org_id": org_id, "generated_at": now.isoformat(), "claimed_at": _iso(claimed),
@@ -232,6 +235,35 @@ def public_origin_check(org_id: str, *, db: Any) -> dict[str, Any]:
     return {**_check("public_origin", "ok", f"Links, passkeys and SSO use {origin}", 0,
                      "Change BOSS_PUBLIC_URL if people reach BOSS at another address."),
             "origin": origin, "source": source}
+
+
+def github_check(org_id: str, *, db: Any) -> dict[str, Any]:
+    from . import github_setup
+
+    try:
+        with db.begin_nested():
+            m = github_setup.mode(db, org_id)
+    except Exception:  # noqa: BLE001 — a missing table on an old schema: nothing connected yet
+        m = {"mode": "none", "env_token": {"present": False, "read_by_builds": False}}
+    fix = "Connect a GitHub App in Setup › Repo (recommended)."
+    if m["mode"] == "app":
+        return {**_check("github", "ok", "Builds reach GitHub through the BOSS GitHub App", 0,
+                         "Nothing to do."), "github_mode": "app"}
+    if m["mode"] == "token":
+        return {**_check("github", "warn", "Builds reach GitHub with the org's fine-grained token (long-lived; "
+                         "less safe than the App)", 1, fix), "github_mode": "token"}
+    env = m.get("env_token") or {}
+    if env.get("read_by_builds"):
+        return {**_check("github", "warn", "Builds use BOSS_GITHUB_TOKEN from the environment (not enforced): "
+                         "move it into the vault", 1, fix), "github_mode": "env"}
+    if m["mode"] == "as_me":
+        summary = "Only people's own GitHub connections: a build whose grant does not say \"act as me\" has no GitHub"
+    elif env.get("present"):
+        summary = ("BOSS_GITHUB_TOKEN is set but builds do not use it under enforce: move it into the vault "
+                   "or connect a GitHub App")
+    else:
+        summary = "Builds have no way to reach GitHub"
+    return {**_check("github", "critical", summary, 1, fix), "github_mode": m["mode"]}
 
 
 def banners(ctx: Any, *, db: Any, now: Optional[datetime] = None) -> list[dict[str, Any]]:
