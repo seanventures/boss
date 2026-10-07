@@ -656,6 +656,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   /** WHO IS ON IT, recorded as a CHOICE — but only when it differs from what start_run already
    *  seeded. Writing an identical list back as `operator` would claim a decision nobody made. */
   const assignTeam = async (title: string) => {
+    // Recording the team is POST /v1/projects/{id}/agents (work_item:manage). A viewer who
+    // cannot keeps the seeded team rather than send a write that is refused.
+    if (!teamGate.allowed) return;
     const chosenAgents = draft.agents;
     const sameAsDefault = chosenAgents.length === defaultAgents.length
       && chosenAgents.every((a) => defaultAgents.includes(a));
@@ -785,6 +788,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const steerGate = useGate("code_task:steer");
   const conveneGate = useGate("meeting:convene");
   const runGate = useGate("workflow_run:start");
+  const teamGate = useGate("work_item:manage");
   const primaryGate = adding && addPath === QUICK ? steerGate : adding && addPath === SPEC ? conveneGate : runGate;
 
   const primary = async () => {

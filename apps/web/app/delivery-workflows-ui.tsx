@@ -1,5 +1,7 @@
 "use client";
 
+import { GatedButton, useGate } from "../components/gated";
+import type { Permission } from "../lib/identity/permissions.gen";
 import { routeForStep, useRunRoutes } from "./why-this-model";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ShareRunButton } from "./improve/share-run";
@@ -530,6 +532,9 @@ const PANEL_PRESSES = "delivery-workflows-panel";
  * raw fetch on its own say-so; it now passes the answer the run offered (the engine's
  * stopped_for_operator) and it is sent here, keyed by the press like every other write.
  */
+/** What a run's answer (retry, skip, recheck, stop, an input) needs: every one is workflow_run:control. */
+export const RUN_ANSWER_PERMISSION: Permission = "workflow_run:control";
+
 export async function sendRunAnswer(projectId: string, actor: string, runId: string,
                                     answer: RunAction, reason?: string) {
   // SKIP NEEDS A REASON: the engine keeps it on the step (skip-step 422s without one).
@@ -875,6 +880,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // (registered before any await) and is the ONLY thing that sets `busy`. The same press again
   // joins the running one; a different press is refused in the operator's words.
   type PressResult<T> = T | { ok: false; error: string; refused: true };
+  const scheduleGate = useGate("workflow_schedule:manage");
+  const stepGate = useGate("workflow:create");
   const pressOn = useCallback(<T,>(label: string, what: unknown,
                                    run: (key: string) => Promise<T>): Promise<PressResult<T>> =>
     runPress<T>({ press: { scope: PANEL_PRESSES, label }, fingerprint: JSON.stringify([label, what]) },
@@ -1045,7 +1052,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               });
             return Boolean((result as { ok?: boolean }).ok);
           }}
-          onToggleSchedule={(id, enabled) => void pressOn(
+          onToggleSchedule={(id, enabled) => scheduleGate.allowed && void pressOn(
             enabled ? "Resume schedule" : "Pause schedule", id, async (key) => {
               const r = await apiWrite("/api/delivery-workflows", {
                 method: "POST",
@@ -1057,7 +1064,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               if (!r.ok) { setNotice(String(body?.error ?? `API returned ${r.status}`)); return; }
               await load();
             })}
-          onDeleteSchedule={(id) => void pressOn("Remove schedule", id, async (key) => {
+          onDeleteSchedule={(id) => scheduleGate.allowed && void pressOn("Remove schedule", id, async (key) => {
             const r = await apiWrite(
               `/api/delivery-workflows?view=schedules&schedule_id=${encodeURIComponent(id)}`
                 + `&project_id=${encodeURIComponent(projectId)}`
@@ -1067,7 +1074,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             if (!r.ok) { setNotice(String(body?.error ?? `API returned ${r.status}`)); return; }
             await load();
           })}
-          onRemoveStep={(stepKey) => void pressOn(`Remove ${stepKey}`, stepKey, async (key) => {
+          onRemoveStep={(stepKey) => stepGate.allowed && void pressOn(`Remove ${stepKey}`, stepKey, async (key) => {
             const r = await apiWrite(
               `/api/delivery-workflows?project_id=${encodeURIComponent(projectId)}`
                 + `&step_key=${encodeURIComponent(stepKey)}`
@@ -2332,11 +2339,11 @@ function ShipNow({ projectId, buildRunId, target, alreadyLive, onDone }: {
 
   return (
     <div className="dw-ship" data-testid="dw-ship">
-      <button type="button" className="cap-btn primary" disabled={state !== "idle"}
+      <GatedButton permission="deployment:create" type="button" className="cap-btn primary" disabled={state !== "idle"}
               onClick={ship} data-testid="dw-ship-now">
         {state === "planning" ? "Planning…"
           : alreadyLive ? "Plan redeployment" : "Plan deployment"}
-      </button>
+      </GatedButton>
       <span className="detail">
         {alreadyLive
           ? <>Creates a ChangeSet to review before replacing what runs at{" "}
@@ -2543,10 +2550,10 @@ function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget, onBound
       <input name="app_port" placeholder="port (auto)" data-testid="dw-deploy-port"
              aria-label="App port — blank lets BOSS pick a free one"
              style={{ width: 96, fontSize: 12 }} />
-      <button className="cap-btn" type="submit" disabled={saving || !!busy}
+      <GatedButton permission="deployment_target:manage" className="cap-btn" type="submit" disabled={saving || !!busy}
               data-testid="dw-deploy-settarget">
         {saving ? "Saving…" : "Set target"}
-      </button>
+      </GatedButton>
       {msg ? <span className="detail dw-bind-msg">{msg}</span> : null}
     </form>
   );

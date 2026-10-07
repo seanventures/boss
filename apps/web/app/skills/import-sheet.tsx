@@ -23,7 +23,8 @@ export function ImportSheet({ projectId, actor, onClose, onImported }: {
   const [error, setError] = useState<string | null>(null);
   // Pre-greyed (P1-18): an mcpServers JSON registers servers; anything else imports a skill.
   const skillGate = useGate("skill:manage");
-  const mcpGate = useGate("mcp_server:register");
+  // Adding an MCP server is POST /v1/mcp/servers: mcp_server:review (apps/api main.py register_mcp).
+  const mcpGate = useGate("mcp_server:review");
   const gate = text.trim().startsWith("{") ? mcpGate : skillGate;
 
   const run = async () => {

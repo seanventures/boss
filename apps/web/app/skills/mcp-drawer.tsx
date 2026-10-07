@@ -6,6 +6,7 @@
  * Agents, Used in — plus `More` (the data boundary), collapsed. A token is typed once and never
  * shown again; a URL change voids the review (the API does it, the drawer says it).
  */
+import { GatedButton, useGate } from "../../components/gated";
 import React, { useState } from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { DotsThree, Star, X } from "@phosphor-icons/react";
@@ -153,6 +154,7 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
     onRemoved();
   };
 
+  const boundaryGate = useGate("mcp_server:review");
   const boundary = async (value: string) => {
     const r = await mcpApi.update(projectId, actor, server.id, { data_boundary: value });
     if (!r.ok) { showToast("error", shortError(r.error)); return; }
@@ -171,8 +173,8 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
           <button type="button" className="kit-icon-btn" aria-label="More" onClick={() => setMenu((m) => !m)}><DotsThree size={18} /></button>
           {menu ? (
             <span className="kit-pop kit-menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => void toggleOn()}>{server.enabled ? "Turn off" : "Turn on"}</button>
-              <button type="button" role="menuitem" data-testid="kit-mcp-remove" onClick={() => { setMenu(false); setConfirm(true); }}>Remove</button>
+              <GatedButton permission="mcp_server:review" type="button" role="menuitem" onClick={() => void toggleOn()}>{server.enabled ? "Turn off" : "Turn on"}</GatedButton>
+              <GatedButton permission="mcp_server:review" type="button" role="menuitem" data-testid="kit-mcp-remove" onClick={() => { setMenu(false); setConfirm(true); }}>Remove</GatedButton>
             </span>
           ) : null}
           {confirm ? (
@@ -180,7 +182,7 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
               <strong>Remove {server.name}?</strong>
               {holders.length ? <span>Agents lose {server.name}</span> : null}
               <span className="kit-pop-actions">
-                <button type="button" className="kit-btn kit-btn-danger kit-btn-sm" data-testid="kit-mcp-remove-yes" onClick={() => void remove()}>Remove</button>
+                <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-danger kit-btn-sm" data-testid="kit-mcp-remove-yes" onClick={() => void remove()}>Remove</GatedButton>
                 <button type="button" className="kit-btn kit-btn-sm" onClick={() => setConfirm(false)}>Cancel</button>
               </span>
             </span>
@@ -228,8 +230,8 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
           ) : null}
           {error && error.field !== "url" && error.field !== "secret" ? <div className="kit-err" role="alert" data-tip={error.message}>{shortError(error.message)}</div> : null}
           <div className="kit-actions">
-            <button type="button" className="kit-btn kit-btn-primary" disabled={busy || !url.trim()} data-testid="kit-mcp-save"
-                    onClick={() => void saveTest()}>{busy ? "Testing…" : "Save & test"}</button>
+            <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-primary" disabled={busy || !url.trim()} data-testid="kit-mcp-save"
+                    onClick={() => void saveTest()}>{busy ? "Testing…" : "Save & test"}</GatedButton>
           </div>
         </Section>
         <Section id="tools" label="Tools" tip="What agents may call, and when they ask">
@@ -242,7 +244,7 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
             <div key={t.ref} className="kit-tool" data-testid={`kit-tool-${t.ref}`}>
               <span className="kit-tool-label" data-tip={server.tools.find((x) => x.name === t.label)?.description || t.label}>{t.label}</span>
               <RiskDot tier={t.tier} />
-              <PolicySeg tool={t} onPick={(p) => void pick(t, p)} />
+              <PolicySeg tool={t} permission="mcp_server:review" onPick={(p) => void pick(t, p)} />
             </div>
           ))}
         </Section>
@@ -260,7 +262,7 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
                       <Star size={12} weight="fill" aria-label="Recommended" />
                     </span>
                   ) : null}
-                  <button type="button" role="switch" aria-checked={on} className="kit-switch"
+                  <GatedButton permission="agent_ability:assign" type="button" role="switch" aria-checked={on} className="kit-switch"
                           aria-label={`${agentName(c.role_key)} holds ${server.name}`}
                           data-testid={`kit-mcp-agent-toggle-${c.role_key}`} onClick={() => void toggleAgent(c.role_key)} />
                 </li>
@@ -287,7 +289,7 @@ export function McpDrawer({ projectId, actor, server, crew, abilities = [], onCl
           <summary>More</summary>
           <label className="kit-field">
             <span className="kit-field-label" data-tip={TIP.dataBoundary}>Data boundary</span>
-            <select value={server.data_boundary} onChange={(e) => void boundary(e.target.value)}>
+            <select {...boundaryGate.props} disabled={!boundaryGate.allowed} value={server.data_boundary} onChange={(e) => void boundary(e.target.value)}>
               {["public", "internal", "confidential", "restricted", "local-only"].map((b) => <option key={b} value={b}>{b}</option>)}
             </select>
           </label>

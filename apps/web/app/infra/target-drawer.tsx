@@ -11,6 +11,7 @@
  * printed "Host removal unavailable until the approval flow is ready"; now Retire is offered when
  * the route allows it and is otherwise simply absent.
  */
+import { GatedButton, useGate } from "../../components/gated";
 import React, { useState } from "react";
 
 import { deployHref, buildHref, useTargetDetail, type DeployRow, type Rack, type TargetDetail } from "../../lib/infra-view";
@@ -96,8 +97,8 @@ function Secrets({ projectId, actor, t, canBind, refresh }: { projectId: string;
   const [error, setError] = useState<string | null>(null);
   return (
     <DrawerSection label="SECRETS" testId="inf-target-secrets" actions={canBind && !open ? (
-      <button type="button" className="ag-btn" data-testid="inf-target-bind" onClick={() => setOpen(true)}
-              title="Give this target a stored secret by name">Bind secret</button>
+      <GatedButton permission="deployment_target:manage" type="button" className="ag-btn" data-testid="inf-target-bind" onClick={() => setOpen(true)}
+              title="Give this target a stored secret by name">Bind secret</GatedButton>
     ) : undefined}>
       {t.secrets.length ? (
         <ul className="inf-checks">
@@ -133,7 +134,7 @@ function Secrets({ projectId, actor, t, canBind, refresh }: { projectId: string;
               </select></label>
           </div>
           <div className="inf-actions">
-            <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-target-bind-submit">Bind</button>
+            <GatedButton permission="deployment_target:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-target-bind-submit">Bind</GatedButton>
             <button type="button" className="inf-link" onClick={() => setOpen(false)}>Cancel</button>
             <ErrorLine error={error} />
           </div>
@@ -170,7 +171,7 @@ function MoveSheet({ t, projectId, actor, racks, onClose, onMoved }: {
               {choices.map((c) => <option key={c.id} value={c.id}>{c.name}{c.address ? ` · ${c.address}` : ""}</option>)}
             </select></label>
           <div className="inf-actions">
-            <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-move-submit">Move</button>
+            <GatedButton permission="deployment_target:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-move-submit">Move</GatedButton>
             <button type="button" className="inf-link" onClick={onClose}>Cancel</button>
             <ErrorLine error={error} />
           </div>
@@ -201,8 +202,8 @@ function RetireTargetSheet({ t, actor, onClose, onRetired }: { t: TargetDetail; 
         <span className="inf-muted" title="Its deploy history and health samples are kept">History is kept</span>
         <TypedConfirm name={name} value={typed} onChange={setTyped} testId="inf-target-retire-confirm" />
         <div className="inf-actions">
-          <button type="submit" className="ag-btn" data-tone="reject" disabled={!confirmed(name, typed) || busy}
-                  data-testid="inf-target-retire-submit">{busy ? "Retiring…" : "Retire"}</button>
+          <GatedButton permission="deployment_target:manage" type="submit" className="ag-btn" data-tone="reject" disabled={!confirmed(name, typed) || busy}
+                  data-testid="inf-target-retire-submit">{busy ? "Retiring…" : "Retire"}</GatedButton>
           <button type="button" className="inf-link" onClick={onClose}>Cancel</button>
           <ErrorLine error={error} />
         </div>
@@ -237,6 +238,7 @@ function DeploySection({ t, projectId, actor, canWrite, now, refresh, onDeploy }
     afterWrite(refresh);
     if (r.data.ref) onDeploy(r.data.ref);
   };
+  const toggleGate = useGate("deployment_target:manage");
   const toggle = async (patch: { auto_deploy?: boolean; paused?: boolean }) => {
     setBusy("toggle"); setError(null);
     const r = await setTargetToggles(t.id, actor, patch);
@@ -280,20 +282,20 @@ function DeploySection({ t, projectId, actor, canWrite, now, refresh, onDeploy }
               </datalist>
             </label>
             {t.can.deploy || deployOff ? (
-              <button type="button" className="ag-btn ag-btn-primary" data-testid="inf-target-deploy"
+              <GatedButton permission="deployment:create" type="button" className="ag-btn ag-btn-primary" data-testid="inf-target-deploy"
                       disabled={!!deployOff || busy !== null || !t.can.deploy}
                       title={deployOff ?? "Plans a deploy of this ref; you approve the plan"} onClick={() => void deploy()}>
                 {busy === "deploy" ? "Planning…" : "Deploy"}
-              </button>
+              </GatedButton>
             ) : null}
           </div>
           <div className="inf-actions">
             <label className="inf-check" title={autoOff ?? "Plan a deploy each time the repo's main branch moves"}>
-              <input type="checkbox" checked={t.toggles.autoDeploy} disabled={!!autoOff || busy !== null} data-testid="inf-target-auto"
+              <input {...toggleGate.props} type="checkbox" checked={t.toggles.autoDeploy} disabled={(!!autoOff || busy !== null) || !toggleGate.allowed} data-testid="inf-target-auto"
                      onChange={(e) => void toggle({ auto_deploy: e.target.checked })} /> Deploy on merge
             </label>
             <label className="inf-check" title="No deploys to this target until unpaused">
-              <input type="checkbox" checked={t.toggles.paused} disabled={busy !== null} data-testid="inf-target-paused"
+              <input {...toggleGate.props} type="checkbox" checked={t.toggles.paused} disabled={(busy !== null) || !toggleGate.allowed} data-testid="inf-target-paused"
                      onChange={(e) => void toggle({ paused: e.target.checked })} /> Paused
             </label>
           </div>

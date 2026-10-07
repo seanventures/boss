@@ -16,6 +16,7 @@
  * there is one way a team gets set rather than two that can disagree.
  */
 
+import { GatedButton, useGate } from "../components/gated";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "./agent-avatar";
@@ -66,6 +67,7 @@ export function DefaultAgentPicker({ projectId, actor, faces = false }: {
 
   useEffect(() => { void load(); }, [load]);
 
+  const assignGate = useGate("work_item:manage");
   const act = useCallback(async (body: Record<string, unknown>) => {
     setBusy(true);
     try {
@@ -122,12 +124,12 @@ export function DefaultAgentPicker({ projectId, actor, faces = false }: {
             {current.map((key) => (
               <AgentChip key={key} roleKey={key} label={nameOf(key)}
                          href={`?area=workforce&role=${encodeURIComponent(key)}`}>
-                <button type="button" className="aot-x" disabled={busy}
+                <GatedButton permission="work_item:manage" type="button" className="aot-x" disabled={busy}
                         aria-label={`Remove ${nameOf(key)}`}
-                        onClick={() => void act({ action: "unassign", role_key: key })}>✕</button>
+                        onClick={() => void act({ action: "unassign", role_key: key })}>✕</GatedButton>
               </AgentChip>
             ))}
-            <select className="mr-select aot-pick" value="" disabled={busy}
+            <select {...assignGate.props} className="mr-select aot-pick" value="" disabled={(busy) || !assignGate.allowed}
                     data-testid="askboss-agent-add"
                     onChange={(e) => {
                       if (e.target.value) void act({ role_keys: [e.target.value] });

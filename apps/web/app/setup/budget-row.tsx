@@ -1,6 +1,7 @@
 "use client";
 
 /** Budget: what metered models have spent against the monthly cap — the same cap Govern edits. */
+import { GatedButton } from "../../components/gated";
 import React, { forwardRef, useEffect, useState } from "react";
 
 import { SetupFailure, setupWrite } from "../../lib/setup-client";
@@ -51,8 +52,8 @@ export const BudgetRow = forwardRef<HTMLElement, { mode: string; focused: boolea
               {usd(budget.monthly_cap_usd ?? budget.cap_usd)} / month
             </Tip>
             <span className="su-chip">Defaults</span>
-            <button type="button" className="su-link" data-testid="su-budget-change"
-                    onClick={() => setOpen(true)}>Change</button>
+            <GatedButton permission="budget:manage" type="button" className="su-link" data-testid="su-budget-change"
+                    onClick={() => setOpen(true)}>Change</GatedButton>
           </div>
         ) : (
           <div className="su-line" data-testid="su-budget">
@@ -69,13 +70,13 @@ export const BudgetRow = forwardRef<HTMLElement, { mode: string; focused: boolea
                   <input type="number" min="1" step="1" value={value} aria-label="Monthly cap ($)"
                          data-testid="su-budget-input" onChange={(e) => setValue(e.target.value)} />
                 </label>
-                <button type="button" className="su-btn su-btn-sm su-btn-primary"
+                <GatedButton permission="budget:manage" type="button" className="su-btn su-btn-sm su-btn-primary"
                         disabled={busy || !(Number(value) > 0)} data-testid="su-budget-save"
-                        onClick={save}>Save</button>
+                        onClick={save}>Save</GatedButton>
               </>
             ) : (
-              <button type="button" className="su-link" data-testid="su-budget-edit"
-                      onClick={() => setEditing(true)}>Edit</button>
+              <GatedButton permission="budget:manage" type="button" className="su-link" data-testid="su-budget-edit"
+                      onClick={() => setEditing(true)}>Edit</GatedButton>
             )}
             <a className="su-link" href={governHref} data-testid="su-govern">Govern ↗</a>
           </div>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SandboxSummary, SandboxExecResult, SandboxStats, SandboxHost } from "@boss/api-client";
 import { apiWrite } from "../lib/api-write";
+import { GatedButton, useGate } from "../components/gated";
 
 // Same-origin proxies (Next route handlers) — the browser never calls the
 // control-plane API directly (avoids CORS + keeps the API off the browser).
@@ -68,6 +69,7 @@ function Console({ sandboxId }: { sandboxId: string }) {
     return () => { live = false; };
   }, []);
 
+  const execGate = useGate("sandbox:exec");
   const run = useCallback(async () => {
     if (!cmd.trim() || busy) return;
     if (breakGlass && !reason.trim()) {
@@ -92,9 +94,9 @@ function Console({ sandboxId }: { sandboxId: string }) {
     <div className="sbx-console">
       <div className="sbx-console-bar">
         <input className="sbx-cmd" value={cmd} onChange={(e) => setCmd(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && run()}
+          onKeyDown={(e) => e.key === "Enter" && execGate.allowed && run()}
           placeholder="git status · ls · mvn -q test · cat <file>" spellCheck={false} />
-        <button className="cap-btn primary" onClick={run} disabled={busy}>{busy ? "…" : "Run"}</button>
+        <GatedButton permission="sandbox:exec" className="cap-btn primary" onClick={run} disabled={busy}>{busy ? "…" : "Run"}</GatedButton>
       </div>
       <label className="sbx-bg-toggle">
         <input type="checkbox" checked={breakGlass} onChange={(e) => setBreakGlass(e.target.checked)} />

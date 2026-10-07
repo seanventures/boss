@@ -1,5 +1,6 @@
 "use client";
 
+import { GatedButton } from "../components/gated";
 import React, { useState, useTransition } from "react";
 import {
   type SecurityFinding,
@@ -94,7 +95,7 @@ export function SecurityScanCard({
         <h3 style={{ margin: 0 }}>Security scan (OSS)</h3>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {run?.id ? (
-            <button
+            <GatedButton permission="assurance:run"
               type="button"
               onClick={onGate}
               disabled={pending}
@@ -107,7 +108,7 @@ export function SecurityScanCard({
               }}
             >
               Re-evaluate gate
-            </button>
+            </GatedButton>
           ) : null}
         </div>
       </div>

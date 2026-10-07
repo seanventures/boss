@@ -1144,9 +1144,9 @@ export function SetupDeployment({ run, projectId, actor, onDone }: {
           <input name="app_port" placeholder="port (auto)"
                  aria-label="App port — blank lets BOSS pick a free one"
                  style={{ width: 92, fontSize: 12 }} />
-          <button className="cap-btn" type="submit" disabled={busy}>
+          <GatedButton permission="deployment_target:manage" className="cap-btn" type="submit" disabled={busy}>
             {busy ? "Saving…" : "Set target"}
-          </button>
+          </GatedButton>
         </form>
       )}
       {msg ? <span className="detail" style={{ marginLeft: 6 }}>{msg}</span> : null}
@@ -1351,7 +1351,7 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
           <>
             <span className="cap-badge tone-amber">not deployed</span>
             <span className="detail">{linked}</span>
-            <button className="cap-btn primary ct-deploy-action"
+            <GatedButton permission="deployment:create" className="cap-btn primary ct-deploy-action"
                     disabled={retrying || !!plan}
                     data-testid="app-deploy-first"
                     title={plan
@@ -1377,13 +1377,13 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
                     }}>
               <RocketLaunch size={15} weight="fill" aria-hidden />{" "}
               {retrying ? "Planning…" : "Plan deployment"}
-            </button>
+            </GatedButton>
             {/* THE UNDO THAT WAS NEVER THERE.
                 Once an app was bound to a host and port the card only ever offered "Deploy
                 now" — a wrong binding (this app sat on another app's port) could be fixed
                 nowhere but the database. Retiring keeps the history: deployment runs and
                 health samples reference the target row. */}
-            <button className="cap-btn ct-deploy-action"
+            <GatedButton permission="deployment_target:manage" className="cap-btn ct-deploy-action"
                     disabled={retrying || !targetId}
                     data-testid="app-target-retire"
                     title="Unbind this app from its host and port. Deployment history is kept."
@@ -1397,7 +1397,7 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
                       await reload();
                     }}>
               Unbind target
-            </button>
+            </GatedButton>
             {note ? <span className="detail">{note}</span> : null}
           </>
         ) : (
@@ -1438,7 +1438,7 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
               {String(latest.failure_reason).slice(0, 60)}
             </span>
           ) : null}
-          <button className="cap-btn primary ct-deploy-action" disabled={retrying || !!plan}
+          <GatedButton permission="deployment:create" className="cap-btn primary ct-deploy-action" disabled={retrying || !!plan}
                   data-testid="app-deployment-retry"
                   title="Create a new ChangeSet for the same commit and target"
                   onClick={async (e) => {
@@ -1455,13 +1455,13 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
                   }}>
             <ArrowsClockwise size={15} weight="bold" aria-hidden />{" "}
             {retrying ? "Planning…" : "Plan retry"}
-          </button>
+          </GatedButton>
           {/* RETRY IS NOT ALWAYS THE ANSWER.
               A deployment that fails because the target itself is wrong — no domain, or the
               port belongs to another app — fails identically every time it is retried, and
               the card offered nothing else. Unbinding is the other move, and it was reachable
               only from the database. */}
-          <button className="cap-btn ct-deploy-action"
+          <GatedButton permission="deployment_target:manage" className="cap-btn ct-deploy-action"
                   disabled={retrying || !latest.deployment_target_id}
                   data-testid="app-deployment-unbind"
                   title="Unbind this app from its host and port. Deployment history is kept."
@@ -1477,7 +1477,7 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
                     await reload();
                   }}>
             Unbind target
-          </button>
+          </GatedButton>
           {note ? <span className="detail">{note}</span> : null}
         </>
       ) : null}

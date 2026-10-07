@@ -12,6 +12,7 @@
  * Every state the operator can see is the API's record, re-read while it moves. Buttons are the
  * record's own `actions`, decided by the API — never a guess from status or what was last pressed.
  */
+import { GatedButton } from "../components/gated";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { onChanged } from "./changed";
 
@@ -121,10 +122,10 @@ export function StackDeployPanel({ projectId, actor }: { projectId: string; acto
                     </span>
                     {url ? <a className="detail" href={browserHref(url)} target="_blank" rel="noreferrer">{url}</a> : null}
                     {isAttached(t) ? (
-                      <button type="button" className="cap-btn primary" data-testid="stack-target-deploy"
+                      <GatedButton permission="deployment:create" type="button" className="cap-btn primary" data-testid="stack-target-deploy"
                               onClick={() => setDeployTo(t.id)}>
                         Deploy
-                      </button>
+                      </GatedButton>
                     ) : null}
                   </div>
                   {isAttached(t) ? null : (
@@ -252,9 +253,9 @@ function AddStackTarget({ projectId, actor, hosts, repos, suggested, onAdded }: 
       </div>
       {error ? <p className="detail" role="alert" data-testid="stack-add-target-error">{error}</p> : null}
       <div>
-        <button className="cap-btn primary" type="submit" disabled={busy}>
+        <GatedButton permission="deployment_target:manage" className="cap-btn primary" type="submit" disabled={busy}>
           {busy ? "Adding…" : "Add stack target"}
-        </button>
+        </GatedButton>
       </div>
     </form>
   );
@@ -351,9 +352,9 @@ function DeployRepository({ projectId, actor, repos, suggested, targets, targetI
       </p>
       {error ? <p className="detail" role="alert" data-testid="stack-deploy-error">{error}</p> : null}
       <div>
-        <button className="cap-btn primary" type="submit" disabled={busy || !repos.length}>
+        <GatedButton permission="deployment:create" className="cap-btn primary" type="submit" disabled={busy || !repos.length}>
           {busy ? "Planning…" : "Plan deployment"}
-        </button>
+        </GatedButton>
       </div>
     </form>
   );
@@ -493,14 +494,14 @@ export function StackDeploymentView({ deploymentId, actor, initial, onChanged, o
       {actions.length ? (
         <div className="sd-row" data-testid="stack-actions">
           {actions.includes("approve") ? (
-            <button type="button" className="cap-btn primary" disabled={busy} onClick={() => void decide("approve")}>
+            <GatedButton permission="decision:approve" type="button" className="cap-btn primary" disabled={busy} onClick={() => void decide("approve")}>
               Approve
-            </button>
+            </GatedButton>
           ) : null}
           {actions.includes("reject") ? (
-            <button type="button" className="cap-btn" disabled={busy} onClick={() => void decide("reject")}>
+            <GatedButton permission="decision:approve" type="button" className="cap-btn" disabled={busy} onClick={() => void decide("reject")}>
               Reject
-            </button>
+            </GatedButton>
           ) : null}
           {actions.includes("open") && d.open_url ? (
             <a className="cap-btn primary" data-testid="stack-open" href={browserHref(d.open_url)}
@@ -509,11 +510,11 @@ export function StackDeploymentView({ deploymentId, actor, initial, onChanged, o
             </a>
           ) : null}
           {actions.includes("rollback") ? (
-            <button type="button" className="cap-btn" disabled={busy} onClick={() => void rollback()}
+            <GatedButton permission="deployment:rollback" type="button" className="cap-btn" disabled={busy} onClick={() => void rollback()}
                     data-testid="stack-rollback"
                     title={`Plans a deployment of ${shortCommit(d.rollback_commit) || "the previous healthy commit"}, through the same approval`}>
               Roll back{d.rollback_commit ? ` to ${shortCommit(d.rollback_commit)}` : ""}
-            </button>
+            </GatedButton>
           ) : null}
         </div>
       ) : null}

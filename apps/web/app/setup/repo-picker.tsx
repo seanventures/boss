@@ -4,6 +4,7 @@
  * Pick, don't type. The token's own repository list, searchable; one repository is pre-selected.
  * Typing `owner/name` from memory turned a typo into a 404 that read as "no access".
  */
+import { GatedButton, useGate } from "../../components/gated";
 import React, { useMemo, useState } from "react";
 
 import type { TokenFound } from "../../lib/setup-types";
@@ -16,6 +17,7 @@ export function RepoPicker({ repos, busy, onConnect, exclude = [], preselect = n
   /** The repository this token takes over (an install's), picked already when it is listed. */
   preselect?: string | null;
 }) {
+  const connectGate = useGate("repository:register");
   const choices = useMemo(() => repos.filter((r) => !exclude.includes(r.full_name)),
                           [repos, exclude]);
   const [query, setQuery] = useState("");
@@ -48,7 +50,7 @@ export function RepoPicker({ repos, busy, onConnect, exclude = [], preselect = n
                     className="su-option" data-testid={`su-repo-option-${r.full_name}`}
                     onClick={() => setPicked(r.full_name)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && picked === r.full_name && !busy) {
+                      if (e.key === "Enter" && picked === r.full_name && !busy && connectGate.allowed) {
                         e.preventDefault();
                         onConnect(r.full_name);
                       }
@@ -61,10 +63,10 @@ export function RepoPicker({ repos, busy, onConnect, exclude = [], preselect = n
         ))}
         {shown.length === 0 ? <li className="su-faint" aria-disabled="true">No match</li> : null}
       </ul>
-      <button type="button" className="su-btn su-btn-primary" disabled={!picked || busy}
+      <GatedButton permission="repository:register" type="button" className="su-btn su-btn-primary" disabled={!picked || busy}
               data-testid="su-repo-connect" onClick={() => picked && onConnect(picked)}>
         Connect
-      </button>
+      </GatedButton>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { GatedButton } from "../../components/gated";
 import React, { useMemo, useState } from "react";
 
 import type { Bindable, CustomStep } from "../delivery-workflows-ui";
@@ -232,10 +233,10 @@ export function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine,
       {failure ? <div className="detail dw-define-error" role="alert" data-testid="dw-define-error">{failure}</div> : null}
 
       <div className="dw-define-actions">
-        <button type="submit" className="cap-btn" data-testid="dw-define-save"
+        <GatedButton permission="workflow:create" type="submit" className="cap-btn" data-testid="dw-define-save"
                 disabled={!!busy || !label.trim() || !bindingRef || choices === 0}>
           {editing ? "Save changes" : "Define"}
-        </button>
+        </GatedButton>
         <button type="button" className="cap-btn" onClick={onCancel}>Cancel</button>
       </div>
       {choices === 0 ? (

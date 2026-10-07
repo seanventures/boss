@@ -6,6 +6,7 @@
  * and the list with `Verify`. BOSS keeps a reference, never the value: the value field is
  * cleared the moment it is written through, and the only key material shown is a public half.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useState } from "react";
 
 import { showToast } from "../client-forms";
@@ -98,13 +99,13 @@ export function SecretsSheet({ projectId, actor, onClose, canWrite = true }: {
                    data-testid="inf-secret-value" placeholder="Never shown again" />
           </label>
           <div className="inf-actions">
-            <button type="submit" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-secret-upload">
+            <GatedButton permission="secret:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-secret-upload">
               {busy === "upload" ? "Uploading…" : "Upload"}
-            </button>
-            <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-secret-keygen"
+            </GatedButton>
+            <GatedButton permission="secret:manage" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-secret-keygen"
                     title="BOSS keeps the private half and shows you the public one" onClick={() => void keygen()}>
               {busy === "keygen" ? "Generating…" : "Generate keypair"}
-            </button>
+            </GatedButton>
             <ErrorLine error={error} testId="inf-secret-error" />
           </div>
         </form>

@@ -23,6 +23,7 @@
  * would have done the work anyway, and nobody has looked. `assigned` means somebody chose.
  */
 
+import { GatedButton } from "../components/gated";
 import { useCallback, useEffect, useState } from "react";
 
 import { AgentChip } from "./agent-chip";
@@ -142,12 +143,12 @@ export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = fals
                      note={SOURCE_LABEL[a.source] ?? a.source}
                      href={`?area=workforce&role=${encodeURIComponent(a.role_key)}`}>
             {readOnly ? null : (
-              <button type="button" className="aot-x" aria-label={`Remove ${nameOf(a.role_key)}`}
+              <GatedButton permission="work_item:manage" type="button" className="aot-x" aria-label={`Remove ${nameOf(a.role_key)}`}
                       disabled={!!busy}
                       onClick={() => void act({ action: "unassign", role_key: a.role_key },
                                               a.role_key)}>
                 {busy === a.role_key ? "…" : "✕"}
-              </button>
+              </GatedButton>
             )}
           </AgentChip>
         ))}
@@ -168,10 +169,10 @@ export function AgentsOnThis({ projectId, appName, actor, roles, readOnly = fals
             ))}
           </select>
         ) : (
-          <button type="button" className="aot-add" disabled={!!busy}
+          <GatedButton permission="work_item:manage" type="button" className="aot-add" disabled={!!busy}
                   data-testid="aot-add" onClick={() => setAdding(true)}>
             + Assign
-          </button>
+          </GatedButton>
         )}
       </div>
 

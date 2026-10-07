@@ -13,6 +13,7 @@
  * `Probed · <word>`. The `Serving <v>` chip appears only when the app reports a build other than
  * the one last deployed — the server says so (`serving_mismatch`); nothing is compared here.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 
 import { openDockAbout } from "../../lib/dock-subject";
@@ -147,8 +148,8 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
           </DrawerSection>
 
           <div className="inf-actions obs-dactions">
-            <button type="button" className="ag-btn ag-btn-primary" data-testid="obs-probe-now" disabled={busy} aria-busy={busy || undefined}
-                    title="Check this app's health now instead of waiting" onClick={probe}>{busy ? "Probing…" : "Probe now"}</button>
+            <GatedButton permission="observability:manage" type="button" className="ag-btn ag-btn-primary" data-testid="obs-probe-now" disabled={busy} aria-busy={busy || undefined}
+                    title="Check this app's health now instead of waiting" onClick={probe}>{busy ? "Probing…" : "Probe now"}</GatedButton>
             {d.facts.openUrl ? (
               <a className="inf-link" href={d.facts.openUrl} target="_blank" rel="noreferrer noopener" data-testid="obs-app-open" title={d.facts.openUrl}>Open app ↗</a>
             ) : <span className="inf-faint" data-testid="obs-app-open" title="Not serving yet">Not deployed</span>}

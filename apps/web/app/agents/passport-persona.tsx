@@ -10,6 +10,7 @@
  * names is marked here. A real person's name is a warning, not a refusal; the agent still never
  * claims to be them. The footer line saying it is an AI cannot be edited.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useMemo, useState } from "react";
 import { Sparkle, X } from "@phosphor-icons/react";
 
@@ -167,11 +168,11 @@ export function PassportPersona({ projectId, actor, roleKey, passport, onSaved, 
       <label className="ag-field">
         <span className="ag-field-label">
           About me <span className="ag-muted">{(p.about_me ?? "").length}/{LIMITS.about_me}</span>
-          <button type="button" className="ag-link" disabled={!!busy} data-testid="ag-draft-about"
+          <GatedButton permission="agent:create" type="button" className="ag-link" disabled={!!busy} data-testid="ag-draft-about"
                   title="One model call in its voice. Not saved until Save."
                   onClick={() => void draft()}>
             <Sparkle size={12} aria-hidden /> {busy === "draft" ? "Drafting…" : "Draft it"}
-          </button>
+          </GatedButton>
         </span>
         <textarea rows={3} value={p.about_me} placeholder="In first person" data-testid="ag-about-me"
                   onChange={(e) => set("about_me", e.target.value)} />
@@ -217,8 +218,8 @@ export function PassportPersona({ projectId, actor, roleKey, passport, onSaved, 
             Undo
           </button>
         ) : null}
-        <button type="submit" className="ag-btn ag-btn-primary" disabled={!dirty || !!busy || !passport}
-                data-testid="ag-persona-save">{busy === "save" ? "Saving…" : "Save"}</button>
+        <GatedButton permission="agent:update" type="submit" className="ag-btn ag-btn-primary" disabled={!dirty || !!busy || !passport}
+                data-testid="ag-persona-save">{busy === "save" ? "Saving…" : "Save"}</GatedButton>
       </footer>
     </form>
   );

@@ -1,5 +1,6 @@
 "use client";
 
+import { useGate } from "../../../../components/gated";
 import React, { useState, type Dispatch } from "react";
 import { GearSix, X } from "@phosphor-icons/react";
 
@@ -218,6 +219,7 @@ function UsedFor({ projectId, actor, workflowKey, usedFor }: {
 }) {
   const [value, setValue] = useState(usedFor?.[0] ?? "");
   const [busy, setBusy] = useState(false);
+  const applyGate = useGate("workflow:publish");
   const apply = async (workClass: string) => {
     setValue(workClass);
     if (!workClass) return;
@@ -228,7 +230,7 @@ function UsedFor({ projectId, actor, workflowKey, usedFor }: {
   };
   return (
     <Section label="Used for" tip="Which new work starts this workflow">
-      <select className="wf-select" value={value} disabled={busy} data-testid="wf-used-for"
+      <select {...applyGate.props} className="wf-select" value={value} disabled={(busy) || !applyGate.allowed} data-testid="wf-used-for"
               onChange={(e) => void apply(e.target.value)}>
         <option value="">Not used by default</option>
         {WORK_CLASSES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}

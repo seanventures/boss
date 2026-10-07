@@ -10,6 +10,7 @@
  * the editor passes it in, and the API hears it without saving it. With no model configured it
  * says so and where to fix it, rather than failing silently.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useRef, useState } from "react";
 import { Flask } from "@phosphor-icons/react";
 
@@ -80,8 +81,8 @@ export function PassportTest({ projectId, actor, roleKey, persona }: {
           <Flask size={13} aria-hidden /> Test{persona ? " · draft" : ""}
         </span>
         {PROBES.map((x) => (
-          <button key={x.key} type="button" className="ag-btn" disabled={busy} aria-pressed={probe === x.key}
-                  data-testid={`ag-probe-${x.key}`} onClick={() => void run(x.key)}>{x.label}</button>
+          <GatedButton permission="agent:test" key={x.key} type="button" className="ag-btn" disabled={busy} aria-pressed={probe === x.key}
+                  data-testid={`ag-probe-${x.key}`} onClick={() => void run(x.key)}>{x.label}</GatedButton>
         ))}
       </div>
       {probe ? (

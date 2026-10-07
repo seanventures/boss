@@ -1,5 +1,6 @@
 "use client";
 
+import { GatedButton } from "../components/gated";
 import { usd } from "../lib/money";
 import React, { useCallback, useEffect, useState } from "react";
 import { FilePdf, Hammer, Warning } from "@phosphor-icons/react";
@@ -267,11 +268,11 @@ export function RunReportPanel(
             <FilePdf size={15} weight="bold" aria-hidden /> Open the PDF
           </a>
         ) : (
-          <button type="button" className="rr-pdf" onClick={download} disabled={saving}
+          <GatedButton permission="workflow_run:control" type="button" className="rr-pdf" onClick={download} disabled={saving}
                   data-testid="run-report-save">
             <FilePdf size={15} weight="bold" aria-hidden />
             {saving ? "Preparing…" : "Download as PDF"}
-          </button>
+          </GatedButton>
         )}
       </div>
 
@@ -375,11 +376,11 @@ export function RunReportPanel(
               Started — run <code>{builtRunId}</code> is fixing these.
             </p>
           ) : (
-            <button type="button" className="rr-build" onClick={() => void buildFromThis()}
+            <GatedButton permission="workflow:publish" type="button" className="rr-build" onClick={() => void buildFromThis()}
                     disabled={building} data-testid="run-report-build">
               <Hammer size={15} weight="bold" aria-hidden />
               {building ? "Starting…" : "Build from this"}
-            </button>
+            </GatedButton>
           )}
           <ul className="rr-next">
             {nextSteps.map((n, i) => (

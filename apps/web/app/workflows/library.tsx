@@ -17,6 +17,7 @@
  * Words are labels; anything explanatory is a tooltip (spec section 4).
  */
 // React by name: the suite renders with renderToStaticMarkup (classic runtime).
+import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CalendarBlank, Check, Clock, DotsThree, ListNumbers, LockSimple, MagnifyingGlass, PencilSimple,
@@ -777,15 +778,15 @@ function SchedulePopover({ workflow, schedules, projectId, busy, inputSchema, on
                   <Warning size={12} aria-label="Did not start" data-testid={`wf-sched-refused-${s.id}`} />
                 ) : null}
               </span>
-              <button type="button" className="wf-link" disabled={!!busy}
+              <GatedButton permission="workflow_schedule:manage" type="button" className="wf-link" disabled={!!busy}
                       data-testid={`wf-schedule-toggle-${s.id}`}
-                      onClick={() => onToggle(s.id, !s.enabled)}>{s.enabled ? "Pause" : "Resume"}</button>
+                      onClick={() => onToggle(s.id, !s.enabled)}>{s.enabled ? "Pause" : "Resume"}</GatedButton>
               <button type="button" className="wf-link" disabled={!!busy}
                       onClick={() => setDraft(scheduleDraftFor(workflow, s))}>Edit</button>
-              <button type="button" className="wf-link wf-link-danger" disabled={!!busy}
+              <GatedButton permission="workflow_schedule:manage" type="button" className="wf-link wf-link-danger" disabled={!!busy}
                       aria-label="Remove schedule" onClick={() => onDelete(s.id)}>
                 <Trash size={12} aria-hidden />
-              </button>
+              </GatedButton>
             </li>
           ))}
         </ul>
@@ -874,18 +875,18 @@ function StepsTable({ projectId, customSteps, riskFloor, busy, onRemoveStep, onS
                   </td>
                   <td className="wf-libsteps-used" title="Workflows that place this step">Used in {n}</td>
                   <td className="wf-libsteps-act">
-                    <button type="button" className="wf-btn wf-btn-sm wf-btn-icon" aria-label={`Edit ${c.label}`}
+                    <GatedButton permission="workflow:create" type="button" className="wf-btn wf-btn-sm wf-btn-icon" aria-label={`Edit ${c.label}`}
                             disabled={!!busy} data-testid={`wf-step-edit-${c.step_key}`}
                             onClick={() => setModal({ edit: c })}>
                       <PencilSimple size={14} aria-hidden />
-                    </button>
-                    <button type="button" className="wf-btn wf-btn-sm wf-btn-icon" aria-label={`Remove ${c.label}`}
+                    </GatedButton>
+                    <GatedButton permission="workflow:create" type="button" className="wf-btn wf-btn-sm wf-btn-icon" aria-label={`Remove ${c.label}`}
                             disabled={!!busy || n > 0}
                             title={n > 0 ? "In use — take it out of those workflows first" : undefined}
                             data-testid={`wf-step-remove-${c.step_key}`}
                             onClick={() => onRemoveStep(c.step_key)}>
                       <Trash size={14} aria-hidden />
-                    </button>
+                    </GatedButton>
                   </td>
                 </tr>
               );

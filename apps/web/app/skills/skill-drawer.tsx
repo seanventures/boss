@@ -6,6 +6,7 @@
  * be a paragraph is a tooltip on its field. The save payload, the Edit loader (draftFromSkill)
  * and the delete consequences (deleteConsequence) are the ones the old form used.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useMemo, useState } from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { DotsThree, X } from "@phosphor-icons/react";
@@ -143,8 +144,8 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
             </button>
             {menu ? (
               <span className="kit-pop kit-menu" role="menu">
-                <button type="button" role="menuitem" onClick={() => void toggleOn()}>{skill.enabled ? "Turn off" : "Turn on"}</button>
-                <button type="button" role="menuitem" data-testid="kit-skill-delete" onClick={() => { setMenu(false); setConfirm(true); }}>Delete</button>
+                <GatedButton permission="skill:manage" type="button" role="menuitem" onClick={() => void toggleOn()}>{skill.enabled ? "Turn off" : "Turn on"}</GatedButton>
+                <GatedButton permission="skill:manage" type="button" role="menuitem" data-testid="kit-skill-delete" onClick={() => { setMenu(false); setConfirm(true); }}>Delete</GatedButton>
               </span>
             ) : null}
             {confirm && consequence ? (
@@ -158,7 +159,7 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
                   <>
                     <strong data-tip={consequence.confirm}>Remove {skill.label}?</strong>
                     <span className="kit-pop-actions">
-                      <button type="button" className="kit-btn kit-btn-danger kit-btn-sm" data-testid="kit-skill-delete-yes" onClick={() => void remove()}>Delete</button>
+                      <GatedButton permission="skill:manage" type="button" className="kit-btn kit-btn-danger kit-btn-sm" data-testid="kit-skill-delete-yes" onClick={() => void remove()}>Delete</GatedButton>
                       <button type="button" className="kit-btn kit-btn-sm" onClick={() => setConfirm(false)}>Cancel</button>
                     </span>
                   </>
@@ -280,8 +281,8 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
                       aria-label="Reviewed" onClick={() => set({ trusted: !draft.trusted })} />
             </div>
             <div className="kit-actions">
-              <button type="button" className="kit-btn kit-btn-primary" data-testid="skill-save"
-                      disabled={busy || !draft.label.trim()} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</button>
+              <GatedButton permission="skill:manage" type="button" className="kit-btn kit-btn-primary" data-testid="skill-save"
+                      disabled={busy || !draft.label.trim()} onClick={() => void save()}>{busy ? "Saving…" : "Save"}</GatedButton>
             </div>
           </Section>
         ) : (
@@ -299,7 +300,7 @@ export function SkillDrawer({ projectId, actor, skill, builtIn, creating, crew, 
                     <li key={c.role_key} className="kit-agent" data-on={on} data-testid={`kit-skill-agent-${c.role_key}`}>
                       <AgentAvatar agent={c.role_key} size={24} aiBadge={false} />
                       <span className="kit-agent-name" data-tip={c.display_name ?? c.role_key}>{agentName(c.role_key)}</span>
-                      <button type="button" role="switch" aria-checked={on} className="kit-switch"
+                      <GatedButton permission="agent_ability:assign" type="button" role="switch" aria-checked={on} className="kit-switch"
                               aria-label={`${agentName(c.role_key)} holds it`} onClick={() => void toggleAgent(c.role_key)} />
                     </li>
                   );

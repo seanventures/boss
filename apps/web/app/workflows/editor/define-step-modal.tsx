@@ -1,5 +1,6 @@
 "use client";
 
+import { useGate } from "../../../components/gated";
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "@phosphor-icons/react";
@@ -59,9 +60,11 @@ export function DefineStepModal({ projectId, edit, open, onClose, actor }: {
     };
   }, [open, projectId]);
 
+  const defineGate = useGate("workflow:create");
   if (!open || typeof document === "undefined") return null;
 
   const define = async (fields: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> => {
+    if (!defineGate.allowed) return { ok: false, error: defineGate.reason };
     setBusy(String(fields.label ?? "step"));
     try {
       const r = edit
