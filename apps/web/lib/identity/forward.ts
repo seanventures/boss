@@ -140,6 +140,40 @@ export function untrustedBrowserContext(headers: Headers): boolean {
   return site === "cross-site" && mode !== "navigate";
 }
 
+/** The console's origin as the browser addressed it: BOSS_CONSOLE_PUBLIC_ORIGIN, else what a proxy
+ *  forwarded, else the Host header. Null when none can be said (middleware.ts browserOrigin). */
+export function consoleOriginOf(headers: Headers): string | null {
+  const configured = (process.env.BOSS_CONSOLE_PUBLIC_ORIGIN ?? "").trim().replace(/\/+$/, "");
+  if (configured) return configured;
+  const host = (headers.get("x-forwarded-host") || headers.get("host") || "").split(",")[0].trim();
+  if (!host || !/^(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::\d{1,5})?$/i.test(host)) return null;
+  const proto = (headers.get("x-forwarded-proto") || "http").split(",")[0].trim().toLowerCase();
+  return `${proto === "https" ? "https" : "http"}://${host}`;
+}
+
+/**
+ * THE ORIGIN A SERVER-SIDE WRITE CARRIES (round 2, R2-WEB 4). The API's CSRF check on a write wants
+ * `Origin` = the console's origin plus the session's X-Boss-CSRF. A browser POST (a server action,
+ * a proxied write) sends its Origin, and that is what is forwarded. A browser GET does not, yet a
+ * GET to a route handler or a page can need a WRITING GET, which the console calls by its POST twin
+ * (lib/writing-get.ts). Those left with no Origin and were refused `403 csrf_failed` for every
+ * role (/api/kit, /api/mcp, /api/run-acts: "Can't reach BOSS API" on Skills & MCP).
+ *
+ * The GET carries the proof the API itself accepts for a writing GET: `Sec-Fetch-Site:
+ * same-origin` (the console's own page fetched it), or a top-level navigation the person started
+ * (`none` + `navigate`: a typed URL, a reload). Then the console speaks for its own origin. A
+ * cross-site GET (a link on another site, an image tag) gets no origin, so its write is refused
+ * exactly as before. tests/a-writing-get-carries-its-csrf.test.ts.
+ */
+export function forwardedWriteOrigin(incoming: Headers): string | null {
+  const origin = (incoming.get("origin") ?? "").trim();
+  if (origin) return origin.toLowerCase() === "null" ? null : origin;
+  const site = (incoming.get("sec-fetch-site") ?? "").trim().toLowerCase();
+  const mode = (incoming.get("sec-fetch-mode") ?? "").trim().toLowerCase();
+  if (site === "same-origin" || (site === "none" && mode === "navigate")) return consoleOriginOf(incoming);
+  return null;
+}
+
 /** Only the identity cookies, re-serialised. Any other cookie on the console's origin stays home. */
 export function identityCookieHeader(cookieHeader: string | null | undefined, opts: { stub?: boolean } = {}): string {
   if (!cookieHeader) return "";
