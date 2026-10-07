@@ -32,6 +32,21 @@ function names(list: { name: string }[]): string {
   return `${list.slice(0, -1).map((a) => a.name).join(", ")} and ${list[list.length - 1].name}`;
 }
 
+/**
+ * WHY A GRANT WAS REFUSED, IN WORDS (round 3: the sheet said only "That didn't work" when the API
+ * answered 403 github_access_lacking — a person with no GitHub access of their own granting an
+ * agent push on a repo). The API's own sentence when it wrote one (a bare code is never shown);
+ * the GitHub refusal names the repo and the fix.
+ */
+export function consentRefusal(e: unknown): string {
+  if (!(e instanceof IdentityError)) return "That didn't work";
+  if (e.code === "github_access_lacking") {
+    const repo = typeof e.body.repo === "string" && e.body.repo ? e.body.repo : "this repository";
+    return `Your own GitHub account can't push to ${repo}, so you can't let an agent do it for you. Connect your GitHub in My account › Agents, then try again.`;
+  }
+  return e.detail && /\s/.test(e.detail) ? e.detail : e.message;
+}
+
 export function ConsentSheet({ request, onClose }: { request: ConsentRequest; onClose: () => void }) {
   const [busy, setBusy] = useState<ConsentDuration["kind"] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,8 +66,7 @@ export function ConsentSheet({ request, onClose }: { request: ConsentRequest; on
       request.onDecided?.(grant.id);
       onClose();
     } catch (e) {
-      // The API's own sentence when it wrote one; a bare code (no spaces) is never shown.
-      setError(e instanceof IdentityError ? (e.detail && /\s/.test(e.detail) ? e.detail : e.message) : "That didn't work");
+      setError(consentRefusal(e));
       setBusy(null);
     }
   };
