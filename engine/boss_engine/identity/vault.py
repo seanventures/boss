@@ -24,6 +24,7 @@ retried in a loop with a refresh token the provider has already burned.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
 import logging
@@ -34,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterator, Mapping, Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -144,8 +145,8 @@ def _read_master_key(environ: Optional[Mapping[str, str]] = None) -> bytes:
     raw: Optional[str] = None
     path = (env.get(MASTER_KEY_FILE_ENV) or "").strip()
     if path:
-        if not Path(path).exists() and (env.get(MASTER_KEY_AUTOCREATE_ENV) or "1").strip() != "0":
-            _provision_key_file(Path(path))
+        # NEVER created here (#10): a read at runtime that finds no file is an error, not a new
+        # key. The file is created only by `boot()` at FIRST INSTALL (an empty vault), logged.
         try:
             raw = Path(path).read_text(encoding="utf-8").strip()
         except OSError as exc:
@@ -163,9 +164,49 @@ def _read_master_key(environ: Optional[Mapping[str, str]] = None) -> bytes:
     return key
 
 
-#: A compose install names a key FILE on its own volume and lets the API create it on first boot
-#: (no installer step). Set to 0 to require an operator-provided file.
+#: A compose install names a key FILE on its own volume and lets the API create it at FIRST
+#: INSTALL ONLY (an empty vault: no registered KEK, no item), explicitly and logged. Set to 0 to
+#: require an operator-provided file even then.
 MASTER_KEY_AUTOCREATE_ENV = "BOSS_MASTER_KEY_AUTOCREATE"
+
+
+class BootRefused(VaultError):
+    """The API must not start: the vault's key is wrong or missing for a vault that has data."""
+
+
+def boot(*, db: Any) -> str:
+    """The API's boot step for the vault (A53, #10). Refuses (BootRefused) — the caller must stop
+    the process, never serve on — when:
+      * the configured key does not match the registered KEK, or vault rows exist without one;
+      * the key file is missing for a vault that already has a KEK or items (restore the backup);
+      * no key is configured at all but the vault has data.
+    Creates the key file ONLY at first install (no KEK registered, no item) and logs it. Returns
+    the kek id, or "" when no key is configured and the vault is empty (nothing to protect)."""
+    from sqlalchemy import text
+
+    keks = int(db.execute(text("SELECT count(*) FROM identity_vault_keks WHERE retired_at IS NULL")).scalar_one())
+    items = int(db.execute(text("SELECT count(*) FROM identity_vault_items WHERE status <> 'revoked'")).scalar_one())
+    first_install = keks == 0 and items == 0
+    path = (os.environ.get(MASTER_KEY_FILE_ENV) or "").strip()
+    if path and not Path(path).exists():
+        if not first_install:
+            raise BootRefused("master_key_file_missing")
+        if (os.environ.get(MASTER_KEY_AUTOCREATE_ENV) or "1").strip() == "0":
+            raise BootRefused("master_key_file_missing")
+        _provision_key_file(Path(path))
+        log.warning("[identity] FIRST INSTALL: created the vault master key file %s. Back it up with "
+                    "the database; without it nothing in the vault can be decrypted.", path)
+    if not path and not os.environ.get(MASTER_KEY_ENV):
+        if first_install:
+            return ""
+        raise BootRefused("master_key_not_configured")
+    reset_master_key_cache()
+    try:
+        return check_master_key(db=db)
+    except MasterKeyMismatch as exc:
+        raise BootRefused("master_key_mismatch") from exc
+    except MasterKeyMissing as exc:
+        raise BootRefused(exc.code) from exc
 
 
 def _provision_key_file(path: Path) -> None:
@@ -317,7 +358,7 @@ def _open(db: Any, row: Mapping[str, Any], field_name: str = "secret") -> str:
 
 _COLUMNS = ("id, org_id, owner_principal_id, kind, provider, provider_subject, connection_name, "
             "granted_scopes, dek_wrapped, kek_id, secret_enc, secret_nonce, refresh_enc, refresh_nonce, "
-            "access_expires_at, refresh_expires_at, status, last_refreshed_at")
+            "access_expires_at, refresh_expires_at, status, last_refreshed_at, provider_revoke_pending")
 
 
 def store(*, org_id: str, owner_principal_id: Optional[str], kind: VaultItemKind,
@@ -393,58 +434,94 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _refresh_locked(db: Any, item_id: str) -> dict[str, Any]:
-    """Single flight: lock the row, re-read, refresh only if another caller has not already."""
+@contextlib.contextmanager
+def _own_transaction(db: Any) -> Iterator[Any]:
+    """A transaction of the vault's OWN, independent of the caller's: what the provider did (a
+    rotated refresh token, a refusal) must be on disk whatever the caller's business transaction
+    does next — a rollback there must never lose a refresh token the provider has already burned
+    (#12), nor un-mark a connection that needs re-auth (#11)."""
+    engine = getattr(db, "engine", None)
+    if engine is None or not hasattr(engine, "begin"):
+        yield db                                     # no engine to open one with: the caller's
+        return
+    with engine.begin() as own:
+        yield own
+
+
+def _mark_needs_reauth(db: Any, row: Mapping[str, Any], reason: str) -> None:
+    """In its own transaction: it sticks even when the caller's rolls back (#11)."""
     from sqlalchemy import text
 
     from . import audit
 
-    row = _load(db, item_id, for_update=True)
-    if row["status"] != "active":
-        raise VaultNeedsReauth(row["status"])
-    exp = row.get("access_expires_at")
-    if exp is None or exp - _now() > REFRESH_LEEWAY:
-        return row                                   # someone else refreshed while we waited
-    refresher = REFRESHERS.get(row.get("provider") or "")
-    if row.get("refresh_enc") is None or refresher is None:
-        return row
-    refresh_token = _open(db, row, "refresh")
-    try:
-        access, new_refresh, expires_in = refresher(refresh_token)
-    except RefreshRejected:
-        db.execute(text("UPDATE identity_vault_items SET status = 'needs_reauth' WHERE id = :id"),
-                   {"id": item_id})
+    with _own_transaction(db) as own:
+        own.execute(text("UPDATE identity_vault_items SET status = 'needs_reauth' WHERE id = :id "
+                         "AND status = 'active'"), {"id": row["id"]})
         audit.record(audit.SecurityEvent(org_id=row["org_id"], event_type="vault.connection.needs_reauth",
                                          outcome=audit.Outcome.FAILURE, target_type="vault_item",
-                                         target_id=item_id, details={"reason": "refresh_rejected"}),
-                     db=db)
+                                         target_id=row["id"], details={"reason": reason}), db=own)
+
+
+def _refresh_locked(db: Any, item_id: str) -> dict[str, Any]:
+    """Single flight, in the vault's OWN transaction: lock the row, re-read, refresh only if
+    another caller has not already, and COMMIT the rotated refresh token before returning — so the
+    caller's transaction rolling back afterwards cannot lose it (#12). A refusal marks the row
+    `needs_reauth`, also in its own transaction (#11)."""
+    from sqlalchemy import text
+
+    from . import audit
+
+    with _own_transaction(db) as own:
+        row = _load(own, item_id, for_update=True)
+        if row["status"] != "active":
+            raise VaultNeedsReauth(row["status"])
+        exp = row.get("access_expires_at")
+        if exp is None or exp - _now() > REFRESH_LEEWAY:
+            return row                               # someone else refreshed while we waited
+        refresher = REFRESHERS.get(row.get("provider") or "")
+        if row.get("refresh_enc") is None or refresher is None:
+            return row
+        refresh_token = _open(own, row, "refresh")
+        try:
+            access, new_refresh, expires_in = refresher(refresh_token)
+        except RefreshRejected:
+            rejected = True
+        else:
+            rejected = False
+        if not rejected:
+            kek_id, kek = _kek()
+            row_aad = _row_aad(row)
+            dek = _unwrap_dek(kek, bytes(row["dek_wrapped"]), row_aad)
+            senc, snon = _encrypt(dek, access, row_aad, "secret")
+            params: dict[str, Any] = {"id": item_id, "senc": senc, "snon": snon,
+                                      "exp": _now() + timedelta(seconds=int(expires_in))}
+            sets = "secret_enc = :senc, secret_nonce = :snon, access_expires_at = :exp, last_refreshed_at = now()"
+            if new_refresh:
+                renc, rnon = _encrypt(dek, new_refresh, row_aad, "refresh")
+                params.update(renc=renc, rnon=rnon)
+                sets += ", refresh_enc = :renc, refresh_nonce = :rnon"
+            try:
+                own.execute(text("SAVEPOINT vault_refresh"))
+                own.execute(text(f"UPDATE identity_vault_items SET {sets} WHERE id = :id"), params)
+                own.execute(text("RELEASE SAVEPOINT vault_refresh"))
+                write_failed = False
+            except Exception:  # noqa: BLE001
+                own.execute(text("ROLLBACK TO SAVEPOINT vault_refresh"))
+                write_failed = True
+            if not write_failed:
+                audit.record(audit.SecurityEvent(org_id=row["org_id"], event_type="vault.connection.refreshed",
+                                                 outcome=audit.Outcome.SUCCESS, target_type="vault_item",
+                                                 target_id=item_id), db=own)
+                fresh = _load(own, item_id)
+    if rejected:
+        _mark_needs_reauth(db, row, "refresh_rejected")
         raise VaultNeedsReauth("refresh_rejected")
-    kek_id, kek = _kek()
-    row_aad = _row_aad(row)
-    dek = _unwrap_dek(kek, bytes(row["dek_wrapped"]), row_aad)
-    senc, snon = _encrypt(dek, access, row_aad, "secret")
-    params: dict[str, Any] = {"id": item_id, "senc": senc, "snon": snon,
-                              "exp": _now() + timedelta(seconds=int(expires_in))}
-    sets = "secret_enc = :senc, secret_nonce = :snon, access_expires_at = :exp, last_refreshed_at = now()"
-    if new_refresh:
-        renc, rnon = _encrypt(dek, new_refresh, row_aad, "refresh")
-        params.update(renc=renc, rnon=rnon)
-        sets += ", refresh_enc = :renc, refresh_nonce = :rnon"
-    try:
-        db.execute(text("SAVEPOINT vault_refresh"))
-        db.execute(text(f"UPDATE identity_vault_items SET {sets} WHERE id = :id"), params)
-        db.execute(text("RELEASE SAVEPOINT vault_refresh"))
-    except Exception:  # noqa: BLE001
+    if write_failed:
         # The provider has rotated (the old refresh token is burned) but we could not keep the
         # new one. Never loop: the connection needs the person to reconnect.
-        db.execute(text("ROLLBACK TO SAVEPOINT vault_refresh"))
-        db.execute(text("UPDATE identity_vault_items SET status = 'needs_reauth' WHERE id = :id"),
-                   {"id": item_id})
+        _mark_needs_reauth(db, row, "refresh_write_failed")
         raise VaultNeedsReauth("refresh_write_failed")
-    audit.record(audit.SecurityEvent(org_id=row["org_id"], event_type="vault.connection.refreshed",
-                                     outcome=audit.Outcome.SUCCESS, target_type="vault_item",
-                                     target_id=item_id), db=db)
-    return _load(db, item_id)
+    return fresh
 
 
 def _owner_from_context(ctx: AuthContext) -> Optional[str]:
@@ -480,6 +557,10 @@ def _find_user_item(db: Any, connection: ConnectionRef, owner: str) -> dict[str,
         row = _load(db, found)
     if row.get("owner_principal_id") != owner or row.get("provider") != connection.provider:
         raise VaultForbidden("not_your_connection")
+    if row.get("kind") not in (VaultItemKind.OAUTH_USER.value, VaultItemKind.LEGACY_PAT.value):
+        # A person's connection, never another kind of their own secret (their TOTP seed) handed
+        # out as a "provider token" by naming its item id.
+        raise VaultForbidden("wrong_kind")
     return row
 
 
@@ -610,23 +691,21 @@ def revoke(item_id: str, *, ctx: AuthContext, reason: str, db: Any) -> None:
         decision = authz.check(ctx, "connection:revoke_any", ResolvedScope.org_level(row["org_id"]), db=db)
         if not decision.allowed:
             raise VaultForbidden("not_your_connection")
-    if row["status"] == "revoked":
+    if row["status"] == "revoked" and not row.get("provider_revoke_pending"):
         return
-    revoker = REVOKERS.get(row.get("provider") or "")
-    if revoker is not None and row["kind"] == VaultItemKind.OAUTH_USER.value:
-        try:
-            access = _open(db, row)
-            refresh = _open(db, row, "refresh") if row.get("refresh_enc") is not None else None
-            revoker(access, refresh)
-        except VaultDecryptError:
-            pass
-        except Exception:  # noqa: BLE001 — local revocation still happens
-            log.warning("provider revocation failed for vault item %s", item_id)
-    db.execute(text(
-        "UPDATE identity_vault_items SET status = 'revoked', dek_wrapped = :shred, "
-        "secret_enc = :shred, refresh_enc = NULL, refresh_nonce = NULL WHERE id = :id"),
-        {"id": item_id, "shred": secrets.token_bytes(60)})
-    details = {"reason": reason[:200]}
+    # PROVIDER FIRST, THEN LOCAL (#LOW): the local ciphertext is the only way to call the provider's
+    # revoke. If the provider call fails, the item is unusable here at once (status revoked) but
+    # NOT shredded: `retry_provider_revocations` tries again, and shreds only after it succeeds.
+    provider_ok = _revoke_at_provider(db, row)
+    if provider_ok:
+        db.execute(text(
+            "UPDATE identity_vault_items SET status = 'revoked', dek_wrapped = :shred, "
+            "secret_enc = :shred, refresh_enc = NULL, refresh_nonce = NULL, provider_revoke_pending = false "
+            "WHERE id = :id"), {"id": item_id, "shred": secrets.token_bytes(60)})
+    else:
+        db.execute(text("UPDATE identity_vault_items SET status = 'revoked', provider_revoke_pending = true "
+                        "WHERE id = :id"), {"id": item_id})
+    details = {"reason": reason[:200], "provider_revoked": provider_ok}
     event = (audit.SecurityEvent.from_context(ctx, "vault.connection.revoked", audit.Outcome.SUCCESS,
                                               target_type="vault_item", target_id=item_id, details=details)
              if ctx is not None else
@@ -636,18 +715,63 @@ def revoke(item_id: str, *, ctx: AuthContext, reason: str, db: Any) -> None:
     audit.record(event, db=db)
 
 
-def rotate_master_key(new_key: bytes, *, db: Any) -> int:
+def _revoke_at_provider(db: Any, row: Mapping[str, Any]) -> bool:
+    """True when the provider confirmed (or there is nothing to revoke there)."""
+    revoker = REVOKERS.get(row.get("provider") or "")
+    if revoker is None or row["kind"] != VaultItemKind.OAUTH_USER.value:
+        return True
+    try:
+        access = _open(db, row)
+        refresh = _open(db, row, "refresh") if row.get("refresh_enc") is not None else None
+    except VaultDecryptError:
+        return True                    # nothing usable to revoke with (or to leak)
+    try:
+        revoker(access, refresh)
+        return True
+    except Exception:  # noqa: BLE001
+        log.warning("provider revocation failed for vault item %s; it stays pending", row["id"])
+        return False
+
+
+def retry_provider_revocations(*, db: Any) -> int:
+    """Maintenance: retry the provider revoke of items revoked locally while the provider was
+    unreachable; shred each once it succeeds. Returns how many were completed."""
+    from sqlalchemy import text
+
+    done = 0
+    for item_id in db.execute(text("SELECT id FROM identity_vault_items WHERE provider_revoke_pending "
+                                   "FOR UPDATE SKIP LOCKED")).scalars().all():
+        row = _load(db, item_id)
+        if _revoke_at_provider(db, row):
+            db.execute(text("UPDATE identity_vault_items SET dek_wrapped = :shred, secret_enc = :shred, "
+                            "refresh_enc = NULL, refresh_nonce = NULL, provider_revoke_pending = false "
+                            "WHERE id = :id"), {"id": item_id, "shred": secrets.token_bytes(60)})
+            done += 1
+    return done
+
+
+def rotate_master_key(new_key: bytes, *, db: Any, actor_principal_id: str = "sys_host_cli") -> int:
     """Re-wrap every DEK under `new_key` in the caller's ONE transaction (the CLI is S5's). Data
     ciphertexts never change; only `dek_wrapped` and `kek_id`. Returns the number of rows re-wrapped.
     The caller then points BOSS_MASTER_KEY(_FILE) at the new key and calls reset_master_key_cache()."""
     from sqlalchemy import text
 
+    from . import audit
+
     if len(new_key) != 32:
         raise MasterKeyMissing("master_key_wrong_length")
+    # One rotation at a time, and no new row written under the old KEK while it runs: an advisory
+    # lock serialises rotations, and the KEK table lock blocks the boot check and `store` from
+    # registering against a key that is about to retire.
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext('identity_vault_rotate_master_key'))"))
+    db.execute(text("LOCK TABLE identity_vault_keks IN EXCLUSIVE MODE"))
     old_id, old = _kek()
     new_kek_id = kek_id_of(new_key)
-    rows = db.execute(text("SELECT id, owner_principal_id, provider, kind, dek_wrapped, kek_id "
-                           "FROM identity_vault_items WHERE status <> 'revoked' FOR UPDATE")).mappings().all()
+    if new_kek_id == old_id:
+        raise MasterKeyMismatch("same_key")
+    rows = db.execute(text("SELECT id, org_id, owner_principal_id, provider, kind, dek_wrapped, kek_id "
+                           "FROM identity_vault_items WHERE status <> 'revoked' OR provider_revoke_pending "
+                           "FOR UPDATE")).mappings().all()
     for r in rows:
         if r["kek_id"] != old_id:
             raise MasterKeyMismatch("row_under_unknown_kek")
@@ -659,4 +783,11 @@ def rotate_master_key(new_key: bytes, *, db: Any) -> int:
     db.execute(text("INSERT INTO identity_vault_keks (kek_id, kcv, source) VALUES (:k, :c, 'rotated') "
                     "ON CONFLICT (kek_id) DO UPDATE SET retired_at = NULL"),
                {"k": new_kek_id, "c": kcv_of(new_key)})
+    orgs = sorted({r["org_id"] for r in rows}) or sorted(
+        db.execute(text("SELECT id FROM orgs ORDER BY id LIMIT 1")).scalars().all())
+    for org in orgs:
+        audit.record(audit.SecurityEvent(org_id=org, event_type="vault.master_key_rotated",
+                                         outcome=audit.Outcome.SUCCESS, actor_principal_id=actor_principal_id,
+                                         actor_kind="system", target_type="vault_kek", target_id=new_kek_id,
+                                         details={"from": old_id, "to": new_kek_id, "rows": len(rows)}), db=db)
     return len(rows)

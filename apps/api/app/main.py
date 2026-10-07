@@ -1496,16 +1496,22 @@ async def lifespan(_: FastAPI):
     # IDENTITY VAULT AND SIGNING KEYS (A53, §7.8): register the master key's check value (or refuse
     # a key that does not match the registered one — never decrypt with a wrong key), then make
     # sure the run-token and actor signing keys exist, so the first delegated run can be minted.
+    # A WRONG OR MISSING KEY REFUSES BOOT (#10): the API never serves with a vault it cannot open,
+    # and the key file is created only at first install (vault.boot), never at runtime.
+    from boss_engine.identity import vault as _identity_vault
+    from boss_engine.identity import signing_keys as _identity_signing_keys
+
     try:
         from boss_engine.identity import migration as _identity_migration
-        from boss_engine.identity import signing_keys as _identity_signing_keys
-        from boss_engine.identity import vault as _identity_vault
+        from boss_engine.identity import tokens as _identity_tokens
 
+        _identity_tokens.ensure_egress_service_key_file()
         with begin(engine) as _connection:
-            _kek = _identity_vault.check_master_key(db=_connection)
+            _kek = _identity_vault.boot(db=_connection)
             _org = _identity_migration.default_org(_connection)
-            if _org:
+            if _org and _kek:
                 _identity_signing_keys.provision(org_id=_org, db=_connection)
+                _identity_signing_keys.require_keys(org_id=_org, db=_connection)
                 # Passports for every agent once the install has an Owner (idempotent; also
                 # repairs an empty ceiling an earlier upgrade left).
                 from boss_engine.identity import passports as _identity_passports
@@ -1515,8 +1521,12 @@ async def lifespan(_: FastAPI):
                 if _owners:
                     _identity_passports.upgrade_from_roles(org_id=_org, db=_connection,
                                                            default_sponsor=_owners[0])
-        print(f"[identity] vault ready (key {_kek}); signing keys provisioned")
-    except Exception as exc:  # noqa: BLE001 — the vault is refused, the API still serves
+        print(f"[identity] vault ready (key {_kek or 'none configured, empty vault'}); signing keys provisioned")
+    except (_identity_vault.BootRefused, _identity_signing_keys.SigningKeysMissing) as exc:
+        print(f"[identity] REFUSING TO START: {exc}. Restore the master key file (or BOSS_MASTER_KEY) "
+              "this vault was written with; BOSS never serves with a vault it cannot open.", flush=True)
+        raise
+    except Exception as exc:  # noqa: BLE001 — e.g. identity tables not migrated yet
         print(f"[identity] VAULT NOT READY: {type(exc).__name__}: {exc}. Delegated runs, TOTP "
               "and connected accounts are unavailable until the master key is fixed.", flush=True)
     yield
@@ -26259,14 +26269,13 @@ def start_workflow_run(payload: WorkflowRunStartRequest) -> WorkflowRunSummary:
         )
         # THE SAME PREFLIGHT AS THE DELIVERY DOOR. This low-level door starts product workflows
         # too, and one unchecked door is how a template that cannot run here gets started
-        # anyway. System workflows are not checked (refuse_unless_ready says why).
-        readiness: dict = {}
-        if not payload.parent_run_id:
-            readiness = _delivery_readiness_or_409(
-                connection, payload.project_id, version_id=payload.workflow_version_id,
-                work_class=(payload.selector_value
-                            if payload.selector_kind == "work_class" else ""),
-                run_input=dict(payload.input or {}), start_anyway=payload.start_anyway)
+        # anyway. System workflows are not checked (refuse_unless_ready says why). A CHILD run
+        # (parent_run_id) is checked too: naming a parent is not a way past the preflight (#2).
+        readiness: dict = _delivery_readiness_or_409(
+            connection, payload.project_id, version_id=payload.workflow_version_id,
+            work_class=(payload.selector_value
+                        if payload.selector_kind == "work_class" else ""),
+            run_input=dict(payload.input or {}), start_anyway=payload.start_anyway)
         try:
             run = workflow_runtime.start_run(
                 connection,

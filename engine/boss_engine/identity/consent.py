@@ -46,11 +46,18 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
                       permissions: Iterable[str], repos: Iterable[str] = (), task: str, run_id: Optional[str],
                       github_needs: Optional[dict[str, str]] = None, db: Any) -> Optional[Acting]:
     """The Acting (person + covering grant) the work runs under, or ConsentRequired.
-    None when no person in a human session is starting it, or the agents have no Passports."""
+
+    A person in a console session gets the consent sheet. A person using a PAT, an API key or an
+    MCP client, and a service account, get the same 409 when no grant of THEIR OWN covers the work
+    (#5): they cannot consent mid-request, and the shared credential is never the alternative —
+    they create a standing grant first. None only when there is no caller to act for (system
+    work, which never acts on anyone's behalf) or the agents have no Passports yet."""
     from . import grants, lineage, passports, runs
 
     ctx = lineage.current_context()
-    if ctx is None or not ctx.is_human_session:
+    if ctx is None or ctx.run_token is not None:
+        return None                                       # system work / inside a delegated run
+    if not (ctx.principal.is_person or ctx.principal.kind.value == "service_account"):
         return None
     agents = []
     for rk in role_keys:
@@ -67,6 +74,27 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
         return Acting(principal_id=ctx.principal.id, org_id=ctx.principal.org_id, grant_id=grant.id, run_id=run_id)
     pol = grants.policy_for(ctx.principal.org_id, db=db)
     needs = dict(github_needs or {"contents": "write", "pull_requests": "write"})
+    if not ctx.is_human_session:
+        if not lineage._enforced():
+            import logging
+
+            logging.getLogger("boss.identity.consent").warning(
+                "[identity] SHADOW: %s started %r with a key and no grant of its own covers it; under "
+                "BOSS_AUTHZ_MODE=enforce this is refused (409 consent_required).", ctx.principal.id, task[:80])
+            return None
+        # No sheet to show a key: say what is missing and where to grant it. Never a task-bound
+        # pending grant (that needs a person at a console).
+        raise ConsentRequired({
+            "error": "consent_required", "task": task[:200], "task_run_id": None,
+            "agents": [{"id": p.agent_id, "name": _name(db, p.agent_id), "role_key": p.role_key} for p in agents],
+            "permissions": sorted(needed), "projects": [project_id] if project_id else [],
+            "github": ({"repo": repos[0], "repos": repos, "permissions": needs} if repos else None),
+            "durations": [{"kind": "standing", "label": f"For {int(pol.delegation_default_days)} days",
+                           "days": int(pol.delegation_default_days)}],
+            "max_days": int(pol.delegation_max_days),
+            "hint": "No grant of yours covers this. Create one in the console (My account > Agents acting "
+                    "for me), then retry with the same key.",
+        })
     raise ConsentRequired({
         "error": "consent_required",
         "task": task[:200],
@@ -314,13 +342,20 @@ def require_for_workflow(db: Any, *, project_id: str, spec: Any, input_data: Any
     from . import grants, lineage
 
     wf_run = f"run_wf:{run_id}"
+    ctx = lineage.current_context()
+    ambient = lineage.current()
     if parent_run_id:
+        # A CHILD RUN INHERITS ITS PARENT'S AUTHORITY ONLY FOR THAT AUTHORITY'S OWN PERSON (#2):
+        # naming someone else's run as the parent is not a way to run under their grant. Allowed:
+        # the parent's person themself, or BOSS continuing the parent (a system caller, or the
+        # parent's own delegated run). Anyone else is refused before anything is written.
+        recorded = recorded_authority(db, parent_run_id)
+        if recorded is not None and not _may_continue(ctx, ambient, recorded, parent_run_id):
+            raise ParentNotYours("parent_run_not_yours")
         parent = acting_for_workflow_run(db, parent_run_id)
         if parent is not None:
             return Acting(principal_id=parent.principal_id, org_id=parent.org_id, grant_id=parent.grant_id,
                           run_id=f"{parent.run_id}/wf:{run_id}")
-    ctx = lineage.current_context()
-    ambient = lineage.current()
     human = ctx is not None and ctx.is_human_session
     if not human and (ambient is None or not ambient.grant_id or ambient.chain):
         return None
@@ -345,6 +380,33 @@ def require_for_workflow(db: Any, *, project_id: str, spec: Any, input_data: Any
             g, agent_ids=agent_ids, permissions=needed, project_id=project_id, repos=repos, run_id=wf_run):
         raise AuthorityLost("grant_no_longer_covers")
     return Acting(principal_id=ambient.principal_id, org_id=ambient.org_id, grant_id=g.id, run_id=wf_run)
+
+
+class ParentNotYours(_Base):  # type: ignore[misc,valid-type]
+    """A child workflow run named a parent whose authority belongs to someone else: 403."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        if _Base is Exception:
+            super().__init__(reason)
+        else:
+            super().__init__(status_code=403, detail={"error": "forbidden", "reason": reason})
+
+
+def _may_continue(ctx: Any, ambient: Optional[Acting], recorded: Acting, parent_run_id: str) -> bool:
+    """May this caller start a child of a run recorded under `recorded`?"""
+    if ctx is not None and ctx.run_token is not None:
+        rt = ctx.run_token
+        # The parent's own delegated run (or one nested in it) continuing itself.
+        return (rt.sub == recorded.principal_id and bool(rt.task.run_id)
+                and str(rt.task.run_id).startswith(f"run_wf:{parent_run_id}"))
+    if ctx is not None:
+        return ctx.principal.id == recorded.principal_id
+    if ambient is None:
+        return True                                    # in-process BOSS continuation (no request)
+    if ambient.system or str(ambient.principal_id).startswith("sys_"):
+        return True                                    # the worker continuing the run
+    return ambient.principal_id == recorded.principal_id
 
 
 def record_on_run(snapshot: Any, acting: Optional[Acting]) -> dict[str, Any]:

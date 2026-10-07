@@ -154,7 +154,13 @@ def enqueue_job(
         from boss_engine.identity import consent as _identity_consent
 
         on_behalf_of = _identity_consent.acting_for_workflow_run(connection, str(payload["workflow_run_id"]))
-    job_payload, identity_columns = _identity_lineage.stamp_job_row(payload, on_behalf_of)
+    if on_behalf_of is None and nobody_else and kind == "code.task" and (payload or {}).get("run_id"):
+        # A build re-enqueued by a system thread or the worker (retry, resume, spend-cap failover,
+        # reclaim) carries the authority it was STARTED under, never sys_worker (#6).
+        from boss_engine.identity import runs as _identity_runs
+
+        on_behalf_of = _identity_runs.original_build_authority(connection, str(payload["run_id"]))
+    job_payload, identity_columns = _identity_lineage.stamp_job_row(payload, on_behalf_of, kind=kind)
     boundary = resolve_job_data_boundary(
         connection, task_id, job_payload, data_boundary
     )

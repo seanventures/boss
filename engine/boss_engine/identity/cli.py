@@ -148,6 +148,44 @@ def _print(value: Any, as_json: bool = True) -> None:
     print(json.dumps(value, default=str, indent=2, sort_keys=True) if as_json else value)
 
 
+def rotate_master_key(new_key_file: str, *, db: Any) -> str:
+    """`boss identity rotate-master-key --new-key-file F` (IDENTITY.md §7.8): re-wrap every DEK under
+    the key in F in this ONE transaction (locked, audited as vault.master_key_rotated). The caller's
+    transaction commits; THEN the configured key file is replaced with F's key (atomically), so a
+    crash in between leaves a database under the new key and an old file — which boot refuses —
+    and F still holds the key to restore. Prints no key."""
+    import base64
+    import os
+
+    from . import vault
+
+    try:
+        raw = open(new_key_file, encoding="utf-8").read().strip()
+        new_key = base64.b64decode(raw, validate=True)
+    except (OSError, ValueError) as exc:
+        raise ValueError("the new key file is unreadable or not base64") from exc
+    if len(new_key) != 32:
+        raise ValueError("the new key must be 32 bytes")
+    count = vault.rotate_master_key(new_key, db=db, actor_principal_id=HOST_CLI_PRINCIPAL)
+    target = (os.environ.get(vault.MASTER_KEY_FILE_ENV) or "").strip()
+
+    def _swap() -> None:
+        if target:
+            tmp = target + ".rotating"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(raw + "\n")
+            os.replace(tmp, target)
+        vault.reset_master_key_cache()
+
+    from sqlalchemy import event
+
+    event.listen(db, "commit", lambda *_: _swap(), once=True)
+    where = (f"the key file {target} is replaced once this commits" if target else
+             "now set BOSS_MASTER_KEY to the new key and restart every BOSS process")
+    return f"re-wrapped {count} vault item(s); {where}. Keep {new_key_file} until BOSS restarts cleanly."
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     from ..db import begin
     from . import audit, migration, posture, shadow_report
@@ -172,6 +210,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     rep.add_argument("--json", action="store_true")
     sub.add_parser("posture", help="identity posture checks")
     sub.add_parser("claim-status", help="one line: unclaimed, or claimed and the legacy cutoff")
+    rmk = sub.add_parser("rotate-master-key", help="re-wrap every vault key under a new master key")
+    rmk.add_argument("--new-key-file", required=True,
+                     help="a file holding the new 32-byte key, base64 (never printed)")
     egk = sub.add_parser("egress-key", help="mint the egress service's own boss_sak_ key (shown once)")
     egk.add_argument("--revoke-others", action="store_true", help="end every earlier egress key now")
     args = parser.parse_args(argv)
@@ -187,6 +228,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 print(f"Recovered {done.principal_id} as an Owner. MFA was reset and their "
                       f"sessions ended.\nOpen this link within 15 minutes (single use):\n\n"
                       f"  {done.link}\n\nEvery Owner will see a banner about this for 7 days.")
+            elif args.cmd == "rotate-master-key":
+                print(rotate_master_key(args.new_key_file, db=db))
             elif args.cmd == "egress-key":
                 from . import tokens
 
