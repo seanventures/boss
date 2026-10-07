@@ -1846,6 +1846,25 @@ def j7(env: Env, j: Journey) -> None:
     if carol_in:
         gone = K.raw_fetch(cpage, "GET", "/v1/identity/me", csrf=False)
         gb = gone.get("body") if isinstance(gone.get("body"), dict) else {}
+        if gone["status"] != 401:
+            # Evidence for the finding: what the database says about her and her sessions, and
+            # what the API logged for her /me (no secret: ids, statuses and paths only).
+            j.note("carol after deactivation: " + s2.stack.psql(
+                "SELECT p.status || ' | sessions live=' || (SELECT count(*) FROM identity_sessions s WHERE "
+                "s.principal_id = p.id AND s.revoked_at IS NULL) || ' revoked=' || (SELECT count(*) FROM "
+                "identity_sessions s WHERE s.principal_id = p.id AND s.revoked_at IS NOT NULL) "
+                "FROM identity_principals p WHERE p.id = :'p'", {"p": carol_pid}))
+            j.note("api log: " + " | ".join(ln.strip()[-120:] for ln in s2.logs("api", 3000).splitlines()
+                                             if '/v1/identity/me ' in ln)[-700:])
+            jar = {c["name"]: c["value"] for c in cctx.cookies() if c["name"].lower().startswith("__host-boss")}
+            hdr = {"Cookie": "; ".join(f"{k}={v}" for k, v in jar.items())}
+            direct, _ = K.http("GET", f"{s2.api}/v1/identity/me", headers=hdr)
+            via, _ = K.http("GET", f"{web}/v1/identity/me", headers=hdr)
+            j.note(f"the same cookies ({sorted(jar)}): API direct {direct}, through the console {via}")
+            import os as _os
+            if _os.environ.get("FXD_HOLD_J7"):
+                (Path(env.args.out) / "j7-hold-cookie.txt").write_text(hdr["Cookie"])
+                time.sleep(int(_os.environ["FXD_HOLD_J7"]))
         j.check("her live session ends", gone["status"] == 401, expect="401",
                 actual=f"{gone['status']} " + short({k: gb.get(k) for k in ("principal_id", "email", "auth_method", "method", "legacy", "error")}))
     landed2 = _sso_sign_in(cpage, web, pid, "carol", pw["carol"], j, "carol-after-scim-disable")

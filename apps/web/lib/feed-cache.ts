@@ -29,7 +29,20 @@
  * Deliberately NOT cached: anything that is not a GET, anything not addressed to the control
  * plane, and (via BOSS_FEED_CACHE_MS=0) everything, if this ever needs to be switched off
  * without a rebuild.
+ *
+ * A PERSON'S ANSWER IS NEVER REUSED AFTER IT RETURNED (round 3, R3-STACK S2). The TTL entry for a
+ * session was the API's answer to a request the API had authorized BEFORE — so for five seconds
+ * after a revocation (SCIM deactivating someone, "Sign out everywhere", an admin disabling a
+ * person, a role taken away) the console kept answering that person's reads, /v1/identity/me
+ * included, with 200 and data, while the API itself already said 401. The TTL now applies only
+ * to requests that carry no session; a person's reads are collapsed while in flight (one
+ * request's answer, never an older one) and asked afresh after. And the browser's OWN calls
+ * through the /v1 proxy (NO_REUSE_HEADER) are never collapsed or kept at all: a request the
+ * browser sends after a revocation is decided by the API, every time.
  */
+
+/** Set by the /v1 proxy on the browser's own calls: never collapsed, never kept, stripped here. */
+export const NO_REUSE_HEADER = "x-boss-no-reuse";
 
 import { sessionTag } from "./identity/forward";
 
@@ -123,6 +136,15 @@ export function installFeedCache(apiUrl: string): void {
       : input instanceof URL ? input.toString()
       : input.url;
 
+    // The browser's own call through the /v1 proxy: never collapsed or kept; the marker removed.
+    const given = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    const direct = given.has(NO_REUSE_HEADER);
+    if (direct) {
+      given.delete(NO_REUSE_HEADER);
+      if (input instanceof Request) input = new Request(input, { headers: given });
+      init = { ...init, headers: given };
+    }
+
     // A WRITE MAKES EVERY KEPT READ STALE. The browser's own re-read after a press (give a
     // skill, then read the agent back) comes through a proxy in this process, so it hit the
     // TTL entry from just before the press and the page showed the old state: the chip it had
@@ -140,7 +162,7 @@ export function installFeedCache(apiUrl: string): void {
 
     // Only idempotent reads of the control plane. A POST that deploys something must never be
     // collapsed into another caller's POST, and a cached DELETE would be a genuine hazard.
-    if (ttl === 0 || method !== "GET" || !url.startsWith(apiUrl)
+    if (direct || ttl === 0 || method !== "GET" || !url.startsWith(apiUrl)
         || NEVER_REUSED.some((path) => url.slice(apiUrl.length).startsWith(path))) {
       return original(input as RequestInfo, init);
     }
@@ -149,10 +171,13 @@ export function installFeedCache(apiUrl: string): void {
     // session now (lib/identity/server-fetch.ts), and the same URL answers differently for an
     // Owner and a Viewer — so the key is the URL AND whose session asked. A request with no
     // session shares only with other sessionless requests.
-    const asker = sessionTag(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
+    const asker = sessionTag(given);
     const key = `${url}\u0000${asker}`;
+    // …and a person's answer is not kept once it returned (see the header): only sessionless
+    // reads use the TTL.
+    const keep = asker === "anon";
 
-    const hit = completed.get(key);
+    const hit = keep ? completed.get(key) : undefined;
     if (hit && Date.now() - hit.at < ttl) return fresh(hit.stored);
 
     const flight = inFlight.get(key);
@@ -176,7 +201,7 @@ export function installFeedCache(apiUrl: string): void {
         // Only successful responses are reusable. Caching a 500 for five seconds would turn a
         // blip into an outage that outlives it.
         const stored = await store(response);
-        if (response.ok) {
+        if (response.ok && keep) {
           completed.set(key, { at: Date.now(), stored });
           if (completed.size > 500) evict();
         }
