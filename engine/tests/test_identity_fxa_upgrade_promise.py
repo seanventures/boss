@@ -38,6 +38,9 @@ def shared(monkeypatch):
     monkeypatch.setattr(s, "legacy_console_password", CONSOLE_PASSWORD)
     monkeypatch.setattr(s, "legacy_console_api_key", CONSOLE_KEY)
     monkeypatch.setattr(signin, "DELAY_ENABLED", False)
+    # authz audits a denial or a critical allow on its OWN connection, which would wait on this
+    # test's open transaction: not what these tests are about
+    monkeypatch.setattr(authz, "_audit", lambda *args, **kwargs: None)
     return settings(legacy_console_password=CONSOLE_PASSWORD, legacy_console_api_key=CONSOLE_KEY,
                     api_key_principal_map={CONSOLE_KEY: "ceo"})
 
@@ -172,3 +175,70 @@ def test_a_failed_sign_in_is_recorded_by_the_real_audit_log_not_refused(db, shar
     if answer.status == 401:
         failed = events(db, "auth.login.failed")
         assert failed and str(failed[-1]["details"]["identifier"]).startswith("hmac:")
+
+
+# ---- the host tools keep working: their own service-account keys, never the shared key ---------
+
+def _key_ctx(db, key: str, *, header: str = "authorization"):
+    value = f"Bearer {key}" if header == "authorization" else key
+    req = RequestCredentials(method="GET", path="/v1/projects",
+                             headers={"user-agent": "boss.sh", header: value}, cookies={},
+                             client_ip="127.0.0.1")
+    return authn.authenticate(req, db=db)
+
+
+@pytest.mark.parametrize("header", ["authorization", "x-boss-api-key"])
+def test_the_host_tools_key_outlives_the_shared_key(db, shared, header):
+    from boss_engine.identity import host_tools
+
+    _claim(db, shared)
+    created = host_tools.issue_host_key(db, org_id=ORG)
+    assert created.key.startswith("boss_sak_")
+    ctx = _key_ctx(db, created.key, header=header)     # the rc5 tools' header works too
+    assert ctx.principal.id == host_tools.HOST_TOOLS_PRINCIPAL and ctx.legacy is None
+    # A step-up permission in a service account's key scopes works (IDENTITY.md §4.6): `boss
+    # connect` registers models (model_provider:manage, step-up) with this key.
+    decision = authz.check(ctx, "model_provider:manage", ResolvedScope.org_level(ORG), db=db)
+    assert decision.allowed, decision.reason
+    assert authz._step_up_exempt(ctx)  # noqa: SLF001
+    # (the support's checker for the rest: a real check of a critical permission, or a denial,
+    # is audited on its own connection, which would wait on this test's open transaction)
+    assert fake_check(db, ctx, "workflow_run:start", project="boss-dogfood").allowed
+    assert not fake_check(db, ctx, "user:invite").allowed          # never people and access
+    assert host_tools.host_tools_permissions() <= migration.CONSOLE_AFTER_CLAIM_SET
+    # no legacy cutoff applies to it, and it is not marked deprecated
+    assert legacy.deprecation_headers(ctx) == []
+    # issuing again ends the earlier key (boss identity host-key is a rotation)
+    again = host_tools.issue_host_key(db, org_id=ORG)
+    with pytest.raises(authn.AuthnError):
+        _key_ctx(db, created.key)
+    assert _key_ctx(db, again.key).principal.id == host_tools.HOST_TOOLS_PRINCIPAL
+
+
+def test_the_mcp_key_is_pinned_to_its_project(db, shared):
+    from boss_engine.identity import host_tools
+
+    _claim(db, shared)
+    db.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES ('other', "
+                    "'ws_boss', 'other', 'other') ON CONFLICT DO NOTHING"))
+    created = host_tools.issue_mcp_key(db, org_id=ORG, project_id="boss-dogfood")
+    ctx = _key_ctx(db, created.key)
+    assert ctx.credential.project_ids == frozenset({"boss-dogfood"})
+    assert fake_check(db, ctx, "workflow_run:start", project="boss-dogfood").allowed
+    assert not fake_check(db, ctx, "workflow_run:start", project="other").allowed
+    assert not fake_check(db, ctx, "user:invite").allowed
+    with pytest.raises(ValueError):
+        host_tools.issue_mcp_key(db, org_id=ORG, project_id="nope")
+    with pytest.raises(ValueError):
+        host_tools.issue_mcp_key(db, org_id=ORG, project_id="boss-dogfood", wanted=["no_such_cap"])
+
+
+def test_the_host_key_commands_are_host_shell_only():
+    """Reached from no HTTP route and no MCP tool, like recover-owner (the same pin)."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    for path in list((root / "apps/api/app").rglob("*.py")) + list(
+            (root / "engine/boss_engine/mcp").rglob("*.py")):
+        text_ = path.read_text(encoding="utf-8")
+        assert "issue_host_key" not in text_ and "issue_mcp_key" not in text_, path

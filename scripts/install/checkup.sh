@@ -106,7 +106,7 @@ env_file_error() {
   [ -f "$ENV_FILE" ] || return 0
   awk -v k="" -v mode=error "$_env_awk" "$ENV_FILE" 2>/dev/null || true
 }
-for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_DEFAULT_PROJECT_ID BOSS_API_KEY BOSS_PUBLIC_URL BOSS_API_BIND; do
+for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_DEFAULT_PROJECT_ID BOSS_HOST_API_KEY BOSS_API_KEY BOSS_PUBLIC_URL BOSS_API_BIND; do
   if [ -z "${!key:-}" ]; then
     value="$(env_value "$key")"
     [ -z "$value" ] || printf -v "$key" '%s' "$value"
@@ -125,7 +125,8 @@ case "$API_BIND" in
   *:*) API="http://[${API_BIND}]:${API_PORT}" ;;
   *) API="http://${API_BIND}:${API_PORT}" ;;
 esac
-KEY="${BOSS_API_KEY:-}"
+# The host tools' own key (boss identity host-key); the shared key only until it is issued.
+KEY="${BOSS_HOST_API_KEY:-${BOSS_API_KEY:-}}"
 AUTH=(); [ -n "$KEY" ] && AUTH=(-H "Authorization: Bearer $KEY")
 
 G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; N=$'\e[0m'
@@ -260,10 +261,10 @@ if [ -n "$blocked" ]; then warn "host: $blocked"; else ok "host: scheduling BOSS
 # account; the console password proves it is you, then works 30 days more as an Operator.
 claim=""
 if [ "${#DOCKER[@]}" -gt 0 ]; then
-  claim=$("${DOCKER[@]}" exec boss-community-api-1 python -m boss_engine.identity.cli claim-status 2>/dev/null | tail -n 1 || echo "")
+  claim=$("${DOCKER[@]}" exec -u boss boss-community-api-1 python -m boss_engine.identity.cli claim-status 2>/dev/null | tail -n 1 || echo "")
 fi
 case "$claim" in
-  unclaimed) warn "identity: not claimed yet — open $CONSOLE_URL/claim once to create your Owner account (boss password proves it is you)" ;;
+  unclaimed) warn "identity: not claimed yet — open $CONSOLE_URL/claim once to create your Owner account (boss password proves it is you; boss identity setup-link makes a one-hour link)" ;;
   claimed*) ok "identity: $claim" ;;
   *) : ;;   # an older image without the identity CLI: nothing to say
 esac

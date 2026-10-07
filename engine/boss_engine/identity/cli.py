@@ -12,6 +12,11 @@
     claim-status                             one line for `boss doctor`: claimed or not
     egress-key [--revoke-others]             mint the egress service's boss_sak_ key (sys_egress),
                                              shown once; it authenticates /v1/identity/introspect
+    setup-link                               a new single-use claim link (1 hour), while unclaimed
+    host-key [--quiet] [--keep-others]       mint the host tools' key (service account "Host
+                                             tools"; boss.sh keeps it in .env as BOSS_HOST_API_KEY)
+    mcp-key --project P [--permission X]...  mint one project's MCP key (service account "MCP
+             [--quiet]                       (P)"; make mcp-setup keeps it as BOSS_MCP_API_KEY)
     seed-test-accounts --org O --owner-email E --out F [--domain D] [--i-know]
                                              one person per access role, a custom role and a
                                              service account, as Owner E; credentials ONLY to F
@@ -21,9 +26,13 @@
 HOST SHELL ONLY, by construction: these functions are reached from no HTTP route and no MCP tool
 (test_identity_audit_recovery_is_host_only pins it). Run them where the database is:
 
-    docker compose exec api python -m boss_engine.identity.cli recover-owner --email you@example.com
+    docker compose -f scripts/install/community-compose.yml --env-file .env exec -u boss api \
+        python -m boss_engine.identity.cli recover-owner --email you@example.com
 
-Nothing here prints a secret except the one recovery link, to the terminal that asked for it.
+or, from any directory on the host, `boss identity recover-owner --email you@example.com`.
+
+Nothing here prints a secret except a recovery or setup link, or a key the host shell asked for,
+to the terminal that asked for it.
 """
 from __future__ import annotations
 
@@ -223,6 +232,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     rmk = sub.add_parser("rotate-master-key", help="re-wrap every vault key under a new master key")
     rmk.add_argument("--new-key-file", required=True,
                      help="a file holding the new 32-byte key, base64 (never printed)")
+    sub.add_parser("setup-link", help="a new single-use claim link, while the install has no Owner")
+    hk = sub.add_parser("host-key", help="mint the host tools' key (shown once)")
+    hk.add_argument("--quiet", action="store_true", help="print the key alone (for boss.sh)")
+    hk.add_argument("--keep-others", action="store_true", help="do not end the earlier host keys")
+    mk = sub.add_parser("mcp-key", help="mint one project's MCP key (shown once)")
+    mk.add_argument("--project", required=True)
+    mk.add_argument("--permission", action="append", dest="permissions", default=None,
+                    help="a capability (agent_chat, …) or a permission (workflow_run:start); repeat")
+    mk.add_argument("--quiet", action="store_true", help="print the key alone (for make mcp-setup)")
     egk = sub.add_parser("egress-key", help="mint the egress service's own boss_sak_ key (shown once)")
     egk.add_argument("--revoke-others", action="store_true", help="end every earlier egress key now")
     seed = sub.add_parser("seed-test-accounts", help="test accounts, one per role (credentials only to --out)")
@@ -253,6 +271,27 @@ def main(argv: Optional[list[str]] = None) -> int:
                                                           revoke_others=args.revoke_others)
                 print("The egress service's key (sys_egress). It is shown once; give it to boss-egress as "
                       f"its bearer for /v1/identity/introspect.\n\n  {created.key}\n")
+            elif args.cmd == "setup-link":
+                from .claim import setup_link_command
+
+                code, message = setup_link_command(db)
+                print(message, file=sys.stderr if code else sys.stdout)
+                return code
+            elif args.cmd in ("host-key", "mcp-key"):
+                from . import host_tools
+
+                if args.cmd == "host-key":
+                    created = host_tools.issue_host_key(db, org_id=org_id,
+                                                        revoke_others=not args.keep_others)
+                    what = ("The host tools' key (service account \"Host tools\"). It is shown once; "
+                            "keep it in .env as BOSS_HOST_API_KEY (boss.sh does this for you).")
+                else:
+                    created = host_tools.issue_mcp_key(
+                        db, org_id=org_id, project_id=args.project,
+                        wanted=args.permissions or host_tools.MCP_DEFAULT_CAPABILITIES)
+                    what = (f"The MCP key for project {args.project}. It is shown once; keep it in .env "
+                            "as BOSS_MCP_API_KEY (make mcp-setup does this for you).")
+                print(created.key if args.quiet else f"{what}\n\n  {created.key}\n")
             elif args.cmd == "seed-test-accounts":
                 from .seed_accounts import seed_test_accounts
 

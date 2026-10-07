@@ -613,7 +613,8 @@ def presents_identity_credential(conn: HTTPConnection) -> bool:
     scheme, _, value = raw.partition(" ")
     value = value.strip()
     if scheme.lower() not in ("bearer", "dpop") or not value:
-        return False
+        # a boss_ key in X-Boss-Api-Key (the rc5 host tools' header) is an identity credential too
+        return authn.api_key_header({k.lower(): v for k, v in conn.headers.items()}) is not None
     if authn.parse_api_key(value) is not None:
         return True
     return _is_run_token(value)
