@@ -362,6 +362,28 @@ def _member_ids(db: Any, org: str, members: Any) -> list[str]:
     return wanted
 
 
+def _group_grants_protected_role(db: Any, group_id: str) -> bool:
+    """Does a binding (made by an admin in BOSS) give this group a protected role?"""
+    return db.execute(text(
+        "SELECT 1 FROM identity_role_bindings b JOIN identity_access_roles r ON r.id = b.role_id "
+        "WHERE b.subject_type = 'group' AND b.subject_id = :g AND r.key = ANY(:keys) LIMIT 1"),
+        {"g": group_id, "keys": sorted(PROTECTED_ROLES)}).first() is not None
+
+
+def _guard_member_writes(db: Any, ctx: AuthContext, group_id: str, *, adding: Iterable[str] = (),
+                         removing: Iterable[str] = ()) -> None:
+    """Integration round 2 (c): a SCIM group membership write has the SAME limits as a SCIM user
+    write (M2): it may only move people THIS connection provisioned and never an Owner or Admin,
+    and it may never ADD anyone to a group an admin bound to Owner or Admin — otherwise a SCIM key
+    (or a compromised IdP) places Owners by group membership."""
+    adding, removing = list(adding), list(removing)
+    if adding and _group_grants_protected_role(db, group_id):
+        raise ScimError(403, "this group grants Owner or Admin in BOSS; SCIM cannot add people to it "
+                             "— change its members in BOSS")
+    for pid in dict.fromkeys(adding + removing):
+        _writable_user(db, ctx, pid)
+
+
 def _add_members(db: Any, group_id: str, member_ids: Iterable[str], by: str) -> None:
     for pid in member_ids:
         db.execute(text("INSERT INTO identity_group_members (group_id, principal_id, source, added_by) "
@@ -394,7 +416,9 @@ def create_group(db: Any, ctx: AuthContext, payload: dict[str, Any]) -> dict[str
     key = f"scim-{gid[4:]}"
     db.execute(text("INSERT INTO identity_groups (id, org_id, key, name, source, external_id) "
                     "VALUES (:id, :o, :k, :n, 'scim', :e)"), {"id": gid, "o": org, "k": key, "n": name, "e": external})
-    _add_members(db, gid, _member_ids(db, org, payload.get("members")), ctx.principal.id)
+    first = _member_ids(db, org, payload.get("members"))
+    _guard_member_writes(db, ctx, gid, adding=first)
+    _add_members(db, gid, first, ctx.principal.id)
     emit(db, org_id=org, event_type="scim.group.created", outcome=Outcome.SUCCESS, ctx=ctx,
          target_type="group", target_id=gid)
     _bump(db, org)
@@ -419,7 +443,10 @@ def replace_group(db: Any, ctx: AuthContext, group_id: str, payload: dict[str, A
                    {"n": str(payload["displayName"])[:200], "id": group_id})
     if "members" in payload:
         wanted = _member_ids(db, org, payload.get("members"))
-        _guard_owner_reach(db, org, removals=[(group_id, p) for p in _members_of(db, group_id) if p not in wanted])
+        current = _members_of(db, group_id)
+        _guard_owner_reach(db, org, removals=[(group_id, p) for p in current if p not in wanted])
+        _guard_member_writes(db, ctx, group_id, adding=[p for p in wanted if p not in current],
+                             removing=[p for p in current if p not in wanted])
         db.execute(text("DELETE FROM identity_group_members WHERE group_id = :g AND NOT (principal_id = ANY(:keep))"),
                    {"g": group_id, "keep": wanted})
         _add_members(db, group_id, wanted, ctx.principal.id)
@@ -443,18 +470,23 @@ def patch_group(db: Any, ctx: AuthContext, group_id: str, payload: dict[str, Any
                 k.lower() in FORBIDDEN_ATTRIBUTES for k in value)):
             raise ScimError(400, "SCIM cannot set access roles", "invalidValue")
         if root == "members" and kind == "add":
-            _add_members(db, group_id, _member_ids(db, org, value), ctx.principal.id)
+            adding = [p for p in _member_ids(db, org, value) if p not in _members_of(db, group_id)]
+            _guard_member_writes(db, ctx, group_id, adding=adding)
+            _add_members(db, group_id, adding, ctx.principal.id)
         elif root == "members" and kind == "remove":
             if "[" in path:   # members[value eq "usr_x"]
                 inner = path[path.index("[") + 1:path.rindex("]")]
                 _attr, member = _parse_eq_filter(inner, {"value"})
                 _guard_owner_reach(db, org, removals=[(group_id, member)])
+                _guard_member_writes(db, ctx, group_id, removing=[member])
                 db.execute(text("DELETE FROM identity_group_members WHERE group_id = :g AND principal_id = :p"),
                            {"g": group_id, "p": member})
             else:
                 removed = _member_ids(db, org, value) if value else None
                 _guard_owner_reach(db, org, removals=[(group_id, p) for p in (
                     _members_of(db, group_id) if removed is None else removed)])
+                _guard_member_writes(db, ctx, group_id,
+                                     removing=_members_of(db, group_id) if removed is None else removed)
                 if removed is None:
                     db.execute(text("DELETE FROM identity_group_members WHERE group_id = :g"), {"g": group_id})
                 else:
