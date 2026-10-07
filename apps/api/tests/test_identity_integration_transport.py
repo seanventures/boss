@@ -14,6 +14,7 @@ from apps.api.tests.identity_s1_world import (  # noqa: F401  (fixtures)
     csrf,
     fresh_client,
     make_user,
+    promote_fresh_mfa,
     sign_in,
     world,
 )
@@ -52,6 +53,8 @@ def test_s1_8_sign_in_is_reachable_and_the_session_reaches_routes(world, engine,
     assert client.get("/v1/auth/options").status_code == 200       # public, before any key
     res = sign_in(client, "ann@example.test")
     assert res.status_code == 200, res.text
+    # an Owner's session is a full one only after MFA (F3/H1: password-only is enrolment-only)
+    promote_fresh_mfa(engine, client.cookies.get("__Host-boss_session"))
     me = client.get("/v1/identity/me")
     assert me.status_code == 200 and me.json()["email"] == "ann@example.test"
     assert isinstance(me.json()["epoch"], int)
@@ -122,4 +125,5 @@ def test_in_shadow_an_owner_acts_as_the_console_did_so_an_upgrade_changes_nothin
     make_user(engine, "olive@example.test", role="owner", name="Olive")
     client = fresh_client()
     assert sign_in(client, "olive@example.test").status_code == 200
+    promote_fresh_mfa(engine, client.cookies.get("__Host-boss_session"))   # F3/H1: MFA done
     assert client.get("/v1/dashboard", params={"project_id": "boss-dogfood"}).status_code == 200
