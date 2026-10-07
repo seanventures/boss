@@ -829,3 +829,19 @@ def test_saml_metadata_names_the_acs(world, engine):
     res = fresh_client().get("/saml/v2/metadata")
     assert res.status_code == 200 and ACS in res.text and "WantAssertionsSigned=\"true\"" in res.text
 
+
+
+def test_the_provider_id_is_reserved_before_save_so_the_redirect_url_is_known_first(world, engine, idp):
+    """Google asks for the redirect URL before it gives the client id: the console reserves the
+    provider id when the Add sheet opens, shows /v1/auth/sso/{id}/callback, and creates with it."""
+    client, h = _owner_client(engine)
+    reserved = "idp_" + "a" * 26
+    body = {"id": reserved, "protocol": "oidc", "name": "Corp", "issuer": ISSUER, "client_id": CLIENT_ID,
+            "client_secret": "s3cr3t-client-value"}
+    res = client.post("/v1/identity/providers", json=body, headers=h)
+    assert res.status_code == 201, res.text
+    assert res.json()["id"] == reserved
+    again = client.post("/v1/identity/providers", json={**body, "issuer": ISSUER + "/other"}, headers=h)
+    assert again.status_code == 409 and again.json()["error"] == "provider_id_taken"
+    for bad in ("idp_short", "usr_" + "a" * 26, "idp_" + "A" * 26, "idp_" + "a" * 26 + "/x"):
+        assert client.post("/v1/identity/providers", json={**body, "id": bad}, headers=h).status_code == 422, bad

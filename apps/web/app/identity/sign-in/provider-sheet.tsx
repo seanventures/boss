@@ -17,7 +17,7 @@ import type { Provider } from "../../../lib/identity/types";
 import type { ProviderDetail } from "../../../lib/identity/types-sso";
 import { showToast } from "../../client-forms";
 import {
-  KINDS, createBody, emptyForm, formOf, idpUrls, missing, needsIssuer, patchBody, protocolOf, providerRefusal,
+  KINDS, createBody, emptyForm, formOf, idpUrls, missing, needsIssuer, patchBody, protocolOf, providerRefusal, reserveProviderId,
   type ProviderForm, type ProviderKind,
 } from "./provider-form";
 
@@ -41,7 +41,7 @@ export function CopyRow({ label, value, tip }: { label: string; value: string; t
 }
 
 /** The URLs for the IdP, or why they cannot be shown yet. */
-export function IdpUrls({ origin, provider }: { origin: string | null | undefined; provider: { id: string | null; protocol: Provider["protocol"]; saml_sp_entity_id?: string | null } }) {
+export function IdpUrls({ origin, provider }: { origin: string | null | undefined; provider: { id: string | null; protocol: Provider["protocol"]; saml_sp_entity_id?: string | null; saved?: boolean } }) {
   const urls = idpUrls(origin, provider);
   if (!origin) {
     return <p className="idn-note" data-copy="prose">Set the public URL (below) first: your IdP sends people back to it.</p>;
@@ -78,6 +78,8 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [advanced, setAdvanced] = useState(false);
+  // Reserved now, so the redirect URL can be pasted into the IdP BEFORE its client id exists.
+  const [reserved] = useState<string | null>(() => (initial ? null : reserveProviderId()));
   const guarded = useGuardedCall();
   const set = (change: Partial<ProviderForm>) => setForm((f) => (f ? { ...f, ...change } : f));
 
@@ -126,7 +128,7 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
         onClose();
       } else {
         const out = providerView(await guarded("Adding a provider changes how people sign in.",
-          () => idPost<unknown>("/v1/identity/providers", createBody(form))));
+          () => idPost<unknown>("/v1/identity/providers", createBody(form, reserved))));
         onSaved(out);
         setAdded(out);
       }
@@ -141,6 +143,14 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
   return (
     <Sheet title={editing ? `Edit ${initial!.name}` : `Add ${kindLabel}`} icon={editing ? <PencilSimple size={18} aria-hidden /> : <Plus size={18} aria-hidden />}
       onClose={onClose} wide testId="provider-sheet">
+      {!editing ? (
+        <section className="idn-sso-first" data-testid="provider-first">
+          <b>1. Paste this into {kindLabel}</b>
+          <IdpUrls origin={origin} provider={{ id: reserved, protocol, saved: false }} />
+          {kind === "google" ? <p className="idn-dim idn-small" data-copy="prose" data-testid="google-hint">While the Google app is in testing, add yourself as a Test user under Audience.</p> : null}
+        </section>
+      ) : null}
+      {!editing ? <b className="idn-sso-step">2. Its client ID and secret</b> : null}
       <div className="idn-form idn-sso-form">
         <Field id="pv-name" label="Name" tip="The button people see on the sign-in page">
           <input id="pv-name" className="idn-input" value={form.name} onChange={(e) => set({ name: e.target.value })} data-autofocus />

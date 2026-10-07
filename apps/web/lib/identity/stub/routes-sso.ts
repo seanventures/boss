@@ -30,8 +30,11 @@ export function registerSsoRoutes(on: StubOn): void {
       : preset === "microsoft" ? `https://login.microsoftonline.com/${String(b.tenant ?? "")}/v2.0` : String(b.issuer ?? "");
     if (!issuer || (preset === "microsoft" && !b.tenant)) return stubErr(422, "invalid_provider", { detail: preset === "microsoft" ? "the Microsoft preset needs your tenant id" : "issuer is required" });
     if (s.providers.some((p) => p.issuer?.toLowerCase() === issuer.toLowerCase())) return stubErr(409, "issuer_in_use");
+    // The id the Add sheet reserved (so the redirect URL was shown first), like the real route.
+    if (b.id !== undefined && !/^idp_[a-z2-7]{26}$/.test(String(b.id))) return stubErr(422, "invalid_provider", { detail: "bad id" });
+    if (b.id && s.providers.some((p) => p.id === b.id)) return stubErr(409, "provider_id_taken");
     const p = {
-      id: `idp_${rid()}`, name: String(b.name).trim(), protocol: protocol as "oidc", preset: preset as "generic", issuer,
+      id: b.id ? String(b.id) : `idp_${rid()}`, name: String(b.name).trim(), protocol: protocol as "oidc", preset: preset as "generic", issuer,
       client_id: protocol === "saml" ? null : String(b.client_id ?? "") || null, saml_sso_url: protocol === "saml" ? String(b.saml_sso_url ?? "") : null,
       has_client_secret: Boolean(b.client_secret), scopes: Array.isArray(b.scopes) ? b.scopes.map(String) : [], allowed_algs: ["RS256", "ES256", "EdDSA"],
       saml_sp_entity_id: (b.saml_sp_entity_id as string) ?? null, saml_certificate_count: Array.isArray(b.saml_certificates) ? b.saml_certificates.length : 0,
