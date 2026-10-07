@@ -5422,11 +5422,24 @@ def get_project_member(member_id: str, project_id: str) -> ProjectMemberSummary:
         return project_member_summary_from_service(member)
 
 
+def _refuse_legacy_access_under_enforce(carries_access: bool) -> None:
+    """Under enforce, the legacy member tables are not a grant path. A member or break-glass row
+    that carries roles or permissions was re-imported as identity bindings by the per-boot seed,
+    without §6.11 grant limits (an Admin could hand a placeholder an Owner-only capability). The
+    identity way is a role binding (with an expiry, for break-glass)."""
+    if carries_access and identity_guard.identity_enforced():
+        raise HTTPException(status_code=422, detail={
+            "error": "legacy_roles_retired",
+            "message": "Access is granted with role bindings now (Identity > People). A legacy "
+                       "member or break-glass record cannot carry roles or permissions."})
+
+
 @app.post("/v1/members", response_model=ProjectMemberSummary, status_code=201)
 @permit(P.ROLE_BINDING_ASSIGN, scope=Scope.project(body="project_id"))
 def upsert_project_member(
     payload: ProjectMemberUpsertRequest,
 ) -> ProjectMemberSummary:
+    _refuse_legacy_access_under_enforce(bool(payload.role_keys or payload.permissions))
     with begin(engine) as connection:
         require_project_actor(
             connection,
@@ -5473,6 +5486,7 @@ def list_org_members(org_id: str, project_id: str, actor: str = "ceo") -> OrgMem
 @app.post("/v1/org-members", response_model=OrgMemberSummary, status_code=201)
 @permit(P.ROLE_BINDING_ASSIGN, scope=Scope.org())
 def upsert_org_member(payload: OrgMemberUpsertRequest) -> OrgMemberSummary:
+    _refuse_legacy_access_under_enforce(bool(payload.role_keys or payload.permissions))
     with begin(engine) as connection:
         if not members.project_belongs_to_org(
             connection,
@@ -5526,6 +5540,7 @@ def list_break_glass_grants(
 def create_break_glass_grant(
     payload: BreakGlassGrantCreateRequest,
 ) -> BreakGlassGrantSummary:
+    _refuse_legacy_access_under_enforce(True)
     with begin(engine) as connection:
         require_project_actor(
             connection,
