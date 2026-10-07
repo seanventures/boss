@@ -125,7 +125,7 @@ describe("the provider form's model", () => {
   });
 
   it("an edit sends only what changed, and never an empty secret", () => {
-    const p = stubHandle(req("GET", "/v1/identity/providers", { cookies: signIn("param@kaappu.org").cookies })).body as { providers: Provider[] };
+    const p = stubHandle(req("GET", "/v1/identity/providers", { cookies: signIn("param@example.com").cookies })).body as { providers: Provider[] };
     const okta = p.providers.find((x) => x.id === "idp_okta")!;
     const f = { ...emptyForm("okta"), name: okta.name, issuer: okta.issuer!, client_id: okta.client_id!, scopes: okta.scopes.join(" "), domains: okta.domains.join(", "),
       jit: true, trust_mfa: true, groups_claim: "groups" };
@@ -145,7 +145,7 @@ describe("the provider form's model", () => {
 
 describe("Sign-in providers", () => {
   it("with none: explains, and offers Add provider; an Admin sees it greyed with the permission's name", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const el = await mount(owner, settings(owner, []));
     expect(q("[data-testid='providers-empty']")?.textContent).toContain("No single sign-on yet");
     expect(q("[data-testid='provider-add']")?.getAttribute("aria-disabled")).toBeNull();
@@ -161,7 +161,7 @@ describe("Sign-in providers", () => {
   });
 
   it("a failed read is an error with Try again, never 'no providers'", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const el = await mount(owner, <SignInSettings providers={[]} policy={null} legacy={null}
       failures={{ providers: { status: 503, code: "identity_unavailable" }, policy: { status: 500, code: "error" } }} />);
     expect(q("[data-testid='providers-error']")?.textContent).toContain("Identity is unreachable");
@@ -171,7 +171,7 @@ describe("Sign-in providers", () => {
   });
 
   it("adds an Okta provider: only allowlisted fields go, the redirect URL is shown, the card appears", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     await mount(owner, settings(owner, []));
     await click(q("[data-testid='provider-add']"));
     await click(q("[data-testid='kind-okta']"));
@@ -191,7 +191,7 @@ describe("Sign-in providers", () => {
   });
 
   it("edits only what changed; Remove confirms and turns it off", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const el = await mount(owner, settings(owner));
     expectClean(el);
     await click(q("[data-testid='provider-edit-idp_okta']"));
@@ -210,7 +210,7 @@ describe("Sign-in providers", () => {
   });
 
   it("maps an IdP group to a BOSS group, and shows a SCIM token once", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     await mount(owner, settings(owner));
     await click(q("[data-testid='provider-sync-idp_okta']"));
     const sheet = q("[data-testid='provider-sync']")!;

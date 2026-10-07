@@ -94,7 +94,7 @@ describe("the stub API answers with the real error contract", () => {
   it("names the missing permission, and asks for step-up only for step-up permissions", () => {
     const viewer = signIn("diego@acme.dev");
     expect(stubHandle(req("GET", "/v1/identity/users", { cookies: viewer.cookies })).body).toEqual({ error: "forbidden", permission: "user:read" });
-    const owner = signIn("param@kaappu.org");
+    const owner = signIn("param@example.com");
     const fresh = stubHandle(req("POST", "/v1/identity/users", { cookies: owner.cookies, csrf: owner.csrf, body: { emails: ["a@b.dev"], roles: ["viewer"] } }));
     expect(fresh.status).toBe(201); // signed in with a passkey just now: fresh
     const priya = signIn("priya@acme.dev");
@@ -113,7 +113,7 @@ describe("the stub API answers with the real error contract", () => {
   });
 
   it("only ever returns a key's secret in the one creating response", () => {
-    const owner = signIn("param@kaappu.org");
+    const owner = signIn("param@example.com");
     const made = stubHandle(req("POST", "/v1/identity/service-accounts/sva_ci_deployer/keys", {
       cookies: owner.cookies, csrf: owner.csrf, body: { name: "t", scopes: ["deployment:read"], expires_days: 90, replaces: "key_7f3k2q", overlap_hours: 1 },
     }));

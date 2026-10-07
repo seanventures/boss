@@ -6,7 +6,7 @@
  *   - CONSOLE HALF, today: a production build with the identity stub
  *       BOSS_IDENTITY_STUB=fixtures-not-for-production BOSS_API_URL=http://127.0.0.1:9 next start
  *     Fixture people (any password but "wrong"; MFA accepts any 6 digits but 000000; the stub's
- *     passkey prompt succeeds without a device): param@kaappu.org Owner · priya@acme.dev Admin ·
+ *     passkey prompt succeeds without a device): param@example.com Owner · priya@acme.dev Admin ·
  *     sam@acme.dev Operator (+Admin in acme-web) · diego@acme.dev Viewer · mei@acme.dev Auditor.
  *     First-run claims: set the cookie `boss_stub_claim` to setup_token | legacy_password |
  *     network_bridge before opening /claim. `boss_stub_bare=1` = nothing configured; `boss_stub_signup=1`.
@@ -31,7 +31,7 @@ export type Journey = {
 };
 
 export const PERSONA_EMAIL: Record<Exclude<Persona, "anonymous" | "network">, string> = {
-  owner: "param@kaappu.org", admin: "priya@acme.dev", operator: "sam@acme.dev", viewer: "diego@acme.dev", auditor: "mei@acme.dev",
+  owner: "param@example.com", admin: "priya@acme.dev", operator: "sam@acme.dev", viewer: "diego@acme.dev", auditor: "mei@acme.dev",
 };
 
 export const JOURNEYS: Journey[] = [

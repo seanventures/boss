@@ -88,14 +88,14 @@ function screens(who: ReturnType<typeof as>): [string, React.ReactElement][] {
   const groups = F.groups(NOW, people);
   const sam = people.find((p) => p.id === "usr_sam")!;
   // The data is read as the Owner (a Viewer's reads are refused); the screen renders as `who`.
-  const owner = as("param@kaappu.org");
+  const owner = as("param@example.com");
   const eff = owner.get<EffectiveAccess>("/v1/identity/principals/usr_sam/effective");
   const audit = owner.get<AuditPage>("/v1/identity/audit");
-  const passport = stubHandle(req("GET", "/v1/identity/agents/agt_forge/passport", { cookies: signIn("param@kaappu.org").cookies }), NOW).body as Passport;
-  const grant = stubHandle(req("GET", "/v1/identity/delegations/dlg_01JB7Q", { cookies: signIn("param@kaappu.org").cookies }), NOW).body as DelegationDetail;
+  const passport = stubHandle(req("GET", "/v1/identity/agents/agt_forge/passport", { cookies: signIn("param@example.com").cookies }), NOW).body as Passport;
+  const grant = stubHandle(req("GET", "/v1/identity/delegations/dlg_01JB7Q", { cookies: signIn("param@example.com").cookies }), NOW).body as DelegationDetail;
   const providers = F.providers(NOW) as unknown as Provider[];
   const policy = F.policy() as unknown as SecurityPolicy;
-  const posture = stubHandle(req("GET", "/v1/identity/posture", { cookies: signIn("param@kaappu.org").cookies }), NOW).body as Posture;
+  const posture = stubHandle(req("GET", "/v1/identity/posture", { cookies: signIn("param@example.com").cookies }), NOW).body as Posture;
   const out: [string, React.ReactElement][] = [
     ["overview", <Overview key="o" posture={posture} people={people} roles={roles} groups={groups} serviceAccounts={F.serviceAccounts(NOW)}
       agents={F.passports(NOW)} events={F.auditEvents(NOW).slice(0, 6) as never} />],
@@ -127,7 +127,7 @@ function screens(who: ReturnType<typeof as>): [string, React.ReactElement][] {
 }
 
 describe("no identity screen shows a raw permission key, error code, event name, id or jargon", () => {
-  for (const [label, email] of [["an Owner", "param@kaappu.org"], ["a Viewer", "diego@acme.dev"]] as const) {
+  for (const [label, email] of [["an Owner", "param@example.com"], ["a Viewer", "diego@acme.dev"]] as const) {
     it(`as ${label}`, async () => {
       const who = as(email);
       const found: string[] = [];

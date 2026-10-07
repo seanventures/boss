@@ -24892,7 +24892,7 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             #
             # The capability carries a default captain — a deploy is the Deployment Manager's.
             # A workflow may override it, which is the whole point when two steps run the same
-            # capability against different accounts: "publish to the Kaappu channel" and
+            # capability against different accounts: "publish to our own channel" and
             # "publish to a client's" are the same step kind and different agents. The spec is
             # the authority here exactly as it is for the capability above.
             named = step.get("captain")

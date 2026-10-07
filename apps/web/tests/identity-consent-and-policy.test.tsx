@@ -66,7 +66,7 @@ afterEach(() => {
 
 function meFor(role: keyof typeof ROLE_PERMISSIONS): { me: MeResponse; org: MePermissionsResponse } {
   const me = {
-    principal_id: "usr_param", kind: "user", display_name: "Param", email: "param@kaappu.org", hue: 4, org: { id: "org_1", name: "Acme" },
+    principal_id: "usr_param", kind: "user", display_name: "Param", email: "param@example.com", hue: 4, org: { id: "org_1", name: "Acme" },
     roles: [role], sign_in: { passkeys: 1, totp: true, sso: null, recovery_codes_remaining: 10, password: false },
     csrf_token: "csrf_1", step_up_fresh_until: new Date(NOW + 600_000).toISOString(), banners: [],
   } as unknown as MeResponse;

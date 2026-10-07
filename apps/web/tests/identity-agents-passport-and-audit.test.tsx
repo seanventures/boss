@@ -98,7 +98,7 @@ const PEOPLE = [{ id: "usr_sam", name: "Sam Okafor", hue: 6 }, { id: "usr_priya"
 
 describe("Passports", () => {
   it("an agent with no sponsor gets one assigned, by name", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const agents = owner.get<{ agents: Passport[] }>("/v1/identity/agents").agents;
     const orphan = agents.find((a) => !a.sponsor)!;
     expect(orphan).toBeDefined();
@@ -117,7 +117,7 @@ describe("Passports", () => {
 
   it("a Viewer sees Assign greyed with the permission's name", async () => {
     const viewer = as("diego@acme.dev");
-    const agents = as("param@kaappu.org").get<{ agents: Passport[] }>("/v1/identity/agents").agents;
+    const agents = as("param@example.com").get<{ agents: Passport[] }>("/v1/identity/agents").agents;
     const el = await mount(viewer, <PassportScreen initial={agents.find((a) => !a.sponsor)!} grants={[]} people={PEOPLE} />);
     const b = el.querySelector("[data-testid='assign-sponsor']")!;
     expect(b.getAttribute("aria-disabled")).toBe("true");
@@ -125,7 +125,7 @@ describe("Passports", () => {
   });
 
   it("calls the ceiling the access limit, and every Passport reads without raw ids or set notation", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const agents = owner.get<{ agents: Passport[] }>("/v1/identity/agents").agents;
     for (const a of agents.slice(0, 6)) {
       const el = await mount(owner, <PassportScreen initial={a} grants={null} people={PEOPLE} />);
@@ -137,7 +137,7 @@ describe("Passports", () => {
   });
 
   it("the agents list and its delegations read in words; an empty one says what to do", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const agents = owner.get<{ agents: Passport[] }>("/v1/identity/agents").agents;
     const delegations = owner.get<{ delegations: Delegation[] }>("/v1/identity/delegations").delegations;
     await mount(owner, <AgentsScreen agents={agents} delegations={delegations} />);
@@ -151,7 +151,7 @@ describe("Passports", () => {
   });
 
   it("a failed delegations read is said, never drawn as none", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const el = await mount(owner, <AgentsScreen agents={[]} delegations={null} delegationsFailure={{ status: 503, code: "identity_unavailable" }} />);
     expect(el.querySelector("[data-testid='error-state']")?.textContent).toContain("Identity is unreachable");
     expect(el.querySelector("[data-testid='delegations-empty']")).toBeNull();
@@ -161,7 +161,7 @@ describe("Passports", () => {
 
 describe("a delegation", () => {
   it("reads in plain words: chain rule, hops, tokens and egress", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const d = owner.get<DelegationDetail>("/v1/identity/delegations/dlg_01JB7Q");
     const el = await mount(owner, <DelegationView initial={d} />);
     expect(el.querySelector(".idn-chain-rule")?.textContent).toContain("Agents get only what");
@@ -169,7 +169,7 @@ describe("a delegation", () => {
   });
 
   it("with no chain, tokens or egress yet, says so", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const grant = owner.get<{ delegations: Delegation[] }>("/v1/identity/delegations").delegations[0];
     const el = await mount(owner, <DelegationView initial={detailFromGrant(grant)} />);
     expect(el.querySelector("[data-testid='tokens-empty']")).not.toBeNull();
@@ -187,7 +187,7 @@ describe("a delegation", () => {
 
 describe("the audit log", () => {
   it("names events in words, keeps the raw type in a tooltip, and never prints a token id", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const page = owner.get<AuditPage>("/v1/identity/audit");
     const withToken = page.events.find((e) => e.token_jti) ?? page.events[0];
     const el = await mount(owner, <AuditScreen initial={page} initialFilters={EMPTY_FILTERS} initialEvent={withToken.id} />);
@@ -199,7 +199,7 @@ describe("the audit log", () => {
   });
 
   it("a failed read is an ErrorState with Try again, never an empty log", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const el = await mount(owner, <AuditScreen initial={null} initialFilters={EMPTY_FILTERS} initialEvent={null} failure={{ status: 502, code: "error" }} />);
     const state = el.querySelector("[data-testid='error-state']")!;
     expect(state.textContent).toContain("Couldn't load the audit log");
@@ -209,7 +209,7 @@ describe("the audit log", () => {
   });
 
   it("ErrorState never shows the code it was given", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     for (const failure of [{ status: 503, code: "identity_unavailable" }, { status: 403, code: "forbidden", permission: "audit:read" }, { status: 500, code: "internal_error" }, { status: 0, code: "identity_unavailable" }]) {
       const el = await mount(owner, <ErrorState what="the audit log" failure={failure} />);
       expect(el.textContent).not.toContain(failure.code);

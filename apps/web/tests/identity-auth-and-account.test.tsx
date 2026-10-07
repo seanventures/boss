@@ -154,14 +154,14 @@ describe("Claim this BOSS", () => {
     const el = await mount(<ClaimFlow options={options({ path: "network_bridge", origin, expires_at: null, seats: SEATS })} />);
     expect(el.querySelector("[data-testid='claim-origin']")?.textContent).toContain(origin);
     type(el.querySelector("#claim-name"), "Param Gnanaguru");
-    type(el.querySelector("#claim-email"), "param@kaappu.org");
+    type(el.querySelector("#claim-email"), "param@example.com");
     const submit = el.querySelector("[data-testid='claim-submit']") as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
     await click(el.querySelector("[data-testid='claim-origin-confirm']"));
     expect(submit.disabled).toBe(false);
     await click(submit);
     const claim = calls.find((c) => c.url === "/v1/auth/setup/claim");
-    expect(claim?.body).toMatchObject({ origin, name: "Param Gnanaguru", email: "param@kaappu.org", seat: "ceo" });
+    expect(claim?.body).toMatchObject({ origin, name: "Param Gnanaguru", email: "param@example.com", seat: "ceo" });
     expect(calls.some((c) => c.url === "/v1/identity/me/passkeys" && c.method === "POST")).toBe(true);
     expect(el.querySelector("[data-testid='recovery-codes']")?.textContent).toContain(CODES[0]);
   });

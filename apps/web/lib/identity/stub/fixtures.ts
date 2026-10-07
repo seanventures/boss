@@ -70,7 +70,7 @@ export function people(now: number): Person[] {
   const release = { id: "grp_release", name: "Release", source: "manual" as const, provider: null };
   const oncall = { id: "grp_oncall", name: "On-call", source: "manual" as const, provider: null };
   return [
-    p("usr_param", "Param Gnanaguru", "param@kaappu.org", 4, {
+    p("usr_param", "Param Gnanaguru", "param@example.com", 4, {
       bindings: [bind("rb_1", "owner", "Owner", "org", "usr_param", now, { granted_by: "BOSS (claim)" })],
       sign_in: { passkeys: 2, totp: false, password: true, sso: null, idp_mfa: null }, last_seen_at: ago(now, 10_000),
       seat: "ceo", joined_by: null, last_seen_from: "Chennai, IN",

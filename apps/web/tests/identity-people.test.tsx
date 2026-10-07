@@ -80,7 +80,7 @@ function expectBudget(el: Element) {
 }
 
 function effective(scope?: string): EffectiveAccess {
-  const s = signIn("param@kaappu.org");
+  const s = signIn("param@example.com");
   return stubHandle(req("GET", `/v1/identity/principals/usr_sam/effective${scope ? `?project_id=${scope}` : ""}`, { cookies: s.cookies }), NOW).body as EffectiveAccess;
 }
 
@@ -266,7 +266,7 @@ describe("Identity › Groups", () => {
   });
 
   it("the stub refuses adding to an IdP group and revokes a key by id", () => {
-    const s = signIn("param@kaappu.org");
+    const s = signIn("param@example.com");
     const up = stubHandle(req("POST", "/v1/auth/step-up", { body: { method: "totp", code: "123456" }, cookies: s.cookies, csrf: s.csrf }), NOW);
     expect(up.status).toBe(200);
     const add = stubHandle(req("POST", "/v1/identity/groups/grp_builders/members", { body: { principal_id: "usr_mei" }, cookies: s.cookies, csrf: s.csrf }), NOW);
