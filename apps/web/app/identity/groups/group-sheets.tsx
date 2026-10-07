@@ -14,6 +14,7 @@ import { useGuardedCall, useIdentity } from "../../../components/identity/identi
 import { ErrorLine, RoleChip, Sheet } from "../../../components/identity/kit";
 import { IdentityError, idDelete, idPatch, idPost } from "../../../lib/identity/api";
 import type { AccessRole, Binding, Group } from "../../../lib/identity/types";
+import { grantReach } from "../../../lib/identity/grant-limit";
 import type { ProjectChoice } from "../../../lib/identity/types-people";
 
 /** The API's words for a refusal, never its code. */
@@ -158,11 +159,12 @@ export function BindRoleSheet({ group, roles, projects, onClose }: {
         <span className="idn-label" id="gb-role">Access role</span>
         <div className="idn-pick" role="radiogroup" aria-labelledby="gb-role">
           {roles.filter((r) => !r.system && !group.bindings.some((b) => b.role_id === r.id && b.scope === "org")).map((r) => {
-            const lack = held ? r.permissions.filter((p) => !held.has(p)).length : 0;
+            const { ok, reason } = grantReach(held, r);
+            const lack = !ok;
             return (
-              <button key={r.id} type="button" role="radio" aria-checked={role === r.id} aria-disabled={lack > 0 || undefined}
+              <button key={r.id} type="button" role="radio" aria-checked={role === r.id} aria-disabled={lack || undefined}
                 className="idn-pick-row" data-selected={role === r.id || undefined} data-testid={`gb-role-${r.key}`}
-                title={lack ? `You don't hold ${lack} of its permissions` : r.description}
+                title={reason || undefined}
                 onClick={() => { if (!lack) { setRole(r.id); if (!r.bindable_scopes.includes("project")) setWhere("org"); } }}>
                 <RoleChip roleKey={r.key} name={r.name} />
                 <span className="idn-dim">{r.permissions.length} permissions</span>

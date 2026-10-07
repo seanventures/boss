@@ -59,11 +59,13 @@ function Select({ label, value, onChange, options }: {
   );
 }
 
-export function PeopleList({ people, roles, groups: allGroups = [], invited: invitedCount = null, failure = null, requests = null, requestsFailure = null }: {
+export function PeopleList({ people, roles, groups: allGroups = [], invited: invitedCount = null, failure = null, requests = null, requestsProject = null, requestsFailure = null }: {
   people: Person[]; roles: AccessRole[]; groups?: Group[]; invited?: number | null;
   /** The users read failed: say so, never "No people yet". */
   failure?: ReadFailure | null;
   requests?: AccessRequestRow[] | null; requestsFailure?: ReadFailure | null;
+  /** Set when `requests` is one project's queue (a project Admin): decided at that project. */
+  requestsProject?: string | null;
 }) {
   const [f, setF] = useState<Filter>(NONE);
   const [inviting, setInviting] = useState(false);
@@ -96,7 +98,7 @@ export function PeopleList({ people, roles, groups: allGroups = [], invited: inv
         </CanButton>
       </div>
 
-      <AccessRequests requests={requests} roles={roles} failure={requestsFailure} />
+      <AccessRequests requests={requests} roles={roles} failure={requestsFailure} project={requestsProject} />
 
       {failure ? <ErrorState what="people" failure={failure} testId="people-error" /> : null}
 

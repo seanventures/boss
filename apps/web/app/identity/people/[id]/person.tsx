@@ -24,6 +24,7 @@ import { eventWords, methodWords, permissionName, seatName } from "../../../../l
 import type { ProjectChoice } from "../../../../lib/identity/types-people";
 import { ProjectPicker } from "../../groups/group-sheets";
 import { ExpiryField, expiresAt, type ExpiryChoice } from "../expiry";
+import { grantReach } from "../../../../lib/identity/grant-limit";
 import { IdentityError, idDelete, idPost } from "../../../../lib/identity/api";
 import { PERMISSION_META, PERMISSIONS, type Permission } from "../../../../lib/identity/permissions.gen";
 import type {
@@ -153,19 +154,18 @@ function AddAccessSheet({ person, roles, projects, onClose }: { person: Person; 
   const [busy, setBusy] = useState(false);
   const chosen = roles.find((r) => r.key === role);
   const canProject = !chosen || chosen.bindable_scopes.includes("project");
-  const missing = (r: AccessRole) => (held ? r.permissions.filter((p) => !held.has(p)) : []);
   return (
     <Sheet title={`Add access for ${person.display_name.split(" ")[0]}`} icon={<Plus size={18} aria-hidden />} onClose={onClose} testId="add-access-sheet">
       <div className="idn-field">
         <span className="idn-label" id="aa-role">Access role</span>
         <div className="idn-pick" role="radiogroup" aria-labelledby="aa-role">
           {roles.filter((r) => r.key !== "owner" || held?.has("owner:assign")).map((r) => {
-            const lack = missing(r);
-            const locked = lack.length > 0;
+            const { ok, reason } = grantReach(held, r);
+            const locked = !ok;
             return (
               <button key={r.id} type="button" role="radio" aria-checked={role === r.key} aria-disabled={locked || undefined}
                 className="idn-pick-row" data-selected={role === r.key || undefined}
-                title={locked ? `You don't hold this: ${lack.length} missing` : r.description}
+                title={reason || undefined}
                 onClick={() => { if (!locked) setRole(r.key); }}>
                 <RoleChip roleKey={r.key} name={r.name} />
                 <span className="idn-dim">{r.permissions.length} permissions</span>
