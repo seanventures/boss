@@ -29,6 +29,7 @@ import * as F from "../lib/identity/stub/fixtures";
 import { resetStub, stubHandle } from "../lib/identity/stub/server";
 import type { EffectiveAccess } from "../lib/identity/types";
 import { identityCopyAudit } from "./_helpers/identity-copy";
+import { needsWords } from "../lib/identity/words";
 import { req, signIn } from "./_helpers/identity-stub-session";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -112,7 +113,7 @@ describe("Identity › People", () => {
     const { el } = await mount(<PeopleList people={F.people(NOW)} roles={F.roles(NOW)} />, "viewer");
     const invite = el.querySelector("[data-testid='people-invite']")!;
     expect(invite.getAttribute("aria-disabled")).toBe("true");
-    expect(invite.getAttribute("title")).toBe("Needs user:invite · ask an Admin");
+    expect(invite.getAttribute("title")).toBe("Needs “Invite people” · ask an Admin");
   });
 });
 
@@ -175,7 +176,7 @@ describe("a person's profile", () => {
     for (const [id, p] of Object.entries(want)) {
       const b = viewer.el.querySelector(`[data-testid='${id}']`)!;
       expect(b.getAttribute("aria-disabled"), id).toBe("true");
-      expect(b.getAttribute("title")).toBe(`Needs ${p} · ask an Admin`);
+      expect(b.getAttribute("title")).toBe(needsWords(p));
     }
     await act(async () => { (viewer.el.querySelector("[data-testid='person-disable']") as HTMLButtonElement).click(); });
     expect(document.querySelector("[data-testid='confirm-disable']")).toBeNull();

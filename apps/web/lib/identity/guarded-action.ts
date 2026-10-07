@@ -15,6 +15,7 @@
  *
  * Isomorphic: "use server" modules and the client-side action modules (infra, cockpit) share it.
  */
+import { needsWords } from "./words";
 import { isPermission, type Permission } from "./permissions.gen";
 
 export const GUARDED = Symbol.for("boss.identity.guardedAction");
@@ -36,7 +37,7 @@ export function identityRefusal(status: number, body: unknown): IdentityRefusalI
 export function identitySentence(info: IdentityRefusalInfo): string {
   if (info.error === "step_up_required") return "Confirm it's you, then try again.";
   if (info.error === "unauthenticated") return "Your session ended — sign in again.";
-  return info.permission ? `Needs ${info.permission} · ask an Admin.` : "Not allowed · ask an Admin.";
+  return info.permission ? `${needsWords(info.permission)}.` : "Not allowed · ask an Admin.";
 }
 
 export function guardedAction<A extends unknown[], R>(permission: Permission, fn: (...args: A) => Promise<R>): (...args: A) => Promise<R> {

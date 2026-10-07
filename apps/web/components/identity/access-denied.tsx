@@ -9,7 +9,8 @@ import React, { useEffect, useState } from "react";
 import { LockSimple } from "@phosphor-icons/react";
 
 import { IdentityError, idGet, idPost } from "../../lib/identity/api";
-import { PERMISSION_META, type Permission } from "../../lib/identity/permissions.gen";
+import type { Permission } from "../../lib/identity/permissions.gen";
+import { Perm } from "./kit";
 import type { Grantor } from "../../lib/identity/types";
 import { adaptGrantor } from "../../lib/identity/adapt-people";
 import { showToast } from "../../app/client-forms";
@@ -39,7 +40,7 @@ export function AccessDenied({ permission, page, home = "/" }: { permission: Per
         <div className="idn-lock" aria-hidden><LockSimple size={24} weight="duotone" /></div>
         <h1>You can't open {page}</h1>
         <div className="idn-why-line">
-          <span>Needs</span> <code className="idn-perm" title={PERMISSION_META[permission].title}>{permission}</code>
+          <span>Needs</span> <Perm p={permission} />
         </div>
         <div className="idn-why-line idn-dim" data-testid="access-denied-grantors">
           {grantors && grantors.length ? `${role}: ${who}` : `Ask ${who}`}

@@ -106,7 +106,7 @@ describe("can()", () => {
   });
 
   it("says why it refuses, and never guesses across scopes", () => {
-    expect(can(snap, "deployment:production", here)).toMatchObject({ allowed: false, reason: "Needs deployment:production" });
+    expect(can(snap, "deployment:production", here)).toMatchObject({ allowed: false, reason: `Needs “${PERMISSION_META["deployment:production"].title}”` });
     expect(can(snap, "workflow:read", { kind: "project", projectId: "other" }).allowed).toBe(false);
     expect(can(snap, "workflow:read").allowed).toBe(false);
     expect(can(null, "workflow:read").allowed).toBe(false);

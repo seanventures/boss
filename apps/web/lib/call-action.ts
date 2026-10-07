@@ -4,6 +4,7 @@ import { runPressedAction } from "../app/press-relay";
 import { INTENT_FIELD, type Press, runPress } from "./api-write";
 import { currentMirror, wantsStepUp, wasForbidden } from "./identity/mirror";
 import type { Permission } from "./identity/permissions.gen";
+import { permissionName } from "./identity/words";
 
 /**
  * THE ONE WAY CLIENT CODE INVOKES A SERVER ACTION.
@@ -80,7 +81,7 @@ export function callAction<A extends unknown[], R>(
     const first = await once(...args);
     const mirror = currentMirror();
     if (mirror && wantsStepUp(first)) {
-      if (await mirror.stepUp(`This needs ${permission}.`)) return once(...args);
+      if (await mirror.stepUp(`This needs “${permissionName(permission)}”.`)) return once(...args);
     } else if (mirror && wasForbidden(first)) {
       mirror.refresh().catch(() => undefined);
     }
