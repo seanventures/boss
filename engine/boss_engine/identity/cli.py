@@ -139,7 +139,7 @@ def recover_owner(email: str, *, db: Any, origin: Optional[str] = None,
         db=db)
     bump_epoch(db, org_id, "owner recovered by host")
     # the token travels in the fragment: never in a request line the API or a proxy logs (A88)
-    link = links.url("recover_owner", _origin(db, org_id, origin), token)
+    link = links.url("owner_recovery", _origin(db, org_id, origin), token)
     return Recovery(pid, link, expires, reactivated, not had_owner)
 
 

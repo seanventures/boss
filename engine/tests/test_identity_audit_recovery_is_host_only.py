@@ -39,7 +39,7 @@ def test_recover_owner_restores_a_locked_out_owner_in_one_audited_step(db):
 
     done = cli.recover_owner("PARAM@example.com", db=db, now=NOW)
     assert done.principal_id == pid and done.reactivated
-    assert done.link.startswith("https://boss.example.com/reset#t=")   # links.AUTH_LINKS["recover_owner"]
+    assert done.link.startswith("https://boss.example.com/reset#t=")   # links.AUTH_LINKS["owner_recovery"]
     token = done.link.split("#t=", 1)[1]
     row = db.execute(text("SELECT kind, principal_id, expires_at FROM identity_auth_challenges "
                           "WHERE id_hash = :h"), {"h": token_hash(token)}).first()
@@ -79,8 +79,10 @@ def test_recover_owner_never_makes_a_bridge_principal_an_owner(db):
 def test_recovery_is_reachable_only_from_the_host_shell():
     pattern = r"recover_owner|from \.cli import|from \. import .*\bcli\b|identity\.cli import|" \
               r"identity import .*\bcli\b|import_module\(.*identity\.cli"
+    # Product code only: a test that drives the host command end to end (apps/api/tests/
+    # test_every_minted_link_lands_on_a_real_page.py) is the host shell's stand-in, not a route.
     hits = subprocess.run(["git", "grep", "-l", "-E", pattern, "--",
-                           "apps", "engine/boss_engine", "tools", "api"],
+                           "apps", "engine/boss_engine", "tools", "api", ":!apps/*/tests/*"],
                           cwd=REPO, capture_output=True, text=True).stdout.split()
     assert set(hits) <= {"engine/boss_engine/identity/cli.py"}, hits
     with pytest.raises(SystemExit):
