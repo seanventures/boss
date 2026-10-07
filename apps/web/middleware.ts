@@ -6,6 +6,7 @@ import {
 } from "./lib/console-session";
 import { hasSessionCookie, isPreviewCapabilityPath } from "./lib/identity/forward";
 import { isPublicConsolePath, PATH_HEADER } from "./lib/identity/pages";
+import { githubWebOrigins, HANDOFF_PATH } from "./lib/identity/github-manifest";
 import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
 import { consoleParams } from "./app/legacy-areas";
 
@@ -188,7 +189,9 @@ async function passThrough(request: NextRequest) {
   // previewed apps, nor the hand-written /api routes. Next reads the nonce from the request's
   // CSP header and stamps it on its own scripts; nothing else may run.
   const page = !request.nextUrl.pathname.startsWith("/v1/") && !request.nextUrl.pathname.startsWith("/api/");
-  const policy = page ? contentSecurityPolicy(btoa(crypto.randomUUID())) : null;
+  // The GitHub App manifest hand-off is the one page that may post a form to GitHub.
+  const formTargets = request.nextUrl.pathname === HANDOFF_PATH ? githubWebOrigins() : [];
+  const policy = page ? contentSecurityPolicy(btoa(crypto.randomUUID()), undefined, formTargets) : null;
   if (policy) forwarded.set("content-security-policy", policy);
   const response = NextResponse.next({ request: { headers: forwarded } });
   if (policy) response.headers.set("Content-Security-Policy", policy);
@@ -202,7 +205,8 @@ async function passThrough(request: NextRequest) {
  * come from Google Fonts, the page talks only to its own origin, and nothing may frame it. Dev
  * adds what Next's dev server needs (eval for fast refresh, ws for HMR).
  */
-export function contentSecurityPolicy(nonce: string, dev = process.env.NODE_ENV === "development"): string {
+export function contentSecurityPolicy(nonce: string, dev = process.env.NODE_ENV === "development",
+  formTargets: readonly string[] = []): string {
   return [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ""}`,
@@ -213,7 +217,7 @@ export function contentSecurityPolicy(nonce: string, dev = process.env.NODE_ENV 
     "frame-src 'self'",
     "frame-ancestors 'none'",
     "base-uri 'self'",
-    "form-action 'self'",
+    `form-action 'self'${formTargets.map((o) => ` ${o}`).join("")}`,
     "object-src 'none'",
   ].join("; ");
 }
