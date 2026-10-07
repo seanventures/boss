@@ -1216,7 +1216,9 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                         act_id=act_id, role_key=speaker.role_key, settings=settings)
         try:
             record_llm_call(engine_name=engine_name, stage="converse",
-                            latency_ms=int((time.monotonic() - started) * 1000), **call)
+                            latency_ms=int((time.monotonic() - started) * 1000),
+                            route_id=getattr(getattr(adapter, "_boss_route", None), "id", None),
+                            **call)
         finally:
             set_llm_context(act_id=None, role_key=None)
 
