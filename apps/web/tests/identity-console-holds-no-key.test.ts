@@ -113,7 +113,7 @@ describe("what the pass-through forwards", () => {
 });
 
 describe("the feed cache partitions by session", () => {
-  it("two people's identical reads are two requests; one person's repeat is one", async () => {
+  it("two people's identical reads are two requests; one person's repeat is asked again (never reused)", async () => {
     vi.stubEnv("BOSS_FEED_CACHE_MS", "5000");
     let calls = 0;
     const g = globalThis as unknown as { fetch: typeof fetch; __bossFeedCache?: true };
@@ -127,9 +127,11 @@ describe("the feed cache partitions by session", () => {
       const a1 = await (await g.fetch("http://api.internal:8000/v1/orgs", as("bss_alice"))).json();
       const a2 = await (await g.fetch("http://api.internal:8000/v1/orgs", as("bss_alice"))).json();
       const b1 = await (await g.fetch("http://api.internal:8000/v1/orgs", as("bss_bob"))).json();
-      expect(a2).toEqual(a1);
+      // A person's answer is not kept after it returned (round 3, S2: a revoked session's reads
+      // were answered from this cache for 5 s); two people never share one.
+      expect(a2).not.toEqual(a1);
       expect(b1).not.toEqual(a1);
-      expect(calls).toBe(2);
+      expect(calls).toBe(3);
     } finally {
       g.fetch = before;
       delete g.__bossFeedCache;
