@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { DotsThree, FileText, MagnifyingGlass, Plus, Sparkle } from "@phosphor-icons/react";
 
 import type { Ability, AbilityStatus } from "../../lib/kit-types";
+import { ReadFailure } from "../../components/locked-panel";
 import { mcpApi, type CrewMember, type KitWithCrew, type McpServer } from "../../lib/kit-api";
 import { openDockAbout } from "../../lib/dock-subject";
 import { HolderStack, StatusPill } from "./ability-card";
@@ -104,6 +105,8 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
   // with Retry, never "no skills".
   const [skillsError, setSkillsError] = useState<string | null>(null);
   const [serversError, setServersError] = useState<string | null>(null);
+  const [skillsStatus, setSkillsStatus] = useState(0);
+  const [serversStatus, setServersStatus] = useState(0);
   const loadSkills = useCallback(async () => {
     const mine = ++skillSeq.current;
     try {
@@ -115,8 +118,9 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
       if (mine !== skillSeq.current) return;
       const bad = [a, b, c].find((r) => !r.ok);
       if (bad) {
-        const said = await bad.json().catch(() => ({})) as { error?: string };
-        setSkillsError(String(said.error ?? `HTTP ${bad.status}`));
+        const said = await bad.json().catch(() => ({})) as { error?: string; reason?: string };
+        setSkillsStatus(bad.status);
+        setSkillsError(String(said.reason ?? said.error ?? `HTTP ${bad.status}`));
         return;
       }
       const [sa, sb, sc] = await Promise.all([a.json(), b.json(), c.json()]);
@@ -126,14 +130,14 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
       setAssignments((sc.assignments ?? []) as Assignment[]);
       setSkillsError(null);
     } catch (e) {
-      if (mine === skillSeq.current) setSkillsError(String((e as Error)?.message ?? e));
+      if (mine === skillSeq.current) { setSkillsStatus(0); setSkillsError(String((e as Error)?.message ?? e)); }
     }
   }, [enc]);
   const loadServers = useCallback(async (check: "none" | "stale" = "stale") => {
     const mine = ++serverSeq.current;
     const r = await mcpApi.list(projectId, check);
     if (mine !== serverSeq.current) return;
-    if (!r.ok) { setServersError(r.error); return; }
+    if (!r.ok) { setServersStatus(r.status ?? 0); setServersError(r.error); return; }
     setServers(r.data.items);
     setServersError(null);
   }, [projectId]);
@@ -228,11 +232,9 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
       </div>
 
       {(segment === "skills" ? skillsError : serversError) ? (
-        <div className="kit-bar-err" role="alert" data-testid="kit-lib-error">
-          <span data-tip={(segment === "skills" ? skillsError : serversError) ?? undefined}>Can&apos;t reach BOSS API</span>
-          <button type="button" className="kit-link" data-testid="kit-lib-retry"
-                  onClick={() => void (segment === "skills" ? loadSkills() : loadServers("none"))}>Retry</button>
-        </div>
+        <ReadFailure testId="kit-lib-error" retryTestId="kit-lib-retry"
+                     problem={segment === "skills" ? { text: skillsError ?? "", status: skillsStatus } : { text: serversError ?? "", status: serversStatus }}
+                     onRetry={() => void (segment === "skills" ? loadSkills() : loadServers("none"))} />
       ) : null}
 
       {segment === "skills" ? (
