@@ -32,9 +32,50 @@ def forwarded_allow_ips(trusted: str) -> str:
     return ",".join(keep)
 
 
+#: The ASGI scope key holding the SOCKET peer, recorded before the forwarded headers are applied
+#: (F2: identity's trusted-proxy decisions read the peer that actually connected; uvicorn's own
+#: proxy handling overwrote scope["client"] and kept nothing of it).
+RAW_PEER_KEY = "boss.raw_peer"
+APP_TARGET = "apps.api.serve:asgi"
+
+
+class RecordRawPeer:
+    """Outermost ASGI layer: keep the connecting peer, then hand on to the proxy-header layer."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") in ("http", "websocket") and scope.get("client"):
+            scope[RAW_PEER_KEY] = scope["client"][0]
+        await self.app(scope, receive, send)
+
+
+def build_asgi(app, trusted: str):
+    """The served app: the raw peer recorded, then X-Forwarded-For believed ONLY from
+    BOSS_TRUSTED_PROXIES (uvicorn's own middleware, applied here instead of by its CLI)."""
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    return RecordRawPeer(ProxyHeadersMiddleware(app, trusted_hosts=forwarded_allow_ips(trusted)))
+
+
+def __getattr__(name: str):
+    """`asgi` is built on first use (uvicorn imports APP_TARGET), so importing this module for its
+    helpers never imports the whole API."""
+    if name == "asgi":
+        from boss_engine.config import get_settings
+        from apps.api.app.main import app
+
+        built = build_asgi(app, str(getattr(get_settings(), "trusted_proxies", "") or ""))
+        globals()["asgi"] = built
+        return built
+    raise AttributeError(name)
+
+
 def uvicorn_argv(argv: list[str], trusted: str) -> list[str]:
-    """`argv` for uvicorn's CLI, the app and the forwarded-header trust filled in. An explicit
-    --forwarded-allow-ips on the command line is replaced: the one list is BOSS_TRUSTED_PROXIES."""
+    """`argv` for uvicorn's CLI with the app filled in. Forwarded headers are applied by the app
+    itself (build_asgi, from BOSS_TRUSTED_PROXIES), after the raw peer is recorded, so uvicorn's
+    own proxy handling is off and any --forwarded-allow-ips on the command line is dropped."""
     out: list[str] = []
     skip = False
     for arg in argv:
@@ -46,10 +87,13 @@ def uvicorn_argv(argv: list[str], trusted: str) -> list[str]:
             continue
         if arg.startswith("--forwarded-allow-ips="):
             continue
+        if arg in ("--proxy-headers", "--no-proxy-headers"):
+            continue
         out.append(arg)
-    if "apps.api.app.main:app" not in out:
-        out.insert(0, "apps.api.app.main:app")
-    return [*out, "--forwarded-allow-ips", forwarded_allow_ips(trusted)]
+    out = [a for a in out if a != "apps.api.app.main:app"]
+    if APP_TARGET not in out:
+        out.insert(0, APP_TARGET)
+    return [*out, "--no-proxy-headers"]
 
 
 def main(argv: list[str] | None = None) -> None:

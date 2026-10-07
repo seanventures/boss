@@ -84,7 +84,12 @@ def owner(world):
 
 def _get(label, world, headers):
     path = label.split(" ", 1)[1]
-    req = identity_matrix.request_for("GET", path, ROUTES[label].access, world.project_a)
+    access = ROUTES[label].access
+    req = identity_matrix.request_for("GET", path, access, world.project_a)
+    # A GET that writes only with some parameters (writes_on_get_if: GET /v1/mcp/servers probes
+    # only with check=stale|now) is asked the way that writes.
+    for name, values in access.writes_on_get_if:
+        req["params"] = {**req["params"], name: values[0]}
     req["headers"] = headers
     return req
 

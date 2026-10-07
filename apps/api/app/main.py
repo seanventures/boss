@@ -28,6 +28,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
+from starlette.convertors import Convertor as _StarletteConvertor, register_url_convertor as _register_url_convertor
 from starlette.routing import Match
 from sqlalchemy import text
 from uuid import uuid4
@@ -1955,15 +1956,21 @@ async def _identity_transport(request: Request, call_next):
     if ctx is None:
         return JSONResponse(status_code=401, content={"error": "unauthenticated"},
                             headers={"WWW-Authenticate": "Bearer"})
-    console_member = settings.api_key_principal_map.get(
-        getattr(settings, "legacy_console_api_key", "") or "") or None
-    member = await run_in_threadpool(identity_guard.legacy_member_for, ctx,
-                                     console_member=console_member)
+    enforced = identity_guard.route_mode(request.scope) == AuthzMode.ENFORCE
+    if enforced:
+        # F2/H7: under enforce the principal IS the actor everywhere — never the console's
+        # member (`ceo`) that legacy_member_for lends an Owner for the shadow-mode checks.
+        member = identity_guard.actor_for(ctx)
+    else:
+        console_member = settings.api_key_principal_map.get(
+            getattr(settings, "legacy_console_api_key", "") or "") or None
+        member = await run_in_threadpool(identity_guard.legacy_member_for, ctx,
+                                         console_member=console_member)
     principal_token = current_api_principal.set(member)
     authenticated_token = current_transport_authenticated.set(True)
     auth_method_token = current_auth_method.set("identity")
     try:
-        if identity_guard.route_mode(request.scope) != AuthzMode.ENFORCE:
+        if not enforced:
             read_project_id = requested_get_project_id(request)
             if read_project_id:
                 try:
@@ -2336,8 +2343,15 @@ def require_authenticated_actor_binding(
     connection=None,
 ) -> None:
     if identity_guard.identity_enforced():
-        # The guard decided this request against the catalogue (enforce): the claimed actor
-        # decides nothing (R6) and the legacy binding check has nothing left to add.
+        # The guard decided this request against the catalogue (enforce) and REPLACED the claimed
+        # actor with the verified principal's (identity_guard._bind_actor, F2/H7). An actor that
+        # still differs reached the handler some other way: refuse it, never act as it.
+        expected = identity_guard.request_actor()
+        if expected and actor and actor != expected and not identity_guard.is_worker_principal(
+                identity_guard.REQUEST_IDENTITY.get()):
+            raise HTTPException(status_code=403, detail={
+                "error": "forbidden", "reason": "actor_mismatch",
+                "message": "the actor is the signed-in principal; it cannot be named"})
         return
     principal = current_api_principal.get()
     if not principal:
@@ -2405,7 +2419,8 @@ def _may_act_as(connection, project_id: str, actor: str) -> bool:
     `executive_console` carries `ceo`, so the console's key may act as it)."""
     principal = current_api_principal.get()
     if identity_guard.identity_enforced():
-        return bool(principal) and principal == actor   # an identity principal is only itself
+        # an identity principal is only itself (F2/H7: its actor, never a claimed one)
+        return actor == (identity_guard.request_actor() or principal)
     if not principal or principal == actor:
         return True
     try:
@@ -2424,6 +2439,8 @@ def signed_in_actor(connection, project_id: str, claimed: str | None) -> str:
     redeploy as whichever route it went through. An exact MCP confirmation still records its
     independently authenticated reviewer."""
     claimed = str(claimed or "").strip()
+    if identity_guard.request_actor():
+        return identity_guard.request_actor()   # F2/H7: under enforce the actor is the principal
     if current_mcp_human_attribution.get():
         return _decision_action_actor(claimed)
     if claimed and _may_act_as(connection, project_id, claimed):
@@ -3401,11 +3418,35 @@ def scim_error(status_code: int, detail: str) -> JSONResponse:
     )
 
 
+class _LegacyScimProject(_StarletteConvertor):
+    """The legacy SCIM routes' `{project_id}`: any segment EXCEPT the identity SCIM endpoint's own
+    resource names. /scim/v2/{project_id}/Users used to match /scim/v2/Groups/Users (project
+    "Groups"), so which handler answered depended on registration order (F2, the route
+    collision); now the identity endpoint's literal paths can never be taken for a project."""
+    regex = (r"(?!(?:Users|Groups|ServiceProviderConfig|Schemas|ResourceTypes|Bulk|Me)(?:/|$))"
+             r"[^/]+")
+
+    def convert(self, value: str) -> str:
+        return value
+
+    def to_string(self, value: Any) -> str:
+        return str(value)
+
+
+_register_url_convertor("legacy_scim_project", _LegacyScimProject())
+
+
 def require_enterprise_scim_access(
     request: Request,
     connection,
     project_id: str,
 ) -> Optional[JSONResponse]:
+    if identity_guard.identity_enforced():
+        # F2/M1: retired under enforce. A shared, project-path bearer cannot say who provisions;
+        # the identity SCIM endpoint (/scim/v2/Users, /scim/v2/Groups) takes a boss_scim_ key
+        # bound to one identity provider.
+        return scim_error(410, "This SCIM endpoint is retired: provision through /scim/v2 with a "
+                               "boss_scim_ key (Settings › Identity providers).")
     configured_tokens = settings.enterprise_scim_bearer_token_values
     if not configured_tokens:
         return scim_error(
@@ -3468,8 +3509,23 @@ def scim_display_name(payload: dict[str, Any]) -> str:
     return str(user_name).strip() if user_name else ""
 
 
+class ScimRolesRefused(ValueError):
+    """F2/M1: the legacy project-path SCIM bearer is shared and unscoped; it provisions people and
+    groups, never BOSS roles or capabilities. Access is granted in BOSS (role bindings), or by
+    the identity SCIM endpoint's group mapping (/scim/v2 with a boss_scim_ key)."""
+
+
+def _refuse_scim_roles(extension: dict[str, Any]) -> None:
+    for key in ("roleKeys", "role_keys", "permissions"):
+        if scim_token_list(extension.get(key)):
+            raise ScimRolesRefused(
+                "The legacy SCIM endpoint cannot set BOSS roles or permissions; grant access in "
+                "BOSS (People › Access) or map the group with the identity SCIM endpoint.")
+
+
 def scim_group_payload_to_service(payload: dict[str, Any]) -> dict[str, Any]:
     extension = scim_extension(payload, BOSS_SCIM_GROUP_EXTENSION)
+    _refuse_scim_roles(extension)
     return {
         "external_id": payload.get("externalId") or payload.get("id"),
         "display_name": str(payload.get("displayName") or "").strip(),
@@ -3482,6 +3538,7 @@ def scim_group_payload_to_service(payload: dict[str, Any]) -> dict[str, Any]:
 
 def scim_user_payload_to_service(payload: dict[str, Any]) -> dict[str, Any]:
     extension = scim_extension(payload, BOSS_SCIM_USER_EXTENSION)
+    _refuse_scim_roles(extension)
     return {
         "external_id": payload.get("externalId") or payload.get("id"),
         "user_name": str(payload.get("userName") or "").strip().lower(),
@@ -4721,6 +4778,12 @@ def list_enterprise_scim_groups(project_id: str) -> EnterpriseScimGroupListRespo
 def upsert_enterprise_scim_group(
     payload: EnterpriseScimGroupUpsertRequest,
 ) -> EnterpriseScimGroupSummary:
+    if identity_guard.identity_enforced() and (payload.role_keys or payload.permissions):
+        # F2/M1: under enforce a SCIM record never carries BOSS access (it was a second, unaudited
+        # grant path through the identity migration); grant access with role bindings.
+        raise HTTPException(status_code=403, detail={
+            "error": "forbidden", "reason": "scim_roles_retired",
+            "message": "SCIM records cannot carry BOSS roles or permissions; use role bindings."})
     with begin(engine) as connection:
         require_project_actor(
             connection,
@@ -4768,6 +4831,12 @@ def list_enterprise_scim_users(project_id: str) -> EnterpriseScimUserListRespons
 def upsert_enterprise_scim_user(
     payload: EnterpriseScimUserUpsertRequest,
 ) -> EnterpriseScimUserSummary:
+    if identity_guard.identity_enforced() and (payload.role_keys or payload.permissions):
+        # F2/M1: under enforce a SCIM record never carries BOSS access (it was a second, unaudited
+        # grant path through the identity migration); grant access with role bindings.
+        raise HTTPException(status_code=403, detail={
+            "error": "forbidden", "reason": "scim_roles_retired",
+            "message": "SCIM records cannot carry BOSS roles or permissions; use role bindings."})
     with begin(engine) as connection:
         require_project_actor(
             connection,
@@ -4794,7 +4863,7 @@ def upsert_enterprise_scim_user(
         return enterprise_scim_user_summary_from_service(user)
 
 
-@app.get("/scim/v2/{project_id}/Groups")
+@app.get("/scim/v2/{project_id:legacy_scim_project}/Groups")
 @permit(P.SCIM_PROVISION)
 def scim_list_groups(
     project_id: str,
@@ -4812,7 +4881,7 @@ def scim_list_groups(
         return scim_list_response([scim_group_resource(group) for group in groups])
 
 
-@app.post("/scim/v2/{project_id}/Groups", status_code=201)
+@app.post("/scim/v2/{project_id:legacy_scim_project}/Groups", status_code=201)
 @permit(P.SCIM_PROVISION)
 async def scim_create_group(
     project_id: str,
@@ -4825,7 +4894,10 @@ async def scim_create_group(
         payload = await request.json()
         if not isinstance(payload, dict):
             return scim_error(400, "SCIM group payload must be a JSON object.")
-        service_payload = scim_group_payload_to_service(payload)
+        try:
+            service_payload = scim_group_payload_to_service(payload)
+        except ScimRolesRefused as error:
+            return scim_error(403, str(error))
         try:
             group = enterprise.upsert_scim_group(
                 connection,
@@ -4843,7 +4915,7 @@ async def scim_create_group(
         return scim_group_resource(group)
 
 
-@app.get("/scim/v2/{project_id}/Groups/{group_id}")
+@app.get("/scim/v2/{project_id:legacy_scim_project}/Groups/{group_id}")
 @permit(P.SCIM_PROVISION)
 def scim_get_group(
     project_id: str,
@@ -4861,7 +4933,7 @@ def scim_get_group(
         return scim_group_resource(group)
 
 
-@app.put("/scim/v2/{project_id}/Groups/{group_id}")
+@app.put("/scim/v2/{project_id:legacy_scim_project}/Groups/{group_id}")
 @permit(P.SCIM_PROVISION)
 async def scim_replace_group(
     project_id: str,
@@ -4876,7 +4948,10 @@ async def scim_replace_group(
         if not isinstance(payload, dict):
             return scim_error(400, "SCIM group payload must be a JSON object.")
         payload.setdefault("externalId", group_id)
-        service_payload = scim_group_payload_to_service(payload)
+        try:
+            service_payload = scim_group_payload_to_service(payload)
+        except ScimRolesRefused as error:
+            return scim_error(403, str(error))
         try:
             group = enterprise.upsert_scim_group(
                 connection,
@@ -4894,7 +4969,7 @@ async def scim_replace_group(
         return scim_group_resource(group)
 
 
-@app.delete("/scim/v2/{project_id}/Groups/{group_id}", status_code=204)
+@app.delete("/scim/v2/{project_id:legacy_scim_project}/Groups/{group_id}", status_code=204)
 @permit(P.SCIM_PROVISION)
 def scim_delete_group(
     project_id: str,
@@ -4923,7 +4998,7 @@ def scim_delete_group(
         return Response(status_code=204)
 
 
-@app.get("/scim/v2/{project_id}/Users")
+@app.get("/scim/v2/{project_id:legacy_scim_project}/Users")
 @permit(P.SCIM_PROVISION)
 def scim_list_users(
     project_id: str,
@@ -4945,7 +5020,7 @@ def scim_list_users(
         return scim_list_response([scim_user_resource(user) for user in users])
 
 
-@app.post("/scim/v2/{project_id}/Users", status_code=201)
+@app.post("/scim/v2/{project_id:legacy_scim_project}/Users", status_code=201)
 @permit(P.SCIM_PROVISION)
 async def scim_create_user(
     project_id: str,
@@ -4958,7 +5033,10 @@ async def scim_create_user(
         payload = await request.json()
         if not isinstance(payload, dict):
             return scim_error(400, "SCIM user payload must be a JSON object.")
-        service_payload = scim_user_payload_to_service(payload)
+        try:
+            service_payload = scim_user_payload_to_service(payload)
+        except ScimRolesRefused as error:
+            return scim_error(403, str(error))
         try:
             user = enterprise.upsert_scim_user(
                 connection,
@@ -4978,7 +5056,7 @@ async def scim_create_user(
         return scim_user_resource(user)
 
 
-@app.get("/scim/v2/{project_id}/Users/{user_id}")
+@app.get("/scim/v2/{project_id:legacy_scim_project}/Users/{user_id}")
 @permit(P.SCIM_PROVISION)
 def scim_get_user(
     project_id: str,
@@ -4996,7 +5074,7 @@ def scim_get_user(
         return scim_user_resource(user)
 
 
-@app.put("/scim/v2/{project_id}/Users/{user_id}")
+@app.put("/scim/v2/{project_id:legacy_scim_project}/Users/{user_id}")
 @permit(P.SCIM_PROVISION)
 async def scim_replace_user(
     project_id: str,
@@ -5011,7 +5089,10 @@ async def scim_replace_user(
         if not isinstance(payload, dict):
             return scim_error(400, "SCIM user payload must be a JSON object.")
         payload.setdefault("externalId", user_id)
-        service_payload = scim_user_payload_to_service(payload)
+        try:
+            service_payload = scim_user_payload_to_service(payload)
+        except ScimRolesRefused as error:
+            return scim_error(403, str(error))
         try:
             user = enterprise.upsert_scim_user(
                 connection,
@@ -5031,7 +5112,7 @@ async def scim_replace_user(
         return scim_user_resource(user)
 
 
-@app.delete("/scim/v2/{project_id}/Users/{user_id}", status_code=204)
+@app.delete("/scim/v2/{project_id:legacy_scim_project}/Users/{user_id}", status_code=204)
 @permit(P.SCIM_PROVISION)
 def scim_delete_user(
     project_id: str,
@@ -5169,6 +5250,11 @@ def onboard_org_endpoint(payload: OrgOnboardBody):
     """Onboard a new organization: create org → workspace → project and seed it
     with the common defaults (budget policy, members, packs, agent modules,
     entitlement sources, MCP servers). No auth yet — this is the admin action."""
+    if identity_guard.identity_enforced():
+        # F2/M5: identity is one org per install. A second org would have no Owner, no bindings
+        # and no claim, and nothing in BOSS yet keeps two orgs apart end to end.
+        raise HTTPException(status_code=409, detail={
+            "error": "single_org", "message": "This BOSS runs one organization."})
     payload = payload.payload()
     name = str(payload.get("name") or "").strip()
     if not name:
@@ -6252,7 +6338,8 @@ def execute_github_community_job(
 
 
 @writing_get(app, "/v1/mcp/servers")
-@permit(P.MCP_SERVER_READ, scope=Scope.project(query="project_id"), writes_on_get=True)
+@permit(P.MCP_SERVER_READ, scope=Scope.project(query="project_id"), writes_on_get=True,
+        writes_on_get_if={"check": ("stale", "now")})
 def list_mcp(project_id: str, check: Literal["none", "stale", "now"] = "none"):
     """Every registered server, with what the last probe found and what points at it.
 
@@ -8119,7 +8206,8 @@ def _deployment_target_write_actor(payload: Optional[dict]) -> str:
 
 
 @app.post("/v1/deployment-targets", status_code=201)
-@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(body="project_id"))
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(body="project_id"),
+        production=Production(environment="body:environment"))
 def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
     """Register where an app is deployed. This is the whole of onboarding.
 
@@ -8255,7 +8343,10 @@ def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
 
 
 @app.patch("/v1/deployment-targets/{target_id}")
-@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"))
+# F2: the environment label feeds every production gate, so moving a target to or from
+# production (or changing a production target at all) needs deployment:production.
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"),
+        production=Production(target="path:target_id", environment="body:environment"))
 def update_deployment_target_endpoint(target_id: str, payload: DeploymentTargetUpdateBody):
     """Change a target in place — port, domain, health check, status, auto-deploy."""
     payload = payload.payload()
@@ -9650,7 +9741,8 @@ def _stack_error(exc) -> HTTPException:
 
 
 @app.post("/v1/deployments/stack/targets", status_code=201)
-@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(body="project_id"))
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.project(body="project_id"),
+        production=Production(environment="body:environment", environment_default="production"))
 def create_stack_target_endpoint(payload: open_bodies.StackTargetCreateBody):
     """Where a stack deploys: a GitHub repository, on a verified fleet host."""
     payload = payload.payload()
@@ -12553,6 +12645,8 @@ def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentA
         # IDENTITY (S2): the thread the press is recorded in must be this project's.
         _identity_verifiers.require_in_project(connection, "agent_threads", payload.thread_id,
                                                payload.project_id)
+        if payload.thread_id:
+            require_agent_thread_owner(connection, payload.thread_id, payload.actor)
 
     ctx = EngineContext(settings=settings, engine=engine)
     # THIS IS THE ACK, AND ONLY THIS PATH CAN GIVE IT.
@@ -12835,9 +12929,29 @@ def require_agent_thread_reader(connection, thread_id: str) -> str:
         ).scalar_one_or_none()
     if project_id is None:
         raise HTTPException(status_code=404, detail="Agent thread not found.")
-    actor = current_api_principal.get() or "system"
+    actor = identity_guard.request_actor() or current_api_principal.get() or "system"
     require_project_actor(connection, project_id, actor, "agent_chat")
+    if identity_guard.identity_enforced():
+        # Without enforce the transport principal (`ceo`) is not the console's actor
+        # (`executive_console`), so ownership is decided only where the actor is the principal.
+        require_agent_thread_owner(connection, thread_id, actor)
     return project_id
+
+
+def require_agent_thread_owner(connection, thread_id: str, actor: str) -> None:
+    """F2/H7: a private conversation is its actor's. A task thread (external_ref set) is shared
+    with every project actor allowed to chat (agent_service's own rule); any other thread is read,
+    listed and continued only by the actor who opened it — answered 404, never 403, so a thread
+    id is no oracle. Ledger-only threads (no thread row) predate actors and stay project-wide."""
+    if identity_guard.is_worker_principal(identity_guard.REQUEST_IDENTITY.get()):
+        return
+    row = connection.execute(
+        text("SELECT actor, external_ref FROM agent_threads WHERE id = :t"), {"t": thread_id}
+    ).mappings().first()
+    if row is None or row["external_ref"]:
+        return
+    if str(row["actor"] or "") != str(actor or ""):
+        raise HTTPException(status_code=404, detail="Agent thread not found.")
 
 
 @app.get("/v1/agent/threads/{thread_id}/ledger")
@@ -12970,6 +13084,7 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
         ).mappings().first()
         if not owner or owner["project_id"] != project_id:
             raise HTTPException(status_code=404, detail="Agent thread not found.")
+        require_agent_thread_owner(connection, thread_id, actor)
         # Re-surface a pending plan on reload so the UI can show the Confirm/Revise controls (else a
         # plan proposed in a prior turn is unreachable — you land on "waiting for confirmation" with
         # no button).

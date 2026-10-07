@@ -38,7 +38,7 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from boss_engine.config import get_settings
 from boss_engine.identity import authn, authz, legacy
 from boss_engine.identity import scope as scope_module
-from boss_engine.identity.declarations import Access, Permit, access_of
+from boss_engine.identity.declarations import Access, Authenticated, Permit, access_of
 from boss_engine.identity.enforcement import (
     LEDGER,
     AuthzMode,
@@ -131,13 +131,16 @@ def router_key_for(endpoint: Any) -> str:
 
 def _credentials(conn: HTTPConnection) -> authn.RequestCredentials:
     client = conn.client.host if conn.client else None
+    # F2: the PEER is the socket that connected (apps/api/serve.py records it before the forwarded
+    # headers rewrite scope["client"]); trusted-proxy decisions must never read a forwarded value.
+    peer = conn.scope.get("boss.raw_peer") or client
     return authn.RequestCredentials(
         method=conn.scope.get("method", "WEBSOCKET"),
         path=conn.scope.get("path", ""),
         headers={k.lower(): v for k, v in conn.headers.items()},
         cookies=dict(conn.cookies),
         client_ip=client,
-        peer_ip=client,
+        peer_ip=peer,
         request_id=conn.headers.get("x-request-id"),
         legacy_member_id=_legacy_member(),
         legacy_auth_method=_legacy_method(),
@@ -212,9 +215,13 @@ async def enforce_access(conn: HTTPConnection) -> None:
         return
     access = access_of(endpoint)
     body: Any = None
-    if isinstance(access, Permit) and _reads_body(access) and isinstance(conn, Request):
+    if isinstance(access, (Permit, Authenticated)) and isinstance(conn, Request) and (
+            (isinstance(access, Permit) and _reads_body(access)) or _json_body_expected(conn, route)):
         try:
-            body = await conn.json()   # FastAPI already read and cached it; this is free
+            # FastAPI already read and cached it; this is free — and it is the SAME object FastAPI
+            # validates the handler's body from, which is what lets the actor rule below replace a
+            # claimed actor before the handler sees it.
+            body = await conn.json()
         except Exception:  # noqa: BLE001 — a missing/invalid body leaves the scope unresolved
             body = None
     creds = _credentials(conn)
@@ -233,16 +240,19 @@ async def enforce_access(conn: HTTPConnection) -> None:
     ctx = getattr(conn.state, "identity", None)
     IDENTITY_MODE.set(mode.value)
     REQUEST_IDENTITY.set(ctx)
-    if outcome.allowed and isinstance(access, Permit) and ctx is not None and (
-            access.confine or access.production is not None):
-        # The declaration's object rules (object_rules.py): confined ids in this project, and
-        # deployment:production when the operation's target is production.
+    if outcome.allowed and isinstance(access, Permit) and ctx is not None:
+        # The object rules (object_rules.py): the declaration's confined ids and production
+        # target, AND the central rule (F2 / M5, M9): every id the request names by an object-id
+        # name — path, query or body at any depth — is in the project the permission was checked
+        # at (the org, for an org-level check), and every org_id is the caller's org.
         decided = outcome.decision.scope if outcome.decision is not None else None
         if decided is not None:
             refused = await run_in_threadpool(
                 evaluate_object_rules, access, ctx, decided,
                 RequestValues(path_params=path_params, query=query, body=body),
-                check=lambda c, permission, scope: authz.check(c, permission, scope))
+                check=lambda c, permission, scope: authz.check(c, permission, scope),
+                named_skip=(access.scope.location,) if access.scope.location else (),
+                org_locations=_org_id_locations(route))
             if refused is not None:
                 outcome = refused
     csrf = _writing_get_csrf(conn, access, ctx, creds)
@@ -272,6 +282,8 @@ async def enforce_access(conn: HTTPConnection) -> None:
         if mode == AuthzMode.ENFORCE and not isinstance(access, Public):
             IDENTITY_ENFORCED.set(True)
             conn.state.identity_enforced = True
+            if ctx is not None:
+                _bind_actor(conn, route, ctx, body)
         return
     method = conn.scope.get("method") or "WS"
     path_template = getattr(route, "path", None) or conn.scope.get("path", "")
@@ -281,6 +293,126 @@ async def enforce_access(conn: HTTPConnection) -> None:
         if conn.scope.get("type") == "websocket":
             raise WebSocketException(code=1008, reason=outcome.error_body().get("error", ""))
         raise AccessRefused(outcome)
+
+
+# ---- THE ACTOR RULE (F2 / H7): under enforce, who acts is the verified principal, always ----------
+#
+# Hundreds of routes take a client-supplied `actor` (body field or query parameter) and handlers
+# used it for history, ownership filters (agent threads listed "by actor") and legacy member checks.
+# Under enforce those legacy checks return early — so a caller could name any actor and read or
+# continue someone else's thread. One rule, here, before any handler runs: on an enforced, allowed
+# request the claimed actor is REPLACED by the request's own actor (request_actor), in the body
+# FastAPI validates from and in the query string. A difference is recorded
+# (legacy.claimed_actor_ignored) but never decides anything (R6).
+#
+# The one exception is the worker principal: it replays work on behalf of the agent persona a job
+# names (shepherd, metatron, system) and holds no person's identity to substitute.
+
+ACTOR_FIELD = "actor"
+REQUEST_ACTOR: ContextVar[Optional[str]] = ContextVar("boss_request_actor", default=None)
+
+
+def actor_for(ctx: Any) -> str:
+    """The actor string for a verified principal: the legacy member it took over (the claimant
+    who "is" ceo, the console key's `executive_console`), else its own principal id."""
+    principal = ctx.principal
+    if principal.legacy_member_ids:
+        return str(principal.legacy_member_ids[0])
+    return str(principal.id)
+
+
+def request_actor() -> Optional[str]:
+    """The enforced request's actor (None when the guard did not enforce this request)."""
+    return REQUEST_ACTOR.get() if identity_enforced() else None
+
+
+def _route_takes_actor(route: Any) -> tuple[bool, bool]:
+    """(body has an `actor` field, query has an `actor` parameter) for a route; cached."""
+    cached = getattr(route, "_boss_actor_params", None)
+    if cached is not None:
+        return cached
+    in_body = in_query = False
+    dependant = getattr(route, "dependant", None)
+    if dependant is not None:
+        in_query = any((p.alias or p.name) == ACTOR_FIELD for p in dependant.query_params)
+        for p in dependant.body_params:
+            fields = getattr(getattr(p.field_info, "annotation", None), "model_fields", None) or {}
+            if (p.alias or p.name) == ACTOR_FIELD or any(
+                    (f.alias or k) == ACTOR_FIELD for k, f in fields.items()):
+                in_body = True
+    try:
+        route._boss_actor_params = (in_body, in_query)
+    except Exception:  # noqa: BLE001
+        pass
+    return in_body, in_query
+
+
+def _bind_actor(conn: HTTPConnection, route: Any, ctx: Any, body: Any) -> None:
+    actor = actor_for(ctx)
+    REQUEST_ACTOR.set(actor)
+    conn.state.identity_actor = actor
+    if is_worker_principal(ctx):
+        return
+    claimed: list[str] = []
+    body_field, query_param = _route_takes_actor(route)
+    if isinstance(body, dict) and (ACTOR_FIELD in body or body_field):
+        if body.get(ACTOR_FIELD) not in (None, actor):
+            claimed.append(str(body.get(ACTOR_FIELD)))
+        body[ACTOR_FIELD] = actor            # the same dict FastAPI validates the handler's body from
+    query_string = conn.scope.get("query_string", b"") or b""
+    if query_param or b"actor=" in query_string:
+        from urllib.parse import parse_qsl, urlencode
+
+        pairs = parse_qsl(query_string.decode("latin-1"), keep_blank_values=True)
+        claimed += [v for k, v in pairs if k == ACTOR_FIELD and v != actor]
+        if query_param or any(k == ACTOR_FIELD for k, _v in pairs):
+            pairs = [(k, v) for k, v in pairs if k != ACTOR_FIELD] + [(ACTOR_FIELD, actor)]
+            conn.scope["query_string"] = urlencode(pairs).encode("latin-1")
+            if hasattr(conn, "_query_params"):
+                del conn._query_params       # Starlette caches it; FastAPI reads it after us
+    for value in claimed[:1]:
+        try:
+            legacy.note_claimed_actor(ctx, value)
+        except Exception:  # noqa: BLE001 — recording the difference never blocks the request
+            pass
+
+
+def _org_id_locations(route: Any) -> tuple[str, ...]:
+    """Where this route READS an `org_id` (path, query, a body field); cached per route."""
+    cached = getattr(route, "_boss_org_id_locations", None)
+    if cached is not None:
+        return cached
+    out: list[str] = []
+    dependant = getattr(route, "dependant", None)
+    if dependant is not None:
+        if any((p.alias or p.name) == "org_id" for p in dependant.path_params):
+            out.append("path")
+        if any((p.alias or p.name) == "org_id" for p in dependant.query_params):
+            out.append("query")
+        for p in dependant.body_params:
+            fields = getattr(getattr(p.field_info, "annotation", None), "model_fields", None) or {}
+            if (p.alias or p.name) == "org_id" or any((f.alias or k) == "org_id"
+                                                      for k, f in fields.items()):
+                out.append("body")
+    else:   # no dependant to read (a stub): every location
+        out = ["path", "query", "body"]
+    result = tuple(out)
+    try:
+        route._boss_org_id_locations = result
+    except Exception:  # noqa: BLE001
+        pass
+    return result
+
+
+def _json_body_expected(conn: HTTPConnection, route: Any) -> bool:
+    """Read the JSON body for the central rules: a body-carrying method whose content is JSON
+    (or unlabelled, which FastAPI parses as JSON too). Never a form or an upload."""
+    if (conn.scope.get("method") or "GET").upper() in ("GET", "HEAD", "OPTIONS"):
+        return False
+    kind = (conn.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if not kind:
+        return bool(getattr(getattr(route, "dependant", None), "body_params", None))
+    return kind == "application/json" or kind.endswith("+json")
 
 
 #: A writing GET's POST twin lives at `<path>/load` (several of these paths already answer a
@@ -332,6 +464,9 @@ def _writing_get_csrf(conn: HTTPConnection, access: Any, ctx: Any,
         return None
     if (conn.scope.get("method") or "").upper() not in ("GET", "HEAD"):
         return None
+    if access.writes_on_get_if and not any(
+            conn.query_params.get(name) in values for name, values in access.writes_on_get_if):
+        return None    # this GET, with these parameters, only reads
     from boss_engine.identity.principal import AuthMethod
 
     if ctx is None or ctx.method != AuthMethod.SESSION or ctx.session is None:

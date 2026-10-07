@@ -102,16 +102,37 @@ def _target(db: Any, ctx: AuthContext, user_id: str) -> Optional[users.UserRow]:
     return u if u and not u.network_bound else None
 
 
-def _owner_guard(db: Any, ctx: AuthContext, target: users.UserRow, *, removing: bool) -> Optional[JSONResponse]:
-    """Admins cannot act on Owners; the last active Owner stays (§6.11, §6.12)."""
+def _owner_guard(db: Any, ctx: AuthContext, target: users.UserRow, *, removing: bool,
+                 permission: str = "user:update") -> Optional[JSONResponse]:
+    """Every action on ANOTHER person (§6.11, §6.12): the actor must hold everything the target
+    holds, at every scope the target holds anything (so an Admin can act on neither an Owner nor
+    a more-privileged non-Owner); and the last permanent Owner stays. One Owner lock for every
+    path (bindings.lock_owners)."""
+    from boss_engine.identity import bindings
+    from boss_engine.identity.roles import AccessError
+
     org = ctx.principal.org_id
-    db.execute(text("SELECT pg_advisory_xact_lock(hashtext('boss.identity.owners:' || :o))"), {"o": org})
-    owners = users.active_owner_ids(db, org)
-    if target.principal_id in owners:
-        if ctx.principal.id not in owners:
-            return error(403, "forbidden", permission="owner:assign")
-        if removing and len(owners) <= 1:
-            return error(409, "last_owner", message="Add another Owner first.")
+    bindings.lock_owners(db, org)
+    if target.principal_id != ctx.principal.id:
+        try:
+            bindings.require_covers(db, ctx, target.principal_id, permission)
+        except AccessError as exc:
+            return JSONResponse(status_code=exc.status, content=exc.body())
+    if removing and target.principal_id in bindings.owner_ids(db, org) and not bindings.active_owners(
+            db, org, without_principal=target.principal_id):
+        return error(409, "last_owner", message="Add another Owner first.")
+    return None
+
+
+def _covers(db: Any, ctx: AuthContext, principal_id: str, permission: str) -> Optional[JSONResponse]:
+    """The actor ⊇ target rule for a credential that belongs to a person (sessions, keys)."""
+    from boss_engine.identity import bindings
+    from boss_engine.identity.roles import AccessError
+
+    try:
+        bindings.require_covers(db, ctx, principal_id, permission)
+    except AccessError as exc:
+        return JSONResponse(status_code=exc.status, content=exc.body())
     return None
 
 
@@ -242,7 +263,7 @@ def build_identity_people_router() -> APIRouter:
                 u = _target(db, ctx, user_id)
                 if u is None:
                     return error(404, "not_found")
-                blocked = _owner_guard(db, ctx, u, removing=False) if u.principal_id != ctx.principal.id else None
+                blocked = _owner_guard(db, ctx, u, removing=False, permission="user:update")
                 if blocked:
                     return blocked
                 if "display_name" in raw:
@@ -277,7 +298,7 @@ def build_identity_people_router() -> APIRouter:
                 u = _target(db, ctx, user_id)
                 if u is None:
                     return error(404, "not_found")
-                blocked = _owner_guard(db, ctx, u, removing=True)
+                blocked = _owner_guard(db, ctx, u, removing=True, permission="user:disable")
                 if blocked:
                     return blocked
                 if u.status == "disabled":
@@ -301,6 +322,9 @@ def build_identity_people_router() -> APIRouter:
                 u = _target(db, ctx, user_id)
                 if u is None or u.status not in ("disabled", "active"):
                     return error(404, "not_found")
+                blocked = _owner_guard(db, ctx, u, removing=False, permission="user:disable")
+                if blocked:
+                    return blocked
                 if u.status == "disabled":
                     users.set_status(db, u.principal_id, "active", by=ctx.principal.id, reason="enabled by admin")
                     emit(db, org_id=ctx.principal.org_id, event_type="user.enabled", outcome=Outcome.SUCCESS,
@@ -323,7 +347,7 @@ def build_identity_people_router() -> APIRouter:
                     return error(404, "not_found")
                 if u.status != "disabled":
                     return error(409, "disable_first")
-                blocked = _owner_guard(db, ctx, u, removing=True)
+                blocked = _owner_guard(db, ctx, u, removing=True, permission="user:delete")
                 if blocked:
                     return blocked
                 pid = u.principal_id
@@ -358,7 +382,7 @@ def build_identity_people_router() -> APIRouter:
                     return error(404, "not_found")
                 if u.principal_id == ctx.principal.id:
                     return error(403, "forbidden", permission="user:reset_mfa")
-                blocked = _owner_guard(db, ctx, u, removing=False)
+                blocked = _owner_guard(db, ctx, u, removing=False, permission="user:reset_mfa")
                 if blocked:
                     return blocked
                 for table in ("identity_totp", "identity_webauthn_credentials", "identity_recovery_codes"):
@@ -384,6 +408,9 @@ def build_identity_people_router() -> APIRouter:
                 u = _target(db, ctx, user_id)
                 if u is None:
                     return error(404, "not_found")
+                blocked = _owner_guard(db, ctx, u, removing=False, permission="user:revoke_sessions")
+                if blocked:
+                    return blocked
                 ended = sessions.revoke_all(db, u.principal_id, by=ctx.principal.id, reason="revoked by admin")
                 emit(db, org_id=ctx.principal.org_id, event_type="session.revoked", outcome=Outcome.SUCCESS,
                      ctx=ctx, target_type="user", target_id=u.principal_id, details={"count": ended})
@@ -402,7 +429,7 @@ def build_identity_people_router() -> APIRouter:
                 u = _target(db, ctx, user_id)
                 if u is None or u.status != "active":
                     return error(404, "not_found")
-                blocked = _owner_guard(db, ctx, u, removing=False) if u.principal_id != ctx.principal.id else None
+                blocked = _owner_guard(db, ctx, u, removing=False, permission="user:update")
                 if blocked:
                     return blocked
                 token = recovery.issue_reset_token(db, u.principal_id)
@@ -442,6 +469,9 @@ def build_identity_people_router() -> APIRouter:
                 owner = users.load_principal(db, row.principal_id) if row else None
                 if row is None or owner is None or owner.org_id != ctx.principal.org_id:
                     return error(404, "not_found")
+                blocked = _covers(db, ctx, owner.id, "session:revoke")
+                if blocked:
+                    return blocked
                 if sessions.revoke(db, session_id, by=ctx.principal.id, reason="revoked by admin"):
                     emit(db, org_id=ctx.principal.org_id, event_type="session.revoked", outcome=Outcome.SUCCESS,
                          ctx=ctx, target_type="session", target_id=session_id)
@@ -630,6 +660,11 @@ def build_identity_people_router() -> APIRouter:
         try:
             with begin() as db:
                 ctx = current_context(request, db)
+                key = api_keys.get(db, key_id)
+                if key is not None:
+                    blocked = _covers(db, ctx, key.principal_id, "api_key:revoke")
+                    if blocked:
+                        return blocked
                 if not api_keys.revoke(db, actor=ctx, key_id=key_id, org_id=ctx.principal.org_id):
                     return error(404, "not_found")
                 return JSONResponse({"revoked": True})

@@ -77,6 +77,38 @@ def _check_subset(db: Any, inviter: AuthContext, bindings: list[dict[str, Any]])
             raise InvitationRefused("roles_exceed_inviter", 403, {"permissions": missing[:20]})
 
 
+def _check_groups(db: Any, inviter: AuthContext, group_ids: list[str]) -> None:
+    """C1: inviting someone into a group IS granting what the group's bindings carry — the same
+    ceiling as adding a member (groups.membership_ceilings: A34, and owner:assign for an Owner
+    group). An invitation is never a way round it."""
+    if not group_ids:
+        return
+    from .groups import membership_ceilings
+    from .roles import AccessError
+
+    try:
+        membership_ceilings(db, inviter, group_ids)
+    except AccessError as exc:
+        if exc.status in (404, 409):           # not this org's, or not a manual group
+            raise InvitationRefused("unknown_group", 422) from None
+        raise InvitationRefused("groups_exceed_inviter", 403,
+                                {k: v for k, v in exc.extra.items() if k != "reason"}) from None
+
+
+def inviter_context(db: Any, inv: "Invitation") -> AuthContext:
+    """The inviter as they are NOW (accept re-runs every ceiling with it): an inviter who was
+    disabled, deleted or moved to another org grants nothing."""
+    from .principal import AuthMethod
+    from .users import load_principal
+
+    principal = load_principal(db, inv.invited_by)
+    if principal is None or principal.org_id != inv.org_id or not principal.active:
+        raise InvitationRefused("invitation_invalid", 400, {"reason": "inviter_inactive"})
+    # A re-check of what the inviter HOLDS (no request of theirs is in flight, so step-up
+    # freshness is not the question here; it was asked when they created the invitation).
+    return AuthContext(principal=principal, method=AuthMethod.SYSTEM)
+
+
 def _normalise_bindings(raw: Iterable[Any]) -> list[dict[str, Any]]:
     out = []
     for b in raw or []:
@@ -109,6 +141,7 @@ def create(db: Any, *, inviter: AuthContext, email: str, bindings: Iterable[Any]
                                           {"o": inviter.principal.org_id, "g": groups})}
         if found != set(groups):
             raise InvitationRefused("unknown_group", 422)
+    _check_groups(db, inviter, groups)
     # One open invitation per address: a new one replaces the old.
     db.execute(text("UPDATE identity_invitations SET revoked_at = now() WHERE org_id = :o AND "
                     "lower(email) = lower(:e) AND accepted_at IS NULL AND revoked_at IS NULL"),
@@ -168,6 +201,12 @@ def accept(db: Any, inv: Invitation, *, display_name: str, password_hash: Option
            email_verified: bool) -> str:
     """Create the person, apply the invited bindings and groups, and close the invitation (single
     use: the UPDATE only lands once)."""
+    # C1: the ceilings are re-checked against the inviter as they are now — a demoted or
+    # disabled inviter's invitation grants nothing it no longer could. Before anything is
+    # written, so a refusal leaves the invitation as it was.
+    inviter = inviter_context(db, inv)
+    _check_subset(db, inviter, list(inv.bindings))
+    _check_groups(db, inviter, list(inv.group_ids))
     closed = db.execute(text("UPDATE identity_invitations SET accepted_at = now() WHERE id = :id AND "
                              "accepted_at IS NULL AND revoked_at IS NULL RETURNING id"),
                         {"id": inv.id}).first()
