@@ -133,8 +133,9 @@ describe("the faces are safe to inline anywhere", () => {
 
   it("encodes to a data URI for <img>, next/og and the A2A card", () => {
     const uri = avatarDataUri(specForRole("pm"), { size: 320 });
-    expect(uri.startsWith("data:image/svg+xml;charset=utf-8,%3Csvg")).toBe(true);
-    expect(decodeURIComponent(uri.split(",")[1])).toBe(avatarSvg(specForRole("pm"), { size: 320 }));
+    // One encoder for every SVG drawn through <img> (lib/svg-data-uri.ts): base64, namespace kept.
+    expect(uri.startsWith("data:image/svg+xml;base64,")).toBe(true);
+    expect(Buffer.from(uri.split(",")[1], "base64").toString("utf8")).toBe(avatarSvg(specForRole("pm"), { size: 320 }));
   });
 
   it("draws every state for every variant without throwing", () => {

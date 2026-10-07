@@ -11,13 +11,8 @@ import { idPost } from "../../../lib/identity/api";
 import { codesOf, type RecoveryCodes, type TotpEnrolment } from "../../../lib/identity/types-auth";
 import { CodeInput } from "../../../components/identity/kit";
 import { sayAuth } from "../auth-flow";
+import { svgDataUri } from "../../../lib/svg-data-uri";
 
-function svgDataUri(svg: string): string {
-  const bytes = new TextEncoder().encode(svg);
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return `data:image/svg+xml;base64,${btoa(s)}`;
-}
 
 /** `onDone(codes)`: the recovery codes the API issued with this FIRST factor, or [] (S1). */
 export function TotpStep({ onDone, guard }: {
@@ -30,6 +25,7 @@ export function TotpStep({ onDone, guard }: {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [qrBroken, setQrBroken] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -58,9 +54,11 @@ export function TotpStep({ onDone, guard }: {
     <div data-testid="totp-step">
       {enrol ? (
         <div className="idn-totp">
-          {enrol.qr_svg
+          {/* No QR from the API (or one that would not load): no image box at all, only the key. */}
+          {enrol.qr_svg && !qrBroken
             ? /* eslint-disable-next-line @next/next/no-img-element */
-              <img className="idn-qr" src={svgDataUri(enrol.qr_svg)} alt="QR code for your authenticator app" width={168} height={168} />
+              <img className="idn-qr" src={svgDataUri(enrol.qr_svg)} alt="QR code for your authenticator app" width={168} height={168}
+                data-testid="totp-qr" onError={() => setQrBroken(true)} />
             : null}
           <div className="idn-f">
             <span className="idn-flabel">Or type this key</span>
