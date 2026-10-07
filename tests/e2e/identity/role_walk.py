@@ -516,7 +516,12 @@ class Walk:
         if role in CLICK_ROLES and not self.args.no_click:
             for kind, url, perm, at_project, key in targets:
                 if perm is None or rs.holds(perm, at_project, self.cat.scope):
-                    self.click_all(page, role, key, url, state, rep)
+                    try:
+                        self.click_all(page, role, key, url, state, rep)
+                    except Exception as e:  # noqa: BLE001
+                        self.find("walk", role, key, "click-crash", url, f"{type(e).__name__}: {str(e).splitlines()[0][:160]}",
+                                  "every control on the page pressed", severity="soft")
+                        state["press"] = None
         # 6. mutations seen at any time in this role's session
         self.judge_mutations(role, state["mut"], rep)
         ctx.close()
@@ -697,13 +702,22 @@ class Walk:
                               f"{len(soft)} tokens also shown to {role} on an allowed page: {soft[:8]}",
                               "nothing area-specific on a forbidden page", severity="soft")
 
+    def tag(self, page: Any, on_account: bool) -> list[dict[str, Any]]:
+        """Mark the page's enabled controls; a page still navigating is settled and asked again."""
+        for _ in range(3):
+            try:
+                return page.evaluate(JS_TAG, [SKIP_PRESS.pattern, SKIP_PRESS_ACCOUNT.pattern, on_account])
+            except Exception:  # noqa: BLE001
+                self.settle(page)
+        return []
+
     def click_all(self, page: Any, role: str, key: str, url: str, state: dict[str, Any], rep: dict[str, Any]) -> None:
         on_account = "/account" in url
         self.wait_healthy(page.context)
         deadline = time.time() + self.args.page_budget
         self.goto(page, url)
         state["url"] = url
-        tags = page.evaluate(JS_TAG, [SKIP_PRESS.pattern, SKIP_PRESS_ACCOUNT.pattern, on_account])
+        tags = self.tag(page, on_account)
         pressed = skipped = 0
         shell_done = state.setdefault("shell_pressed", set())
         for t in tags:
@@ -721,9 +735,13 @@ class Walk:
                 skipped += 1
                 continue
             loc = page.locator(f'[data-fxd-i="{t["i"]}"]')
-            if loc.count() == 0:
+            try:
+                gone = loc.count() == 0
+            except Exception:  # noqa: BLE001
+                gone = True
+            if gone:
                 self.goto(page, url)
-                page.evaluate(JS_TAG, [SKIP_PRESS.pattern, SKIP_PRESS_ACCOUNT.pattern, on_account])
+                self.tag(page, on_account)
                 loc = page.locator(f'[data-fxd-i="{t["i"]}"]')
             if loc.count() == 0:
                 rep["clicks"].append({"page": key, "text": t["text"], "skipped": "gone after reload"})
@@ -747,10 +765,13 @@ class Walk:
                                   "requests": [{k: m[k] for k in ("method", "path", "status", "server_action")} for m in muts]})
             pressed += 1
             state["press"] = None
-            cur = urlsplit(page.url)
+            try:
+                cur = urlsplit(page.url)
+            except Exception:  # noqa: BLE001
+                cur = urlsplit("")
             if (cur.path, cur.query) != (urlsplit(url).path, urlsplit(url).query):
                 self.goto(page, url)
-                page.evaluate(JS_TAG, [SKIP_PRESS.pattern, SKIP_PRESS_ACCOUNT.pattern, on_account])
+                self.tag(page, on_account)
         print(f"  [{role}] clicks {key}: pressed {pressed}, skipped {skipped}")
 
     def judge_mutations(self, role: str, muts: list[dict[str, Any]], rep: dict[str, Any]) -> None:
