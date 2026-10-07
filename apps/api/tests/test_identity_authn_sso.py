@@ -148,8 +148,9 @@ def invite(engine, email: str, role: str = "operator") -> None:
                         "status = 'active'"), {"o": org})
         db.execute(text("INSERT INTO identity_role_bindings (id, org_id, subject_type, subject_id, role_id, "
                         "scope_type, scope_id, granted_by) VALUES (:id, :o, 'principal', 'usr_admin', "
-                        "'arl_admin', 'org', :o, 'test') ON CONFLICT DO NOTHING"),
-                   {"id": ids.new_id("rbd"), "o": org})
+                        ":role, 'org', :o, 'test') ON CONFLICT DO NOTHING"),
+                   # only an Owner may invite an Owner (C1 re-checks it at accept)
+                   {"id": ids.new_id("rbd"), "o": org, "role": "arl_owner" if role == "owner" else "arl_admin"})
         db.execute(text("INSERT INTO identity_invitations (id, org_id, email, token_hash, bindings, invited_by, "
                         "expires_at) VALUES (:id, :o, :e, :h, CAST(:b AS jsonb), 'usr_admin', now() + interval '7 days')"),
                    {"id": ids.new_id("inv"), "o": default_org_id(db), "e": email, "h": uuid.uuid4().hex,
