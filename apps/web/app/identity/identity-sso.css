@@ -34,3 +34,9 @@
 .idn-prov > .idn-card-h h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .idn-prov > .idn-card-h > .idn-btn, .idn-prov > .idn-card-h > .idn-tag, .idn-prov > .idn-card-h > .idn-pill { flex: none; }
 @media (max-width: 480px) { .idn-prov > .idn-card-h { flex-wrap: wrap; } }
+
+/* The values the IdP needs, shown FIRST when adding: Google asks for the redirect URL before it
+   gives the client id (provider-sheet.tsx). */
+.idn-sso-first { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; margin-bottom: 14px; border: 1px solid color-mix(in srgb, var(--teal) 30%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--teal) 6%, transparent); }
+.idn-sso-first p { margin: 0; }
+.idn-sso-step { display: block; margin: 0 0 10px; font-size: 13px; }
