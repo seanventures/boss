@@ -77,7 +77,7 @@ def docker_available(binary: str = "docker") -> tuple[bool, str]:
     if not exe:
         return False, f"{binary!r} is not on PATH"
     try:
-        proc = owned_process.run([exe, "info", "--format", "{{.ServerVersion}}"],
+        proc = owned_process.boss_run([exe, "info", "--format", "{{.ServerVersion}}"],
                               capture_output=True, text=True, timeout=20)
     except subprocess.TimeoutExpired:
         return False, "`docker info` timed out — is the daemon running?"
@@ -157,7 +157,7 @@ class ContainerCommandRunner:
             self.image, "sleep", "infinity",
         ]
         try:
-            proc = owned_process.run(create_argv, capture_output=True, text=True,
+            proc = owned_process.boss_run(create_argv, capture_output=True, text=True,
                                   timeout=_DOCKER_START_TIMEOUT)
         except subprocess.TimeoutExpired as exc:
             raise ContainerUnavailable(
@@ -178,7 +178,7 @@ class ContainerCommandRunner:
         if not cid:
             return
         try:
-            owned_process.run([self.binary, "rm", "-f", cid],
+            owned_process.boss_run([self.binary, "rm", "-f", cid],
                            capture_output=True, text=True, timeout=30)
         except Exception as exc:  # noqa: BLE001 — teardown must never mask the real failure
             _log.warning("could not remove sandbox container %s: %s", cid[:12], exc)
@@ -208,7 +208,7 @@ class ContainerCommandRunner:
         ]
         started = time.monotonic()
         try:
-            proc = owned_process.run(exec_argv, capture_output=True, text=True, timeout=limit)
+            proc = owned_process.boss_run(exec_argv, capture_output=True, text=True, timeout=limit)
         except subprocess.TimeoutExpired:
             return CommandOutcome(command, 124, "", f"timed out after {limit}s",
                                   int((time.monotonic() - started) * 1000), timed_out=True)

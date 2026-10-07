@@ -225,3 +225,24 @@ def test_a51_the_sandbox_user_reaches_no_secret(tmp_path):
                           "/src/engine/tests/sandbox_a51/run_in_container.sh"],
                          capture_output=True, text=True, timeout=600)
     assert run.returncode == 0 and "A51 HOLDS" in run.stdout, (run.stdout[-3000:], run.stderr[-3000:])
+
+
+# ---- the CONNECT proxy: the sandbox's model gateway and package route --------------------------------
+
+def test_the_connect_proxy_allows_only_allowlisted_public_https(monkeypatch):
+    sys.path.insert(0, str(ROOT))
+    from apps.egress.boss_egress import connect
+
+    monkeypatch.delenv("BOSS_EGRESS_CONNECT_ALLOW", raising=False)
+    public = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("104.18.0.1", 443))
+    private = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))
+    monkeypatch.setattr(connect.socket, "getaddrinfo", lambda h, p, type=0: [public] if h == "api.anthropic.com"
+                        else [private] if h == "registry.npmjs.org" else [public, private])
+    assert connect.decide(b"CONNECT api.anthropic.com:443 HTTP/1.1\r\n\r\n")[1] == ""
+    assert connect.decide(b"CONNECT api.anthropic.com:80 HTTP/1.1\r\n\r\n")[1] == "port_not_allowed"
+    assert connect.decide(b"CONNECT github.com:443 HTTP/1.1\r\n\r\n")[1] == "host_not_allowed"
+    assert connect.decide(b"CONNECT db:443 HTTP/1.1\r\n\r\n")[1] == "host_not_allowed"
+    assert connect.decide(b"CONNECT registry.npmjs.org:443 HTTP/1.1\r\n\r\n")[1] == "not_a_public_address"
+    assert connect.decide(b"GET http://api.anthropic.com/ HTTP/1.1\r\n\r\n")[1] == "not_a_connect"
+    monkeypatch.setenv("BOSS_EGRESS_CONNECT_ALLOW", "*.github.com,pypi.org")
+    assert connect.decide(b"CONNECT api.github.com:443 HTTP/1.1\r\n\r\n")[1] == "host_not_allowed"   # never GitHub

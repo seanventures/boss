@@ -189,8 +189,6 @@ def chain_key(org_id: Optional[str] = None, *, db: Any = None) -> Optional[bytes
     configured (a dev process without a vault): the chain is then unkeyed (hash_alg 1)."""
     if not org_id:
         return None
-    if org_id in _chain_keys:
-        return _chain_keys[org_id]
     if db is None or getattr(_chain_key_guard, "busy", False):
         return None
     from . import vault
@@ -200,28 +198,29 @@ def chain_key(org_id: Optional[str] = None, *, db: Any = None) -> Optional[bytes
     except vault.MasterKeyMissing:
         return None
     _chain_key_guard.busy = True
+    created = False
     try:
-        # In a transaction of its OWN, committed before the event is hashed: a key created inside a
-        # caller's transaction that then rolls back would be gone for every other process.
-        engine = getattr(db, "engine", None)
-        with (engine.begin() if engine is not None else contextlib.nullcontext(db)) as own:
-            own.execute(_sql("SELECT pg_advisory_xact_lock(:k)"), {"k": _lock_key(f"chain-key:{org_id}")})
-            item = own.execute(_sql(
-                "SELECT id FROM identity_vault_items WHERE org_id = :o AND owner_principal_id IS NULL AND "
-                "provider = 'boss' AND connection_name = :n AND status = 'active' ORDER BY created_at LIMIT 1"),
-                {"o": org_id, "n": CHAIN_KEY_CONNECTION}).scalar()
-            if item is None:
-                if not own.execute(_sql("SELECT 1 FROM orgs WHERE id = :o"), {"o": org_id}).first():
-                    return None
-                raw = secrets.token_bytes(32).hex()
-                vault.store(org_id=org_id, owner_principal_id=None, kind=vault.VaultItemKind.PROVIDER_CREDENTIAL,
-                            provider="boss", secret=raw, db=own, connection_name=CHAIN_KEY_CONNECTION)
-            else:
-                raw = vault.read_secret(item, db=own, kind=vault.VaultItemKind.PROVIDER_CREDENTIAL)
+        # In the CALLER's transaction, under a per-org lock: a key created here lives or dies with
+        # the events hashed under it (a rollback takes both), and a concurrent writer waits on the
+        # lock and then reads the committed key.
+        db.execute(_sql("SELECT pg_advisory_xact_lock(:k)"), {"k": _lock_key(f"chain-key:{org_id}")})
+        item = db.execute(_sql(
+            "SELECT id FROM identity_vault_items WHERE org_id = :o AND owner_principal_id IS NULL AND "
+            "provider = 'boss' AND connection_name = :n AND status = 'active' ORDER BY created_at LIMIT 1"),
+            {"o": org_id, "n": CHAIN_KEY_CONNECTION}).scalar()
+        if item is None:
+            if not db.execute(_sql("SELECT 1 FROM orgs WHERE id = :o"), {"o": org_id}).first():
+                return None
+            raw = secrets.token_bytes(32).hex()
+            vault.store(org_id=org_id, owner_principal_id=None, kind=vault.VaultItemKind.PROVIDER_CREDENTIAL,
+                        provider="boss", secret=raw, db=db, connection_name=CHAIN_KEY_CONNECTION)
+            created = True
+        else:
+            raw = vault.read_secret(item, db=db, kind=vault.VaultItemKind.PROVIDER_CREDENTIAL)
         key = bytes.fromhex(raw)
     finally:
         _chain_key_guard.busy = False
-    _chain_keys[org_id] = key
+    del created          # never cached: a key read inside a transaction may yet be rolled back
     return key
 
 
@@ -639,6 +638,7 @@ def to_public(row: Mapping[str, Any]) -> dict[str, Any]:
     for key in ("prev_hash", "hash"):
         value = row.get(key)
         out[key] = bytes(value).hex() if value is not None else None
+    out["hash_alg"] = int(row.get("hash_alg") or ALG_SHA256)
     return out
 
 
@@ -675,8 +675,9 @@ def export(org_id: str, *, db: Any, ctx: Optional[AuthContext] = None,
         "org_id": org_id,
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "format": "boss-identity-audit/1",
-        "hash": "sha256(prev_hash || canonical_json(row)); canonical_json = HASHED_FIELDS, sorted "
-                "keys, no whitespace, UTF-8, ts ISO-8601 UTC with microseconds",
+        "hash": "hash_alg 2: hmac_sha256(org chain key, prev_hash || canonical_json(row)) — re-verify with "
+                "the chain key (vault); hash_alg 1: sha256(prev_hash || canonical_json(row)); canonical_json = "
+                "HASHED_FIELDS, sorted keys, no whitespace, UTF-8, ts ISO-8601 UTC with microseconds",
         "verification": {"ok": verification.ok, "checked": verification.checked,
                          "last_seq": verification.last_seq,
                          "first_break_seq": verification.first_break_seq},

@@ -268,6 +268,7 @@ def bind(owner_id: str) -> Iterator[Optional[SandboxIdentity]]:
                 os.chmod(sub, 0o2777)
         finally:
             os.umask(old)
+        _seed_cli_logins(ident)
         ident._helper("adopt", str(uid), str(ident.run_dir))
         with _ACTIVE_LOCK:
             _ACTIVE[owner_id] = ident
@@ -280,6 +281,24 @@ def bind(owner_id: str) -> Iterator[Optional[SandboxIdentity]]:
         _purge(ident)
         with contextlib.suppress(OSError):
             os.close(lock_fd)
+
+
+def _seed_cli_logins(ident: SandboxIdentity) -> None:
+    """The coding CLIs' own logins (Codex's auth.json, Grok's), copied into the run's HOME: the
+    model credential is the one secret an agent is meant to hold (agent_env), and the control
+    plane's own CLI homes stay 0700 to the boss uid. Readable inside the run directory only."""
+    for env_name, sub in (("CODEX_HOME", ".codex"), ("GROK_HOME", ".grok")):
+        src = (os.environ.get(env_name) or "").strip()
+        if not src or not os.path.isdir(src):
+            continue
+        dst = ident.home / sub
+        dst.mkdir(exist_ok=True)
+        os.chmod(dst, 0o2777)
+        for name in ("auth.json", "config.toml", "config.json", "credentials.json"):
+            path = os.path.join(src, name)
+            if os.path.isfile(path):
+                shutil.copyfile(path, dst / name)
+                os.chmod(dst / name, 0o644)
 
 
 def _purge(ident: SandboxIdentity) -> None:

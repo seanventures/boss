@@ -741,6 +741,8 @@ Signing keys live in `identity_signing_keys`, with the private key encrypted und
 
 ### 7.6 Run tokens inside sandboxes
 
+**The boundary (as built).** A code task's agent, its tools, its verify commands and its review seats run as a **per-run unprivileged uid** from a fixed pool (61000–61999), never as the API's uid (`services/sandbox_identity.py`). The only privileged piece is `boss-sandbox-exec` (`scripts/sandbox/boss-sandbox-exec.c`): root:boss 0750 with `cap_setuid,cap_setgid,cap_chown,cap_fowner`, it only starts a command as a pool uid (new session, no groups, `no_new_privs`, parent-death kill), kills every process of a pool uid, and hands a run its directory and its shim socket. So the agent cannot read the API's `/proc/<pid>/environ`, the identity key volume, another run's directory, `mcp.json` or shim socket. Each run's directory is `<uid>:boss 2770`; its shim socket is `<uid>` 0600 in a boss-owned 0711 directory and the shim answers only the peer uid the kernel reports (`SO_PEERCRED`). The API container's entrypoint (`scripts/sandbox/entrypoint.sh`) starts as root with `NET_ADMIN` only to fence the pool's network with iptables — loopback addresses, and on the container's own networks only the API (8000) and boss-egress (8090, and 8091: an allowlisted HTTPS `CONNECT` proxy that is the model gateway and package route) — then becomes `boss` for good. `BOSS_SANDBOX_ISOLATION=required` (compose's default) refuses a build when the helper or the fence is missing; `auto` (a developer's Mac) runs unisolated and logs it loudly. A51 is proven in a Linux container with the real helper and fence (`engine/tests/test_identity_f1_sandbox_boundary.py`).
+
 - **Key generation:** when a sandbox (microVM or container) boots, its **credential shim** generates an Ed25519 DPoP key pair. The shim is a small process that runs as a separate uid and is not part of the agent's workspace. The private key never leaves the shim's memory.
 - **Handshake:** the run supervisor receives the public key over the sandbox bootstrap channel and binds the run token to it (`cnf.jkt`).
 - **Use:** the agent's tools (`boss` CLI, the MCP client, `git`, `gh`) call the shim over a unix socket. The shim attaches the token and a fresh DPoP proof. **The model never sees either the run token or the key**, and the shim renews the token every 4 minutes.
@@ -766,12 +768,12 @@ The `identity_vault_items` table holds every long-lived external secret BOSS own
 | Item | Spec |
 |---|---|
 | Encryption | Envelope encryption. Each row has a random 256-bit DEK, used with AES-256-GCM and a 96-bit random nonce. **AAD = `item_id ‖ owner_principal_id ‖ provider ‖ kind`**, so a ciphertext moved to another row fails to decrypt. |
-| KEK | Read from `BOSS_MASTER_KEY_FILE` (preferred; Docker secret) or `BOSS_MASTER_KEY` (32 bytes, base64). The installer generates it and tells the operator to back it up. A **key check value** is stored. Boot refuses when vault rows exist and the KCV does not match. External KMS (AWS KMS, GCP KMS, Vault Transit) is optional, in Phase 5. |
+| KEK | Read from `BOSS_MASTER_KEY_FILE` (preferred; Docker secret) or `BOSS_MASTER_KEY` (32 bytes, base64). A **key check value** is stored. **Boot refuses** (`vault.boot`) when the key does not match, or when the key file is missing for a vault that has data; the API never serves with a vault it cannot open. The key file is created only at **first install** (no registered KEK, no item), explicitly and logged — a runtime read never creates one. External KMS (AWS KMS, GCP KMS, Vault Transit) is optional, in Phase 5. |
 | Rotation | `boss identity rotate-master-key` re-wraps every DEK in one transaction and audits it. |
 | Who may decrypt | Only `boss_engine/identity/vault.py`. A CI test fails if any other module imports `vault._decrypt`. |
 | Failure | A decryption failure is a hard error plus a `vault.decrypt_failed` critical event. **There is never a plaintext fallback.** That was Kaappu's converter flaw. |
-| Provider refresh | On demand, when the token is requested with less than 5 minutes left. It is **single-flight**: `SELECT … FOR UPDATE` on the row, refresh, then write the new refresh token in the same transaction that consumes the old one. If the provider rotated but the write failed, the item becomes `needs_reauth` and the user is notified, rather than retried in a loop. A background sweeper only touches refresh tokens that are close to their 6-month expiry. |
-| Revocation | Disconnecting, or deleting a user, calls the provider's revoke endpoint as well as deleting the local row. For GitHub that is `DELETE /applications/{client_id}/grant`. |
+| Provider refresh | On demand, when the token is requested with less than 5 minutes left. It is **single-flight**: `SELECT … FOR UPDATE` on the row, refresh, then write the new refresh token — all in the vault's **own transaction, committed before the caller continues**, so a rollback of the caller's business transaction can never lose a refresh token the provider already burned. If the provider refuses or rotated but the write failed, the item becomes `needs_reauth` (also in its own transaction, so it sticks) rather than retried in a loop. A background sweeper only touches refresh tokens that are close to their 6-month expiry. |
+| Revocation | Disconnecting, or deleting a user, calls the provider's revoke endpoint **first**; the local ciphertext is shredded only once the provider confirms. If the provider is unreachable the item is revoked locally at once (unusable) but kept, `provider_revoke_pending`, and identity maintenance retries. For GitHub that is `DELETE /applications/{client_id}/grant`. |
 
 ### 7.9 GitHub strategy
 
@@ -870,10 +872,11 @@ These follow from the permissions not being delegable. In addition, the token se
 ### 8.1 Table and integrity
 
 `identity_security_events` (DDL in §11) is append-only:
-- The app's DB role has `INSERT, SELECT` only.
-- A trigger raises on `UPDATE` and `DELETE`.
-- Rows are **hash-chained per org**: `hash = SHA-256(prev_hash ‖ canonical_json(row minus hash))`, with a per-org `seq`.
-- `POST /v1/identity/audit/verify` walks the chain and reports the first break.
+- The table, its trigger function and the two maintenance functions belong to the NOLOGIN role `boss_audit_owner`. The app's DB role has `INSERT, SELECT` and `EXECUTE` on those functions only (`identity_audit_grant_app(role)` grants another app role the same).
+- A trigger raises on `UPDATE`, `DELETE` **and `TRUNCATE`** for every session. The only exceptions run inside `identity_audit_prune` (deletes only a range the newest event — an `audit.checkpoint` — names) and `identity_audit_rekey` (hash columns of pre-keyed rows only), as `boss_audit_owner`. No session setting opens the table.
+- Rows are **hash-chained per org** with a **keyed** hash: `hash = HMAC-SHA-256(chain key, prev_hash ‖ canonical_json(row minus hash))` (`hash_alg = 2`), with a per-org `seq`. The chain key is 32 random bytes per org held in the vault (envelope-encrypted under the master key, so the database alone cannot recompute a hash, and a master-key rotation re-wraps it without changing it). Rows written before the keyed chain are re-keyed once by maintenance, after their old SHA-256 chain verifies.
+- `POST /v1/identity/audit/verify` walks the chain and reports the first break, refuses unkeyed rows in a keyed chain, and checks every published daily anchor is still in the chain (a chain cut back is a break).
+- When the app's role is a Postgres **superuser** (a stock compose install), privileges cannot bind it; the triggers and the keyed chain still make tampering detectable.
 - A daily anchor (the latest hash and seq) goes into the activity log, and into the export when export is configured.
 
 Writes to this log are **not best-effort**. A security event is written in the same transaction as the change it describes. If the write fails, the change fails. Kaappu swallowed audit exceptions.

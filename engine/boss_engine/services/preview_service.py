@@ -1297,7 +1297,7 @@ def _detect_verification(workdir: Path) -> Optional[str]:
 def _descendant_pids(pid: int) -> list[int]:
     pids = [pid]
     try:
-        out = owned_process.run(["pgrep", "-P", str(pid)], capture_output=True, text=True, timeout=5).stdout
+        out = owned_process.run(["pgrep", "-P", str(pid)], capture_output=True, text=True, timeout=5, sandboxed=False).stdout
         for child in out.split():
             pids.extend(_descendant_pids(int(child)))
     except Exception:
@@ -1997,7 +1997,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
                                         owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
             clone_url = _access.url
-            clone = owned_process.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
+            clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
                                capture_output=True, text=True, timeout=120, env=_access.environ())
         if clone.returncode != 0:
             return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
@@ -2250,7 +2250,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
                                     owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
         clone_url = _access.url
-        clone = owned_process.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
+        clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
                            capture_output=True, text=True, timeout=120, env=_access.environ())
     if clone.returncode != 0:
         return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
@@ -2264,7 +2264,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     # LABELLED, so the reaper's substrate sweep finds this image and its container by what
     # they are (boss.owner / boss.preview_id / boss.install_id) even when the row is gone.
     labels = preview_labels(engine, preview_id)
-    build = owned_process.run(["docker", "build", *labels, "-t", tag, str(workdir)],
+    build = owned_process.boss_run(["docker", "build", *labels, "-t", tag, str(workdir)],
                               capture_output=True, text=True, timeout=600)
     if build.returncode != 0:
         _docker_rmi(tag)
@@ -2275,7 +2275,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
                    "--name", tag, "-p", f"{host_port}:{container_port}",
                    "-e", f"PORT={container_port}", "-e", "HOST=0.0.0.0", tag]
     docker_command = " ".join(docker_argv)
-    run_cmd = owned_process.run(docker_argv, capture_output=True, text=True, timeout=60)
+    run_cmd = owned_process.boss_run(docker_argv, capture_output=True, text=True, timeout=60)
     if run_cmd.returncode != 0:
         _docker_rm(tag)
         _docker_rmi(tag)
@@ -2290,7 +2290,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
             break
         time.sleep(1.0)
     if not ok:
-        logs = owned_process.run(["docker", "logs", "--tail", "20", tag], capture_output=True,
+        logs = owned_process.boss_run(["docker", "logs", "--tail", "20", tag], capture_output=True,
                                  text=True, timeout=30).stdout
         _docker_rm(tag)
         _docker_rmi(tag)
@@ -2398,7 +2398,7 @@ def _docker_alive(container_id: Optional[str]) -> bool:
         return False
     result = owned_process.run(
         ["docker", "inspect", "-f", "{{.State.Running}}", container_id],
-        capture_output=True, text=True, timeout=5,
+        capture_output=True, text=True, timeout=5, sandboxed=False,
     )
     return result.returncode == 0 and result.stdout.strip().lower() == "true"
 
@@ -2442,7 +2442,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             clone_url = _access.url
             clone = owned_process.run(
             ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-            capture_output=True, text=True, timeout=120, env=_access.environ())
+            capture_output=True, text=True, timeout=120, env=_access.environ(), sandboxed=False)
         if clone.returncode != 0:
             return
         _changed = lineage_impl_files(engine, {"id": row["run_id"]})
@@ -2630,7 +2630,7 @@ def preview_log_snapshot(engine, preview_id: str, *, tail_chars: int = 12000) ->
     elif row["mode"] == "docker" and row["container_id"] and shutil.which("docker"):
         result = owned_process.run(
             ["docker", "logs", "--tail", "200", row["container_id"]],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, sandboxed=False,
         )
         content = (result.stdout + result.stderr)[-tail_chars:]
     return {"preview_id": preview_id, "status": row["status"], "mode": row["mode"],
@@ -2658,7 +2658,7 @@ def stream_preview_logs(engine, preview_id: str):
 def _docker_rm(container_id: Optional[str]) -> None:
     if container_id:
         try:
-            owned_process.run(["docker", "rm", "-f", container_id], capture_output=True,
+            owned_process.boss_run(["docker", "rm", "-f", container_id], capture_output=True,
                               timeout=60)
         except Exception:  # noqa: BLE001 — the reaper's substrate sweep is the backstop
             pass
@@ -2669,7 +2669,7 @@ def _docker_rmi(tag: Optional[str]) -> None:
     (29 GB nominal) were left on one laptop, one per preview ever started."""
     if tag:
         try:
-            owned_process.run(["docker", "rmi", "-f", tag], capture_output=True, timeout=120)
+            owned_process.boss_run(["docker", "rmi", "-f", tag], capture_output=True, timeout=120)
         except Exception:  # noqa: BLE001
             pass
 
