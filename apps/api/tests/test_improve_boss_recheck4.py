@@ -87,8 +87,9 @@ def test_uvicorn_is_given_the_trusted_proxies_and_nothing_else():
     assert serve.forwarded_allow_ips("") == ""
     assert serve.forwarded_allow_ips("10.0.0.5, 10.0.0.0/8 ,garbage") == "10.0.0.5/32,10.0.0.0/8"
     argv = serve.uvicorn_argv(["--host", "0.0.0.0", "--forwarded-allow-ips", "*", "--port", "8000"], "")
-    assert argv == ["apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000",
-                    "--forwarded-allow-ips", ""]
+    # F2: the app applies the forwarded headers itself (after recording the socket peer)
+    assert argv == ["apps.api.serve:asgi", "--host", "0.0.0.0", "--port", "8000",
+                    "--no-proxy-headers"]
 
 
 def test_with_nothing_trusted_uvicorn_believes_no_loopback_header():
@@ -110,6 +111,12 @@ def test_with_nothing_trusted_uvicorn_believes_no_loopback_header():
                  "headers": [(b"x-forwarded-for", b"198.51.100.9")]}
         asyncio.run(mw(scope, None, None))
         assert seen["client"][0] == expect, trusted
+        # the served app (build_asgi) does the same, and keeps the socket peer beside it
+        scope = {"type": "http", "client": ("127.0.0.1", 5000), "scheme": "http",
+                 "headers": [(b"x-forwarded-for", b"198.51.100.9")]}
+        asyncio.run(serve.build_asgi(app, trusted)(scope, None, None))
+        assert seen["client"][0] == expect, trusted
+        assert scope[serve.RAW_PEER_KEY] == "127.0.0.1"
 
 
 def test_every_launch_goes_through_the_launcher():

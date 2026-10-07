@@ -275,6 +275,8 @@ def _cmd_serve_mcp(args) -> int:
         ctx, project_id=args.project, read_only=read_only,
         http_token=http_token, api_surface=api_surface,
         api_domains=set(args.api_domain), identity=identity,
+        # stdio: the API-surface tools call the API as this same key, the caller's own (M8).
+        session_credential=(f"Bearer {session_key}" if session_key and not args.http else None),
     )
     if args.http:
         import uvicorn  # lazy: only for HTTP transport

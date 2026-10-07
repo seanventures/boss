@@ -20,7 +20,7 @@ The upgrade itself changes nothing you can see. On the first request after it st
 | SCIM users and groups | Pending people (with their email) and SCIM groups. Old SCIM bearer tokens keep working until you rotate them. |
 | A network-trusted console (`BOSS_CONSOLE_AUTH=network`) | The **network bridge**: the console behaves exactly as today until you claim the install. |
 
-Authorization runs in **shadow mode** by default. BOSS evaluates every request against the new roles and records what it *would* refuse, but refuses nothing. You can read that record in **Identity › Overview** or with `shadow-report` (see [Identity administration](IDENTITY_ADMIN.md)).
+Authorization is **enforced** by default: a request the new roles do not allow is refused. If you want a trial period first, set `BOSS_AUTHZ_MODE=shadow` in `.env` before you restart. In shadow mode BOSS evaluates every request and records what it *would* refuse, but refuses nothing. Identity posture shows shadow mode in red for as long as it is on. You can read the record in **Identity › Overview** or with `shadow-report` (see [Identity administration](IDENTITY_ADMIN.md)).
 
 ## Claim the install (once)
 

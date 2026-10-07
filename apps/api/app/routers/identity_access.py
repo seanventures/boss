@@ -134,7 +134,14 @@ def require_production(request: Optional[Request], project_id: str, environment:
 
     mode = (getattr(request.state, "identity_mode", None) if request is not None else None) \
         or identity_guard.IDENTITY_MODE.get() or ""
-    if mode in ("", AuthzMode.OFF.value):
+    if mode == "":
+        # No guard decided this call (a helper outside a request, a background path): fail
+        # CLOSED to the configured global mode, never open.
+        from boss_engine.config import get_settings
+        from boss_engine.identity.enforcement import mode_for
+
+        mode = mode_for("main", global_mode=get_settings().authz_mode or "enforce").value
+    if mode == AuthzMode.OFF.value:
         return
     ctx = (getattr(request.state, "identity", None) or request_identity(request)
            if request is not None else identity_guard.REQUEST_IDENTITY.get())

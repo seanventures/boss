@@ -452,6 +452,10 @@ class MemberDirectoryService:
         normalized_member_id = member_id.strip()
         normalized_display_name = display_name.strip()
         normalized_type = member_type.strip() or "human"
+        if normalized_type.lower() == "system":
+            # F2/H5: system members come from configuration (the seeded defaults) only; a write
+            # naming the type would become an Owner-equivalent sys_legacy_* principal.
+            raise ValueError("member_type 'system' comes from configuration only")
         normalized_roles = self._normalize_tokens(role_keys)
         normalized_permissions = self._normalize_tokens(permissions)
         existing = connection.execute(
@@ -551,6 +555,10 @@ class MemberDirectoryService:
         normalized_member_id = member_id.strip()
         normalized_display_name = display_name.strip()
         normalized_type = member_type.strip() or "human"
+        if normalized_type.lower() == "system":
+            # F2/H5: system members come from configuration (the seeded defaults) only; a write
+            # naming the type would become an Owner-equivalent sys_legacy_* principal.
+            raise ValueError("member_type 'system' comes from configuration only")
         normalized_roles = self._normalize_tokens(role_keys)
         normalized_permissions = self._normalize_tokens(permissions)
         existing = connection.execute(

@@ -170,6 +170,8 @@ _CHECK = {  # my check key -> (S4 id, label, fix label, href)
     "legacy_credentials": ("legacy", "Legacy paths", "Retire them", "/identity/sign-in#legacy"),
     "orphans": ("owners", "Owners & sponsors", "Assign owners", "/identity/people"),
     "audit_chain": ("audit", "Audit chain", "Verify now", "/identity/audit?verify=1"),
+    "enforcement": ("enforcement", "Access control", "Read the upgrade guide",
+                    "/identity/sign-in#enforcement"),
 }
 _LEGACY_LABEL = {
     "shared_password": ("legacy_password", "Shared console password"),
@@ -198,6 +200,8 @@ def _value(check: dict[str, Any], key: str) -> tuple[str, Optional[str]]:
         return str(total - check["count"]), f"of {total}"
     if key == "orphans":
         return str(check["count"]), "issues"
+    if key == "enforcement":
+        return ("✓" if check["status"] == "ok" else check.get("mode", "?")), None
     return str(check["count"]), None
 
 

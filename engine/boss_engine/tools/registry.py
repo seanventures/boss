@@ -80,6 +80,21 @@ class ToolSpec:
     #: from tools/object_args.py when the tool is registered; `identity_gate` enforces both.
     confine: tuple = ()
     production: Any = None
+    #: True for a project-PINNED registry (the discuss/chat registry): the call acts in the
+    #: session's project, whatever `project_id` the arguments carry. `invoke` strips the argument
+    #: BEFORE the identity gate, so the gate decides the project the handler acts in (H1).
+    pinned_project: bool = False
+    #: The tool acts ACROSS the install, not in one project, so its permission is checked at ORG
+    #: scope (a project binding is not enough): True always, or the name of a boolean argument
+    #: that widens the call to every project (mandate_standard's `all_projects`). M6/M7.
+    org_scope: Any = False
+
+    def acts_org_wide(self, args: Optional[dict]) -> bool:
+        if self.org_scope is True:
+            return True
+        if isinstance(self.org_scope, str) and self.org_scope:
+            return bool((args or {}).get(self.org_scope))
+        return False
 
     def describe(self) -> str:
         return f"tool {self.name} {self.permission or 'route'}"
@@ -148,6 +163,7 @@ class ToolRegistry:
         kind: ToolKind = "read",
         reversibility: Optional[Reversibility] = None,
         permission: Optional[str] = None,
+        org_scope: Any = False,
     ) -> Callable[[ToolHandler], ToolHandler]:
         """Decorator form: @registry.tool("list_x", "…", {...}, kind="read")."""
 
@@ -165,6 +181,7 @@ class ToolRegistry:
                     # destructive tool.
                     reversibility=reversibility or "safe",
                     permission=permission,
+                    org_scope=org_scope,
                 )
             )
             return fn
@@ -257,6 +274,14 @@ class ToolRegistry:
         # to whichever tool remembered.
         safe_args = dict(args or {})
         safe_args.pop("_operator_confirmed", None)
+        # ONE ACTING PROJECT FOR THE GATE AND THE HANDLER (H1). The gate used to read
+        # `args.project_id` while a pinned handler dropped it and acted in the session project, so
+        # a caller holding a permission in project B could act in project A by naming B. Decided
+        # here, for every tool: a pinned registry acts in the session project and the argument is
+        # discarded; otherwise an explicit `project_id` argument IS the acting project, and the
+        # handler is handed that same project (a handler that ignores the argument can no longer
+        # act somewhere the gate did not check).
+        project_id = acting_project(spec, project_id, safe_args)
         if operator_confirmed:
             safe_args["_operator_confirmed"] = True
         if not spec.self_executable and not operator_confirmed:
@@ -305,6 +330,23 @@ class ToolRegistry:
         return result
 
 
+def acting_project(spec: "ToolSpec", session_project: Optional[str], args: dict) -> Optional[str]:
+    """The project a tool call acts in, normalising `args` in place to agree with it (H1).
+
+    Pinned specs: the session project; any `project_id` argument is removed. Others: the
+    `project_id` argument when present (then written back so the handler sees the same value),
+    else the session project."""
+    if getattr(spec, "pinned_project", False):
+        args.pop("project_id", None)
+        return session_project
+    supplied = str(args.get("project_id") or "").strip()
+    if supplied:
+        args["project_id"] = supplied
+        return supplied
+    args.pop("project_id", None)
+    return session_project
+
+
 #: The verified identity of whoever is calling tools on this thread (an AuthContext). Set by the
 #: transport that authenticated the caller (the MCP server, the API's agent endpoints, the run
 #: supervisor with a run token); `invoke(auth=...)` overrides it for one call. Never set from a
@@ -328,8 +370,6 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
     would refuse and refuses nothing; enforce refuses, and refuses a call it cannot evaluate (no
     verified identity on this call path) — fail closed. API-surface tools are re-checked by the
     route they call, so they pass here."""
-    if getattr(spec, "inherits_route_permission", False):
-        return None
     from ..config import get_settings
     from ..identity import authz
     from ..identity.authz import DenyReason
@@ -343,7 +383,16 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
     if mode == AuthzMode.OFF:
         return None
     permission = str(getattr(spec, "permission", None) or "")
-    if permission not in PERMISSION_META:
+    if getattr(spec, "inherits_route_permission", False):
+        # API-surface tools are decided by the route they call — AS THE CALLER (M8: the bridge
+        # forwards the caller's own credential, never a server key). A call with no verified
+        # identity has no caller to forward, so it is not passed through on trust (H2).
+        if auth is not None:
+            return None
+        outcome = Outcome(False, DenyReason.NOT_EVALUATED, permission or "route",
+                          f"tool:{getattr(spec, 'name', '?')}",
+                          detail="no verified identity on this tool call")
+    elif permission not in PERMISSION_META:
         outcome = Outcome(False, DenyReason.UNDECLARED_ROUTE, permission, "undeclared",
                           detail="tool declares no catalogue permission")
     elif auth is None:
@@ -352,8 +401,12 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
     else:
         meta = PERMISSION_META[permission]
         org = auth.principal.org_id
-        acting_in = str((args or {}).get("project_id") or project_id or "").strip() or None
-        scope = (ResolvedScope.org_level(org) if meta.org_only or meta.system_only or not acting_in
+        # `invoke` already normalised the acting project (acting_project); a direct caller of
+        # the gate gets the same rule.
+        acting_in = acting_project(spec, project_id, dict(args or {})) or None
+        org_wide = bool(getattr(spec, "acts_org_wide", lambda _a: False)(args))
+        scope = (ResolvedScope.org_level(org)
+                 if meta.org_only or meta.system_only or org_wide or not acting_in
                  else ResolvedScope.in_project(org, acting_in))
         try:
             decision = authz.check(auth, permission, scope)

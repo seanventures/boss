@@ -99,6 +99,11 @@ class HostSampleBody(BaseModel):
 
 
 def _actor(explicit: Optional[str]) -> str:
+    from apps.api.app import identity_guard
+
+    enforced = identity_guard.request_actor()
+    if enforced:
+        return enforced          # F2/H7: under enforce the actor is the principal, never a claim
     if explicit and explicit.strip():
         return explicit.strip()[:120]
     try:

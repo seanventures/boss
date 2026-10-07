@@ -401,23 +401,40 @@ def system_permissions(principal_id: str, *, db: Any = None) -> Optional[frozens
     fixed = migration.legacy_system_set(principal_id)
     if fixed is None:
         return None
-    if principal_id != LEGACY_CONSOLE_PRINCIPAL:
-        return fixed
+    if principal_id in (LEGACY_WORKER_PRINCIPAL, SCIM_LEGACY_PRINCIPAL) or not fixed:
+        return fixed              # minimal fixed sets: nothing identity-writing to narrow
     if db is None:
         from ..db import begin
         with begin() as conn:
             return system_permissions(principal_id, db=conn)
-    row = db.execute(_sql(
-        "SELECT m.retired_at, p.org_id FROM identity_principals p LEFT JOIN "
-        "identity_legacy_mappings m ON m.legacy_kind = 'console_api_key' AND m.principal_id = p.id "
-        "WHERE p.id = :p"), {"p": principal_id}).first()
-    if row is None:
-        return fixed              # not seeded yet: nothing is claimed either
-    if row[0] is not None:
+    if principal_id == LEGACY_CONSOLE_PRINCIPAL:
+        row = db.execute(_sql(
+            "SELECT m.retired_at, p.org_id FROM identity_principals p LEFT JOIN "
+            "identity_legacy_mappings m ON m.legacy_kind = 'console_api_key' AND m.principal_id = p.id "
+            "WHERE p.id = :p"), {"p": principal_id}).first()
+        if row is None:
+            return fixed              # not seeded yet: nothing is claimed either
+        if row[0] is not None:
+            return frozenset()
+        if migration.claimed_at(db, row[1]) is not None:
+            return migration.CONSOLE_AFTER_CLAIM_SET
+        return fixed
+    # H3: every other legacy system principal (metatron, coo, ...) gets the console key's
+    # treatment: no identity writes from the claim, and nothing at all from the cutoff.
+    org = db.execute(_sql("SELECT org_id FROM identity_principals WHERE id = :p"),
+                     {"p": principal_id}).scalar()
+    if org is None:
+        return fixed
+    claimed = migration.claimed_at(db, org)
+    if claimed is None:
+        return fixed
+    from datetime import timedelta
+    from .policy import get_policy
+
+    cutoff = claimed + timedelta(days=get_policy(org, db=db).legacy_cutoff_days)
+    if datetime.now(timezone.utc) >= cutoff:
         return frozenset()
-    if migration.claimed_at(db, row[1]) is not None:
-        return migration.CONSOLE_AFTER_CLAIM_SET
-    return fixed
+    return migration.CONSOLE_AFTER_CLAIM_SET
 
 
 def step_up_exempt(ctx: AuthContext) -> bool:

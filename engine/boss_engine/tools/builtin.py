@@ -3992,6 +3992,30 @@ def _deepen(root: str, depth: int = 200) -> None:
         pass
 
 
+def _project_probe_host(ctx: Any, project_id: _Optional[str], host: str
+                        ) -> tuple[_Optional[dict], _Optional[str]]:
+    """THE TARGET RULE FOR PORT PROBES (M10): a probe goes only to a deployment host registered
+    in the acting project (by address or name, not retired). An arbitrary address is a network
+    scanner pointed from inside BOSS's network; another project's host is not this caller's.
+    Returns (host row, error)."""
+    host = (host or "").strip()
+    if not host or not project_id:
+        return None, "host and project are required"
+    try:
+        with ctx.begin() as c:
+            row = c.execute(
+                _text("SELECT id, name, address, port_min, port_max FROM deployment_hosts "
+                      "WHERE project_id = :p AND (address = :h OR name = :h) "
+                      "AND status <> 'retired' LIMIT 1"),
+                {"p": project_id, "h": host}).mappings().first()
+    except Exception:  # noqa: BLE001 — no proof of registration is no probe
+        row = None
+    if row is None:
+        return None, ("host is not a deployment host registered in this project; register it "
+                      "(list_deployment_hosts) before probing it")
+    return dict(row), None
+
+
 def _resolve_source(ctx: Any, args: dict, *, project_id: str) -> tuple[
     str, _Optional[str], _Optional[str],
 ]:
@@ -4008,10 +4032,15 @@ def _resolve_source(ctx: Any, args: dict, *, project_id: str) -> tuple[
             return "", None, err
         return repo or "boss", (args.get("ref") or ref or None), None
     repo = str(args.get("repo") or "boss").strip()
-    if (_community_restricted(ctx.settings)
-            and repo not in {"boss", "self", "platform"}
-            and not _project_repository_bound(ctx, project_id, repo)):
-        return "", None, "repository unavailable in this project"
+    if repo not in {"boss", "self", "platform", ""}:
+        # EVERY EDITION (not only Community): an explicit repository is read only when the
+        # acting project has it bound. A paid install's broad token is not authority for one
+        # project to read another project's private code. A short name means the configured
+        # owner, exactly as _repo_root resolves it.
+        full = repo if "/" in repo else (
+            f"{getattr(ctx.settings, 'target_github_owner', '') or ''}/{repo}")
+        if not _project_repository_bound(ctx, project_id, full):
+            return "", None, "repository unavailable in this project"
     return repo, (args.get("ref") or None), None
 
 
@@ -4771,7 +4800,10 @@ def _register_system_health_tools(reg: ToolRegistry) -> None:
              ["finding_id", "option"]),
         kind="write",
         # Some options pause or cancel a build: never pressed on a guess.
-        reversibility="destroys_work", permission="system:operate")
+        reversibility="destroys_work", permission="system:operate",
+        # The doctor acts on the whole install (builds, disk, updates), like its API route
+        # (Scope.org): a project-level system:operate binding is not enough (M6).
+        org_scope=True)
     def system_doctor_act(ctx, *, project_id, actor, args):
         from ..services import system_doctor
 
@@ -4979,7 +5011,9 @@ def _register_port_tools(reg: ToolRegistry) -> None:
               "count": {"type": "integer", "description": "how many to report (default 3)"},
               "project_id": {"type": "string"}},
              ["host"]),
-        kind="read", permission="host:read")
+        # A port scan from inside BOSS's network: a person's host operation, never an agent's
+        # on its own (host:exec is non-delegable), and only at the project's own hosts (M10).
+        kind="read", permission="host:exec")
     def find_free_port(ctx, *, project_id, actor, args):
         import socket
 
@@ -4989,9 +5023,13 @@ def _register_port_tools(reg: ToolRegistry) -> None:
         host = str(args.get("host") or "").strip()
         if not host:
             return {"ok": False, "error": "host is required"}
-        start = max(1024, int(args.get("start") or 3000))
-        want = max(1, min(int(args.get("count") or 3), 10))
         pid = args.get("project_id") or project_id
+        target, refused = _project_probe_host(ctx, pid, host)
+        if refused:
+            return {"ok": False, "error": refused}
+        host = str(target["address"])
+        start = max(1024, int(target.get("port_min") or 1024), int(args.get("start") or 3000))
+        want = max(1, min(int(args.get("count") or 3), 10))
 
         with ctx.begin() as c:
             rows = c.execute(
@@ -5010,7 +5048,8 @@ def _register_port_tools(reg: ToolRegistry) -> None:
         free: list[int] = []
         checked = 0
         port = start
-        while len(free) < want and checked < 200 and port < 65535:
+        ceiling = min(65535, int(target.get("port_max") or 65535) + 1)
+        while len(free) < want and checked < 200 and port < ceiling:
             checked += 1
             if port in assigned:
                 port += 1
@@ -5221,7 +5260,9 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
               "project_id": {"type": "string"}},
              ["key", "title", "body", "rationale"]),
         kind="write",
-        reversibility="safe", permission="policy:manage")
+        reversibility="safe", permission="policy:manage",
+        # all_projects=true writes a rule binding EVERY project: decided at org scope (M7).
+        org_scope="all_projects")
     def mandate_standard(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         key = str(args.get("key") or "").strip()
@@ -5282,14 +5323,21 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
                         "description": "ports to probe"},
               "project_id": {"type": "string"}},
              ["host", "ports"]),
-        kind="read", permission="host:read")
+        # Connects out from inside BOSS's network: non-delegable host:exec, and only to the
+        # project's own registered hosts (M10).
+        kind="read", permission="host:exec")
     def check_port_exposure(ctx, *, project_id, actor, args):
         import socket
 
         host = str(args.get("host") or "").strip()
-        ports = [int(p) for p in (args.get("ports") or []) if str(p).strip().isdigit()][:20]
+        ports = [int(p) for p in (args.get("ports") or [])
+                 if str(p).strip().isdigit() and 0 < int(p) < 65536][:20]
         if not host or not ports:
             return {"ok": False, "error": "host and at least one port are required"}
+        target, refused = _project_probe_host(ctx, args.get("project_id") or project_id, host)
+        if refused:
+            return {"ok": False, "error": refused}
+        host = str(target["address"])
 
         findings = []
         for port in ports:
@@ -5857,7 +5905,14 @@ def _register_image_tools(reg: ToolRegistry) -> None:
         rel = str(args.get("path") or "").strip().lstrip("/")
         if not rel:
             return {"ok": False, "error": "path is required"}
-        root = _os.environ.get("BOSS_IMAGE_DIR") or _os.path.join(_REPO_CACHE, "images")
+        # ONE DIRECTORY PER PROJECT. A shared directory let one project overwrite (or read
+        # back) another's artwork by naming the same relative path.
+        if not project_id or not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", str(project_id)) \
+                or str(project_id) in {".", ".."}:
+            return {"ok": False, "error": "generate_image needs the acting project"}
+        root = _os.path.join(_os.environ.get("BOSS_IMAGE_DIR") or _os.path.join(_REPO_CACHE, "images"),
+                             str(project_id))
+        _os.makedirs(root, exist_ok=True)
         dest = _safe_path(rel, root)
         if dest is None:
             return {"ok": False, "error": "path escapes the image output directory"}
@@ -6444,12 +6499,12 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if "/" not in repo_full:
             return {"ok": False, "error": "repo is required as owner/repo"}
 
+        # A run ID proves the project's own recorded repository. Raw PR numbers/URLs require a
+        # current binding — in EVERY edition: neither caller text nor a broad install token is
+        # authority to inspect an arbitrary private repository.
+        if not run_repo and not _project_repository_bound(ctx, pid, repo_full):
+            return {"ok": False, "error": "repository unavailable in this project"}
         if _community_restricted(ctx.settings):
-            # A run ID proves the project's own recorded repository. Raw PR numbers/URLs
-            # require a current binding; neither caller text nor a broad install token is
-            # authority to inspect an arbitrary private repository.
-            if not run_repo and not _project_repository_bound(ctx, pid, repo_full):
-                return {"ok": False, "error": "repository unavailable in this project"}
             token = _github_token_for(ctx, pid)
         else:
             token = getattr(ctx.settings, "github_token", "") or ""
@@ -7025,6 +7080,10 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
                 # IDENTITY: the rebuilt spec keeps its permission, or the gate would see none.
                 permission=spec.permission,
                 inherits_route_permission=spec.inherits_route_permission,
+                # PINNED: the identity gate decides the session project, the one this handler
+                # acts in — never an args.project_id the handler drops (H1).
+                pinned_project=True,
+                org_scope=spec.org_scope,
                 # Preserve the real kind. Stamping every admitted spec "read" made the
                 # operational writes look like reads to anything that inspects the registry —
                 # an audit, a gate, a future policy. A tool that changes state must say so.

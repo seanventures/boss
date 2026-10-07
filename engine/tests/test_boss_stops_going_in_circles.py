@@ -274,15 +274,25 @@ class TestFindingAPortWithoutGuessing:
         import contextlib
 
         class Result:
+            def __init__(self, sql=""):
+                self.sql = sql
+
             def mappings(self):
                 return self
 
             def all(self):
                 return rows
 
+            def first(self):
+                # M10: probes go only to a deployment host registered in the project.
+                if "deployment_hosts" in self.sql:
+                    return {"id": "h1", "name": "local", "address": "127.0.0.1",
+                            "port_min": 1024, "port_max": 65535}
+                return None
+
         class Connection:
-            def execute(self, *a, **kw):
-                return Result()
+            def execute(self, statement, *a, **kw):
+                return Result(str(statement))
 
         class Ctx:
             settings = type("Settings", (), {"boss_edition": "enterprise"})()

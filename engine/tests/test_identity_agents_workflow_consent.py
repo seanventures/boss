@@ -12,6 +12,7 @@ frozen signatures (as in the other S3 suites).
 from __future__ import annotations
 
 
+from boss_engine.config import get_settings
 import os
 import uuid
 
@@ -38,7 +39,7 @@ def env(monkeypatch):
     assert "test" in url.rsplit("/", 1)[-1]
     monkeypatch.setenv("BOSS_MASTER_KEY", MASTER_KEY)
     monkeypatch.setenv("BOSS_PUBLIC_URL", ISSUER)
-    monkeypatch.delenv("BOSS_AUTHZ_MODE", raising=False)
+    monkeypatch.setattr(get_settings(), "authz_mode", "shadow")
     vault.reset_master_key_cache()
     signing_keys.clear_cache()
     monkeypatch.setattr(cascade, "AFTER_COMMIT", [])
@@ -289,7 +290,7 @@ def test_an_agent_without_a_passport_gets_one_lazily_so_a_person_is_still_asked(
     monkeypatch.setattr(passports, "upgrade_from_roles",
                         lambda **kw: calls.append(kw) or real(**kw))
     monkeypatch.setattr(passports, "get", lambda aid, db=None: None)   # nobody can get one
-    monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
+    monkeypatch.setattr(get_settings(), "authz_mode", "enforce")
     from boss_engine.identity import runs
 
     monkeypatch.setattr(runs, "agent_for_role", lambda db, project_id, rk: "agt_nopass000001")
@@ -297,7 +298,7 @@ def test_an_agent_without_a_passport_gets_one_lazily_so_a_person_is_still_asked(
         with pytest.raises(consent.AgentWithoutPassport):
             consent._agents(db, env.project, ["builder"])
     assert calls and calls[0]["org_id"] == "org_boss"
-    monkeypatch.setenv("BOSS_AUTHZ_MODE", "shadow")
+    monkeypatch.setattr(get_settings(), "authz_mode", "shadow")
     with env.engine.begin() as db:
         assert consent._agents(db, env.project, ["builder"]) is None
 
