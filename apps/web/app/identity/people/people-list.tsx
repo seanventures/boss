@@ -5,8 +5,8 @@
  * source (local, SSO, SCIM); invite. Each row opens the person's profile. Invited people who have
  * not accepted yet carry a pill, so the list never pretends they can sign in.
  */
+import { useConsoleRefresh } from "../../use-console-refresh";
 import React, { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { FileArrowUp, MagnifyingGlass, Plus, UserPlus, UsersThree } from "@phosphor-icons/react";
 
 import { CanButton } from "../../../components/identity/identity-provider";
@@ -70,7 +70,7 @@ export function PeopleList({ people, roles, groups: allGroups = [], invited: inv
   const [f, setF] = useState<Filter>(NONE);
   const [inviting, setInviting] = useState(false);
   const [importing, setImporting] = useState(false);
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   const set = (k: keyof Filter) => (v: string) => setF((x) => ({ ...x, [k]: v }));
   const groups = useMemo(() => {
     const m = new Map<string, string>();
@@ -156,8 +156,8 @@ export function PeopleList({ people, roles, groups: allGroups = [], invited: inv
           </EmptyState>
         ) : null}
       </section> : null}
-      {inviting ? <InviteSheet roles={roles} groups={allGroups} onClose={() => setInviting(false)} onInvited={() => router.refresh()} /> : null}
-      {importing ? <ImportSheet roles={roles} groups={allGroups} people={people} onClose={() => setImporting(false)} onDone={() => router.refresh()} /> : null}
+      {inviting ? <InviteSheet roles={roles} groups={allGroups} onClose={() => setInviting(false)} onInvited={() => refresh("now")} /> : null}
+      {importing ? <ImportSheet roles={roles} groups={allGroups} people={people} onClose={() => setImporting(false)} onDone={() => refresh("now")} /> : null}
     </>
   );
 }

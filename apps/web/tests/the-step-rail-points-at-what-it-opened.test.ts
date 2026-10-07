@@ -60,7 +60,9 @@ describe("the detail reads as a callout", () => {
     // wrong step.
     expect(UI).toContain("node.getBoundingClientRect()");
     expect(UI).toContain("panel.getBoundingClientRect()");
-    expect(UI).toContain("box.left + box.width / 2 - frame.left");
+    // a5f939fa split it through `mid` (also used to hide the notch for a scrolled-out step).
+    expect(UI).toContain("const mid = box.left + box.width / 2;");
+    expect(UI).toContain("const centre = mid - frame.left;");
     expect(UI).not.toContain("node.offsetLeft");
   });
 

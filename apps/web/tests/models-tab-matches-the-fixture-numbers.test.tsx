@@ -112,7 +112,7 @@ describe("the Models numbers", () => {
     await click($("[data-testid='obs-calls-older']"));
     expect($$("[data-testid='obs-call-row']")).toHaveLength(26);
     expect($("[data-testid='obs-calls-older']")).toBeNull();
-    expect($("[data-testid='obs-group-logs']")?.getAttribute("href")).toMatch(/^\?area=activity&source=llm_call/);
+    expect($("[data-testid='obs-group-logs']")?.getAttribute("href")).toMatch(/^\?area=activity&src=llm_call/);
   });
 
   it("a row click opens the same drawer; Agent rows wear their face", async () => {

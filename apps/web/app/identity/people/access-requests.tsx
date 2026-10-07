@@ -5,8 +5,8 @@
  * grants a role that carries the permission (the API binds it under every §6.11 rule); Deny
  * closes it. Shown only when there is something to answer; a failed read says so.
  */
+import { useConsoleRefresh } from "../../use-console-refresh";
 import React, { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Check, HandWaving, X } from "@phosphor-icons/react";
 
 import { showToast } from "../../client-forms";
@@ -42,7 +42,7 @@ export function candidateRoles(r: AccessRequestRow, roles: AccessRole[]): { id: 
 
 function Approve({ request, roles, onClose }: { request: AccessRequestRow; roles: AccessRole[]; onClose: () => void }) {
   const guarded = useGuardedCall();
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   const now = useNow();
   const { org, project } = useIdentity();
   // The grant limit (lib/identity/grant-limit.ts): what the approver holds where the request is.
@@ -92,7 +92,7 @@ function Approve({ request, roles, onClose }: { request: AccessRequestRow; roles
               await guarded("Granting access changes what they can do.", () => idPost(`/v1/identity/access-requests/${encodeURIComponent(request.id)}/approve`,
                 { role_id: role, expires_at: expiresAt(expiry, date, now), reason: null }));
               showToast("success", "Access granted");
-              router.refresh();
+              refresh("now");
               onClose();
             } catch (e) {
               setError(refusal(e));
@@ -113,7 +113,7 @@ export function AccessRequests({ requests, roles, failure = null, project = null
   project?: string | null;
 }) {
   const guarded = useGuardedCall();
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   const { projectId: mirroredProject } = useIdentity();
   // A request is judged at ITS project only when that is the project the console mirrors (its
   // snapshot is loaded); any other project's request is judged by the org snapshot, which is
@@ -147,7 +147,7 @@ export function AccessRequests({ requests, roles, failure = null, project = null
                 try {
                   await guarded("Declining is recorded.", () => idPost(`/v1/identity/access-requests/${encodeURIComponent(r.id)}/deny`, { reason: null }));
                   showToast("success", "Declined");
-                  router.refresh();
+                  refresh("now");
                 } catch (e) {
                   showToast("error", refusal(e));
                 }

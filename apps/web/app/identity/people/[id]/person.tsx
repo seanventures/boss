@@ -7,8 +7,8 @@
  * delegations they granted, their keys and their audit trail. Admin actions are mirrored: a
  * viewer without the permission sees them disabled with the reason, never hidden.
  */
+import { useConsoleRefresh } from "../../../use-console-refresh";
 import React, { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   ArrowsClockwise, ArrowUpRight, CaretDown, Check, Clock, Desktop, DeviceMobile, EnvelopeSimple, Fingerprint, GithubLogo,
   Key, LinkSimple, LockSimple, MagnifyingGlass, Plus, Prohibit, SealCheck, ShieldCheck, ShieldWarning, User, UsersThree, X,
@@ -63,12 +63,12 @@ function refusal(e: unknown): string {
 /** A write from this page: step-up when asked, a ≤4-word toast either way, then a fresh render. */
 function useAct() {
   const guarded = useGuardedCall();
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   return async <T,>(reason: string, call: () => Promise<T>, done: string): Promise<T | null> => {
     try {
       const out = await guarded(reason, call);
       showToast("success", done);
-      router.refresh();
+      refresh("now");
       return out;
     } catch (e) {
       showToast("error", refusal(e));

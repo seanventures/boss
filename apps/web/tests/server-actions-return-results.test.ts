@@ -132,9 +132,10 @@ describe("every form that submits a server action goes through ActionForm", () =
   it("finds the forms it is checking (the scan works)", () => {
     const count = FILES.filter((f) => f.endsWith(".tsx"))
       .reduce((n, f) => n + (readFileSync(f, "utf8").match(/<ActionForm\b/g)?.length ?? 0), 0);
-    // Calibrated on the private repo, which carries two pages and the paid screens; the
-    // Community tree has one page and none of them (99 forms at integration).
-    expect(count).toBeGreaterThan(90);
+    // A floor that proves the scan finds forms, not a quota. 99 at integration; the Oct 4-5
+    // redesigns retired the old Infra, System Configuration, Observability and Panels screens
+    // (14d0f8a8, f923b20c) and their forms with them: 76 after. Lower it only for a removal.
+    expect(count).toBeGreaterThan(70);
   });
 
   it("ActionForm renders the result: the failure sentence inline and as a toast", () => {

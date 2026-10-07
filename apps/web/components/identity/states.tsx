@@ -7,8 +7,8 @@
  *     pretends there is nothing, and never a raw code (lib/identity/words.ts).
  *   - EmptyState: there really is nothing. It says what this is for and offers the next step.
  */
+import { useConsoleRefresh } from "../../app/use-console-refresh";
 import React, { type ReactNode } from "react";
-import { useRouter } from "next/navigation";
 import { ArrowClockwise, WarningCircle } from "@phosphor-icons/react";
 
 import { loadFailureWords } from "../../lib/identity/words";
@@ -20,7 +20,7 @@ export function ErrorState({ what, failure, compact = false, testId }: {
   /** What was being loaded, lower case: "people", "this group", "service accounts". */
   what: string; failure: ReadFailure; compact?: boolean; testId?: string;
 }) {
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   const w = loadFailureWords(what, failure.status, failure.code, failure.permission);
   const retry = failure.status !== 403 && failure.status !== 404;
   return (
@@ -32,7 +32,7 @@ export function ErrorState({ what, failure, compact = false, testId }: {
       </div>
       {failure.status === 401
         ? <a className="idn-btn sm" href="/login">Sign in</a>
-        : retry ? <button type="button" className="idn-btn sm" onClick={() => router.refresh()}><ArrowClockwise size={13} aria-hidden /> Try again</button> : null}
+        : retry ? <button type="button" className="idn-btn sm" onClick={() => refresh("now")}><ArrowClockwise size={13} aria-hidden /> Try again</button> : null}
     </div>
   );
 }
@@ -57,7 +57,7 @@ export function EmptyState({ icon, title, children, action, compact = false, tes
  * happened, offers Retry — and the page itself is not drawn (fail closed).
  */
 export function AccessUnchecked({ page }: { page: string }) {
-  const router = useRouter();
+  const refresh = useConsoleRefresh();
   return (
     <div className="idn-denied" data-testid="access-unchecked">
       <div className="idn-denied-card">
@@ -65,7 +65,7 @@ export function AccessUnchecked({ page }: { page: string }) {
         <h1>Can't check your access right now</h1>
         <p className="idn-why-line idn-dim" data-copy="prose">BOSS could not reach its identity service, so {page} stays closed until it can.</p>
         <div className="idn-acts">
-          <button type="button" className="idn-btn primary" onClick={() => router.refresh()}><ArrowClockwise size={13} aria-hidden /> Retry</button>
+          <button type="button" className="idn-btn primary" onClick={() => refresh("now")}><ArrowClockwise size={13} aria-hidden /> Retry</button>
         </div>
       </div>
     </div>

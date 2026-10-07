@@ -257,7 +257,7 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged }: 
                 <li key={`${r.origin}:${r.id}`} className="kit-list-row" data-testid={`kit-skill-${r.id}`}
                     onClick={() => showSkill(r.id)}>
                   <span className="kit-list-name" data-tip={r.tip} data-user-text={r.origin !== "built_in" || undefined}>
-                    {r.guide ? <FileText size={13} aria-label="Guide" data-testid={`kit-guide-${r.id}`} /> : null} {r.label}
+                    {r.guide ? <><FileText size={13} aria-label="Guide" data-testid={`kit-guide-${r.id}`} />{" "}</> : null}{r.label}
                   </span>
                   <span className="kit-chip" data-tip={r.origin === "built_in" ? TIP.builtIn : r.origin === "agent" ? "Written by an agent on an earlier run" : TIP.custom}>
                     {r.origin === "built_in" ? "Built in" : r.origin === "agent" ? "Agent-written" : "Yours"}
