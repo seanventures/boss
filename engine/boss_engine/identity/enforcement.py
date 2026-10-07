@@ -54,7 +54,7 @@ def parse_router_modes(raw: str) -> dict[str, AuthzMode]:
 
 
 def mode_for(router_key: str, *, global_mode: str, router_modes: str = "") -> AuthzMode:
-    base = AuthzMode((global_mode or "shadow").strip().lower())
+    base = AuthzMode((global_mode or "enforce").strip().lower())
     if base == AuthzMode.OFF:
         return AuthzMode.OFF
     if router_key.startswith(ALWAYS_ENFORCED_PREFIX):
@@ -65,7 +65,7 @@ def mode_for(router_key: str, *, global_mode: str, router_modes: str = "") -> Au
 def coverage_policy(*, global_mode: str, coverage: str = "") -> CoveragePolicy:
     if coverage:
         return CoveragePolicy(coverage.strip().lower())
-    return CoveragePolicy.FAIL if (global_mode or "").strip().lower() == "enforce" else CoveragePolicy.WARN
+    return CoveragePolicy.FAIL if (global_mode or "enforce").strip().lower() == "enforce" else CoveragePolicy.WARN
 
 
 # ---- evaluation ------------------------------------------------------------------------------------
@@ -185,28 +185,39 @@ def evaluate_object_rules(
     *,
     check: Callable[[AuthContext, str, ResolvedScope], Decision],
     db: Any = None,
+    named_skip: Optional[Iterable[tuple[str, str]]] = None,
+    org_locations: Iterable[str] = ("path", "query", "body"),
 ) -> Optional[Outcome]:
     """The declaration's object rules, after its permission was allowed (object_rules.py):
     every confined id must be in the scope's project (else 404), and a production target needs
     deployment:production at the target's project. None when both hold; a deny Outcome otherwise.
     Never raises: an error is NOT_EVALUATED (enforce refuses it, fail closed)."""
-    from .object_rules import Confined, check_confined, production_projects
+    from .epoch import connection
+    from .object_rules import Confined, check_confined, check_named, production_projects
     from .permissions_gen import P
 
     kind = ctx.principal.kind.value
     org = ctx.principal.org_id
     try:
-        if access.confine:
-            check_confined(access.confine, values, org_id=org, project_id=scope.project_id, db=db)
-        if access.production is not None:
-            for project_id in production_projects(access.production, values, scope=scope, db=db):
-                at = (ResolvedScope.in_project(org, project_id) if project_id
-                      else ResolvedScope.org_level(org))
-                decision = check(ctx, P.DEPLOYMENT_PRODUCTION, at)
-                if not decision.allowed:
-                    return Outcome(False, decision.reason, P.DEPLOYMENT_PRODUCTION,
-                                   access.describe() + " + " + access.production.describe(), kind,
-                                   decision=decision)
+        with connection(db) as conn:
+            if access.confine:
+                check_confined(access.confine, values, org_id=org, project_id=scope.project_id,
+                               db=conn)
+            if named_skip is not None:
+                # The central rule (F2 / M5, M9): every id the request names, by its name.
+                check_named(values, org_id=org, project_id=scope.project_id,
+                            skip=tuple(named_skip) + tuple((c.where, c.name) for c in access.confine),
+                            db=conn, org_locations=org_locations)
+            production = (production_projects(access.production, values, scope=scope, db=conn)
+                          if access.production is not None else [])
+        for project_id in production:
+            at = (ResolvedScope.in_project(org, project_id) if project_id
+                  else ResolvedScope.org_level(org))
+            decision = check(ctx, P.DEPLOYMENT_PRODUCTION, at)
+            if not decision.allowed:
+                return Outcome(False, decision.reason, P.DEPLOYMENT_PRODUCTION,
+                               access.describe() + " + " + access.production.describe(), kind,
+                               decision=decision)
     except Confined as exc:
         return Outcome(False, DenyReason.NOT_FOUND, access.permission, access.describe(), kind,
                        detail=f"confine: {exc.rule.describe()}")
