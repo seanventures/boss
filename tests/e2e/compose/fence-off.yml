@@ -1,0 +1,8 @@
+# A host that CANNOT fence the build sandbox's network (tests/e2e/identity/upgrade_walk.py,
+# sandbox_fence). The api normally gets cap_add NET_ADMIN so its entrypoint can install the
+# iptables owner-match rules for the sandbox uids (scripts/sandbox/entrypoint.sh). Without it the
+# rules fail exactly as they do on rootless Docker, gVisor and some WSL2/VPS kernels.
+# `!reset` (Compose 2.24+) removes the base file's cap_add list instead of merging into it.
+services:
+  api:
+    cap_add: !reset []
