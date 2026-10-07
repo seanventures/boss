@@ -113,6 +113,14 @@ class Outcome:
         return body
 
 
+def is_person_session(ctx: AuthContext) -> bool:
+    """A person signed in with a session: the only caller a people_only declaration admits (the
+    handlers' need_person_session asks the same)."""
+    from .principal import PrincipalKind
+
+    return ctx.principal.kind == PrincipalKind.USER and ctx.session is not None
+
+
 def _not_evaluated(access: Access, detail: str, permission: str = "") -> Outcome:
     return Outcome(False, DenyReason.NOT_EVALUATED, permission, access.describe(), detail=detail)
 
@@ -154,6 +162,12 @@ def evaluate(
         return Outcome(False, DenyReason.PRINCIPAL_INACTIVE, getattr(access, "permission", ""),
                        access.describe(), kind)
     if isinstance(access, Authenticated):
+        if access.people_only and not is_person_session(ctx):
+            # Decided HERE, before the body is validated, like every other refusal: a key calling
+            # POST /v1/identity/me/password got 422 "field required" before the handler's own
+            # people check could say no (round 3 sweep). Same code and status as the handler's.
+            return Outcome(False, DenyReason.MISSING_PERMISSION, "", access.describe(), kind,
+                           detail="people only", authn_status=403, authn_code="people_only")
         return Outcome(True, None, declaration=access.describe(), principal_kind=kind)
     assert isinstance(access, Permit)
     try:
