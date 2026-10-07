@@ -9,7 +9,7 @@ This is the first draft of the one catalogue every BOSS API route, MCP tool, con
 ## 1. Conventions
 
 - **Key format:** `resource:action`, lowercase snake_case, matching `^[a-z][a-z_]*:[a-z][a-z_]*$`. One resource per BOSS object a person would name: a build is `code_task`, a workflow run is `workflow_run`.
-- **No wildcards anywhere.** Neither `*` nor `resource:*` exists, in storage or in matching. Built-in roles are explicit lists generated from the `roles` column of each entry. In the role editor, "select all in a resource" expands to explicit keys when you save. So a permission added in a later BOSS release never reaches a custom role silently. Kaappu's seeder bug, and its `gateway:*` vs `gateway_instances:*` confusion, cannot happen here.
+- **No wildcards anywhere.** Neither `*` nor `resource:*` exists, in storage or in matching. Built-in roles are explicit lists generated from the `roles` column of each entry. In the role editor, "select all in a resource" expands to explicit keys when you save. So a permission added in a later BOSS release never reaches a custom role silently. A seeder that grants a wildcard, or two near-identical wildcards that drift apart, cannot happen here.
 - **Actions are named for what they risk, not for the HTTP verb.** `read`, `create`, `update`, `delete` and `manage` are the common ones. Dangerous effects get their own action, such as `deployment:production`, `code_task:override`, `host:exec`, `agent_ability:assign` and `owner:assign`, so a broader permission never implies them.
 - **Flags:**
   - **step-up:** the session must have passed MFA in the last 10 minutes (IDENTITY.md §4.6).

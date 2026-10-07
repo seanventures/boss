@@ -4,14 +4,14 @@ BOSS Community speaks the Model Context Protocol, so agent clients can discover 
 
 | Session | Authority | Tools | Start with |
 |---|---|---|---|
-| **API-backed** | A dedicated project member and API key; every call goes through the HTTP API | API search and invocation tools; native engine tools are hidden | `make mcp-setup`, then `make mcp` |
+| **API-backed** | A service account pinned to one project, with its own key; every call goes through the HTTP API | API search and invocation tools; native engine tools are hidden | `make mcp-setup`, then `make mcp` |
 | **Engine-only** | The engine's local database authority | The engine's 106 native tools (61 read, 45 write) | `python -m boss_engine ... serve-mcp` |
 
 The engine's typed tool registry is shared by MCP, the native agent, and `python -m boss_engine call`. MCP is an agent interface to the engine; the HTTP control plane remains the complete API for BOSS administration and integrations.
 
 ## Quick start
 
-For an installed Community stack, provision a dedicated MCP member and key once, then point your MCP client's stdio command at `make mcp` from the install directory:
+For an installed Community stack, give your MCP client its own key once, then point your MCP client's stdio command at `make mcp` from the install directory:
 
 ```bash
 make mcp-setup
@@ -20,10 +20,13 @@ make mcp
 
 `make mcp-setup`:
 
-- Creates an `mcp_operator` member with the default permissions `agent_chat`, `command_submit`, `task_create`, `workflow_manage`, `workflow_execute`, `health_refresh`, and `audit_export`.
-- Generates a separate key and preserves the owner and worker credentials.
-- Updates `.env` atomically with mode 0600 and restarts the API service.
-- Never prints the key.
+- Creates a service account **MCP (project-id)** with access to that one project only. By default it can do what `agent_chat`, `command_submit`, `task_create`, `workflow_manage`, `workflow_execute`, `health_refresh` and `audit_export` allowed before, plus reading the project.
+- Issues its key from the host shell (inside the api container, as the `boss` user), pinned to that project.
+- Keeps the key in `.env` as `BOSS_MCP_API_KEY` (atomic write, mode 0600). Never prints it.
+- Replaces an older MCP key (one bound to `mcp_operator` in `BOSS_API_KEYS`) and unbinds it; only then does it restart the API, once, to drop the old key.
+- Run again with the same project, it changes nothing.
+
+Owners see the account in **Identity › Service accounts**, where they can narrow its role or revoke the key.
 
 The stdio launcher reads the key from `.env` and forwards it to a single MCP process through the environment, so Docker's command line contains only the variable name.
 
@@ -32,32 +35,34 @@ The stdio launcher reads the key from `.env` and forwards it to a single MCP pro
 
 ### Choose a project and permissions
 
-One installed `.env` MCP key and member belong to one project. To use a project other than the default, set it **before the first setup**:
+One installed `.env` MCP key belongs to one project. To use a project other than the default, set it **before the first setup**:
 
 ```bash
 BOSS_PROJECT_ID=project-id make mcp-setup
 BOSS_PROJECT_ID=project-id make mcp
 ```
 
-Setup refuses to add the member to a second project, and the launcher refuses a different project ID. For a different permission set on the selected project:
+Setup refuses a second project for the same key, and the launcher refuses a different project ID. For a different permission set on the selected project:
 
 ```bash
 python3 scripts/install/mcp_access.py setup --restart-api --project project-id \
   --permission agent_chat --permission workflow_manage
 ```
 
-An explicit permission list replaces that member's grants. The authenticated API still enforces each operation's policy and approval gates. The launcher fails if the key is missing or unbound, or if the member can see any project other than the selected one.
+Each `--permission` is either one of the capability names above or a permission such as `workflow_run:start`. An explicit list issues a new key with exactly that access (the old key stops). The API still enforces each operation's policy and approval gates. The launcher fails if the key is missing, and the API-backed session refuses a key that can see any project other than the selected one.
+
+A person can also point a remote MCP client at a personal key (**My account › API keys**). Personal keys never hold step-up permissions; a service-account key may, for the permissions in its scopes.
 
 !!! warning "One principal per project"
     Use a separate principal, key, and MCP process for each project. Do not add one MCP principal to several projects.
 
 ## Engine-only sessions
 
-The Community installer already starts Postgres and seeds the default project. The legacy engine-only command remains available for a client on the same machine. It uses the engine's local database authority and exposes native writes, whereas the `make mcp` API-backed session routes every call through its dedicated project member.
+The Community installer already starts Postgres and seeds the default project. The legacy engine-only command remains available for a client on the same machine. It uses the engine's local database authority and exposes native writes, whereas the `make mcp` API-backed session routes every call through its own project service account.
 
 ```bash
 docker compose -f scripts/install/community-compose.yml --env-file .env \
-  exec -T api python -m boss_engine --project boss-dogfood serve-mcp
+  exec -T -u boss api python -m boss_engine --project boss-dogfood serve-mcp
 ```
 
 - Add `serve-mcp --read-only` if the client should only inspect BOSS.
@@ -101,7 +106,7 @@ python -m boss_engine --project boss-dogfood serve-mcp --http --allow-writes --h
 ```
 
 !!! note
-    `make mcp-setup` only provisions a member and key for the local API. Keep that helper, and the API it calls, on loopback. The HTTP MCP listener is separate and is not published by the stock Compose file.
+    `make mcp-setup` only issues a key through the local install. Keep that helper, and the API it calls, on loopback. The HTTP MCP listener is separate and is not published by the stock Compose file.
 
 ## Native engine tools
 
@@ -132,7 +137,7 @@ The engine registry has 106 tools: 61 read and 45 write. Examples:
 - The session project is fixed at server startup. MCP ignores any `project_id` supplied in a tool call and strips the internal `_operator_confirmed` and `_writes_allowed` fields.
 - Destructive and irreversible tools return a confirmation requirement; an agent cannot forge an operator click.
 - Decision approvals, gate waivers, host shell, and other high-risk actions follow their existing explicit approval path.
-- API-backed sessions hide every native engine tool, including reads, so a client cannot bypass the member's API read or write permissions through `DATABASE_URL`.
+- API-backed sessions hide every native engine tool, including reads, so a client cannot bypass the key's API read or write permissions through `DATABASE_URL`.
 
 ## Drive the API from MCP
 
@@ -155,12 +160,12 @@ Discovery works without an API credential in a manually started catalog-only ses
 
 ### Credential requirements
 
-- The key must already be configured in the API's key/principal map, and `GET /v1/projects` must return **exactly** the pinned session project for that principal, both when the session starts and before each call.
+- The key must be a BOSS key whose account can see **exactly** the pinned session project (`GET /v1/projects`), and, when the key is pinned to projects, only that one. This is checked when the session starts and before each call.
 - A multi-project operator needs one dedicated principal and key per project. Calls cannot switch projects through arguments, including operations that accept only a resource ID and no `project_id` field.
-- The bridge verifies that `/v1/auth/session` reports authenticated API-key transport and an actual bound principal. It never reads the API container's ambient `BOSS_API_KEY`, and an HTTP MCP bearer token alone grants no API authority.
-- The stock `ceo`, `system`, and `executive_console` principals are rejected for API-backed MCP calls.
+- The bridge verifies that `/v1/auth/session` reports an API key and who it belongs to. It never reads the API container's own environment, and an HTTP MCP bearer token alone grants no API authority.
+- The shared console key, the worker's key and the host tools' key are rejected for API-backed MCP calls.
 
-To provision a credential manually, create a dedicated project member with only the permissions this client needs, bind a separate API key to that member in the API's key/principal configuration, and pass that key only to the MCP process.
+To provision a credential by hand, create a service account in **Identity › Service accounts**, give it a role in one project only, issue a key limited to that project, and pass that key only to the MCP process.
 
 !!! warning
     Keep `BOSS_MCP_API_KEY` in your MCP client's private environment or secret store, never in the MCP arguments or command line. The Community setup stores it only in the private, gitignored `.env` file.
@@ -200,7 +205,7 @@ The public Community export can verify its mounted subset with `python scripts/a
 
 ### API policy eligible
 
-The operation is discoverable, and the bridge may submit it with a verified scoped principal. That does not mean the member has permission, that an edition includes the feature, or that an approval has been granted. Notable eligible operations:
+The operation is discoverable, and the bridge may submit it with a verified scoped principal. That does not mean the account has permission, that an edition includes the feature, or that an approval has been granted. Notable eligible operations:
 
 | Operation | Requirement |
 |---|---|
@@ -211,7 +216,7 @@ The operation is discoverable, and the bridge may submit it with a verified scop
 | Project meeting-role edits | `workflow_manage` |
 | Planned team-structure and agent-role edits | `role_review` |
 
-For these edits the API records the authenticated member as the actor, even if a request body names another actor. The standard MCP member does not receive these management permissions by default.
+For these edits the API records the authenticated member as the actor, even if a request body names another actor. The standard MCP service account does not receive these management permissions by default.
 
 Changing or applying the gate-autonomy policy requires a separate human CEO confirmation. The approving human, who holds `decision_resolve`, is the actor recorded on the policy. Dedicated MCP principals cannot be CEOs.
 

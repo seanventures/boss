@@ -101,7 +101,7 @@ The installer puts `boss` in `~/.local/bin` (or in `/usr/local/bin` when that is
 |---|---|
 | `boss status` | Install directory, release, services, and API health |
 | `boss open` | Prints the Mission Control address |
-| `boss password` | Shows the console password, in a terminal only. `boss password reset` rotates it |
+| `boss password` | Shows the console password, in a terminal only: it claims a new install, then signs teammates in as Operator for 30 days after the claim. `boss password reset` rotates it |
 | `boss doctor` | Runs `checkup.sh` (`--probe` also asks a model a question) |
 | `boss logs [-f] [api\|worker\|web\|db]` | Recent service logs |
 | `boss connect` | Runs the [Models](#models) step again. It saves newly exported provider keys into `.env` and restarts only api and worker. It then asks once before each copy, sign-in, or connection, offers a subscription sign-in or a local model when nothing is usable, and ends with the Models table. `--connect-found` answers yes for what was found. `--yes` asks nothing and installs nothing |
@@ -113,6 +113,7 @@ The installer puts `boss` in `~/.local/bin` (or in `/usr/local/bin` when that is
 | `boss update` | Re-applies configuration on the installed release: reruns the installer so newly exported keys and flags such as `--web` take effect. It never changes the release |
 | `boss uninstall [--purge]` | Stops BOSS and keeps data and the `boss` command. `--purge` deletes data after a backup and a typed confirmation, then removes the `boss` command the installer wrote for this install (one that belongs to another program or another install is left alone) |
 | `boss version` | Installed release and commit |
+| `boss identity CMD` | Named accounts from the host shell: `setup-link` (a one-hour claim link), `claim-status`, `recover-owner --email E`, `host-key`, `legacy status`, `posture`, `audit verify`. Runs in the api container as the `boss` user. See [Identity administration](../../docs/community/IDENTITY_ADMIN.md#host-shell-commands) |
 
 ### Which release, and staying on it
 
@@ -227,10 +228,14 @@ A rerun retains both API credentials and any operator-added API keys, the databa
 
 ### API keys
 
-| Key | Bound to | Used by |
+| Key | Belongs to | Used by |
 |---|---|---|
-| `BOSS_API_KEY` (owner) | `ceo` member | Mission Control and local CLI commands |
+| `BOSS_HOST_API_KEY` | Service account **Host tools** | The `boss` command, `boss doctor`, `make metatron`, `remote.sh` and the model helpers. `boss` issues it when missing or refused; `boss identity host-key` makes a new one |
+| `BOSS_MCP_API_KEY` | Service account **MCP (project)** | `make mcp`, after `make mcp-setup` |
 | `BOSS_WORKER_API_KEY` (worker) | Seeded `system` member | The worker container only; it can claim and settle leased jobs, so never expose it elsewhere |
+| `BOSS_API_KEY` (shared, legacy) | Legacy console key | Older tools. It loses people-and-access changes when the install is claimed and stops 30 days later |
+
+People use their own keys: **My account › API keys** in the console.
 
 Existing single-key installs receive a new worker key on the next installer rerun or upgrade, without rotating the owner key.
 
@@ -445,8 +450,8 @@ Returns three separate grades (delivery, efficiency, host) deterministically, wi
 
 ```bash
 source ~/boss/boss-community.env.sh
-curl -sS -H "Authorization: Bearer $BOSS_API_KEY" "$BOSS_API_URL/health"
-# Mission Control: http://127.0.0.1:3000
+curl -sS "$BOSS_API_URL/health"
+# Mission Control: http://127.0.0.1:3000 — the first visit claims it (boss password proves it is you)
 ```
 
 ## Upgrade & recover
@@ -455,7 +460,10 @@ curl -sS -H "Authorization: Bearer $BOSS_API_KEY" "$BOSS_API_URL/health"
 boss upgrade --dry-run                                      # show the release it would move to
 boss upgrade                                                # back up, then move to the newest release
 boss upgrade --to v1.1                                      # back up, then move to one ref
+boss upgrade --no-rollback                                  # keep a failed release in place to inspect it
 ```
+
+If the new release fails to start after its source is in place, `boss upgrade` puts the previous release back and starts it again, then says **Rolled back**. Data volumes are kept; the new release only adds tables, which the old one ignores. If the rollback cannot start either, restore the backup (below).
 
 `boss upgrade` runs `scripts/install/upgrade.sh` from the install. Without `--to`, a release install moves to the newest published release tag and never to `main`; see [which release](#which-release-and-staying-on-it). The script works directly too:
 

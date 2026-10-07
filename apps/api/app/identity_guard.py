@@ -1,6 +1,6 @@
 """THE API's enforcement point: every route goes through `enforce_access`.
 
-docs/product/IDENTITY.md §6.3/§6.6, frozen in Phase 0 (docs/product/IDENTITY_BUILD.md §2.4).
+docs/product/IDENTITY.md §6.3/§6.6, frozen in Phase 0 (docs/maintainers/IDENTITY_BUILD.md §2.4).
 
     app = FastAPI(..., dependencies=[Depends(identity_guard.enforce_access)])
 

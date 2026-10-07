@@ -14,7 +14,7 @@ From the install directory:
 make metatron
 ```
 
-This opens the terminal inside the API container with the install's configured API key and project. No host Python setup is needed.
+This opens the terminal inside the API container with the host tools' key (`BOSS_HOST_API_KEY`, issued for you if missing) and the install's project. No host Python setup is needed.
 
 ### From a checkout
 
@@ -23,7 +23,7 @@ Set these environment variables, then run `python3 scripts/metatron_tui.py`:
 | Variable | Required | Purpose |
 |---|---|---|
 | `BOSS_API_URL` | Yes | API origin |
-| `BOSS_API_KEY` | Yes | Sent in the `X-Boss-Api-Key` header; never printed by the terminal |
+| `BOSS_API_KEY` | Yes | Your key: a personal key from **My account › API keys**, or on the install machine the host tools' `BOSS_HOST_API_KEY`. Sent in the `X-Boss-Api-Key` header; never printed |
 | `BOSS_PROJECT_ID` | Yes | Initial project |
 | `BOSS_ACTOR` | No | Actor the terminal sends with requests |
 
@@ -170,7 +170,7 @@ In the stock Community install, run the engine's Python module inside the API co
 
 ```sh
 docker compose -f scripts/install/community-compose.yml --env-file .env \
-  exec -T api python -m boss_engine --project boss-dogfood tools
+  exec -T -u boss api python -m boss_engine --project boss-dogfood tools
 ```
 
 Use the same `python -m boss_engine` entry point for `call`, `code`, and `serve-mcp`. The Community API image does not install a `boss-engine` executable. If your user needs sudo for Docker, run these commands through a working Docker permission path. [MCP](MCP.md) shows the stdio command; its optional HTTP transport is read-only by default.

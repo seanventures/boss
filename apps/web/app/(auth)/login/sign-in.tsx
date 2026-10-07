@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * SIGN IN (mockup e, IDENTITY.md §9.7, D33): Kaappu's layout in BOSS style.
+ * SIGN IN (mockup e, IDENTITY.md §9.7, D33): a familiar layout in BOSS style.
  *
  *   mark and welcome → the configured provider row (hidden when none) → "Sign in with a passkey"
  *   → "or use email" → Password | Magic link | Email code (the email tabs only with SMTP)

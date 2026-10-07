@@ -42,7 +42,7 @@ Once a day, BOSS also writes the chain head into the activity log as an **anchor
 
 ### Retention and pruning
 
-Events are kept for 400 days by default (`BOSS_IDENTITY_AUDIT_RETENTION_DAYS`). Only an Owner can prune, and never anything younger than 30 days.
+Events are kept for 400 days by default (`BOSS_IDENTITY_AUDIT_RETENTION_DAYS`, at least 30). Once a day BOSS prunes older events by itself, recorded as **BOSS** in the log. An Owner can prune sooner (**Prune** in Identity › Audit, step-up, or `boss identity audit prune --older-than-days N`), but never anything younger than 30 days.
 
 A prune first writes an `audit.checkpoint` event holding the hash of the pruned range, then deletes the range in the same transaction, so the chain still verifies. A prune never deletes the record of the claim (`bootstrap.claimed`), the protection that stops the last Owner from being removed depends on it, or an earlier checkpoint.
 
@@ -65,7 +65,7 @@ Any identity change (a person, a role, a binding, a group, a key, a grant, the p
 
 ## Posture
 
-**Identity › Overview** shows six checks, each with a status and a fix (`GET /v1/identity/posture`):
+**Identity › Overview** shows the posture checks, each with a status and a link to its fix (`GET /v1/identity/posture`, or `boss identity posture`):
 
 | Check | Red or amber when |
 | --- | --- |
@@ -75,12 +75,14 @@ Any identity change (a person, a role, a binding, a group, a key, a grant, the p
 | Legacy credentials | The shared password, the shared API key, env API keys, classic GitHub tokens or the network bridge are still in use. Each shows its use count, last use and days left. |
 | Orphans | A service account has no active owner, or an agent has no sponsor. |
 | Audit chain | The chain was not verified in the last two days, or verification failed. |
+| Public address | BOSS has no public address, so it sends no emailed links and offers no passkeys or SSO. |
+| GitHub | Builds have no safe way to reach GitHub (see [GitHub for builds](#github-for-builds)). |
 
 Legacy credentials are also listed on their own, with their cutoffs (`GET /v1/identity/legacy`).
 
 ## The identity policy
 
-**Identity › Settings** edits the policy (`GET` and `PUT /v1/identity/policy`; changing it needs an Owner and step-up). Every change is recorded as `policy.changed` with the old and new values.
+**Identity › Sign-in & SSO** edits the policy (`GET` and `PUT /v1/identity/policy`; changing it needs an Owner and step-up). Every change is recorded as `policy.changed` with the old and new values.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -91,9 +93,10 @@ Legacy credentials are also listed on their own, with their cutoffs (`GET /v1/id
 | `email_magic_link` / `email_code` | on | Email sign-in, effective only with SMTP. |
 | `signup_enabled` / `signup_domains` | off / none | Self sign-up and its domain allow-list. |
 | `public_origin` | unset | The console origin bound at claim (HTTPS only). |
-| `key_default_days` / `key_max_days` | 90 / 365 | API key expiry. |
+| `key_default_days` / `key_max_days` | 90 / 365 | API key expiry. Owners get a reminder 14 and 3 days before a key expires (a banner, and an email with SMTP). |
+| `key_auto_revoke_unused_days` | off | Revoke keys not used for this many days (counted from the last use, or from creation). Audited; the key's owner is emailed. |
 | `delegation_default_days` / `delegation_max_days` | 30 / 90 | How long an agent may act for someone. |
-| `legacy_cutoff_days` | 30 | Days after the claim at which the shared credentials stop working (0–90). |
+| `legacy_cutoff_days` | 30 | Days after the claim at which the shared credentials stop working (0–30). It can only shorten the window; an Owner extends it once, by at most 30 days, per credential. |
 | `network_bridge_enabled` | on | Off ends the network bridge at the claim. |
 
 A value outside its range, or a key that does not exist, is refused with `422`. A save applies only the fields that changed, so an automatic setting stays automatic. Two fields are not switches: `smtp` reports whether email is configured, and `network_mode` can only be turned **off** (Require sign-in); network trust is never turned back on (`409`). `github_require_user_repo_access` is automatic until an Owner sets it (on exactly when more than one person is active); setting it to `null` makes it automatic again.
@@ -158,14 +161,25 @@ A device-bound passkey whose signature counter goes backwards looks like a clone
 
 ## Host-shell commands
 
-These commands run on the machine where BOSS runs, against its database. No console page, API route or MCP tool can run them.
+These commands run on the machine where BOSS runs, against its database. No console page, API route or MCP tool can run them. Use the `boss` command:
 
 ```bash
-docker compose exec api python -m boss_engine.identity.cli <command>
+boss identity <command>
 ```
+
+It runs the identity CLI inside the api container as the `boss` user. Without the `boss` command, from the install directory:
+
+```bash
+docker compose -f scripts/install/community-compose.yml --env-file .env exec -u boss api \
+  python -m boss_engine.identity.cli <command>
+```
+
+Always pass `-u boss`: the api container starts as root (to fence the build sandbox), and files written as root can break the `boss` user later.
 
 | Command | What it does |
 | --- | --- |
+| `setup-link` | A new link to claim this BOSS, valid once for one hour. Only while the install has no Owner. |
+| `host-key` | Issues a new key for the host tools (service account **Host tools**) and keeps it in `.env` as `BOSS_HOST_API_KEY`. The old one stops. With `boss identity` it is never printed. |
 | `recover-owner --email E` | Makes a locked-out person an active Owner again, removes their authenticator app and recovery codes, ends their sessions, and prints a single-use link valid for 15 minutes. Recorded as `owner.recovered_by_host`. |
 | `legacy status` | Lists every legacy credential with its principal, use count, last use and cutoff. |
 | `legacy retire --path network_mode` | Ends a legacy credential now: `network_mode`, `shared_password` or `console_api_key`. |
@@ -175,10 +189,13 @@ docker compose exec api python -m boss_engine.identity.cli <command>
 | `shadow-report [--json]` | Prints the per-router shadow report. |
 | `posture` | Prints the posture checks. |
 | `claim-status` | One line: `unclaimed`, or when the install was claimed and when the shared credentials stop. `boss doctor` prints it. |
-| `seed-test-accounts --org O --owner-email E --out F [--domain D] [--i-know]` | Creates (or refreshes) one person per access role (Owner, Admin, Operator, Viewer, Auditor), the custom role `developer` with a person, and the service account `seed-ci` with a key, all as the Owner E. Passwords, TOTP secrets for roles that need MFA, and the key are written only to F, created with mode 0600; nothing secret is printed. Refused when the install looks like production (no `BOSS_ENVIRONMENT=dev/test/e2e/ci/staging` and a public origin that is not localhost or `.test`/`.local`) unless `--i-know`. Running it again gives the same accounts new credentials. Delete F when you are done. |
+| `mcp-key --project P [--permission X]` | Issues one project's MCP key. Prints it, so `boss identity` refuses it: use `make mcp-setup`, which keeps it in `.env`. |
+| `egress-key [--revoke-others]` | Issues the egress service's key. Prints it; run it with the `docker compose … exec -u boss` form. |
+| `seed-test-accounts --org O --owner-email E --out F [--domain D] [--i-know]` | Creates (or refreshes) one person per access role (Owner, Admin, Operator, Viewer, Auditor), the custom role `developer` with a person, and the service account `seed-ci` with a key, all as the Owner E. Passwords, TOTP secrets for roles that need MFA, and the key are written only to F, created with mode 0600; nothing secret is printed. Refused when the install looks like production (no `BOSS_ENVIRONMENT=dev/test/e2e/ci/staging` and a public origin that is not localhost or `.test`/`.local`) unless `--i-know`. Running it again gives the same accounts new credentials. Delete F when you are done. `boss identity` refuses it; use the `docker compose … exec -u boss` form. |
 | `migrate` | Re-runs the mapping of legacy members, keys, grants and SCIM data. It runs by itself at startup, and running it again changes nothing that is already mapped. |
 
 ## Next steps
 
 - [Upgrade to named accounts](IDENTITY_UPGRADE.md), for the claim and the 30-day window.
+- [People and access](PEOPLE_AND_ACCESS.md) and [Sign-in setup](SIGN_IN_SETUP.md).
 - [Sign in to Mission Control](CONSOLE_AUTH.md), for reaching the console and its TLS requirements.
