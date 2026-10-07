@@ -314,10 +314,41 @@ def may_enrol(db: Any, row: sessions.SessionRow, user: users.UserRow) -> Optiona
     return None
 
 
+def sso_refusal(db: Any, user: users.UserRow, facts: RequestFacts, *,
+                method: str) -> Optional[Answer]:
+    """Enforce SSO (IDENTITY.md §4.8), for EVERY first factor in one place: when an active
+    provider enforces SSO for the person's email domain, only that provider signs them in — not a
+    password, an email link or code, or another provider. A passkey still works for an Owner (the
+    break-glass), for nobody else. None: this method may proceed."""
+    from sqlalchemy import text
+
+    domain = user.email.rsplit("@", 1)[-1].lower() if user.email and "@" in user.email else ""
+    if not domain:
+        return None
+    enforcing = {r[0] for r in db.execute(text(
+        "SELECT id FROM identity_providers WHERE status = 'active' AND enforce_sso AND "
+        ":d = ANY(domains)"), {"d": domain})}
+    if not enforcing:
+        return None
+    if method.startswith("sso:") and method[4:] in enforcing:
+        return None
+    if method == "passkey" and users.is_owner(db, user.principal_id, user.org_id):
+        return None
+    emit(db, org_id=user.org_id, event_type="auth.login.failed", outcome=Outcome.DENIED,
+         target_type="user", target_id=user.principal_id, ip=facts.ip,
+         user_agent=facts.user_agent, request_id=facts.request_id,
+         details={"reason": "sso_required", "method": method.split(":", 1)[0]})
+    return Answer(403, {"error": "sso_required"})
+
+
 def finish_first_factor(db: Any, user: users.UserRow, facts: RequestFacts, *, method: str,
                         email_method: bool = False, idp_mfa: bool = False) -> Answer:
     """After a first factor: MFA if the person has a second factor (or the IdP vouched for MFA),
-    otherwise a session. An email method never satisfies an MFA-required role (A87)."""
+    otherwise a session. An email method never satisfies an MFA-required role (A87). Enforce SSO
+    is checked here, so every first factor (password, email link or code, any provider) obeys it."""
+    refused = sso_refusal(db, user, facts, method=method)
+    if refused is not None:
+        return refused
     f = users.factors(db, user.principal_id)
     if idp_mfa:
         return finish(db, user, facts, methods=[method], mfa=True)
@@ -380,6 +411,9 @@ def _backoff_failures(db: Any, email: str, facts: RequestFacts) -> int:
 
 
 def password_login(db: Any, facts: RequestFacts, *, email: str, password: str) -> Answer:
+    if not (email or "").strip():
+        # no email: the shared console password (Operator for 30 days after the claim)
+        return shared_password_login(db, facts, password=password)
     limited = ip_limited(db, facts)
     if limited:
         return limited
@@ -427,6 +461,88 @@ def password_login(db: Any, facts: RequestFacts, *, email: str, password: str) -
         except PasswordBusy:
             pass   # upgrade next time
     return finish_first_factor(db, user, facts, method="pwd")
+
+
+#: The rate-limit identity of the shared console password (it has no email of its own).
+SHARED_IDENTIFIER = "(shared console password)"
+SHARED_RETIRED = {"error": "shared_password_retired",
+                  "message": "The shared password no longer signs in. Ask an Owner to invite you."}
+
+
+def shared_password_login(db: Any, facts: RequestFacts, *, password: str) -> Answer:
+    """The shared console password, signed in WITHOUT an email (docs/community/IDENTITY_UPGRADE.md).
+
+    Before the first Owner is claimed it only claims: 409 `claim_first`. From the claim it signs in
+    as `usr_legacy_shared` with the Operator role until the legacy cutoff (claim + 30 days, plus at
+    most one audited Owner extension of at most 30 days); the session never outlives that cutoff,
+    and every page shows the countdown banner. After the cutoff: 403 `shared_password_retired`.
+    A wrong password is the same uniform failure, with the same per-source backoff, as any other."""
+    from . import legacy
+
+    limited = ip_limited(db, facts)
+    if limited:
+        return limited
+    org_id = default_org_id(db)
+    if _source_failures(db, SHARED_IDENTIFIER, facts) >= ACCOUNT_LOCK_AFTER:
+        if org_id:
+            emit(db, org_id=org_id, event_type="auth.locked_soft", outcome=Outcome.DENIED,
+                 ip=facts.ip, user_agent=facts.user_agent, request_id=facts.request_id,
+                 details={"identifier": identifier_hash(SHARED_IDENTIFIER)})
+        return Answer(401, dict(INVALID))
+    result = legacy.check_shared_password(password or "", db=db)
+    if result.status in ("invalid", "not_configured"):
+        _count_failure(db, SHARED_IDENTIFIER, facts)
+        if org_id:
+            emit(db, org_id=org_id, event_type="auth.login.failed", outcome=Outcome.FAILURE,
+                 ip=facts.ip, user_agent=facts.user_agent, request_id=facts.request_id,
+                 details={"identifier": identifier_hash(SHARED_IDENTIFIER),
+                          "reason": "bad_shared_password"})
+        if DELAY_ENABLED:
+            _progressive_delay(_source_failures(db, SHARED_IDENTIFIER, facts))
+        return Answer(401, dict(INVALID))
+    if result.status == "claim":
+        return Answer(409, {"error": "claim_first",
+                            "message": "This BOSS has no Owner yet. Claim it first."})
+    principal = users.load_principal(db, legacy.LEGACY_SHARED_PRINCIPAL)
+    if result.status != "ok" or principal is None or not principal.active:
+        return Answer(403, dict(SHARED_RETIRED))
+    if not secure_origin_ok(facts.origin or facts.request_origin):
+        return Answer(400, {"error": "insecure_origin"})
+    now = utcnow()
+    _idle, absolute = sessions._lifetimes(db, principal.org_id)  # noqa: SLF001
+    until = result.retire_after
+    ends = min(now + absolute, until) if until else now + absolute
+    device = facts.device if (facts.device and len(facts.device) <= 100) else random_token("bdv_", 24)
+    issued = sessions.issue(db, principal_id=principal.id, org_id=principal.org_id,
+                            methods=["legacy_password"], mfa_at=None, ip=facts.ip,
+                            user_agent=facts.user_agent, device_id_hash=sha256_hex(device),
+                            absolute_expires_at=ends)
+    for bucket, ident in [("signin.account", SHARED_IDENTIFIER),
+                          *_source_keys(SHARED_IDENTIFIER, facts)]:
+        ratelimit.reset(bucket, ident, db=db)
+    ctx = AuthContext(principal, AuthMethod.LEGACY_PASSWORD, legacy="shared_password", ip=facts.ip,
+                      user_agent=facts.user_agent, request_id=facts.request_id)
+    emit(db, org_id=principal.org_id, event_type="session.created", outcome=Outcome.SUCCESS, ctx=ctx,
+         session_ref=issued.session_id, details={"methods": ["legacy_password"]})
+    emit(db, org_id=principal.org_id, event_type="auth.login.succeeded", outcome=Outcome.SUCCESS,
+         ctx=ctx, session_ref=issued.session_id,
+         details={"methods": ["legacy_password"], "mfa": False})
+    emit(db, org_id=principal.org_id, event_type="legacy.password_used", outcome=Outcome.INFO,
+         ctx=ctx, target_type="legacy_path", target_id="shared_password",
+         details={"path": "shared_password", "until": until.isoformat() if until else None})
+    legacy._count_use(principal.org_id, "shared_password", "BOSS_CONSOLE_PASSWORD",  # noqa: SLF001
+                      principal.id, now)
+    legacy.note_sunset(principal.org_id, "shared_password", principal.id, until)
+    max_age = max(1, int((issued.absolute_expires_at - now).total_seconds()))
+    cookies = [sessions.set_cookie_header(SESSION_COOKIE, issued.token, max_age=max_age),
+               sessions.set_cookie_header(DEVICE_COOKIE, device, max_age=DEVICE_MAX_AGE),
+               sessions.clear_cookie_header(PREAUTH_COOKIE)]
+    return Answer(200, {"next": "done", "methods": [],
+                        "who": {"display_name": principal.display_name, "email": "", "hue": 0},
+                        "session_id": issued.session_id,
+                        "expires_at": issued.absolute_expires_at.isoformat(),
+                        "shared_password_until": until.isoformat() if until else None},
+                  cookies=cookies)
 
 
 def sso_enforced_for(db: Any, email: str) -> bool:
@@ -579,6 +695,9 @@ def passkey_verify(db: Any, facts: RequestFacts, *, credential: Any, purpose: st
     emit(db, org_id=user.org_id, event_type="auth.passkey.succeeded", outcome=Outcome.SUCCESS,
          ctx=ctx, target_type="passkey", target_id=verified.passkey_id, details={"purpose": purpose})
     if purpose == "login":
+        refused = sso_refusal(db, user, facts, method="passkey")
+        if refused is not None:
+            return refused
         return finish(db, user, facts, methods=["passkey"], mfa=True)
     if purpose == "mfa":
         ch = _mfa_challenge(db, facts)

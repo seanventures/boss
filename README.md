@@ -73,7 +73,7 @@ BOSS runs on a server you control, and your team reaches Mission Control over HT
 curl -fsSL https://boss.sean.network/install.sh | bash -s -- --console-origin https://boss.example.com
 ```
 
-Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. That address becomes BOSS's public URL (`BOSS_PUBLIC_URL` in `.env`): every emailed link, passkey and SSO redirect uses it and never a request's `Host`, so without one BOSS sends no sign-in or reset emails. Setup shows the URL BOSS uses. The installer records the release, so reruns and `boss upgrade` never move it to `main`. Want to read the script first? `curl -fsSL https://boss.sean.network/install.sh -o install.sh`, then `bash install.sh`.
+Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. The installer writes that address to `.env` as `BOSS_CONSOLE_PUBLIC_ORIGIN`, and BOSS uses it as its public address (a `BOSS_PUBLIC_URL` you set yourself takes precedence): every emailed link, passkey and SSO redirect uses it and never a request's `Host`, so without one BOSS sends no sign-in or reset emails. Setup shows the URL BOSS uses. The installer records the release, so reruns and `boss upgrade` never move it to `main`. Want to read the script first? `curl -fsSL https://boss.sean.network/install.sh -o install.sh`, then `bash install.sh`.
 
 Prefer git? Clone the release and install it in place. `--ref` keeps the install on that release instead of moving it to `main`:
 
@@ -127,7 +127,7 @@ boss.example.com {
 
 On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once: copy `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` from the server (`ssh user@your-server sudo cat …`) and add it to each device's trusted roots — on a Mac, `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt`. Installed without `--console-origin`? [Add the address to a running install](docs/community/hostname.md#add-a-hostname-to-a-running-install).
 
-**4. Claim and sign in** at your address. The first visit to `/claim` (for example `http://127.0.0.1:3000/claim`) claims the install: the password from `boss password` proves you are the operator, then you create your own Owner account with a passkey. `boss doctor` reminds you until it is done. BOSS opens on **Repo and models**: paste a GitHub token, connect a model, and open your first PR. Upgrading an existing install? [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) explains the claim and the 30-day window for the shared password.
+**4. Claim and sign in** at your address. The first visit to `/claim` (for example `http://127.0.0.1:3000/claim`) claims the install: the password from `boss password` (or a one-hour link from `boss identity setup-link`) proves you are the operator, then you create your own Owner account with a passkey. `boss doctor` reminds you until it is done. Invite your team in **Identity › People**. BOSS opens on **Repo and models**: paste a GitHub token, connect a model, and open your first PR. Upgrading an existing install? [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) explains the claim and the 30-day window for the shared password.
 
 Models found by the installer appear there already; `boss connect` does the same from a terminal. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
@@ -145,7 +145,7 @@ Every interface is a client of the same authenticated HTTP API, so the same perm
 | **Mission Control** (web) | `https://boss.example.com`, or your server's private IP | [Console access](docs/community/CONSOLE_AUTH.md) |
 | **Metatron** (terminal) | `make metatron` in the install directory | [Terminal and API](docs/community/TERMINAL_API.md) |
 | **MCP** (agents) | `make mcp-setup`, then point your agent at `make mcp` | [MCP](docs/community/MCP.md) |
-| **CLI and HTTP API** | `source boss-community.env.sh` (the API key is never printed) | [CLI](docs/community/cli.md) |
+| **CLI and HTTP API** | `boss` on the host, or a personal API key from **My account › API keys** | [CLI](docs/community/cli.md) |
 
 ### Metatron: BOSS in your terminal
 
@@ -202,7 +202,7 @@ Remote MCP over HTTP requires a bearer token in `BOSS_MCP_HTTP_TOKEN`. The [MCP 
 The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 
 > [!NOTE]
-> **About this release candidate.** In `v1.0-rc5`, deploying an app to an SSH host goes through the governed path in **Infra › Deploys**: BOSS plans the deploy, a person approves it, BOSS applies it and writes a receipt, and a failed health check rolls it back. A few capabilities stay paused while their spend, recovery, and effect safeguards are finished: live debugging investigations, direct host changes made outside an approved plan, cloud-account deploy runs, auto-deploy, the agent host shell, and host-backed preview sandboxes. Investigation results and deployment records stay readable. Discovery web research runs as a governed job and needs a connected Claude Code subscription. The console still signs in with the single owner password; per-person sign-in is not in this release.
+> **About this release candidate.** In `v1.0-rc5`, deploying an app to an SSH host goes through the governed path in **Infra › Deploys**: BOSS plans the deploy, a person approves it, BOSS applies it and writes a receipt, and a failed health check rolls it back. A few capabilities stay paused while their spend, recovery, and effect safeguards are finished: live debugging investigations, direct host changes made outside an approved plan, cloud-account deploy runs, auto-deploy, the agent host shell, and host-backed preview sandboxes. Investigation results and deployment records stay readable. Discovery web research runs as a governed job and needs a connected Claude Code subscription. From `v1.0-rc6` each person signs in with their own account; see the [draft release notes](docs/community/RELEASE_NOTES_v1.0-rc6.md) and [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md).
 
 ## Documentation
 
@@ -217,7 +217,12 @@ The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 | [Terminal and API](docs/community/TERMINAL_API.md) | Every Metatron command, plus one-shot JSON for scripts |
 | [MCP](docs/community/MCP.md) | Connecting agents, transports, and the human confirmation flow |
 | [Control surfaces](docs/community/CONTROL_SURFACES.md) | How the API, terminal, and MCP fit together |
+| [People and access](docs/community/PEOPLE_AND_ACCESS.md) | Invite people, roles, groups, service accounts, and your own account |
+| [Sign-in setup](docs/community/SIGN_IN_SETUP.md) | Email, single sign-on, social sign-in, SCIM |
+| [Agents and access](docs/community/AGENTS_AND_ACCESS.md) | What agents may do, acting for a person, GitHub access |
+| [Build sandbox](docs/community/SANDBOX.md) | How builds are isolated, and hosts that cannot fence them |
 | [Identity administration](docs/community/IDENTITY_ADMIN.md) | The security audit log, posture, policy, and the move to enforcement |
+| [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) | Moving an existing install off the shared password |
 
 Everything else is linked from the [documentation home](docs/community/README.md).
 
@@ -226,7 +231,7 @@ Everything else is linked from the [documentation home](docs/community/README.md
 From any directory:
 
 ```sh
-boss upgrade      # writes a private backup, then moves to the newest release
+boss upgrade      # writes a private backup, then moves to the newest release (and rolls back if it cannot start)
 boss uninstall    # stops BOSS, keeps data and credentials
 ```
 

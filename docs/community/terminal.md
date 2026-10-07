@@ -10,11 +10,11 @@ From the install directory:
 make metatron
 ```
 
-This opens the Metatron TUI inside the API container, using the install's API key and project. The key is never printed.
+This opens the Metatron TUI inside the API container, using the host tools' key (`BOSS_HOST_API_KEY`, issued for you if missing) and the install's project. The key is never printed.
 
 ## Run it outside the container
 
-Set `BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID` in your environment, for example by sourcing `boss-community.env.sh`, then run `python3 scripts/metatron_tui.py`.
+Set `BOSS_API_URL` and `BOSS_PROJECT_ID` (sourcing `boss-community.env.sh` does), and put your own key in `BOSS_API_KEY`: a personal key from **My account › API keys**, or on the install machine `export BOSS_API_KEY="$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env)"`. Then run `python3 scripts/metatron_tui.py`.
 
 !!! warning
     Load the API key from the environment. Never pass it on the command line.

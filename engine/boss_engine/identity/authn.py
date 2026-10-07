@@ -66,7 +66,11 @@ class RequestCredentials:
     def bearer(self) -> Optional[str]:
         raw = self.headers.get("authorization", "")
         scheme, _, value = raw.partition(" ")
-        return value.strip() or None if scheme.lower() in ("bearer", "dpop") else None
+        if scheme.lower() in ("bearer", "dpop") and value.strip():
+            return value.strip()
+        # The host tools send their key the old way, in X-Boss-Api-Key: a BOSS key there is the
+        # same credential as in Authorization (a legacy hex key there stays the bridge's).
+        return api_key_header(self.headers)
 
 
 class AuthnError(Exception):
@@ -132,6 +136,12 @@ def parse_api_key(token: str) -> Optional[ParsedApiKey]:
 
             return ParsedApiKey(kind, body, _hmac.compare_digest(_checksum(body), checksum))
     return None
+
+
+def api_key_header(headers: Mapping[str, str]) -> Optional[str]:
+    """A boss_ key presented in X-Boss-Api-Key (how the rc5 host tools send a key), else None."""
+    value = (headers.get("x-boss-api-key") or "").strip()
+    return value if value and parse_api_key(value) is not None else None
 
 
 def hash_token(token: str) -> str:
@@ -303,8 +313,14 @@ def _from_session(creds: RequestCredentials, db: Any, token: str, ip: Optional[s
         if enrolment_only(db, principal.id, row.mfa_at):
             raise AuthnError(ENROLMENT_REQUIRED, 403)
     sessions.touch(db, row, org_id=principal.org_id)
+    from .legacy import LEGACY_SHARED_PRINCIPAL
+
+    # The shared console password's session (signin.shared_password_login) is still a legacy
+    # bridge: it carries the bridge's mark, so banners show its countdown and step-up treats it
+    # as the bridges are treated (it has no factor to step up with).
+    bridged = "shared_password" if principal.id == LEGACY_SHARED_PRINCIPAL else None
     return AuthContext(principal=principal, method=AuthMethod.SESSION, session=row.ref(), ip=ip,
-                       user_agent=ua, request_id=creds.request_id)
+                       user_agent=ua, request_id=creds.request_id, legacy=bridged)
 
 
 def _from_run_token(creds: RequestCredentials, db: Any, token: str, ip: Optional[str],

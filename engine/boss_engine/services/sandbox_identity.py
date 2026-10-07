@@ -88,6 +88,31 @@ def network_fenced() -> bool:
     return st.st_uid == 0                         # root wrote it, after the rules went in
 
 
+NETWORK_PROBLEM_MARKER = ".network-unfenced"   # the entrypoint could not fence: why (one line)
+
+
+def network_problem() -> Optional[str]:
+    """Why the entrypoint could not fence the network, when it started without it
+    (BOSS_SANDBOX_NETWORK=enforce on a host without iptables owner match). None otherwise."""
+    try:
+        with open(os.path.join(SHIM_ROOT, NETWORK_PROBLEM_MARKER), encoding="utf-8") as fh:
+            return fh.read(300).strip() or "the sandbox network rules could not be installed"
+    except OSError:
+        return None
+
+
+def unavailable_reason() -> str:
+    """What a held build says: the one thing to fix, in plain words."""
+    problem = network_problem()
+    if problem and not network_fenced():
+        return ("this host cannot fence the build sandbox's network (" + problem + "). Builds are "
+                "held until the host is fixed, or until you set BOSS_SANDBOX_NETWORK=off in .env "
+                "and restart (builds then reach this container's networks). See "
+                "docs/community/SANDBOX.md.")
+    return (f"sandbox isolation is required but boss-sandbox-exec, {run_root()}, {SHIM_ROOT} or "
+            "the network fence is missing")
+
+
 def available() -> bool:
     return (helper_path() is not None and run_root().is_dir() and os.path.isdir(SHIM_ROOT)
             and network_fenced())
@@ -96,6 +121,7 @@ def available() -> bool:
 def status() -> dict[str, Any]:
     """For posture and the system doctor."""
     return {"mode": mode(), "helper": bool(helper_path()), "network_fenced": network_fenced(),
+            "network_problem": network_problem(),
             "isolating": mode() != "off" and available()}
 
 
@@ -250,8 +276,7 @@ def bind(owner_id: str) -> Iterator[Optional[SandboxIdentity]]:
         return
     if not available():
         if m == "required":
-            raise SandboxUnavailable("sandbox isolation is required but boss-sandbox-exec, "
-                                     f"{run_root()}, {SHIM_ROOT} or the network fence is missing")
+            raise SandboxUnavailable(unavailable_reason())
         log.warning("SANDBOX NOT ISOLATED: run %s runs as the control plane's uid (no boss-sandbox-exec; "
                     "BOSS_SANDBOX_ISOLATION=auto). Never run this way with untrusted code.", owner_id)
         yield None

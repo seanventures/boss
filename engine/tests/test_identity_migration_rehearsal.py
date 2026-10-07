@@ -298,8 +298,9 @@ def test_boss1_password_install_claims_with_the_shared_password_and_every_path_k
     assert allowed(db, shared, "settings:update", "user:invite", "deployment:production") == \
         dict.fromkeys(["settings:update", "user:invite", "deployment:production"], False)
 
-    # the countdown banner shows from 14 days before
-    assert posture.banners(shared, db=db, now=NOW + timedelta(days=5)) == []
+    # the countdown banner shows for the whole window (the upgrade promise: a visible countdown)
+    banner = posture.banners(shared, db=db, now=NOW + timedelta(days=5))
+    assert banner[0]["kind"] == "legacy_password" and "25 days" in banner[0]["message"]
     banner = posture.banners(shared, db=db, now=NOW + timedelta(days=17))
     assert banner[0]["kind"] == "legacy_password" and "13 days" in banner[0]["message"]
 

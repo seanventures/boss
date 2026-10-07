@@ -3,7 +3,7 @@
 IDENTITY.md §7.5. Each family (`run`, `actor`) has its own keys. A key moves
     next -> active -> retiring -> retired
 `provision` creates the first active key and a `next` key (explicitly, at bootstrap or by the
-operator, never as a silent side effect of signing: Kaappu flaw #3). `rotate` (every 30 days) makes
+operator, never as a silent side effect of signing: a common flaw). `rotate` (every 30 days) makes
 `next` active, the old active `retiring` until `retire_after` (the longest a token it signed can
 live, plus skew), then `retired`. The JWKS publishes active + retiring: two keys at a time.
 

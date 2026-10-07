@@ -291,13 +291,13 @@ The adversarial test ids are IDENTITY.md §15.3 (A1–A80, A13b, and the A81–A
 
 **Consumes:** `authz.bump_epoch` (S2), `delegation.revoke_cascade` (S3), and S1's claim service (for the legacy-password and network-bridge claim paths).
 
-**Tests:** A73–A80; M1–M4 (migration rehearsal on a shared-server snapshot: the network-bridge claim with no env change, the bridge ending at 30 days, J14); J2; J15; R6.
+**Tests:** A73–A80; M1–M4 (migration rehearsal on a production-like snapshot: the network-bridge claim with no env change, the bridge ending at 30 days, J14); J2; J15; R6.
 
 **Done when:**
 - the chain verifies after export and prune;
 - the redaction sweep is clean;
 - every legacy path shows in posture with counts and a countdown;
-- the shared-server rehearsal passes: claim by passkey, the bridge ends, history is intact;
+- the network-trusted rehearsal passes: claim by passkey, the bridge ends, history is intact;
 - every router is in `enforce` with zero unexplained shadow-denies for 7 days;
 - `BOSS_AUTHZ_MODE` defaults to `enforce`.
 

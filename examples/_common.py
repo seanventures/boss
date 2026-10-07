@@ -103,10 +103,15 @@ def parser(description: str) -> argparse.ArgumentParser:
 #: is ever run from, and each one is a line to paste.
 HOW_TO_FIND_THE_KEY = """no API key.
 
-  Where to find it, depending on where BOSS is running:
+  Put a BOSS API key in BOSS_API_KEY. Where to get one:
 
-  ON THE SERVER — run this from the default install directory:
+  ANY MACHINE — a personal key: in the console, My account › API keys › New key.
+      export BOSS_API_KEY=...   (paste it; it is shown once)
+
+  ON THE SERVER — the host tools' key, from the install directory:
       cd ~/boss && source ./boss-community.env.sh
+      grep -q '^BOSS_HOST_API_KEY=' .env || boss identity host-key
+      export BOSS_API_KEY="$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env)"
       export BOSS_API="$BOSS_API_URL" BOSS_PROJECT="$BOSS_PROJECT_ID"
 
   FROM YOUR LAPTOP, with BOSS on a server — start the SSH tunnel in another
@@ -114,15 +119,9 @@ HOW_TO_FIND_THE_KEY = """no API key.
       scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key tunnel
       scripts/install/remote.sh --host root@YOUR_HOST --key ~/.ssh/your_key env
 
-  BOSS ON THIS MACHINE:
-      source ./boss-community.env.sh
-      export BOSS_API="$BOSS_API_URL" BOSS_PROJECT="$BOSS_PROJECT_ID"
-
-  The generated shell file exports BOSS_API_KEY. Avoid --key on the command
-  line because arguments can appear in process listings.
-
-  The key is a secret. `env` prints it to your terminal, so do not paste that output
-  into a chat or a ticket."""
+  Avoid --key on the command line because arguments can appear in process
+  listings. The key is a secret: do not paste `env` output into a chat or a
+  ticket."""
 
 
 def connect(args, description: str) -> Api:

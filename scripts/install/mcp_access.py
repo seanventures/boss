@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""Provision a scoped Community MCP principal and launch stdio without echoing keys.
+"""Give an agent client MCP access to one project, then launch stdio without echoing keys.
 
-The setup command uses the installed owner key only to create a dedicated
-project member, then binds a separate generated API key to that member in .env.
-The launch command forwards only that key to a single MCP stdio process.
+`setup` asks the BOSS host shell for a service account "MCP (<project>)" bound in that one project
+to the capabilities chosen (by default what rc5 granted), with a key pinned to the project
+(`boss_engine.identity.cli mcp-key`, run inside the api container as the boss user). The key goes
+into .env as BOSS_MCP_API_KEY and is never printed. An rc5 key (a hex key bound to the
+`mcp_operator` member in BOSS_API_KEYS) is replaced and its binding removed: it stopped being
+able to change members at the claim and stops entirely at the legacy cutoff.
+`serve` forwards only that key to a single MCP stdio process.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
-import secrets
 import shutil
 import subprocess
 import sys
 import tempfile
-from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from reconcile_api_credentials import _key_list, _principal_map, _set, _values
 
@@ -29,15 +28,9 @@ DEFAULT_PERMISSIONS = (
     "agent_chat", "command_submit", "task_create", "workflow_manage",
     "workflow_execute", "health_refresh", "audit_export",
 )
+#: the rc5 member an MCP hex key was bound to (still recognised, and replaced, by setup)
 PRINCIPAL = "mcp_operator"
-
-
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, request, fp, code, msg, headers, newurl):
-        return None
-
-
-_OPENER = build_opener(_NoRedirect)
+KEY_PREFIX = "boss_sak_"
 
 
 class MCPSetupError(Exception):
@@ -55,127 +48,68 @@ def _read_env(path: Path) -> tuple[list[str], dict[str, str]]:
     return lines, values
 
 
-def _api_origin(values: dict[str, str]) -> str:
-    port = values.get("BOSS_API_PORT", "8000")
-    if not port.isdigit() or not 1 <= int(port) <= 65535:
-        raise MCPSetupError("BOSS_API_PORT must be a local TCP port")
-    return f"http://127.0.0.1:{port}"
+def _valid_project(project_id: str) -> bool:
+    return bool(project_id) and len(project_id) <= 128 and all(
+        ch.isalnum() or ch in "_.-" for ch in project_id)
 
 
-def _request(origin: str, key: str, method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
-    parsed = urlsplit(origin)
-    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or parsed.path not in {"", "/"}:
-        raise MCPSetupError("MCP setup accepts only the installed loopback API origin")
-    data = json.dumps(body).encode() if body is not None else None
-    request = Request(
-        origin.rstrip("/") + path, data=data, method=method,
-        headers={"X-Boss-Api-Key": key, "Content-Type": "application/json"},
-    )
-    try:
-        with _OPENER.open(request, timeout=10) as response:
-            status = response.status
-            raw = response.read(128_001)
-    except HTTPError as error:
-        status = error.code
-        raw = b""
-    except (OSError, URLError) as error:
-        raise MCPSetupError("Cannot reach the installed BOSS API on loopback") from error
-    if len(raw) > 128_000:
-        raise MCPSetupError("BOSS API response was unexpectedly large")
-    try:
-        value = json.loads(raw) if raw else {}
-    except ValueError as error:
-        raise MCPSetupError("BOSS API returned invalid JSON") from error
-    if not isinstance(value, dict):
-        raise MCPSetupError("BOSS API returned an unexpected response")
-    return status, value
+def _mint(env_path: Path, project_id: str, permissions: list[str] | None) -> str:
+    """The new key, from the host shell inside the api container. Never printed."""
+    prefix = _docker_prefix()
+    command = [*prefix, "compose", "-f", str(COMPOSE), "--env-file", str(env_path),
+               "exec", "-T", "-u", "boss", "api", "python", "-m", "boss_engine.identity.cli",
+               "mcp-key", "--project", project_id, "--quiet"]
+    for permission in permissions or []:
+        command += ["--permission", permission]
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False,
+                            timeout=120)
+    lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+    key = lines[-1] if lines else ""
+    if result.returncode != 0 or not key.startswith(KEY_PREFIX):
+        # stderr says why ("no project", "unknown permission"); it never carries the key
+        reason = (result.stderr or "").strip().splitlines()[-1:] or ["BOSS did not issue a key"]
+        raise MCPSetupError(reason[0][:200])
+    return key
 
 
-def configure(env_path: Path, project_id: str, permissions: list[str] | None = None) -> bool:
+def configure(env_path: Path, project_id: str, permissions: list[str] | None = None,
+              *, mint=None) -> tuple[bool, bool]:
+    """(changed .env, the API must restart). The API restarts only when an rc5 hex key's binding
+    was removed from BOSS_API_KEYS; a service-account key works the moment it is issued."""
     lines, values = _read_env(env_path)
     before = list(lines)
+    if not _valid_project(project_id):
+        raise MCPSetupError("Choose a valid project ID")
+    if permissions is not None and (not permissions or any(
+            not p or not p.replace("_", "").replace(":", "").isalnum() for p in permissions)):
+        raise MCPSetupError("At least one valid permission is required")
     configured_project = values.get("BOSS_MCP_PROJECT_ID", "")
     if configured_project and configured_project != project_id:
         raise MCPSetupError(
             "This installed MCP key is bound to another project; use a separate principal and key"
         )
-    owner = values.get("BOSS_API_KEY", "")
-    worker = values.get("BOSS_WORKER_API_KEY", "")
-    if not owner or not worker:
-        raise MCPSetupError("Install BOSS before configuring MCP access")
-    existing_keys = set(_key_list(values.get("BOSS_API_KEYS", "")))
-    bindings = _principal_map(values.get("BOSS_API_KEY_PRINCIPALS", ""))
     key = values.get("BOSS_MCP_API_KEY", "")
-    if key and bindings.get(key) != PRINCIPAL:
+    bindings = _principal_map(values.get("BOSS_API_KEY_PRINCIPALS", ""))
+    if key and not key.startswith(KEY_PREFIX) and bindings.get(key) != PRINCIPAL:
         raise MCPSetupError("Existing MCP key is not bound to the dedicated member")
-    if not key:
-        key = secrets.token_hex(24)
-        while key in existing_keys or key in bindings or key in {owner, worker}:
-            key = secrets.token_hex(24)
-    if key in {owner, worker} or any(ch in key for ch in ",:=\n\r"):
-        raise MCPSetupError("MCP API key must be separate and map-safe")
-    if (not project_id or len(project_id) > 128 or
-            any(not (ch.isalnum() or ch in "_.-") for ch in project_id)):
-        raise MCPSetupError("Choose a valid project ID")
-    origin = _api_origin(values)
-    status, listing = _request(origin, owner, "GET", "/v1/projects")
-    if status != 200 or not isinstance(listing.get("items"), list):
-        raise MCPSetupError("Owner API key could not list projects")
-    project_ids = {
-        item.get("id") for item in listing["items"]
-        if isinstance(item, dict) and isinstance(item.get("id"), str)
-    }
-    if project_id not in project_ids:
-        raise MCPSetupError("Selected project is not available to the installer owner")
-
-    member: dict = {}
-    status = 404
-    for visible_project in sorted(project_ids):
-        member_path = f"/v1/members/{quote(PRINCIPAL)}?project_id={quote(visible_project)}"
-        found_status, found_member = _request(origin, owner, "GET", member_path)
-        if found_status not in {200, 404}:
-            raise MCPSetupError(f"MCP member lookup failed with HTTP {found_status}")
-        if found_status == 200 and visible_project != project_id:
-            raise MCPSetupError(
-                "The dedicated MCP member already belongs to another project; "
-                "use a separate principal and key"
-            )
-        if visible_project == project_id:
-            status, member = found_status, found_member
-    if status == 200 and member.get("status") != "active":
-        raise MCPSetupError("Existing MCP member is not active")
-    if status == 200 and (member.get("member_type") != "system" or
-                          PRINCIPAL not in (member.get("role_keys") or [])):
-        raise MCPSetupError("Existing MCP member does not have the expected dedicated role")
-    if status == 404 or permissions is not None:
-        selected = permissions if permissions is not None else list(DEFAULT_PERMISSIONS)
-        if not selected or any(not p or not p.replace("_", "").isalnum() for p in selected):
-            raise MCPSetupError("At least one valid permission is required")
-        status, _ = _request(origin, owner, "POST", "/v1/members", {
-            "project_id": project_id,
-            "member_id": PRINCIPAL,
-            "display_name": "MCP operator",
-            "member_type": "system",
-            "role_keys": [PRINCIPAL],
-            "permissions": selected,
-            "actor": "ceo",
-        })
-        if status != 201:
-            raise MCPSetupError(f"MCP member configuration failed with HTTP {status}")
-
-    keys = list(dict.fromkeys([*_key_list(values.get("BOSS_API_KEYS", "")), owner, worker, key]))
-    bindings[owner] = "ceo"
-    bindings[worker] = "system"
-    bindings[key] = PRINCIPAL
-    for name, value in (
-        ("BOSS_MCP_API_KEY", key),
-        ("BOSS_MCP_PROJECT_ID", project_id),
-        ("BOSS_API_KEYS", ",".join(keys)),
-        ("BOSS_API_KEY_PRINCIPALS", ",".join(f"{token}:{principal}" for token, principal in bindings.items())),
-    ):
-        lines = _set(lines, name, value)
+    if key.startswith(KEY_PREFIX) and permissions is None:
+        return False, False          # already a service-account key for this project
+    new_key = (mint or _mint)(env_path, project_id, permissions)
+    if not new_key.startswith(KEY_PREFIX):
+        raise MCPSetupError("BOSS did not issue a service-account key")
+    restart = False
+    if key and not key.startswith(KEY_PREFIX):
+        # the rc5 hex key: unbind it so it stops working once the API reloads .env
+        keys = [k for k in _key_list(values.get("BOSS_API_KEYS", "")) if k != key]
+        bindings.pop(key, None)
+        lines = _set(lines, "BOSS_API_KEYS", ",".join(keys))
+        lines = _set(lines, "BOSS_API_KEY_PRINCIPALS",
+                     ",".join(f"{token}:{principal}" for token, principal in bindings.items()))
+        restart = True
+    lines = _set(lines, "BOSS_MCP_API_KEY", new_key)
+    lines = _set(lines, "BOSS_MCP_PROJECT_ID", project_id)
     if lines == before:
-        return False
+        return False, False
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=env_path.parent,
@@ -187,7 +121,7 @@ def configure(env_path: Path, project_id: str, permissions: list[str] | None = N
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
-    return True
+    return True, restart
 
 
 def launch(env_path: Path, project_id: str) -> None:
@@ -196,17 +130,34 @@ def launch(env_path: Path, project_id: str) -> None:
         raise MCPSetupError("MCP key is not pinned to this project; run make mcp-setup")
     key = values.get("BOSS_MCP_API_KEY", "")
     bindings = _principal_map(values.get("BOSS_API_KEY_PRINCIPALS", ""))
-    if not key or bindings.get(key) != PRINCIPAL:
+    if not key or (not key.startswith(KEY_PREFIX) and bindings.get(key) != PRINCIPAL):
         raise MCPSetupError("MCP access is unbound; run make mcp-setup first")
+    if not key.startswith(KEY_PREFIX):
+        print("This MCP key is the old kind and stops working when the shared credentials do. "
+              "Run make mcp-setup to replace it.", file=sys.stderr)
     environment = dict(os.environ, BOSS_MCP_API_KEY=key)
     docker_command = _docker_command(environment, key)
     command = [
         *docker_command, "compose", "-f", str(COMPOSE), "--env-file", str(env_path),
-        "exec", "-T", "-e", "BOSS_MCP_API_KEY", "api", "python", "-m",
+        "exec", "-T", "-u", "boss", "-e", "BOSS_MCP_API_KEY", "api", "python", "-m",
         "boss_engine", "--project", project_id, "serve-mcp", "--api-url",
         "http://127.0.0.1:8000",
     ]
     os.execvpe(docker_command[0], command, environment)
+
+
+def _docker_prefix() -> list[str]:
+    if shutil.which("docker") and subprocess.run(
+        ["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        check=False, timeout=5,
+    ).returncode == 0:
+        return ["docker"]
+    if shutil.which("sudo") and subprocess.run(
+        ["sudo", "-n", "docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        check=False, timeout=5,
+    ).returncode == 0:
+        return ["sudo", "-n", "docker"]
+    raise MCPSetupError("Docker access is required to issue the MCP key")
 
 
 def _docker_command(environment: dict[str, str], key: str) -> list[str]:
@@ -231,19 +182,7 @@ def _docker_command(environment: dict[str, str], key: str) -> list[str]:
 
 
 def _restart_api(env_path: Path) -> None:
-    if shutil.which("docker") and subprocess.run(
-        ["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        check=False, timeout=5,
-    ).returncode == 0:
-        prefix = ["docker"]
-    elif shutil.which("sudo") and subprocess.run(
-        ["sudo", "-n", "docker", "info"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        check=False, timeout=5,
-    ).returncode == 0:
-        prefix = ["sudo", "-n", "docker"]
-    else:
-        raise MCPSetupError("Docker access is required to load the new API credential")
+    prefix = _docker_prefix()
     command = [*prefix, "compose", "-f", str(COMPOSE), "--env-file", str(env_path),
                "up", "-d", "--wait", "--no-deps", "--force-recreate", "api"]
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True,
@@ -266,11 +205,12 @@ def main() -> int:
         project = (args.project or os.environ.get("BOSS_PROJECT_ID") or
                    values.get("BOSS_DEFAULT_PROJECT_ID", "boss-dogfood"))
         if args.action == "setup":
-            changed = configure(args.env_file, project, args.permissions)
-            if changed and args.restart_api:
+            _changed, restart = configure(args.env_file, project, args.permissions)
+            if restart and args.restart_api:
                 _restart_api(args.env_file)
-            print(f"MCP member and dedicated API key ready for project {project}." +
-                  (" Restart the API to load the new binding." if changed and not args.restart_api else ""))
+            print(f"MCP access ready for project {project}: a service-account key in "
+                  "BOSS_MCP_API_KEY. Start it with: make mcp" +
+                  (" (restart the API first to end the old key)" if restart and not args.restart_api else ""))
         else:
             launch(args.env_file, project)
     except MCPSetupError as error:

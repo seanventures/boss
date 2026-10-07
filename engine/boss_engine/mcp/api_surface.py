@@ -795,8 +795,14 @@ def _verify_api_scope(session: httpx.Client, project_id: str) -> tuple[str | Non
     ):
         return None, "api_principal_binding_unverified"
     candidate = state["principal_member_id"].strip()
-    if candidate in {"ceo", "system", "executive_console"}:
+    # Not the console's key, the worker's, or the host tools': a dedicated MCP key
+    # (`make mcp-setup`: a service account pinned to the project).
+    if candidate in {"ceo", "system", "executive_console", "sys_legacy_console",
+                     "sys_legacy_system", "sva_host_tools"}:
         return None, "dedicated_mcp_principal_required"
+    pinned = state.get("key_projects")
+    if isinstance(pinned, list) and pinned != [project_id]:
+        return None, "exclusive_project_membership_required"
     projects = session.get("/v1/projects")
     try:
         listing = projects.json() if projects.is_success else {}

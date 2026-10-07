@@ -3718,7 +3718,7 @@ async def health() -> HealthResponse:
 
 @app.get("/v1/auth/session", response_model=AuthSessionResponse)
 @authenticated(note="returns the caller's own principal/auth method from context vars")
-def auth_session() -> AuthSessionResponse:
+def auth_session(request: Request) -> AuthSessionResponse:
     principal = current_api_principal.get()
     auth_method = current_auth_method.get()
     binding_required = (
@@ -3745,14 +3745,19 @@ def auth_session() -> AuthSessionResponse:
         message = "Transport principal binding is required but no principal was resolved."
     else:
         message = "Transport API key is valid; actor binding is not configured."
+    # THE ONE /v1/auth/session (identity's copy was shadowed by this route): rc5's fields, plus
+    # the identity context's (principal, org, mfa_at, csrf, expires, key_projects).
+    from .routers.identity_auth import session_fields
+
+    identity = session_fields(request)
     return AuthSessionResponse(
-        auth_required=auth_required,
-        transport_authenticated=transport_authenticated,
-        actor_binding_required=binding_required,
+        auth_required=auth_required or bool(identity),
+        transport_authenticated=transport_authenticated or bool(identity),
+        actor_binding_required=binding_required or bool(identity),
         principal_member_id=principal,
-        auth_method=auth_method,
         oidc_enabled=settings.oidc_enabled,
         message=message,
+        **{"auth_method": auth_method, **identity},
     )
 
 

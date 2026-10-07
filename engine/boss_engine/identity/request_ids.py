@@ -60,6 +60,12 @@ class RequestIdMiddleware:
                 out = [(k, v) for k, v in message.get("headers", [])
                        if k.lower() != HEADER.encode()]
                 out.append((b"x-request-id", request_id.encode()))
+                # A request on a legacy bridge (the shared API key, an env key, network mode, the
+                # shared password) is told so on every response: Deprecation, and Sunset with its
+                # cutoff (RFC 9745, RFC 8594), so scripts and MCP clients see the end coming.
+                from .legacy import deprecation_headers
+
+                out.extend(deprecation_headers((scope.get("state") or {}).get("identity")))
                 message = dict(message, headers=out)
             await send(message)
 

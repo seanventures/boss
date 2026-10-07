@@ -6,8 +6,12 @@
 #      container's own networks ONLY the BOSS API (8000) and boss-egress (8090 git/API proxy,
 #      8091 the allowlisted CONNECT proxy that is the model gateway and package mirror route).
 #      Everything else — the database, Infisical, the host, the internet — is rejected.
-#      BOSS_SANDBOX_NETWORK=enforce (default) refuses to start when the rules cannot be installed;
-#      `off` skips them (a developer's choice, reported by posture).
+#      BOSS_SANDBOX_NETWORK=enforce (default): when the rules cannot be installed (rootless
+#      Docker, gVisor, some WSL2 and VPS kernels without iptables owner match), BOSS STILL STARTS,
+#      says so loudly, and holds every build ("Sandbox unavailable") until the host is fixed: the
+#      console, people and access keep working, and nothing ever runs unfenced.
+#      `required` refuses to start instead. `off` skips the rules (builds then reach this
+#      container's networks: your choice, reported by posture and boss doctor).
 #   2. The run and shim roots exist, owned by boss, 0711 (a sandbox uid can traverse to its own
 #      run directory, never list or enter another).
 #   3. The identity key volume and the artifacts are boss-only.
@@ -61,19 +65,32 @@ PY
 }
 
 mkdir -p "$SHIM_ROOT"
-rm -f "$SHIM_ROOT/.network-fenced"
+rm -f "$SHIM_ROOT/.network-fenced" "$SHIM_ROOT/.network-unfenced"
 case "$MODE" in
   off) echo "boss: BOSS_SANDBOX_NETWORK=off — sandboxed builds can reach this container's networks" >&2 ;;
   *)
     if ! fence_network; then
-      echo "boss: could not install the sandbox network rules (needs iptables and cap_add NET_ADMIN)." >&2
-      echo "boss: refusing to start. Set BOSS_SANDBOX_NETWORK=off only on a machine you accept that on." >&2
-      exit 1
-    fi
+      echo "boss: ************************************************************************" >&2
+      echo "boss: could not install the sandbox network rules (needs iptables with the owner" >&2
+      echo "boss: match, and cap_add NET_ADMIN). Rootless Docker, gVisor and some WSL2 and VPS" >&2
+      echo "boss: kernels cannot do this." >&2
+      if [ "$MODE" = "required" ]; then
+        echo "boss: BOSS_SANDBOX_NETWORK=required: refusing to start." >&2
+        exit 1
+      fi
+      echo "boss: BOSS IS STARTING WITHOUT IT: builds are held until this is fixed. Everything" >&2
+      echo "boss: else works. Fix the host, or set BOSS_SANDBOX_NETWORK=off in .env if you accept" >&2
+      echo "boss: builds reaching this container's networks. See docs/community/SANDBOX.md." >&2
+      echo "boss: ************************************************************************" >&2
+      # Read by the API (sandbox_identity.network_problem) and boss doctor: why builds are held.
+      echo "iptables owner-match rules could not be installed" > "$SHIM_ROOT/.network-unfenced"
+      chmod 0444 "$SHIM_ROOT/.network-unfenced"
+    else
     # The API refuses to start an isolated build without this marker (sandbox_identity.available).
     : > "$SHIM_ROOT/.network-fenced"
     chown root:root "$SHIM_ROOT/.network-fenced"
-    chmod 0444 "$SHIM_ROOT/.network-fenced" ;;
+    chmod 0444 "$SHIM_ROOT/.network-fenced"
+    fi ;;
 esac
 
 mkdir -p "$RUN_ROOT" "$SHIM_ROOT"

@@ -434,6 +434,9 @@ export interface AuthOptions {
   smtp: boolean;
   signup: boolean;
   legacy_password: boolean;
+  /** After the claim, while the shared console password still signs in (as Operator): when it
+   *  stops. Null or absent: not offered. */
+  shared_password?: { until: string | null } | null;
   /** S1: passkeys work only once a public origin is bound; false hides "Sign in with a passkey". */
   passkey?: boolean;
   /** The public URL BOSS binds cookies, passkeys and emailed links to (H2). Null: none bound —
@@ -455,6 +458,8 @@ export interface SignInStep {
   /** With next "enrol" (H1): false when this sign-in may NOT enrol a factor (only an admin
    *  resetting the second factor helps); true or absent: go and enrol. */
   enrolment_grant?: boolean;
+  /** After a recovery-code sign-in that left fewer than 3 codes: make new ones now (§4.7). */
+  must_regenerate_recovery_codes?: boolean;
   methods: ("totp" | "passkey" | "recovery")[];
   who: { display_name: string; email: string; hue: number } | null;
 }

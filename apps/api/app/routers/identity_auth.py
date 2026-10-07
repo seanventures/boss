@@ -132,7 +132,8 @@ class _Body(BaseModel):
 
 
 class LoginBody(_Body):
-    email: str = Field(max_length=320)
+    #: blank: the shared console password (Operator for 30 days after the claim)
+    email: str = Field(default="", max_length=320)
     password: str = Field(max_length=1024)
 
 
@@ -248,6 +249,7 @@ def build_identity_auth_router() -> APIRouter:
                                          else "claim" if bound else None),
                 "providers": providers, "smtp": smtp, "signup": email_signin.signup_enabled(db),
                 "legacy_password": bool(claim_module.legacy_password_configured()),
+                "shared_password": _shared_password_offer(db, org) if claim_info is None else None,
                 "passkey": bool(public_origin(db)), "claim": claim_info,
             }, headers={"Cache-Control": "no-store"})
 
@@ -459,26 +461,64 @@ def build_identity_auth_router() -> APIRouter:
         session the cookie names."""
         return _run(request, lambda db, f: signin.logout(db, f))
 
-    @router.get("/v1/auth/session")
-    @authenticated(self_only=True)
-    def session(request: Request):
-        from boss_engine.identity.sessions import csrf_token
-
-        try:
-            with begin() as db:
-                ctx = current_context(request, db)
-                return JSONResponse({
-                    "principal": {"id": ctx.principal.id, "kind": ctx.principal.kind.value,
-                                  "display_name": ctx.principal.display_name},
-                    "org": ctx.principal.org_id,
-                    "mfa_at": ctx.session.mfa_at.isoformat() if ctx.session and ctx.session.mfa_at else None,
-                    "csrf": csrf_token(ctx.session.id) if ctx.session else None,
-                    "expires": ctx.session.absolute_expires_at.isoformat() if ctx.session else None,
-                }, headers={"Cache-Control": "no-store"})
-        except AuthnError as exc:
-            return refusal(exc)
-
     return router
+
+
+def session_fields(request: Request) -> dict[str, Any]:
+    """GET /v1/auth/session's identity half (IDENTITY.md §10: {principal, org, mfa_at, csrf,
+    expires}), merged into the one handler in main.py, which keeps rc5's fields for the clients
+    that read them (the MCP API surface's scope check, the console's auth-session helper). The
+    identity router's own copy of this route was unreachable: main.py's was registered first.
+    Empty when the request has no identity context (a legacy key identity has not mapped)."""
+    from boss_engine.identity.principal import AuthMethod
+    from boss_engine.identity.sessions import csrf_token
+
+    try:
+        with begin() as db:
+            ctx = current_context(request, db)
+    except (AuthnError, NotImplementedError):
+        return {}
+    method = {AuthMethod.API_KEY: "api_key", AuthMethod.LEGACY_API_KEY: "api_key",
+              AuthMethod.SESSION: "session", AuthMethod.RUN_TOKEN: "run_token",
+              AuthMethod.OIDC_BEARER: "oidc", AuthMethod.NETWORK: "network",
+              AuthMethod.LEGACY_PASSWORD: "session"}.get(ctx.method, str(ctx.method.value))
+    cred, session = ctx.credential, ctx.session
+    return {
+        "principal": {"id": ctx.principal.id, "kind": ctx.principal.kind.value,
+                      "display_name": ctx.principal.display_name},
+        "org": ctx.principal.org_id,
+        "mfa_at": session.mfa_at.isoformat() if session and session.mfa_at else None,
+        "csrf": csrf_token(session.id) if session else None,
+        "expires": session.absolute_expires_at.isoformat() if session else None,
+        "auth_method": method,
+        "key_projects": (sorted(cred.project_ids) if cred is not None and cred.project_ids is not None
+                         else None),
+    }
+
+
+def _settings():
+    from boss_engine.config import get_settings
+
+    return get_settings()
+
+
+def _shared_password_offer(db: Any, org: Optional[str]) -> Optional[dict[str, Any]]:
+    """After the claim, while the shared console password still signs in (as Operator): the date
+    it stops, so the sign-in page can offer it. None when it is not configured or has ended."""
+    from datetime import datetime, timezone
+
+    from boss_engine.identity import migration
+    from boss_engine.identity.legacy import LegacyKind
+
+    if not org or not claim_module.legacy_password_configured():
+        return None
+    m = migration.mapping(db, org, LegacyKind.SHARED_PASSWORD, "BOSS_CONSOLE_PASSWORD")
+    if not m or m["retired_at"] is not None:
+        return None
+    until = m["retire_after"]
+    if until is not None and until <= datetime.now(timezone.utc):
+        return None
+    return {"until": until.isoformat() if until else None}
 
 
 def _bridged(request: Request) -> Optional[AuthContext]:
