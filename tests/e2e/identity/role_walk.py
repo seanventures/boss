@@ -475,8 +475,10 @@ class Walk:
             at_project = not (path.startswith("/identity") or path.startswith("/account"))
             targets.append(("page", f"{self.origin}{path}", p.permission, at_project, p.path))
 
+        any_scope = {p.path for p in self.pages if p.any_scope}
         for kind, url, perm, at_project, key in targets:
-            may = perm is None or rs.holds(perm, at_project, self.cat.scope)
+            may = perm is None or rs.holds(perm, at_project, self.cat.scope) or (
+                key in any_scope and (perm in rs.org or perm in rs.project))
             state["console"].clear(); state["bad"].clear()
             state["url"] = url
             entry: dict[str, Any] = {"kind": kind, "key": key, "url": url, "permission": perm, "allowed": may}
