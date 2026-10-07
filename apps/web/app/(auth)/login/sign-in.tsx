@@ -17,6 +17,7 @@ import { ArrowRight, CaretRight, EnvelopeSimple, Fingerprint, Key, LockSimple, S
 
 import { IdentityError, idPost } from "../../../lib/identity/api";
 import type { AuthOptions, SignInStep } from "../../../lib/identity/types";
+import { emailSignInOffered } from "../../../lib/identity/email-sign-in";
 import { getAssertion, PasskeyCancelled, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../../lib/identity/webauthn";
 import { CodeInput, Face } from "../../../components/identity/kit";
 import { AuthStage, Live, Logo, MethodTabs, ProviderRow, safeNextClient } from "../auth-parts";
@@ -63,15 +64,6 @@ function say(e: unknown): string {
     return WORDS[e.code] ?? e.message;
   }
   return "That didn't work";
-}
-
-/**
- * Magic link and email code send an email whose link names BOSS's public URL. Without SMTP there is
- * no email, and without a public URL (H2: `public_origin` null) the API refuses them
- * `409 public_origin_unset` — so neither is offered. An API that does not report the URL is trusted.
- */
-export function emailSignInOffered(options: Pick<AuthOptions, "smtp" | "public_origin">): boolean {
-  return options.smtp && options.public_origin !== null;
 }
 
 /**
