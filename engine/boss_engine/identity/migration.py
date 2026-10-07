@@ -909,6 +909,17 @@ def on_claimed(org_id: str, owner_principal_id: str, *, db: Any, now: Optional[d
     # without one, delegation never applies and work would run outside it.
     from . import passports
     passports.upgrade_from_roles(org_id=org_id, db=db, default_sponsor=owner_principal_id)
+    # A FRESH install: the API booted (and checked the vault) before the installer seeded the org,
+    # so no run/actor signing keys exist yet; the first Owner's claim provisions them, or the
+    # first delegated run would fail until a restart (round 2 a). Idempotent.
+    from . import signing_keys, vault
+    try:
+        vault._kek()  # noqa: SLF001 — is a master key configured at all?
+    except vault.MasterKeyMissing:
+        pass          # no vault key: boot reports it; nothing to sign with
+    else:
+        vault.check_master_key(db=db)
+        signing_keys.provision(org_id=org_id, db=db)
     return _apply_claimed_state(db, org_id, settings, now, started=now)
 
 
