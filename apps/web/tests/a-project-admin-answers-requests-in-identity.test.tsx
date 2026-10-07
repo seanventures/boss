@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { RequestsScreen } from "../app/identity/requests/requests-screen";
 import { snapshotFrom, type MePermissionsResponse } from "../lib/identity/contract";
-import { candidateProjects, heldSomewhere, MAX_PROJECTS } from "../lib/identity/held-anywhere";
+import { heldFrom, heldSomewhere, MY_PROJECTS_PATH, type MyProject } from "../lib/identity/held-anywhere";
 import { IDENTITY_TABS, pageFor } from "../lib/identity/pages";
 import { ORG_QUEUE, requestQueues } from "../lib/identity/request-queues";
 import { eventHref, REQUESTS_PATH } from "../lib/identity/words";
@@ -45,19 +45,36 @@ describe("the page and its tab", () => {
 });
 
 describe("which queues it reads", () => {
+  const mine = (rows: Array<[string, string[]]>): MyProject[] =>
+    rows.map(([project_id, permissions]) => ({ project_id, name: project_id, permissions, via: ["project"] }));
+
   it("an org admin reads the org's list", () => {
-    expect(requestQueues(snap(["role_binding:read", "role_binding:assign"]), { org: true, projects: [] }, ["p1"])).toEqual([ORG_QUEUE]);
+    expect(requestQueues(snap(["role_binding:read", "role_binding:assign"]), { org: true, projects: ["p1"] })).toEqual([ORG_QUEUE]);
   });
   it("a project Admin reads each project where they assign roles, and nothing else", () => {
-    expect(requestQueues(snap(["project:read"]), { org: false, projects: ["p1", "p2"] }, ["p1", "p2", "p3"]).map((q) => q.path)).toEqual([
+    const held = heldFrom(snap(["project:read"]), mine([["p1", ["role_binding:assign"]], ["p2", ["role_binding:assign"]],
+                                                         ["p3", ["project:read"]]]), "role_binding:assign");
+    expect(held).toEqual({ org: false, projects: ["p1", "p2"] });
+    expect(requestQueues(snap(["project:read"]), held).map((q) => q.path)).toEqual([
       "/v1/identity/projects/p1/access-requests?status=open", "/v1/identity/projects/p2/access-requests?status=open"]);
   });
-  it("org-wide assign without org read: every candidate project's queue", () => {
-    expect(requestQueues(snap(["role_binding:assign"]), { org: true, projects: [] }, ["p1", "p2"]).map((q) => q.projectId)).toEqual(["p1", "p2"]);
+  it("org-wide assign without org read: the queue of every project /me/projects lists", () => {
+    const held = heldFrom(snap(["role_binding:assign"]), mine([["p1", ["role_binding:assign"]], ["p2", ["role_binding:assign"]]]),
+                          "role_binding:assign");
+    expect(held.org).toBe(true);
+    expect(requestQueues(snap(["role_binding:assign"]), held).map((q) => q.projectId)).toEqual(["p1", "p2"]);
   });
-  it("asks about the active project first, each once, and at most MAX_PROJECTS", () => {
-    expect(candidateProjects("p1", ["p2", "p1", "p3"])).toEqual(["p1", "p2", "p3"]);
-    expect(candidateProjects("a", Array.from({ length: 60 }, (_, i) => `p${i}`))).toHaveLength(MAX_PROJECTS);
+  it("a project past the 25th is found: there is no cap any more", () => {
+    const many = mine(Array.from({ length: 60 }, (_, i) => [`p${i}`, ["role_binding:assign"]] as [string, string[]]));
+    expect(heldFrom(snap([]), many, "role_binding:assign").projects).toHaveLength(60);
+  });
+  it("asks the API once (GET /v1/identity/me/projects), never probing projects one by one", () => {
+    const src = readFileSync(join(WEB, "lib/identity/held-anywhere.ts"), "utf8");
+    expect(MY_PROJECTS_PATH).toBe("/v1/identity/me/projects");
+    expect(src).toMatch(/serverGet<\{ projects: MyProject\[\] \}>\(MY_PROJECTS_PATH\)/);
+    expect(src).not.toMatch(/ME_PERMISSIONS_PATH|fetchProjectFeed|MAX_PROJECTS/);
+    const page = readFileSync(join(WEB, "app/identity/requests/page.tsx"), "utf8");
+    expect(page).not.toMatch(/fetchProjectFeed|candidateProjects/);
   });
 });
 
