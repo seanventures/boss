@@ -142,7 +142,15 @@ class SandboxIdentity:
         """The sandboxed process's environment: its own HOME/TMPDIR/config dirs inside the run
         directory, the egress CONNECT proxy for everything that is not BOSS. A credential-shaped
         variable is never added here."""
-        out = dict(os.environ if env is None else env)
+        from .agent_env import NEVER, agent_environment
+
+        # Deny by default (round 2): a caller that passes no env gets the agent allow-list, never
+        # the control plane's own environment (DATABASE_URL, provider keys, the master-key path);
+        # an env a caller computed still loses every NEVER name.
+        never = {n.upper() for n in NEVER} | {"BOSS_MASTER_KEY", "BOSS_IDENTITY_SERVER_KEY",
+                                              "BOSS_EGRESS_SERVICE_KEY", "BOSS_KMS_MASTER_KEY"}
+        out = {k: v for k, v in (agent_environment(os.environ) if env is None else dict(env)).items()
+               if k.upper() not in never}
         home, tmp = str(self.home), str(self.tmp)
         out.update({"HOME": home, "TMPDIR": tmp, "TMP": tmp, "TEMP": tmp, "USER": f"sbx{self.uid}",
                     "LOGNAME": f"sbx{self.uid}", "XDG_CONFIG_HOME": f"{home}/.config",
