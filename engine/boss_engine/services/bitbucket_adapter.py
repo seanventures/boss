@@ -113,6 +113,9 @@ class BitbucketAdapter:
     # --- files ----------------------------------------------------------------
     def upsert_file(self, branch_name: str, path: str, content: str, message: str) -> str:
         """Commit one file onto a branch via the src endpoint (create-or-update semantics)."""
+        from .agent_acts import sign_commit_message
+
+        message = sign_commit_message(message)
         self._request("POST", f"{self._repo_path()}/src",
                       form={path: content, "message": message, "branch": branch_name},
                       allow_empty=True)

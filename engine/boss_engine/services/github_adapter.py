@@ -617,6 +617,9 @@ class GitHubAdapter:
         self, branch_name: str, path: str, data: bytes, message: str
     ) -> str:
         """Create or update a file of arbitrary bytes (e.g. a PDF) on a branch."""
+        from .agent_acts import sign_commit_message
+
+        message = sign_commit_message(message)
         sha = None
         try:
             existing = self._request(
