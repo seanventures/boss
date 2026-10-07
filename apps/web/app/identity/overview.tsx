@@ -23,6 +23,7 @@ const CHECK_ICON: Record<PostureCheck["id"], React.ReactNode> = {
   legacy: <Warning size={13} aria-hidden />, owners: <UsersThree size={13} aria-hidden />, audit: <LinkSimple size={13} aria-hidden />,
   enforcement: <ShieldCheck size={13} aria-hidden />,
   origin: <Globe size={13} aria-hidden />,
+  github: <GitBranch size={13} aria-hidden />,
 };
 
 /** The engine says "critical"; the posture cards have three tones. */

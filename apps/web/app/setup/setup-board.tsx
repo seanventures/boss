@@ -27,6 +27,7 @@ import { JobsRow } from "./jobs-row";
 import { ModelsRow } from "./models-row";
 import { BoardContext, toast } from "./parts";
 import { Dot, localView } from "./pill";
+import { GitHubAccessRow } from "./github-access-row";
 import { RepositoryRow } from "./repository-row";
 import { TryRow } from "./try-row";
 import { PublicUrlRow } from "./public-url-row";
@@ -203,6 +204,7 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
         </header>
         <RepositoryRow ref={ref("repository")} mode={rowMode(view, "repository")}
                        step={stepNumber(view, "repository")} focused={focus === "repository"} />
+        <GitHubAccessRow />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}
                    step={stepNumber(view, "models")} focused={focus === "models"}
                    add={params.add} source={params.source}

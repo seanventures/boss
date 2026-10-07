@@ -317,7 +317,7 @@ export type PostureStatus = "ok" | "warn" | "bad" | "critical";
 
 export interface PostureCheck {
   /** `origin`: is a public URL bound (H2)? "bad" while none is: emailed links are off. */
-  id: "mfa" | "keys" | "delegations" | "legacy" | "owners" | "audit" | "enforcement" | "origin";
+  id: "mfa" | "keys" | "delegations" | "legacy" | "owners" | "audit" | "enforcement" | "origin" | "github";
   label: string;
   status: PostureStatus;
   value: string;
