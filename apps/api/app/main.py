@@ -17,7 +17,7 @@ import threading
 from secrets import compare_digest
 import time
 from collections import defaultdict, deque
-from typing import Any, Literal, Optional
+from typing import Any, Iterable, Literal, Optional
 from urllib.parse import parse_qs
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
@@ -1295,6 +1295,40 @@ def _install_shipped_cast() -> dict:
         return {}
 
 
+def _seed_work_tracker_defaults() -> None:
+    """Every project's tracker catalogue rows and job quota (work_orchestration.seed_defaults:
+    idempotent, never undoes an operator), refreshed at boot — the reads that used to seed them on
+    every GET (/v1/work-trackers, /v1/work-orchestration/overview) only read now (R5)."""
+    from boss_engine.services.work_orchestration import WorkOrchestrationService
+
+    try:
+        with begin(engine) as connection:
+            ids = [r[0] for r in connection.execute(text("SELECT id FROM projects ORDER BY id"))]
+        service = WorkOrchestrationService(settings)
+        for project_id in ids:
+            with begin(engine) as connection:
+                service.seed_defaults(connection, project_id, "boss")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a catalogue refresh
+        print(f"[lifespan] work-tracker defaults not refreshed: {type(exc).__name__}")
+
+
+#: How often an unclaimed install checks that a live claim link exists (and prints a fresh one).
+CLAIM_LINK_REANNOUNCE_SECONDS = 60
+
+
+def announce_claim_link_once() -> bool:
+    """While the install has no Owner: print a fresh one-hour claim link when none is live (the
+    lifespan's keeper calls this at boot and every CLAIM_LINK_REANNOUNCE_SECONDS). False once
+    claimed (the keeper stops)."""
+    from boss_engine.identity import claim as _identity_claim
+
+    with begin(engine) as connection:
+        if _identity_claim.is_claimed(connection):
+            return False
+        _identity_claim.announce_setup_link(connection)
+        return True
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
@@ -1362,6 +1396,7 @@ async def lifespan(_: FastAPI):
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
     _install_shipped_cast()
+    _seed_work_tracker_defaults()
     _backfill_agent_identities()
     # REFUSED DEPLOYMENT PLANS LEFT NOTHING BEHIND ONCE, AND NOW NEVER DID. An unverified host
     # used to raise a pending decision nobody could act on and a failed run that never ran;
@@ -1556,16 +1591,34 @@ async def lifespan(_: FastAPI):
         _server_key()
     except ServerKeyMissing as exc:
         print(f"[identity] NO SERVER KEY: {exc}", flush=True)
-    # IDENTITY (S1-3): an install with no Owner prints its one-hour claim link once at boot. The
-    # token rides in the URL fragment, so it never reaches an access log.
-    try:
-        from boss_engine.identity import claim as _identity_claim
+    # IDENTITY (S1-3): an install with no Owner prints its one-hour claim link at boot, and a
+    # fresh one whenever the last expires, until it is claimed. The token rides in the URL
+    # fragment, so it never reaches an access log. Here, never on a GET (R5: every GET is
+    # read-only; /v1/auth/options and /v1/auth/setup/status used to mint it).
+    async def _keep_claim_link_announced() -> None:
+        import asyncio as _asyncio
 
-        with begin(engine) as _connection:
-            _identity_claim.announce_setup_link(_connection)
-    except Exception as exc:  # noqa: BLE001 — never block startup on the claim link
-        print(f"[identity] claim link not announced: {type(exc).__name__}")
-    yield
+        while True:
+            try:
+                if not await _asyncio.to_thread(announce_claim_link_once):
+                    return
+            except Exception as exc:  # noqa: BLE001 — never block startup on the claim link
+                print(f"[identity] claim link not announced: {type(exc).__name__}")
+            await _asyncio.sleep(CLAIM_LINK_REANNOUNCE_SECONDS)
+
+    try:
+        import asyncio as _asyncio
+
+        _claim_link_task = _asyncio.create_task(_keep_claim_link_announced())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[identity] claim link not scheduled: {type(exc).__name__}")
+    try:
+        yield
+    finally:
+        try:
+            _claim_link_task.cancel()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # THE IDENTITY ENFORCEMENT POINT (docs/product/IDENTITY.md §6.6). An app-level dependency is copied
@@ -2176,7 +2229,8 @@ async def require_transport_auth_for_v1(request: Request, call_next):
             current_transport_authenticated.reset(authenticated_token)
             current_auth_method.reset(auth_method_token)
 
-    if identity_guard.presents_identity_credential(request):
+    if (identity_guard.presents_identity_credential(request)
+            or identity_guard.network_bridge_applies(request)):
         # A person's session, a boss_ key or a run token: authenticated once, here, by identity
         # (the guard reuses the result), never by the legacy key list.
         return await _identity_transport(request, call_next)
@@ -2253,14 +2307,20 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         # reuses it.
         from boss_engine.identity.enforcement import AuthzMode as _AuthzMode
 
-        if identity_guard.route_mode(request.scope) == _AuthzMode.ENFORCE:
+        enforced = identity_guard.route_mode(request.scope) == _AuthzMode.ENFORCE
+        _legacy_ctx = None
+        if enforced:
             try:
                 _legacy_ctx = await run_in_threadpool(identity_guard.request_auth, request)
             except Exception:  # noqa: BLE001 — the guard refuses it with the right status
                 _legacy_ctx = None
             if _legacy_ctx is not None:
                 current_api_principal.set(str(_legacy_ctx.principal.id))
-        read_project_id = requested_get_project_id(request)
+        # Under enforce the guard decides every request against the catalogue (the legacy console
+        # key pre-claim is sys_legacy_console, which holds the Owner set): the legacy members
+        # table is never read for an enforced route — it names none of the bridge principals,
+        # so it refused the installer's own GET /v1/edition (R2 #1).
+        read_project_id = None if enforced else requested_get_project_id(request)
         if read_project_id:
             try:
                 with begin(engine) as connection:
@@ -2283,7 +2343,9 @@ async def require_transport_auth_for_v1(request: Request, call_next):
             with begin(engine) as connection:
                 human_principal = _authenticated_principal_is_human(connection, principal)
             if not human_principal and not mcp_operation:
-                denied = await _deny_missing_grant_before_mcp_hold(
+                # Under enforce the hold still applies (it is about WHO the key is: the key's
+                # legacy member decides), but the grant before it is the guard's to check.
+                denied = None if enforced else await _deny_missing_grant_before_mcp_hold(
                     request, principal, matched[1],
                 )
                 if denied is not None:
@@ -2302,6 +2364,14 @@ async def require_transport_auth_for_v1(request: Request, call_next):
                 return JSONResponse(status_code=409, content={"detail": "mcp_confirmation_required"})
             if confirmation_id and not eligible:
                 return JSONResponse(status_code=409, content={"detail": "mcp_confirmation_not_supported"})
+            if confirmation_id and enforced:
+                # The ONE replay path under enforce: the reviewer re-checked by the PDP, never by
+                # the legacy members table (identity_mcp_confirmations).
+                if _legacy_ctx is None:
+                    return JSONResponse(status_code=401, content={"error": "unauthenticated"})
+                return await _identity_confirmed_replay(
+                    request, call_next, _legacy_ctx, identity_guard.actor_for(_legacy_ctx),
+                    confirmation_id)
             if confirmation_id:
                 raw_body = await request.body()
                 if len(raw_body) > mcp_confirmation.MAX_REQUEST_BYTES:
@@ -12261,7 +12331,10 @@ def list_sandboxes_endpoint():
                 "AND updated_at > now() - interval '115 minutes' "
                 "ORDER BY updated_at DESC LIMIT 30")).mappings().all()
             for r in rows:
-                if current_transport_authenticated.get():
+                if identity_guard.identity_enforced():
+                    # the guard checked sandbox:read org-wide: every project's card is theirs
+                    pass
+                elif current_transport_authenticated.get():
                     principal = current_api_principal.get()
                     try:
                         if not principal:
@@ -12577,12 +12650,14 @@ def list_capabilities(project_id: str):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     settings = get_settings()
-    # The same read the Skills and MCP page and the step builder use
-    # (mcp_registry.servers_with_tools), so the three screens cannot disagree about whether a
-    # server is up. This probed every server inline with a 6-second timeout, every load, and
-    # remembered nothing.
+    # The same RECORDED state the Skills and MCP page and the step builder read
+    # (mcp_registry: what the last probe found), so the three screens cannot disagree about
+    # whether a server is up. A GET never probes (R5: every GET is read-only — a probe records
+    # its result): the servers are asked by POST /v1/mcp/servers/load?check=stale.
     enriched: list[dict] = []
-    for s in servers_with_tools(lambda: begin(engine), settings, project_id):
+    with begin(engine) as connection:
+        recorded = list_mcp_servers(connection, project_id)
+    for s in recorded:
         entry = dict(s)
         entry["reachable"] = s["reachable"] is not False
         entry["tools"] = [{"name": t["name"], "description": t.get("description", "")}
@@ -20207,7 +20282,20 @@ def approve_changeset(
         required_roles = resource_plane.required_approvers_for_changeset(
             connection, changeset_id
         )
-        if required_roles:
+        approver_roles: Optional[list[str]] = None
+        if required_roles and identity_guard.identity_enforced():
+            # Dual control under identity: the guard checked changeset:approve; the person must
+            # also hold it THROUGH one of the named approver roles (a role binding at the org or
+            # this project, direct or by group) — never the legacy members table.
+            approver_roles = _roles_granting(project_id, P.CHANGESET_APPROVE, required_roles)
+            if not approver_roles:
+                reason = ("Dual control: approving needs one of the approver roles "
+                          + ", ".join(required_roles) + ".")
+                record_policy_denial(project_id, payload.actor, "changeset_approve", reason)
+                raise HTTPException(status_code=403, detail={
+                    "error": "forbidden", "reason": "approver_role_required",
+                    "required_roles": list(required_roles), "message": reason})
+        elif required_roles:
             # Dual-control: only an active member holding one of the named approver
             # roles may approve (no generic providerops_manage shortcut).
             try:
@@ -20240,6 +20328,7 @@ def approve_changeset(
                 connection,
                 changeset_id=changeset_id,
                 actor=payload.actor,
+                approver_roles=approver_roles,
             )
         except (ChangeSetNotFoundError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -24486,7 +24575,7 @@ def list_delivery_custom_steps(project_id: str) -> dict:
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
 
-    from boss_engine.services.mcp_registry import servers_with_tools, tool_tier
+    from boss_engine.services.mcp_registry import tool_tier
     from boss_engine.services.skill_catalogue import bindable as catalogue_bindable
 
     # THE ONE CATALOGUE (skill_catalogue). This read `project_skills`, labelled it "Your
@@ -24497,13 +24586,13 @@ def list_delivery_custom_steps(project_id: str) -> dict:
         steps = custom_steps.list_steps(connection, project_id)
         bindable_skills = catalogue_bindable(connection, project_id, settings=get_settings())
 
-    # One read for every MCP screen (mcp_registry.servers_with_tools): probes only servers whose
-    # last check is over a minute old, records what it found, and keeps the last-known tools of
-    # a server that is down. This used to probe every server inline on every builder load with
-    # a 6-second timeout each and remember nothing.
+    # The RECORDED state every MCP screen reads (what the last probe found, with the last-known
+    # tools of a server that is down). A GET never probes (R5: every GET is read-only — a probe
+    # records its result); the screens ask the servers with POST /v1/mcp/servers/load?check=stale.
     bindable_servers = []
-    for server in servers_with_tools(lambda: begin(engine), get_settings(), project_id,
-                                     enabled_only=True):
+    with begin(engine) as connection:
+        recorded_servers = list_mcp_servers(connection, project_id, enabled_only=True)
+    for server in recorded_servers:
         entry = {
             "id": server["id"], "name": server["name"],
             "risk_tier": server["risk_tier"], "trusted": server["trusted"],
@@ -29334,12 +29423,18 @@ def agent_lifecycle_endpoint(role_key: str, body: AgentLifecycleBody):
                                           "role_review")
         # AN OWNER IS A PERSON: the ceo role on a HUMAN member, as require_autonomy_operator
         # decides it. A ceo role key alone let an agent or system principal count as an owner.
-        try:
-            member = members.require_member(connection, body.project_id, who,
-                                             role_keys_any=["ceo"])
-            owner = member.get("member_type") == "human"
-        except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
-            owner = False
+        # Under enforce: a person bound to the org's Owner role (never the legacy members table).
+        if identity_guard.identity_enforced():
+            ctx = identity_guard.REQUEST_IDENTITY.get()
+            owner = bool(ctx is not None and ctx.run_token is None
+                         and identity_guard._is_org_owner(ctx.principal))  # noqa: SLF001
+        else:
+            try:
+                member = members.require_member(connection, body.project_id, who,
+                                                 role_keys_any=["ceo"])
+                owner = member.get("member_type") == "human"
+            except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
+                owner = False
         try:
             return jsonable_encoder(agent_identity.set_lifecycle(
                 connection, body.project_id, role_key, body.state, who, body.reason,
@@ -29928,10 +30023,42 @@ def backfill_signed_acts(payload: ActsBackfillRequest) -> dict:
 # THE ONE AGENT MODEL: create/read/edit/delete an agent and its MCP grants (routers/agents.py).
 from .routers.agents import build_agents_router
 
+def _roles_granting(project_id: str, permission: str, among: Iterable[str]) -> list[str]:
+    """The roles (of `among`) through which this enforced request's principal holds `permission`
+    at `project_id` — the PDP's own binding paths (authz.effective_permissions(with_why)), so a
+    group binding and an org binding count, an expired one does not — plus the legacy seat the
+    principal took over at the claim (an approver role named `ceo` is the claimant's), only while
+    it holds `permission` at all. An org names a person to another approver role (`cto`) with a
+    custom role of that key."""
+    from boss_engine.identity import authz as _authz
+    from boss_engine.identity.scope import ResolvedScope as _RS
+
+    ctx = identity_guard.REQUEST_IDENTITY.get()
+    if ctx is None:
+        return []
+    eff = _authz.effective_permissions(ctx, _RS.in_project(ctx.principal.org_id, project_id),
+                                       with_why=True)
+    if permission not in eff.permissions:
+        return []
+    held = {w.role_key for w in eff.why.get(permission, ())}
+    # the legacy seat a person took over at the claim (`ceo`) is still theirs to fill
+    held |= set(getattr(ctx.principal, "legacy_member_ids", ()) or ())
+    return sorted(held & set(among))
+
+
 def project_actor_can(connection, project_id: str, claimed_actor: Optional[str],
-                      permission: str) -> bool:
+                      permission: str, catalogue_permission: str) -> bool:
     """Whether the signed-in principal holds `permission` here — a question, not a gate: no
-    denial is recorded, so a page can ask it to decide which controls to show."""
+    denial is recorded, so a page can ask it to decide which controls to show.
+
+    Under enforce it is the PDP's answer for `catalogue_permission` (the one the control's write
+    route declares) held by the verified principal; never the legacy members table and never the
+    claimed actor (identity.viewer.may, R2 #5)."""
+    from boss_engine.identity import viewer as _viewer
+
+    decided = _viewer.may(project_id, catalogue_permission)
+    if decided is not None:
+        return decided
     actor = str(current_api_principal.get() or claimed_actor or "").strip()
     if not actor:
         return False
