@@ -5,6 +5,7 @@ import {
   secureConsoleTransport,
 } from "./lib/console-session";
 import { hasSessionCookie, isPreviewCapabilityPath } from "./lib/identity/forward";
+import { machineRequest, protocolKind } from "./lib/identity/protocol-proxy";
 import { isPublicConsolePath, PATH_HEADER } from "./lib/identity/pages";
 import { githubWebOrigins, HANDOFF_PATH } from "./lib/identity/github-manifest";
 import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
@@ -68,6 +69,16 @@ export async function middleware(request: NextRequest) {
   // the preview origin (lib/identity/forward.ts isPreviewCapabilityPath, which judges the
   // normalised path) and forwards nothing. No session is needed for a redirect, and none is used.
   if (isPreviewCapabilityPath(path)) return NextResponse.next();
+  // SAML AND SCIM ON THE PUBLIC ORIGIN (lib/identity/protocol-proxy.ts). No session: SCIM carries
+  // its own bearer and is forwarded with nothing else, and only as a machine request; the SAML
+  // metadata is a public GET. The ACS POST — exactly `/saml/v2/acs` — is the ONE write allowed
+  // past the cross-site refusal: an IdP's form POST is cross-site by design.
+  const protocol = protocolKind(request.method, path);
+  if (protocol === "scim") {
+    return machineRequest(request.headers) ? NextResponse.next()
+      : NextResponse.json({ detail: "scim_is_server_to_server" }, { status: 403, headers: { "Cache-Control": "no-store" } });
+  }
+  if (protocol === "saml-metadata" || protocol === "saml-acs") return NextResponse.next();
   // The sign-in pages and the public sign-in API (rate-limited and CSRF-checked by the API).
   if (isPublicConsolePath(path)) return passThrough(request);
   // A NETWORK-TRUSTED INSTALL (goldeneye, before and up to 30 days after its claim) has no
