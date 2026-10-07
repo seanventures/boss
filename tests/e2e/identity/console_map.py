@@ -89,6 +89,7 @@ class Page:
     label: str
     permission: Optional[str]          # None: any signed-in person
     source: str                        # IDENTITY_PAGES | CONSOLE_PAGES
+    any_scope: bool = False            # { anyScope: p }: held at the org OR in any project
 
 
 def pages() -> list[Page]:
@@ -98,14 +99,15 @@ def pages() -> list[Page]:
     for name in ("IDENTITY_PAGES", "CONSOLE_PAGES"):
         body = _block(src, f"export const {name}")
         entries = re.findall(r'\{\s*path:\s*"([^"]+)",\s*label:\s*"([^"]+)",.*?access:\s*'
-                             r'(\{\s*permission:\s*"([a-z_]+:[a-z_]+)"\s*\}|\{\s*authenticated:\s*true\s*\}|area\("([^"]+)"\))',
+                             r'(\{\s*permission:\s*"([a-z_]+:[a-z_]+)"\s*\}|\{\s*authenticated:\s*true\s*\}|area\("([^"]+)"\)'
+                             r'|\{\s*anyScope:\s*"([a-z_]+:[a-z_]+)"\s*\})',
                              body)
         literal_paths = len(re.findall(r'\{\s*path:\s*"', body))
         if len(entries) != literal_paths:
             raise MapError(f"{name}: parsed {len(entries)} of {literal_paths} page entries")
-        for path, label, _whole, perm, area in entries:
-            permission = perm or (area_perm[area] if area else None)
-            out.append(Page(path, label, permission, name))
+        for path, label, _whole, perm, area, any_perm in entries:
+            permission = perm or any_perm or (area_perm[area] if area else None)
+            out.append(Page(path, label, permission, name, any_scope=bool(any_perm)))
     return out
 
 
