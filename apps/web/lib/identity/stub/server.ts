@@ -705,9 +705,10 @@ for (const [action, perm] of [["suspend", "agent_passport:suspend"], ["resume", 
   });
 }
 on("GET", "/v1/identity/delegations", "delegation:read_all", ({ s }) => ok({ delegations: s.delegations }));
-on("GET", "/v1/identity/delegations/([^/]+)", "delegation:read_all", ({ s, m }) => {
+// As the API: the grantor or a reader of every grant; anyone else reads 404.
+on("GET", "/v1/identity/delegations/([^/]+)", "self", ({ s, m, who }) => {
   const d = s.delegations.find((x) => x.id === m[1]);
-  return d ? ok(detail(s, d)) : notFound();
+  return d && (d.user.id === who || holds(s, who, "delegation:read_all")) ? ok(detail(s, d)) : notFound();
 });
 on("POST", "/v1/identity/delegations/([^/]+)/revoke", "delegation:revoke_any", ({ s, m, req, who, now }) => {
   const d = s.delegations.find((x) => x.id === m[1]);

@@ -11,7 +11,8 @@ import { DeviceMobile, Fingerprint, Key, LinkSimple, LockSimple, PencilSimple, P
 
 import { IdentityError, idDelete, idGet, idPatch, idPost } from "../../lib/identity/api";
 import type { MeResponse } from "../../lib/identity/contract";
-import type { Factor } from "../../lib/identity/types";
+import type { AuthOptions, Factor } from "../../lib/identity/types";
+import { probeSsoLink, ssoLinkStartPath } from "../../lib/identity/sso-link";
 import { codesOf, type LinkedIdentity, type RecoveryCodes } from "../../lib/identity/types-auth";
 import { webauthnAvailable } from "../../lib/identity/webauthn";
 import { useGuardedCall, useIdentity } from "../../components/identity/identity-provider";
@@ -30,8 +31,10 @@ const FACTOR_ICON: Record<Factor["kind"], React.ReactNode> = {
   recovery: <LockSimple size={16} aria-hidden />, sso: <LinkSimple size={16} aria-hidden />,
 };
 
-export function AccountSecurity({ me, factors: initialFactors, identities: initialIdentities, host, linked = false }: {
+export function AccountSecurity({ me, factors: initialFactors, identities: initialIdentities, host, linked = false, providers = [] }: {
   me: MeResponse | null; factors: Factor[]; identities: LinkedIdentity[]; host: string;
+  /** The org's sign-in providers (GET /v1/auth/options): the ones not linked yet offer "Link". */
+  providers?: AuthOptions["providers"];
   /** Back from linking a single sign-on account (`/account?linked=1`). */
   linked?: boolean;
 }) {
@@ -74,6 +77,22 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
       setBusy(false);
     }
   };
+
+  // LINK: probe the start (fresh session, not SAML), step up if asked, then go to the provider.
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const link = async (p: AuthOptions["providers"][number]) => {
+    setLinkError(null);
+    try {
+      await guarded("Linking adds a way to sign in to your account.", () => probeSsoLink(p.id));
+      window.location.assign(ssoLinkStartPath(p.id));
+    } catch (e) {
+      setLinkError(e instanceof IdentityError && e.code === "step_up_required"
+        ? `${p.name} can't be linked from here — sign out and sign in with it instead.`
+        : e instanceof IdentityError && e.code === "step_up_cancelled" ? null : said(e));
+    }
+  };
+  const linkedNames = new Set(identities.map((i) => i.provider));
+  const linkable = providers.filter((p) => !linkedNames.has(p.name) && !linkedNames.has(p.id));
 
   const passkeys = factors.filter((f) => f.kind === "passkey");
   const totp = factors.find((f) => f.kind === "totp");
@@ -185,6 +204,15 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
                 .catch((e) => setError(said(e)))}>Unlink</button>
             </div>
           )) : <div className="idn-dim">None linked</div>}
+          {linkable.map((p) => (
+            <div key={`link-${p.id}`} className="idn-fac" data-testid={`sso-link-${p.id}`}>
+              <span className="idn-d" data-kind="sso"><LinkSimple size={16} aria-hidden /></span>
+              <span><b>{p.name}</b><small>Not linked</small></span>
+              <button type="button" className="idn-btn sm" onClick={() => void link(p)}
+                title={`Sign in with ${p.name} once to link it`}>Link</button>
+            </div>
+          ))}
+          <ErrorLine error={linkError} />
         </section>
         <section className="idn-card" aria-labelledby="acc-you-h">
           <div className="idn-card-h"><h2 id="acc-you-h">Signed in as</h2></div>

@@ -21,3 +21,22 @@ def test_a_redirect_to_another_host_is_the_apps_business():
 def test_the_approval_gate_offers_the_gateway_path_not_the_loopback_port():
     assert preview_approval._open_url("prev_1") == f"{P}/"
     assert preview_approval._open_url(None) is None
+
+
+def test_a_redirect_is_read_the_way_the_browser_reads_it():
+    """The preview gateway open redirect: `\\` is `/` to a browser, tabs/newlines vanish and
+    leading controls are stripped, so these spellings name the loopback port (or another scheme)
+    and must be judged in their browser form, not as written."""
+    assert _gateway_location("prev_1", "\\\\127.0.0.1:43001/admin") == f"{P}/admin"
+    assert _gateway_location("prev_1", "/\\localhost:5000/x") == f"{P}/x"
+    assert _gateway_location("prev_1", "//127.0.0.1:5000/y?z=1") == f"{P}/y?z=1"
+    assert _gateway_location("prev_1", " \x01http://localhost:5000/k") == f"{P}/k"
+    assert _gateway_location("prev_1", "ht\ttp://127.0.0.1:1/t") == f"{P}/t"
+    assert _gateway_location("prev_1", "http:\\\\127.0.0.1:1\\u") == f"{P}/u"
+    # Never a script or data URL out of a preview.
+    for bad in ("javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,x", "\tjavascript:x"):
+        assert _gateway_location("prev_1", bad) == f"{P}/"
+    # A bare relative redirect resolves against the gateway URL it came from.
+    assert _gateway_location("prev_1", "login") == "login"
+    # Another host stays the app's business, in the browser's form.
+    assert _gateway_location("prev_1", "\\\\cdn.example.com/x") == "//cdn.example.com/x"

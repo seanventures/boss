@@ -16,6 +16,7 @@ import { API_URL, PROJECT_ID } from "../../lib/client";
 import { networkTrustedConsole } from "../../lib/console-session";
 import { checkWith } from "../../lib/identity/check";
 import { snapshotFrom } from "../../lib/identity/contract";
+import { enrolHref, needsEnrolment } from "../../lib/identity/enrolment";
 import { ACCOUNT_TABS, IDENTITY_TABS, PATH_HEADER, pageFor, type IdentityPage } from "../../lib/identity/pages";
 import { serverGet } from "../../lib/identity/server";
 import { loadIdentityCached } from "../../lib/identity/server-cache";
@@ -29,6 +30,8 @@ export async function RouteShell({ section, children }: { section: "identity" | 
   const path = (await headers()).get(PATH_HEADER) ?? (section === "identity" ? "/identity" : "/account");
   const boot = await loadIdentityCached(null);
   if (boot.problem === "unauthenticated" && !networkTrustedConsole()) redirect(`/login?next=${encodeURIComponent(path)}`);
+  // An enrolment-only session can do nothing here but enrol (lib/identity/enrolment.ts).
+  if (needsEnrolment(boot.me, boot.problem)) redirect(enrolHref(path));
   const org = boot.org ? snapshotFrom(boot.org) : null;
   const unavailable = !boot.org;
   const allowed = (page: IdentityPage) => unavailable || !("permission" in page.access) || checkWith(org, null, null, page.access.permission).allowed;

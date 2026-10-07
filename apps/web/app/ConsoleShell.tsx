@@ -86,6 +86,7 @@ import type { AreaId } from "../lib/area-ids";
 import { accessForArea } from "../lib/identity/area-access";
 import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
 import { IdentityProvider, useIdentity } from "../components/identity/identity-provider";
+import { allRoleLabels, primaryRoleLabel } from "../lib/identity/role-label";
 import { AccessDenied } from "../components/identity/access-denied";
 import { AccountMenu, IdentityBanners, signOut } from "../components/identity/account-menu";
 import { ConsentHost } from "../components/identity/consent-sheet";
@@ -1237,7 +1238,10 @@ function ConsoleShellInner({
             <span className="bx-operator-avatar" aria-hidden>{(me?.display_name ?? scope.actor).slice(0, 1).toUpperCase()}</span>
             <span>
               <strong>{me?.display_name ?? scope.actor}</strong>
-              <small>{me ? ([...new Set(me.access_roles)].map((r) => r.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())).join(" · ") || "No access role") : "Operator · in control"}</small>
+              {/* The highest role, from /v1/identity/me (lib/identity/role-label); never a guess. */}
+              <small data-testid="signed-in-role" title={me ? allRoleLabels(me.access_roles) : undefined}>
+                {me ? primaryRoleLabel(me.access_roles) : "Signed in"}
+              </small>
             </span>
           </div>
           <div className="bx-control-status">

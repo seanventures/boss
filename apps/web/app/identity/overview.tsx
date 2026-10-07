@@ -8,7 +8,7 @@
  */
 import React, { useState } from "react";
 import {
-  ArrowRight, ArrowUpRight, Fingerprint, GitBranch, Key, Plus, Robot, ShieldCheck, Users, UsersThree, Warning, LinkSimple,
+  ArrowRight, ArrowUpRight, Fingerprint, GitBranch, Globe, Key, Plus, Robot, ShieldCheck, Users, UsersThree, Warning, LinkSimple,
 } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../agent-avatar";
@@ -21,7 +21,11 @@ import type { AccessRole, AuditEvent, Group, Passport, Person, Posture, PostureC
 const CHECK_ICON: Record<PostureCheck["id"], React.ReactNode> = {
   mfa: <ShieldCheck size={13} aria-hidden />, keys: <Key size={13} aria-hidden />, delegations: <Robot size={13} aria-hidden />,
   legacy: <Warning size={13} aria-hidden />, owners: <UsersThree size={13} aria-hidden />, audit: <LinkSimple size={13} aria-hidden />,
+  origin: <Globe size={13} aria-hidden />,
 };
+
+/** The engine says "critical"; the posture cards have three tones. */
+const tone = (status: PostureCheck["status"]) => (status === "critical" ? "bad" : status);
 
 function Ring({ score }: { score: number }) {
   const c = 2 * Math.PI * 42;
@@ -154,8 +158,8 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
           </div>
           <div className="idn-posture">
             {posture.checks.map((c) => (
-              <div key={c.id} className="idn-pc" data-status={c.status} data-testid={`posture-${c.id}`}>
-                <span className="idn-label">{CHECK_ICON[c.id]} {c.label}</span>
+              <div key={c.id} className="idn-pc" data-status={tone(c.status)} data-testid={`posture-${c.id}`}>
+                <span className="idn-label">{CHECK_ICON[c.id] ?? <Warning size={13} aria-hidden />} {c.label}</span>
                 <span className="idn-num">{c.value}{c.unit ? <small>{c.unit}</small> : null}</span>
                 <span className="idn-txt" data-copy="data">{c.detail}</span>
                 {c.fix

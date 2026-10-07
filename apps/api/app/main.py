@@ -1293,6 +1293,15 @@ def _install_shipped_cast() -> dict:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
+    # THE PREVIEW ORIGIN (apps/api/app/preview_origin.py): previews on their own port, never the
+    # console's origin. Only when apps/api/serve.py asked (one server process); the task ends
+    # with this event loop.
+    try:
+        from .preview_origin import listen_settings, serve_preview_origin
+        if (_preview_listen := listen_settings()) is not None:
+            await serve_preview_origin(*_preview_listen)
+    except Exception as exc:  # noqa: BLE001 — previews unavailable, the API still serves
+        print(f"[preview-origin] not started: {type(exc).__name__}: {exc}")
     # Self-migrate on startup: schema.sql is fully idempotent (CREATE/ALTER … IF NOT EXISTS), so
     # every deploy converges the managed Postgres to the shipped schema with no separate migration
     # step. Guarded so a transient DB blip at boot can't crash-loop the API.
@@ -11028,6 +11037,29 @@ def smoke_preview_endpoint(preview_id: str, payload: Optional[dict] = None):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+def _preview_served_elsewhere(request: Request, preview_id: str, path: str,
+                              isolation: dict) -> Optional[Response]:
+    """A browser that carries the console's session must not be served a preview HERE, on an
+    origin with the whole API behind it: it is sent to the preview origin, where the cookie is
+    stripped before anything reads it (apps/api/app/preview_origin.py). The preview listener
+    itself never arrives with a cookie, so it is served."""
+    from boss_engine.identity.authn import SESSION_COOKIE as _session_cookie
+    if not request.cookies.get(_session_cookie):
+        return None
+    from boss_engine.services.preview_service import preview_origin_for
+    scheme = "https" if request.url.scheme == "https" else "http"
+    origin = preview_origin_for(request.headers.get("host"), scheme)
+    if not origin:
+        return JSONResponse({"detail": "previews are served from the preview origin "
+                             "(BOSS_PREVIEW_ORIGIN / BOSS_PREVIEW_PORT), not from the API"},
+                            status_code=403, headers=isolation)
+    from urllib.parse import quote
+    target = f"{origin}/v1/previews/{quote(preview_id, safe='')}/web/{quote(path, safe='/')}"
+    if request.url.query:
+        target += "?" + request.url.query
+    return Response(status_code=307, headers={**isolation, "Location": target, "Cache-Control": "no-store"})
+
+
 @app.api_route("/v1/previews/{preview_id}/web", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 @app.api_route("/v1/previews/{preview_id}/web/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 @public(reason=PublicReason.PREVIEW_CAPABILITY_URL, verifier=_identity_verifiers.preview_capability)
@@ -11038,6 +11070,9 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
     from boss_engine.services.preview_service import preview_isolation_headers
     # ISOLATED, EVERY ANSWER (errors too): a sandbox CSP without allow-same-origin.
     isolation = preview_isolation_headers()
+    moved = _preview_served_elsewhere(request, preview_id, path, isolation)
+    if moved is not None:
+        return moved
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.", headers=isolation)
     from .services.preview_service import proxy_preview
