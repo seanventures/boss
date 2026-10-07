@@ -826,8 +826,122 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
                 with engine.begin() as db:
                     end_run(shim.run_id, db=db, org_id=acting.org_id)
             return
+    if kind == "github" and engine is not None:
+        # NO GRANT (a system loop, a preview of a build, a read tool outside any run): never the
+        # shared token silently (round 2 e). With egress on, the clone runs as BOSS's own read-only
+        # system agent under its explicit, audited authority; under enforce without egress it is
+        # refused; in shadow the legacy token is used and that use is recorded.
+        if egress_enabled():
+            with engine.begin() as db:
+                agent_ctx = system_repo_reader(db, project_id=project_id)
+                shim = None
+                if agent_ctx is not None:
+                    rid = f"run_sys:git:{secrets.token_hex(6)}"
+                    shim = start_run(agent_ctx, RunStart(run_id=rid, agent_id=agent_ctx.principal.id,
+                                                         project_id=project_id, repos=(f"{owner}/{repo}",),
+                                                         scope=SYSTEM_GIT_SCOPE),
+                                     grant_id=None, db=db, audiences=(AUD_API,))
+            if shim is not None:
+                access = egress_access(shim, owner=owner, repo=repo)
+                try:
+                    yield GitAccess(access.clone_url, git_config_env(access.git_config), via="egress")
+                finally:
+                    close_shim_socket(shim.run_id)
+                    with engine.begin() as db:
+                        end_run(shim.run_id, db=db, org_id=agent_ctx.principal.org_id)
+                return
+        if lineage._enforced():  # noqa: SLF001
+            _no_authority("no grant and no system repo reader (is boss-egress configured?)",
+                          task_run_id=f"git:{owner}/{repo}")
+        _note_shared_token_use(engine, owner=owner, repo=repo, project_id=project_id)
     raw = token() if callable(token) else token
     yield git_access(kind, owner, repo, raw or "")
+
+
+#: BOSS's own read-only GitHub reader: clones and reads for work that acts for nobody (previews of a
+#: finished build, the read tools, a system loop). An AUTONOMOUS agent with an explicit authority —
+#: a Passport whose ceiling and GitHub ceiling are read-only, bound to Viewer at the org by the
+#: system and recorded in the audit log — instead of the shared GitHub token.
+SYSTEM_REPO_READER = "agt_sys_repo_reader"
+SYSTEM_GIT_SCOPE = frozenset({"repository:read", "github:read"})
+SYSTEM_GIT_EXTERNAL = {"github": {"contents": "read", "metadata": "read"}}
+
+
+def system_repo_reader(db: Any, *, project_id: Optional[str]) -> Optional[AuthContext]:
+    """The system reader's context, creating its Passport and authority once (idempotent, audited).
+    None before the install has an Owner (a Passport needs an accountable person)."""
+    import json
+
+    from sqlalchemy import text
+
+    from . import audit, passports, users
+    from .principal import AuthMethod
+
+    org = None
+    if project_id:
+        org = db.execute(text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                              "WHERE p.id = :p"), {"p": project_id}).scalar()
+    if not org:
+        from .migration import default_org
+        org = default_org(db)
+    if not org:
+        return None
+    p = passports.get(SYSTEM_REPO_READER, db=db)
+    if p is None:
+        owners = sorted(users.active_owner_ids(db, org))
+        if not owners:
+            return None
+        passports.ensure_passport(org_id=org, agent_id=SYSTEM_REPO_READER, role_key="system_repo_reader",
+                                  display_name="BOSS repo reader (system)", sponsor_principal_id=owners[0],
+                                  db=db, autonomous=True, can_spawn=False, max_depth=0,
+                                  created_by="sys_migration")
+        for key in sorted(SYSTEM_GIT_SCOPE):
+            db.execute(text("INSERT INTO identity_agent_ceilings (agent_id, permission_key) VALUES (:a, :k) "
+                            "ON CONFLICT DO NOTHING"), {"a": SYSTEM_REPO_READER, "k": key})
+        db.execute(text("UPDATE identity_agent_passports SET external_ceiling = CAST(:e AS JSONB) "
+                        "WHERE agent_id = :a"), {"e": json.dumps(SYSTEM_GIT_EXTERNAL), "a": SYSTEM_REPO_READER})
+        users.add_binding(db, org_id=org, subject_id=SYSTEM_REPO_READER, role_key="viewer",
+                          granted_by="sys_migration",
+                          reason="system: BOSS's read-only repo reader for work that acts for nobody")
+        audit.record(audit.SecurityEvent(org_id=org, event_type="role_binding.added",
+                                         outcome=audit.Outcome.SUCCESS, actor_principal_id="sys_migration",
+                                         actor_kind="system", target_type="principal",
+                                         target_id=SYSTEM_REPO_READER, scope="org",
+                                         details={"role": "viewer", "why": "system repo reader",
+                                                  "ceiling": sorted(SYSTEM_GIT_SCOPE),
+                                                  "github": SYSTEM_GIT_EXTERNAL["github"]}), db=db)
+        p = passports.get(SYSTEM_REPO_READER, db=db)
+    if p is None or not p.active:
+        return None
+    principal = users.load_principal(db, SYSTEM_REPO_READER)
+    return AuthContext(principal=principal, method=AuthMethod.SYSTEM) if principal else None
+
+
+_shared_noted: set[str] = set()
+
+
+def _note_shared_token_use(engine: Any, *, owner: str, repo: str, project_id: Optional[str]) -> None:
+    """Shadow mode only: the shared token was used for a clone that acts for nobody. Recorded once
+    per repo and process (credential.handed_out), so posture and the audit log show it."""
+    key = f"{owner}/{repo}"
+    if key in _shared_noted:
+        return
+    _shared_noted.add(key)
+    try:
+        from . import audit
+        from .migration import default_org
+
+        with engine.begin() as db:
+            org = default_org(db)
+            if org:
+                audit.record(audit.SecurityEvent(
+                    org_id=org, event_type="credential.handed_out", outcome=audit.Outcome.INFO,
+                    actor_principal_id="sys_worker", actor_kind="system", target_type="github_repo",
+                    target_id=key, details={"credential": "shared BOSS_GITHUB_TOKEN", "why": "no grant (shadow)",
+                                            "project": project_id}), db=db)
+    except Exception:  # noqa: BLE001 — the note never blocks the clone
+        import logging
+        logging.getLogger("boss.identity.runs").warning("could not record the shared-token use for %s", key)
 
 
 def finish_code_task_run(engine: Any, shim: Shim, *, org_id: str) -> None:
