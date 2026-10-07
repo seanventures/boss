@@ -28,6 +28,7 @@ import "./identity/identity-roles.css";
 import "./identity/identity-agents.css";
 import "./identity/identity-auth.css";
 import "./identity/identity-account.css";
+import "./identity/identity-sso.css";
 import type { Metadata } from "next";
 import { Toaster } from "./client-forms";
 
