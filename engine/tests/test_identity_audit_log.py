@@ -311,9 +311,11 @@ def test_a78_export_carries_the_events_the_verification_and_the_anchor(db):
     assert bundle["verification"]["ok"] and bundle["anchor"]["seq"] == len(bundle["events"])
     # offline re-verification from the bundle alone
     prev = audit.GENESIS_HASH
+    key = audit.chain_key(ORG, db=db)            # a keyed chain re-verifies with the org's chain key
     for row in bundle["events"]:
         stored = dict(row, ts=datetime.fromisoformat(row["ts"]))
-        assert audit.chain_hash(prev, stored).hex() == row["hash"]
+        alg = row["hash_alg"]
+        assert audit.chain_hash(prev, stored, alg=alg, key=key if alg == 2 else None).hex() == row["hash"]
         prev = bytes.fromhex(row["hash"])
     anchor = audit.daily_anchor(ORG, db=db, project_id="boss-dogfood")
     again = audit.daily_anchor(ORG, db=db, project_id="boss-dogfood")

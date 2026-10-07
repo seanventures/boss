@@ -17,6 +17,7 @@ Every failure is uniform to the caller (401 `unauthenticated`, 400 `invalid_gran
 """
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import threading
@@ -54,6 +55,8 @@ from .principal import (
     RunTokenClaims,
     TaskBinding,
 )
+
+log = logging.getLogger("boss.identity.tokens")
 
 ISSUER_ENV = "BOSS_PUBLIC_URL"
 EGRESS_SERVICE_KEY_ENV = "BOSS_EGRESS_SERVICE_KEY"
@@ -170,6 +173,21 @@ def live_state(db: Any, *, org_id: str, mode: RunMode, sub: str, chain: ActorCha
     return LiveState(allowed=frozenset(allowed & delegable), max_depth=min(depth_caps), narrowed_by=narrowed)
 
 
+def _lock_authority(db: Any, *, grant_id: Optional[str], principal_ids: tuple[str, ...]) -> None:
+    """Take share locks on what a new token stands on (the grant, the subject, the agents): a
+    cascade holding them FOR UPDATE makes this wait, and the checks that follow then read the
+    committed outcome — a token is never minted mid-cascade against the old status."""
+    from sqlalchemy import text
+
+    # Principals first, then the grant: the order a disable or a suspend takes them in (it updates
+    # the principal, then the cascade locks the grants), so the two never wait on each other.
+    ids = sorted({p for p in principal_ids if p})
+    if ids:
+        db.execute(text("SELECT 1 FROM identity_principals WHERE id = ANY(:i) ORDER BY id FOR SHARE"), {"i": ids})
+    if grant_id:
+        db.execute(text("SELECT 1 FROM identity_delegation_grants WHERE id = :g FOR SHARE"), {"g": grant_id})
+
+
 def _jti_live(db: Any, jti: str, org_id: str) -> bool:
     from sqlalchemy import text
 
@@ -234,12 +252,12 @@ def _claims_dict(c: RunTokenClaims) -> dict[str, Any]:
     return out
 
 
-def _issue(db: Any, claims: RunTokenClaims, event_type: str) -> IssuedToken:
+def _issue(db: Any, claims: RunTokenClaims, event_type: str, *, renewed_from: Optional[str] = None) -> IssuedToken:
     from . import lineage
 
     token = _sign_run(db, _claims_dict(claims))
     _store_credential(db, claims)
-    lineage.token_event(db, claims, event_type)
+    lineage.token_event(db, claims, event_type, renewed_from=renewed_from)
     return IssuedToken(access_token=token, expires_in=max(0, claims.exp - _now()), jti=claims.jti,
                        scope=claims.scope)
 
@@ -275,6 +293,7 @@ def mint_run_token(*, subject: AuthContext, agent: AgentInstance, grant_id: Opti
             raise _refused("first_hop_needs_a_principal_context", "invalid_request")   # later hops: exchange
         scope = frozenset(scope)
         _require_delegable_scope(scope)
+        _lock_authority(db, grant_id=grant_id, principal_ids=(subject.principal.id, agent.agent_id))
         p = passports.get(agent.agent_id, db=db)
         if p is None or p.org_id != org_id:
             raise _refused("unknown_agent")
@@ -353,11 +372,14 @@ def _parse_claims(raw: Mapping[str, Any]) -> RunTokenClaims:
     return claims
 
 
-def _verify(token: str, *, audiences: frozenset[str], dpop_proof: Optional[str], htm: str, htu: str,
-            db: Any, now: Optional[int] = None) -> RunTokenClaims:
-    from . import dpop, signing_keys
+def _check_claims(token: str, *, audiences: frozenset[str], db: Any, now: int) -> tuple[RunTokenClaims, dict]:
+    """Everything a run token is checked against EXCEPT its DPoP proof — shared by verification and
+    introspection, so the two can never disagree (#LOW parity): signature with a local kid, typ,
+    iss, exactly one audience, exp/iat/nbf with skew, the lifetime cap, the jti ledger, and the
+    LIVE state of everything it stands on (person, grant, every agent in the chain) with the depth
+    cap. A revoked grant fails here, at authentication, not only later at a permission check."""
+    from . import signing_keys
 
-    now = _now() if now is None else now
     if not isinstance(token, str) or not token:
         raise _invalid("no_token")
     try:
@@ -381,12 +403,25 @@ def _verify(token: str, *, audiences: frozenset[str], dpop_proof: Optional[str],
         raise _invalid("nbf")
     if claims.exp - claims.iat > RUN_TOKEN_TTL_SECONDS:
         raise _invalid("lifetime")
+    if not _jti_live(db, claims.jti, claims.org_id):
+        raise _invalid("jti_revoked")
+    state = live_state(db, org_id=claims.org_id, mode=claims.mode, sub=claims.sub, chain=claims.chain,
+                       grant_id=claims.grant_id, task=claims.task)
+    if claims.depth > state.max_depth:
+        raise _invalid("depth")
+    return claims, raw
+
+
+def _verify(token: str, *, audiences: frozenset[str], dpop_proof: Optional[str], htm: str, htu: str,
+            db: Any, now: Optional[int] = None) -> RunTokenClaims:
+    from . import dpop
+
+    now = _now() if now is None else now
+    claims, _ = _check_claims(token, audiences=audiences, db=db, now=now)
     try:
         dpop.verify_proof(dpop_proof, htm=htm, htu=htu, access_token=token, expected_jkt=claims.cnf_jkt, db=db)
     except dpop.DPoPError as exc:
         raise _invalid(exc.code) from exc
-    if not _jti_live(db, claims.jti, claims.org_id):
-        raise _invalid("jti_revoked")
     return claims
 
 
@@ -515,6 +550,8 @@ def exchange_token(request: TokenExchangeRequest, *, htm: str, htu: str, db: Any
                          dpop_proof=request.dpop_proof, htm=htm, htu=htu, db=db, now=now)
         org_id, run_id = parent.org_id, parent.task.run_id
         _rate_limit(parent.task.run_id, db=db)
+        _lock_authority(db, grant_id=parent.grant_id,
+                        principal_ids=(parent.sub, *parent.chain.agent_ids))
         # 2. The actor assertion: minted by BOSS for a child run of this exact parent.
         actor = _verify_actor(request.actor_token, db=db, now=now)
         child = AgentInstance.parse(str(actor["sub"]))
@@ -578,12 +615,15 @@ def exchange_token(request: TokenExchangeRequest, *, htm: str, htu: str, db: Any
 
 def renew_run_token(token: str, *, dpop_proof: Optional[str], htm: str, htu: str, db: Any) -> IssuedToken:
     """The shim's 4-minute renewal: the same hop, re-checked live, never longer than the grant or
-    (for a child) than the parent RUN's live credentials. Revoking anything upstream stops it."""
+    (for any child, autonomous or not) than its PARENT RUN's live credentials. Rate-limited per
+    run; single-use (two renewals of one token: one wins, the other is refused); the new token's
+    lineage names the token it renewed."""
     from sqlalchemy import text
 
     from . import grants
 
     claims = _verify(token, audiences=RUN_AUDIENCES, dpop_proof=dpop_proof, htm=htm, htu=htu, db=db)
+    _rate_limit(f"renew:{claims.task.run_id}", db=db)
     state = live_state(db, org_id=claims.org_id, mode=claims.mode, sub=claims.sub, chain=claims.chain,
                        grant_id=claims.grant_id, task=claims.task)
     if claims.depth > state.max_depth:
@@ -593,20 +633,29 @@ def renew_run_token(token: str, *, dpop_proof: Optional[str], htm: str, htu: str
         raise _refused("empty_scope", "invalid_scope")
     now = _now()
     parent_exp: Optional[int] = None
-    if claims.depth >= 2:
-        parent_run = claims.chain.hops[-2].run_id
-        latest = db.execute(text("SELECT max(expires_at) FROM identity_run_credentials WHERE run_id = :r "
-                                 "AND revoked_at IS NULL AND expires_at > now()"), {"r": parent_run}).scalar()
+    if claims.parent_jti:
+        # A child (exchanged) token: its parent RUN must still hold a live credential. Keyed on the
+        # parent token's run in the ledger, not on chain depth: an autonomous root's child has depth
+        # 1 and must end with its parent too.
+        parent_run = db.execute(text("SELECT run_id FROM identity_run_credentials WHERE jti = :j"),
+                                {"j": claims.parent_jti}).scalar()
+        latest = None
+        if parent_run:
+            latest = db.execute(text("SELECT max(expires_at) FROM identity_run_credentials WHERE run_id = :r "
+                                     "AND revoked_at IS NULL AND expires_at > now()"), {"r": parent_run}).scalar()
         if latest is None:
             raise _invalid("parent_run_ended")
         parent_exp = int(latest.timestamp())
     grant = grants.load(claims.grant_id, db=db)
     exp = _exp_cap(now, grant, parent_exp)
+    consumed = db.execute(text("UPDATE identity_run_credentials SET revoked_at = now() WHERE jti = :j "
+                               "AND revoked_at IS NULL RETURNING 1"), {"j": claims.jti}).scalar()
+    if not consumed:
+        raise _invalid("already_renewed")
     new = RunTokenClaims(iss=claims.iss, aud=claims.aud, sub=claims.sub, org_id=claims.org_id, mode=claims.mode,
                          chain=claims.chain, grant_id=claims.grant_id, task=claims.task, scope=scope,
                          cnf_jkt=claims.cnf_jkt, jti=_new_jti(), parent_jti=claims.parent_jti, iat=now, exp=exp)
-    db.execute(text("UPDATE identity_run_credentials SET revoked_at = now() WHERE jti = :j"), {"j": claims.jti})
-    return _issue(db, new, "token.issued")
+    return _issue(db, new, "token.issued", renewed_from=claims.jti)
 
 
 # ---- the run-token half of the decision ------------------------------------------------------------------
@@ -657,8 +706,40 @@ def decide(claims: RunTokenClaims, permission: str, scope: Any, *, db: Any):
 
 # ---- introspection ---------------------------------------------------------------------------------------
 
+EGRESS_SERVICE_KEY_FILE_ENV = "BOSS_EGRESS_SERVICE_KEY_FILE"
+
+
+def egress_service_key() -> str:
+    """The API <-> boss-egress shared key: BOSS_EGRESS_SERVICE_KEY, else the file named by
+    BOSS_EGRESS_SERVICE_KEY_FILE (on the identity volume both mount). "" when neither is set."""
+    value = (os.environ.get(EGRESS_SERVICE_KEY_ENV) or "").strip()
+    if value:
+        return value
+    path = (os.environ.get(EGRESS_SERVICE_KEY_FILE_ENV) or "").strip()
+    if path:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return fh.read().strip()
+        except OSError:
+            return ""
+    return ""
+
+
+def ensure_egress_service_key_file() -> bool:
+    """At API boot: create the shared key file if it is configured and absent (0600, random, never
+    logged). True when it was created. The egress service only ever reads it."""
+    path = (os.environ.get(EGRESS_SERVICE_KEY_FILE_ENV) or "").strip()
+    if not path or (os.environ.get(EGRESS_SERVICE_KEY_ENV) or "").strip() or os.path.exists(path):
+        return False
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(secrets.token_urlsafe(48))
+    log.warning("created the boss-egress service key file %s (first start)", path)
+    return True
+
+
 def egress_service_key_ok(presented: Optional[str]) -> bool:
-    expected = os.environ.get(EGRESS_SERVICE_KEY_ENV) or ""
+    expected = egress_service_key()
     return bool(expected) and bool(presented) and secrets.compare_digest(presented.encode(), expected.encode())
 
 
@@ -725,22 +806,13 @@ def issue_egress_service_key(db: Any, *, org_id: str, created_by: str = "sys_hos
 
 
 def introspect(token: str, *, db: Any) -> dict[str, Any]:
-    """RFC 7662 for the egress service only (the route checks its credential: A40). Signature, time
-    and jti liveness, plus the grant and chain status — and it RETURNS `act` (Keycloak #53029).
-    No DPoP here: the caller is the proxy, not the token holder."""
-    from . import grants, signing_keys
+    """RFC 7662 for the egress service only (the route checks its credential: A40). EXACTLY the
+    checks verification makes (`_check_claims`), minus the DPoP proof (the caller is the proxy, not
+    the token holder) — and it RETURNS `act` (Keycloak #53029)."""
+    from . import grants
 
     try:
-        _, raw = jwks.verify(token, typ=TYP_RUN,
-                             key_for_kid=lambda kid: signing_keys.verification_key(kid, "run", db=db))
-        if raw.get("iss") != issuer() or raw.get("aud") not in RUN_AUDIENCES:
-            return {"active": False}
-        claims = _parse_claims(raw)
-        now = _now()
-        if claims.exp <= now - CLOCK_SKEW_SECONDS or not _jti_live(db, claims.jti, claims.org_id):
-            return {"active": False}
-        live_state(db, org_id=claims.org_id, mode=claims.mode, sub=claims.sub, chain=claims.chain,
-                   grant_id=claims.grant_id, task=claims.task)
+        claims, raw = _check_claims(token, audiences=RUN_AUDIENCES, db=db, now=_now())
     except (jwks.JoseError, TokenError):
         return {"active": False}
     grant = grants.load(claims.grant_id, db=db)

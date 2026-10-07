@@ -258,7 +258,9 @@ def set_ceiling(ctx: AuthContext, agent_id: str, permissions: frozenset[str], *,
     for key in sorted(perms):
         db.execute(text("INSERT INTO identity_agent_ceilings (agent_id, permission_key) VALUES (:a, :k)"),
                    {"a": agent_id, "k": key})
-    db.execute(text("UPDATE identity_agent_passports SET version = version + 1, ceiling_preset = NULL, "
+    # 'custom': a person set this ceiling, so no upgrade or restart ever "repairs" it — not even
+    # an empty one a human chose (#LOW: a restart used to restore the preset).
+    db.execute(text("UPDATE identity_agent_passports SET version = version + 1, ceiling_preset = 'custom', "
                     "updated_at = now() WHERE agent_id = :a"), {"a": agent_id})
     after = require(agent_id, db=db)
     lineage.passport_event(db, after, "agent.passport.ceiling_changed", ctx=ctx,
@@ -307,6 +309,14 @@ def set_rules(ctx: AuthContext, agent_id: str, *, db: Any, can_spawn: Optional[b
     if sponsor_principal_id is not None and sponsor_principal_id != before.sponsor_principal_id:
         lineage.passport_event(db, after, "agent.passport.sponsor_changed", ctx=ctx,
                                details={"from": before.sponsor_principal_id, "to": sponsor_principal_id})
+    rules_before = {"can_spawn": before.can_spawn, "allowed_children": sorted(before.allowed_children),
+                    "max_depth": before.max_depth}
+    rules_after = {"can_spawn": after.can_spawn, "allowed_children": sorted(after.allowed_children),
+                   "max_depth": after.max_depth}
+    if rules_before != rules_after:
+        # Who may spawn whom, how deep: a change of authority like a ceiling's, so it is lineage.
+        lineage.passport_event(db, after, "agent.passport.rules_changed", ctx=ctx,
+                               details={"before": rules_before, "after": rules_after})
     return after
 
 

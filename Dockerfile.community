@@ -3,6 +3,14 @@
 # Build only from a reviewed Community tree. The source export gate verifies
 # that every copied path belongs in that tree before publication.
 # Pin the multi-architecture base indexes reviewed for this release candidate.
+# THE SANDBOX HELPER (IDENTITY.md §7.6): the one privileged binary, built here so the runtime image
+# carries no compiler. scripts/sandbox/boss-sandbox-exec.c says what it may do (and nothing more).
+FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS sandbox-helper
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+COPY scripts/sandbox/boss-sandbox-exec.c /tmp/boss-sandbox-exec.c
+RUN gcc -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -pie \
+      -o /tmp/boss-sandbox-exec /tmp/boss-sandbox-exec.c
+
 FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS python-runtime
 
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
@@ -28,15 +36,28 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates git openssh-client ffmpeg libavfilter-extra fonts-dejavu-core \
+       iptables libcap2-bin \
     && addgroup --system boss \
     && adduser --system --ingroup boss --home /home/boss boss \
     && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts /var/lib/boss/identity \
-    && chown -R boss:boss /home/boss /var/lib/boss/artifacts /var/lib/boss/identity && chmod 700 /var/lib/boss/identity \
+       /var/lib/boss/sandboxes /run/boss-shim \
+    && chown -R boss:boss /home/boss /var/lib/boss/artifacts /var/lib/boss/identity /var/lib/boss/sandboxes /run/boss-shim \
+    && chmod 700 /var/lib/boss/identity /home/boss && chmod 750 /var/lib/boss/artifacts \
+    && chmod 711 /var/lib/boss/sandboxes /run/boss-shim \
     && chmod 700 /home/boss/.codex /home/boss/.claude \
     && npm install -g @anthropic-ai/claude-code@2.1.197 @openai/codex@0.158.0 @xai-official/grok@1.0.41 \
        pnpm@9.15.0 \
     && npm cache clean --force \
     && rm -rf /home/boss/.npm /home/boss/.cache /var/lib/apt/lists/*
+
+# The sandbox helper: executable by the boss group only, with exactly the capabilities it needs.
+# A sandbox uid (61000-61999) is never in the boss group, so it cannot run it.
+COPY --from=sandbox-helper /tmp/boss-sandbox-exec /usr/local/libexec/boss/boss-sandbox-exec
+COPY scripts/sandbox/entrypoint.sh /usr/local/bin/boss-entrypoint
+RUN chown root:boss /usr/local/libexec/boss/boss-sandbox-exec \
+    && chmod 0750 /usr/local/libexec/boss/boss-sandbox-exec \
+    && setcap cap_setuid,cap_setgid,cap_chown,cap_fowner+ep /usr/local/libexec/boss/boss-sandbox-exec \
+    && chmod 0755 /usr/local/bin/boss-entrypoint
 
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 COPY apps/worker/requirements.txt /tmp/worker-requirements.txt
@@ -79,6 +100,8 @@ ARG BOSS_BUILT_AT=unknown
 ENV BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA \
     BOSS_BUILT_AT=$BOSS_BUILT_AT
 RUN chown -R boss:boss /app /var/lib/boss/artifacts /var/lib/boss/identity
+# The code a sandboxed build reads (it runs BOSS's own verify on BOSS's tree) but never writes.
+RUN chmod -R go-w /app
 USER boss
 # Fail the build if the installed browser cannot launch as the runtime user.
 RUN python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); b.close(); p.stop()'
@@ -86,6 +109,9 @@ RUN grok --version >/dev/null
 
 FROM python-runtime AS api
 EXPOSE 8000
+# Compose runs this as root with NET_ADMIN only long enough to fence the sandbox uids' network,
+# then it becomes boss for good (scripts/sandbox/entrypoint.sh). Run as boss, it just execs.
+ENTRYPOINT ["/usr/local/bin/boss-entrypoint"]
 # apps/api/serve.py: uvicorn, trusting forwarded headers only from BOSS_TRUSTED_PROXIES.
 CMD ["python", "-m", "apps.api.serve", "--host", "0.0.0.0", "--port", "8000"]
 

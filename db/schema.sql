@@ -7322,6 +7322,17 @@ CREATE TABLE IF NOT EXISTS identity_egress_credentials (  -- boss_egr_ per-run s
   expires_at TIMESTAMPTZ NOT NULL,
   revoked_at TIMESTAMPTZ
 );
+-- A revocation cascade's runs, by id: the NOTIFY payload carries only this row's id (a payload is
+-- capped at 8000 bytes and a cascade can halt thousands of runs), and a listener that was away
+-- catches up from the last id it processed.
+CREATE TABLE IF NOT EXISTS identity_revocation_notices (
+  id         BIGSERIAL PRIMARY KEY,
+  trigger    TEXT NOT NULL,
+  target_id  TEXT NOT NULL,
+  runs       TEXT[] NOT NULL DEFAULT '{}',
+  reason     TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS identity_egress_log (
   id            BIGSERIAL,
   ts            TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -7375,6 +7386,9 @@ CREATE TABLE IF NOT EXISTS identity_vault_items (
   last_refreshed_at  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS identity_vault_items_owner ON identity_vault_items (owner_principal_id, provider);
+-- Revoked here but not yet at the provider (it was unreachable): kept, unusable, until a retry
+-- succeeds; only then is the ciphertext shredded.
+ALTER TABLE identity_vault_items ADD COLUMN IF NOT EXISTS provider_revoke_pending BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS identity_signing_keys (        -- JWKS for run and actor tokens; two published at a time
   kid                   TEXT PRIMARY KEY,
@@ -7492,12 +7506,39 @@ CREATE INDEX IF NOT EXISTS identity_security_events_ts ON identity_security_even
 CREATE INDEX IF NOT EXISTS identity_security_events_actor ON identity_security_events (org_id, actor_principal_id, ts DESC);
 CREATE INDEX IF NOT EXISTS identity_security_events_grant ON identity_security_events (org_id, grant_id) WHERE grant_id IS NOT NULL;
 
--- Append-only: UPDATE always raises; DELETE raises unless the audited prune path set
--- boss.identity_audit_prune = 'on' for its own transaction (it writes a checkpoint event first).
+-- APPEND-ONLY, BY PRIVILEGE AND BY TRIGGER (§8.1, #13).
+--  * hash_alg: 2 = HMAC-SHA-256 keyed with the identity server key (a row's hash cannot be
+--    recomputed by anyone holding only the database); 1 = the old unkeyed SHA-256, re-keyed once at
+--    boot by identity_audit_rekey after the old chain verifies. Verification refuses alg 1.
+--  * UPDATE, DELETE and TRUNCATE raise for every session — the only exceptions run INSIDE the two
+--    SECURITY DEFINER functions below, as the NOLOGIN role boss_audit_owner, which owns the table,
+--    the trigger function and those functions. An app session cannot become it, and no GUC an app
+--    session can set opens the table (the old boss.identity_audit_prune switch is gone).
+--  * The app's role holds INSERT and SELECT on the table, and EXECUTE on the two functions, only.
+--    When the app's role is a SUPERUSER (a stock compose install), privileges cannot bind it: the
+--    triggers still refuse, and the keyed chain still makes any tampering detectable. Posture says so.
+ALTER TABLE identity_security_events ADD COLUMN IF NOT EXISTS hash_alg SMALLINT NOT NULL DEFAULT 1;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'boss_audit_owner') THEN
+    BEGIN
+      CREATE ROLE boss_audit_owner NOLOGIN;
+    EXCEPTION WHEN insufficient_privilege THEN
+      RAISE NOTICE 'boss_audit_owner not created (needs CREATEROLE): audit prune is unavailable';
+    END;
+  END IF;
+END $$;
 CREATE OR REPLACE FUNCTION identity_security_events_append_only() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-  IF TG_OP = 'DELETE' AND current_setting('boss.identity_audit_prune', true) = 'on' THEN
+  IF current_user = 'boss_audit_owner' AND TG_OP IN ('DELETE', 'UPDATE') THEN
+    IF TG_OP = 'UPDATE' THEN
+      -- re-keying only: the row's content never changes
+      IF (to_jsonb(NEW) - 'prev_hash' - 'hash' - 'hash_alg') <> (to_jsonb(OLD) - 'prev_hash' - 'hash' - 'hash_alg')
+         OR OLD.hash_alg <> 1 OR NEW.hash_alg <> 2 THEN
+        RAISE EXCEPTION 'identity_security_events is append-only (re-key changes only hashes)' USING ERRCODE = 'P0001';
+      END IF;
+      RETURN NEW;
+    END IF;
     RETURN OLD;
   END IF;
   RAISE EXCEPTION 'identity_security_events is append-only (%)', TG_OP USING ERRCODE = 'P0001';
@@ -7508,6 +7549,91 @@ DO $$ BEGIN
     CREATE TRIGGER identity_security_events_append_only BEFORE UPDATE OR DELETE
       ON identity_security_events FOR EACH ROW EXECUTE FUNCTION identity_security_events_append_only();
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_security_events_no_truncate'
+                 AND tgrelid = 'identity_security_events'::regclass) THEN
+    CREATE TRIGGER identity_security_events_no_truncate BEFORE TRUNCATE
+      ON identity_security_events FOR EACH STATEMENT EXECUTE FUNCTION identity_security_events_append_only();
+  END IF;
+END $$;
+-- The prune (Owner, step-up, via audit.prune): deletes ONLY a range that the newest event of the
+-- org already checkpoints (an audit.checkpoint naming exactly this upper bound), and never the
+-- kept event types. Runs as boss_audit_owner.
+CREATE OR REPLACE FUNCTION identity_audit_prune(p_org TEXT, p_upper BIGINT, p_keep TEXT[]) RETURNS BIGINT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  v_last RECORD;
+  v_n BIGINT;
+BEGIN
+  SELECT seq, event_type, details INTO v_last FROM identity_security_events
+   WHERE org_id = p_org ORDER BY seq DESC LIMIT 1;
+  IF v_last IS NULL OR v_last.event_type <> 'audit.checkpoint'
+     OR (v_last.details->>'pruned_through_seq')::BIGINT IS DISTINCT FROM p_upper
+     OR p_upper >= v_last.seq
+     OR NOT (p_keep @> ARRAY['audit.checkpoint', 'bootstrap.claimed']) THEN
+    RAISE EXCEPTION 'identity_audit_prune: no checkpoint for this range' USING ERRCODE = 'P0001';
+  END IF;
+  DELETE FROM identity_security_events WHERE org_id = p_org AND seq <= p_upper AND event_type <> ALL(p_keep);
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n;
+END $$;
+-- One-time re-keying of rows written before the keyed chain (hash_alg 1 -> 2). Only alg-1 rows,
+-- only their hash columns (the trigger checks it). The new hashes are HMACs only the API can make.
+CREATE OR REPLACE FUNCTION identity_audit_rekey(p_org TEXT, p_seqs BIGINT[], p_prev BYTEA[], p_hash BYTEA[])
+RETURNS BIGINT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  v_n BIGINT := 0;
+  i INT;
+BEGIN
+  IF array_length(p_seqs, 1) IS DISTINCT FROM array_length(p_hash, 1)
+     OR array_length(p_seqs, 1) IS DISTINCT FROM array_length(p_prev, 1) THEN
+    RAISE EXCEPTION 'identity_audit_rekey: arrays differ' USING ERRCODE = 'P0001';
+  END IF;
+  FOR i IN 1 .. coalesce(array_length(p_seqs, 1), 0) LOOP
+    UPDATE identity_security_events SET prev_hash = p_prev[i], hash = p_hash[i], hash_alg = 2
+     WHERE org_id = p_org AND seq = p_seqs[i] AND hash_alg = 1;
+    v_n := v_n + 1;
+  END LOOP;
+  RETURN v_n;
+END $$;
+-- Ownership and privileges, when this session may set them (a superuser or the table's owner with
+-- membership): the table, its trigger function and the two functions belong to boss_audit_owner;
+-- the app's role keeps INSERT, SELECT and EXECUTE.
+DO $$
+DECLARE
+  v_app TEXT := current_user;
+BEGIN
+  IF v_app = 'boss_audit_owner' OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'boss_audit_owner') THEN
+    RETURN;
+  END IF;
+  BEGIN
+    ALTER TABLE identity_security_events OWNER TO boss_audit_owner;
+    ALTER FUNCTION identity_security_events_append_only() OWNER TO boss_audit_owner;
+    ALTER FUNCTION identity_audit_prune(TEXT, BIGINT, TEXT[]) OWNER TO boss_audit_owner;
+    ALTER FUNCTION identity_audit_rekey(TEXT, BIGINT[], BYTEA[], BYTEA[]) OWNER TO boss_audit_owner;
+    REVOKE ALL ON identity_security_events FROM PUBLIC;
+    EXECUTE format('REVOKE ALL ON identity_security_events FROM %I', v_app);
+    EXECUTE format('GRANT SELECT, INSERT ON identity_security_events TO %I', v_app);
+    EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE identity_security_events_id_seq TO %I', v_app);
+    REVOKE ALL ON FUNCTION identity_audit_prune(TEXT, BIGINT, TEXT[]) FROM PUBLIC;
+    REVOKE ALL ON FUNCTION identity_audit_rekey(TEXT, BIGINT[], BYTEA[], BYTEA[]) FROM PUBLIC;
+    EXECUTE format('GRANT EXECUTE ON FUNCTION identity_audit_prune(TEXT, BIGINT, TEXT[]) TO %I', v_app);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION identity_audit_rekey(TEXT, BIGINT[], BYTEA[], BYTEA[]) TO %I', v_app);
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'identity audit privileges not changed (run as a superuser once to separate the roles)';
+  END;
+END $$;
+
+-- Grant the app role explicitly (an install whose API connects as a role other than the one that
+-- ran the schema): SELECT identity_audit_grant_app('boss_app'), as a superuser.
+CREATE OR REPLACE FUNCTION identity_audit_grant_app(p_role TEXT) RETURNS VOID
+LANGUAGE plpgsql AS $$
+BEGIN
+  EXECUTE format('REVOKE ALL ON identity_security_events FROM %I', p_role);
+  EXECUTE format('GRANT SELECT, INSERT ON identity_security_events TO %I', p_role);
+  EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE identity_security_events_id_seq TO %I', p_role);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION identity_audit_prune(TEXT, BIGINT, TEXT[]) TO %I', p_role);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION identity_audit_rekey(TEXT, BIGINT[], BYTEA[], BYTEA[]) TO %I', p_role);
 END $$;
 
 -- Ceilings and grants hold delegable permissions only (D12): a second, independent check.

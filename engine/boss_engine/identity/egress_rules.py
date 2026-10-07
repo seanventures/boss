@@ -64,6 +64,45 @@ _FORBIDDEN = re.compile(r"^/(collaborators|hooks|keys|deployments|environments|b
 _REPO_PATH = re.compile(r"^/repos/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(/.*)?$")
 
 
+class PathRefused(ValueError):
+    """A request path the proxy will not interpret: refused before any rule is consulted."""
+
+
+#: Encodings of structural characters: `/` `\` `.` `%` NUL. A path carrying one is refused outright
+#: (never decoded and re-matched), so no rule can be matched on one path and another sent upstream.
+_ENCODED_STRUCTURE = re.compile(r"%(2f|5c|2e|25|00)", re.IGNORECASE)
+_PCHAR_SAFE = "/:@!$&'()*+,;=-._~"
+
+
+def canonical_path(raw: str) -> tuple[str, str]:
+    """(decoded, encoded) for a raw request path, or PathRefused. Refuses `..` and `.` segments,
+    empty segments (`//`), backslashes, control characters, and encoded slashes, backslashes, dots,
+    percents or NULs. `decoded` is what the rules match; `encoded` is what the upstream receives
+    (the same path, canonically encoded), so the two can never disagree."""
+    from urllib.parse import quote, unquote
+
+    if not raw.startswith("/") or len(raw) > 2048:
+        raise PathRefused("bad_path")
+    if _ENCODED_STRUCTURE.search(raw):
+        raise PathRefused("encoded_path_separator")
+    if "\\" in raw or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise PathRefused("bad_path_characters")
+    segments = raw[1:].split("/")
+    for seg in segments:
+        if seg in ("", ".", ".."):
+            raise PathRefused("dot_or_empty_segment")
+    try:
+        decoded_segments = [unquote(seg, errors="strict") for seg in segments]
+    except UnicodeDecodeError as exc:
+        raise PathRefused("bad_encoding") from exc
+    for seg in decoded_segments:
+        if seg in ("", ".", "..") or "/" in seg or "\\" in seg or any(ord(ch) < 0x20 for ch in seg):
+            raise PathRefused("dot_or_empty_segment")
+    decoded = "/" + "/".join(decoded_segments)
+    encoded = "/" + "/".join(quote(seg, safe=_PCHAR_SAFE.replace("/", "")) for seg in decoded_segments)
+    return decoded, encoded
+
+
 def _level_ok(perms: Mapping[str, str], need: tuple[str, str]) -> bool:
     key, level = need
     if key == "metadata":
@@ -75,8 +114,15 @@ def _in_run(repo: str, repos: Iterable[str]) -> bool:
     return repo.lower() in {r.lower() for r in repos}
 
 
+#: What an agent may change on a pull request (PATCH): never its base, never anything but its own.
+_PR_PATCH_FIELDS = frozenset({"title", "body", "state", "maintainer_can_modify"})
+
+
 def check_api(method: str, path: str, *, perms: Mapping[str, str], repos: Iterable[str],
-              body: Optional[Mapping[str, Any]] = None, push_pattern: str = "") -> RuleDecision:
+              body: Optional[Mapping[str, Any]] = None, push_pattern: str = "",
+              pr_head: Optional[Callable[[str, int], Optional[str]]] = None) -> RuleDecision:
+    """`path` is the DECODED canonical path (canonical_path). `pr_head(repo, number)` returns the
+    head branch of a pull request (asked of GitHub by the proxy) for the PATCH rule."""
     method = method.upper()
     m = _REPO_PATH.match(path)
     if not m:
@@ -103,6 +149,17 @@ def check_api(method: str, path: str, *, perms: Mapping[str, str], repos: Iterab
                 head = str((body or {}).get("head", "")).split(":")[-1]
                 if not fnmatch.fnmatchcase(f"refs/heads/{head}", push_pattern or "refs/heads/boss/*"):
                     return RuleDecision(False, template, "pr_head_not_run_branch")
+            if method == "POST" and template == "/repos/{o}/{r}/pulls/{n}/{sub}" and tail.endswith("/reviews"):
+                # An approving review is a human's (branch protection counts it): never an agent's.
+                if str((body or {}).get("event", "")).upper() not in ("", "COMMENT", "REQUEST_CHANGES"):
+                    return RuleDecision(False, template, "approve_not_allowed")
+            if method == "PATCH" and template == "/repos/{o}/{r}/pulls/{n}":
+                if body is None or not set(body) <= _PR_PATCH_FIELDS:
+                    return RuleDecision(False, template, "pr_field_not_allowed")
+                number = int(tail.rsplit("/", 1)[1])
+                head = pr_head(repo, number) if pr_head is not None else None
+                if not head or not fnmatch.fnmatchcase(f"refs/heads/{head}", push_pattern or "refs/heads/boss/*"):
+                    return RuleDecision(False, template, "pr_not_the_runs")
             return RuleDecision(True, template, need=need)
     return _deny("/repos/{o}/{r}/{other}", "not_in_rule_table")
 
@@ -216,20 +273,37 @@ def _apply_delta(base: bytes, delta: bytes) -> bytes:
     return bytes(out)
 
 
-def parse_pack(pack: bytes) -> dict[str, tuple[int, bytes]]:
-    """sha -> (type, data) for every object resolvable from the pack alone. A REF_DELTA against an
-    object NOT in the pack (a thin pack) stays unresolved: its sha is unknown, so the caller treats
-    an unresolvable commit or tree as a reason to refuse."""
+#: A push body larger than this is refused before it is parsed (the pack size limit).
+MAX_PUSH_BYTES = 64 * 1024 * 1024
+#: The most a pack may inflate to, in total and per object (a zip bomb is refused, not inflated).
+MAX_INFLATED_BYTES = 512 * 1024 * 1024
+MAX_OBJECT_BYTES = 100 * 1024 * 1024
+
+
+class UnverifiablePack(ValueError):
+    """A thin pack whose delta bases could not be fetched and verified."""
+
+
+def parse_pack(pack: bytes, *, fetch_base: Optional[Callable[[str], Optional[tuple[int, bytes]]]] = None
+               ) -> dict[str, tuple[int, bytes]]:
+    """sha -> (type, data) for every object in the pack. A REF_DELTA against an object NOT in the
+    pack (a thin pack — git's default for a push) is resolved by fetching its base from the
+    remote (`fetch_base(sha)` -> (type, data), verified against the sha); a delta that still
+    cannot be resolved raises UnverifiablePack: its type and sha are unknown, so nothing can be
+    said about what it changes."""
     import hashlib
 
     if not pack:
         return {}
+    if len(pack) > MAX_PUSH_BYTES:
+        raise ValueError("pack too large")
     if pack[:4] != b"PACK" or len(pack) < 32:
         raise ValueError("not a pack")
     version, count = struct.unpack(">II", pack[4:12])
     if version not in (2, 3) or count > 200_000:
         raise ValueError("bad pack header")
     pos = 12
+    inflated = 0
     by_offset: dict[int, tuple[int, bytes]] = {}
     pending: list[tuple[int, int, Any, bytes]] = []        # (offset, kind, base ref, delta)
     for _ in range(count):
@@ -254,9 +328,12 @@ def parse_pack(pack: bytes) -> dict[str, tuple[int, bytes]]:
             base = pack[pos:pos + 20].hex()
             pos += 20
         d = zlib.decompressobj()
-        data = d.decompress(pack[pos:])
+        data = d.decompress(pack[pos:], MAX_OBJECT_BYTES)
         if not d.eof:
-            raise ValueError("truncated object")
+            raise ValueError("truncated or oversized object")
+        inflated += len(data)
+        if inflated > MAX_INFLATED_BYTES:
+            raise ValueError("pack inflates too far")
         pos = len(pack) - len(d.unused_data)
         if kind in _TYPE_NAMES:
             by_offset[start] = (kind, data)
@@ -282,6 +359,17 @@ def parse_pack(pack: bytes) -> dict[str, tuple[int, bytes]]:
             by_sha[sha_of(*obj)] = obj
             pending.remove(item)
             progress = True
+        if not progress and pending and fetch_base is not None:
+            # Thin pack: fetch each missing REF_DELTA base once, verify it, and go round again.
+            for start, kind, base, delta in list(pending):
+                if kind != OBJ_REF_DELTA or base in by_sha:
+                    continue
+                fetched = fetch_base(base)
+                if fetched is not None and fetched[0] in _TYPE_NAMES and sha_of(*fetched) == base:
+                    by_sha[base] = fetched
+                    progress = True
+    if pending:
+        raise UnverifiablePack("unresolvable delta")
     return by_sha
 
 
@@ -309,9 +397,23 @@ def _tree_entries(data: bytes) -> dict[bytes, tuple[bytes, str]]:
     return out
 
 
+#: (tree sha) -> {name: (mode, sha)} for a tree NOT in the pack, from the remote; None if unknown.
+RemoteTree = Callable[[str], Optional[dict[bytes, tuple[bytes, str]]]]
+#: (commit sha) -> its tree sha, for a commit NOT in the pack; None if unknown.
+RemoteCommitTree = Callable[[str], Optional[str]]
+
+
 def check_push(updates: list[RefUpdate], objects: Mapping[str, tuple[int, bytes]], *, push_pattern: str,
-               perms: Mapping[str, str], is_ancestor: Callable[[str, str], bool]) -> RuleDecision:
-    """`is_ancestor(old, descendant)` asks GitHub (compare API) about commits outside the pack."""
+               perms: Mapping[str, str], is_ancestor: Callable[[str, str], bool],
+               remote_tree: Optional[RemoteTree] = None,
+               remote_commit_tree: Optional[RemoteCommitTree] = None) -> RuleDecision:
+    """`is_ancestor(old, descendant)` asks GitHub (compare API) about commits outside the pack.
+
+    Workflows: EVERY pushed commit's `.github/workflows` must be identical to its FIRST parent's
+    (resolved from the pack, else from the remote). So neither an intermediate commit that changes
+    them and a later one that changes them back, nor a commit that reuses an existing tree (not in
+    the pack, so "unchanged" by presence) with other workflows, nor a merge that takes them from a
+    second parent, gets through without `workflows: write`."""
     tpl = "/{o}/{r}.git/git-receive-pack"
     if not updates:
         return _deny(tpl, "no_updates")
@@ -344,8 +446,12 @@ def check_push(updates: list[RefUpdate], objects: Mapping[str, tuple[int, bytes]
             if obj[0] != OBJ_COMMIT:
                 return _deny(tpl, "unverifiable_push")
             tree, parents = _commit_info(obj[1])
-            if not workflows_ok and _touches_workflows(tree, objects):
-                return RuleDecision(False, tpl, "workflows_write", ("workflows", "write"))
+            if not workflows_ok:
+                verdict = _workflows_unchanged(tree, parents, objects, remote_tree, remote_commit_tree)
+                if verdict is None:
+                    return _deny(tpl, "unverifiable_push")
+                if not verdict:
+                    return RuleDecision(False, tpl, "workflows_write", ("workflows", "write"))
             frontier.extend(parents)
         if not u.is_create and not reached_old:
             if not boundary or not any(b == u.old or is_ancestor(u.old, b) for b in boundary):
@@ -353,12 +459,66 @@ def check_push(updates: list[RefUpdate], objects: Mapping[str, tuple[int, bytes]
     return RuleDecision(True, tpl)
 
 
+_ABSENT = "absent"
+
+
+def _entries(tree_sha: str, objects: Mapping[str, tuple[int, bytes]],
+             remote_tree: Optional[RemoteTree]) -> Optional[dict[bytes, tuple[bytes, str]]]:
+    obj = objects.get(tree_sha)
+    if obj is not None:
+        return _tree_entries(obj[1]) if obj[0] == OBJ_TREE else None
+    return remote_tree(tree_sha) if remote_tree is not None else None
+
+
+def _workflows_id(tree_sha: str, objects: Mapping[str, tuple[int, bytes]],
+                  remote_tree: Optional[RemoteTree]) -> Optional[str]:
+    """The sha of `.github/workflows` in a root tree, `absent`, or None when it cannot be known."""
+    root = _entries(tree_sha, objects, remote_tree)
+    if root is None:
+        return None
+    gh = root.get(b".github")
+    if gh is None:
+        return _ABSENT
+    if not gh[0].startswith(b"4"):                    # `.github` as a file or a link
+        return "nondir:" + gh[1]
+    gh_entries = _entries(gh[1], objects, remote_tree)
+    if gh_entries is None:
+        return None
+    wf = gh_entries.get(b"workflows")
+    if wf is None:
+        return _ABSENT
+    return ("" if wf[0].startswith(b"4") else "nondir:") + wf[1]
+
+
+def _workflows_unchanged(tree: str, parents: list[str], objects: Mapping[str, tuple[int, bytes]],
+                         remote_tree: Optional[RemoteTree],
+                         remote_commit_tree: Optional[RemoteCommitTree]) -> Optional[bool]:
+    mine = _workflows_id(tree, objects, remote_tree)
+    if mine is None:
+        return None
+    if not parents:
+        return mine == _ABSENT                          # a root commit may not bring workflows
+    first = parents[0]
+    obj = objects.get(first)
+    if obj is not None:
+        if obj[0] != OBJ_COMMIT:
+            return None
+        parent_tree = _commit_info(obj[1])[0]
+    else:
+        parent_tree = remote_commit_tree(first) if remote_commit_tree is not None else None
+    if not parent_tree:
+        return None
+    theirs = _workflows_id(parent_tree, objects, remote_tree)
+    if theirs is None:
+        return None
+    return mine == theirs
+
+
 def _touches_workflows(root_tree: str, objects: Mapping[str, tuple[int, bytes]]) -> bool:
-    """Git sends only objects the remote lacks, so a `.github` (then `workflows`) tree present in the
-    pack means that directory's content changed in this push."""
+    """Kept for callers outside the push check: does the pack carry a changed workflows tree?"""
     root = objects.get(root_tree)
     if root is None:
-        return False                     # the root tree is unchanged: nothing under it changed
+        return False
     gh = _tree_entries(root[1]).get(b".github")
     if gh is None:
         return False
@@ -366,5 +526,14 @@ def _touches_workflows(root_tree: str, objects: Mapping[str, tuple[int, bytes]])
     if gh_tree is None:
         return False
     wf = _tree_entries(gh_tree[1]).get(b"workflows")
-    # A changed `.github` without a `workflows` entry may be a deletion of the workflows: refuse.
     return wf is None or wf[1] in objects
+
+
+def raw_tree_from_api(entries: list[Mapping[str, Any]]) -> bytes:
+    """Rebuild a tree object's bytes from GitHub's JSON (`GET /git/trees/{sha}`), so a thin-pack
+    base can be verified against its sha before a delta is applied to it."""
+    out = bytearray()
+    for e in entries:
+        mode = str(e["mode"]).lstrip("0") or "0"
+        out += f"{mode} {e['path']}".encode() + b"\0" + bytes.fromhex(str(e["sha"]))
+    return bytes(out)

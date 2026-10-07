@@ -388,10 +388,10 @@ def test_a_revoked_mid_chain_agent_stops_every_hop_below_it(env):
     with pytest.raises(tokens.TokenError) as e:
         _exchange(env, forge, child_agent=env.vera, scope=("code_task:read",))
     assert _reason(e) in ("chain_inactive",)
-    with env.db() as c:
-        claims = verify(env, forge)
-        decision = tokens.decide(claims, "code_task:read", None, db=c)
-    assert not decision.allowed and decision.reason.value == "chain_inactive"
+    # Authentication itself re-checks the chain: the token no longer verifies at all.
+    with pytest.raises(tokens.TokenError) as e:
+        verify(env, forge)
+    assert _reason(e) == "chain_inactive"
 
 
 def test_a_reactivated_agent_does_not_revive_its_revoked_tokens(env):

@@ -135,9 +135,13 @@ def _active_runs(db: Any, where: str, params: dict) -> tuple[list[str], list[str
 
 
 def _grants_where(db: Any, where: str, params: dict) -> list[str]:
+    """The grants a cascade touches, LOCKED (FOR UPDATE) until it commits: a token minted
+    concurrently waits on the lock (tokens._lock_authority) and then sees the grant revoked,
+    instead of being minted against the old status and left live in the ledger."""
     from sqlalchemy import text
 
-    return list(db.execute(text(f"SELECT id FROM identity_delegation_grants WHERE {where}"), params).scalars().all())
+    return list(db.execute(text(f"SELECT id FROM identity_delegation_grants WHERE {where} ORDER BY id FOR UPDATE"),
+                           params).scalars().all())
 
 
 def _schedules_for(db: Any, grant_ids: list[str]) -> list[str]:
@@ -176,6 +180,82 @@ def _queued_jobs_for(db: Any, grant_ids: list[str]) -> list[str]:
                            {"g": grant_ids}).scalars().all())
 
 
+def _workflow_runs_of_person(db: Any, person: str) -> list[str]:
+    """Live workflow runs recorded as acting for this person (whatever grant)."""
+    from sqlalchemy import text
+
+    if not _table_exists(db, "workflow_runs"):
+        return []
+    rows = db.execute(text(
+        "SELECT id FROM workflow_runs WHERE (on_behalf_of = :u OR (on_behalf_of IS NULL AND "
+        "policy_snapshot->'_identity'->>'on_behalf_of' = :u)) AND status NOT IN "
+        "('completed','failed','deadlettered','cancelled','compensated','paused')"), {"u": person}).scalars().all()
+    return [f"run_wf:{r}" for r in rows]
+
+
+def _queued_jobs_where(db: Any, where: str, params: dict[str, Any]) -> list[str]:
+    from sqlalchemy import text
+
+    if not _table_exists(db, "jobs"):
+        return []
+    return list(db.execute(text(f"SELECT id FROM jobs WHERE status = 'queued' AND ({where})"), params).scalars().all())
+
+
+def _agent_role_keys(db: Any, agents: list[str]) -> list[str]:
+    from sqlalchemy import text
+
+    if not agents or not _table_exists(db, "roles"):
+        return []
+    return list(db.execute(text("SELECT DISTINCT role_key FROM roles WHERE agent_id = ANY(:a) AND role_key IS NOT NULL"),
+                           {"a": agents}).scalars().all())
+
+
+def _builds_as_agents(db: Any, agents: list[str]) -> tuple[list[str], list[str]]:
+    """(running build run ids, queued job ids) acting AS one of these agents, whatever path they
+    took: a job whose chain holds the agent, or a code task run as the agent's role (a legacy-path
+    build mints no token, so the token ledger alone never finds it)."""
+    from sqlalchemy import text
+
+    if not agents or not _table_exists(db, "jobs"):
+        return [], []
+    roles = _agent_role_keys(db, agents)
+    chain_hit = ("(chain IS NOT NULL AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(chain) h "
+                 "WHERE split_part(h, '#', 1) = ANY(:a)))")
+    role_hit = "FALSE"
+    if roles and _table_exists(db, "code_task_runs"):
+        role_hit = ("(kind = 'code.task' AND EXISTS (SELECT 1 FROM code_task_runs r WHERE "
+                    "r.id = coalesce(payload->>'code_task_run_id', payload->>'run_id') "
+                    "AND r.spec->>'role_key' = ANY(:roles)))")
+    params = {"a": agents, "roles": roles}
+    running = db.execute(text(
+        "SELECT coalesce(payload->>'code_task_run_id', payload->>'run_id') FROM jobs "
+        f"WHERE status IN ('running','leased') AND kind = 'code.task' AND ({chain_hit} OR {role_hit})"),
+        params).scalars().all()
+    queued = _queued_jobs_where(db, f"{chain_hit} OR {role_hit}", params)
+    return [f"run_ct:{r}" for r in running if r and str(r).startswith("crun_")], queued
+
+
+def _sponsored_by(db: Any, person: str) -> list[str]:
+    from sqlalchemy import text
+
+    return list(db.execute(text("SELECT a.agent_id FROM identity_agent_passports a JOIN identity_principals p "
+                                "ON p.id = a.agent_id WHERE a.sponsor_principal_id = :u AND p.status = 'active'"),
+                           {"u": person}).scalars().all())
+
+
+def _orphaned_by(db: Any, person: str) -> list[str]:
+    """Service accounts this person owned whose owners are now ALL inactive (after the disable)."""
+    from sqlalchemy import text
+
+    if not _table_exists(db, "identity_service_accounts"):
+        return []
+    return list(db.execute(text(
+        "SELECT s.principal_id FROM identity_service_accounts s JOIN identity_principals sp ON sp.id = s.principal_id "
+        "WHERE :u = ANY(s.owner_principal_ids) AND sp.status = 'active' AND NOT EXISTS (SELECT 1 FROM "
+        "identity_principals o WHERE o.id = ANY(s.owner_principal_ids) AND o.id <> :u AND o.status = 'active')"),
+        {"u": person}).scalars().all())
+
+
 def _egress_for(db: Any, run_ids: list[str]) -> int:
     from sqlalchemy import text
 
@@ -207,7 +287,8 @@ def _plan(trigger: CascadeTrigger, target: str, db: Any) -> dict[str, Any]:
 
     plan: dict[str, Any] = {"revoke_grants": [], "expire_grants": [], "suspend_grants": [],
                             "jtis": [], "runs": [], "passports": [], "sessions": 0, "keys": 0,
-                            "vault_items": [], "schedules": [], "jobs": []}
+                            "vault_items": [], "schedules": [], "jobs": [], "flag_agents": [],
+                            "orphaned_accounts": []}
     if trigger in (CascadeTrigger.GRANT_REVOKED, CascadeTrigger.GRANT_EXPIRED):
         live = _grants_where(db, "id = :g AND status IN ('active','suspended')", {"g": target})
         family = live + [g for g in grants_mod.descendants(db, live)]
@@ -228,8 +309,15 @@ def _plan(trigger: CascadeTrigger, target: str, db: Any) -> dict[str, Any]:
         else:
             plan["suspend_grants"] = _grants_where(db, "user_principal_id = :u AND status = 'active'", {"u": target})
         plan["jtis"], plan["runs"] = _active_runs(db, "subject_principal_id = :u", {"u": target})
-        plan["runs"] = sorted(set(plan["runs"]) | set(_running_builds_for(db, "on_behalf_of = :u", {"u": target})))
+        # Every run acting for them, on every path (#15): token-carrying runs, legacy-path builds a
+        # leased job is running, and their workflow runs; their queued work never starts.
+        plan["runs"] = sorted(set(plan["runs"]) | set(_running_builds_for(db, "on_behalf_of = :u", {"u": target}))
+                              | set(_workflow_runs_of_person(db, target)) | set(_workflow_runs_for(db, mine)))
+        plan["jobs"] = sorted(set(_queued_jobs_where(db, "on_behalf_of = :u", {"u": target}))
+                              | set(_queued_jobs_for(db, mine)))
         plan["schedules"] = _schedules_for(db, mine)
+        plan["flag_agents"] = _sponsored_by(db, target)
+        plan["orphaned_accounts"] = _orphaned_by(db, target)
         if _table_exists(db, "identity_sessions"):
             plan["sessions"] = int(db.execute(text("SELECT count(*) FROM identity_sessions WHERE principal_id = :u "
                                                    "AND revoked_at IS NULL"), {"u": target}).scalar_one())
@@ -257,7 +345,13 @@ def _plan(trigger: CascadeTrigger, target: str, db: Any) -> dict[str, Any]:
             " subject_principal_id = ANY(:a) OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(chain) h "
             " WHERE split_part(h, '#', 1) = ANY(:a)))"), {"a": agents}).all()
         plan["jtis"] = [r[0] for r in pattern_rows]
-        plan["runs"] = sorted({r[1] for r in pattern_rows})
+        # Every run of the agent on every path (#15): token-carrying runs, legacy-path builds that
+        # run as it, workflow runs and builds under the grants naming it; its queued work stops.
+        legacy_builds, queued_as = _builds_as_agents(db, agents)
+        plan["runs"] = sorted({r[1] for r in pattern_rows} | set(legacy_builds)
+                              | set(_workflow_runs_for(db, naming))
+                              | set(_running_builds_for(db, "grant_id = ANY(:g)", {"g": naming})))
+        plan["jobs"] = sorted(set(queued_as) | set(_queued_jobs_for(db, naming)))
         plan["schedules"] = _schedules_for(db, naming)
     elif trigger == CascadeTrigger.API_KEY_REVOKED:
         plan["keys"] = 1
@@ -347,6 +441,22 @@ def revoke_cascade(trigger: CascadeTrigger, target_id: str, *, actor: AuthContex
         db.execute(text("UPDATE identity_principals SET status = 'suspended', status_changed_at = now(), "
                         "status_changed_by = :by, status_reason = 'parent revoked: review' WHERE id = :a "
                         "AND status = 'active'"), {"a": aid, "by": by})
+    for aid in plan["flag_agents"]:
+        # A disabled sponsor: the agent is flagged for review (§7.1) — its runs for that person
+        # are halted above; its own work needs a new accountable human.
+        from . import passports as _passports
+
+        p = _passports.get(aid, db=db)
+        if p is not None:
+            lineage.passport_event(db, p, "agent.passport.flagged", ctx=actor,
+                                   details={"reason": "sponsor_disabled", "sponsor": target_id})
+    for sa in plan["orphaned_accounts"]:
+        from . import audit as _audit
+
+        _audit.record(_audit.SecurityEvent(
+            org_id=actor.principal.org_id if actor else "", event_type="service_account.orphaned",
+            outcome=_audit.Outcome.INFO, actor_principal_id=by, actor_kind="system",
+            target_type="service_account", target_id=sa, details={"last_owner_disabled": target_id}), db=db)
     if trigger in (CascadeTrigger.PERSON_DISABLED, CascadeTrigger.PERSON_DELETED):
         if _table_exists(db, "identity_sessions"):
             db.execute(text("UPDATE identity_sessions SET revoked_at = now(), revoked_reason = 'person disabled' "
@@ -389,10 +499,22 @@ def revoke_cascade(trigger: CascadeTrigger, target_id: str, *, actor: AuthContex
                                    details={"reason": reason[:200], "runs_halted": len(plan["runs"]),
                                             "descendants_suspended": plan["passports"]})
 
-    payload = json.dumps({"trigger": trigger.value, "target": target_id, "runs": plan["runs"][:200]})
-    db.execute(text("SELECT pg_notify(:c, :p)"), {"c": NOTIFY_CHANNEL, "p": payload[:7900]})
+    notify(db, trigger=trigger.value, target_id=target_id, runs=list(plan["runs"]), reason=why)
     _after_commit(db, list(plan["runs"]), why)
     return report
+
+
+def notify(db: Any, *, trigger: str, target_id: str, runs: list[str], reason: str) -> int:
+    """Record the cascade's runs and NOTIFY only the row id: a payload is capped at 8000 bytes,
+    and a truncated one is broken JSON that a listener drops (the runs are then never revoked at
+    GitHub). The listener fetches the runs by id."""
+    from sqlalchemy import text
+
+    notice = int(db.execute(text("INSERT INTO identity_revocation_notices (trigger, target_id, runs, reason) "
+                                 "VALUES (:t, :g, :r, :why) RETURNING id"),
+                            {"t": trigger, "g": target_id[:200], "r": runs, "why": reason[:300]}).scalar_one())
+    db.execute(text("SELECT pg_notify(:c, :p)"), {"c": NOTIFY_CHANNEL, "p": json.dumps({"notice": notice})})
+    return notice
 
 
 def _after_commit(db: Any, run_ids: list[str], reason: str) -> None:

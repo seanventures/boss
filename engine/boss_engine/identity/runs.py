@@ -17,6 +17,7 @@ import contextlib
 import hashlib
 import secrets
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator, Mapping, Optional
@@ -48,6 +49,7 @@ class Shim:
     key: dpop.DPoPKey = field(default_factory=dpop.DPoPKey.generate, repr=False)
     tokens: dict[str, IssuedToken] = field(default_factory=dict, repr=False)
     egress_credential: Optional[str] = field(default=None, repr=False)
+    renewed_at: float = field(default_factory=time.monotonic, repr=False)
 
     def authorization(self, audience: str, method: str, url: str) -> dict[str, str]:
         """Headers for one call: `Authorization: DPoP <token>` and a fresh `DPoP` proof."""
@@ -91,14 +93,15 @@ def start_run(ctx: AuthContext, start: RunStart, *, grant_id: Optional[str], db:
         shim.tokens[aud] = tokens.mint_run_token(subject=ctx, agent=agent, grant_id=grant_id, task=task,
                                                  audience=aud, scope=start.scope, cnf_jkt=shim.key.jkt, db=db)
     if AUD_EGRESS in shim.tokens:
-        shim.egress_credential = issue_egress_credential(shim, sandbox_id=sandbox_id or start.run_id, db=db)
+        shim.egress_credential = issue_egress_credential(shim, sandbox_id=sandbox_id or sandbox_network_id(), db=db)
     with _lock:
         _SHIMS[start.run_id] = shim
     return shim
 
 
 def spawn_child(parent: Shim, *, child_agent_id: str, child_name: str, scope: frozenset[str],
-                db: Any, base_url: str, audience: str = AUD_API) -> Shim:
+                db: Any, base_url: str, audience: str = AUD_API,
+                audiences: Optional[tuple[str, ...]] = None) -> Shim:
     """Spawn a sub-agent through BOSS: the supervisor mints the actor assertion for the child run
     (bound to the CHILD's new key) and the parent's shim performs the RFC 8693 exchange with its own
     token and DPoP proof. The child never sees the parent's token or key."""
@@ -108,14 +111,17 @@ def spawn_child(parent: Shim, *, child_agent_id: str, child_name: str, scope: fr
         dpop_proof=parent.key.proof("POST", base_url + "/v1/identity/spawn", access_token=parent_token.access_token),
         htm="POST", htu=base_url + "/v1/identity/spawn", db=db)
     child = Shim(run_id=f"{parent.run_id}/{child_name}")
-    assertion = tokens.mint_actor_assertion(parent=parent_claims, child_agent_id=child_agent_id,
-                                            child_run_id=child.run_id, child_jkt=child.key.jkt, db=db)
     htu = base_url + TOKEN_ENDPOINT
-    request = TokenExchangeRequest(
-        subject_token=parent_token.access_token, subject_token_type=TOKEN_TYPE_RUN, actor_token=assertion,
-        actor_token_type=TOKEN_TYPE_ACTOR, audience=audience, scope=frozenset(scope),
-        dpop_proof=parent.key.proof("POST", htu, access_token=parent_token.access_token))
-    child.tokens[audience] = tokens.exchange_token(request, htm="POST", htu=htu, db=db)
+    for aud in (audiences or (audience,)):
+        # One exchange per audience, each with its own single-use actor assertion, all bound to
+        # the CHILD's key: every one passes the full spawn checks (§7.5 1-8).
+        assertion = tokens.mint_actor_assertion(parent=parent_claims, child_agent_id=child_agent_id,
+                                                child_run_id=child.run_id, child_jkt=child.key.jkt, db=db)
+        request = TokenExchangeRequest(
+            subject_token=parent_token.access_token, subject_token_type=TOKEN_TYPE_RUN, actor_token=assertion,
+            actor_token_type=TOKEN_TYPE_ACTOR, audience=aud, scope=frozenset(scope),
+            dpop_proof=parent.key.proof("POST", htu, access_token=parent_token.access_token))
+        child.tokens[aud] = tokens.exchange_token(request, htm="POST", htu=htu, db=db)
     with _lock:
         _SHIMS[child.run_id] = child
     return child
@@ -134,6 +140,8 @@ def renew(shim: Shim, *, db: Any, base_url: str) -> None:
                    {"j": shim.tokens[AUD_EGRESS].jti, "r": shim.run_id})
         if shim.egress_credential:
             register_egress(raw_hash=_hash(shim.egress_credential), token=shim.tokens[AUD_EGRESS].access_token, db=db)
+            publish_egress(raw_hash=_hash(shim.egress_credential), token=shim.tokens[AUD_EGRESS].access_token,
+                           strict=False)
 
 
 def end_run(run_id: str, *, db: Any, org_id: str, reason: str = "run ended") -> None:
@@ -149,6 +157,11 @@ def end_run(run_id: str, *, db: Any, org_id: str, reason: str = "run ended") -> 
                     "AND revoked_at IS NULL"), {"r": run_id, "c": run_id + "/%"})
     grants.end_task_grants(run_id, db=db, org_id=org_id)
     github_app.revoke_runs([run_id], reason)
+    # A SEPARATE boss-egress process holds the run's installation tokens in ITS memory: tell it
+    # (identity_revocation_notices + NOTIFY), so they are revoked at GitHub there too.
+    from . import cascade
+
+    cascade.notify(db, trigger="run_ended", target_id=run_id, runs=[run_id], reason=reason)
     with _lock:
         for rid in [k for k in _SHIMS if k == run_id or k.startswith(run_id + "/")]:
             _SHIMS.pop(rid, None)
@@ -157,6 +170,118 @@ def end_run(run_id: str, *, db: Any, org_id: str, reason: str = "run ended") -> 
 _SHIMS: dict[str, Shim] = {}
 _lock = threading.Lock()
 
+# ---- renewal at runtime: a run's tokens (and egress) never die at 5 minutes mid-build ----------------
+
+RENEW_AFTER_SECONDS = 240           # the shim renews every 4 minutes (tokens live 5)
+_ENGINE: Any = None
+_RENEWER: Optional[threading.Thread] = None
+
+
+def remember_engine(engine: Any) -> None:
+    """The run supervisor's engine: renew live runs' tokens in the background, and stop a build
+    whose authority is revoked the moment it is (this process's cascades, after commit) or within
+    seconds (another process's, by polling)."""
+    global _ENGINE, _RENEWER
+    from . import cascade
+
+    _ENGINE = engine
+    cascade.register_after_commit(_hard_stop_hook)
+    with _lock:
+        if _RENEWER is None or not _RENEWER.is_alive():
+            _RENEWER = threading.Thread(target=_renew_forever, daemon=True, name="identity-run-renewer")
+            _RENEWER.start()
+
+
+def _hard_stop_hook(run_ids: list[str], _reason: str) -> None:
+    for rid in run_ids:
+        stop_run_processes(rid)
+
+
+def enforce_revocations(engine: Any) -> list[str]:
+    """Stop every build running in THIS process whose authority another process revoked: a live
+    shim whose current token was revoked, or a build with an unhonoured `authority_revoked` stop
+    request (a legacy-path build has no token). Returns the run ids stopped."""
+    from sqlalchemy import text
+
+    from ..services import owned_process
+
+    with _lock:
+        by_jti = {tok.jti: s.run_id for s in _SHIMS.values() for tok in s.tokens.values()}
+    live_builds = sorted(owned_process.live_owner_ids("code_run"))
+    stopped: list[str] = []
+    if not by_jti and not live_builds:
+        return stopped
+    with engine.begin() as db:
+        if by_jti:
+            for jti in db.execute(text("SELECT jti FROM identity_run_credentials WHERE jti = ANY(:j) "
+                                       "AND revoked_at IS NOT NULL"), {"j": list(by_jti)}).scalars().all():
+                stopped.append(by_jti[jti])
+        if live_builds and db.execute(text("SELECT to_regclass('code_task_stop_requests') IS NOT NULL")).scalar():
+            for crun in db.execute(text("SELECT run_id FROM code_task_stop_requests WHERE run_id = ANY(:r) "
+                                        "AND phase = 'authority_revoked' AND honoured_at IS NULL"),
+                                   {"r": live_builds}).scalars().all():
+                stopped.append(f"run_ct:{crun}")
+    for rid in sorted(set(stopped)):
+        with _lock:
+            _SHIMS.pop(rid, None)
+        stop_run_processes(rid)
+    return sorted(set(stopped))
+
+
+def renew_due(engine: Any, *, now: Optional[float] = None) -> dict[str, str]:
+    """Renew every live shim whose tokens are older than RENEW_AFTER_SECONDS. A refusal (grant
+    revoked, person disabled, parent run ended) is final for that run: its shim is dropped and its
+    sandbox processes are killed, so a revoked run stops even mid-stage."""
+    import time as _time
+
+    now = _time.monotonic() if now is None else now
+    out: dict[str, str] = {}
+    with _lock:
+        due = [s for s in _SHIMS.values() if s.tokens and now - s.renewed_at >= RENEW_AFTER_SECONDS]
+    for shim in due:
+        try:
+            with engine.begin() as db:
+                renew(shim, db=db, base_url=tokens.issuer())
+            shim.renewed_at = now
+            out[shim.run_id] = "renewed"
+        except tokens.TokenError as exc:
+            out[shim.run_id] = f"refused:{exc.reason}"
+            with _lock:
+                _SHIMS.pop(shim.run_id, None)
+            stop_run_processes(shim.run_id)
+    return out
+
+
+def _renew_forever() -> None:  # pragma: no cover — the loop around renew_due
+    import logging
+    import time as _time
+
+    while True:
+        _time.sleep(2)
+        try:
+            if _ENGINE is not None:
+                enforce_revocations(_ENGINE)
+                renew_due(_ENGINE)
+        except Exception:  # noqa: BLE001
+            logging.getLogger("boss.identity.runs").warning("run supervision pass failed", exc_info=True)
+
+
+def stop_run_processes(run_id: str) -> None:
+    """HARD STOP: every process of the build behind `run_id` (`run_ct:<crun>`, or one nested in a
+    workflow run) is killed now — through the owner registry (its process groups, wherever it is in
+    its stage) and its sandbox uid (anything that escaped the group). Not only at a stage boundary."""
+    from ..services import owned_process, sandbox_identity
+    from . import cascade
+
+    for kind, entity in cascade.run_segments(run_id):
+        if kind != "ct":
+            continue
+        try:
+            owned_process.terminate_owner(entity, reason="cancel", grace=0)
+        except Exception:  # noqa: BLE001
+            pass
+        sandbox_identity.end_owner(entity)
+
 
 def shim_for(run_id: str) -> Optional[Shim]:
     with _lock:
@@ -164,6 +289,55 @@ def shim_for(run_id: str) -> Optional[Shim]:
 
 
 # ---- the per-run egress credential ---------------------------------------------------------------------
+
+SANDBOX_ADDRS_ENV = "BOSS_SANDBOX_SOURCE_ADDRS"
+TOFU = "tofu:"
+
+
+def sandbox_network_id() -> str:
+    """The network identity of the sandbox this process starts (#16): the addresses its traffic
+    to boss-egress comes from. Sandboxes run in this container (as their own uid), so these are
+    this container's addresses; `BOSS_SANDBOX_SOURCE_ADDRS` overrides (a NAT in between). When
+    nothing usable is known (a developer's laptop), the first request binds it (trust on first
+    use) and every later request must come from there."""
+    import os
+    import socket
+
+    configured = [a.strip() for a in (os.environ.get(SANDBOX_ADDRS_ENV) or "").split(",") if a.strip()]
+    if configured:
+        return "net:" + ",".join(sorted(set(configured)))
+    addrs: set[str] = set()
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            addrs.add(str(info[4][0]))
+    except OSError:
+        pass
+    routable = {a for a in addrs if not a.startswith("127.") and a != "::1"}
+    return ("net:" + ",".join(sorted(routable | {"127.0.0.1", "::1"}))) if routable else TOFU
+
+
+def _check_network(db: Any, row: Mapping[str, Any], peer: Optional[str]) -> None:
+    from sqlalchemy import text
+
+    bound = str(row.get("sandbox_id") or "")
+    if peer is None:
+        return                                        # in-process callers (tests, the API itself)
+    if bound.startswith("net:"):
+        if peer not in bound[4:].split(","):
+            raise tokens.TokenError("unauthenticated", 401, "egress_wrong_sandbox")
+    elif bound == TOFU or not bound:
+        db.execute(text("UPDATE identity_egress_credentials SET sandbox_id = :n WHERE token_hash = :h "
+                        "AND (sandbox_id = :t OR sandbox_id IS NULL OR sandbox_id = '')"),
+                   {"n": "net:" + peer, "h": row["token_hash"], "t": TOFU})
+        again = db.execute(text("SELECT sandbox_id FROM identity_egress_credentials WHERE token_hash = :h"),
+                           {"h": row["token_hash"]}).scalar()
+        if str(again) != "net:" + peer:
+            raise tokens.TokenError("unauthenticated", 401, "egress_wrong_sandbox")
+    else:
+        # A sandbox id that is not a network identity (rows from before #16): bind now.
+        db.execute(text("UPDATE identity_egress_credentials SET sandbox_id = :n WHERE token_hash = :h "
+                        "AND sandbox_id = :old"), {"n": "net:" + peer, "h": row["token_hash"], "old": bound})
+
 
 def issue_egress_credential(shim: Shim, *, sandbox_id: str, db: Any) -> str:
     """`boss_egr_` + 32 random bytes. Stored hashed, bound to the run and sandbox, ≤1 h, revoked at
@@ -178,7 +352,32 @@ def issue_egress_credential(shim: Shim, *, sandbox_id: str, db: Any) -> str:
                {"id": new_id("egr"), "h": _hash(raw), "r": shim.run_id, "s": sandbox_id,
                 "j": shim.tokens[AUD_EGRESS].jti, "e": datetime.now(timezone.utc) + EGRESS_TTL})
     register_egress(raw_hash=_hash(raw), token=shim.tokens[AUD_EGRESS].access_token, db=db)
+    publish_egress(raw_hash=_hash(raw), token=shim.tokens[AUD_EGRESS].access_token)
     return raw
+
+
+def publish_egress(*, raw_hash: str, token: str, strict: bool = True) -> bool:
+    """Hand the run's egress token to a SEPARATE boss-egress process (compose's `egress`), server
+    to server with the shared service key. In-process egress (tests, a single-process install)
+    needs no hand-off: there is no key configured. A failed hand-off at run start fails the run:
+    the credential would be refused anyway."""
+    import os
+
+    import httpx
+
+    key = tokens.egress_service_key()
+    base = (os.environ.get(EGRESS_URL_ENV) or "").rstrip("/")
+    if not key or not base:
+        return False
+    try:
+        resp = httpx.post(base + "/_boss/register", json={"credential_hash": raw_hash, "token": token},
+                          headers={"X-Boss-Egress-Key": key}, timeout=10.0)
+        ok = resp.status_code == 200
+    except httpx.HTTPError:
+        ok = False
+    if not ok and strict:
+        raise tokens.TokenError("unavailable", 503, "egress_unreachable")
+    return ok
 
 
 #: credential hash -> the run's verified egress claims (in the egress process's memory).
@@ -200,17 +399,20 @@ def register_egress(*, raw_hash: str, token: str, db: Any) -> RunTokenClaims:
     return claims
 
 
-def resolve_egress(raw: Optional[str], *, db: Any) -> RunTokenClaims:
-    """boss_egr -> run -> run token -> LIVE checks (credential, jti, grant, chain, person)."""
+def resolve_egress(raw: Optional[str], *, db: Any, peer: Optional[str] = None) -> RunTokenClaims:
+    """boss_egr -> run -> run token -> LIVE checks (credential, network identity, jti, grant,
+    chain, person). `peer` is the request's source address: a credential presented from anywhere
+    but its sandbox is refused (#16)."""
     from sqlalchemy import text
 
     if not raw or not raw.startswith(EGRESS_PREFIX) or len(raw) > 128:
         raise tokens.TokenError("unauthenticated", 401, "no_egress_credential")
     h = _hash(raw)
-    row = db.execute(text("SELECT run_id, jti, revoked_at, expires_at FROM identity_egress_credentials "
-                          "WHERE token_hash = :h"), {"h": h}).mappings().first()
+    row = db.execute(text("SELECT token_hash, run_id, jti, revoked_at, expires_at, sandbox_id "
+                          "FROM identity_egress_credentials WHERE token_hash = :h"), {"h": h}).mappings().first()
     if row is None or row["revoked_at"] is not None or row["expires_at"] <= datetime.now(timezone.utc):
         raise tokens.TokenError("unauthenticated", 401, "egress_credential_dead")
+    _check_network(db, row, peer)
     with _lock:
         claims = _EGRESS.get(h)
     if claims is None or claims.task.run_id != row["run_id"]:
@@ -265,6 +467,15 @@ def agent_for_role(db: Any, project_id: Optional[str], role_key: Optional[str]) 
 
 
 @dataclass(frozen=True)
+class OwnGit:
+    """How BOSS's OWN git (the clone, checkpoints, the final push) gets the run's egress
+    credential: from its own process environment, never from the shim socket (which belongs to
+    the run's sandbox uid) and never from disk. The agent's uid cannot read that environment."""
+    config: tuple[tuple[str, str], ...]
+    env: Mapping[str, str] = field(default_factory=dict, repr=False)
+
+
+@dataclass(frozen=True)
 class CloneAccess:
     """How a sandbox reaches a repo through egress: a credential-free URL plus the git config that
     makes git ask the shim (never a file in the workspace) for the run's boss_egr credential."""
@@ -272,6 +483,11 @@ class CloneAccess:
     clone_url: str
     git_config: tuple[tuple[str, str], ...]
     helper_env: Mapping[str, str] = field(default_factory=dict)
+    own_git: Optional[OwnGit] = field(default=None, repr=False)
+
+
+_OWN_HELPER = ("!f() { test \"$1\" = get && printf 'username=boss-egress\\npassword=%s\\n' "
+               "\"$BOSS_EGR_CREDENTIAL\"; }; f")
 
 
 def egress_access(shim: Shim, *, owner: str, repo: str) -> CloneAccess:
@@ -283,12 +499,14 @@ def egress_access(shim: Shim, *, owner: str, repo: str) -> CloneAccess:
     helper = ("!f() { python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); "
               "s.sendall(sys.argv[2].encode()); sys.stdout.write(s.recv(4096).decode())' "
               f"{socket_path} \"$1\"; }}; f")
+    own = OwnGit(config=(("credential.helper", ""), ("credential.helper", _OWN_HELPER)),
+                 env={"BOSS_EGR_CREDENTIAL": shim.egress_credential or ""})
     return CloneAccess(
         run_id=shim.run_id, clone_url=f"{base}/github/{owner}/{repo}.git",
         git_config=((f"url.{base}/github/.insteadOf", "https://github.com/"),
                     ("credential.helper", ""), ("credential.helper", helper),
                     ("credential.useHttpPath", "true")),
-        helper_env={"BOSS_SHIM_SOCKET": socket_path})
+        helper_env={"BOSS_SHIM_SOCKET": socket_path}, own_git=own)
 
 
 # ---- the in-process shim socket ----------------------------------------------------------------------------
@@ -296,29 +514,66 @@ def egress_access(shim: Shim, *, owner: str, repo: str) -> CloneAccess:
 _SOCKETS: dict[str, Any] = {}
 
 
+def peer_uid(conn: Any) -> Optional[int]:
+    """The connecting process's uid, from the kernel (SO_PEERCRED on Linux, LOCAL_PEERCRED on
+    macOS). None when the platform cannot say: the caller then refuses."""
+    import socket
+    import struct
+    import sys
+
+    try:
+        if sys.platform.startswith("linux"):
+            raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+            return struct.unpack("3i", raw)[1]
+        if sys.platform == "darwin":
+            raw = conn.getsockopt(0, 0x001, 76)          # SOL_LOCAL, LOCAL_PEERCRED -> struct xucred
+            return struct.unpack("Ii", raw[:8])[1]
+    except OSError:
+        return None
+    return None
+
+
 def serve_shim_socket(shim: Shim) -> str:
-    """A unix socket (0600, outside any workspace) answering git's credential helper with the run's
-    boss_egr credential. The credential is held in this process only. NOTE: a same-uid sandbox can
-    connect too; only a separate-uid shim (microVM) keeps it from the agent. The credential is
-    egress-only, run-bound and ≤1 h either way."""
+    """A unix socket answering git's credential helper with the run's boss_egr credential, held in
+    this process only.
+
+    Inside a run that holds a sandbox uid (services.sandbox_identity) the socket is in the
+    boss-owned 0711 shim root, owned by THAT uid with mode 0600, and the kernel-reported peer uid
+    must be that uid: no other run's agent can connect or be answered. Without isolation (a
+    developer's machine) the socket is 0600 in a 0700 directory and only this uid is answered."""
     import os
     import socket
     import tempfile
+
+    from ..services import sandbox_identity
 
     with _lock:
         existing = _SOCKETS.get(shim.run_id)
     if existing is not None:
         return existing[0]
-    # AF_UNIX paths are short (104 bytes on macOS): default to /tmp, not a long per-user TMPDIR.
-    root = os.environ.get("BOSS_SHIM_DIR") or ("/tmp/boss-shim" if os.path.isdir("/tmp") else
-                                               os.path.join(tempfile.gettempdir(), "boss-shim"))
-    os.makedirs(root, mode=0o700, exist_ok=True)
+    ident = sandbox_identity.current()
+    if ident is not None:
+        root = sandbox_identity.SHIM_ROOT
+        allowed = {ident.uid}
+    else:
+        # AF_UNIX paths are short (104 bytes on macOS): default to /tmp, not a long per-user TMPDIR.
+        root = os.environ.get("BOSS_SHIM_DIR") or ("/tmp/boss-shim" if os.path.isdir("/tmp") else
+                                                   os.path.join(tempfile.gettempdir(), "boss-shim"))
+        os.makedirs(root, mode=0o700, exist_ok=True)
+        os.chmod(root, 0o700)
+        allowed = {os.getuid()}
     path = os.path.join(root, hashlib.sha256(shim.run_id.encode()).hexdigest()[:24] + ".sock")
-    if os.path.exists(path):
+    if os.path.lexists(path):
         os.unlink(path)
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(path)
+    old = os.umask(0o177)
+    try:
+        srv.bind(path)
+    finally:
+        os.umask(old)
     os.chmod(path, 0o600)
+    if ident is not None:
+        ident.adopt_socket(path)              # <uid>:<uid> 0600
     srv.listen(4)
 
     def loop() -> None:
@@ -329,6 +584,8 @@ def serve_shim_socket(shim: Shim) -> str:
                 return
             with conn:
                 try:
+                    if peer_uid(conn) not in allowed:
+                        continue                  # not this run's agent: nothing is said
                     request = conn.recv(4096).decode("utf-8", "replace")
                     if request.startswith("get") and shim.egress_credential:
                         conn.sendall(f"username=boss-egress\npassword={shim.egress_credential}\n".encode())
@@ -363,36 +620,127 @@ def _acting_of_job(engine: Any, job_id: Optional[str]) -> Any:
         return lineage.acting_for_job_id(db, job_id)
 
 
+def original_build_authority(db: Any, task_run_id: str) -> Any:
+    """The authority a build was STARTED under: the principal + grant stamped on the FIRST code.task
+    job of that run (written in the same transaction as the run). A retry, a resume after plan
+    approval, a spend-cap failover or a lease reclaim re-enqueues the build from a system thread
+    or the worker; each carries this, never the re-enqueuer's identity (#6)."""
+    from sqlalchemy import text
+
+    from . import lineage
+
+    if not db.execute(text("SELECT to_regclass('jobs') IS NOT NULL")).scalar():
+        return None
+    row = db.execute(text(
+        "SELECT payload, on_behalf_of, grant_id, chain, on_behalf_system FROM jobs WHERE kind = 'code.task' "
+        "AND payload->>'run_id' = :r ORDER BY created_at, id LIMIT 1"), {"r": task_run_id}).mappings().first()
+    if row is None:
+        return None
+    try:
+        return lineage.acting_for_job(dict(row))
+    except lineage.PrincipalRequired:
+        return None
+
+
+class NoAuthority(tokens.TokenError):
+    """A build with no delegated grant behind it (#5-8). Under enforcement this is the answer: the
+    shared GitHub token is never the fallback."""
+
+    def __init__(self, reason: str):
+        super().__init__("forbidden", 403, reason)
+
+
+def _no_authority(reason: str, *, task_run_id: str) -> None:
+    """Under BOSS_AUTHZ_MODE=enforce: refuse. In shadow: say so LOUDLY (once per build, at
+    WARNING, with the reason) and let the caller keep the legacy path, which posture reports."""
+    import logging
+
+    from .lineage import _enforced
+
+    if _enforced():
+        raise NoAuthority(reason)
+    logging.getLogger("boss.identity.runs").warning(
+        "[identity] SHADOW: build %s runs WITHOUT a delegated grant (%s) and would be REFUSED under "
+        "BOSS_AUTHZ_MODE=enforce; it falls back to the shared GitHub credential.", task_run_id, reason)
+
+
+BUILD_SCOPE = frozenset({"code_task:read", "code_task:steer", "repository:read", "github:read", "github:sync"})
+#: What a build declares it does on GitHub (the run's step needs): push its branch, open its PR.
+BUILD_GITHUB_NEEDS = {"contents": "write", "pull_requests": "write", "checks": "read", "statuses": "read"}
+
+
 def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner: str, repo: str,
                         role_key: Optional[str], acting: Any = None,
                         job_id: Optional[str] = None) -> Optional[tuple[Shim, CloneAccess]]:
     """Wire a code task to its delegated principal: a run token for the person's grant, an egress
-    credential, and the clone access. The principal is the ambient one, else the one stamped on the
-    job that created the build (R8). None (the legacy path) when egress is off or the build carries
-    no verified principal — the caller then keeps today's behaviour, which posture reports."""
+    credential, and the clone access.
+
+    WHOSE AUTHORITY: the one the build was started under (`original_build_authority`, else the
+    job `job_id`), adopted when nobody else is acting here (the worker calling in, or the same
+    person); otherwise the ambient one. A retry or failover never loses it (#6).
+
+    NO GRANT IS AN ERROR (#5-8): no principal, a system principal, no grant, no Passport for the
+    builder, or no egress proxy -> NoAuthority under enforcement (never the shared token); in
+    shadow, None and a loud warning (the legacy path). A build inside a delegated run (the acting
+    authority carries a chain) is minted as a CHILD hop of that run through the token exchange,
+    with every spawn check (can_spawn, allowed_children, the grant's child list, depth, cycles);
+    when that run is not live here, it is refused."""
     from . import lineage
 
+    if acting is None:
+        ambient = lineage.current()
+        with engine.begin() as db:
+            recorded = original_build_authority(db, task_run_id)
+        if recorded is None and job_id:
+            recorded = _acting_of_job(engine, job_id)
+        acting = recorded if (recorded is not None and _adoptable(ambient, recorded)) else ambient
     if not egress_enabled():
+        _no_authority("egress_not_configured", task_run_id=task_run_id)
         return None
-    acting = acting or lineage.current() or _acting_of_job(engine, job_id)
-    if not egress_enabled() or acting is None or not acting.grant_id:
+    if acting is None or getattr(acting, "system", False) or not acting.grant_id:
+        _no_authority("no_grant" if acting is not None else "no_principal", task_run_id=task_run_id)
         return None
     with engine.begin() as db:
         agent_id = agent_for_role(db, project_id, role_key or "forge")
         if not agent_id:
+            _no_authority("builder_has_no_passport", task_run_id=task_run_id)
             return None
-        if acting.run_id and acting.run_id.startswith("run_wf:"):
-            rid = f"{acting.run_id}/ct:{task_run_id}"        # a build inside a workflow run
-        elif acting.run_id and acting.run_id.startswith("run_ct:"):
-            rid = acting.run_id
+        if acting.chain:
+            parent = shim_for(acting.run_id or "")
+            if parent is None:
+                _no_authority("parent_run_not_live", task_run_id=task_run_id)
+                return None
+            from . import tokens as tok
+
+            shim = spawn_child(parent, child_agent_id=agent_id, child_name=f"ct:{task_run_id}", scope=BUILD_SCOPE,
+                               db=db, base_url=tok.issuer(), audiences=(AUD_API, AUD_EGRESS))
+            if f"{owner}/{repo}".lower() not in {r.lower() for r in _task_repos(shim, db)}:
+                end_run(shim.run_id, db=db, org_id=acting.org_id)
+                _no_authority("repo_outside_parent_task", task_run_id=task_run_id)
+                return None
+            shim.egress_credential = issue_egress_credential(shim, sandbox_id=sandbox_network_id(), db=db)
         else:
-            rid = f"run_ct:{task_run_id}"
-        shim = start_run(subject_for(acting, db=db),
-                         RunStart(run_id=rid, agent_id=agent_id, project_id=project_id, repos=(f"{owner}/{repo}",),
-                                  scope=frozenset({"code_task:read", "code_task:steer", "repository:read",
-                                                   "github:read", "github:sync"})),
-                         grant_id=acting.grant_id, db=db, audiences=(AUD_API,))
+            if acting.run_id and acting.run_id.startswith("run_wf:"):
+                rid = f"{acting.run_id}/ct:{task_run_id}"        # a build inside a workflow run
+            elif acting.run_id and acting.run_id.startswith("run_ct:"):
+                rid = acting.run_id
+            else:
+                rid = f"run_ct:{task_run_id}"
+            shim = start_run(subject_for(acting, db=db),
+                             RunStart(run_id=rid, agent_id=agent_id, project_id=project_id,
+                                      repos=(f"{owner}/{repo}",), scope=BUILD_SCOPE,
+                                      github_needs=BUILD_GITHUB_NEEDS),
+                             grant_id=acting.grant_id, db=db, audiences=(AUD_API,))
+    remember_engine(engine)
     return shim, egress_access(shim, owner=owner, repo=repo)
+
+
+def _task_repos(shim: Shim, db: Any) -> list[str]:
+    from . import jwks, signing_keys
+
+    _, raw = jwks.verify(shim.tokens[AUD_EGRESS].access_token, typ=tokens.TYP_RUN,
+                         key_for_kid=lambda kid: signing_keys.verification_key(kid, "run", db=db))
+    return list(((raw.get("boss_task") or {}).get("resources") or {}).get("github") or [])
 
 
 @contextlib.contextmanager
