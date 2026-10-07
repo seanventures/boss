@@ -111,7 +111,7 @@ class Env:
         return self._own("admin")
 
     def owner_page(self, j: Any = None) -> tuple[Any, Any]:
-        """A page in ONE seed-owner session shared by every journey (fewer sign-ins as an account
+        """A page in ONE session of the run's own Owner shared by every journey (fewer sign-ins as an account
         other walks also use). Close the returned handle: it closes only the page."""
         held = self.shared.get("_owner_ctx")
         if held is None or not _alive(held[1]):
@@ -188,7 +188,7 @@ def j3(env: Env, j: Journey) -> None:
                          "bindings": [{"role_key": key, "scope_type": "org"}], "group_ids": []}, j)
     j.check("API: an Admin inviting into a role they do not hold is refused", refused["status"] == 403,
             expect="403 (grant limit, §6.11)", actual=f"{refused['status']} {short(refused.get('body'))}",
-            repro=f"POST /v1/identity/users as seed-admin with bindings role_key={key}")
+            repro=f"POST /v1/identity/users as an Admin with bindings role_key={key}")
     if refused["status"] == 201 and (refused.get("body") or {}).get("invitation_id"):
         api(apage, "DELETE", f"/v1/identity/invitations/{refused['body']['invitation_id']}")
 
@@ -209,7 +209,7 @@ def j3(env: Env, j: Journey) -> None:
     j.shot(apage, "invite-link-shown")
     inv = audit_has(apage, "user.invited", since_seq=seq0)
     j.check("audit: user.invited by the Admin", bool(inv) and (inv.get("raw") or {}).get("actor_principal_id") == admin.principal_id,
-            expect="a user.invited event by seed-admin", actual=short(inv))
+            expect="a user.invited event by the Admin", actual=short(inv))
     actx.close()
 
     # Accept as the invitee.
@@ -395,7 +395,7 @@ def j4(env: Env, j: Journey) -> None:
             opage.get_by_role("button", name=re.compile("reset link|password", re.I)).count() > 0,
             expect="a 'Reset link' action on People › person (the /reset page sends people there)",
             actual="no such control", known="FX-C P1-17 (dead end: /reset says an admin can issue a link; People has no control)",
-            repro=f"{env.web}/identity/people/{p.principal_id} as seed-owner")
+            repro=f"{env.web}/identity/people/{p.principal_id} as the Owner")
     seq0 = audit_seq(opage)
     rl = K.stepped(opage, owner, "POST", f"/v1/identity/users/{p.principal_id}/reset-link", None, j)
     link = K.secret((rl.get("body") or {}).get("link") or "")
@@ -575,7 +575,7 @@ def j5(env: Env, j: Journey) -> None:
     j.check("API: the Operator's live session ended", gone["status"] == 401, expect="401", actual=gone["status"])
     ev = audit_has(opage, "user.mfa_reset", target=p.principal_id, since_seq=seq1)
     j.check("audit: user.mfa_reset by the Admin", bool(ev) and (ev.get("raw") or {}).get("actor_principal_id") == admin.principal_id,
-            expect="event by seed-admin", actual=short(ev))
+            expect="event by the Admin", actual=short(ev))
     nctx, npage = K.new_page(env.browser, j)
     npage.goto(f"{env.web}/login", wait_until="domcontentloaded")
     nxt = K.raw_fetch(npage, "POST", "/v1/auth/login", {"email": p.email, "password": p.password}, csrf=False)
@@ -591,7 +591,7 @@ def j5(env: Env, j: Journey) -> None:
     refused = K.stepped(apage, admin, "POST", f"/v1/identity/users/{op.principal_id}/reset-mfa", None, j)
     j.check("API: an Admin resetting an Owner's MFA is refused", refused["status"] == 403,
             expect="403 (needs owner:assign)", actual=f"{refused['status']} {short(refused.get('body'))}",
-            repro=f"POST /v1/identity/users/<fxd owner>/reset-mfa as seed-admin")
+            repro="POST /v1/identity/users/<an Owner>/reset-mfa as an Admin")
     okr = K.stepped(opage, owner, "POST", f"/v1/identity/users/{op.principal_id}/reset-mfa", None, j)
     j.check("API: a second Owner may reset an Owner's MFA", okr["status"] == 200, expect="200",
             actual=f"{okr['status']} {short(okr.get('body'))}")
@@ -803,7 +803,7 @@ def j12(env: Env, j: Journey) -> None:
             expect="the holder among the affected", actual=short(pvb, 300))
     j.check("API: the preview counts pages/routes/tools lost (§10 shape)", int((pvb.get("routes") or {}).get("lost") or 0) > 0,
             expect="routes.lost > 0 (and pages±, tools±)", actual=f"keys={sorted(pvb)}",
-            known="FX-C P1-11/12/13 (impact preview counts)", repro=f"POST /v1/identity/access-roles/<id>/preview as seed-admin")
+            known="FX-C P1-11/12/13 (impact preview counts)", repro="POST /v1/identity/access-roles/<id>/preview as an Admin")
 
     # Save: stale MFA first, so the step-up sheet must appear.
     K.age_my_session(env.stack, apage)
@@ -878,7 +878,7 @@ def j13(env: Env, j: Journey) -> None:
                 r0.get_attribute("aria-disabled") == "true",
                 expect="aria-disabled with “You don't hold all of it”", actual=f"aria-disabled={r0.get_attribute('aria-disabled')} title={r0.get_attribute('title')!r}",
                 known="unassigned (new: NewAccount sheet offers every role; the invite sheet applies the grant limit)",
-                repro=f"{env.web}/identity/service-accounts → New, as seed-admin: an Owner-only custom role is selectable")
+                repro=f"{env.web}/identity/service-accounts → New, as an Admin: an Owner-only custom role is selectable")
     sheet_radios.filter(has_text=re.compile("^Operator")).first.click()
     j.shot(apage, "new-service-account")
     apage.locator("[data-testid=new-sa] .idn-mf .idn-btn.primary").click()
@@ -898,7 +898,10 @@ def j13(env: Env, j: Journey) -> None:
     apage.wait_for_selector("#key-name", timeout=10000)
     apage.fill("#key-name", "fxd-j13 deploy")
     apage.locator("[data-testid=key-form]").get_by_role("button", name="CI deploy").click()
+    K.wait_for(lambda: "deployment:create" in apage.locator("[data-testid=scopes]").inner_text(), 10)
     scopes = apage.locator("[data-testid=scopes]").inner_text()
+    if "deployment:create" not in scopes:
+        j.note("SA scopes view: " + short(api(apage, "GET", f"/v1/identity/service-accounts/{sa_id}/scopes").get("body"), 300))
     j.check("the CI deploy preset picks deployment:create, deployment:read, code_task:read",
             all(x in scopes for x in ("deployment:create", "deployment:read", "code_task:read")),
             expect="the three CI scopes", actual=scopes[:200])
@@ -993,8 +996,9 @@ def _drop_sa(env: Env, sa_id: str) -> None:
 def j15(env: Env, j: Journey) -> None:
     auditor = env.A["auditor"]
     xctx, xpage = K.signed_in_page(env.browser, env.web, auditor, j)
-    grant = env.shared.get("grant_id")
-    if not grant:
+    t = env.shared.get("j8_target")
+    grant = env.shared.get("grant_id") if t is not None and t.web == env.web else None
+    if not grant:          # J8's grant lives on the second stack (or J8 did not run): one of this stack's
         h, opage = env.owner_page(j)
         ds = (api(opage, "GET", "/v1/identity/delegations").get("body") or {}).get("delegations") or []
         grant = ds[0]["id"] if ds else None
@@ -1157,7 +1161,7 @@ def _j8_on(env: Env, j: Journey, T: Target, *, phase: str) -> bool:
     K.answer_step_up_sheet(ppage, p, timeout_ms=5000)
     ppage.wait_for_timeout(5000)
     j.shot(ppage, "build-started")
-    j.note(f"grant POSTs from the sheet: {short(grants_posted, 600)}; sheet error: {K.body_text(ppage) if False else ''}")
+    j.note(f"grant POSTs from the sheet: {short(grants_posted, 600)}")
     err = ppage.locator("[data-testid=consent-durations] ~ .idn-err, .idn-err[role=alert]")
     refused = [b for st, b in grants_posted if st >= 400]
     if refused:
@@ -1738,7 +1742,7 @@ def j7(env: Env, j: Journey) -> None:
     j.check("API: the manual groups API refuses removing an IdP-synced membership", rm["status"] in (403, 409, 422),
             expect="409 idp read-only", actual=f"{rm['status']} {short(rm.get('body'))}",
             known="unassigned (new: an OIDC-synced membership of a mapped group can be removed by hand; the next sign-in re-adds it)",
-            repro=f"DELETE /v1/identity/groups/<mapped group>/members/<oidc member> as Owner → 200")
+            repro="DELETE /v1/identity/groups/<mapped group>/members/<oidc member> as Owner → 200")
     if rm["status"] < 300:
         _sso_sign_in(bpage, web, pid, "bob", pw["bob"], j, "bob-resynced")
 
