@@ -321,6 +321,12 @@ class EphemeralSandbox:
             if own is not None:
                 self._git_env = dict(own.env)
                 self._git_own_config = list(own.config)
+                # THE CLONE IS BOSS's OWN GIT TOO. Its `-c` list follows the own helper, and the
+                # egress config's `credential.helper=` (empty: reset) and shim helper came after
+                # it — so the clone asked the shim socket, which belongs to the run's uid:
+                # "Permission denied", then "could not read Username" (R2, the real-stack walk).
+                egress_config = [a for k, v in egress.git_config if k != "credential.helper"
+                                 for a in ("-c", f"{k}={v}")]
 
         depth = max(1, int(self.settings.sandbox_clone_depth or 1))
         self._git(
