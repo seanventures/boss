@@ -9,7 +9,7 @@
  *     passkey prompt succeeds without a device): param@example.com Owner · priya@acme.dev Admin ·
  *     sam@acme.dev Operator (+Admin in acme-web) · diego@acme.dev Viewer · mei@acme.dev Auditor.
  *     First-run claims: set the cookie `boss_stub_claim` to setup_token | legacy_password |
- *     network_bridge before opening /claim. `boss_stub_bare=1` = nothing configured; `boss_stub_signup=1`.
+ *     network_bridge before opening /claim. `boss_stub_bare=1` = nothing configured (an IP install: no passkeys); `boss_stub_signup=1`; `boss_stub_shared=1` = the shared password still works.
  *   - FULL JOURNEY, once S1/S2/S3/S5 land: the same steps on a real stack (no stub variable). The
  *     `needs` list names the streams whose API half each journey also proves.
  *

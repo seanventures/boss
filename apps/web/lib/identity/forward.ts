@@ -23,7 +23,7 @@ export const PREAUTH_COOKIE = "__Host-boss_preauth";
 export const DEVICE_COOKIE = "__Host-boss_device";
 export const IDENTITY_COOKIES: readonly string[] = [SESSION_COOKIE, PREAUTH_COOKIE, DEVICE_COOKIE];
 /** Dev-only cookies the identity stub reads (lib/identity/stub). Forwarded only to the stub. */
-export const STUB_COOKIES: readonly string[] = ["boss_stub_claim", "boss_stub_bare", "boss_stub_signup"];
+export const STUB_COOKIES: readonly string[] = ["boss_stub_claim", "boss_stub_bare", "boss_stub_signup", "boss_stub_shared"];
 
 export const CSRF_HEADER_LC = "x-boss-csrf";
 /**

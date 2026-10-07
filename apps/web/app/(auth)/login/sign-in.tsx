@@ -1,31 +1,34 @@
 "use client";
 
 /**
- * SIGN IN (mockup e, IDENTITY.md §9.7, D33): a familiar layout in BOSS style.
+ * SIGN IN (IDENTITY.md §9.7, D33): a familiar layout in BOSS style.
  *
- *   mark and welcome → the configured provider row (hidden when none) → "Sign in with a passkey"
- *   → "or use email" → Password | Magic link | Email code (the email tabs only with SMTP)
- *   → footer: "Ask an admin to invite you", or "New here? Create account" when self sign-up is on.
+ *   the BOSS mark and "Welcome back" → the provider squares (Google, GitHub, Microsoft, Apple and
+ *   any configured OIDC/SAML provider) → "Sign in with a passkey" → "or use email" → Password |
+ *   Magic link | Email code → email, password (show/hide, "Forgot?") → "Sign in →"
+ *   → "New here? Create account" → the host, and "Use the shared password" while it still works.
  *
- * Then the second factor (code, passkey or recovery code) when the account has one. No phone or
- * SMS anywhere. The API decides every step; the page only carries the person through it, and
- * keeps every message uniform (an unknown address gets exactly the words a known one does).
+ * The page always has that whole shape. What `/v1/auth/options` says isn't set up stays visible
+ * but disabled, and says exactly what turns it on (lib/identity/sign-in-offers.ts): no fake
+ * buttons. Then the second factor (code, passkey or recovery code) when the account has one. No
+ * phone or SMS anywhere. The API decides every step; the page only carries the person through
+ * it, and keeps every message uniform (an unknown address gets exactly the words a known one does).
  */
 import { afterEnrolStep, ENROLMENT_GRANT_WORDS } from "../../../lib/identity/enrolment";
 import React, { useEffect, useState } from "react";
-import { ArrowRight, CaretRight, EnvelopeSimple, Fingerprint, Key, LockSimple, ShieldCheck } from "@phosphor-icons/react";
+import { ArrowRight, CaretRight, EnvelopeSimple, Eye, EyeSlash, Fingerprint, Hash, Key, LockSimple, ShieldCheck, Sparkle, UserPlus } from "@phosphor-icons/react";
 
 import { IdentityError, idPost } from "../../../lib/identity/api";
 import type { AuthOptions, SignInStep } from "../../../lib/identity/types";
 import { emailSignInOffered } from "../../../lib/identity/email-sign-in";
 import { getAssertion, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../../lib/identity/webauthn";
 import { sayAuth } from "../auth-flow";
-import { passkeyBlockWords } from "../../../lib/identity/passkey-support";
-import { CodeInput, Face } from "../../../components/identity/kit";
-import { AuthStage, Live, Logo, MethodTabs, ProviderRow, safeNextClient } from "../auth-parts";
+import { methodWhyNot, passkeyWhyNot, providerOffers, type Method } from "../../../lib/identity/sign-in-offers";
+import { CodeInput, Face, Sheet } from "../../../components/identity/kit";
+import { AuthStage, HostLine, Live, Logo, MethodTabs, ProviderRow, safeNextClient, Tip } from "../auth-parts";
+import { CopyCommand } from "../copy-command";
 import { localWith } from "../../../lib/local-time";
 
-type Method = "password" | "magic" | "code";
 type Stage =
   | { kind: "start" }
   | { kind: "magic-sent"; email: string }
@@ -86,14 +89,24 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(notice);
   const [resendIn, setResendIn] = useState(0);
-  const [hasPasskeys, setHasPasskeys] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
+  // Why a disabled option is off, in words, under the group that was pressed (a phone has no hover).
+  const [why, setWhy] = useState<{ at: "idp" | "passkey" | "tabs"; text: string } | null>(null);
+  const [sheet, setSheet] = useState<null | "invite-only" | "forgot">(null);
+  // The page's own address and this browser's passkey support are known only once it runs here.
+  const [where, setWhere] = useState<{ hostname: string; protocol: string } | null>(null);
+  const [webauthn, setWebauthn] = useState(false);
   const target = safeNextClient(next);
 
-  // The API offers passkeys only once a public origin is bound (S1 `passkey`); the stub omits it.
-  // …and never on an address a browser can't hold a passkey for (an IP, plain http: passkey-support).
+  // The API offers passkeys only once a public origin is bound (S1 `passkey`, `passkey_reason`),
+  // and never on an address a browser can't hold a passkey for (an IP, plain http: passkey-support).
   useEffect(() => {
-    setHasPasskeys(webauthnAvailable() && options.passkey !== false && !passkeyBlockWords(options.passkey_reason, window.location));
-  }, [options.passkey, options.passkey_reason]);
+    setWhere({ hostname: window.location.hostname, protocol: window.location.protocol });
+    setWebauthn(webauthnAvailable());
+  }, []);
+  const passkeyWhy = passkeyWhyNot(options, where, webauthn);
+  const hasPasskeys = where !== null && passkeyWhy === null;
+  const sharedOffered = !!options.shared_password && (!options.shared_password.until || Date.parse(options.shared_password.until) > Date.now());
   useEffect(() => {
     if (resendIn <= 0) return;
     const t = window.setTimeout(() => setResendIn((n) => n - 1), 1000);
@@ -134,9 +147,13 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
     after(await idPost<SignInStep>("/v1/auth/webauthn/verify", { purpose, credential }));
   });
 
-  const tabs: { id: Method; label: string }[] = emailSignInOffered(options)
-    ? [{ id: "password", label: "Password" }, { id: "magic", label: "Magic link" }, { id: "code", label: "Email code" }]
-    : [{ id: "password", label: "Password" }];
+  const tabs = [
+    { id: "password" as const, label: "Password", icon: <Key size={14} weight="bold" aria-hidden /> },
+    { id: "magic" as const, label: "Magic link", icon: <Sparkle size={14} weight="bold" aria-hidden />, why: methodWhyNot("magic", options) },
+    { id: "code" as const, label: "Email code", icon: <Hash size={14} weight="bold" aria-hidden />, why: methodWhyNot("code", options) },
+  ];
+  const whyLine = (at: "idp" | "passkey" | "tabs") => why?.at === at
+    ? <p className="idn-why" data-copy="prose" data-testid={`why-${at}`}>{why.text}</p> : null;
 
   // ---- second factor ---------------------------------------------------------------------------
   if (stage.kind === "mfa" || stage.kind === "recovery") {
@@ -214,24 +231,31 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
   }
 
   // ---- the first screen -----------------------------------------------------------------------
+  const passkeyButton = (tip?: string) => (
+    <button type="button" className="idn-big pk" aria-disabled={passkeyWhy ? true : undefined} aria-describedby={tip}
+      disabled={busy} data-testid="passkey-sign-in"
+      onClick={() => (passkeyWhy ? setWhy({ at: "passkey", text: passkeyWhy }) : passkey("login"))}>
+      <Fingerprint size={20} weight="bold" aria-hidden /> Sign in with a passkey
+    </button>
+  );
   return (
     <AuthStage label="Sign in">
-      <Logo host={options.host} />
+      <Logo />
       <h1>Welcome back</h1>
-      <p className="idn-s" data-copy="prose">Sign in to the {options.org_name} to pick up where your team left off.</p>
+      <p className="idn-s" data-copy="prose">Sign in to {options.org_name} to pick up where your team left off.</p>
       {options.claim ? (
         <a className="idn-note info" href="/claim" data-testid="claim-door">
           <ShieldCheck size={16} aria-hidden /> <span><b>This BOSS has no Owner yet.</b> Claim it <ArrowRight size={12} aria-hidden /></span>
         </a>
       ) : null}
-      <ProviderRow providers={options.providers} next={target} />
-      {hasPasskeys ? (
-        <button type="button" className="idn-big p" onClick={() => passkey("login")} disabled={busy} data-testid="passkey-sign-in">
-          <Fingerprint size={18} weight="bold" aria-hidden /> Sign in with a passkey
-        </button>
-      ) : null}
-      <div className="idn-or">{hasPasskeys || options.providers.length ? "or use email" : "sign in with email"}</div>
-      <MethodTabs tabs={tabs} value={method} onChange={(m) => { setMethod(m); setError(null); setStage({ kind: "start" }); }} label="Sign-in method" />
+      <ProviderRow offers={providerOffers(options.providers, target)} onWhy={(text) => setWhy({ at: "idp", text })} />
+      {whyLine("idp")}
+      {passkeyWhy ? <Tip text={passkeyWhy} className="block">{(tip) => passkeyButton(tip)}</Tip> : passkeyButton()}
+      {whyLine("passkey")}
+      <div className="idn-or">or use email</div>
+      <MethodTabs tabs={tabs} value={method} label="Sign-in method" onWhy={(text) => setWhy({ at: "tabs", text })}
+        onChange={(m) => { setMethod(m); setError(null); setWhy(null); setStage({ kind: "start" }); }} />
+      {whyLine("tabs")}
 
       {stage.kind === "magic-sent" ? (
         <div className="idn-sent" id="panel-magic" role="tabpanel" aria-labelledby="tab-magic">
@@ -265,7 +289,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
           </div>
         </div>
       ) : (
-        <form id={`panel-${method}`} role={tabs.length > 1 ? "tabpanel" : undefined} aria-labelledby={tabs.length > 1 ? `tab-${method}` : undefined}
+        <form id={`panel-${method}`} role="tabpanel" aria-labelledby={`tab-${method}`}
           onSubmit={(e) => {
             e.preventDefault();
             if (method === "password") run(async () => after(await idPost<SignInStep>("/v1/auth/login", { email: shared ? "" : email, password })));
@@ -275,8 +299,11 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
           {shared && method === "password" ? null : (
             <div className="idn-f">
               <label htmlFor="email">Email</label>
-              <input id="email" className="idn-i" type="email" autoComplete="username webauthn" required value={email}
-                onChange={(e) => setEmail(e.target.value)} aria-invalid={!!error || undefined} aria-describedby={error ? "signin-error" : undefined} />
+              <div className="idn-ig">
+                <EnvelopeSimple size={18} className="idn-ig-ico" aria-hidden />
+                <input id="email" className="idn-i" type="email" autoComplete="username webauthn" required value={email} placeholder="you@example.com"
+                  onChange={(e) => setEmail(e.target.value)} aria-invalid={!!error || undefined} aria-describedby={error ? "signin-error" : undefined} />
+              </div>
             </div>
           )}
           {method === "password" ? (
@@ -284,11 +311,18 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
               <span className="idn-flabel">
                 <label htmlFor="password">{shared ? "Shared password" : "Password"}</label>
                 {shared ? null : emailSignInOffered(options)
-                  ? <a href="/reset">Forgot password?</a>
-                  : <span className="idn-dim" title="An admin can send you a reset link">Ask an admin</span>}
+                  ? <a href="/reset" data-testid="forgot">Forgot?</a>
+                  : <button type="button" data-testid="forgot" onClick={() => setSheet("forgot")}>Forgot?</button>}
               </span>
-              <input id="password" className="idn-i" type="password" autoComplete="current-password" required value={password}
-                onChange={(e) => setPassword(e.target.value)} aria-invalid={!!error || undefined} />
+              <div className="idn-ig">
+                <LockSimple size={18} className="idn-ig-ico" aria-hidden />
+                <input id="password" className="idn-i" type={showPassword ? "text" : "password"} autoComplete="current-password" required value={password}
+                  placeholder="••••••••••" onChange={(e) => setPassword(e.target.value)} aria-invalid={!!error || undefined} />
+                <button type="button" className="idn-eye" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword}
+                  onClick={() => setShowPassword(!showPassword)}>
+                  {showPassword ? <EyeSlash size={18} aria-hidden /> : <Eye size={18} aria-hidden />}
+                </button>
+              </div>
             </div>
           ) : null}
           {shared && method === "password" ? (
@@ -297,23 +331,42 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
             </p>
           ) : null}
           {error ? <div className="idn-err" id="signin-error" role="alert">{error}</div> : null}
-          <button type="submit" className={`idn-big ${hasPasskeys ? "s" : "p"}`} disabled={busy} data-testid="email-submit">
+          <button type="submit" className="idn-big p go" disabled={busy} data-testid="email-submit">
             {busy ? "Signing in…" : method === "password" ? "Sign in" : method === "magic" ? "Email me a link" : "Email me a code"}
+            {busy ? null : <ArrowRight size={18} weight="bold" aria-hidden />}
           </button>
         </form>
       )}
 
-      {options.shared_password && method === "password" && stage.kind === "start" ? (
-        <button type="button" className="idn-link" data-testid="shared-password-toggle"
-          onClick={() => { setShared(!shared); setError(null); setPassword(""); }}>
-          {shared ? "Sign in with your email" : "Use the shared password"}
-        </button>
-      ) : null}
-      <div className="idn-foot">
+      <p className="idn-new">
+        New here?{" "}
         {options.signup
-          ? <>New here? <a href="/signup">Create account</a></>
-          : <>No account? <span className="idn-mut">Ask an admin to invite you</span></>}
-      </div>
+          ? <a href="/signup" data-testid="create-account">Create account</a>
+          : <button type="button" data-testid="create-account" onClick={() => setSheet("invite-only")}>Create account</button>}
+      </p>
+      <HostLine host={options.host}>
+        {sharedOffered && method === "password" && stage.kind === "start" ? (
+          <button type="button" className="idn-link" data-testid="shared-password-toggle"
+            onClick={() => { setShared(!shared); setError(null); setPassword(""); }}>
+            {shared ? "Sign in with your email" : "Use the shared password"}
+          </button>
+        ) : null}
+      </HostLine>
+
+      {sheet === "invite-only" ? (
+        <Sheet title="This BOSS is invite-only" icon={<UserPlus size={20} aria-hidden />} onClose={() => setSheet(null)} testId="invite-only-sheet">
+          <p className="idn-lede2" data-copy="prose">Ask an admin to invite you. Their invitation gives you a link that sets up your account.</p>
+          <div className="idn-mf"><span className="idn-spacer" /><button type="button" className="idn-btn primary" onClick={() => setSheet(null)}>Got it</button></div>
+        </Sheet>
+      ) : null}
+      {sheet === "forgot" ? (
+        <Sheet title="Reset your password" icon={<LockSimple size={20} aria-hidden />} onClose={() => setSheet(null)} testId="forgot-sheet">
+          <p className="idn-lede2" data-copy="prose">This BOSS sends no email. Ask an admin to send you a reset link.</p>
+          <p className="idn-lede2" data-copy="prose">A locked-out sole Owner runs this on the host:</p>
+          <CopyCommand command="boss identity recover-owner --email you@example.com" />
+          <div className="idn-mf"><span className="idn-spacer" /><button type="button" className="idn-btn primary" onClick={() => setSheet(null)}>Got it</button></div>
+        </Sheet>
+      ) : null}
       <Live text={busy ? "Working" : stage.kind === "done" ? "Signed in" : ""} />
     </AuthStage>
   );

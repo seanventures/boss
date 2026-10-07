@@ -204,6 +204,10 @@ on("GET", "/v1/auth/options", "public", ({ s, req }) => {
     providers: bare ? [] : s.providers.map((p) => ({ id: p.id, name: p.name, preset: p.preset })),
     smtp: bare ? false : s.policy.smtp, signup: !bare && (s.policy.signup.enabled || req.cookies.boss_stub_signup === "1"),
     legacy_password: false, claim,
+    // Bare is an install reached by an IP address: a browser can't hold a passkey there.
+    ...(bare ? { passkey: false, passkey_reason: "passkey_needs_domain" } : {}),
+    // The shared console password, while it still signs in (as Operator), for 30 days.
+    shared_password: req.cookies.boss_stub_shared === "1" ? { until: new Date(Date.now() + 30 * 86_400_000).toISOString() } : null,
   };
   return ok({ ...options, password_min_length: s.policy.password_min_length });
 });

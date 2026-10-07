@@ -19,7 +19,7 @@
 
 @media print {
   .idn-auth { background: none; color: black; }
-  .idn-auth::before, .idn-auth .idn-logo img, .idn-code-acts, .idn-stored, .idn-auth .idn-big, .idn-auth .idn-fine { display: none; }
+  .idn-auth::before, .idn-auth .idn-brand-mark, .idn-hostline, .idn-code-acts, .idn-stored, .idn-auth .idn-big, .idn-auth .idn-fine { display: none; }
   .idn-panel { box-shadow: none; border: 0; background: none; }
   .idn-codes { color: black; border-color: black; background: none; }
   .idn-codes li { color: black; }
@@ -27,3 +27,120 @@
 /* A waiting line ("Checking your link…"): distinct from the shared .idn-state panels (states.tsx). */
 .idn-wait { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13.5px; color: var(--muted); margin-bottom: 16px; }
 .idn-wait .idn-blink { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); animation: idn-blink 1s infinite; }
+
+/* ── the auth family (sign-in and every sibling: sign-up, reset, invitation, claim, enrolment,
+   second factor, email landings): one panel, one centred mark, one field and button style ── */
+/* No backdrop-filter: it would make the panel the containing block of a fixed sheet, trapping the sheet inside the panel. */
+.idn-auth .idn-panel { max-width: 440px; padding: 34px 36px 28px; border-radius: 26px; backdrop-filter: none; }
+.idn-auth .idn-panel.wide { max-width: 480px; }
+.idn-panel:has(> .idn-hostline) { padding-bottom: 68px; }
+.idn-auth .idn-panel > h1 { text-align: center; font-size: 26px; letter-spacing: -0.01em; margin-bottom: 8px; }
+.idn-auth .idn-panel > h1 + .idn-s { text-align: center; margin-bottom: 22px; text-wrap: balance; }
+/* A tap on a disabled option says why in a line below it; the hover tip would only repeat it. */
+.idn-tipw:has([aria-disabled="true"]:focus:not(:focus-visible)) > .idn-tip { opacity: 0; visibility: hidden; }
+
+/* the mark: large, centred, lit from behind so the deep blue reads on the dark stage */
+.idn-brand { display: flex; flex-direction: column; align-items: center; gap: 10px; margin: 0 0 20px; }
+.idn-brand-mark { position: relative; width: 88px; height: 88px; display: grid; place-items: center; }
+.idn-brand-mark::before { content: ""; position: absolute; inset: -22px; border-radius: 50%; background: radial-gradient(closest-side, color-mix(in srgb, var(--teal) 30%, transparent), color-mix(in srgb, var(--accent) 12%, transparent) 62%, transparent); }
+.idn-brand-mark img { position: relative; width: 68px; height: auto; filter: brightness(1.3) saturate(1.15) drop-shadow(0 8px 20px color-mix(in srgb, var(--accent) 55%, transparent)); }
+.idn-brand-word { font: 700 21px/1 var(--display); letter-spacing: 0.24em; padding-left: 0.24em; background: var(--brand-grad-2); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.idn-brand-tag { font-size: 11.5px; font-weight: 600; color: var(--muted); border: 1px solid var(--border-strong); border-radius: 999px; padding: 3px 11px; background: color-mix(in srgb, var(--surface-3) 60%, transparent); }
+
+/* which BOSS this is, quietly at the foot of the panel */
+.idn-hostline { position: absolute; left: 36px; right: 36px; bottom: 18px; display: flex; align-items: center; justify-content: center; gap: 12px; padding-top: 13px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--faint); }
+.idn-hostline.with { justify-content: space-between; }
+.idn-host { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.idn-host svg { flex: none; }
+.idn-hostline .idn-link { font-size: 12px; white-space: nowrap; }
+
+/* the hover-and-focus tooltip every disabled option carries */
+.idn-tipw { position: relative; display: inline-flex; }
+.idn-tipw.block { display: block; }
+.idn-tip { position: absolute; bottom: calc(100% + 9px); left: 50%; transform: translate(-50%, 4px); width: max-content; max-width: 250px; padding: 7px 10px; border-radius: 9px; background: var(--surface-3); border: 1px solid var(--border-strong); color: var(--ink-soft); font-size: 12px; font-weight: 500; line-height: 1.4; letter-spacing: 0; text-transform: none; text-align: center; white-space: normal; box-shadow: 0 14px 30px -12px var(--idn-shadow); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 120ms, transform 120ms, visibility 120ms; z-index: 5; }
+.idn-tipw:hover > .idn-tip, .idn-tipw:has(:focus-visible) > .idn-tip { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+.idn-idps > .idn-tipw:first-child > .idn-tip, .idn-mtabs.seg > .idn-tipw:first-child > .idn-tip { left: 0; transform: translate(0, 4px); }
+.idn-idps > .idn-tipw:last-child > .idn-tip, .idn-mtabs.seg > .idn-tipw:last-child > .idn-tip { left: auto; right: 0; transform: translate(0, 4px); }
+.idn-idps > .idn-tipw:first-child:is(:hover, :has(:focus-visible)) > .idn-tip, .idn-idps > .idn-tipw:last-child:is(:hover, :has(:focus-visible)) > .idn-tip,
+.idn-mtabs.seg > .idn-tipw:first-child:is(:hover, :has(:focus-visible)) > .idn-tip, .idn-mtabs.seg > .idn-tipw:last-child:is(:hover, :has(:focus-visible)) > .idn-tip { transform: none; }
+
+/* provider squares */
+.idn-idps { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 10px; margin: 2px 0 12px; }
+.idn-idps > .idn-tipw { display: block; min-width: 0; }
+.idn-idp { width: 100%; height: 54px; display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: 14px; background: color-mix(in srgb, var(--surface-3) 50%, transparent); color: var(--ink); transition: border-color 120ms, background 120ms, transform 120ms; }
+a.idn-idp:hover { border-color: var(--accent-line); background: color-mix(in srgb, var(--surface-3) 90%, transparent); transform: translateY(-1px); }
+.idn-idp[aria-disabled="true"] { cursor: not-allowed; border-style: dashed; background: color-mix(in srgb, var(--surface-3) 18%, transparent); }
+.idn-idp[aria-disabled="true"] > * { opacity: 0.4; filter: grayscale(1); }
+.idn-gg .r { fill: var(--idn-g-red); } .idn-gg .b { fill: var(--idn-g-blue); } .idn-gg .y { fill: var(--idn-g-yellow); } .idn-gg .g { fill: var(--idn-g-green); }
+.idn-ms .r { fill: var(--idn-ms-red); } .idn-ms .g { fill: var(--idn-ms-green); } .idn-ms .b { fill: var(--idn-ms-blue); } .idn-ms .y { fill: var(--idn-ms-yellow); }
+.idn-mono { font: 700 13px var(--display); letter-spacing: 0.04em; color: var(--ink-soft); }
+
+/* the passkey button: tinted, second only to the primary */
+.idn-auth .idn-big { min-height: 52px; border-radius: 14px; font-size: 15px; }
+.idn-big.pk { border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); background: color-mix(in srgb, var(--accent) 13%, transparent); color: var(--idn-ink-blue); }
+.idn-big.pk:hover:not([aria-disabled="true"]):not(:disabled) { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.idn-auth .idn-big.pk[aria-disabled="true"] { opacity: 1; cursor: not-allowed; color: var(--faint); border-style: dashed; border-color: var(--border-strong); background: transparent; }
+.idn-auth .idn-big.p:hover:not(:disabled) { filter: brightness(1.08); }
+.idn-big.go svg { transition: transform 120ms; }
+.idn-big.go:hover:not(:disabled) svg { transform: translateX(3px); }
+.idn-auth form .idn-big.p { margin-top: 10px; }
+
+/* "or use email" */
+.idn-auth .idn-or { text-transform: uppercase; letter-spacing: 0.14em; font-size: 11px; font-weight: 700; margin: 20px 0 16px; }
+
+/* the segmented method switcher */
+.idn-mtabs.seg { display: flex; gap: 4px; padding: 4px; border-radius: 13px; margin-bottom: 18px; }
+.idn-mtabs.seg > [role="tab"], .idn-mtabs.seg > .idn-tipw { flex: 1 1 0; min-width: 0; }
+.idn-mtabs.seg > .idn-tipw > [role="tab"] { width: 100%; }
+.idn-mtabs.seg [role="tab"] { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; padding: 0 6px; border-radius: 9px; font-size: 12.5px; }
+.idn-mtabs.seg [role="tab"] svg { flex: none; }
+.idn-mtabs.seg [role="tab"]:hover:not([aria-disabled="true"]):not([aria-selected="true"]) { color: var(--ink-soft); }
+.idn-mtabs.seg [role="tab"][aria-selected="true"] { background: var(--surface-3); color: var(--ink); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--teal) 35%, transparent), 0 6px 16px -8px var(--idn-shadow); }
+.idn-mtabs.seg [role="tab"][aria-selected="true"] svg { color: var(--teal); }
+.idn-mtabs.seg [role="tab"][aria-disabled="true"] { opacity: 0.42; cursor: not-allowed; }
+
+/* why a disabled option is off, said in words after a tap */
+.idn-why { font-size: 12.5px; line-height: 1.45; color: var(--ink-soft); background: color-mix(in srgb, var(--idn-sky) 8%, transparent); border: 1px solid color-mix(in srgb, var(--idn-sky) 26%, transparent); border-radius: 10px; padding: 8px 11px; margin: 8px 0 4px; }
+.idn-idps + .idn-why { margin: -4px 0 12px; }
+.idn-mtabs + .idn-why { margin: -8px 0 16px; }
+
+/* fields: a small caps label, a tall well, an icon, and the show/hide eye */
+.idn-auth .idn-f { gap: 7px; margin-bottom: 14px; }
+.idn-auth .idn-f > label:not(.idn-check), .idn-auth .idn-f .idn-flabel { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; color: var(--faint); padding-left: 2px; align-items: baseline; }
+.idn-auth .idn-f .idn-flabel a, .idn-auth .idn-f .idn-flabel button { text-transform: none; letter-spacing: 0; font-size: 12.5px; font-weight: 700; color: var(--teal); }
+.idn-auth .idn-f .idn-i { min-height: 50px; border-radius: 12px; padding: 12px 14px; font-size: 14.5px; }
+.idn-auth .idn-i::placeholder { color: color-mix(in srgb, var(--faint) 70%, transparent); }
+.idn-ig { position: relative; display: flex; align-items: center; }
+.idn-auth .idn-ig .idn-i { padding-left: 44px; }
+.idn-auth .idn-ig:has(.idn-eye) .idn-i { padding-right: 50px; }
+.idn-ig .idn-ig-ico { position: absolute; left: 15px; color: var(--faint); pointer-events: none; transition: color 120ms; }
+.idn-ig:focus-within .idn-ig-ico { color: var(--teal); }
+.idn-ig .idn-eye { position: absolute; right: 6px; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 9px; color: var(--faint); }
+.idn-ig .idn-eye:hover { color: var(--ink); }
+
+/* the foot: "New here? Create account" (sign-in) and the siblings' "Back to sign in" */
+.idn-new { text-align: center; font-size: 13.5px; color: var(--muted); margin: 20px 0 0; }
+.idn-new a, .idn-new button { color: var(--teal); font-weight: 700; padding: 0; }
+.idn-new a:hover, .idn-new button:hover, .idn-hostline .idn-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.idn-auth .idn-foot { border-top: 0; margin-top: 18px; padding-top: 0; font-size: 13.5px; color: var(--muted); }
+.idn-auth .idn-who-s { border-radius: 14px; padding: 10px 14px; }
+
+@media (max-width: 560px) {
+  .idn-auth .idn-panel { padding: 26px 18px 20px; border-radius: 22px; }
+  .idn-panel:has(> .idn-hostline) { padding-bottom: 62px; }
+  .idn-hostline { left: 18px; right: 18px; bottom: 14px; }
+  .idn-brand-mark { width: 76px; height: 76px; }
+  .idn-brand-mark img { width: 58px; }
+  .idn-auth .idn-panel > h1 { font-size: 23px; }
+  .idn-idps { gap: 8px; }
+  .idn-idp { height: 50px; }
+  .idn-mtabs.seg [role="tab"] { font-size: 12px; gap: 5px; padding: 0 4px; }
+}
+@media (max-width: 370px) { .idn-mtabs.seg [role="tab"] svg { display: none; } }
+/* The panel hangs from the top, so switching a method never makes it jump up and down. */
+.idn-auth:has(> .idn-panel) { place-items: start center; grid-template-columns: minmax(0, 1fr); padding-top: clamp(24px, 7vh, 80px); }
+.idn-auth > .idn-panel { min-width: 0; }
+/* A command in a sheet wraps: it is short enough to read whole, and is copied whole anyway. */
+.idn-sheet .idn-cmd pre { white-space: pre-wrap; word-break: break-word; overflow-x: visible; }
+.idn-sheet .idn-cmd { margin: 4px 0 2px; }
+.idn-auth .idn-fine, .idn-auth .idn-s { text-wrap: pretty; }
