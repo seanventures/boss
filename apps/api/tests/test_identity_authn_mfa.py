@@ -43,19 +43,22 @@ RP_ID = "boss.example.test"
 class SoftAuthenticator:
     """One discoverable ES256 credential, as a platform authenticator would hold it."""
 
-    def __init__(self, user_handle: bytes, *, uv: bool = True, sign_count: int = 0):
+    def __init__(self, user_handle: bytes, *, uv: bool = True, sign_count: int = 0,
+                 synced: bool = False):
         self.key = ec.generate_private_key(ec.SECP256R1())
         self.credential_id = os.urandom(16)
         self.user_handle = user_handle
         self.uv = uv
         self.sign_count = sign_count
+        self.synced = synced          # backup eligible + backed up (a synced passkey)
 
     def _cose(self) -> bytes:
         nums = self.key.public_key().public_numbers()
         return cbor2.dumps({1: 2, 3: -7, -1: 1, -2: nums.x.to_bytes(32, "big"), -3: nums.y.to_bytes(32, "big")})
 
     def _flags(self, attested: bool) -> int:
-        return 0x01 | (0x04 if self.uv else 0) | (0x40 if attested else 0)
+        return (0x01 | (0x04 if self.uv else 0) | (0x18 if self.synced else 0)
+                | (0x40 if attested else 0))
 
     @staticmethod
     def _client_data(kind: str, challenge: str, origin: str) -> bytes:
@@ -397,17 +400,35 @@ def test_a6_another_persons_passkey_cannot_answer_my_mfa_challenge(world, engine
     assert res.status_code == 401 and not attacker.cookies.get(authn.SESSION_COOKIE)
 
 
-def test_a_sign_count_regression_is_recorded_but_does_not_block(world, engine):
+def test_a_sign_count_regression_of_a_synced_passkey_is_flagged_but_does_not_block(world, engine):
     pid = make_user(engine, "ria@example.test")
     client = fresh_client()
     sign_in(client, "ria@example.test")
-    auth = SoftAuthenticator(pid.encode(), sign_count=5)
+    auth = SoftAuthenticator(pid.encode(), sign_count=5, synced=True)
     _register_passkey(client, auth)
     res = _passkey_sign_in(fresh_client(), auth, sign_count=3)
     assert res.status_code == 200, res.text
     assert world.events_of("passkey.counter_regressed")
     with engine.begin() as db:
-        assert db.execute(text("SELECT sign_count FROM identity_webauthn_credentials")).scalar() == 5
+        count, flagged = db.execute(text("SELECT sign_count, counter_regressed_at "
+                                         "FROM identity_webauthn_credentials")).one()
+    assert count == 5 and flagged is not None
+
+
+def test_l3_a_sign_count_regression_of_a_device_bound_key_blocks_and_is_flagged(world, engine):
+    """F3/L3: a device-bound authenticator whose counter goes backwards is a cloned key."""
+    pid = make_user(engine, "rob@example.test")
+    client = fresh_client()
+    sign_in(client, "rob@example.test")
+    auth = SoftAuthenticator(pid.encode(), sign_count=5)
+    _register_passkey(client, auth)
+    assert _passkey_sign_in(fresh_client(), auth, sign_count=9).status_code == 200
+    res = _passkey_sign_in(fresh_client(), auth, sign_count=7)
+    assert res.status_code == 401, res.text
+    assert not any(c.startswith(authn.SESSION_COOKIE + "=bss_") for c in res.headers.get_list("set-cookie"))
+    assert world.events_of("passkey.counter_regressed")
+    with engine.begin() as db:
+        assert db.execute(text("SELECT counter_regressed_at FROM identity_webauthn_credentials")).scalar()
 
 
 def test_ten_passkeys_at_most(world, engine):
