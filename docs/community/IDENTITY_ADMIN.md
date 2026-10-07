@@ -100,11 +100,11 @@ A value outside its range, or a key that does not exist, is refused with `422`. 
 
 ## From shadow mode to enforcement
 
-Authorization starts in **shadow mode**: every request is evaluated, and what would be refused is recorded but allowed. You then switch on enforcement one group of routes (a *router*) at a time, as each one shows it refuses nothing it should allow.
+Authorization is **enforced** by default. During an upgrade you can opt into **shadow mode** (`BOSS_AUTHZ_MODE=shadow`): every request is evaluated, and what would be refused is recorded but allowed. You then switch on enforcement one group of routes (a *router*) at a time, as each one shows it refuses nothing it should allow. While anything is not enforced, the *Access control* check in identity posture is red.
 
 | Setting | Values | Effect |
 | --- | --- | --- |
-| `BOSS_AUTHZ_MODE` | `off`, `shadow` (default), `enforce` | The mode for every router. |
+| `BOSS_AUTHZ_MODE` | `off`, `shadow`, `enforce` (default) | The mode for every router. |
 | `BOSS_AUTHZ_ROUTER_MODES` | for example `setup=enforce,github=enforce` | Per-router overrides during the rollout. |
 | `BOSS_AUTHZ_COVERAGE` | `warn`, `fail` | `fail` stops the API from starting while any route lacks a declared permission. It is the default under `enforce`. |
 
