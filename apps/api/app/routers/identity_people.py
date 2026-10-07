@@ -21,7 +21,7 @@ from sqlalchemy import text
 
 from boss_engine.db import begin
 from boss_engine.identity import P, permit
-from boss_engine.identity import api_keys, invitations, recovery, service_accounts, sessions, users
+from boss_engine.identity import api_keys, invitations, recovery, service_accounts, sessions, signin, users
 from boss_engine.identity.audit import Outcome
 from boss_engine.identity.authn import AuthnError
 from boss_engine.identity.authn_support import emit, public_origin, send_mail, smtp_configured
@@ -190,7 +190,12 @@ def build_identity_people_router() -> APIRouter:
                 inv, token = invitations.create(db, inviter=ctx, email=body.email, bindings=body.bindings,
                                                 group_ids=body.group_ids)
                 link = f"{public_origin(db) or ''}/invite#t={token}"
-                if smtp_configured():
+                # H2 (F3): an invitation is emailed only on the BOUND public origin; without one the
+                # link is shown once to the inviter instead. M1: an emailed invitation proves the
+                # mailbox, so accepting it verifies the address (identity_invitations.emailed).
+                if smtp_configured() and public_origin(db):
+                    db.execute(text("UPDATE identity_invitations SET emailed = true WHERE id = :id"),
+                               {"id": inv.id})
                     send_mail(inv.email, "You are invited to BOSS",
                               f"{ctx.principal.display_name} invited you to BOSS. Accept within 7 days:\n\n{link}")
                     return JSONResponse(status_code=201, content={
@@ -365,6 +370,8 @@ def build_identity_people_router() -> APIRouter:
                     db.execute(text(f"DELETE FROM {table} WHERE principal_id = :p"), {"p": u.principal_id})
                 db.execute(text("UPDATE identity_users SET mfa_required = true WHERE principal_id = :p"),
                            {"p": u.principal_id})
+                # H1 (F3): the reset is what lets the person's next sign-in enrol a FIRST factor.
+                signin.grant_first_factor_after_reset(db, u.principal_id)
                 ended = sessions.revoke_all(db, u.principal_id, by=ctx.principal.id, reason="MFA reset")
                 emit(db, org_id=ctx.principal.org_id, event_type="user.mfa_reset", outcome=Outcome.SUCCESS,
                      ctx=ctx, target_type="user", target_id=u.principal_id, details={"sessions_revoked": ended})

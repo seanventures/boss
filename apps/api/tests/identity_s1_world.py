@@ -287,7 +287,9 @@ def mark_claimed(engine) -> None:
         seq = int(db.execute(text("SELECT coalesce(max(seq),0)+1 FROM identity_security_events WHERE org_id=:o"),
                              {"o": org}).scalar())
         db.execute(text("INSERT INTO identity_security_events (org_id, seq, stream, event_type, outcome, "
-                        "prev_hash, hash) VALUES (:o, :s, 'security', 'bootstrap.claimed', 'success', :p, :h)"),
+                        "prev_hash, hash) SELECT :o, :s, 'security', 'bootstrap.claimed', 'success', :p, :h "
+                        "WHERE NOT EXISTS (SELECT 1 FROM identity_security_events WHERE org_id = :o "
+                        "AND event_type = 'bootstrap.claimed')"),
                    {"o": org, "s": seq, "p": b"\0" * 32, "h": b"\1" * 32})
 
 
