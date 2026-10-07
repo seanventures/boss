@@ -66,7 +66,10 @@ _BOUNDS: dict[str, tuple[int, int]] = {
     "delegation_default_days": (1, 365),
     "delegation_max_days": (1, 3650),
     "org_max_depth": (0, 5),
-    "legacy_cutoff_days": (0, 90),
+    # M3: the shared credentials end at most 30 days after the claim (an Owner's one extension
+    # of at most 30 more is migration.extend_path, audited): a larger number would promise
+    # something the bridges never do.
+    "legacy_cutoff_days": (0, 30),
 }
 _ROLE_KEYS = ("owner", "admin", "operator", "viewer", "auditor")
 

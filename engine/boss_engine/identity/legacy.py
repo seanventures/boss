@@ -481,6 +481,9 @@ def system_permissions(principal_id: str, *, db: Any = None) -> Optional[frozens
     from .policy import get_policy
 
     cutoff = claimed + timedelta(days=get_policy(org, db=db).legacy_cutoff_days)
+    hard = migration.hard_cutoff(db, org)          # M3: never past claim + 30 (+ one extension)
+    if hard is not None:
+        cutoff = min(cutoff, hard)
     if datetime.now(timezone.utc) >= cutoff:
         return frozenset()
     return migration.CONSOLE_AFTER_CLAIM_SET

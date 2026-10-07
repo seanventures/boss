@@ -269,3 +269,26 @@ def test_the_entrypoint_starts_without_the_fence_unless_told_to_refuse():
     assert failure.count("exit 1") == 1
     assert 'if [ "$MODE" = "required" ]; then' in failure
     assert ".network-unfenced" in failure
+
+
+# ---- rc5's SSO providers come across (P0-3) ------------------------------------------------------
+
+def test_rc5_sso_providers_are_imported_once_switched_off(db, shared):
+    community_install(db)
+    for pid, kind, extra in (("eip_okta", "oidc", {"issuer": "https://acme.okta.example", "audience": "client-123"}),
+                             ("eip_adfs", "saml", {"entity_id": "urn:adfs", "sso_url": "https://adfs.example/sso"})):
+        db.execute(text(
+            "INSERT INTO enterprise_identity_providers (id, org_id, project_id, provider_key, "
+            "provider_type, display_name, issuer, audience, entity_id, sso_url, status) VALUES "
+            "(:id, :o, 'boss-dogfood', :id, :t, :n, :iss, :aud, :ent, :sso, 'active')"),
+            {"id": pid, "o": ORG, "t": kind, "n": pid.upper(), "iss": extra.get("issuer"),
+             "aud": extra.get("audience"), "ent": extra.get("entity_id"), "sso": extra.get("sso_url")})
+    report = migration.seed(db, settings=shared, org_id=ORG)
+    assert report.providers == 2
+    rows = {r["imported_from"]: r for r in db.execute(text(
+        "SELECT imported_from, protocol, status, issuer, client_id, saml_sso_url FROM identity_providers "
+        "WHERE imported_from IS NOT NULL")).mappings()}
+    assert rows["eip_okta"]["protocol"] == "oidc" and rows["eip_okta"]["client_id"] == "client-123"
+    assert rows["eip_adfs"]["issuer"] == "urn:adfs" and rows["eip_adfs"]["saml_sso_url"] == "https://adfs.example/sso"
+    assert {r["status"] for r in rows.values()} == {"disabled"}     # no secret yet: an Owner turns it on
+    assert migration.seed(db, settings=shared, org_id=ORG).providers == 0   # once
