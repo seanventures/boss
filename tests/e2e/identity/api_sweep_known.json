@@ -1,3 +1,1 @@
-{
-  "* GET /v1/sandboxes/helpers": "environment: the community compose stack has no sandbox-service on 127.0.0.1:8088, so every allowed caller gets 503; not an authz defect."
-}
+{}
