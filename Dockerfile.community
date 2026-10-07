@@ -20,7 +20,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app:/app/engine \
     PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
-    HOME=/home/boss
+    HOME=/home/boss \
+    BOSS_RUNTIME_USER=boss
 WORKDIR /app
 
 # The official Node image supplies Node 20 and npm for coding CLIs and project
