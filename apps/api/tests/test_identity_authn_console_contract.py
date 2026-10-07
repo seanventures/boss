@@ -25,6 +25,9 @@ def _fresh(engine, email, role):
 
 
 def test_auth_options_before_and_after_the_claim(world, engine):
+    from apps.api.app import main
+
+    main.announce_claim_link_once()          # what the API keeps live from boot (a GET never mints)
     client = fresh_client()
     opts = client.get("/v1/auth/options").json()
     assert set(opts) >= {"org_name", "host", "providers", "smtp", "signup", "legacy_password", "claim"}

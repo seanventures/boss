@@ -261,10 +261,10 @@ class WorkPlaneService:
     def ensure_tables(self, connection: Connection) -> None:
         if self._schema_ready:
             return
-        for stmt in _SCHEMA_SQL.split(";"):
-            sql = stmt.strip()
-            if sql:
-                connection.execute(text(sql))
+        from ..db import ensure_service_schema
+
+        # applied at boot (db.SERVICE_SCHEMAS); DDL here only when a table is really missing
+        ensure_service_schema(connection, _SCHEMA_SQL)
         self._schema_ready = True
 
     def _require_project(self, connection: Connection, project_id: str) -> None:
