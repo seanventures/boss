@@ -61,7 +61,12 @@ class RequestFacts:
     preauth: Optional[str] = field(default=None, repr=False)
     session: Optional[str] = field(default=None, repr=False)
     device: Optional[str] = field(default=None, repr=False)
-    origin: Optional[str] = None          # the bound public origin (cookies, WebAuthn, links)
+    #: The BOUND public origin (BOSS_PUBLIC_URL, or the one bound at the claim): WebAuthn RP ID,
+    #: SSO redirect URIs and every emailed link. Never derived from Host (H2): None when unbound.
+    origin: Optional[str] = None
+    #: This request's own origin (Host, or X-Forwarded-Host from a trusted proxy). Used ONLY to
+    #: decide whether a Secure session cookie may be set before an origin is bound; never a link.
+    request_origin: Optional[str] = None
 
 
 @dataclass
@@ -135,15 +140,17 @@ def finish(db: Any, user: users.UserRow, facts: RequestFacts, *, methods: list[s
            extra: Optional[dict[str, Any]] = None) -> Answer:
     """Issue a session (the ONLY place one is issued): a new token, the device marker, the events,
     and the body the console needs — never the token itself."""
-    if not secure_origin_ok(facts.origin):
+    if not secure_origin_ok(facts.origin or facts.request_origin):
         # A20: never a session cookie for a plain-http, non-loopback origin.
         return Answer(400, {"error": "insecure_origin"})
     familiar = sessions.device_is_familiar(db, user.principal_id, facts.device)
     device = facts.device if (facts.device and len(facts.device) <= 100) else random_token("bdv_", 24)
     now = utcnow()
+    grant = first_factor_grant(db, user, mfa=mfa, now=now)
     issued = sessions.issue(db, principal_id=user.principal_id, org_id=user.org_id, methods=methods,
                             mfa_at=now if mfa else None, ip=facts.ip, user_agent=facts.user_agent,
-                            device_id_hash=sha256_hex(device), replaces=replaces)
+                            device_id_hash=sha256_hex(device), replaces=replaces,
+                            enrol_grant_until=grant)
     users.mark_login(db, user.principal_id)
     ratelimit.reset("signin.account", user.email, db=db)
     ctx = _ctx_for(user, facts)
@@ -166,9 +173,104 @@ def finish(db: Any, user: users.UserRow, facts: RequestFacts, *, methods: list[s
                             "expires_at": issued.absolute_expires_at.isoformat()}
     if enrol:
         body["mfa_enrolment_required"] = True
+        # H1: the session is ENROLMENT-ONLY. Say whether it can enrol the first factor itself, or
+        # the person needs an admin's MFA reset (a later password-only sign-in never can).
+        body["enrolment_grant"] = grant is not None
     if extra:
         body.update(extra)
     return Answer(200, body, cookies=cookies)
+
+
+# ---- H1: enrolment-only sessions and the first-factor grant -------------------------------------------
+
+#: How long after the granting sign-in the FIRST second factor may be enrolled.
+FIRST_FACTOR_WINDOW_SECONDS = 15 * 60
+#: How long an admin's MFA reset leaves the person to sign in and enrol.
+RESET_GRANT_SECONDS = 72 * 3600
+
+#: What an ENROLMENT-ONLY session may reach: who am I, enrol a factor, sign out. Everything else is
+#: refused 403 `mfa_enrolment_required` by authn (and by the guard in every mode but `off`).
+ENROLMENT_ONLY_ROUTES = frozenset({
+    ("GET", "/v1/identity/me"),
+    ("GET", "/v1/identity/me/permissions"),
+    ("GET", "/v1/identity/me/factors"),
+    ("POST", "/v1/identity/me/mfa/totp"),
+    ("POST", "/v1/identity/me/mfa/totp/confirm"),
+    ("GET", "/v1/identity/me/passkeys"),
+    ("POST", "/v1/identity/me/passkeys/options"),
+    ("POST", "/v1/identity/me/passkeys"),
+    ("GET", "/v1/auth/session"),
+    ("POST", "/v1/auth/logout"),
+})
+
+
+def enrolment_only(db: Any, principal_id: str, mfa_at: Optional[datetime]) -> bool:
+    """A session without MFA of a person whose roles require MFA (H1). Such a person has no second
+    factor (sign-in would have asked for it), so the session can only enrol one."""
+    if mfa_at is not None:
+        return False
+    user = users.by_id(db, principal_id)
+    if user is None or user.network_bound:
+        return False
+    return users.mfa_required(db, user)
+
+
+def first_factor_grant(db: Any, user: users.UserRow, *, mfa: bool,
+                       now: Optional[datetime] = None) -> Optional[datetime]:
+    """The window in which a NEW session may enrol the person's FIRST second factor, or None.
+
+    Granted only to a session that proves more than a password: the person's first sign-in ever
+    (the claim and an invitation acceptance are first sign-ins: their proof is the setup link,
+    the shared password or the invitation token), or the first sign-in after an admin reset their
+    MFA (identity_users.first_factor_grant_until, consumed here). Any later password-only sign-in
+    gets none: whoever holds only the password cannot bind their own factor to the account."""
+    if mfa:
+        return None
+    if users.factors(db, user.principal_id).any_second_factor:
+        return None
+    now = now or utcnow()
+    from sqlalchemy import text
+
+    pending = db.execute(text(
+        "UPDATE identity_users u SET first_factor_grant_until = NULL FROM identity_users old "
+        "WHERE u.principal_id = :p AND old.principal_id = u.principal_id AND "
+        "old.first_factor_grant_until IS NOT NULL RETURNING old.first_factor_grant_until"),
+        {"p": user.principal_id}).scalar()
+    if user.last_login_at is None or (pending is not None and pending > now):
+        return now + timedelta(seconds=FIRST_FACTOR_WINDOW_SECONDS)
+    return None
+
+
+def grant_first_factor_after_reset(db: Any, principal_id: str) -> None:
+    """An admin's MFA reset: the person's next sign-in may enrol a first factor (H1)."""
+    from sqlalchemy import text
+
+    db.execute(text("UPDATE identity_users SET first_factor_grant_until = now() + "
+                    "make_interval(secs => :s) WHERE principal_id = :p"),
+               {"s": RESET_GRANT_SECONDS, "p": principal_id})
+
+
+def may_enrol(db: Any, row: sessions.SessionRow, user: users.UserRow) -> Optional[tuple[int, str]]:
+    """May this session add a second factor? None when yes, else (status, error).
+
+      - fresh MFA on this session (10 minutes) always may;
+      - a person who already has a factor: only with that fresh MFA (step up first);
+      - the FIRST factor of a person whose roles require MFA: this session's first-factor grant
+        (claim, invitation, first sign-in, or after an admin reset), never a later password-only
+        sign-in — 403 `enrolment_grant_required` (ask an admin to reset your second factor);
+      - the first factor of anyone else: a sign-in within the last 10 minutes."""
+    now = utcnow()
+    if row.mfa_at is not None and (now - row.mfa_at).total_seconds() <= STEP_UP_WINDOW_SECONDS:
+        return None
+    if users.factors(db, user.principal_id).any_second_factor:
+        return 401, "step_up_required"
+    if users.mfa_required(db, user):
+        if row.enrol_grant_until is None or now >= row.enrol_grant_until:
+            return 403, "enrolment_grant_required"
+        return None
+    if not recently_authenticated(row):
+        return 401, "step_up_required"
+    return None
 
 
 def finish_first_factor(db: Any, user: users.UserRow, facts: RequestFacts, *, method: str,

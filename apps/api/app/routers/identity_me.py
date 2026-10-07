@@ -389,10 +389,12 @@ def build_identity_me_router() -> APIRouter:
                     return blocked
                 token = request.cookies.get(SESSION_COOKIE) or ""
                 row = sessions.lookup(db, token)
-                if row is None or not signin.recently_authenticated(row):
-                    return error(401, "step_up_required")
                 user = users.by_id(db, ctx.principal.id)
-                assert user is not None
+                if row is None or user is None:
+                    return error(401, "step_up_required")
+                refused = signin.may_enrol(db, row, user)
+                if refused:
+                    return error(*refused)
                 secret, uri = totp.begin_enrolment(db, principal_id=user.principal_id, account=user.email,
                                                    session_token=token)
                 return JSONResponse({"secret": secret, "otpauth_uri": uri, "qr_svg": _qr_svg(uri)},
@@ -462,10 +464,12 @@ def build_identity_me_router() -> APIRouter:
                     return blocked
                 token = request.cookies.get(SESSION_COOKIE) or ""
                 row = sessions.lookup(db, token)
-                if row is None or not signin.recently_authenticated(row):
-                    return error(401, "step_up_required")
                 user = users.by_id(db, ctx.principal.id)
-                assert user is not None
+                if row is None or user is None:
+                    return error(401, "step_up_required")
+                refused = signin.may_enrol(db, row, user)
+                if refused:
+                    return error(*refused)
                 try:
                     options = passkeys.registration_options(
                         db, principal_id=user.principal_id, email=user.email,

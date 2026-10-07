@@ -212,6 +212,9 @@ def build_identity_sso_router() -> APIRouter:
     def sso_start(provider_id: str, request: Request, purpose: str = "login"):
         with begin() as db:
             origin = facts(request, db).origin or ""
+            if not origin:
+                # H2: a redirect URI / ACS URL is only ever the BOUND public origin, never Host.
+                return error(409, "public_origin_unset")
             provider = sso_oidc.load_provider(db, provider_id)
             if provider is None:
                 return error(404, "not_found")
@@ -276,6 +279,8 @@ def build_identity_sso_router() -> APIRouter:
     def saml_metadata(request: Request, provider_id: Optional[str] = None):
         with begin() as db:
             origin = facts(request, db).origin or ""
+            if not origin:
+                return error(409, "public_origin_unset")
             provider = sso_oidc.load_provider(db, provider_id) if provider_id else None
             body = sso_saml.metadata(origin, sso_saml.sp_entity_id(provider, origin))
         return Response(body, media_type="application/samlmetadata+xml")
