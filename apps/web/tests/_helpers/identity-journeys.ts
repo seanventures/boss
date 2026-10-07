@@ -85,11 +85,11 @@ export const JOURNEYS: Journey[] = [
   ] },
   { id: "J12", title: "Role editor: clone Operator, remove deployment:create", persona: "admin", needs: ["S2"], steps: [
     { go: "/identity/roles", do: "Clone Operator", expect: "A custom copy opens in the editor" },
-    { do: "Turn off deployment:create", expect: "Changes shows −deployment:create; Impact preview lists people, pages and route counts" },
+    { do: "Turn off deployment:create", expect: "Changes shows −“Create deployments” (deployment:create in its tooltip); Impact preview lists people, pages and route counts" },
     { do: "Save (step-up)", expect: "Version +1; an affected Deploy button disables live after the epoch moves" },
   ] },
   { id: "J13", title: "Service account key: shown once, rotate with overlap", persona: "admin", needs: ["S1"], steps: [
-    { go: "/identity/service-accounts?sa=sva_ci_deployer", do: "New key → CI deploy preset → Create key", expect: "Shown-once dialog; Done disabled until “I've stored this key” is ticked; Escape does not close" },
+    { go: "/identity/service-accounts?sa=sva_ci_deployer", do: "New key → CI deploy preset (scopes “Create deployments”, “View deployments”, “View builds”) → Create key", expect: "Shown-once dialog; Done disabled until “I've stored this key” is ticked; Escape does not close" },
     { do: "Close; read the keys table", expect: "Only the key id (key_…), never any part of the secret" },
     { do: "Rotate key_7f3k2q with 1 h overlap", expect: "Old key shows grace; both visible during the overlap" },
   ] },

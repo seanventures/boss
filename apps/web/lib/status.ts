@@ -11,6 +11,10 @@ export type StatusCard = {
   orgName: string;
   databaseConnected: boolean;
   apiReachable: boolean;
+  /** The API answered (a refusal included: a 401/403 on the status read is not an outage). The
+   *  shell's "Control plane online/offline" reads this, never apiReachable alone — the build walk
+   *  showed "offline" on every page while every other read worked (round 3, W3). */
+  answered?: boolean;
   budgetState: string;
   pendingDecisions: number;
   openTasks: number;
@@ -21,6 +25,11 @@ export type StatusCard = {
   latestSnapshotAt?: string;
   blockedReason?: string;
 };
+
+/** Is the control plane up, as the shell's status line says it: it answered, or reports itself reachable. */
+export function controlPlaneOnline(status: Pick<StatusCard, "apiReachable" | "answered">): boolean {
+  return status.apiReachable || status.answered === true;
+}
 
 export function unavailableStatus(
   reason: string,
@@ -53,6 +62,7 @@ function mapStatus(payload: StatusResponse): StatusCard {
     orgName: payload.org_name,
     databaseConnected: payload.database_connected,
     apiReachable: payload.api_reachable,
+    answered: true,
     budgetState: payload.budget_state,
     pendingDecisions: payload.pending_decisions,
     openTasks: payload.open_tasks,
@@ -70,7 +80,7 @@ export async function fetchStatus(projectId = PROJECT_ID): Promise<StatusCard> {
     return mapStatus(await client.getStatus(resolveProjectId(projectId)));
   } catch (error) {
     if (error instanceof BossApiError) {
-      return unavailableStatus(`API returned ${error.status}`, projectId);
+      return { ...unavailableStatus(`API returned ${error.status}`, projectId), answered: error.status > 0 && error.status < 500 };
     }
     return unavailableStatus(
       error instanceof Error ? error.message : "Unknown API error",

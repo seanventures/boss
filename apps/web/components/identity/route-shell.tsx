@@ -30,7 +30,7 @@ import { TabStrip } from "./tab-strip";
 export async function RouteShell({ section, children }: { section: "identity" | "account"; children: ReactNode }) {
   const path = (await headers()).get(PATH_HEADER) ?? (section === "identity" ? "/identity" : "/account");
   const boot = await loadIdentityCached(null);
-  if (boot.problem === "unauthenticated" && !networkTrustedConsole()) redirect(`/login?next=${encodeURIComponent(path)}`);
+  if (boot.problem === "unauthenticated") redirect(`/login?next=${encodeURIComponent(path)}`);
   // An enrolment-only session can do nothing here but enrol (lib/identity/enrolment.ts).
   if (needsEnrolment(boot.me, boot.problem)) redirect(enrolHref(path));
   const org = boot.org ? snapshotFrom(boot.org) : null;
@@ -106,7 +106,7 @@ export function accessUncheckable(boot: { org: unknown; problem: string | null }
 export async function consolePageAllowed(path: string): Promise<boolean> {
   const page = pageFor(path);
   const boot = await loadIdentityCached(PROJECT_ID);
-  if (boot.problem === "unauthenticated" && !networkTrustedConsole()) redirect(`/login?next=${encodeURIComponent(path)}`);
+  if (boot.problem === "unauthenticated") redirect(`/login?next=${encodeURIComponent(path)}`);
   if (!page || !("permission" in page.access)) return true;
   // FAIL CLOSED: a page that needs a permission is not drawn when its access cannot be checked
   // (the identity API is unreachable); <PageDenied> then says so, with Retry.

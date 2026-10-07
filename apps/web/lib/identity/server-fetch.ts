@@ -14,10 +14,12 @@ import { parseIdentityCookies, withForwardedIdentity } from "./forward";
 
 export function installIdentityFetch(apiUrl: string): void {
   if (typeof window !== "undefined" || !apiUrl) return;
-  const g = globalThis as unknown as { __bossIdentityFetch?: true; fetch: typeof fetch };
+  const g = globalThis as unknown as { __bossIdentityFetch?: true; __bossOriginalFetch?: typeof fetch; fetch: typeof fetch };
   if (g.__bossIdentityFetch) return;
   g.__bossIdentityFetch = true;
   const inner = g.fetch.bind(globalThis);
+  // Kept for protocol-proxy.ts directFetch when the feed cache (installed first) is off.
+  g.__bossOriginalFetch ??= inner;
 
   g.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;

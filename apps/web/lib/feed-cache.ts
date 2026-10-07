@@ -97,11 +97,14 @@ function ttlMs(): number {
 export function installFeedCache(apiUrl: string): void {
   if (typeof window !== "undefined") return;          // browser: never
   if (!apiUrl) return;                                 // misconfigured: leave it alone
-  const g = globalThis as unknown as { __bossFeedCache?: true; fetch: typeof fetch };
+  const g = globalThis as unknown as { __bossFeedCache?: true; __bossOriginalFetch?: typeof fetch; fetch: typeof fetch };
   if (g.__bossFeedCache) return;
   g.__bossFeedCache = true;
 
   const original = g.fetch.bind(globalThis);
+  // The platform fetch, for the protocol proxies that must bypass every wrapper (SAML/SCIM:
+  // lib/identity/protocol-proxy.ts directFetch).
+  g.__bossOriginalFetch ??= original;
   const inFlight = new Map<string, Promise<Stored>>();
   const completed = new Map<string, Entry>();
 
