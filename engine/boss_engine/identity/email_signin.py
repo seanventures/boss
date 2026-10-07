@@ -20,7 +20,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from . import ratelimit, recovery, sessions, users
+from . import links, ratelimit, recovery, sessions, users
 from .audit import Outcome
 from .authn_support import (
     challenge_by_secret,
@@ -139,7 +139,7 @@ def request_sign_in(db: Any, facts: RequestFacts, *, kind: str, email: str) -> A
         if user:
             create_challenge(db, kind="magic_link", binding_secret=secret, ttl_seconds=EMAIL_TTL_SECONDS,
                              principal_id=user.principal_id, secret=token)
-            link = f"{link_origin(facts)}/signin/link#t={token}"
+            link = links.url("magic_link", link_origin(facts), token)
             DELIVER(user.email, "Your BOSS sign-in link",
                     f"Sign in to BOSS with this link. It works once, for 10 minutes, in the browser "
                     f"where you asked for it:\n\n{link}\n\nIf you did not ask, ignore this email.")
@@ -235,7 +235,7 @@ def forgot_password(db: Any, facts: RequestFacts, *, email: str) -> Answer:
              user_agent=facts.user_agent, request_id=facts.request_id)
         DELIVER(user.email, "Reset your BOSS password",
                 f"Reset your BOSS password with this link (30 minutes, once):\n\n"
-                f"{link_origin(facts)}/reset#t={token}\n\nIf you did not ask, ignore this email.")
+                f"{links.url('reset', link_origin(facts), token)}\n\nIf you did not ask, ignore this email.")
     else:
         sha256_hex(token)
     return _uniform(started)
@@ -263,8 +263,30 @@ def reset_password(db: Any, facts: RequestFacts, *, token: str, new_password: st
     notify(user.email, "Your BOSS password was reset",
            "Your BOSS password was just reset and every session was signed out. Review your API "
            "keys under My account. If this was not you, contact an administrator now.")
-    # No session: a reset never bypasses MFA — the person signs in (and completes MFA) next.
+    # A reset never bypasses MFA. The one exception is the person who HAS no second factor and
+    # holds a first-factor grant (the host's `boss identity recover-owner`, or an admin's MFA
+    # reset): the grant exists so their next sign-in can enrol, and this link was minted for
+    # exactly that. They get an ENROLMENT-ONLY session (H1) and go straight to adding a factor —
+    # never a dead end at "sign in", where a locked-out sole Owner would have to start over.
+    if _holds_first_factor_grant(db, user):
+        fresh = users.by_id(db, user.principal_id)
+        assert fresh is not None
+        answer = finish(db, fresh, facts, methods=["pwd"], mfa=False)
+        if answer.status == 200 and answer.body.get("next") == "enrol":
+            answer.body["after"] = "password_reset"
+            return answer
+    # No session otherwise: the person signs in (and completes MFA) next.
     return Answer(200, {"next": "signin"})
+
+
+def _holds_first_factor_grant(db: Any, user: users.UserRow) -> bool:
+    """No second factor, MFA required by their role, and a live first-factor grant (signin.py H1)."""
+    from sqlalchemy import text
+
+    if users.factors(db, user.principal_id).any_second_factor or not users.mfa_required(db, user):
+        return False
+    return bool(db.execute(text("SELECT first_factor_grant_until > now() FROM identity_users "
+                                "WHERE principal_id = :p"), {"p": user.principal_id}).scalar())
 
 
 # ---- self sign-up (off by default) ------------------------------------------------------------------
@@ -311,7 +333,7 @@ def request_signup(db: Any, facts: RequestFacts, *, name: str, email: str) -> An
              details={"identifier": identifier_hash(email)})
         DELIVER(email, "Finish creating your BOSS account",
                 f"Finish creating your BOSS account with this link (10 minutes, once, in the "
-                f"browser where you asked):\n\n{link_origin(facts)}/signup/verify#t={token}\n\n"
+                f"browser where you asked):\n\n{links.url('signup_verify', link_origin(facts), token)}\n\n"
                 f"If you did not ask, ignore this email.")
     else:
         sha256_hex(token)

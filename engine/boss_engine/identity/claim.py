@@ -147,7 +147,9 @@ def issue_setup_token(db: Any, *, force: bool = False) -> Optional[str]:
 def setup_url(db: Any, token: str) -> str:
     """The claim link. The token is in the fragment, so it never reaches an access log."""
     origin = public_origin(db) or "http://localhost:3000"
-    return f"{origin}/claim#t={token}"
+    from .links import url
+
+    return url("setup", origin, token)
 
 
 def announce_setup_link(db: Any) -> Optional[str]:

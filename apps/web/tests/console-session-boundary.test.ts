@@ -35,7 +35,7 @@ describe("the console boundary", () => {
       const response = await middleware(new NextRequest(`https://boss.example${path}`));
       expect(response.status).toBe(path === "/" ? 307 : 401);
       if (path === "/") expect(response.headers.get("location"))
-        .toBe("https://boss.example/login?next=%2F");
+        .toBe("https://boss.example/login?next=%2F#");   // empty fragment: no link token rides along
       expect(response.headers.get("cache-control")).toMatch(/no-store|private/);
     },
   );
@@ -168,7 +168,7 @@ describe("the console boundary", () => {
     const headers = { host: "boss.example", "x-forwarded-proto": "https", "x-forwarded-host": "boss.example" };
     const page = await middleware(new NextRequest("http://localhost:3000/v2?area=work", { headers }));
     expect(page.status).toBe(307);
-    expect(page.headers.get("location")).toBe("https://boss.example/login?next=%2Fv2%3Farea%3Dwork");
+    expect(page.headers.get("location")).toBe("https://boss.example/login?next=%2Fv2%3Farea%3Dwork#");
   });
 
   it("accepts local tunnel mutations even when a public HTTPS origin is configured", async () => {
