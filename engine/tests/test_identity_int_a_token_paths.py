@@ -168,3 +168,50 @@ def test_the_governed_code_task_clones_through_egress_like_the_ungoverned_one():
     assert 'guest_spec["egress"] = guest_egress["spec"]' in source
     start = source.index("identity_run = identity_runs.start_code_task_run(")
     assert 'token = ""' in source[start:start + 900]
+
+
+def test_round2_e_no_grant_clones_as_the_audited_system_reader_never_the_shared_token(monkeypatch):
+    """Integration round 2 (e): work that acts for nobody (a preview, a read tool, a system loop)
+    used to fall back to the shared GitHub token. With egress on it now clones as BOSS's read-only
+    system agent (an autonomous Passport, read-only ceilings, bound to Viewer and audited); under
+    enforce without egress it is refused, never the shared token silently."""
+    import tempfile
+
+    from sqlalchemy import text
+
+    from boss_engine.identity import runs
+
+    from ._identity_agents_support import build_env
+
+    env = build_env(monkeypatch)
+    with env.db() as c:
+        c.execute(text("INSERT INTO identity_role_bindings (id, org_id, subject_type, subject_id, role_id, "
+                       "scope_type, scope_id, granted_by) VALUES ('rbd_owner_t', 'org_boss', 'principal', :u, "
+                       "'arl_owner', 'org', 'org_boss', 'test') ON CONFLICT DO NOTHING"), {"u": env.alice})
+    env.world.grant(runs.SYSTEM_REPO_READER, runs.SYSTEM_GIT_SCOPE)
+    monkeypatch.setenv("BOSS_EGRESS_URL", "https://egress.boss.internal")
+    monkeypatch.setenv("BOSS_SHIM_DIR", tempfile.mkdtemp(prefix="bshim", dir="/tmp"))
+
+    def never():
+        raise AssertionError("the shared token was consulted")
+
+    with runs.repo_access(env.engine, host="github", owner="acme", repo="web", project_id=env.project,
+                          token=never) as access:
+        assert access.via == "egress"
+        with env.db() as c:
+            row = c.execute(text("SELECT subject_principal_id, run_id FROM identity_run_credentials "
+                                 "WHERE revoked_at IS NULL")).first()
+        assert row[0] == runs.SYSTEM_REPO_READER and row[1].startswith("run_sys:git:")
+    with env.db() as c:
+        ceiling = set(c.execute(text("SELECT permission_key FROM identity_agent_ceilings WHERE agent_id = :a"),
+                                {"a": runs.SYSTEM_REPO_READER}).scalars())
+    audited = [e for e in env.world.events
+               if e.event_type == "role_binding.added" and e.target_id == runs.SYSTEM_REPO_READER]
+    assert ceiling == set(runs.SYSTEM_GIT_SCOPE) and len(audited) == 1
+    # enforce, no egress: refused
+    monkeypatch.delenv("BOSS_EGRESS_URL")
+    monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
+    with pytest.raises(runs.NoAuthority):
+        with runs.repo_access(env.engine, host="github", owner="acme", repo="web", project_id=env.project,
+                              token=never):
+            pass
