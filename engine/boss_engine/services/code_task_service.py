@@ -812,12 +812,22 @@ def start_code_task(
     from .work_provenance import code_task_job_priority
     from boss_engine.identity import lineage as _identity_lineage
 
-    if identity_acting is None and _identity_lineage.current() is None and run_finalize.get("workflow_run_id"):
-        # A build a workflow step started (in the worker): it acts for the person under the grant
-        # recorded on that workflow run — never under the worker's own identity.
+    _ambient = _identity_lineage.current()
+    _wf_run = str(run_finalize.get("workflow_run_id") or "")
+    if identity_acting is None and _wf_run and (
+            _ambient is None
+            or (_ambient.chain and str(_ambient.run_id or "").startswith(f"run_wf:{_wf_run}"))):
+        # A build a workflow step started (in the worker, or inside the step's own delegated run):
+        # it acts for the person under the grant recorded on that workflow run — never under the
+        # worker's own identity, and never as a child of the step's run token, which lives only
+        # while the step's call does and only in the process that minted it (the build runs later,
+        # elsewhere: it was refused `parent_run_not_live`, R2 #3). The grant names the builder
+        # (the workflow consent asked for it), and the build's run is <workflow run>/ct:<task>.
         from boss_engine.identity import consent as _consent
 
-        identity_acting = _consent.acting_for_workflow_run(connection, str(run_finalize["workflow_run_id"]))
+        _wf_acting = _consent.acting_for_workflow_run(connection, _wf_run)
+        if _wf_acting is not None and (_ambient is None or _ambient.principal_id == _wf_acting.principal_id):
+            identity_acting = _wf_acting
     with (_identity_lineage.acting(identity_acting) if identity_acting is not None
           else _identity_lineage.nullcontext()):
         jobs.create_job(connection, project_id=project_id, task_id=task_id,

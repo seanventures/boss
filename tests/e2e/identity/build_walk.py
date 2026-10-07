@@ -380,7 +380,11 @@ class Walk:
     def builder_check(self) -> None:
         """A governed build with no role_key is wired to DEFAULT_BUILDER 'forge' (identity/runs.py
         start_code_task_run, consent.DEFAULT_BUILDER); read-only check that such a builder exists."""
-        forge = self.psql("SELECT coalesce(agent_id,'') FROM roles WHERE role_key = 'forge' AND agent_id IS NOT NULL LIMIT 1")
+        # the same rule as identity.runs.agent_for_role: a role key, or the persona callsign the
+        # presets and DEFAULT_BUILDER use ('forge' is the shipped software_engineer)
+        forge = self.psql("SELECT coalesce(r.agent_id,'') FROM roles r JOIN identity_agent_passports p "
+                          "ON p.agent_id = r.agent_id WHERE (r.role_key = 'forge' OR "
+                          "lower(r.spec->'persona'->>'callsign') = 'forge') LIMIT 1")
         self.j.check("the Fast fix build's builder resolves to an agent with a Passport", bool(forge),
                      expect="a 'forge' role with a Passport (the default builder a Fast fix build is wired to), or a "
                             "build step that names its role",

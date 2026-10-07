@@ -28,11 +28,26 @@ from boss_engine.identity.delegation import CascadeTrigger, GrantRequest, TokenE
 PROVIDER_LABELS = {"github": "GitHub"}
 
 
+class NoPublicOrigin(Exception):
+    """No origin to send a provider back to: BOSS_PUBLIC_URL unset and none bound at the claim."""
+
+
 def _callback_url(request: Request, provider: str) -> str:
+    """Where the provider sends the person back: the PUBLIC origin (BOSS_PUBLIC_URL, else the one
+    bound at the claim) — never the Host this request was addressed to (H2). Behind the console
+    that Host is the API's internal address (http://api:8000 on compose), which no browser can
+    reach: Connect GitHub never came back (R2)."""
     import os
 
-    base = (os.environ.get("BOSS_PUBLIC_URL") or str(request.base_url)).rstrip("/")
-    return f"{base}/v1/identity/me/connections/{provider}/callback"
+    from boss_engine.identity.authn_support import origin_of, public_origin
+
+    base = origin_of(os.environ.get("BOSS_PUBLIC_URL") or "")
+    if not base:
+        with _engine().begin() as db:
+            base = public_origin(db)
+    if not base:
+        raise NoPublicOrigin()
+    return f"{base.rstrip('/')}/v1/identity/me/connections/{provider}/callback"
 
 
 TOKEN_FIELDS = ("grant_type", "subject_token", "subject_token_type", "actor_token", "actor_token_type",
@@ -718,6 +733,8 @@ def build_identity_agents_router() -> APIRouter:
 
             if isinstance(exc, github_app.GitHubRefused):
                 return _err(exc.code, exc.status)
+            if isinstance(exc, NoPublicOrigin):
+                return _err("public_origin_required", 409)
             return _map(exc)
         return {"redirect": url}
 
@@ -740,6 +757,8 @@ def build_identity_agents_router() -> APIRouter:
         except github_app.GitHubRefused as exc:
             # Never a token or code in the redirect: only the outcome.
             return RedirectResponse(f"/account/agents?connect_error={exc.code}", status_code=303)
+        except NoPublicOrigin:
+            return RedirectResponse("/account/agents?connect_error=public_origin_required", status_code=303)
         except Exception as exc:  # noqa: BLE001
             return _map(exc)
         return RedirectResponse(f"/account/agents?connected={provider}", status_code=303)
