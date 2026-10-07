@@ -260,18 +260,28 @@ def sign_in(page: Any, console_origin: str, account: Account, *, next_path: str 
         if code_box.count():
             if not account.totp_secret:
                 raise IdentitySetupError(f"{account.role}: asked for a code but the seed gave no TOTP secret")
-            # Two attempts: another process signing in as the same seeded person may have spent
-            # this 30 s step already (the API refuses a replayed step); the next step is fresh.
-            for attempt in range(2):
-                code_box.first.fill(fresh_totp(account.totp_secret))
-                try:
-                    page.wait_for_url(lambda u: "/login" not in u, timeout=8_000 if attempt == 0 else timeout_ms)
+            # The code was accepted when the page leaves /login; the box can vanish first (the
+            # "Signed in" stage while the navigation runs), so only an error on a still-visible
+            # box means refused. Another process signing in as the same seeded person may have
+            # spent this 30 s step (the API refuses a replayed step): one retry on the next step.
+            fills = 0
+            while time.time() < deadline:
+                if "/login" not in page.url and "/signin" not in page.url:
                     return
-                except Exception:  # noqa: BLE001
-                    if attempt:
-                        raise IdentitySetupError(f"{account.role}: the authenticator code was refused twice") from None
-                    _LAST_STEP[account.totp_secret] = int(time.time() // 30)   # force the next step
-            return
+                refused = page.locator(".idn-err[role=alert]")
+                if fills == 0 or (code_box.count() and refused.count() and refused.first.is_visible()):
+                    if fills == 2:
+                        raise IdentitySetupError(f"{account.role}: the authenticator code was refused twice")
+                    if fills:
+                        _LAST_STEP[account.totp_secret] = int(time.time() // 30)   # force the next step
+                    if not code_box.count():
+                        page.wait_for_timeout(250)
+                        continue
+                    code_box.first.fill(fresh_totp(account.totp_secret))
+                    fills += 1
+                    page.wait_for_timeout(1_000)   # the page clears the old error as it submits
+                page.wait_for_timeout(250)
+            break
         err = page.locator("#signin-error, .idn-err[role=alert]")
         if err.count() and err.first.is_visible():
             raise IdentitySetupError(f"{account.role}: sign-in refused: {err.first.inner_text()[:120]}")
