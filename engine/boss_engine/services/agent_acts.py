@@ -1567,6 +1567,51 @@ def identity_trailers(connection: Connection, code_task_run_id: str) -> str:
         return ""
 
 
+_SIGNED: dict[str, str] = {}
+
+
+def _current_code_run() -> Optional[str]:
+    """The code-task run this thread is working for (owned_process's owner scope), if any."""
+    from . import owned_process
+
+    owner = owned_process.current_owner()
+    if owner is None:
+        return None
+    if owner.kind == "code_run":
+        return owner.id
+    return next((i for i in reversed(owner.ids()) if str(i).startswith("crun_")), None)
+
+
+def sign_commit_message(message: str, run_id: Optional[str] = None) -> str:
+    """EVERY COMMIT BOSS MAKES FOR A PERSON'S BUILD SAYS WHO IT WAS FOR (IDENTITY.md §7.9).
+
+    The PR body carried `On-behalf-of:` and `Boss-Lineage:` (pr_trailers), but the commits — the
+    checkpoint after each stage, the proposal's file updates — did not: whoever reads `git log`
+    (or a branch protection rule that checks trailers) could not tell whose authority wrote them.
+    Every repository host's file commit (github_adapter, bitbucket_adapter, mcp_repo_host) passes
+    its message through here; inside a code-task run (the owner scope) the run's identity trailers
+    are appended once. Outside a run, for BOSS's own work, or when nothing is known, the message is
+    unchanged. Never raises."""
+    try:
+        rid = run_id or _current_code_run()
+        if not rid or "On-behalf-of:" in (message or ""):
+            return message
+        trailers = _SIGNED.get(rid)
+        if trailers is None:
+            from ..db import begin
+
+            with begin() as connection:
+                trailers = identity_trailers(connection, rid)
+            if trailers:
+                if len(_SIGNED) > 512:
+                    _SIGNED.clear()
+                _SIGNED[rid] = trailers
+        return f"{message.rstrip()}\n\n{trailers}" if trailers else message
+    except Exception as error:  # noqa: BLE001 — a trailer is never worth a failed commit
+        log.warning("agent acts: commit not signed: %s", type(error).__name__)
+        return message
+
+
 # ── 5. panel seats ───────────────────────────────────────────────────────────────────────────
 
 

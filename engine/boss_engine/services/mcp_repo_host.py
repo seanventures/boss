@@ -133,6 +133,9 @@ class McpRepoHost:
         return str((out or {}).get("hash", "")) if isinstance(out, dict) else str(out or "")
 
     def upsert_file(self, branch_name: str, path: str, content: str, message: str) -> str:
+        from .agent_acts import sign_commit_message
+
+        message = sign_commit_message(message)
         self._call("upsert_file", {"repository": self.repository_full_name,
                                    "branch": branch_name, "path": path,
                                    "content": content, "message": message})
