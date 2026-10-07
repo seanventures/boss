@@ -39,8 +39,16 @@ def env(monkeypatch):
     return e
 
 
+def _mode(monkeypatch, mode: str) -> None:
+    """The mode lives in the ONE settings object the guard and lineage read (F2), not os.environ."""
+    from boss_engine.config import get_settings
+
+    monkeypatch.setenv("BOSS_AUTHZ_MODE", mode)
+    monkeypatch.setattr(get_settings(), "authz_mode", mode)
+
+
 def _enforce(monkeypatch):
-    monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
+    _mode(monkeypatch, "enforce")
 
 
 def _key_ctx(pid: str, kind=PrincipalKind.USER) -> AuthContext:
@@ -73,7 +81,7 @@ def test_5_a_key_started_build_needs_a_grant_of_the_callers_own(env, monkeypatch
 
 
 def test_5_in_shadow_a_key_without_a_grant_is_logged_loudly_not_silently(env, monkeypatch, caplog):
-    monkeypatch.delenv("BOSS_AUTHZ_MODE", raising=False)
+    _mode(monkeypatch, "shadow")
     with env.db() as c, lineage.acting(_key_ctx(env.alice)):
         assert consent.require_authority(org_id=None, project_id=env.project, role_keys=["forge"],
                                          permissions=consent.CODE_TASK_PERMISSIONS, repos=["acme/web"],
@@ -131,13 +139,13 @@ def test_8_no_grant_is_an_error_under_enforcement_never_the_shared_token(env, mo
 
 
 def test_8_a_delegated_job_with_no_principal_fails_closed_at_enqueue(monkeypatch):
-    monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
+    _mode(monkeypatch, "enforce")
     with pytest.raises(lineage.PrincipalRequired):
         lineage.stamp_job_row({"run_id": "crun_x"}, None, kind="code.task")
     # BOSS's own housekeeping stays BOSS's own work
     payload, cols = lineage.stamp_job_row({}, None, kind="deployment.health_sweep")
     assert cols["on_behalf_system"] is True
-    monkeypatch.setenv("BOSS_AUTHZ_MODE", "shadow")
+    _mode(monkeypatch, "shadow")
     payload, cols = lineage.stamp_job_row({"run_id": "crun_x"}, None, kind="code.task")
     assert cols["on_behalf_system"] is True and cols["grant_id"] is None   # holds nothing
 

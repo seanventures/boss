@@ -157,8 +157,12 @@ def test_without_isolation_the_shim_still_checks_the_peer(tmp_path, monkeypatch)
         s = socket.socket(socket.AF_UNIX)
         s.settimeout(3)
         s.connect(path)
-        s.sendall(b"get\n")
-        assert s.recv(4096) == b""                              # anyone else: silence
+        try:
+            s.sendall(b"get\n")
+            answer = s.recv(4096)
+        except (BrokenPipeError, ConnectionResetError):
+            answer = b""                                        # hung up before we asked
+        assert answer == b""                                    # anyone else: silence
         s.close()
     finally:
         runs.close_shim_socket(shim.run_id)
