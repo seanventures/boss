@@ -18,7 +18,7 @@ import { describe, expect, it } from "vitest";
 
 import { AREA_IDS } from "../lib/area-ids";
 import { AREA_ACCESS } from "../lib/identity/areas";
-import { accessForArea, DRAFT_AREA_ACCESS } from "../lib/identity/area-access";
+import { accessForArea } from "../lib/identity/area-access";
 import { ACTION_PERMISSIONS } from "../lib/identity/action-permissions";
 import { declareAction, guardedAction, identityRefusal, permissionOf } from "../lib/identity/guarded-action";
 import { isPermission } from "../lib/identity/permissions.gen";
@@ -176,12 +176,12 @@ describe("(c) every area has an access, and the shell mirrors it", () => {
   });
 });
 
-describe("(d) the draft area table agrees with S2's declarations", () => {
-  it("never disagrees on an area S2 has declared", () => {
+describe("(d) S2's table is the only one", () => {
+  it("every area reads its access from AREA_ACCESS, and no draft table is left", () => {
     for (const [id, access] of Object.entries(AREA_ACCESS)) {
-      if (!access) continue;
-      expect(DRAFT_AREA_ACCESS[id as keyof typeof DRAFT_AREA_ACCESS], id).toEqual(access);
+      expect(accessForArea(id as keyof typeof AREA_ACCESS), id).toEqual(access);
     }
+    expect(read("lib/identity/area-access.ts")).not.toMatch(/DRAFT_AREA_ACCESS/);
   });
 });
 

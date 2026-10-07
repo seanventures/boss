@@ -81,3 +81,16 @@ export async function pageAllowed(path: string): Promise<boolean> {
   if (!boot.org) return true;
   return checkWith(snapshotFrom(boot.org), null, null, page.access.permission).allowed;
 }
+
+/**
+ * For a page outside identity/account (the /v2 screens): may this request load it? Checked at the
+ * project the console is on, as the area shell checks its areas; a stale session goes to sign in.
+ */
+export async function consolePageAllowed(path: string): Promise<boolean> {
+  const page = pageFor(path);
+  const boot = await loadIdentityCached(PROJECT_ID);
+  if (boot.problem === "unauthenticated" && !networkTrustedConsole()) redirect(`/login?next=${encodeURIComponent(path)}`);
+  if (!page || !("permission" in page.access) || !boot.org) return true;
+  return checkWith(snapshotFrom(boot.org), boot.project ? snapshotFrom(boot.project) : null, PROJECT_ID,
+                   page.access.permission).allowed;
+}

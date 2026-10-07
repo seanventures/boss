@@ -4,6 +4,8 @@ import { fetchCompanyOverview } from "../../../../lib/v2/overview";
 import { fetchWorkspace } from "../../../../lib/v2/workspace";
 import { resolveProjectId } from "../../../../lib/client";
 import { fetchOrgs } from "../../../../lib/orgs";
+import { consolePageAllowed } from "../../../../components/identity/route-shell";
+import { PageDenied } from "../../../../components/identity/page-denied";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,7 @@ const one = (v: string | string[] | undefined): string | undefined =>
 
 export default async function V2Workspace({ params, searchParams }: Params) {
   const { id } = await params;
+  if (!(await consolePageAllowed(`/v2/missions/${encodeURIComponent(id)}`))) return <PageDenied path="/v2/missions/x" />;
   const sp = searchParams ? await searchParams : undefined;
   const orgId = one(sp?.org) ?? one(sp?.org_id);
 

@@ -3,6 +3,8 @@ import { fetchCompanyOverview } from "../../lib/v2/overview";
 import { resolveProjectId } from "../../lib/client";
 import { fetchOrgs } from "../../lib/orgs";
 import { ProjectsScreen } from "../../components/v2/ProjectsScreen";
+import { consolePageAllowed } from "../../components/identity/route-shell";
+import { PageDenied } from "../../components/identity/page-denied";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +14,7 @@ const one = (v: string | string[] | undefined): string | undefined =>
   Array.isArray(v) ? v[0] : v;
 
 export default async function V2Projects({ searchParams }: Params) {
+  if (!(await consolePageAllowed("/v2"))) return <PageDenied path="/v2" />;
   const sp = searchParams ? await searchParams : undefined;
   const orgId = one(sp?.org) ?? one(sp?.org_id);
 
