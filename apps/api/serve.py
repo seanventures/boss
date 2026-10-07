@@ -52,12 +52,38 @@ def uvicorn_argv(argv: list[str], trusted: str) -> list[str]:
     return [*out, "--forwarded-allow-ips", forwarded_allow_ips(trusted)]
 
 
+def _option(argv: list[str], name: str) -> str | None:
+    for i, arg in enumerate(argv):
+        if arg == name and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith(name + "="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def preview_listen_env(argv: list[str]) -> dict[str, str]:
+    """Ask the API process to serve the preview origin too (apps/api/app/preview_origin.py), on
+    the API's own host and BOSS_PREVIEW_PORT. Not with several workers: each would race for the
+    one port, and one listener in one process is the whole design."""
+    try:
+        workers = int(_option(argv, "--workers") or "1")
+    except ValueError:
+        workers = 1
+    if workers > 1:
+        return {}
+    return {"BOSS_PREVIEW_LISTEN": "1", "BOSS_PREVIEW_HOST": _option(argv, "--host") or "127.0.0.1"}
+
+
 def main(argv: list[str] | None = None) -> None:
+    import os
+
     from boss_engine.config import get_settings
     import uvicorn.main
 
-    args = uvicorn_argv(list(sys.argv[1:] if argv is None else argv),
-                        str(getattr(get_settings(), "trusted_proxies", "") or ""))
+    given = list(sys.argv[1:] if argv is None else argv)
+    for key, value in preview_listen_env(given).items():
+        os.environ.setdefault(key, value)
+    args = uvicorn_argv(given, str(getattr(get_settings(), "trusted_proxies", "") or ""))
     uvicorn.main.main(args=args, prog_name="uvicorn")
 
 

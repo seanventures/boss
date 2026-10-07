@@ -1,8 +1,8 @@
 /**
- * A previewed app is someone else's code served on the console's origin. The /v1 proxy must
- * never hand it the operator's session: no identity cookie, no CSRF token and no network-trust
- * marker reach a preview path, nothing the preview answers sets a cookie on the console's
- * origin, and the API's sandbox CSP reaches the browser intact. A request from a sandboxed
+ * A previewed app is someone else's code, and it is never served on the console's origin: the /v1
+ * proxy sends every preview path to the preview origin (security finding #4) and forwards nothing
+ * for it — no identity cookie, no CSRF token, no network-trust marker. Nothing a sandboxed answer
+ * carries sets a cookie on the console's origin, and the API's CSP reaches the browser intact. A request from a sandboxed
  * (`Origin: null`) or cross-site non-navigation context gets no session on ANY path, so a
  * preview's `fetch('/v1/identity/me')` cannot read the CSRF token.
  */
@@ -64,34 +64,31 @@ describe("the /v1 proxy and previews", () => {
   });
 
   for (const method of ["GET", "POST"] as const) {
-    it(`${method} to a preview path forwards no cookie, CSRF or network marker`, async () => {
+    it(`${method} to a preview path is sent to the preview origin, and nothing is forwarded`, async () => {
       upstream({ "content-security-policy": SANDBOX, "access-control-allow-origin": "*" });
       const { GET, POST } = await route();
       const path = "/v1/previews/prv_1/web/api/items";
-      const req = new Request(`http://boss.example.test${path}`, {
+      const req = new Request(`http://boss.example.test${path}?q=1`, {
         method,
-        headers: { cookie: COOKIES, "x-boss-csrf": "csrf_secret", origin: "http://boss.example.test", "content-type": "application/json" },
+        headers: { cookie: COOKIES, "x-boss-csrf": "csrf_secret", origin: "http://boss.example.test", "content-type": "application/json", host: "boss.example.test" },
         body: method === "POST" ? "{}" : undefined,
       });
       const res = await (method === "GET" ? GET : POST)(req, ctx(path));
-      expect(seen).toHaveLength(1);
-      expect(seen[0].url).toBe(`http://api.example.test${path}`);
-      expect(seen[0].headers.get("cookie")).toBeNull();
-      expect(seen[0].headers.get("x-boss-csrf")).toBeNull();
-      expect(seen[0].headers.get("x-boss-console-auth")).toBeNull();
-      // The isolation reaches the browser.
-      expect(res.headers.get("content-security-policy")).toBe(SANDBOX);
-      expect(res.headers.get("content-security-policy")).not.toContain("allow-same-origin");
-      expect(res.headers.get("access-control-allow-origin")).toBe("*");
+      // Nothing reached the API on the person's behalf (or anyone's).
+      expect(seen).toHaveLength(0);
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toBe(`http://boss.example.test:3001${path}?q=1`);
+      expect(res.headers.get("set-cookie")).toBeNull();
     });
   }
 
-  it("never relays a cookie the previewed app tries to set on the console's origin", async () => {
+  it("never relays a cookie from an answer the API sandboxed, whatever its path", async () => {
     upstream({ "content-security-policy": SANDBOX }, ["__Host-boss_session=attacker; Path=/; Secure; HttpOnly"]);
     const { GET } = await route();
-    const path = "/v1/previews/prv_1/web/";
+    const path = "/v1/something/else";
     const res = await GET(new Request(`http://boss.example.test${path}`, { headers: { cookie: COOKIES } }), ctx(path));
     expect(res.headers.get("set-cookie")).toBeNull();
+    expect(res.headers.get("content-security-policy")).toBe(SANDBOX);
   });
 
   it("a sandboxed document's fetch of /v1/identity/me goes without the session", async () => {
@@ -123,15 +120,13 @@ describe("the /v1 proxy and previews", () => {
     expect(untrustedBrowserContext(new Headers({ "sec-fetch-site": "same-origin" }))).toBe(false);
   });
 
-  it("answers a preview's preflight without credentials, and nothing else's", async () => {
+  it("answers no preflight on the console's origin: a preview's goes to the preview origin", async () => {
     const { OPTIONS } = await route();
-    const ok = await OPTIONS(new Request("http://boss.example.test/v1/previews/prv_1/feedback", {
-      method: "OPTIONS", headers: { "access-control-request-headers": "content-type, x-boss-csrf, authorization" },
+    const preview = await OPTIONS(new Request("http://boss.example.test/v1/previews/prv_1/feedback", {
+      method: "OPTIONS", headers: { "access-control-request-headers": "content-type, x-boss-csrf, authorization", host: "boss.example.test" },
     }));
-    expect(ok.status).toBe(204);
-    expect(ok.headers.get("access-control-allow-origin")).toBe("*");
-    expect(ok.headers.get("access-control-allow-credentials")).toBeNull();
-    expect(ok.headers.get("access-control-allow-headers")).toBe("content-type");
+    expect(preview.status).toBe(307);
+    expect(preview.headers.get("access-control-allow-origin")).toBeNull();
     const no = await OPTIONS(new Request("http://boss.example.test/v1/identity/me", { method: "OPTIONS" }));
     expect(no.status).toBe(405);
   });
