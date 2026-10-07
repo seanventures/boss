@@ -176,9 +176,6 @@ def test_the_manual_groups_api_refuses_to_edit_an_idp_group(world, source):
     assert members == {member.id} and name == f"idp-{source}"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "FX-B questionable routes: group membership critical — group:manage_members is not critical, "
-    "although changing a group's membership is granting (§6.8) and role_binding:assign is"))
 def test_changing_group_membership_is_a_critical_permission():
     assert PERMISSION_META["role_binding:assign"].critical
     assert PERMISSION_META["group:manage_members"].critical

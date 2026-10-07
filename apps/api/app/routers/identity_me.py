@@ -145,6 +145,18 @@ def need_person_session(ctx: AuthContext) -> Optional[JSONResponse]:
     return None
 
 
+def need_own_account(db: Any, ctx: AuthContext) -> Optional[JSONResponse]:
+    """A self-service change to sign-in factors needs an account of the caller's OWN. The shared
+    console password's session (usr_legacy_shared) and the network bridge are shared principals
+    with no password, factors or email of their own: refused with words, never a 500 (R2)."""
+    if users.by_id(db, ctx.principal.id) is None:
+        return JSONResponse(status_code=409, content={
+            "error": "shared_account",
+            "message": "This is the shared console sign-in: it has no password or second factor of its "
+                       "own. Sign in with your own account (or claim one) to change them."})
+    return None
+
+
 def _first_factor_extras(db: Any, ctx: AuthContext, had_factor: bool) -> dict[str, Any]:
     """The first second factor a person adds comes with their recovery codes, shown once."""
     if had_factor:
@@ -297,6 +309,46 @@ def build_identity_me_router() -> APIRouter:
         except AuthnError as exc:
             return refusal(exc)
 
+    @router.get("/v1/identity/me/projects")
+    @authenticated(self_only=True)
+    def get_my_projects(request: Request):
+        """The projects where the signed-in principal holds access through a role binding — its
+        own or a group's, at that project or org-wide — each with the permissions it holds THERE
+        (the PDP's effective permissions, A3 applied). One read, so a page never probes projects
+        one by one to find where the person may act."""
+        from boss_engine.identity import authz
+        from boss_engine.identity.scope import ResolvedScope
+
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                org = ctx.principal.org_id
+                bound = db.execute(text(
+                    "SELECT DISTINCT b.scope_type, b.scope_id FROM identity_role_bindings b "
+                    "WHERE b.org_id = :o AND (b.expires_at IS NULL OR b.expires_at > now()) AND ("
+                    "(b.subject_type = 'principal' AND b.subject_id = :p) OR (b.subject_type = 'group' "
+                    "AND b.subject_id IN (SELECT m.group_id FROM identity_group_members m "
+                    "WHERE m.principal_id = :p)))"), {"o": org, "p": ctx.principal.id}).all()
+                org_wide = any(r[0] == "org" for r in bound)
+                at_project = {r[1] for r in bound if r[0] == "project"}
+                rows = db.execute(text(
+                    "SELECT pr.id, pr.name FROM projects pr JOIN workspaces w ON w.id = pr.workspace_id "
+                    "WHERE w.org_id = :o ORDER BY pr.name, pr.id"), {"o": org}).all()
+                items = []
+                for pid, name in rows:
+                    if not org_wide and pid not in at_project:
+                        continue
+                    perms = authz.effective_permissions(ctx, ResolvedScope.in_project(org, pid),
+                                                        db=db).permissions
+                    if not perms:
+                        continue
+                    items.append({"project_id": pid, "name": name, "permissions": sorted(perms),
+                                  "via": sorted({"org"} if org_wide else set())
+                                  + (["project"] if pid in at_project else [])})
+            return JSONResponse({"projects": items}, headers={"Cache-Control": "no-store"})
+        except AuthnError as exc:
+            return refusal(exc)
+
     # ---- profile: your own name and avatar colour -----------------------------------------------------
 
     def _profile(db: Any, principal_id: str) -> dict[str, Any]:
@@ -416,11 +468,10 @@ def build_identity_me_router() -> APIRouter:
         try:
             with begin() as db:
                 ctx = current_context(request, db)
-                blocked = need_person_session(ctx)
+                blocked = need_person_session(ctx) or need_own_account(db, ctx)
                 if blocked:
                     return blocked
                 user = users.by_id(db, ctx.principal.id)
-                assert user is not None
                 if user.password_hash:
                     if not verify_password(body.current or "", user.password_hash):
                         return error(401, "invalid_credentials")
@@ -457,7 +508,7 @@ def build_identity_me_router() -> APIRouter:
         try:
             with begin() as db:
                 ctx = current_context(request, db)
-                blocked = need_person_session(ctx)
+                blocked = need_person_session(ctx) or need_own_account(db, ctx)
                 if blocked:
                     return blocked
                 token = request.cookies.get(SESSION_COOKIE) or ""
@@ -532,7 +583,7 @@ def build_identity_me_router() -> APIRouter:
         try:
             with begin() as db:
                 ctx = current_context(request, db)
-                blocked = need_person_session(ctx)
+                blocked = need_person_session(ctx) or need_own_account(db, ctx)
                 if blocked:
                     return blocked
                 token = request.cookies.get(SESSION_COOKIE) or ""

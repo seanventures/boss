@@ -106,7 +106,7 @@ env_file_error() {
   [ -f "$ENV_FILE" ] || return 0
   awk -v k="" -v mode=error "$_env_awk" "$ENV_FILE" 2>/dev/null || true
 }
-for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_DEFAULT_PROJECT_ID BOSS_HOST_API_KEY BOSS_API_KEY BOSS_PUBLIC_URL BOSS_API_BIND; do
+for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_DEFAULT_PROJECT_ID BOSS_HOST_API_KEY BOSS_API_KEY BOSS_PUBLIC_URL BOSS_API_BIND COMPOSE_PROJECT_NAME; do
   if [ -z "${!key:-}" ]; then
     value="$(env_value "$key")"
     [ -z "$value" ] || printf -v "$key" '%s' "$value"
@@ -114,6 +114,10 @@ for key in BOSS_API_PORT BOSS_WEB_PORT BOSS_DEFAULT_PROJECT_ID BOSS_HOST_API_KEY
 done
 export BOSS_ENV_FILE="$ENV_FILE"
 
+# The compose project the containers belong to (install.sh exports COMPOSE_PROJECT_NAME; the
+# default is boss-community). Every container name below is derived from it, never hardcoded,
+# so a checkup of a second install on the same machine reads ITS containers.
+STACK="${COMPOSE_PROJECT_NAME:-boss-community}"
 API_PORT="${BOSS_API_PORT:-8000}"
 WEB_PORT="${BOSS_WEB_PORT:-3000}"
 PROJECT="${BOSS_DEFAULT_PROJECT_ID:-boss-dogfood}"
@@ -159,10 +163,10 @@ if [ "${#DOCKER[@]}" -eq 0 ]; then
 else
   missing=""
   for svc in db api worker; do
-    "${DOCKER[@]}" ps --filter "name=boss-community-${svc}-" --format '{{.Names}}' 2>/dev/null \
+    "${DOCKER[@]}" ps --filter "name=${STACK}-${svc}-" --format '{{.Names}}' 2>/dev/null \
       | grep -q . || missing="$missing $svc"
   done
-  running=$("${DOCKER[@]}" ps --filter "name=boss-community" --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ')
+  running=$("${DOCKER[@]}" ps --filter "name=${STACK}-" --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ')
   if [ -z "$missing" ]; then
     ok "containers: $running running (db, api, worker required; web and secrets are optional)"
   else
@@ -183,7 +187,7 @@ else bad "api: no answer on $API/health"; fi
 # operator opened :8000, got {"detail":"Not Found"} from the API, and reasonably concluded the
 # install was broken. It was fine. That is the API port; the console is on WEB_PORT.
 if [ "${#DOCKER[@]}" -gt 0 ]; then
-  compiled=$("${DOCKER[@]}" exec boss-community-web-1 printenv NEXT_PUBLIC_BOSS_API_URL 2>/dev/null || echo "")
+  compiled=$("${DOCKER[@]}" exec "${STACK}-web-1" printenv NEXT_PUBLIC_BOSS_API_URL 2>/dev/null || echo "")
 fi
 if [ -z "$compiled" ]; then warn "console → API: could not read the address it was built with (web container not running?)"
 elif printf '%s' "$compiled" | grep -q '127.0.0.1\|localhost'; then
@@ -261,12 +265,12 @@ if [ -n "$blocked" ]; then warn "host: $blocked"; else ok "host: scheduling BOSS
 # account; the console password proves it is you, then works 30 days more as an Operator.
 claim=""
 if [ "${#DOCKER[@]}" -gt 0 ]; then
-  claim=$("${DOCKER[@]}" exec -u boss boss-community-api-1 python -m boss_engine.identity.cli claim-status 2>/dev/null | tail -n 1 || echo "")
+  claim=$("${DOCKER[@]}" exec -u boss "${STACK}-api-1" python -m boss_engine.identity.cli claim-status 2>/dev/null | tail -n 1 || echo "")
 fi
 # THE BUILD SANDBOX'S NETWORK FENCE (docs/community/SANDBOX.md). On a host without iptables owner
 # match the api starts anyway and holds every build; say so here, with the fix.
 if [ "${#DOCKER[@]}" -gt 0 ] &&
-   "${DOCKER[@]}" exec boss-community-api-1 test -f /run/boss-shim/.network-unfenced 2>/dev/null; then
+   "${DOCKER[@]}" exec "${STACK}-api-1" test -f /run/boss-shim/.network-unfenced 2>/dev/null; then
   bad "sandbox: this host cannot fence the build network, so builds are held — see docs/community/SANDBOX.md (or set BOSS_SANDBOX_NETWORK=off in .env and restart)"
 fi
 case "$claim" in

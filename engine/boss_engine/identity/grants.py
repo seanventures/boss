@@ -198,8 +198,24 @@ def repo_guard_active(org_id: str, *, db: Any) -> bool:
     return multi_person_install(org_id, db=db) if setting is None else bool(setting)
 
 
-_GUARD_CACHE: dict[tuple[str, str, str], tuple[bool, float]] = {}
+_GUARD_CACHE: dict[tuple[str, str, str, str], tuple[bool, float]] = {}
 GUARD_TTL_SECONDS = 15 * 60
+
+
+def _github_link_version(db: Any, person_id: str) -> str:
+    """Which GitHub connection of the person's an answer was about: the active linked items' ids
+    and statuses. Connecting (or reconnecting, revoking) changes it, so a cached "no" from before
+    the person connected their GitHub is never the answer after (R2: the consent was refused with
+    github_access_lacking for 15 minutes after a successful connect)."""
+    from sqlalchemy import text
+
+    try:
+        rows = db.execute(text(
+            "SELECT id, status FROM identity_vault_items WHERE owner_principal_id = :p "
+            "AND kind = 'oauth_user' AND provider = 'github' ORDER BY id"), {"p": person_id}).all()
+    except Exception:  # noqa: BLE001 — cannot tell: never reuse an answer
+        return f"unknown:{time.monotonic()}"
+    return ",".join(f"{r[0]}:{r[1]}" for r in rows) or "none"
 
 
 def check_user_repo_access(org_id: str, person_id: str, gh: Mapping[str, Any], *, db: Any,
@@ -212,8 +228,9 @@ def check_user_repo_access(org_id: str, person_id: str, gh: Mapping[str, Any], *
 
     needs_write = any(LEVELS.get(str(v), 0) >= 2 for k, v in gh.items() if k in GITHUB_PERMISSIONS)
     need = "push" if needs_write else "pull"
+    link = _github_link_version(db, person_id)
     for repo in gh["repos"]:
-        key = (person_id, repo, need)
+        key = (person_id, repo, need, link)
         hit = _GUARD_CACHE.get(key)
         if use_cache and hit and time.monotonic() - hit[1] < GUARD_TTL_SECONDS:
             ok = hit[0]

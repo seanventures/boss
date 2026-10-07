@@ -417,3 +417,19 @@ def test_the_upgrade_finds_the_preset_by_persona_callsign_and_repairs_an_empty_c
         again = passports.upgrade_from_roles(org_id="org_boss", db=c)
         assert again["agt_forgecs00001"] == "ceiling repaired: builder"
         assert passports.upgrade_from_roles(org_id="org_boss", db=c)["agt_forgecs00001"] == "exists"
+
+
+def test_connecting_github_is_seen_at_once_never_a_cached_no(env, monkeypatch):
+    """R2: the guard cached a "no" for 15 minutes, so a person told to connect their GitHub was
+    refused github_access_lacking again right after connecting. The cached answer is about ONE
+    state of the person's GitHub link; connecting changes it."""
+    gh = install_github(monkeypatch, env)
+    with env.db() as c:
+        add_person(c, env.bob)                                   # multi-person: the guard is on
+    grants.clear_guard_cache()
+    gh.user_repo_perms[("gho_ALICE_LATE", "acme/web")] = {"pull": True, "push": True}
+    with pytest.raises(grants.GrantRefused) as before:
+        env.grant(repos=("acme/web",))                           # no GitHub linked yet: no
+    assert before.value.code == "github_access_lacking"
+    link_github(env, env.alice, "gho_ALICE_LATE")                # she connects it...
+    env.grant(repos=("acme/web",))                               # ...and the next consent works

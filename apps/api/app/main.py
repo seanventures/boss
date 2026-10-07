@@ -30024,26 +30024,10 @@ def backfill_signed_acts(payload: ActsBackfillRequest) -> dict:
 from .routers.agents import build_agents_router
 
 def _roles_granting(project_id: str, permission: str, among: Iterable[str]) -> list[str]:
-    """The roles (of `among`) through which this enforced request's principal holds `permission`
-    at `project_id` — the PDP's own binding paths (authz.effective_permissions(with_why)), so a
-    group binding and an org binding count, an expired one does not — plus the legacy seat the
-    principal took over at the claim (an approver role named `ceo` is the claimant's), only while
-    it holds `permission` at all. An org names a person to another approver role (`cto`) with a
-    custom role of that key."""
-    from boss_engine.identity import authz as _authz
-    from boss_engine.identity.scope import ResolvedScope as _RS
+    """identity.viewer.roles_granting for this enforced request (dual control's approver roles)."""
+    from boss_engine.identity import viewer as _viewer
 
-    ctx = identity_guard.REQUEST_IDENTITY.get()
-    if ctx is None:
-        return []
-    eff = _authz.effective_permissions(ctx, _RS.in_project(ctx.principal.org_id, project_id),
-                                       with_why=True)
-    if permission not in eff.permissions:
-        return []
-    held = {w.role_key for w in eff.why.get(permission, ())}
-    # the legacy seat a person took over at the claim (`ceo`) is still theirs to fill
-    held |= set(getattr(ctx.principal, "legacy_member_ids", ()) or ())
-    return sorted(held & set(among))
+    return _viewer.roles_granting(project_id, permission, among)
 
 
 def project_actor_can(connection, project_id: str, claimed_actor: Optional[str],

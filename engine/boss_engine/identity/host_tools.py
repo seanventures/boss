@@ -48,19 +48,26 @@ def host_tools_permissions() -> frozenset[str]:
 
 def mcp_permissions(wanted: Iterable[str] = MCP_DEFAULT_CAPABILITIES) -> frozenset[str]:
     """Each item is one of today's capability names (agent_chat, …) or a catalogue permission
-    (workflow_run:start). Plus reading the project, as every member could."""
+    (workflow_run:start). Plus reading the project, as every member could.
+
+    The MCP key's role is bound at ONE project, where an org-only permission does nothing (A3):
+    those are left out (the baseline's directory:read, org:read, access_role:read and
+    api_key:manage_own made a role the A3 rule would never have let anyone write), and asking for
+    one by name is refused."""
     from .migration import MEMBER_BASELINE, capability_permissions
     from .permissions_gen import PERMISSION_META
 
     caps = [w for w in wanted if ":" not in w]
     keys = [w for w in wanted if ":" in w]
-    unknown = [k for k in keys if k not in PERMISSION_META or PERMISSION_META[k].system_only]
+    unknown = [k for k in keys if k not in PERMISSION_META or PERMISSION_META[k].system_only
+               or PERMISSION_META[k].org_only]
     from .migration import ALL_CAPABILITIES
 
     unknown += [c for c in caps if c not in ALL_CAPABILITIES]
     if unknown:
         raise ValueError("unknown permission: " + ", ".join(sorted(unknown)))
-    return frozenset(MEMBER_BASELINE | capability_permissions(caps) | set(keys))
+    return frozenset(k for k in MEMBER_BASELINE | capability_permissions(caps) | set(keys)
+                     if not PERMISSION_META[k].org_only)
 
 
 def _role(db: Any, org_id: str, key: str, name: str, permissions: frozenset[str],

@@ -285,3 +285,18 @@ def test_dual_control_under_enforce_takes_two_people_holding_the_approver_roles(
     assert again.status_code == 422, again.text          # the same person cannot fill the second role
     second = approve(cto)
     assert second.status_code == 200 and second.json()["status"] == "approved", second.text
+
+
+def test_a_person_is_an_active_user_principal_not_a_legacy_member(engine, owner_world):
+    """agent_identity.is_person decided "is this approver a person?" (host deploy approvals) from
+    project_members only: under enforce no identity person is there, so nobody but the claimant
+    could approve a host deployment."""
+    from boss_engine.identity.principal import PrincipalKind, PrincipalStatus
+    from boss_engine.services.agent_identity import is_person
+
+    world, owner = owner_world
+    gone = world.person("r2-disabled", status=PrincipalStatus.DISABLED)
+    robot = world.principal("r2-robot", kind=PrincipalKind.SERVICE_ACCOUNT)
+    with engine.begin() as db:
+        verdicts = {who.id: is_person(who.id, db, world.project_a) for who in (owner, gone, robot)}
+    assert verdicts == {owner.id: True, gone.id: False, robot.id: False}
