@@ -138,6 +138,7 @@
   "PUT /v1/identity/policy",
   "GET /v1/identity/posture",
   "GET /v1/identity/principals/{principal_id}/effective",
+  "GET /v1/identity/projects/{project_id}/access-requests",
   "GET /v1/identity/projects/{project_id}/role-bindings",
   "POST /v1/identity/projects/{project_id}/role-bindings",
   "DELETE /v1/identity/projects/{project_id}/role-bindings/{binding_id}",

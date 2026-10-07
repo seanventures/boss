@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1383 operations.
+# 1386 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -202,7 +202,7 @@
 "GET /v1/auth/options": ["public:auth_endpoint", "OAPVU"]
 "POST /v1/auth/password/forgot": ["public:auth_endpoint", "OAPVU"]
 "POST /v1/auth/password/reset": ["public:auth_endpoint", "OAPVU"]
-"GET /v1/auth/session": ["authenticated:self", "OAPVU"]
+"GET /v1/auth/session": ["authenticated", "OAPVU"]
 "POST /v1/auth/setup/claim": ["public:auth_endpoint", "OAPVU"]
 "GET /v1/auth/setup/status": ["public:auth_endpoint", "OAPVU"]
 "POST /v1/auth/signup": ["public:auth_endpoint", "OAPVU"]
@@ -713,6 +713,7 @@
 "POST /v1/identity/legacy/{path}/extend": ["permit security_policy:manage @ org", "O"]
 "POST /v1/identity/legacy/{path}/retire": ["permit security_policy:manage @ org", "O"]
 "GET /v1/identity/me": ["authenticated:self", "OAPVU"]
+"PATCH /v1/identity/me": ["authenticated:self", "OAPVU"]
 "GET /v1/identity/me/api-keys": ["authenticated:self", "OAPVU"]
 "POST /v1/identity/me/api-keys": ["permit api_key:manage_own @ org", "OAPVU"]
 "POST /v1/identity/me/api-keys/{key_id}/revoke": ["permit api_key:manage_own @ org", "OAPVU"]
@@ -739,6 +740,7 @@
 "PATCH /v1/identity/me/passkeys/{passkey_id}": ["authenticated:self", "OAPVU"]
 "POST /v1/identity/me/password": ["authenticated:self", "OAPVU"]
 "GET /v1/identity/me/permissions": ["authenticated:self", "OAPVU"]
+"GET /v1/identity/me/profile": ["authenticated:self", "OAPVU"]
 "POST /v1/identity/me/recovery-codes": ["authenticated:self", "OAPVU"]
 "DELETE /v1/identity/me/sessions": ["authenticated:self", "OAPVU"]
 "GET /v1/identity/me/sessions": ["authenticated:self", "OAPVU"]
@@ -794,6 +796,7 @@
 "POST /v1/identity/users/{user_id}/reset-link": ["permit user:reset_mfa @ org", "OA"]
 "POST /v1/identity/users/{user_id}/reset-mfa": ["permit user:reset_mfa @ org", "OA"]
 "POST /v1/identity/users/{user_id}/revoke-sessions": ["permit user:revoke_sessions @ org", "OA"]
+"POST /v1/identity/users/{user_id}/verify-email": ["permit user:update @ org", "OA"]
 "GET /v1/improvement-programs": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/improvement-programs": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "POST /v1/improvement-programs/trials/{trial_id}/adopt-baseline": ["permit improvement:manage @ improvement_trial(path=trial_id)", "OA"]
