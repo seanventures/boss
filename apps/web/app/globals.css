@@ -55,6 +55,14 @@
   --blue: #2F6FE0;
   --teal: #2EC5C5;
 
+  /* model-routing tiers (Setup › Model routing, "Why this model"): marks, never text alone */
+  --tier-fast: #2EC5C5;
+  --tier-fast-soft: rgba(46, 197, 197, 0.12);
+  --tier-balanced: #7AA2F7;
+  --tier-balanced-soft: rgba(122, 162, 247, 0.14);
+  --tier-frontier: #C58AF9;
+  --tier-frontier-soft: rgba(197, 138, 249, 0.14);
+
   /* shape */
   --r-sm: 8px;
   --r: 8px;
@@ -8626,4 +8634,40 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 
 @media (max-width: 560px) {
   .ag-pill[data-n]::before { content: attr(data-n); font-weight: 700; font-variant-numeric: tabular-nums; }
+}
+
+/* "Why this model" (app/why-this-model.tsx): a route's tier, source · model, and its reasons. */
+/* One row per stage: step | tier | source · model (+ flags) | Why — columns that line up. */
+.wm {
+  display: grid; grid-template-columns: 130px 76px minmax(0, 1fr) auto; align-items: center;
+  gap: 4px 8px; min-width: 0;
+}
+.wm:not(:has(.wm-step)) { display: inline-flex; flex-wrap: wrap; }
+.wm-step { color: var(--muted); font-size: 0.8125rem; }
+.wm-main { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.wm-tier {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px;
+  border: 1px solid var(--border-strong); color: var(--ink); font: 700 0.6875rem/1 var(--sans);
+}
+.wm-fast { border-color: var(--tier-fast); background: var(--tier-fast-soft); }
+.wm-balanced { border-color: var(--tier-balanced); background: var(--tier-balanced-soft); }
+.wm-frontier { border-color: var(--tier-frontier); background: var(--tier-frontier-soft); }
+.wm-label { font-size: 0.8125rem; color: var(--ink-soft); overflow-wrap: break-word; }
+.wm-tier { justify-self: start; }
+.wm-flag { font-size: 0.75rem; color: var(--amber); cursor: help; }
+.wm-why-btn {
+  min-height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: transparent; color: var(--accent-text); font: 600 0.75rem var(--sans); cursor: pointer;
+}
+.wm-why-btn:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.wm-why {
+  grid-column: 1 / -1; flex-basis: 100%; margin: 4px 0 0; padding: 8px 10px 8px 26px; border: 1px solid var(--accent-line);
+  border-radius: var(--r); background: var(--surface-2); color: var(--ink-soft); font-size: 0.8125rem;
+}
+.wm-why li + li { margin-top: 2px; }
+.wm-list { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+@media (max-width: 639px) {
+  .wm { grid-template-columns: 76px minmax(0, 1fr) auto; }
+  .wm-step { grid-column: 1 / -1; }
+  .wm-why-btn { min-height: 44px; min-width: 44px; }
 }

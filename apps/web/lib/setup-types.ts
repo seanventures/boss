@@ -101,6 +101,48 @@ export type Job = {
   options: JobOption[];
 };
 
+/** Setup › Model routing (docs/product/MODEL_ROUTER.md). Decided by the server. */
+export type Tier = "fast" | "balanced" | "frontier";
+export type RouteTarget = { engine: string; model: string | null; label: string; connected?: boolean };
+export type RoutingFloor = {
+  match: Record<string, string | string[]>; tier: Tier; label?: string;
+  describe: string; tier_label: string;
+};
+export type RoutingHeadroom = {
+  engine: string; source_label: string; state: "plenty" | "tight" | "near_limit" | "exhausted";
+  label: string; left: number | null; resets_at: string | null; basis: string;
+  exhausted_models: string[]; describe: string; detail?: string;
+};
+export type HeadroomRule = { source: string; when: string; tiers: Tier[]; to: string };
+export type Routing = {
+  mode: "fixed" | "smart";
+  version: number;
+  tiers: { tier: Tier; label: string; criteria: string; targets: RouteTarget[] }[];
+  floors: RoutingFloor[];
+  floor_preset: string;
+  presets: { name: string; label: string }[];
+  floor_steps: { step: string; label: string }[];
+  headroom: RoutingHeadroom[];
+  headroom_rules: HeadroomRule[];
+  headroom_states: { state: string; label: string }[];
+  thresholds: { tight: number; near_limit: number };
+  budget: Record<string, number>;
+  budget_state: string;
+  classifier: {
+    backend: string; jev: "ready" | "held" | "absent"; model_fallback: boolean;
+    model_below: number; criteria: Record<Tier, string>;
+    backends: { value: string; label: string }[];
+  };
+  sources: { engine: string; label: string; kind: string; working: boolean;
+             models: (string | null)[] }[];
+  pins: Record<string, { engine: string; model: string | null; label: string }>;
+  /** Jobs whose pin is "Always use, even when limited"; any other pin is a preference. */
+  hard_pins?: string[];
+  frontier_allows_local?: boolean;
+  week: { routes: number; smart_routes: number; tiers: Record<Tier, number>;
+          escalations: number; moved: number; saved_usd: number };
+};
+
 export type Budget = {
   period: "month" | "day";
   spent_usd: number;
@@ -131,6 +173,8 @@ export type SetupView = {
   detected: Detected[];
   catalogue: CatalogueEntry[];
   jobs: Job[];
+  /** Null when the server has no router tables yet (an older API): the row shows the jobs. */
+  routing?: Routing | null;
   budget: Budget;
   try: { workflow_key: string; last_run: TryRun | null; done?: boolean };
   /** A background probe (signed-in CLIs, the secret store) is on its way: ask again soon. */

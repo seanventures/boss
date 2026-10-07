@@ -79,6 +79,15 @@ export function resolveLegacyArea(params: URLSearchParams): URLSearchParams | nu
     return next;
   }
 
+  // THE CODING PIPELINE PAGE FOLDED INTO MODEL ROUTING (docs/product/MODEL_ROUTER.md): its
+  // profiles are the floor presets there, its default is the preset's picker.
+  if (area === "pipeline") {
+    const next = copyWithout(params, []);
+    next.set("area", "setup");
+    next.set("focus", "routing");
+    return next;
+  }
+
   if (area === "org_chart") {
     const next = copyWithout(params, []);
     next.set("area", "workforce");

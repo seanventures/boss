@@ -444,3 +444,108 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-cap-form select { min-height: 30px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--ink); font: inherit; font-size: 0.8125rem; }
 .su-cap-sessions { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0 0 0 12px; list-style: none; border-left: 2px solid var(--border); }
 .su-cap-label { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+
+/* ── Model routing (routing-row.tsx; docs/product/MODEL_ROUTER.md) ───────────────────────────
+   Tokens only. Tier colour marks a dot, a border or a bar — the tier's name is always there. */
+.mr-body, .mr-section { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.mr-body { gap: 16px; }
+.mr-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-height: 28px; min-width: 0; }
+.mr-sub {
+  font: 700 0.6875rem/1 var(--sans); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--faint); cursor: help;
+}
+.mr-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r); overflow: hidden; }
+.mr-seg button {
+  min-height: 32px; padding: 0 14px; border: 0; background: transparent; color: var(--muted);
+  font: 600 0.8125rem var(--sans); cursor: pointer;
+}
+.mr-seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.mr-seg button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.mr-seg button:disabled { cursor: default; opacity: 0.6; }
+.mr-tiers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.mr-tier {
+  display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2);
+}
+.mr-tier-name { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; cursor: help; }
+.mr-tier select, .mr-section select, .mr-criteria textarea {
+  min-height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--bg); color: var(--ink); font: 0.8125rem var(--sans); min-width: 0; max-width: 100%;
+}
+.mr-tier select { width: 100%; }
+.mr-criteria textarea { padding: 6px 8px; width: 100%; resize: vertical; line-height: 1.4; }
+.mr-tier select:focus, .mr-section select:focus, .mr-criteria textarea:focus { outline: 0; border-color: var(--accent); }
+.mr-fallback { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 0.75rem; }
+.mr-fallback select { width: 100%; min-height: 28px; font-size: 0.75rem; }
+.mr-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.mr-dot.mr-fast, .mr-mix .mr-fast { background: var(--tier-fast); }
+.mr-dot.mr-balanced, .mr-mix .mr-balanced { background: var(--tier-balanced); }
+.mr-dot.mr-frontier, .mr-mix .mr-frontier { background: var(--tier-frontier); }
+.mr-chips { gap: 6px; }
+.mr-chip {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 0 10px;
+  border: 1px solid var(--border-strong); border-radius: 999px; background: transparent;
+  color: var(--ink-soft); font: 600 0.75rem/1 var(--sans); white-space: nowrap;
+}
+.mr-chip strong { color: var(--ink); font-weight: 700; }
+.mr-chip-fast { border-color: var(--tier-fast); }
+.mr-chip-balanced { border-color: var(--tier-balanced); }
+.mr-chip-frontier { border-color: var(--tier-frontier); }
+.mr-chip-add { border-style: dashed; color: var(--accent-text); cursor: pointer; }
+.mr-toggle { cursor: pointer; }
+.mr-toggle[aria-pressed="true"].mr-chip-fast { background: var(--tier-fast-soft); }
+.mr-toggle[aria-pressed="true"].mr-chip-balanced { background: var(--tier-balanced-soft); }
+.mr-toggle[aria-pressed="false"] { border-style: dashed; color: var(--faint); }
+.mr-keep { cursor: help; }
+.mr-x {
+  display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0;
+  border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer;
+}
+.mr-x:hover { color: var(--ink); background: var(--surface-3); }
+.mr-x:focus-visible, .mr-chip:focus-visible, .mr-tier select:focus-visible,
+.mr-section select:focus-visible, .mr-criteria textarea:focus-visible {
+  outline: 2px solid var(--accent-text); outline-offset: 1px;
+}
+.mr-add { padding: 6px 8px; }
+.mr-source { min-width: 96px; font-weight: 600; }
+.mr-meter {
+  position: relative; flex: 1 1 140px; max-width: 220px; height: 8px; border-radius: 4px;
+  background: var(--border); overflow: hidden; cursor: help;
+}
+.mr-meter i { position: absolute; inset: 0 auto 0 0; background: var(--green); border-radius: 4px; }
+.mr-meter i[data-state="tight"], .mr-meter i[data-state="near_limit"] { background: var(--amber); }
+.mr-meter i[data-state="exhausted"] { background: var(--red); }
+.mr-rule { color: var(--ink-soft); }
+.mr-criteria summary { cursor: pointer; color: var(--accent-text); font-weight: 600; width: max-content; }
+.mr-criteria[open] { display: flex; flex-direction: column; gap: 8px; }
+.mr-criteria .su-field-label { display: inline-flex; align-items: center; gap: 6px; }
+.mr-mix {
+  display: flex; flex: 1 1 160px; max-width: 280px; height: 10px; border-radius: 5px;
+  overflow: hidden; background: var(--border); cursor: help;
+}
+.mr-mix i { display: block; height: 100%; }
+.mr-mix .mr-none { width: 100%; background: transparent; }
+.mr-stat { white-space: nowrap; }
+.mr-stat strong { font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) {
+  .mr-tiers { grid-template-columns: minmax(0, 1fr); }
+  /* Touch: every control at least 44px tall. */
+  .mr-seg button, .mr-chip-add, .mr-toggle, .mr-tier select, .mr-section select,
+  .mr-fallback select, .mr-criteria .su-btn, #su-jobs .su-more { min-height: 44px; }
+  .mr-x { width: 44px; height: 44px; }
+  .mr-section .su-consent { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mr-seg button, .mr-chip, .mr-meter i { transition: none; }
+}
+.mr-tier select, .mr-fallback select { text-overflow: ellipsis; padding-right: 24px; }
+.mr-criteria summary { padding: 4px 0; }
+@media (max-width: 720px) { .mr-criteria summary { padding: 12px 0; } }
+.mr-pin { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.mr-always { font-size: 0.8125rem; color: var(--muted); }
+.mr-always input, .mr-section .su-consent input { width: 18px; height: 18px; }
+@media (max-width: 720px) {
+  .mr-always, .mr-section .su-consent { min-height: 44px; padding-right: 8px; }
+  /* The box itself is the touch target (the 390 px walk measures the input): 44 px. */
+  .mr-always input, .mr-section .su-consent input { width: 44px; height: 44px; margin: 0; }
+}

@@ -144,6 +144,9 @@ class StreamParser:
         # tool_use that preceded it is the difference between "Bash failed" and an anonymous
         # error. It must therefore survive ACROSS lines, which is why it lives on the instance.
         self._tool_names: dict[str, str] = {}
+        # The last `rate_limit_event` the CLI emitted: its subscription windows' utilisation
+        # and reset times, which the model router's headroom reads (model_router.headroom).
+        self.rate_limit: Optional[dict[str, Any]] = None
 
     def feed(self, line: str) -> list[dict[str, Any]]:
         """Consume one line; return the turns it produced (usually zero or one).
@@ -162,6 +165,9 @@ class StreamParser:
             return produced
 
         kind = str(event.get("type") or "")
+        if kind == "rate_limit_event":
+            self.rate_limit = event
+            return produced
         if kind == "result":
             # The terminal event carries exactly what --output-format json would have returned.
             self.result = event
@@ -225,6 +231,8 @@ def parse_stream(stdout: str) -> tuple[Optional[dict[str, Any]], list[dict[str, 
     parser = StreamParser()
     for line in (stdout or "").splitlines():
         parser.feed(line)
+    if parser.result is not None and parser.rate_limit is not None:
+        parser.result.setdefault("_rate_limit", parser.rate_limit)
     return parser.result, parser.turns
 
 

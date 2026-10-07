@@ -200,13 +200,19 @@ def record_llm_call(
     ok: bool = True,
     error: Optional[str] = None,
     stage: Optional[str] = None,
+    route_id: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> None:
-    """Insert one llm_calls row from the call result + the ambient context. Never raises."""
+    """Insert one llm_calls row from the call result + the ambient context. Never raises.
+    `route_id` / `project_id` name the model router's decision and project when the caller
+    holds them (a routed chat call), over whatever the ambient context says."""
     try:
         from ..db import begin
         from .openai_adapter import price_for_model
 
-        ctx = _llm_ctx.get()
+        ctx = dict(_llm_ctx.get())
+        if project_id and not ctx.get("project_id"):
+            ctx["project_id"] = project_id
         u = usage or {}
         model = str(u.get("model") or "")
         # Self-reported cost (Claude CLI) is exact; otherwise the price table estimated it,
@@ -224,6 +230,12 @@ def record_llm_call(
             # The act column is written only when there is an act, so a store that predates
             # the ledger (or a test's minimal table) records the call exactly as before.
             signed = (", act_id", ", :act") if act_id else ("", "")
+            # The route that chose this call's model (model_router): by stage, else the last.
+            routes = ctx.get("routes") if isinstance(ctx.get("routes"), dict) else {}
+            route_id = route_id or routes.get(stage or ctx.get("stage") or "") \
+                or ctx.get("route_id")
+            if route_id:
+                signed = (signed[0] + ", route_id", signed[1] + ", :route")
             c.execute(
                 text(f"""
                     INSERT INTO llm_calls (
@@ -243,6 +255,7 @@ def record_llm_call(
                     "stage": stage or ctx.get("stage"),
                     "role": role,
                     "act": act_id,
+                    "route": route_id,
                     "eng": engine_name,
                     "model": model or None,
                     "pt": int(u.get("prompt_tokens") or 0),
@@ -272,6 +285,19 @@ def record_llm_call(
                 from .provider_limits import record_call_outcome
                 record_call_outcome(c, ctx.get("settings"), str(project_id), engine_name,
                                     ok=bool(ok), error=error)
+                # SUBSCRIPTION HEADROOM (model_router.headroom): the CLI's own window numbers
+                # and its limit sentences, folded into the source's observed windows.
+                # Pooled per ACCOUNT, written only when a window's state changes; a success
+                # clears the rejected windows it proves wrong (model_router.accounts).
+                from .model_router.policy import SUBSCRIPTION_ENGINES
+
+                if str(engine_name) in SUBSCRIPTION_ENGINES:
+                    from .model_router.store import observe
+
+                    observe(c, ctx.get("settings"), str(project_id), str(engine_name),
+                            event=u.get("rate_limit") if isinstance(u.get("rate_limit"), dict)
+                            else None, error=None if ok else error,
+                            ok_model=(model or "") if ok else None)
     except Exception as exc:  # noqa: BLE001 — telemetry must never break the pipeline
         log.warning("llm_call telemetry write failed (non-fatal): %s", exc)
 

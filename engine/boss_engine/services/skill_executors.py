@@ -550,9 +550,11 @@ def execute_model_generate_code(
     try:
         # THE PROJECT'S MODEL. Building the adapter from the bare deployment settings read
         # `llm_engine` ("auto" = OpenAI) and failed on a subscription-only install.
-        message, usage = project_chat_adapter(
-            context.connection, context.settings, context.project_id,
-        ).create_chat_completion(
+        with _routed(context, "implement", user_prompt):
+            adapter = project_chat_adapter(
+                context.connection, context.settings, context.project_id,
+            )
+        message, usage = adapter.create_chat_completion(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -1493,9 +1495,11 @@ def execute_model_generate_text(
         prompt = f"{prompt}\n\n--- material ---\n{material}"
 
     system = str(inputs.get("system") or inputs.get("instructions") or "").strip()
-    _ref, text_out, usage = project_chat_adapter(
-        context.connection, context.settings, context.project_id,
-    ).create_text_response(prompt, system_prompt=system)
+    with _routed(context, "writing", prompt):
+        adapter = project_chat_adapter(
+            context.connection, context.settings, context.project_id,
+        )
+    _ref, text_out, usage = adapter.create_text_response(prompt, system_prompt=system)
     body = str(text_out or "").strip()
     if not body:
         raise ValueError("the model returned nothing to write")
@@ -1562,8 +1566,10 @@ def execute_meeting_extract_actions(
     # The model THIS PROJECT connected (model_routing). Without it the adapter falls through to
     # OpenAI and an install on a Claude subscription fails with "OPENAI_API_KEY is not
     # configured".
+    with _routed(context, "writing", transcript):
+        adapter = project_chat_adapter(context.connection, context.settings, context.project_id)
     result = extract(
-        project_chat_adapter(context.connection, context.settings, context.project_id),
+        adapter,
         transcript=transcript,
         context=str(inputs.get("context") or ""),
     )
@@ -2244,8 +2250,10 @@ def execute_video_plan_edit(
     # resolved by model_routing, the one place every model-using skill gets its model.
     from .model_routing import project_chat_adapter
 
+    with _routed(context, "writing", instructions):
+        adapter = project_chat_adapter(context.connection, context.settings, context.project_id)
     result = plan_from_instructions(
-        project_chat_adapter(context.connection, context.settings, context.project_id),
+        adapter,
         instructions=instructions,
         house_style=str(inputs.get("house_style")
                         or house_style_for(context.connection, context.project_id)),
@@ -2468,3 +2476,26 @@ def execute_drive_import_video(
         "bytes": int(info.get("size") or 0),
         "drive_file_id": info.get("id"),
     }
+
+
+def _route_purpose(context: Any, step: str, text: Any):
+    """What the model router reads about a skill's model call (docs/product/MODEL_ROUTER.md):
+    the kind of step, the material, the workflow run and step it serves, and the caller. Reads
+    the context defensively: a skill can be run by anything that looks like a context."""
+    from .model_router.router import RouteRequest
+
+    about = getattr(context, "approval_about", None) or {}
+    about = about if isinstance(about, dict) else {}
+    return RouteRequest(kind="workflow_step", step=step,
+                        project_id=getattr(context, "project_id", None),
+                        unit_id=about.get("workflow_run_id") or about.get("run_id")
+                        or getattr(context, "created_by_job_id", None),
+                        ref=about.get("step_id"), role=getattr(context, "caller", None) or None,
+                        text=str(text or "")[:6000])
+
+
+def _routed(context: Any, step: str, text: Any):
+    """The purpose around a skill's `project_chat_adapter` call (model_routing.routing_purpose)."""
+    from .model_routing import routing_purpose
+
+    return routing_purpose(_route_purpose(context, step, text))

@@ -132,3 +132,22 @@ def github_probes():
 def model_probes():
     """The model stub's answers to Repo and models' one-question check, per key."""
     return _stub("model_probes")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_model_router():
+    """The model router caches snapshots and classifications per process (model_router.store,
+    .classifier). A test's project must not inherit another test's mode or policy."""
+    from boss_engine.services.model_router import store
+    from boss_engine.services.model_router.classifier import CLASSIFIER
+
+    from boss_engine.services.model_router import accounts, breaker
+
+    store.invalidate()
+    CLASSIFIER.clear()
+    accounts.reset_caches()
+    breaker.reset()
+    yield
+    store.invalidate()
+    accounts.reset_caches()
+    breaker.reset()

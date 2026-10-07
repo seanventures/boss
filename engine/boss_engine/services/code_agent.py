@@ -1009,6 +1009,8 @@ class ClaudeCodeAgent:
             "total_tokens": prompt_tokens + cache_read + cache_write + completion,
             "cost_usd_micros": cost_micros,
         }
+        if isinstance(data.get("_rate_limit"), dict):
+            usage["rate_limit"] = data["_rate_limit"]
         return usage, cost_micros
 
     def run_role(

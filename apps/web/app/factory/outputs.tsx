@@ -8,6 +8,8 @@
  * server's `word`; nothing here counts tests (only commands are real) or draws a diff (hunks are
  * not served: `View diff ↗` goes to the PR).
  */
+import { latestPerStep } from "../../lib/model-routes";
+import { WhyThisModel } from "../why-this-model";
 import { CaretDown, CaretRight, Check, X } from "@phosphor-icons/react";
 import { plural } from "../../lib/factory-floor";
 import React, { useEffect, useState } from "react";
@@ -266,6 +268,16 @@ function BriefBody({ c }: { c: Cockpit }) {
           <span data-user-text>{[b.reviewEngine, b.reviewModel].filter(Boolean).join(" · ")}</span>
           <span className="fx-muted" title={b.crossModel ? "A different model reviewed the code: no self-grading" : "The model that built it also reviewed it"}>
             {b.crossModel ? "cross-model" : "same model"}
+          </span>
+        </span>
+      ) : null}
+      {c.routes.length ? (
+        <span className="fx-out-col" data-group="models" data-testid="fx-brief-models">
+          <span className="fx-out-sub" title="Which model ran each stage, and why">Models</span>
+          <span className="wm-list">
+            {latestPerStep(c.routes).map((r) => (
+              <WhyThisModel key={r.id} route={r} title={r.step_label ?? r.step} />
+            ))}
           </span>
         </span>
       ) : null}

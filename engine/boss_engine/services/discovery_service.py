@@ -253,9 +253,13 @@ def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worke
     agent = make_code_agent(settings, engine="claude_code")
     if not hasattr(agent, "run_research"):
         raise RuntimeError("Discovery requires the claude_code engine (web research).")
+    # THE MODEL ROUTER picks the model (docs/product/MODEL_ROUTER.md): web research needs the
+    # Claude Code harness, so the source is pinned to it and the tier — research synthesis,
+    # Balanced by the default floor — picks the model on it. Fixed mode: the CLI's default.
+    research_model = _research_model(engine, settings, row, run_id)
 
     def research(stage: str, prompt: str) -> dict:
-        return spend.run(stage, lambda: agent.run_research(prompt),
+        return spend.run(stage, lambda: agent.run_research(prompt, model=research_model),
                          source_id=discovery_spend.RESEARCH_SOURCE_ID)
 
     last_attempt = int(row["attempt"] or 1) >= int(row["max_attempts"] or 1)
@@ -1243,3 +1247,26 @@ def _extract_json(text_out: str) -> dict:
         except Exception:
             continue
     return {}
+
+
+def _research_model(db_engine, settings, row, run_id: str):
+    """The routed model for a discovery's research stages, or None (the CLI's default)."""
+    try:
+        from ..db import begin
+        from .model_router import store
+        from .model_router.policy import Target
+        from .model_router.router import LegacyRoute, RouteRequest
+
+        payload = row["payload"] if isinstance(row["payload"], dict) else {}
+        request = RouteRequest(
+            kind="research", step="research_synthesis", project_id=row["project_id"],
+            unit_id=run_id, text=str(payload.get("idea") or payload.get("directive")
+                                     or payload.get("question") or "")[:6000],
+            task_pin=Target("claude_code", None),
+            legacy=lambda: LegacyRoute("claude_code", None,
+                                       "Discovery runs on Claude Code (web research)"))
+        with begin(db_engine) as c:
+            decision = store.route(c, settings, request)
+        return decision.model if decision.mode == "smart" else None
+    except Exception:  # noqa: BLE001 — research must not fail because routing did
+        return None
