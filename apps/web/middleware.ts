@@ -94,7 +94,10 @@ export async function middleware(request: NextRequest) {
   const local = localHttp(request);
   const login = new URL("/login", local || !process.env.BOSS_CONSOLE_PUBLIC_ORIGIN ? request.url : process.env.BOSS_CONSOLE_PUBLIC_ORIGIN);
   login.searchParams.set("next", path + request.nextUrl.search);
-  const response = local ? NextResponse.rewrite(login) : NextResponse.redirect(login);
+  // An EMPTY fragment on purpose: a redirect without one inherits the request's fragment, and a
+  // link's token (`#t=…`) would ride into /login, which ignores it. Pages a link lands on are
+  // public (lib/identity/pages.ts PUBLIC_AUTH_PATHS) and never get here.
+  const response = local ? NextResponse.rewrite(login) : NextResponse.redirect(`${login.toString()}#`);
   response.headers.set("Cache-Control", "no-store");
   return response;
 }

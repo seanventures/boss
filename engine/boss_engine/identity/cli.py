@@ -44,9 +44,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from . import links
+
 HOST_CLI_PRINCIPAL = "sys_host_cli"
 RECOVERY_TTL = timedelta(minutes=15)
-RECOVERY_PATH = "/auth/recover"
 
 
 class RecoveryError(RuntimeError):
@@ -138,7 +139,7 @@ def recover_owner(email: str, *, db: Any, origin: Optional[str] = None,
         db=db)
     bump_epoch(db, org_id, "owner recovered by host")
     # the token travels in the fragment: never in a request line the API or a proxy logs (A88)
-    link = f"{_origin(db, org_id, origin)}{RECOVERY_PATH}#token={token}"
+    link = links.url("recover_owner", _origin(db, org_id, origin), token)
     return Recovery(pid, link, expires, reactivated, not had_owner)
 
 
