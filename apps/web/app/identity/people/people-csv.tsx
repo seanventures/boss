@@ -15,6 +15,7 @@ import { ErrorLine, Sheet } from "../../../components/identity/kit";
 import { IdentityError, idPost } from "../../../lib/identity/api";
 import type { AccessRole, Group, Person } from "../../../lib/identity/types";
 import type { CsvInviteRow } from "../../../lib/identity/types-people";
+import { grantReach } from "../../../lib/identity/grant-limit";
 
 const hasMfa = (p: Person) => p.sign_in.passkeys > 0 || p.sign_in.totp || Boolean(p.sign_in.idp_mfa);
 
@@ -99,7 +100,7 @@ export function readInviteCsv(text: string, ctx: { roles: AccessRole[]; groups: 
     else if (seen.has(email.toLowerCase())) problem = "Twice in the file";
     else if (!role || role.system) problem = `No role called “${roleText}”`;
     else if (role.key === "owner") problem = "Owners are not invited in bulk";
-    else if (ctx.held && role.permissions.some((p) => !ctx.held!.has(p))) problem = `You don't hold all of ${role.name}`;
+    else if (!grantReach(ctx.held, role).ok) problem = `You don't hold all of ${role.name}`;
     else {
       const bad = groupNames.find((_, i) => !groups[i]);
       if (bad) problem = `No group called “${bad}”`;

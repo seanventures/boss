@@ -40,4 +40,4 @@ export async function actOnInfraAttentionAction(form: FormData): Promise<InfraAc
 // THE PERMISSION EACH ACTION DECLARES (IDENTITY.md §6.5, R4; lib/identity/guarded-action.ts).
 // A declaration for the console to mirror — disabled with the reason when not held — never a
 // decision: the API checks every call. tests/identity-mirroring.test.ts keeps this table whole.
-declareAction(actOnInfraAttentionAction, "infra:provision");
+declareAction(actOnInfraAttentionAction, "deployment:rollback");

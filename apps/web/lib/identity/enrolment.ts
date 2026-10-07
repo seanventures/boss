@@ -51,3 +51,17 @@ export function afterEnrolStep(step: { enrolment_grant?: boolean }, next: string
   if (step.enrolment_grant === false) return `/signin?error=${ENROLMENT_GRANT_REQUIRED}`;
   return enrolHref(next);
 }
+
+/**
+ * A SESSION THE API NO LONGER HONOURS GOES TO SIGN IN, BEFORE ANYTHING ELSE IS DECIDED (round 2,
+ * R2-WEB). A dead cookie (revoked, expired, or a network-mode console whose bridge was turned off
+ * by Require sign-in) passes middleware.ts, which only sees that a cookie or the network mode is
+ * there. The console used to ask for the org list first, got nothing, and showed the org picker
+ * with an enabled "Onboard organization" to someone nobody had signed in. The API's 401 on
+ * /v1/identity/me is the answer, in every console mode: sign in, coming back to `next`.
+ */
+export function signInAgainHref(problem: string | null | undefined, next: string): string | null {
+  if (problem !== "unauthenticated") return null;
+  const back = next.startsWith("/") && !next.startsWith("//") && !/^\/(login|signin)\b/.test(next) ? next : "/";
+  return `/login?next=${encodeURIComponent(back)}`;
+}

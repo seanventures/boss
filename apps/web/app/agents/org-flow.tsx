@@ -32,6 +32,7 @@ import { StuckItem, WaitItem, consoleHref, liveFirst, liveState, nameOf, runHref
 import { shownTeams } from "./org-teams";
 import { curvePath, lastRunReplay } from "./team-swarm";
 import { matches, reducedMotion, teamHue } from "./team-zones";
+import { localFull } from "../../lib/local-time";
 
 export const EDGE_CAP = 12;
 export const ISOLATE_FACES = 16;
@@ -603,6 +604,7 @@ function FlowNode(p: OrgFlowProps & {
   setActive: (k: string) => void; nodeRef: (el: HTMLElement | null) => void; onMore: () => void;
   failedRoles?: string[];
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const { team, board, live, search, anchor, expanded, onPath, dim, isolate } = p;
   const label = teamLabel(team.key, board);
   const out = board.teamEdges.filter((e) => e.from === team.key && e.to !== team.key);
@@ -631,7 +633,7 @@ function FlowNode(p: OrgFlowProps & {
         {team.waitingTotal || team.work.failed ? (
           <span className="ag-flow-waits-row">
             {team.waitingTotal ? (
-              <span className="ag-flow-waits" data-state="waiting" title={`Open since ${team.waiting[0]?.since ? new Date(team.waiting[0].since).toLocaleString() : "unknown"}`}>
+              <span className="ag-flow-waits" data-state="waiting" title={`Open since ${team.waiting[0]?.since ? localFull(team.waiting[0].since) : "unknown"}`}>
                 Waiting {team.waitingTotal} · oldest {ageWords(team.waiting[0]?.since ?? null)}
               </span>
             ) : null}
@@ -674,6 +676,7 @@ function FlowTable({ board, rows, search, visible, teamOf, filter, onClearFilter
   board: OrgBoard; rows: OrgEdge[]; search: string; visible: boolean; teamOf: (r: string) => string;
   filter: string | null; onClearFilter: () => void; onOpenEdge: (f: EdgeFocus) => void;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const [open, setOpen] = useState<Set<string>>(new Set());
   const q = search.trim();
   const pairsOf = (e: OrgEdge) => board.agentEdges.filter((a) => teamOf(a.from) === e.from && teamOf(a.to) === e.to
@@ -710,7 +713,7 @@ function FlowTable({ board, rows, search, visible, teamOf, filter, onClearFilter
                   <td data-label="Handoffs">{e.handoffs}</td>
                   <td data-label="Failed">{e.failed ? `${e.failed} failed ✕` : "0"}</td>
                   <td data-label="Waiting">{e.waiting ? `${e.waiting} waiting ⏸` : "0"}</td>
-                  <td data-label="Last" title={e.lastAt ? new Date(e.lastAt).toLocaleString() : undefined}>{e.lastAt ? `${ageWords(e.lastAt)} ago` : ""}</td>
+                  <td data-label="Last" title={e.lastAt ? localFull(e.lastAt) : undefined}>{e.lastAt ? `${ageWords(e.lastAt)} ago` : ""}</td>
                 </tr>
                 {isOpen ? pairs.map((a) => (
                   <tr key={`${key}:${a.from}>${a.to}`} className="ag-flow-pair">
@@ -757,7 +760,7 @@ function StuckNow({ board, teams }: { board: OrgBoard; teams: OrgTeam[] }) {
             {failed.map((f) => (
               <li key={f.actId} data-testid={`ag-flow-stuck-failed-${f.actId}`}>
                 <AgFace roleKey={f.roleKey} size={24} decorative />
-                <StuckItem roleKey={f.roleKey} age={`${ageWords(f.at)} ago`} ageTip={f.at ? new Date(f.at).toLocaleString() : undefined}
+                <StuckItem roleKey={f.roleKey} age={`${ageWords(f.at)} ago`} ageTip={f.at ? localFull(f.at) : undefined}
                            state="failed" word="Failed ✕" label={f.label}
                            action={f.runId ? <a className="ag-link" href={runHref(f.runId)}>Open run ↗</a> : null} />
               </li>

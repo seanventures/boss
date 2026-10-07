@@ -94,3 +94,27 @@ export function methodWords(m: string): string {
 export function keyCount(n: number): string {
   return `${n} ${n === 1 ? "key" : "keys"}`;
 }
+
+/**
+ * A change in a count, as the impact preview shows it: "+3", "−2", "+3 −2", or "no change". A
+ * zero side is never printed: "+0 −0" read as a broken preview (round 2, R2-WEB). Every delta on
+ * an identity screen is drawn by <Delta> (components/identity/kit.tsx), which uses this.
+ */
+export function deltaParts(gained: number, lost: number): { gained: string | null; lost: string | null; none: boolean } {
+  const g = Math.max(0, Math.trunc(gained || 0));
+  const l = Math.max(0, Math.trunc(lost || 0));
+  return { gained: g ? `+${g}` : null, lost: l ? `−${l}` : null, none: !g && !l };
+}
+
+/** An audit outcome in words ("ok" → "done"); an unknown one is humanised, never shown raw. */
+const OUTCOMES: Record<string, string> = { ok: "done", denied: "refused", failed: "failed", notice: "notice" };
+export function outcomeWords(outcome: string): string {
+  return OUTCOMES[outcome] ?? humanise(outcome).toLowerCase();
+}
+
+/** Where a security event's row opens: a request for access opens the queue that answers it
+ *  (Identity › Access requests); every other event opens in the audit log. */
+export const REQUESTS_PATH = "/identity/requests";
+export function eventHref(e: { id: string; event_type: string }): string {
+  return e.event_type === "access.requested" ? REQUESTS_PATH : `/identity/audit?event=${encodeURIComponent(e.id)}`;
+}

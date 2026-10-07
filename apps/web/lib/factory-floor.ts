@@ -249,8 +249,24 @@ export function usePolled<T>(url: string | null, parse: (w: unknown) => T,
   const seeded = useRef(seed?.initial ?? null);
   const seededEtag = useRef(seed?.etag ?? null);
   const [data, setData] = useState<T | null>(seeded.current);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(seeded.current === null);
+  const [error, setErrorState] = useState<string | null>(null);
+  const [loading, setLoadingState] = useState(seeded.current === null);
+  // A 304 CHANGES NOTHING, SO IT SETS NOTHING. Setting the same value again is not free: React
+  // may spend a render pass on an identical update, and under load the deploy drawer re-rendered
+  // on an unchanged answer (tests/deploy-drawer-polls-only-while-live.test.tsx, flaky). The
+  // setters compare with what was last set and skip an update that would change nothing.
+  const errorNow = useRef<string | null>(null);
+  const loadingNow = useRef(seeded.current === null);
+  const setError = useCallback((v: string | null) => {
+    if (errorNow.current === v) return;
+    errorNow.current = v;
+    setErrorState(v);
+  }, []);
+  const setLoading = useCallback((v: boolean) => {
+    if (loadingNow.current === v) return;
+    loadingNow.current = v;
+    setLoadingState(v);
+  }, []);
   const etag = useRef<string | null>(null);
   const kick = useRef<() => void>(() => {});
   const latest = useRef<T | null>(null);

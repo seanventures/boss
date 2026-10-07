@@ -15,7 +15,9 @@ import type { Permission } from "./permissions.gen";
 /** Set by middleware.ts on every page request: the pathname, for a layout's guard. */
 export const PATH_HEADER = "x-boss-path";
 
-export type PageAccess = { readonly permission: Permission } | { readonly authenticated: true };
+export type PageAccess = { readonly permission: Permission } | { readonly authenticated: true }
+  /** Held at the org or at ANY project (lib/identity/held-anywhere.ts): a project Admin's page. */
+  | { readonly anyScope: Permission };
 
 export type IdentityPage = {
   /** Route pattern; `[id]` matches one segment. */
@@ -32,6 +34,7 @@ export const IDENTITY_PAGES: readonly IdentityPage[] = [
   { path: "/identity", label: "Overview", tip: "Posture, people, roles and agents at a glance", access: { permission: "directory:read" }, tab: true },
   { path: "/identity/people", label: "People", tip: "Everyone who signs in, and their access", access: { permission: "user:read" }, tab: true },
   { path: "/identity/people/[id]", label: "Person", tip: "One person's access, sessions and security", access: { permission: "user:read" } },
+  { path: "/identity/requests", label: "Access requests", tip: "Requests for access waiting on you", access: { anyScope: "role_binding:assign" }, tab: true },
   { path: "/identity/groups", label: "Groups", tip: "Sets of people who share access roles", access: { permission: "group:read" }, tab: true },
   { path: "/identity/groups/[id]", label: "Group", tip: "Members and the roles they inherit", access: { permission: "group:read" } },
   { path: "/identity/roles", label: "Access roles", tip: "Named sets of permissions you bind to people", access: { permission: "access_role:read" }, tab: true },
@@ -72,6 +75,7 @@ export const CONSOLE_PAGES: readonly IdentityPage[] = [
   { path: "/v2/timeline", label: "Receipts", tip: "What happened, with evidence", access: area("activity") },
   { path: "/v2/infra", label: "Infra & Models", tip: "Hosts, deploys and models", access: area("delivery") },
   { path: "/v2/settings", label: "Settings", tip: "Repo and models", access: area("setup") },
+  { path: "/github-app", label: "GitHub App", tip: "Hands the App's manifest to GitHub", access: area("setup") },
   ...["/login", "/claim", "/invite", "/signin", "/signin/link", "/reset", "/signup", "/signup/verify"].map(
     (path) => ({ path, label: "Sign in", tip: "Public: signing in needs no session", access: PUBLIC })),
 ];

@@ -20,6 +20,8 @@
  * apiWrite, then the list and the board are read again.
  */
 import { GatedButton } from "../../components/gated";
+import { LockedPanel, lockedReason } from "../../components/locked-panel";
+import { isLocked } from "../../lib/identity/read-gates";
 import React, { forwardRef, useCallback, useEffect, useState } from "react";
 
 import { apiWrite } from "../../lib/api-write";
@@ -215,6 +217,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
   const [sources, setSources] = useState<CapSource[] | null>(null);
   const [sessions, setSessions] = useState<CapSession[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [locked, setLocked] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const who = actor || "ceo";
@@ -226,7 +229,9 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
         fetch(`/v1/entitlements/sources?project_id=${pid}`, { cache: "no-store" }),
         fetch(`/v1/entitlement-connection-sessions?project_id=${pid}&limit=20`, { cache: "no-store" }),
       ]);
+      if (isLocked(a)) { setLocked(await lockedReason(a)); setSources([]); setError(null); return; }
       if (!a.ok) throw new Error(`HTTP ${a.status}`);
+      setLocked(null);
       setSources(parseSources(await a.json()));
       setSessions(b.ok ? parseSessions(await b.json()) : []);
       setError(null);
@@ -253,8 +258,9 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
               tip="Where model capacity comes from: keys, plans and official logins.">
       <div className="su-stack" data-testid="setup-entitlements">
         {sources === null ? <span className="su-faint">Loading…</span> : null}
+        {locked ? <LockedPanel inline reason={locked} testId="setup-entitlements-locked" /> : null}
         {error ? <Tip tip={error} className="su-faint">Can&apos;t load capacity</Tip> : null}
-        {sources && !error && sources.length === 0 ? <span className="su-faint">No sources yet</span> : null}
+        {sources && !error && !locked && sources.length === 0 ? <span className="su-faint">No sources yet</span> : null}
         {(sources ?? []).map((src) => {
           const st = stateOf(src);
           const mine = sessions.filter((x) => x.sourceId === src.sourceId);

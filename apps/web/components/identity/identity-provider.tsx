@@ -24,7 +24,8 @@ import type { Permission } from "../../lib/identity/permissions.gen";
 import { checkWith } from "../../lib/identity/check";
 import { IdentityError, idGet, setCsrfToken } from "../../lib/identity/api";
 import { StepUpSheet } from "./step-up-sheet";
-import { installMirror } from "../../lib/identity/mirror";
+import { currentMirror, installMirror } from "../../lib/identity/mirror";
+import { installReadGate } from "../../lib/identity/read-gates";
 
 export const EPOCH_EVENT = "boss:identity-epoch";
 
@@ -130,11 +131,20 @@ export function IdentityProvider({ me: initialMe, org: initialOrg, project: init
 
   const stepUp = useCallback((reason: string) => new Promise<boolean>((resolve) => setAsk({ reason, resolve })), []);
 
-  // Code outside components (lib/call-action.ts) mirrors through the same check and step-up.
+  // Code outside components (lib/call-action.ts, the read gate) mirrors through the same check
+  // and step-up. Installed DURING RENDER as well as in the effect: a child's mount effect (the
+  // shell's first reads) runs before this provider's effects, and the read gate must already
+  // know who is looking (lib/identity/read-gates.ts).
+  const mirror = useMemo(() => ({ check: (p: Permission) => check(p), stepUp, refresh, projectId }),
+    [check, stepUp, refresh, projectId]);
+  if (typeof window !== "undefined" && currentMirror() !== mirror) {
+    installMirror(mirror);
+    installReadGate();
+  }
   useEffect(() => {
-    installMirror({ check: (p) => check(p), stepUp, refresh });
+    installMirror(mirror);
     return () => installMirror(null);
-  }, [check, stepUp, refresh]);
+  }, [mirror]);
 
   const value = useMemo<Ctx>(() => ({ me, org, project, projectId, stub, mirrored, check, refresh, stepUp }),
     [me, org, project, projectId, stub, mirrored, check, refresh, stepUp]);

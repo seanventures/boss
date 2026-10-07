@@ -41,20 +41,28 @@ describe("GitHub access", () => {
     expect(document.querySelector('[data-testid="gh-env-token"]')).toBeNull();
   });
 
-  it("Create the App POSTs the manifest to GitHub as a form", async () => {
+  it("Create the App hands the manifest to /github-app, the one page whose CSP lets a form reach GitHub", async () => {
     const api = fakeApi(board());
     withGitHub(api, NONE, (url, method) => method === "POST" && url.endsWith("/app/manifest")
       ? { post_url: "https://github.com/settings/apps/new?state=s1", manifest: { name: "BOSS x" }, state: "s1" } : null);
     const submitted: HTMLFormElement[] = [];
     vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (this: HTMLFormElement) { submitted.push(this); });
-    mounted = await mountBoard(board());
-    await click(document.querySelector('[data-testid="gh-app-create"]'));
-    await flush();
-    expect(submitted).toHaveLength(1);
-    expect(submitted[0].method.toUpperCase()).toBe("POST");
-    expect(submitted[0].action).toBe("https://github.com/settings/apps/new?state=s1");
-    const field = submitted[0].querySelector('input[name="manifest"]') as HTMLInputElement;
-    expect(JSON.parse(field.value)).toEqual({ name: "BOSS x" });
+    const assign = vi.fn();
+    const real = window.location;
+    Object.defineProperty(window, "location", { configurable: true, value: { ...real, assign, href: real.href, origin: real.origin } });
+    try {
+      mounted = await mountBoard(board());
+      await click(document.querySelector('[data-testid="gh-app-create"]'));
+      await flush();
+      // Not posted from Setup (its CSP is form-action 'self'): kept for this tab, then the hand-off opens.
+      expect(submitted).toHaveLength(0);
+      expect(assign).toHaveBeenCalledWith("/github-app");
+      expect(JSON.parse(window.sessionStorage.getItem("boss:github-app-manifest") ?? "null"))
+        .toEqual({ post_url: "https://github.com/settings/apps/new?state=s1", manifest: { name: "BOSS x" } });
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: real });
+      window.sessionStorage.removeItem("boss:github-app-manifest");
+    }
   });
 
   it("a created App offers Install and the picker, and choosing posts the installation", async () => {

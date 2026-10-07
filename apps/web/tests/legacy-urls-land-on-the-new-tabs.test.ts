@@ -67,10 +67,11 @@ describe("legacy Infra / System Configuration / Observability links", () => {
     expect(readObsUrl("?area=observability").view).toBe("apps");
   });
 
-  it("links into the Activity log with the filter shape the Activity spec honours", () => {
-    // §6.7: the Activity log accepts `source=` and `subject=` (it rewrites source → src).
-    expect(logsHref("deployment", "t_live")).toBe("?area=activity&source=deployment&subject=t_live");
-    expect(logsHref("llm_call", "claude-sonnet", "2026-10-04T00:00:00Z"))
-      .toBe("?area=activity&source=llm_call&subject=claude-sonnet&since=2026-10-04T00%3A00%3A00Z");
+  it("links into the Activity log through logHref, in the Log's own names, keeping the org", () => {
+    // §6.7 through lib/log-url.ts logHref (the one way into the Log): src, subject, from.
+    expect(logsHref("deployment", "t_live", null, "")).toBe("?area=activity&src=deployment&subject=t_live");
+    expect(logsHref("llm_call", "claude-sonnet", "2026-10-04T00:00:00Z", ""))
+      .toBe("?area=activity&src=llm_call&subject=claude-sonnet&from=2026-10-04T00%3A00%3A00Z");
+    expect(logsHref("deployment", "t_live", null, "?org=org_1&area=infra")).toBe("?org=org_1&area=activity&src=deployment&subject=t_live");
   });
 });

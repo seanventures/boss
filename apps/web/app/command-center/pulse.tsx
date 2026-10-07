@@ -17,6 +17,7 @@ import { AgentAvatar } from "../agent-avatar";
 import { nameOf } from "../agents/run-face";
 import { ago, navigate, plainClick, runPatch } from "../agents/live-util";
 import { Go, whoLine } from "./hero";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -90,6 +91,7 @@ export function uniqueEvents(events: PulseEvent[]): PulseEvent[] {
 const VERDICT: Record<string, string> = { approved: " — approved", changes_asked: " — asked for changes" };
 
 function Event({ e, now, orgId }: { e: PulseEvent; now: number | null; orgId?: string | null }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const who = nameOf(e.roleKey);
   const role = who.role && who.role.toLowerCase() !== who.name.toLowerCase() ? who.role : "";
   const when = ago(e.at, now);
@@ -135,6 +137,7 @@ export function weekLine(w: Week): string {
 export function PulseRow({ pulse, week, prsOpen, now, orgId }: {
   pulse: Pulse | null; week?: Week | null; prsOpen: number | null; now: number | null; orgId?: string | null;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   if (!pulse) return null;
   const top = pulse.top.slice(0, 5);
   const most = top[0]?.n ?? 1;

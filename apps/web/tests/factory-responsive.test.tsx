@@ -17,7 +17,10 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: 
 
 const { FloorView } = await import("../app/factory/floor");
 const CSS = codeOnly("app/factory/factory.css");
-const PHONE = CSS.slice(CSS.indexOf("{", CSS.indexOf("@media (max-width: 639px)")), CSS.indexOf("@media (prefers-reduced-motion"));
+// The phone block: from the first 639px query to the reduced-motion block AFTER it (an earlier
+// reduced-motion rule for the Apps tab sits above it in the file and emptied the slice).
+const PHONE_AT = CSS.indexOf("@media (max-width: 639px)");
+const PHONE = CSS.slice(CSS.indexOf("{", PHONE_AT), CSS.indexOf("@media (prefers-reduced-motion", PHONE_AT));
 
 afterEach(() => unmount());
 const noop = () => {};

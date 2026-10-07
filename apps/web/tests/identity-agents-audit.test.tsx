@@ -198,6 +198,29 @@ describe("the security audit log", () => {
       .toEqual({ q: "rt_7R", outcome: "denied,ok", actor: "usr_sam", grant: "" });
   });
 
+  // Round 2 (R2-WEB follow-up 4): the role walk pressed an Auditor's Verify now and Export and saw
+  // 401. audit:export is a step-up permission the Auditor HOLDS, so a press must open "confirm
+  // it's you" and retry — never read as a refusal.
+  it.each(["verify-chain", "export-audit"])("an Auditor whose step-up is stale: %s opens confirm-it's-you, not a refusal", async (id) => {
+    const auditor = as("mei@acme.dev");
+    const el = await mount(auditor, <AuditScreen initial={null} initialFilters={EMPTY_FILTERS} initialEvent={null} />);
+    const b = el.querySelector(`[data-testid='${id}']`)!;
+    expect(b.getAttribute("aria-disabled")).toBeNull();
+    expect(b.getAttribute("data-can")).toBe("yes");
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://x").pathname;
+      if (path === "/v1/identity/audit/verify" || path === "/v1/identity/audit/export") {
+        calls.push({ method: "POST", path, body: null });
+        return new Response(JSON.stringify({ error: "step_up_required" }), { status: 401, headers: { "content-type": "application/json" } });
+      }
+      return inner(input, init);
+    }));
+    await click(b);
+    expect(document.querySelector("[data-testid='step-up-sheet']"), "the step-up sheet").not.toBeNull();
+    expect(document.body.textContent).not.toMatch(/Needs “|not allowed|forbidden/i);
+  });
+
   it("a Viewer cannot verify or export, and is told why", async () => {
     const viewer = as("diego@acme.dev");
     const el = await mount(viewer, <AuditScreen initial={null} initialFilters={EMPTY_FILTERS} initialEvent={null} />);

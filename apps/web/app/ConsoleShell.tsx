@@ -1,5 +1,6 @@
 "use client";
 
+import { GatedButton } from "../components/gated";
 import { IDENTITY_PARAMS } from "./url-intent";
 import { isInConsoleLink } from "./console-href";
 import { consoleParams, resolveLegacyArea } from "./legacy-areas";
@@ -1275,7 +1276,8 @@ function ConsoleShellInner({
               first, then the build. The Factory's menu keeps the other doors (a workflow, a
               direct change, a benchmark); one primary press in both places. */}
           {/* ONE PRODUCT (walk D19): on the Factory its own header holds `+ New build`. */}
-          {active !== "code_tasks" ? <button
+          {active !== "code_tasks" ? <GatedButton
+            permission="meeting:convene"
             type="button"
             className="bx-new-project"
             data-testid="topbar-new-project"
@@ -1283,7 +1285,7 @@ function ConsoleShellInner({
             onClick={() => openPlan("pm", { from: "palette" })}
           >
             <span aria-hidden>+</span> New build
-          </button> : null}
+          </GatedButton> : null}
 
           <div className="bx-topbar-title" id="boss-console-title">
             {title?.label ?? activeDef.label}

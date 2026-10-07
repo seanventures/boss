@@ -32,10 +32,15 @@ describe("Skip and proceed", () => {
     // that did not fail and for an approval, and the SAME verdict is what skip_failed_step
     // enforces through `require`.
     expect(ENGINE).toContain("if step_status not in SKIPPABLE_STEP_STATES:");
-    // ...and a refused approval of any kind: a gate, or a stack deployment the operator
-    // rejected (is_refused_approval) — skipping either would turn a "no" into a yes.
-    expect(ENGINE).toContain("elif (is_gate(_step_kind(step), step_capability(step))");
-    expect(ENGINE).toContain("or is_refused_approval(step)):");
+    // ...and a standalone gate (agents-home D3, b89ce9f5): skipping it would carry the run past
+    // a "no". A step whose OWN action was refused may be skipped — the action then never runs,
+    // which is what the no asked for. One rule, skip_refusal, read by the list and by
+    // skip_failed_step alike.
+    expect(ENGINE).toContain("elif skip_refusal(step):");
+    const at = ENGINE.indexOf("def skip_refusal(");
+    const rule = ENGINE.slice(at, ENGINE.indexOf("\ndef ", at + 1));
+    expect(rule).toContain("if is_gate(_step_kind(step), step_capability(step)):");
+    expect(rule).toContain("return SKIP_PAST_A_NO");
   });
 
   it("is never offered on an approval gate — a refused gate is somebody's no", () => {

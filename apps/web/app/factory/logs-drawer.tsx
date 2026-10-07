@@ -11,6 +11,7 @@ import React, { useEffect, useId, useRef, useState } from "react";
 import { LiveDeployment } from "../deploy-ui";
 import { fetchBuildLog, type LogLine } from "./cockpit-actions";
 import { areaHref, clockOf, whoName } from "./cockpit-util";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 export type LogTab = "build" | "preview" | "deploy";
 
@@ -56,6 +57,7 @@ export function LogsDrawer({ projectId, runId, previewId, previewStatus, deployI
   projectId: string; runId: string; previewId: string | null; deployId: string | null;
   tab: LogTab; onTab: (t: LogTab) => void; onClose: () => void;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const headId = useId();
   const box = useRef<HTMLElement>(null);
   const [agent, setAgent] = useState("");

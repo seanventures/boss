@@ -51,8 +51,8 @@ export function SharingAsk({ projectId, actor }: { projectId: string; actor: str
           <span className="im-ask-head">
             <GatedButton permission="telemetry:manage" type="button" className="ag-btn ag-btn-primary" disabled={busy} data-testid="su-sharing-on"
                     onClick={() => void answer(true)}>Turn on</GatedButton>
-            <button type="button" className="ag-btn" disabled={busy} data-testid="su-sharing-no"
-                    title="Off. Change it any time in Govern › Sharing." onClick={() => void answer(false)}>Not now</button>
+            <GatedButton permission="telemetry:manage" type="button" className="ag-btn" disabled={busy} data-testid="su-sharing-no"
+                    title="Off. Change it any time in Govern › Sharing." onClick={() => void answer(false)}>Not now</GatedButton>
           </span>
         </>
       ) : (

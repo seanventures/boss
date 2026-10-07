@@ -1,7 +1,7 @@
 import { loadAuthOptions } from "../auth-options";
 import { passwordMin } from "../../../lib/identity/types-account";
 import { Reset } from "./reset";
-import { emailSignInOffered } from "../login/sign-in";
+import { emailSignInOffered } from "../../../lib/identity/email-sign-in";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Reset password · BOSS" };

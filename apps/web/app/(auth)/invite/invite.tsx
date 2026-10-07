@@ -51,6 +51,9 @@ export function InviteAccept({ token, invitation, options }: { token: string; in
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Days left, from a clock read after mount: the server's "now" is not the browser's.
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => { setNow(Date.now()); }, []);
 
   if (!invitation) {
     return (
@@ -63,7 +66,7 @@ export function InviteAccept({ token, invitation, options }: { token: string; in
     );
   }
 
-  const days = invitation.expires_at ? Math.max(0, Math.ceil((Date.parse(invitation.expires_at) - Date.now()) / 86_400_000)) : null;
+  const days = invitation.expires_at && now !== null ? Math.max(0, Math.ceil((Date.parse(invitation.expires_at) - now) / 86_400_000)) : null;
   const ok = name.trim().length > 0 && password.length >= minPw;
 
   const accept = async () => {

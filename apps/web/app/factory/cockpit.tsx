@@ -47,6 +47,7 @@ import { Outputs, defaultOpen, type OutputKey } from "./outputs";
 import { StationLine } from "./station-line";
 import { Story, bayLabel } from "./story";
 import { plural } from "../../lib/factory-floor";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 export type CockpitProps = {
   projectId: string;
@@ -156,6 +157,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
   c: CockpitData; projectId: string; runId: string; actor: string;
   onClose: () => void; onOpenBuild: (runId: string) => void; refresh: () => void;
 }) {
+  useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const h1 = useRef<HTMLHeadingElement>(null);
   const root = useRef<HTMLElement>(null);
   const now = useNow(1000);

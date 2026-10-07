@@ -30,6 +30,8 @@ import { OrgEdgePanel, type EdgeFocus } from "./org-edge-panel";
 import { OrgFlow } from "./org-flow";
 import { OrgTeams } from "./org-teams";
 import { useNarrow } from "./team-zones";
+import { localFull } from "../../lib/local-time";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 export type OrgLayout = "teams" | "flow" | "lines";
 const LEGACY_LAYOUT: Record<string, OrgLayout> = { zones: "teams", swarm: "flow" };
@@ -85,6 +87,7 @@ export type OrgViewProps = {
 
 export function OrgView({ projectId, live, search = "", focusRunId, focusTeam, onClearFocus, lines, actor,
                           onNewAgent }: OrgViewProps): React.ReactElement {
+  const identityV = useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const initial = useMemo(() => (typeof window !== "undefined" ? readOrgUrl(window.location.search)
     : { layout: null, days: 7 as OrgDays, isolate: null }), []);
   const [layout, setLayoutState] = useState<OrgLayout>(initial.layout ?? (focusRunId ? "flow" : "teams"));
@@ -100,7 +103,8 @@ export function OrgView({ projectId, live, search = "", focusRunId, focusTeam, o
   const org = useOrgBoard(projectId, days, true);
   const board = org.board;
   const actions = useMemo(() => (actor ? orgActions(projectId, actor, org.refresh) : null),
-                          [projectId, actor, org.refresh]);
+                          // eslint-disable-next-line react-hooks/exhaustive-deps -- its toasts name agents
+                          [projectId, actor, org.refresh, identityV]);
 
   // Back/forward and a link arriving: the URL wins.
   useEffect(() => {
@@ -243,7 +247,7 @@ export function OrgView({ projectId, live, search = "", focusRunId, focusTeam, o
                 title="Live updates are paused. Press Live in the top bar.">Paused</span>
         ) : stale && org.confirmedAt ? (
           <span className="ag-chip ag-org-status" data-testid="ag-org-stale"
-                title={new Date(org.confirmedAt).toLocaleString()}>
+                title={localFull(org.confirmedAt)}>
             Updated {Math.max(1, Math.round((Date.now() - org.confirmedAt) / 60_000))}m ago
           </span>
         ) : null}

@@ -297,7 +297,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     form.set("actor", actor);
     form.set("project_id", projectId);
     try {
-      const r = await callAction(actOnInfraAttentionAction, undefined, "infra:provision")(form);
+      const r = await callAction(actOnInfraAttentionAction, undefined, "deployment:rollback")(form);
       if (r.ok) {
         if (r.open) navigate(infraOpenPatch(r.open));
         setDone(r.result || a.label);
@@ -446,7 +446,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
           </GatedButton>
         )) : null}
         {item.kind === "infra" && !done ? item.answers.filter((a) => a.key !== "open").map((a) => (
-          <GatedButton key={a.key} permission="infra:provision" type="button" className="ag-btn" data-testid={`ag-att-infra-${a.key}`}
+          <GatedButton key={a.key} permission="deployment:rollback" type="button" className="ag-btn" data-testid={`ag-att-infra-${a.key}`}
                   disabled={!a.enabled || busy !== null} title={a.reason || undefined}
                   aria-busy={busy === a.key || undefined} onClick={() => void chooseInfra(a)}>
             {busy === a.key ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}

@@ -10,6 +10,7 @@ import { Check, EnvelopeSimple, Copy, UsersThree } from "@phosphor-icons/react";
 
 import { IdentityError, idPost } from "../../lib/identity/api";
 import type { AccessRole, Group } from "../../lib/identity/types";
+import { grantReach } from "../../lib/identity/grant-limit";
 import { useGuardedCall, useIdentity } from "./identity-provider";
 import { ErrorLine, RoleChip, Sheet } from "./kit";
 import { showToast } from "../../app/client-forms";
@@ -30,7 +31,7 @@ export function InviteSheet({ roles, groups = [], onClose, onInvited }: {
   const [error, setError] = useState<string | null>(null);
   const guarded = useGuardedCall();
   const held = org?.permissions;
-  const reachable = (r: AccessRole) => !held || r.permissions.every((p) => held.has(p));
+  const reach = (r: AccessRole) => grantReach(held, r);
 
   const list = emails.split(/[\s,;]+/).map((e) => e.trim()).filter((e) => e.includes("@"));
 
@@ -92,10 +93,10 @@ export function InviteSheet({ roles, groups = [], onClose, onInvited }: {
         <span className="idn-label">Access role</span>
         <div className="idn-segs" role="radiogroup" aria-label="Access role">
           {roles.filter((r) => r.key !== "owner" && !r.system).map((r) => {
-            const ok = reachable(r);
+            const { ok, reason } = reach(r);
             return (
               <button key={r.id} type="button" role="radio" aria-checked={role === r.key} aria-pressed={role === r.key}
-                aria-disabled={!ok || undefined} title={ok ? r.description : "You don't hold all of it"}
+                aria-disabled={!ok || undefined} title={reason || undefined}
                 onClick={() => { if (ok) setRole(r.key); }}>
                 <RoleChip roleKey={r.key} name={r.name} />
               </button>

@@ -148,7 +148,7 @@ export function MeetingConsensusCard({
   meetings?: Array<{ id: string; title: string }>;
 }) {
   const [tallyState, tallyAction, tallyPending] = useActionState(callAction(tallyVotesAction, undefined, "meeting:convene"), null);
-  const [sweepState, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction, undefined, "meeting:convene"), null);
+  const [sweepState, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction, undefined, "system:operate"), null);
   const bound = Boolean(meetingId);
   // AN OPERATOR FORM, NOT A FIXTURE. On boss-1 this card sat on the Meetings screen with votes
   // prefilled 2 / 1 / 0, "requires meeting_id" copy and an "mtg_… or mrun_…" placeholder — a
@@ -214,7 +214,7 @@ export function MeetingConsensusCard({
         </p>
         <form action={sweepAction}>
           <input type="hidden" name="actor" value={actor} />
-          <SubmitButton permission="meeting:convene" className="button secondary" type="submit" disabled={sweepPending}>
+          <SubmitButton permission="system:operate" className="button secondary" type="submit" disabled={sweepPending}>
             {sweepPending ? "Sweeping…" : "Sweep stalled meeting runs"}
           </SubmitButton>
         </form>
@@ -238,7 +238,7 @@ export function MeetingConsensusCard({
 // --- Software-factory scale-up: WIP + confidence merge gate + chunk planner ---
 export function FactoryScaleCard({ wip }: { wip: WipStatus }) {
   const [mergeState, mergeAction, mergePending] = useActionState(callAction(mergeCheckAction, undefined, "code_task:read"), null);
-  const [chunkState, chunkAction, chunkPending] = useActionState(callAction(chunkPlanAction, undefined, "code_task:create"), null);
+  const [chunkState, chunkAction, chunkPending] = useActionState(callAction(chunkPlanAction, undefined, "code_task:read"), null);
   const planeLabel =
     wip?.githubPlane === "mission_control_binding"
       ? `GitHub: Mission Control binding${wip.githubFullName ? ` (${wip.githubFullName})` : ""}`

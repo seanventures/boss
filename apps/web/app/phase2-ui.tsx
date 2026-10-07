@@ -67,7 +67,7 @@ export function AutonomyEvaluateCard({ projectId, actor }: { projectId: string; 
         Gather a role’s allowed/denied/scope-violation events since its last review and run a
         governance review — auto-proposes an upgrade decision or auto-downgrades on a violation.
       </p>
-      <ActionForm permission="autonomy:read" action={evaluateAutonomyAction} className="composer compact">
+      <ActionForm permission="autonomy:manage" action={evaluateAutonomyAction} className="composer compact">
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="actor" value={actor} />
         <label className="field">
@@ -106,12 +106,12 @@ export function RouterHealthCard({
         </p>
       ) : null}
       <div style={{ display: "flex", gap: 8 }}>
-        <ActionForm permission="model_provider:read" action={pollProviderHealthAction}>
+        <ActionForm permission="system:operate" action={pollProviderHealthAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
           <SubmitButton className="button secondary" type="submit">Poll provider health</SubmitButton>
         </ActionForm>
-        <ActionForm permission="model_provider:manage" action={recordRouterRationaleAction}>
+        <ActionForm permission="system:operate" action={recordRouterRationaleAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
           <SubmitButton className="button secondary" type="submit">Record rationale</SubmitButton>

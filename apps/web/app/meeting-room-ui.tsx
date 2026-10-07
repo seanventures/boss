@@ -762,7 +762,7 @@ function ManageSeats({ projectId, roles }: { projectId: string; roles: MeetingRo
 function PanelsMaintenance({ actor, meetings }: { actor: string; meetings: Meeting[] }) {
   const [job, setJob] = useState<"vote" | "sweep" | null>(null);
   const [vote, voteAction, votePending] = useActionState(callAction(tallyVotesAction, undefined, "meeting:convene"), null);
-  const [sweep, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction, undefined, "meeting:convene"), null);
+  const [sweep, sweepAction, sweepPending] = useActionState(callAction(sweepStalledMeetingsAction, undefined, "system:operate"), null);
   const votable = meetings.filter((m) => m.can_vote !== false && !meetingLive(m));
   const data = (r: typeof vote) => ((r?.data ?? {}) as Record<string, unknown>);
   return (
@@ -806,7 +806,7 @@ function PanelsMaintenance({ actor, meetings }: { actor: string; meetings: Meeti
             <input type="hidden" name="actor" value={actor} />
             <p className="rp-sub">A panel whose worker died mid-round stays “in session” until it is swept. Sweeping marks it
               stopped, so it can be convened again.</p>
-            <SubmitButton permission="meeting:convene" type="submit" className="rp-btn primary sm" disabled={sweepPending}>Sweep stalled panels</SubmitButton>
+            <SubmitButton permission="system:operate" type="submit" className="rp-btn primary sm" disabled={sweepPending}>Sweep stalled panels</SubmitButton>
             {sweep ? (sweep.ok
               ? <p className="rp-okmsg" data-testid="maint-sweep-result">{Number(data(sweep).swept)
                   ? `Swept ${Number(data(sweep).swept)} stalled panel${Number(data(sweep).swept) === 1 ? "" : "s"}.`
