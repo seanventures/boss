@@ -2,8 +2,9 @@
 
 The console-stub journeys (apps/web/tests/_helpers/identity-journeys.ts) prove the screens; these
 prove the whole journey: a real browser through the real console, AND the API half of every step
-(status codes, audit events, database state). A check that fails because of a known, assigned
-bug is recorded `xfail` naming the fix item; assertions are never weakened to pass.
+(status codes, audit events, database state). No check is an expected failure: every one passes or
+fails (round 3 removed the last `known=` markers when their bugs were fixed); assertions are never
+weakened to pass.
 
     cd tests && python3 -m e2e.identity.journeys_real --console http://localhost:53100 \\
         --accounts <accounts.json> --out <dir> [--only J3,J7]
@@ -385,7 +386,6 @@ def j4(env: Env, j: Journey) -> None:
         j.check("no SMTP: /reset says an admin issues the link (no form that pretends to send)",
                 "admin" in txt.lower() and apage.locator("#reset-email").count() == 0 and "hit an error" not in txt,
                 expect="admin hand-over words, no email form", actual=txt[:200],
-                known="unassigned (new: /reset crashes server-side — emailSignInOffered() is a client function called from the server page)",
                 repro=f"GET {env.web}/reset anonymous, no SMTP → “This page hit an error”; web log: Attempted to call emailSignInOffered() from the server")
     actx.close()
 
@@ -398,7 +398,6 @@ def j4(env: Env, j: Journey) -> None:
     j.check("API: a wrong password answers 401 invalid_credentials, the same as an unknown address",
             wrong["status"] == nobody["status"] == 401 and wrong.get("body") == nobody.get("body") == {"error": "invalid_credentials"},
             expect='401 {"error": "invalid_credentials"} for both', actual=f"{wrong['status']} {short(wrong.get('body'))} | {nobody['status']} {short(nobody.get('body'))}",
-            known="unassigned (new: auth.login.failed audit refuses its own details — identifier_hash() has no 'hmac:' prefix — so every failed sign-in is a 500 AuditWriteRefused)",
             repro="POST /v1/auth/login {email: any, password: wrong} → 500 internal_error; api log: AuditWriteRefused auth.login.failed: 'identifier' must be stored as identifier_hmac(...) (A79)")
     sid1 = (me(s1).get("body") or {}).get("session_id")
     sid2 = (me(s2).get("body") or {}).get("session_id")
@@ -413,8 +412,7 @@ def j4(env: Env, j: Journey) -> None:
     j.check("the person page offers the admin reset link the reset page promises",
             opage.get_by_role("button", name=re.compile("reset link|password", re.I)).count() > 0,
             expect="a 'Reset link' action on People › person (the /reset page sends people there)",
-            actual="no such control", known="FX-C P1-17 (dead end: /reset says an admin can issue a link; People has no control)",
-            repro=f"{env.web}/identity/people/{p.principal_id} as the Owner")
+            actual="no such control", repro=f"{env.web}/identity/people/{p.principal_id} as the Owner")
     seq0 = audit_seq(opage)
     rl = K.stepped(opage, owner, "POST", f"/v1/identity/users/{p.principal_id}/reset-link", None, j)
     link = K.secret((rl.get("body") or {}).get("link") or "")
@@ -433,7 +431,6 @@ def j4(env: Env, j: Journey) -> None:
     j.shot(rpage, "reset-link-page")
     j.check("the reset link opens the new-password form", ui_ok, expect="#new-pw form",
             actual=K.body_text(rpage, 200),
-            known="unassigned (new: /reset crashes server-side — emailSignInOffered() called from the server)",
             repro=f"open the admin-issued {env.web}/reset#t=… link")
     if ui_ok:
         rpage.fill("#new-pw", new_pw)
@@ -465,7 +462,7 @@ def j4(env: Env, j: Journey) -> None:
             actual=f"{again['status']} {short(again.get('body'))}")
     old = K.raw_fetch(rpage, "POST", "/v1/auth/login", {"email": p.email, "password": p.password}, csrf=False)
     j.check("API: the old password no longer signs in", old["status"] == 401, expect="401 invalid_credentials",
-            actual=f"{old['status']} {short(old.get('body'))}", known="unassigned (the failed-sign-in 500: AuditWriteRefused, see above)")
+            actual=f"{old['status']} {short(old.get('body'))}")
     if old["status"] >= 500:
         rpage.wait_for_timeout(1500)      # the console's proxy answers 502 once after the API's 500
     p.password = new_pw
@@ -566,7 +563,7 @@ def j5(env: Env, j: Journey) -> None:
         fpage.locator("[data-testid=recovery-codes]").count() > 0
     j.check("the console forces regeneration (new codes shown / required before going on)", forced,
             expect="the person is taken to make new recovery codes", actual=f"landed at {fpage.url}",
-            known="FX-A P2 (recovery-code forced regeneration)", repro=f"sign in {env.web}/login with a recovery code when 3 are left")
+            repro=f"sign in {env.web}/login with a recovery code when 3 are left")
     fctx.close()
 
     # Admin resets the Operator's MFA in the console (step-up first).
@@ -713,7 +710,6 @@ def j11(env: Env, j: Journey) -> None:
                 and (b.get_attribute("title") or "") == _needs_words(vpage, gate),
                 expect="disabled, gated on a permission the Viewer lacks, titled with its Needs “…” · ask an Admin",
                 actual=f"aria-disabled={b.get_attribute('aria-disabled')} data-permission={gate!r} title={b.get_attribute('title')!r}",
-                known="FX-C P1-18 (pre-grey actions the person cannot take)",
                 repro=f"{env.web}/ as seed-viewer: top bar “+ New build”")
     vpage.goto(f"{env.web}/identity", wait_until="domcontentloaded")
     vpage.wait_for_selector("[data-testid=overview-invite]", timeout=30000)
@@ -830,7 +826,7 @@ def j12(env: Env, j: Journey) -> None:
     lost = re.search(r"[−-](\d+)\s*\n?\s*API operations", impact)
     j.check("the impact preview counts the API operations lost", bool(lost) and int(lost.group(1)) > 0,
             expect="−N API operations, N > 0", actual=impact[:400].replace("\n", " · "),
-            known="FX-C P1-11/12/13 (impact preview counts)", repro=f"{env.web}/identity/roles/<clone of Operator>: turn off deployment:create")
+            repro=f"{env.web}/identity/roles/<clone of Operator>: turn off deployment:create")
     pv = K.stepped(apage, admin, "POST", f"/v1/identity/access-roles/{role_id}/preview",
                    {"permissions": [x for x in role.get("permissions", []) if x != "deployment:create"]}, j)
     pvb = pv.get("body") or {}
@@ -839,7 +835,7 @@ def j12(env: Env, j: Journey) -> None:
             expect="the holder among the affected", actual=short(pvb, 300))
     j.check("API: the preview counts pages/routes/tools lost (§10 shape)", int((pvb.get("routes") or {}).get("lost") or 0) > 0,
             expect="routes.lost > 0 (and pages±, tools±)", actual=f"keys={sorted(pvb)}",
-            known="FX-C P1-11/12/13 (impact preview counts)", repro="POST /v1/identity/access-roles/<id>/preview as an Admin")
+            repro="POST /v1/identity/access-roles/<id>/preview as an Admin")
 
     # Save: stale MFA first, so the step-up sheet must appear.
     K.age_my_session(env.stack, apage)
@@ -913,7 +909,6 @@ def j13(env: Env, j: Journey) -> None:
         j.check("the new-account sheet greys out roles the Admin does not fully hold (as Invite does)",
                 r0.get_attribute("aria-disabled") == "true",
                 expect="aria-disabled with “You don't hold all of it”", actual=f"aria-disabled={r0.get_attribute('aria-disabled')} title={r0.get_attribute('title')!r}",
-                known="unassigned (new: NewAccount sheet offers every role; the invite sheet applies the grant limit)",
                 repro=f"{env.web}/identity/service-accounts → New, as an Admin: an Owner-only custom role is selectable")
     sheet_radios.filter(has_text=re.compile("^Operator")).first.click()
     j.shot(apage, "new-service-account")
@@ -1182,10 +1177,12 @@ def _j8_on(env: Env, j: Journey, T: Target, *, phase: str) -> bool:
     j.shot(ppage, "consent-sheet")
     j.check("API: the start answered 409 consent_required", any(st == 409 for st, _ in starts),
             expect="a 409 on the start", actual=starts[-4:])
-    sheet = K.body_text(ppage)
+    # The sheet itself, not the page's first N characters (the rail and the feed come first).
+    sheet = ppage.locator("[data-testid=consent-sheet]").first.inner_text(timeout=10000)
     offers = [b.inner_text().strip() for b in ppage.locator("[data-testid=consent-durations] button").all()]
-    j.check("the consent sheet names the agents and offers “for this build only”", "act for you" in sheet.lower() or "Let " in sheet,
-            expect="“Let … act for you?” + durations", actual=f"offers={offers}")
+    j.check("the consent sheet names the agents and offers “for this build only”",
+            "act for you" in sheet.lower() and any(re.search(r"this (build|run) only", o, re.I) for o in offers),
+            expect="“Let … act for you?” + a this-build-only duration", actual=f"{sheet[:160]!r} offers={offers}")
     grants_posted: list[Any] = []
 
     def _grant_resp(r: Any) -> None:
@@ -1207,7 +1204,6 @@ def _j8_on(env: Env, j: Journey, T: Target, *, phase: str) -> bool:
         said = err.first.inner_text()[:200] if err.count() else ""
         j.check("a refused grant is explained in the sheet (not “That didn't work”)", bool(said) and "didn't work" not in said,
                 expect=f"words for {short(refused[-1], 120)}", actual=said,
-                known="FX-C P1-11/12/13 (real error states, no raw codes)",
                 repro="consent sheet → For this run only, as a person whose GitHub cannot reach the repo")
     mine = (api(ppage, "GET", "/v1/identity/me/delegations").get("body") or {}).get("delegations", [])
     new = [g for g in mine if g["id"] not in before]
@@ -1357,8 +1353,7 @@ def j10(env: Env, j: Journey) -> None:
             expect="event naming preview:manage", actual=short(ev))
     lin = api(apage, "GET", f"/v1/identity/agents/{fid}/lineage")
     j.check("API: the agent's lineage route lists ceiling_changed", lin["status"] == 200 and "ceiling" in json.dumps(lin.get("body")),
-            expect="GET /v1/identity/agents/{id}/lineage → ceiling_changed", actual=lin["status"],
-            known="FX-B P2 (lineage route)")
+            expect="GET /v1/identity/agents/{id}/lineage → ceiling_changed", actual=lin["status"])
     post = K.stepped(opage, owner, "POST", "/v1/identity/me/delegations",
                      {"agents": [fid], "permissions": ["preview:manage"], "projects": [PROJECT], "kind": "standing", "days": 1, "purpose": "fxd-j10 after"}, j)
     j.check("after: no grant can hand Forge preview:manage (403 exceeds_ceiling naming it)",
@@ -1567,7 +1562,6 @@ def j2(env: Env, j: Journey) -> None:
             page.locator("[data-testid=claim-legacy-password]").count() == 0,
             expect="the claim proceeds with the setup link (no shared password asked)",
             actual="the page asks for the shared console password",
-            known="unassigned (new: /v1/auth/options picks legacy_password over setup_token, so the claim page ignores #t=)",
             repro=f"{s2.web}/claim#t=<setup-link token> on a compose install (BOSS_CONSOLE_PASSWORD is always set)")
     page.goto(f"{s2.web}/claim", wait_until="domcontentloaded")
     page.wait_for_selector("#claim-name", timeout=30000)
@@ -1595,8 +1589,7 @@ def j2(env: Env, j: Journey) -> None:
     kinds = [b.get("kind") for b in m.get("banners") or []]
     j.check("a banner counts down the shared password's last days", any("legacy" in str(k) for k in kinds)
             or page.locator("[data-testid=identity-banners]").filter(has_text=re.compile("password", re.I)).count() > 0,
-            expect="a legacy-password banner with a countdown", actual=kinds,
-            known="FX-A P0-2 (wire the banners)")
+            expect="a legacy-password banner with a countdown", actual=kinds)
     again = K.raw_fetch(page, "POST", "/v1/auth/setup/claim",
                         {"legacy_password": shared, "name": "x", "email": "x@example.test"}, csrf=False)
     j.check("API: the claim answers 404 for good, even with the shared password", again["status"] == 404,
@@ -1611,8 +1604,7 @@ def j2(env: Env, j: Journey) -> None:
     j.check("the sign-in page still offers the shared password (as the legacy Operator, 30 days)",
             bool(opts.get("legacy_password")) and shared_ui,
             expect="a shared-password sign-in that lands as usr_legacy_shared (Operator)",
-            actual=f"options.legacy_password={opts.get('legacy_password')} ui={shared_ui}",
-            known="FX-A P0-1 (shared password signs in as Operator for 30 days)")
+            actual=f"options.legacy_password={opts.get('legacy_password')} ui={shared_ui}")
     lctx.close()
     _s2_owner_after_claim(env, j, s2, page, ctx, p)
 
@@ -1772,15 +1764,13 @@ def j7(env: Env, j: Journey) -> None:
     j.check("the group page shows bob's membership as IdP-synced and read-only (source badge, no Remove)",
             ("OIDC" in main_txt or "Keycloak" in main_txt) and not removable,
             expect="an OIDC/IdP source badge on the membership; no Remove", actual=f"removable={removable}; " + main_txt[-300:],
-            known="unassigned (new: an OIDC-synced membership shows as a plain member with Remove)",
             repro=f"{web}/identity/groups/<group mapped from the IdP> as Owner after an OIDC group sync")
     j.check("the group page shows names, never raw principal ids", "usr_" not in main_txt,
             expect="no usr_… ids", actual=re.findall(r"usr_[a-z0-9]{6,}", main_txt)[:3],
-            known="FX-C P1-11/12/13 (no raw codes, ids, jargon)", repro=f"{web}/identity/groups/<id>: Access roles “granted by usr_…”")
+            repro=f"{web}/identity/groups/<id>: Access roles “granted by usr_…”")
     rm = K.stepped(opage, owner, "DELETE", f"/v1/identity/groups/{gid}/members/{bob_pid}", None, j)
     j.check("API: the manual groups API refuses removing an IdP-synced membership", rm["status"] in (403, 409, 422),
             expect="409 idp read-only", actual=f"{rm['status']} {short(rm.get('body'))}",
-            known="unassigned (new: an OIDC-synced membership of a mapped group can be removed by hand; the next sign-in re-adds it)",
             repro="DELETE /v1/identity/groups/<mapped group>/members/<oidc member> as Owner → 200")
     if rm["status"] < 300:
         _sso_sign_in(bpage, web, pid, "bob", pw["bob"], j, "bob-resynced")
@@ -1833,7 +1823,6 @@ def j7(env: Env, j: Journey) -> None:
     carol_in = cm["status"] == 200 and (cm.get("body") or {}).get("principal_id") == carol_pid
     j.check("the SCIM-provisioned person's first SSO sign-in activates her", carol_in,
             expect="signed in as the SCIM-made carol", actual=f"{landed} me={cm['status']}",
-            known="unassigned (new: a SCIM-provisioned person is an unlinked existing account, which social.resolve refuses — and the refusal's audit write fails (identifier not hmac'd), so the callback is a 500)",
             repro="SCIM POST /scim/v2/Users carol@fxd.test, then SSO sign-in as carol → /signin?error=not_invited")
     seq0 = audit_seq(opage)
     ds, db_ = s2.stack.bearer("PATCH", f"/scim/v2/Users/{carol_pid}", skey, {
@@ -1861,10 +1850,6 @@ def j7(env: Env, j: Journey) -> None:
             direct, _ = K.http("GET", f"{s2.api}/v1/identity/me", headers=hdr)
             via, _ = K.http("GET", f"{web}/v1/identity/me", headers=hdr)
             j.note(f"the same cookies ({sorted(jar)}): API direct {direct}, through the console {via}")
-            import os as _os
-            if _os.environ.get("FXD_HOLD_J7"):
-                (Path(env.args.out) / "j7-hold-cookie.txt").write_text(hdr["Cookie"])
-                time.sleep(int(_os.environ["FXD_HOLD_J7"]))
         j.check("her live session ends", gone["status"] == 401, expect="401",
                 actual=f"{gone['status']} " + short({k: gb.get(k) for k in ("principal_id", "email", "auth_method", "method", "legacy", "error")}))
     landed2 = _sso_sign_in(cpage, web, pid, "carol", pw["carol"], j, "carol-after-scim-disable")
@@ -1873,7 +1858,6 @@ def j7(env: Env, j: Journey) -> None:
     j.check("a disabled person's SSO sign-in is refused (with words, not a server error)",
             "error=" in landed2 and me(cpage)["status"] == 401,
             expect="/signin?error=…", actual=landed2.split("?")[0] + " (HTTP 500 on the callback)" if "/callback" in landed2 else landed2,
-            known="unassigned (new: the SSO callback answers 500 when it refuses an unlinked or disabled account)" if "/callback" in landed2 else None,
             repro="SSO sign-in by a SCIM-provisioned (unlinked) person → GET /v1/auth/sso/<id>/callback → 500")
     ev = audit_has(opage, "scim.user.deactivated", target=carol_pid, since_seq=seq0)
     j.check("audit: scim.user.deactivated", bool(ev), expect="event", actual=short(ev))
@@ -1914,14 +1898,12 @@ def j7(env: Env, j: Journey) -> None:
     meta_st, meta = K.http("GET", f"{web}/saml/v2/metadata?provider_id={spid}")
     j.check("the SP metadata is served on the console origin", meta_st == 200 and "AssertionConsumerService" in str(meta),
             expect="200 metadata XML", actual=f"{meta_st} {str(meta)[:120]}",
-            known="unassigned (new: the console forwards /v1/* only — /saml/v2/* on the public origin is the console's own page)",
             repro=f"GET {web}/saml/v2/metadata")
     dctx, dpage = _keycloak_ctx(env, j)
     landed = _sso_sign_in(dpage, web, spid, "dave", pw["dave"], j, "dave-after-saml")
     dm = me(dpage)
     j.check("SAML sign-in lands signed in as dave (JIT)", dm["status"] == 200 and (dm.get("body") or {}).get("email") == "dave@fxd.test",
             expect="me 200 as dave@fxd.test", actual=f"{landed} me={dm['status']}",
-            known="unassigned (new: the SAML POST to {origin}/saml/v2/acs reaches the console, not the API)",
             repro=f"SP-initiated SAML through {web}: the IdP posts to {web}/saml/v2/acs")
     if dm["status"] == 200:
         dave_pid = (dm.get("body") or {}).get("principal_id")
@@ -1988,9 +1970,6 @@ def j7(env: Env, j: Journey) -> None:
 # =================================================================================================
 
 TLS_PORT = 58243
-NET_BUG = ("unassigned (new: with BOSS_REQUIRE_API_AUTH=true — compose's only setting — the API's transport "
-           "middleware refuses every credential-less request before identity runs, so the network bridge "
-           "only ever reaches the @public routes: the claim works, the bridged console does not)")
 
 
 def _tls_front(dirpath: Path) -> tuple[dict[str, Any], str]:
@@ -2046,16 +2025,15 @@ def j14(env: Env, j: Journey) -> None:
     j.check("before the claim a visitor is the network operator", m["status"] == 200 and mb.get("principal_id") == "usr_network_operator"
             and mb.get("network_bound") is True, expect="me = usr_network_operator, network_bound",
             actual=f"{m['status']} {short({k: mb.get(k) for k in ('principal_id', 'network_bound', 'access_roles')})} at {vpage.url}",
-            known=NET_BUG, repro=f"compose stack, web BOSS_CONSOLE_AUTH=network, {origin}/ anonymous → GET /v1/identity/me 401 "
+            repro=f"compose stack, web BOSS_CONSOLE_AUTH=network, {origin}/ anonymous → GET /v1/identity/me 401 "
                                  "“Valid BOSS API key or OIDC bearer token required.” (main.py transport middleware)")
     kinds = [x.get("kind") for x in mb.get("banners") or []]
     j.check("the banner says anyone who can reach it acts as the operator", "network_bridge" in kinds
             and "acts as the operator" in K.body_text(vpage, 20000), expect="the network banner in /me and on the page",
-            actual=f"banners={kinds}", known=NET_BUG)
+            actual=f"banners={kinds}")
     g = api(vpage, "POST", "/v1/identity/groups", {"key": "fxd-j14", "name": "fxd-j14"})
     j.check("the network operator may not touch identity settings (only the claim)", g["status"] == 403,
-            expect="403 forbidden (bridged, but not for identity settings)", actual=f"{g['status']} {short(g.get('body'))}",
-            known=NET_BUG if g["status"] == 401 else None)
+            expect="403 forbidden (bridged, but not for identity settings)", actual=f"{g['status']} {short(g.get('body'))}")
     st = K.raw_fetch(vpage, "GET", "/v1/auth/setup/status", csrf=False).get("body") or {}
     j.check("API: the network claim path is offered to the bridged browser", "network" in (st.get("paths") or []),
             expect="paths ∋ network", actual=st)
@@ -2069,7 +2047,6 @@ def j14(env: Env, j: Journey) -> None:
     shown = vpage.locator("[data-testid=claim-origin] code").inner_text()
     origin_ok = shown == origin
     j.check("/claim shows the origin it will bind to", origin_ok, expect=origin, actual=shown,
-            known=None if origin_ok else "unassigned (new: the claim page is rendered server-side and asks /v1/auth/options without the browser's Origin, so it offers to bind the console's internal API URL)",
             repro=f"{origin}/claim on a network-mode compose stack shows “This BOSS will be bound to http://api:8000”")
     p = K.Person(role="owner", email=f"fxd-j14-owner-{int(time.time()) % 100000}@example.test", name="FXD J14 Owner", password="")
     vpage.fill("#claim-name", p.name)
@@ -2109,7 +2086,7 @@ def j14(env: Env, j: Journey) -> None:
     am = me(apage).get("body") or {}
     j.check("after the claim the bridge maps to Operator", am.get("principal_id") == "usr_network_operator"
             and am.get("access_roles") == ["operator"], expect="usr_network_operator, [operator]",
-            actual=short({k: am.get(k) for k in ("principal_id", "access_roles")}), known=NET_BUG)
+            actual=short({k: am.get(k) for k in ("principal_id", "access_roles")}))
     j.shot(apage, "bridge-as-operator")
 
     # Require sign-in (step-up with the passkey).
@@ -2137,7 +2114,6 @@ def j14(env: Env, j: Journey) -> None:
     gone = K.raw_fetch(bpage, "GET", "/v1/identity/me", csrf=False)
     j.check("a visitor now has to sign in (sent to /login)", gone["status"] == 401 and ("/login" in bpage.url or "/signin" in bpage.url),
             expect="401 and /login", actual=f"{gone['status']} {bpage.url}",
-            known="unassigned (new: a network-mode console build never routes a visitor to /login, even after Require sign-in: it shows the org picker with an enabled “Onboard organization”)",
             repro=f"{origin}/ in a fresh browser after Require sign-in")
     j.shot(bpage, "visitor-sent-to-login")
     hist = [e for e in K.audit_events(vpage, limit="200") if (e.get("actor") or {}).get("id") == "usr_network_operator"]
