@@ -322,6 +322,15 @@ KEY_NEVER_STEPS_UP: frozenset[str] = frozenset(
     if m.step_up and (m.category == "Identity and access" or k in ("approval_rule:manage", "owner:assign")))
 
 
+#: (reviewer principal id, permission): set by the API for the ONE replay of an MCP request a
+#: separate person reviewed and approved (identity_mcp_confirmations). That request's step-up is
+#: the reviewer's; nothing else is changed (the caller must still hold the permission itself).
+import contextvars as _contextvars
+
+HUMAN_CONFIRMED: _contextvars.ContextVar[Optional[tuple[str, str]]] = _contextvars.ContextVar(
+    "boss_identity_human_confirmed", default=None)
+
+
 def _step_up_exempt(ctx: AuthContext) -> bool:
     """In-process system principals, and the legacy bridges as S5 defines them
     (`legacy.step_up_exempt`: a bridged context with no session and no run token)."""
@@ -560,9 +569,13 @@ def check(ctx: AuthContext, permission: str, scope: ResolvedScope, *, db: Any = 
                 # identity-administration permission is never used by a key without a person's
                 # fresh second factor: a stolen key does not rewrite who may do what.
                 return _finish(ctx, deny(meta.key, scope, DenyReason.STEP_UP_REQUIRED))
-            fresh = step_up_fresh_until(ctx, window_seconds=_step_up_window_seconds(p.org_id, conn))
-            if fresh is None or fresh <= _now():
-                return _finish(ctx, deny(meta.key, scope, DenyReason.STEP_UP_REQUIRED))
+            confirmed = HUMAN_CONFIRMED.get()
+            if confirmed is not None and confirmed[1] == meta.key and ctx.session is None:
+                pass        # this exact request was confirmed by a person who stepped up (§6.13)
+            else:
+                fresh = step_up_fresh_until(ctx, window_seconds=_step_up_window_seconds(p.org_id, conn))
+                if fresh is None or fresh <= _now():
+                    return _finish(ctx, deny(meta.key, scope, DenyReason.STEP_UP_REQUIRED))
         return _finish(ctx, Decision.allow(meta.key, scope, base.why.get(meta.key, ())))  # 5.
 
 

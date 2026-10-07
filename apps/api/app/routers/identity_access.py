@@ -710,6 +710,19 @@ def build_identity_access_router(engine: Any) -> APIRouter:
                 db, org, r["permission_key"], r["project_id"])} for r in rows]}
         return run(request, work)
 
+    @router.get("/v1/identity/projects/{project_id}/access-requests")
+    @permit(P.ROLE_BINDING_ASSIGN, scope=Scope.project(path="project_id"))
+    def list_project_access_requests(project_id: str, request: Request, status: str = "open"):
+        """A project Admin's queue: the requests for this project only."""
+        def work(db, ctx):
+            org = ctx.principal.org_id
+            rows = db.execute(text(_REQUEST_COLUMNS + "WHERE r.org_id = :o AND r.project_id = :p AND "
+                                   "r.status = :s ORDER BY r.created_at DESC LIMIT 200"),
+                              {"o": org, "p": project_id, "s": status}).mappings().all()
+            return {"requests": [{**dict(r), "candidate_roles": _candidate_roles(
+                db, org, r["permission_key"], r["project_id"])} for r in rows]}
+        return run(request, work)
+
     def _open_request(db, ctx, request_id: str) -> dict:
         row = db.execute(text(_REQUEST_COLUMNS + "WHERE r.id = :i AND r.org_id = :o FOR UPDATE OF r"),
                          {"i": request_id, "o": ctx.principal.org_id}).mappings().first()
@@ -733,7 +746,7 @@ def build_identity_access_router(engine: Any) -> APIRouter:
         return dict(db.execute(text(_REQUEST_COLUMNS + "WHERE r.id = :i"), {"i": row["id"]}).mappings().first())
 
     @router.post("/v1/identity/access-requests/{request_id}/approve")
-    @permit(P.ROLE_BINDING_ASSIGN, scope=Scope.org())
+    @permit(P.ROLE_BINDING_ASSIGN, scope=Scope.of("access_request", path="request_id"))
     def approve_access_request(request_id: str, body: AccessRequestApproval, request: Request):
         """Grant an access request by binding a role that carries the permission, at the request's
         scope, under every §6.11 rule (the same add_binding as POST /role-bindings)."""
@@ -753,7 +766,7 @@ def build_identity_access_router(engine: Any) -> APIRouter:
         return run(request, work, write=True)
 
     @router.post("/v1/identity/access-requests/{request_id}/deny")
-    @permit(P.ROLE_BINDING_ASSIGN, scope=Scope.org())
+    @permit(P.ROLE_BINDING_ASSIGN, scope=Scope.of("access_request", path="request_id"))
     def deny_access_request(request_id: str, body: AccessRequestDenial, request: Request):
         def work(db, ctx):
             row = _open_request(db, ctx, request_id)

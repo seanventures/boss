@@ -1996,6 +1996,11 @@ async def _identity_transport(request: Request, call_next):
             getattr(settings, "legacy_console_api_key", "") or "") or None
         member = await run_in_threadpool(identity_guard.legacy_member_for, ctx,
                                          console_member=console_member)
+    confirmation_id = request.headers.get("X-BOSS-MCP-Confirmation")
+    if confirmation_id:
+        if not enforced:
+            return JSONResponse(status_code=409, content={"detail": "mcp_confirmation_not_supported"})
+        return await _identity_confirmed_replay(request, call_next, ctx, member, confirmation_id)
     principal_token = current_api_principal.set(member)
     authenticated_token = current_transport_authenticated.set(True)
     auth_method_token = current_auth_method.set("identity")
@@ -2014,6 +2019,63 @@ async def _identity_transport(request: Request, call_next):
         current_api_principal.reset(principal_token)
         current_transport_authenticated.reset(authenticated_token)
         current_auth_method.reset(auth_method_token)
+
+
+async def _identity_confirmed_replay(request: Request, call_next, ctx: Any, member: str,
+                                     confirmation_id: str):
+    """The ONE replay of an MCP request a separate person approved (identity_mcp_confirmations):
+    consumed for exactly this request and this requester, the reviewer re-checked, then this
+    request's step-up is the reviewer's (authz.HUMAN_CONFIRMED) and any approval it makes is
+    theirs (approvals.MCP_REVIEWER). The legacy members table is never read."""
+    from boss_engine.identity import approvals as _approvals
+    from boss_engine.identity import authz as _authz
+
+    from . import identity_mcp_confirmations as confirmations
+
+    route_path = _route_relative_path(request)
+    mcp_operation = request.headers.get("X-BOSS-MCP-Operation")
+    project_id = request.headers.get("X-BOSS-MCP-Project")
+    if not mcp_operation or not project_id:
+        return JSONResponse(status_code=409, content={"detail": "mcp_confirmation_without_operation"})
+    matched = _matched_mcp_operation(request.method, route_path)
+    if matched is None or matched[0] != mcp_operation or not mcp_confirmation_eligible(request.method, matched[1]):
+        return JSONResponse(status_code=409, content={"detail": "mcp_operation_mismatch"})
+    raw_body = await request.body()
+    if len(raw_body) > mcp_confirmation.MAX_REQUEST_BYTES:
+        return JSONResponse(status_code=413, content={"detail": "mcp_request_too_large"})
+    try:
+        body = json.loads(raw_body) if raw_body else None
+    except (ValueError, UnicodeDecodeError):
+        return JSONResponse(status_code=400, content={"detail": "invalid_mcp_json_body"})
+    query = dict(request.query_params.multi_items())
+    try:
+        with begin(engine) as connection:
+            reviewer = mcp_confirmation.consume_request(
+                connection, project_id=project_id, confirmation_id=confirmation_id,
+                requester=ctx.principal.id, operation=mcp_operation, method=request.method,
+                path=route_path, query=query, body=body)
+            permission = await run_in_threadpool(
+                confirmations.reviewer_may_still, app, ctx, connection, reviewer_id=reviewer,
+                method=request.method, path=route_path, project_id=project_id, query=query, body=body)
+    except HTTPException as error:
+        return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
+    except mcp_confirmation.ConfirmationError as error:
+        return JSONResponse(status_code=409, content={"detail": error.code})
+    tokens = (_authz.HUMAN_CONFIRMED.set((reviewer, permission)), _approvals.MCP_REVIEWER.set(reviewer),
+              current_api_principal.set(member), current_transport_authenticated.set(True),
+              current_auth_method.set("identity"))
+    try:
+        response = await call_next(request)
+        with begin(engine) as connection:
+            mcp_confirmation.record_outcome(connection, project_id=project_id, confirmation_id=confirmation_id,
+                                            requester=ctx.principal.id, status_code=response.status_code)
+        return response
+    finally:
+        current_auth_method.reset(tokens[4])
+        current_transport_authenticated.reset(tokens[3])
+        current_api_principal.reset(tokens[2])
+        _approvals.MCP_REVIEWER.reset(tokens[1])
+        _authz.HUMAN_CONFIRMED.reset(tokens[0])
 
 
 @app.middleware("http")
@@ -3825,6 +3887,8 @@ def _decision_action_actor(claimed_actor: str) -> str:
 @authenticated(note="bound MCP API key asks for human confirmation of its own request; handler inline requires ")
 def request_mcp_confirmation(payload: McpConfirmationRequest) -> dict:
     """Ask a separate human to approve one exact MCP request; no effect runs."""
+    if identity_guard.identity_enforced():
+        return _identity_request_mcp_confirmation(payload)
     principal = current_api_principal.get()
     if not current_transport_authenticated.get() or current_auth_method.get() != "api_key" or not principal:
         raise HTTPException(status_code=403, detail="Bound MCP API key required.")
@@ -3860,11 +3924,59 @@ def request_mcp_confirmation(payload: McpConfirmationRequest) -> dict:
         raise HTTPException(status_code=422, detail=error.code) from error
 
 
+def _identity_request_mcp_confirmation(payload: McpConfirmationRequest) -> dict:
+    """Under identity: the requester's own permission for the confirmed operation is decided by the
+    PDP (identity_mcp_confirmations.require_requester); never the legacy members table."""
+    from . import identity_mcp_confirmations as confirmations
+
+    ctx = identity_guard.REQUEST_IDENTITY.get()
+    if ctx is None:
+        raise HTTPException(status_code=401, detail={"error": "unauthenticated"})
+    if payload.method not in {"POST", "DELETE"} or len(payload.path) > 2048 or "?" in payload.path:
+        raise HTTPException(status_code=422, detail="Unsupported confirmation request.")
+    matched = _matched_mcp_operation(payload.method, payload.path)
+    if (matched is None or matched[0] != payload.operation
+            or mcp_exclusion_reason(payload.method, matched[1])
+            or not mcp_confirmation_eligible(payload.method, matched[1])):
+        raise HTTPException(status_code=422, detail="Operation is not confirmation eligible.")
+    confirmations.require_requester(app, ctx, method=payload.method, path=payload.path,
+                                    project_id=payload.project_id, query=payload.query,
+                                    body=payload.body)
+    try:
+        with begin(engine) as connection:
+            return mcp_confirmation.create_request(
+                connection, project_id=payload.project_id, requested_by=ctx.principal.id,
+                operation=payload.operation, method=payload.method, path=payload.path,
+                query=payload.query, body=payload.body,
+                human_attributed=bool(mcp_human_attributed_permission(payload.method, matched[1])))
+    except mcp_confirmation.ConfirmationError as error:
+        raise HTTPException(status_code=422, detail=error.code) from error
+
+
+def _mcp_reviewer_under_identity(connection, project_id: str, reviewed: Any = None) -> str:
+    """The reviewing person under identity: a human session (and, for an approval, the confirmed
+    operation's permission and seat — identity_mcp_confirmations.require_reviewer)."""
+    from boss_engine.identity.legacy import is_bridge_principal
+
+    from . import identity_mcp_confirmations as confirmations
+
+    ctx = identity_guard.REQUEST_IDENTITY.get()
+    if reviewed is None:
+        if ctx is None or not ctx.is_human_session or is_bridge_principal(ctx.principal.id):
+            raise HTTPException(status_code=403, detail={"error": "human_session_required"})
+        return ctx.principal.id
+    return confirmations.require_reviewer(app, ctx, connection, method=reviewed.method, path=reviewed.path,
+                                          project_id=project_id, query=reviewed.query, body=reviewed.body)
+
+
 @app.get("/v1/mcp-confirmations")
 @permit(P.DECISION_READ, scope=Scope.project(query="project_id"))
 def list_mcp_confirmations(project_id: str, limit: int = 30) -> dict:
     with begin(engine) as connection:
-        _require_human_mcp_reviewer(connection, project_id)
+        if identity_guard.identity_enforced():
+            _mcp_reviewer_under_identity(connection, project_id)
+        else:
+            _require_human_mcp_reviewer(connection, project_id)
         return {"items": mcp_confirmation.list_requests(
             connection, project_id=project_id, limit=limit,
         )}
@@ -3874,7 +3986,10 @@ def list_mcp_confirmations(project_id: str, limit: int = 30) -> dict:
 @permit(P.DECISION_READ, scope=Scope.project(query="project_id"))
 def get_mcp_confirmation(confirmation_id: str, project_id: str) -> dict:
     with begin(engine) as connection:
-        _require_human_mcp_reviewer(connection, project_id)
+        if identity_guard.identity_enforced():
+            _mcp_reviewer_under_identity(connection, project_id)
+        else:
+            _require_human_mcp_reviewer(connection, project_id)
         try:
             return mcp_confirmation.get_request(
                 connection, project_id=project_id, confirmation_id=confirmation_id,
@@ -3889,10 +4004,12 @@ def approve_mcp_confirmation(
     confirmation_id: str, payload: McpConfirmationApproval,
 ) -> dict:
     with begin(engine) as connection:
-        approver = _require_human_mcp_reviewer(connection, payload.project_id)
         reviewed = payload.reviewed_request
         if reviewed.project_id != payload.project_id:
             raise HTTPException(status_code=409, detail="reviewed_project_mismatch")
+        approver = (_mcp_reviewer_under_identity(connection, payload.project_id, reviewed)
+                    if identity_guard.identity_enforced()
+                    else _require_human_mcp_reviewer(connection, payload.project_id))
         try:
             verified_digest = mcp_confirmation.request_digest(
                 project_id=reviewed.project_id, operation=reviewed.operation,

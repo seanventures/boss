@@ -6,6 +6,8 @@ project B, and get_costs returned every tenant's spend ledger.
 """
 from __future__ import annotations
 
+import pytest
+
 from contextlib import contextmanager
 from typing import Any, Optional
 
@@ -187,8 +189,16 @@ def test_decide_refuses_foreign_decision(monkeypatch):
     assert called["n"] == 0
 
 
-def test_get_costs_always_filters_by_session_project():
-    reg = build_default_registry()
+@pytest.mark.parametrize("pinned", [True, False])
+def test_get_costs_filters_every_query_by_the_one_acting_project(pinned):
+    """ONE ACTING PROJECT (identity H1, registry.acting_project): a pinned (chat) registry acts in
+    the session project and drops the argument; an unpinned one acts in the project the argument
+    names — the same project its identity gate authorizes. Either way every query is bound to
+    that one project, never a mix."""
+    from boss_engine.tools.builtin import build_discuss_read_registry
+
+    reg = build_discuss_read_registry() if pinned else build_default_registry()
+    expected = "project-a" if pinned else "project-b"
     conn = _Conn()
     ctx = _Ctx(conn)
     out = reg.invoke(
@@ -196,7 +206,7 @@ def test_get_costs_always_filters_by_session_project():
         args={"project_id": "project-b", "days": 7},
     )
     assert out["ok"] is True
-    assert out["project_id"] == "project-a"
+    assert out["project_id"] == expected
     # EVERY query against the spend ledger, not just the first, and regardless of whether the
     # table is aliased. get_costs grew a second (unaliased) aggregate for the window total, and
     # this assertion passed it over silently while still reporting green -- a tenant-isolation
@@ -207,10 +217,8 @@ def test_get_costs_always_filters_by_session_project():
         flat = " ".join(sql.split())
         assert ("l.project_id = :p" in flat or "project_id = :p" in flat), (
             f"llm_calls query without a project filter: {flat[:160]}")
-        assert p.get("p") == "project-a", (
-            f"llm_calls query bound to {p.get('p')!r}, not the session project")
-    cost_sql, params = cost_queries[0]
-    assert params["p"] == "project-a"
+        assert p.get("p") == expected, (
+            f"llm_calls query bound to {p.get('p')!r}, not the acting project")
 
 
 def test_get_meeting_refuses_foreign_meeting():

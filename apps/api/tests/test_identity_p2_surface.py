@@ -287,3 +287,32 @@ def test_history_names_who_a_legacy_actor_is_now(world):
         migration.put_mapping(db, world.org, migration.LegacyKind.MEMBER_ID, "ceo", person.id)
         labels = legacy.actor_labels(world.org, ["ceo", person.id, "nobody"], db=db)
     assert labels == {"ceo": "Param (was: ceo)", person.id: "Param"}
+
+
+def test_a_project_admin_decides_their_projects_requests_and_nothing_else(world):
+    """Access requests are an object kind: a project request is decided at its project (a project
+    Admin with role_binding:assign there may approve or deny it), an org-wide one at the org."""
+    padmin = world.person("ar-project-admin")
+    world.bind(padmin, "admin", project=world.project_a)
+    mine = _request_access(world, world.person("ar-a"), "code_task:create", world.project_a)
+    theirs = _request_access(world, world.person("ar-b"), "code_task:create", world.project_b)
+    org_wide = _request_access(world, world.person("ar-o"), "user:read")
+    client = _client()
+    with world.acting_as(world.ctx(padmin)):
+        queue = client.get(f"/v1/identity/projects/{world.project_a}/access-requests").json()["requests"]
+        other_queue = client.get(f"/v1/identity/projects/{world.project_b}/access-requests")
+        approved = client.post(f"/v1/identity/access-requests/{mine}/approve",
+                               json={"role_id": "arl_operator"}, headers=H)
+        other = client.post(f"/v1/identity/access-requests/{theirs}/deny", json={}, headers=H)
+        org = client.post(f"/v1/identity/access-requests/{org_wide}/deny", json={}, headers=H)
+        unknown = client.post("/v1/identity/access-requests/acr_nobody/deny", json={}, headers=H)
+    assert [r["id"] for r in queue] == [mine]
+    assert other_queue.status_code in (403, 404)
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["binding"]["scope"] == f"project:{world.project_a}"
+    assert other.status_code in (403, 404) and org.status_code in (403, 404), (other.text, org.text)
+    assert unknown.status_code == 404
+    oadmin = world.person("ar-org-admin")
+    world.bind(oadmin, "admin")
+    with world.acting_as(world.ctx(oadmin)):
+        assert client.post(f"/v1/identity/access-requests/{org_wide}/deny", json={}, headers=H).status_code == 200
