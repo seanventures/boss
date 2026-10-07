@@ -106,13 +106,22 @@ def main() -> None:
                 if uid not in POOL:
                     continue
                 raw = (d / "cmdline").read_bytes()
-                envb = (d / "environ").read_bytes()
-                cwd = os.readlink(d / "cwd")
             except OSError:
                 continue
+            # A sandboxed process is NOT dumpable (boss-sandbox-exec carries file capabilities and
+            # changes uid), so its environ and cwd need CAP_SYS_PTRACE: build_walk runs this with
+            # `docker exec --privileged`. Without it they are unreadable — the process is still
+            # recorded (uid and argv come from world-readable files), never silently skipped,
+            # which is how round 2 reported "no sandbox uid" for a build whose commands ran as one.
+            try:
+                envb = (d / "environ").read_bytes()
+                cwd = os.readlink(d / "cwd")
+                readable = True
+            except OSError:
+                envb, cwd, readable = b"", "", False
             argv = [redact(a.decode(errors="replace"))[:120] for a in raw.split(b"\0") if a][:6]
-            root = git_root(cwd)
-            rec = {"pid": int(pid), "uid": uid, "gid": gid, "argv": argv, "cwd": cwd,
+            root = git_root(cwd) if cwd else None
+            rec = {"pid": int(pid), "uid": uid, "gid": gid, "argv": argv, "cwd": cwd, "inspectable": readable,
                    "argv_has_credential": bool(CRED.search(raw)), "env_has_github_token": bool(re.search(rb"gh[spou]_[A-Za-z0-9]", envb)),
                    "env_has_proxy": b"HTTPS_PROXY=" in envb or b"https_proxy=" in envb,
                    "checkout": root, "remotes": remotes(root) if root else [], "at": time.time()}

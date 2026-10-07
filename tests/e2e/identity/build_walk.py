@@ -74,8 +74,9 @@ class Walk:
             return json.loads(r.read() or b"null")
 
     def in_container(self, service: str, argv: list[str], *, user: str = "root", detach: bool = False,
-                     timeout: int = 120) -> subprocess.CompletedProcess:
-        cmd = ["docker", "exec"] + (["-d"] if detach else []) + ["-u", user, f"{self.args.project}-{service}-1", *argv]
+                     timeout: int = 120, privileged: bool = False) -> subprocess.CompletedProcess:
+        cmd = (["docker", "exec"] + (["-d"] if detach else []) + (["--privileged"] if privileged else [])
+               + ["-u", user, f"{self.args.project}-{service}-1", *argv])
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
     def psql(self, sql: str, **params: str) -> str:
@@ -172,7 +173,12 @@ class Walk:
             K.answer_step_up_sheet(page, self.owner)
         j.check("POST /v1/identity/github/app/manifest answers 200 (or after a step-up)", resp.status in (200, 401),
                 expect="200", actual=resp.status)
-        out = resp.json() if resp.status == 200 else {}
+        try:
+            # The console keeps the answer and opens its manifest hand-off page (/github-app), which
+            # posts the form to GitHub: the page has usually navigated on before the body is read.
+            out = resp.json() if resp.status == 200 else {}
+        except Exception:  # noqa: BLE001
+            out = {}
         left = True
         try:
             page.wait_for_url(re.compile(r"https://github\.com/.*settings/apps/new"), timeout=10000)
@@ -184,7 +190,7 @@ class Walk:
                 repro="Setup › GitHub access › GitHub org 'fxd-org' › Create the App on GitHub: nothing happens; the "
                       "devtools console shows \"Sending form data to 'https://github.com/…/settings/apps/new' violates "
                       "… form-action 'self'\" (apps/web CSP form-action 'self'; the manifest flow POSTs a form to GitHub)")
-        if not left:
+        if not left and out:
             # WORKAROUND (recorded above as a failure, not hidden): do in this browser exactly what the
             # console's postManifest() does — a form POST of `manifest` to `post_url` — from a page that
             # carries no CSP, so the rest of the flow (GitHub → BOSS callbacks) is still walked for real.
@@ -506,7 +512,9 @@ class Walk:
     def watch_start(self) -> None:
         out = f"/tmp/fxd-watch-{self.state['stamp']}.json"
         self.state["watch"] = out
-        r = self.in_container("api", ["python", WATCH_IN_API, out, str(self.args.build_timeout)], detach=True)
+        # --privileged: CAP_SYS_PTRACE, to read a non-dumpable sandboxed process's environ and cwd.
+        r = self.in_container("api", ["python", WATCH_IN_API, out, str(self.args.build_timeout)], detach=True,
+                              privileged=True)
         self.j.note(f"sandbox watcher started in the api container ({r.returncode})")
 
     def watch_read(self) -> dict[str, Any]:
@@ -531,6 +539,10 @@ class Walk:
         j.check("the build ran under a per-run sandbox uid (61000-61999), not the API's uid",
                 bool(procs) and len(uids) >= 1 and w.get("api_uid") not in uids,
                 expect="≥1 process in the uid pool; api uid not among them", actual=self.state["sandbox"])
+        j.check("the watcher could read every sandbox process's environment and cwd (the checks below are not vacuous)",
+                bool(procs) and all(p.get("inspectable", True) for p in procs),
+                expect="all inspectable (the watcher runs with CAP_SYS_PTRACE)",
+                actual=[p["pid"] for p in procs if not p.get("inspectable", True)][:6])
         j.check("no sandbox process had a credential in its argv", not any(p["argv_has_credential"] for p in procs),
                 expect="none", actual=[p["argv"] for p in procs if p["argv_has_credential"]])
         j.check("no sandbox process held a GitHub token in its environment", not any(p["env_has_github_token"] for p in procs),
