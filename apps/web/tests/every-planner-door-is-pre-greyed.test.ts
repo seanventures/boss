@@ -32,4 +32,23 @@ describe("planner doors", () => {
     }
     expect(bad).toEqual([]);
   });
+
+  it("every control LABELLED “Plan it…” is a GatedButton (the planner's, or the org plan's agent:update)", () => {
+    // The final role walk: the Factory's empty-state "Plan it with Juno" called an onPlan prop, so
+    // the openPlan( rule above never saw it. The label is what a person presses; gate by it.
+    const bad: string[] = [];
+    for (const f of [...files(join(ROOT, "app")), ...files(join(ROOT, "components"))]) {
+      const s = readFileSync(f, "utf8");
+      for (const m of s.matchAll(/>\s*Plan it( with [A-Z][a-z]+)?\s*</g)) {
+        const before = s.slice(0, m.index! + 1);
+        const open = Math.max(before.lastIndexOf("<button"), before.lastIndexOf("<GatedButton"));
+        if (open < 0) continue;
+        const tag = before.slice(open);
+        if (!/^<GatedButton\b[^]*permission="[a-z_]+:[a-z_]+"/.test(tag)) {
+          bad.push(`${f.slice(ROOT.length + 1)}:${before.split("\n").length}`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+  });
 });
