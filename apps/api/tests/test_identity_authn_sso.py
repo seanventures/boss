@@ -140,6 +140,16 @@ def invite(engine, email: str, role: str = "operator") -> None:
     from boss_engine.identity.authn_support import default_org_id
 
     with engine.begin() as db:
+        # A real, active inviter who holds what the invitation grants: accept re-checks the
+        # ceiling against the inviter as they are then (C1), so a made-up inviter grants nothing.
+        org = default_org_id(db)
+        db.execute(text("INSERT INTO identity_principals (id, org_id, kind, status, display_name) VALUES "
+                        "('usr_admin', :o, 'user', 'active', 'Admin') ON CONFLICT (id) DO UPDATE SET "
+                        "status = 'active'"), {"o": org})
+        db.execute(text("INSERT INTO identity_role_bindings (id, org_id, subject_type, subject_id, role_id, "
+                        "scope_type, scope_id, granted_by) VALUES (:id, :o, 'principal', 'usr_admin', "
+                        "'arl_admin', 'org', :o, 'test') ON CONFLICT DO NOTHING"),
+                   {"id": ids.new_id("rbd"), "o": org})
         db.execute(text("INSERT INTO identity_invitations (id, org_id, email, token_hash, bindings, invited_by, "
                         "expires_at) VALUES (:id, :o, :e, :h, CAST(:b AS jsonb), 'usr_admin', now() + interval '7 days')"),
                    {"id": ids.new_id("inv"), "o": default_org_id(db), "e": email, "h": uuid.uuid4().hex,

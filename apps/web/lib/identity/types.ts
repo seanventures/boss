@@ -316,7 +316,7 @@ export interface CascadePreview {
 export type PostureStatus = "ok" | "warn" | "bad";
 
 export interface PostureCheck {
-  id: "mfa" | "keys" | "delegations" | "legacy" | "owners" | "audit";
+  id: "mfa" | "keys" | "delegations" | "legacy" | "owners" | "audit" | "enforcement";
   label: string;
   status: PostureStatus;
   value: string;
