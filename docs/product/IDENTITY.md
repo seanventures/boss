@@ -864,6 +864,7 @@ These follow from the permissions not being delegable. In addition, the token se
 - **What the worker holds:** the worker authenticates as `sys_worker`, which holds `worker:lease`, for the protocol endpoints only (poll, heartbeat, complete).
 - **How effects are authorized:** when the worker leases a job, the API mints the job's run token, scoped to the job's principal, grant and task. Every effect the job causes uses that token. The worker's own identity never authorizes an effect.
 - **Leases:** existing lease tokens stay. Both the lease and the run token must be valid.
+- **Jobs with no agent (as built).** A leased job whose work is an agent's (a build, an agent loop, a workflow step, a skill) runs under a run token minted for its principal, grant and task, as above. A job whose work is BOSS delivering something with no agent in it (an outbox message, a webhook, an a2a dispatch, an infrastructure action) has no agent to put in a run token's chain, so it gets none. Instead its effect is authorized **when it is queued**: every job kind maps to the catalogue permission its effect needs (`boss_engine/identity/job_permissions.py`, one table, a test fails on an unmapped kind a worker leases), checked by the PDP at the job's project for the person or run that queues it; an unknown kind is refused under enforcement. The job row still carries `on_behalf_of`, `grant_id` and `chain`, so the cascade cancels it when that authority ends, and the worker's own identity still authorizes nothing.
 
 ---
 

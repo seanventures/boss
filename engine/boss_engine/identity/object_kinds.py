@@ -64,6 +64,25 @@ class UniqueProjectKind(ObjectKind):
         return (str(rows[0][0]), str(rows[0][1])) if len(rows) == 1 else None
 
 
+class AccessRequestKind(ObjectKind):
+    """An access request (A13) is decided where it asks for access: at its project, or at the org
+    for an org-wide request (the loader answers (org_id, None); scope.resolve decides at org)."""
+
+    def __init__(self) -> None:
+        object.__setattr__(self, "kind", "access_request")
+        object.__setattr__(self, "table", "identity_access_requests")
+        object.__setattr__(self, "id_column", "id")
+        object.__setattr__(self, "project", "t.project_id")
+
+    def sql(self) -> str:
+        return "SELECT t.org_id, t.project_id FROM identity_access_requests t WHERE t.id = :id LIMIT 1"
+
+    def load(self, db: Any, object_id: str) -> Optional[tuple[str, Optional[str]]]:
+        with connection(db) as conn:
+            row = conn.execute(text(self.sql()), {"id": str(object_id)}).first()
+        return (str(row[0]), str(row[1]) if row[1] else None) if row else None
+
+
 class SecurityScanRunKind(ObjectKind):
     """Security-scan runs live in the engine's in-process registry, not a table."""
 
@@ -240,6 +259,7 @@ KINDS: tuple[ObjectKind, ...] = (
                                  "UNION SELECT project_id FROM receipts WHERE dedupe_key = :id "
                                  "AND NOT EXISTS (SELECT 1 FROM receipts WHERE id = :id)"),
     SecurityScanRunKind(),
+    AccessRequestKind(),
 )
 
 _BY_KIND: dict[str, ObjectKind] = {}
@@ -286,6 +306,7 @@ _PLANS = ("plan", "github_resolution_plan")
 
 ID_PARAM_KINDS: dict[str, tuple[str, ...]] = {
     "project_id": ("project",), "project_ids": ("project",), "scope_id": ("project",),
+    "request_id": ("access_request",),
     "act_id": ("agent_act",),
     "agent_group_version_id": ("agent_group_version",),
     "allocation_id": ("budget_allocation", "resource_allocation"),
@@ -405,8 +426,7 @@ NON_OBJECT_IDS: dict[str, str] = {
     **{n: _IDENTITY for n in ("grant_id", "group_id", "group_ids", "idp_id", "identity_id",
                               "invitation_id", "key_id", "passkey_id", "principal_id",
                               "owner_principal_ids", "sa_id", "subject_id", "user_id", "member_id",
-                              "target_member_id", "item_id", "principal_ids", "request_id",
-                              "to_role_id")},
+                              "target_member_id", "item_id", "principal_ids", "to_role_id")},
     **{n: _EXTERNAL for n in ("external_id", "external_channel_id", "external_issue_id",
                               "external_project_id", "external_workspace_id", "installation_id",
                               "client_id", "saml_sp_entity_id", "app_id", "provider_id", "model_id",
