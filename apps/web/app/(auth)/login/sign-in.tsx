@@ -11,6 +11,7 @@
  * SMS anywhere. The API decides every step; the page only carries the person through it, and
  * keeps every message uniform (an unknown address gets exactly the words a known one does).
  */
+import { afterEnrolStep, ENROLMENT_GRANT_WORDS } from "../../../lib/identity/enrolment";
 import React, { useEffect, useState } from "react";
 import { ArrowRight, CaretRight, EnvelopeSimple, Fingerprint, Key, LockSimple, ShieldCheck } from "@phosphor-icons/react";
 
@@ -56,6 +57,15 @@ function say(e: unknown): string {
 }
 
 /**
+ * Magic link and email code send an email whose link names BOSS's public URL. Without SMTP there is
+ * no email, and without a public URL (H2: `public_origin` null) the API refuses them
+ * `409 public_origin_unset` — so neither is offered. An API that does not report the URL is trusted.
+ */
+export function emailSignInOffered(options: Pick<AuthOptions, "smtp" | "public_origin">): boolean {
+  return options.smtp && options.public_origin !== null;
+}
+
+/**
  * `initialStep`: single sign-on came back needing a second factor (`/signin?step=mfa`; the
  * pre-auth cookie holds the rest). `notice`: why single sign-on did not finish
  * (`/signin?error=<code>`), already in words.
@@ -85,7 +95,11 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
   const after = (step: SignInStep) => {
     setCode("");
     if (step.next === "done") { setStage({ kind: "done" }); window.location.assign(target); return; }
-    if (step.next === "enrol") { window.location.assign(`/enrol?next=${encodeURIComponent(target)}`); return; }
+    if (step.next === "enrol") {
+      // H1: a sign-in that may not enrol says so here instead of opening a refused enrol screen.
+      if (step.enrolment_grant === false) { setStage({ kind: "start" }); setError(ENROLMENT_GRANT_WORDS); return; }
+      window.location.assign(afterEnrolStep(step, target)); return;
+    }
     const methods = step.methods ?? [];
     setStage(methods.includes("totp") || !methods.includes("passkey") ? { kind: "mfa", step } : { kind: "passkey", purpose: "mfa", step });
   };
@@ -107,7 +121,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
     after(await idPost<SignInStep>("/v1/auth/webauthn/verify", { purpose, credential }));
   });
 
-  const tabs: { id: Method; label: string }[] = options.smtp
+  const tabs: { id: Method; label: string }[] = emailSignInOffered(options)
     ? [{ id: "password", label: "Password" }, { id: "magic", label: "Magic link" }, { id: "code", label: "Email code" }]
     : [{ id: "password", label: "Password" }];
 
@@ -254,7 +268,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
             <div className="idn-f">
               <span className="idn-flabel">
                 <label htmlFor="password">Password</label>
-                {options.smtp
+                {emailSignInOffered(options)
                   ? <a href="/reset">Forgot password?</a>
                   : <span className="idn-dim" title="An admin can send you a reset link">Ask an admin</span>}
               </span>

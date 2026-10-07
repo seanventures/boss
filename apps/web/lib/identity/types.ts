@@ -313,10 +313,11 @@ export interface CascadePreview {
   halts: number;
 }
 
-export type PostureStatus = "ok" | "warn" | "bad";
+export type PostureStatus = "ok" | "warn" | "bad" | "critical";
 
 export interface PostureCheck {
-  id: "mfa" | "keys" | "delegations" | "legacy" | "owners" | "audit";
+  /** `origin`: is a public URL bound (H2)? "bad" while none is: emailed links are off. */
+  id: "mfa" | "keys" | "delegations" | "legacy" | "owners" | "audit" | "origin";
   label: string;
   status: PostureStatus;
   value: string;
@@ -435,6 +436,11 @@ export interface AuthOptions {
   legacy_password: boolean;
   /** S1: passkeys work only once a public origin is bound; false hides "Sign in with a passkey". */
   passkey?: boolean;
+  /** The public URL BOSS binds cookies, passkeys and emailed links to (H2). Null: none bound —
+   *  emailed sign-in cannot work, so it is not offered. Absent: an API that does not say. */
+  public_origin?: string | null;
+  /** Where it came from: BOSS_PUBLIC_URL ("env") or bound when the install was claimed ("claim"). */
+  public_origin_source?: "env" | "claim" | null;
   claim: null | {
     path: "setup_token" | "legacy_password" | "network_bridge";
     origin: string | null;
@@ -446,6 +452,9 @@ export interface AuthOptions {
 /** POST /v1/auth/login and every next-step answer of the sign-in flow. */
 export interface SignInStep {
   next: "mfa" | "done" | "enrol";
+  /** With next "enrol" (H1): false when this sign-in may NOT enrol a factor (only an admin
+   *  resetting the second factor helps); true or absent: go and enrol. */
+  enrolment_grant?: boolean;
   methods: ("totp" | "passkey" | "recovery")[];
   who: { display_name: string; email: string; hue: number } | null;
 }

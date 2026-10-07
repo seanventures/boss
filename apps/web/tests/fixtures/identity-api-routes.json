@@ -63,6 +63,7 @@
   "POST /v1/identity/credentials/github",
   "GET /v1/identity/delegations",
   "DELETE /v1/identity/delegations/{grant_id}",
+  "GET /v1/identity/delegations/{grant_id}",
   "GET /v1/identity/delegations/{grant_id}/cascade-preview",
   "GET /v1/identity/delegations/{grant_id}/claims",
   "POST /v1/identity/delegations/{grant_id}/extend",
