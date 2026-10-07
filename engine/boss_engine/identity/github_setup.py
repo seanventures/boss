@@ -342,15 +342,31 @@ def mode(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
 
     env_token = bool((get_settings().github_token or "").strip())
     active = "app" if app_ready(db, org_id) else ("token" if token else ("as_me" if people else "none"))
-    return {"mode": active,
+    read_by_builds = env_token and (get_settings().authz_mode or "enforce") != "enforce"
+    return {"mode": active, "verdict": _verdict(active, cfg["account_login"], read_by_builds),
             "app": {"configured": bool(cfg["app_id"]), "installed": bool(cfg["installation_id"]),
                     "slug": cfg["slug"], "html_url": cfg["html_url"], "account": cfg["account_login"],
                     "source": cfg["source"]},
             "token": ({"repos": token["repos"], "login": token["login"], "migrated": token["migrated"]}
                       if token else None),
             "people_connected": people,
-            "env_token": {"present": env_token,
-                          "read_by_builds": env_token and (get_settings().authz_mode or "enforce") != "enforce"}}
+            "env_token": {"present": env_token, "read_by_builds": read_by_builds}}
+
+
+def _verdict(active: str, account: Optional[str], env_read: bool) -> dict[str, str]:
+    """The Setup row's one pill, decided here (the console never maps a state to a colour)."""
+    if active == "app":
+        return {"tone": "green", "label": "GitHub App" + (f" · @{account}" if account else ""),
+                "tip": "Each build gets a short-lived token for its own repos."}
+    if active == "token":
+        return {"tone": "amber", "label": "Fine-grained token", "tip": "Works, but long-lived. A GitHub App is safer."}
+    if env_read:
+        return {"tone": "amber", "label": "BOSS_GITHUB_TOKEN",
+                "tip": "Read from the server's environment. Move it into the vault."}
+    if active == "as_me":
+        return {"tone": "amber", "label": "Only “as me” runs",
+                "tip": "Builds whose grant does not say “as me” cannot reach GitHub."}
+    return {"tone": "red", "label": "Builds can't reach GitHub", "tip": "Connect a GitHub App below."}
 
 
 def _event(db: Any, org_id: str, by: str, target_type: str, target_id: str, details: dict[str, Any], *,

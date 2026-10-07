@@ -444,3 +444,26 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-cap-form select { min-height: 30px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--ink); font: inherit; font-size: 0.8125rem; }
 .su-cap-sessions { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0 0 0 12px; list-style: none; border-left: 2px solid var(--border); }
 .su-cap-label { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+
+/* GitHub access: three ways side by side (stacked on a phone); the active one is outlined. */
+.su-ways { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.su-way {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg, var(--r-xl));
+  background: var(--bg);
+}
+.su-way[data-active] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
+.su-way-text { margin: 0; color: var(--muted); font-size: 0.8125rem; }
+.su-way .su-field { width: 100%; }
+.su-way .su-picker-list { width: 100%; padding: 0; margin: 0; }
+.su-way-env { padding: 8px 10px; border-radius: var(--r); background: var(--amber-soft); }
+.su-chip-good { color: var(--green); border-color: var(--green-soft); }
+@media (max-width: 760px) {
+  .su-ways { grid-template-columns: minmax(0, 1fr); }
+}
