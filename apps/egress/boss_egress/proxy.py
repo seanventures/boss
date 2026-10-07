@@ -121,13 +121,20 @@ class EgressProxy:
         claims: Optional[RunTokenClaims] = None
         template = "{unparsed}"
         token = ""
+        presented = _credential(req)
+        # THE CHALLENGE (round 2 walk): git (libcurl, CURLAUTH_ANY) sends its credential only after a
+        # 401 that names a scheme. Without `WWW-Authenticate: Basic` every clone and push through
+        # egress failed "Authentication failed" — the helper was never asked. A request that
+        # presents nothing is that first handshake, not an attack: challenged, not audited.
+        challenge = {"content-type": "application/json", "www-authenticate": 'Basic realm="boss-egress"'}
+        if presented is None:
+            return EgressResponse(401, challenge, b'{"error":"unauthenticated"}')
         with self.engine.begin() as db:
             try:
-                claims = runs.resolve_egress(_credential(req), db=db, peer=req.peer)
+                claims = runs.resolve_egress(presented, db=db, peer=req.peer)
             except tokens.TokenError as exc:
                 self._deny_event(db, None, provider, req.method, template, exc.reason)
-                return EgressResponse(401, {"content-type": "application/json"},
-                                      b'{"error":"unauthenticated"}')
+                return EgressResponse(401, challenge, b'{"error":"unauthenticated"}')
             # THE PATH FIRST: decoded and canonical BEFORE any rule sees it; `..`, `.`, `//` and
             # encoded separators are refused outright, and the upstream gets exactly this path.
             try:

@@ -267,3 +267,19 @@ def test_16_with_no_known_address_the_first_use_binds_it(env, monkeypatch):
     other = proxy.handle(EgressRequest("GET", "/github-api/repos/acme/web", "",
                                        {"authorization": f"Bearer {shim.egress_credential}"}, peer="10.9.9.9"))
     assert (first.status, again.status, other.status) == (200, 200, 401)
+
+
+def test_round2_git_is_challenged_for_its_credential_and_the_handshake_is_not_audited(env, monkeypatch):
+    """The compose walk: git (libcurl) only sends the credential its helper gives after a 401 that
+    names a scheme. Egress answered a bare 401, so every clone and push through it failed with
+    "Authentication failed". The handshake is challenged (Basic) and not recorded as a denial; a
+    WRONG credential is still refused, challenged and audited."""
+    hub, g, shim, up, proxy = _setup(env, monkeypatch)
+    before = len(env.world.events)
+    first = proxy.handle(EgressRequest("GET", "/github/acme/web.git/info/refs", "service=git-upload-pack", {}))
+    assert first.status == 401 and first.headers.get("www-authenticate", "").startswith("Basic")
+    assert len(env.world.events) == before and up.calls == []
+    wrong = proxy.handle(EgressRequest("GET", "/github/acme/web.git/info/refs", "service=git-upload-pack",
+                                       {"authorization": _basic("boss_egr_" + "x" * 40)}))
+    assert wrong.status == 401 and wrong.headers.get("www-authenticate", "").startswith("Basic")
+    assert any(e.event_type == "egress.denied" for e in env.world.events[before:])
