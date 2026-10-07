@@ -153,6 +153,8 @@ def finish(db: Any, user: users.UserRow, facts: RequestFacts, *, methods: list[s
                             enrol_grant_until=grant)
     users.mark_login(db, user.principal_id)
     ratelimit.reset("signin.account", user.email, db=db)
+    for bucket, ident in _source_keys(user.email, facts):
+        ratelimit.reset(bucket, ident, db=db)
     ctx = _ctx_for(user, facts)
     emit(db, org_id=user.org_id, event_type="session.created", outcome=Outcome.SUCCESS, ctx=ctx,
          session_ref=issued.session_id, details={"methods": sorted(set(methods))})
@@ -309,6 +311,35 @@ def _progressive_delay(failures: int) -> None:
 DELAY_ENABLED = True
 
 
+def _source_keys(email: str, facts: RequestFacts) -> list[tuple[str, str]]:
+    """The buckets one sign-in source fills for an account (L2): this client IP, and this device
+    when it sends its marker cookie (no cookie is no device: never one bucket all cookieless
+    browsers share). Keyed through the server key like every bucket."""
+    keys = [("signin.account_ip", f"{email.lower()}|{facts.ip or 'unknown'}")]
+    if facts.device and len(facts.device) <= 100:
+        keys.append(("signin.account_device", f"{email.lower()}|{sha256_hex(facts.device)}"))
+    return keys
+
+
+def _source_failures(db: Any, email: str, facts: RequestFacts) -> int:
+    return max(ratelimit.peek(bucket, ident, window_seconds=ACCOUNT_WINDOW_SECONDS, db=db)
+               for bucket, ident in _source_keys(email, facts))
+
+
+def _count_failure(db: Any, email: str, facts: RequestFacts) -> None:
+    for bucket, ident in [("signin.account", email), *_source_keys(email, facts)]:
+        ratelimit.hit(bucket, ident, limit=10 ** 6, window_seconds=ACCOUNT_WINDOW_SECONDS, db=db)
+
+
+def _backoff_failures(db: Any, email: str, facts: RequestFacts) -> int:
+    """The CAPTCHA-free backoff (L2): this source's own failures drive the full 1, 2, 4 … 30 s
+    delay; the account-wide count (many sources at once) only a gentle one, capped at 4 s, so a
+    distributed guesser is slowed and the real person is never made to wait long."""
+    own = _source_failures(db, email, facts)
+    account = ratelimit.peek("signin.account", email, window_seconds=ACCOUNT_WINDOW_SECONDS, db=db)
+    return max(own, min(account, ACCOUNT_DELAY_AFTER + 2) if account >= 2 * ACCOUNT_LOCK_AFTER else 0)
+
+
 def password_login(db: Any, facts: RequestFacts, *, email: str, password: str) -> Answer:
     limited = ip_limited(db, facts)
     if limited:
@@ -317,7 +348,9 @@ def password_login(db: Any, facts: RequestFacts, *, email: str, password: str) -
     user = users.by_email(db, email) if email else None
     org_id = user.org_id if user else default_org_id(db)
     familiar = bool(user) and sessions.device_is_familiar(db, user.principal_id, facts.device)
-    failures = ratelimit.peek("signin.account", email, window_seconds=ACCOUNT_WINDOW_SECONDS, db=db)
+    # L2: the soft lock is per SOURCE (this device, this IP), never per account: someone failing
+    # against a victim's address locks their own device and address, not the victim's sign-in.
+    failures = _source_failures(db, email, facts)
     if not familiar and failures >= ACCOUNT_LOCK_AFTER:
         # Soft lock of the PASSWORD factor from unfamiliar devices. Same body, same work (A2, A3).
         verify_password(password, None)
@@ -329,8 +362,7 @@ def password_login(db: Any, facts: RequestFacts, *, email: str, password: str) -
         return Answer(401, dict(INVALID))
     ok = verify_password(password, user.password_hash if user else None)
     if not ok:
-        ratelimit.hit("signin.account", email, limit=10 ** 6,
-                      window_seconds=ACCOUNT_WINDOW_SECONDS, db=db)
+        _count_failure(db, email, facts)
         if org_id:
             emit(db, org_id=org_id, event_type="auth.login.failed", outcome=Outcome.FAILURE,
                  target_type="user" if user else None, target_id=user.principal_id if user else None,
@@ -338,7 +370,7 @@ def password_login(db: Any, facts: RequestFacts, *, email: str, password: str) -
                  details={"identifier": identifier_hash(email),
                           "reason": "bad_password" if user else "unknown_identifier"})
         if DELAY_ENABLED and not familiar:
-            _progressive_delay(failures + 1)
+            _progressive_delay(_backoff_failures(db, email, facts))
         return Answer(401, dict(INVALID))
     assert user is not None
     if user.status == "disabled":

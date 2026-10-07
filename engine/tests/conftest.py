@@ -15,7 +15,13 @@ A column added to entitlement_sources is added here and nowhere else.
 
 from __future__ import annotations
 
+import os
+
 from sqlalchemy import text
+
+# Identity needs a PERSISTENT server key and refuses to run without one (F3/L2). Tests get a fixed,
+# test-only key (never a real one) unless the run names its own.
+os.environ.setdefault("BOSS_IDENTITY_SERVER_KEY", "dGVzdC1vbmx5LWlkZW50aXR5LXNlcnZlci1rZXktLS0tLS0tLS0tLS0tLS0=")
 
 #: Mirrors the real entitlement_sources. SQLite types, since the stubs run in memory; JSON
 #: columns are TEXT because that is how SQLAlchemy round-trips them here.

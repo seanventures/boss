@@ -468,3 +468,75 @@ def test_m4_a_key_in_grace_or_expired_cannot_be_rotated_again(world, engine):
                         "WHERE id = :i"), {"i": new})
     expired = client.post(f"/v1/identity/me/api-keys/{new}/rotate", json={"grace": "1h"}, headers=_me_csrf(client))
     assert expired.status_code == 409 and expired.json()["error"] == "key_not_active", expired.text
+
+
+# ---- L2: no attacker-driven lockout; a fair argon2 queue; a persistent server key is required ------
+
+def _client_at(ip: str):
+    from fastapi.testclient import TestClient
+    from apps.api.app.main import app
+
+    return TestClient(app, base_url=ORIGIN, client=(ip, 50000))
+
+
+def test_l2_an_attackers_failures_never_lock_the_victim_out(world, engine):
+    make_user(engine, "target@example.test")
+    attacker = _client_at("198.51.100.66")
+    for _ in range(12):
+        assert sign_in(attacker, "target@example.test", "wrong-password-guess").status_code == 401
+    # the attacker's own source is locked: even the right password fails from there
+    assert sign_in(attacker, "target@example.test").status_code == 401
+    # the victim, from a new device and their own address, signs in
+    victim = _client_at("203.0.113.10")
+    assert sign_in(victim, "target@example.test").status_code == 200
+
+
+def test_l2_the_argon2_queue_gives_each_client_a_share_and_serves_in_order():
+    import threading
+    import time
+
+    from boss_engine.identity.passwords import FairHashQueue
+
+    q = FairHashQueue(slots=2, per_client=2)
+    assert q.acquire("10.0.0.1", 0.1) and q.acquire("10.0.0.1", 0.1)
+    # one address has its share: refused at once, without waiting
+    started = time.monotonic()
+    assert q.acquire("10.0.0.1", 1.0) is False
+    assert time.monotonic() - started < 0.2
+    order: list[str] = []
+
+    def waiter(name: str) -> None:
+        if q.acquire(name, 2.0):
+            order.append(name)
+            q.release(name)
+
+    threads = [threading.Thread(target=waiter, args=(n,)) for n in ("10.0.0.2", "10.0.0.3")]
+    for t in threads:
+        t.start()
+        time.sleep(0.05)
+    q.release("10.0.0.1")
+    q.release("10.0.0.1")
+    for t in threads:
+        t.join()
+    assert order == ["10.0.0.2", "10.0.0.3"]                 # first come, first served
+
+
+def test_l2_identity_refuses_to_run_on_a_per_process_server_key(monkeypatch):
+    import pytest
+
+    from boss_engine.identity import authn_support, vault
+
+    monkeypatch.setattr(get_settings(), "identity_server_key", "")
+    monkeypatch.delenv("BOSS_MASTER_KEY", raising=False)
+    monkeypatch.setenv("BOSS_MASTER_KEY_FILE", "/nonexistent-dir-f3/master.key")
+    monkeypatch.setenv("BOSS_MASTER_KEY_AUTOCREATE", "0")
+    def missing(*_a, **_k):
+        raise vault.MasterKeyMissing("master_key_missing")
+
+    monkeypatch.setattr(vault, "_read_master_key", missing)
+    authn_support.reset_server_key_for_tests()
+    try:
+        with pytest.raises(authn_support.ServerKeyMissing):
+            authn_support.server_key()
+    finally:
+        authn_support.reset_server_key_for_tests()

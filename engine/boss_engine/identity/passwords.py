@@ -16,7 +16,7 @@ import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from cryptography.exceptions import InvalidKey
 from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
@@ -45,6 +45,9 @@ CODE_PROFILE = PROFILES["small"]
 
 MAX_CONCURRENT_HASHES = 4
 QUEUE_SECONDS = 2.0
+#: L2: how many hashes one client (IP) may have running or waiting at once. Over its share a
+#: request is refused at once (429), so one address can never fill the queue and starve others.
+PER_CLIENT_SHARE = 2
 MIN_LENGTH = 12
 MAX_LENGTH = 128
 
@@ -61,7 +64,82 @@ class PasswordRejected(Exception):
         self.code = code
 
 
-_SEMAPHORE = threading.BoundedSemaphore(MAX_CONCURRENT_HASHES)
+class FairHashQueue:
+    """THE argon2 gate of this process (L2): at most `slots` hashes run at once; waiters are served
+    strictly first-come first-served; each client (the request's IP) holds at most `per_client`
+    places, running or waiting, and is refused immediately beyond that. A client of None (no
+    request: CLI, migrations) has no share limit but still queues in order."""
+
+    def __init__(self, slots: int, per_client: int) -> None:
+        import collections
+
+        self.slots = slots
+        self.per_client = per_client
+        self._cv = threading.Condition()
+        self._running = 0
+        self._held: dict[str, int] = collections.Counter()
+        self._waiting: "collections.deque[object]" = collections.deque()
+
+    def acquire(self, client: Optional[str], timeout: float) -> bool:
+        import time
+
+        with self._cv:
+            if client is not None and self._held[client] >= self.per_client:
+                return False
+            ticket = object()
+            self._waiting.append(ticket)
+            if client is not None:
+                self._held[client] += 1
+            deadline = time.monotonic() + timeout
+            while True:
+                if self._running < self.slots and self._waiting[0] is ticket:
+                    self._waiting.popleft()
+                    self._running += 1
+                    self._cv.notify_all()
+                    return True
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._waiting.remove(ticket)
+                    if client is not None:
+                        self._release_share(client)
+                    self._cv.notify_all()
+                    return False
+                self._cv.wait(remaining)
+
+    def release(self, client: Optional[str]) -> None:
+        with self._cv:
+            self._running -= 1
+            if client is not None:
+                self._release_share(client)
+            self._cv.notify_all()
+
+    def _release_share(self, client: str) -> None:
+        self._held[client] -= 1
+        if self._held[client] <= 0:
+            del self._held[client]
+
+
+_QUEUE = FairHashQueue(MAX_CONCURRENT_HASHES, PER_CLIENT_SHARE)
+
+import contextvars  # noqa: E402
+
+#: The client (IP) whose request is hashing now; set by the sign-in routes (hashing_for).
+_CLIENT: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("boss_hash_client", default=None)
+
+
+class hashing_for:
+    """`with hashing_for(ip):` — hashes in this block count against that client's share."""
+
+    def __init__(self, client: Optional[str]) -> None:
+        self._client = client or "unknown"
+        self._token: Any = None
+
+    def __enter__(self) -> "hashing_for":
+        self._token = _CLIENT.set(self._client)
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        _CLIENT.reset(self._token)
 
 
 def current_profile() -> Argon2Profile:
@@ -76,12 +154,13 @@ def normalize(password: str) -> str:
 
 def _guarded(fn):
     def run(*args, **kwargs):
-        if not _SEMAPHORE.acquire(timeout=QUEUE_SECONDS):
+        client = _CLIENT.get()
+        if not _QUEUE.acquire(client, QUEUE_SECONDS):
             raise PasswordBusy()
         try:
             return fn(*args, **kwargs)
         finally:
-            _SEMAPHORE.release()
+            _QUEUE.release(client)
     return run
 
 
