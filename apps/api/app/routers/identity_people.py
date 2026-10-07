@@ -399,10 +399,30 @@ def build_identity_people_router() -> APIRouter:
                 ended = sessions.revoke_all(db, u.principal_id, by=ctx.principal.id, reason="MFA reset")
                 emit(db, org_id=ctx.principal.org_id, event_type="user.mfa_reset", outcome=Outcome.SUCCESS,
                      ctx=ctx, target_type="user", target_id=u.principal_id, details={"sessions_revoked": ended})
-                if smtp_configured():
+                # §4.7: the person AND every admin hear about it (a reset is how an account is
+                # taken over: the other admins are the ones who can notice).
+                admins = [r for r in db.execute(text(
+                    "SELECT DISTINCT u.principal_id, u.email FROM identity_role_bindings b "
+                    "JOIN identity_users u ON u.principal_id = b.subject_id "
+                    "JOIN identity_principals p ON p.id = u.principal_id "
+                    "WHERE b.org_id = :o AND b.subject_type = 'principal' AND b.scope_type = 'org' "
+                    "AND b.role_id IN ('arl_owner', 'arl_admin') AND p.status = 'active' "
+                    "AND (b.expires_at IS NULL OR b.expires_at > now()) AND u.principal_id <> :t"),
+                    {"o": ctx.principal.org_id, "t": u.principal_id}).all()]
+                from boss_engine.identity import authn_support as _mail
+
+                delivered = _mail.smtp_configured()
+                if delivered:
                     send_mail(u.email, "Your BOSS second factor was reset",
                               "An administrator reset your BOSS second factor. Enrol a new one when you next sign in.")
-                return JSONResponse({"reset": True, "sessions_revoked": ended})
+                    for _pid, email in admins:
+                        send_mail(email, "A BOSS second factor was reset",
+                                  f"{ctx.principal.display_name} reset the second factor of "
+                                  f"{u.display_name}. If nobody expected this, check the audit log.")
+                emit(db, org_id=ctx.principal.org_id, event_type="notice.mfa_reset", outcome=Outcome.INFO,
+                     ctx=ctx, target_type="user", target_id=u.principal_id,
+                     details={"admins_told": len(admins), "emailed": delivered})
+                return JSONResponse({"reset": True, "sessions_revoked": ended, "admins_notified": len(admins)})
         except AuthnError as exc:
             return refusal(exc)
 
@@ -426,7 +446,7 @@ def build_identity_people_router() -> APIRouter:
             return refusal(exc)
 
     @router.post("/v1/identity/users/{user_id}/reset-link")
-    @permit(P.USER_UPDATE)
+    @permit(P.USER_RESET_MFA)     # mints another person's password factor: critical, audited allows
     def reset_link(user_id: str, request: Request):
         """Without SMTP: a 30-minute, single-use reset link shown ONCE to this authenticated admin
         to hand over out of band (never from a public endpoint). It does not bypass MFA."""
@@ -436,7 +456,7 @@ def build_identity_people_router() -> APIRouter:
                 u = _target(db, ctx, user_id)
                 if u is None or u.status != "active":
                     return error(404, "not_found")
-                blocked = _owner_guard(db, ctx, u, removing=False, permission="user:update")
+                blocked = _owner_guard(db, ctx, u, removing=False, permission="user:reset_mfa")
                 if blocked:
                     return blocked
                 token = recovery.issue_reset_token(db, u.principal_id)

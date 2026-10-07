@@ -34,7 +34,7 @@ class MeSignInMethods(_Frozen):
 class MeBanner(_Frozen):
     """Console-wide notices the API owns: network bridge, legacy countdown, owner recovered."""
     kind: Literal["network_bridge", "legacy_password", "legacy_api_key", "owner_recovered",
-                  "mfa_enrolment_required"]
+                  "mfa_enrolment_required", "new_device"]
     message: str
     until: Optional[datetime] = None
 

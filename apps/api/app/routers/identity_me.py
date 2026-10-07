@@ -198,6 +198,20 @@ def build_me_response(db: Any, ctx: AuthContext) -> MeResponse:
     if required and not f.any_second_factor:
         banners.append(MeBanner(kind="mfa_enrolment_required",
                                 message="Your access needs a second factor. Add a passkey or an authenticator app."))
+    from boss_engine.identity.authn_support import smtp_configured
+
+    if user is not None and not smtp_configured():
+        # Without SMTP, a sign-in from a new device is told here (with SMTP it was emailed).
+        seen = db.execute(text(
+            "SELECT ts, ip, user_agent FROM identity_security_events WHERE org_id = :o AND "
+            "event_type = 'auth.new_device' AND actor_principal_id = :p AND ts > now() - interval '7 days' "
+            "AND (CAST(:s AS TEXT) IS NULL OR session_ref IS DISTINCT FROM :s) ORDER BY ts DESC LIMIT 1"),
+            {"o": p.org_id, "p": p.id, "s": ctx.session.id if ctx.session else None}).mappings().first()
+        if seen:
+            banners.append(MeBanner(kind="new_device", message=(
+                f"New sign-in from {seen['ip'] or 'an unknown address'} on "
+                f"{seen['ts'].strftime('%Y-%m-%d %H:%M UTC')}. Not you? Sign out everywhere in "
+                "Sessions and change your password.")))
     if p.network_bound:
         banners.append(MeBanner(kind="network_bridge",
                                 message="Anyone who can reach this BOSS acts as the operator. Claim it to finish setup."))
@@ -355,7 +369,7 @@ def build_identity_me_router() -> APIRouter:
                     return error(401, "step_up_required")   # setting a first password
                 try:
                     check_new_password(body.new, email=user.email,
-                                       min_length=users.get_policy(user.org_id, db=db).password_min_length)
+                                       policy=users.get_policy(user.org_id, db=db))
                 except PasswordRejected as exc:
                     return error(422, exc.code)
                 users.set_password_hash(db, user.principal_id, hash_password(body.new))

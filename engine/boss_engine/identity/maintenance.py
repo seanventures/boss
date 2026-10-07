@@ -10,7 +10,9 @@ two processes never run it at once:
     through the same cascade (#14); a code task's end at run end is runs.end_run's;
   * signing keys rotate when due (30 days) and retiring keys retire (signing_keys.rotate_if_due);
   * provider revocations that failed are retried, and shredded once they succeed (vault);
-  * the audit chain's rows from before the keyed chain are re-keyed once (audit.rekey);
+  * (the audit chain's rows from before the keyed chain are re-keyed ONCE, at boot, by
+    `rekey_at_boot` — never on this timer (N4): a re-key rewrites hashes, so it runs only when
+    the API starts, after the old chain verifies);
   * expired DPoP replay rows are purged.
 """
 from __future__ import annotations
@@ -60,9 +62,9 @@ def tick(engine: Any, *, now: Optional[datetime] = None) -> dict[str, Any]:
         steps = [
             ("expired_grants", lambda c: grants.expire_due(db=c, now=now)),
             ("ended_workflow_grants", lambda c: end_finished_workflow_grants(db=c)),
+            ("grant_reminders", lambda c: grants.remind_expiring(db=c, now=now)),
             ("rotated_keys", lambda c: _rotate(c)),
             ("provider_revocations", lambda c: vault.retry_provider_revocations(db=c)),
-            ("audit_rekeyed", lambda c: _rekey(c)),
             ("dpop_purged", lambda c: c.execute(text("DELETE FROM identity_dpop_replay WHERE expires_at < now()")).rowcount),
         ]
         for name, step in steps:
@@ -80,6 +82,17 @@ def _rotate(db: Any) -> list[str]:
 
     org = migration.default_org(db)
     return signing_keys.rotate_if_due(org_id=org, db=db) if org else []
+
+
+def rekey_at_boot(engine: Any) -> int:
+    """N4: the one-time re-key of pre-keyed audit rows, at API boot only (audit.rekey re-keys a
+    chain only after its old hashes verify, and identity_audit_rekey only a whole chain)."""
+    try:
+        with engine.begin() as db:
+            return _rekey(db)
+    except Exception as exc:  # noqa: BLE001 — logged; the chain still verifies (or reports) as is
+        log.warning("identity audit re-key failed: %s", type(exc).__name__)
+        return 0
 
 
 def _rekey(db: Any) -> int:

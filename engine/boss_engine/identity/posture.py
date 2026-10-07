@@ -22,6 +22,8 @@ from .legacy import (
 COUNTDOWN_BANNER_DAYS = 14
 OWNER_RECOVERED_BANNER_DAYS = 7
 STALE_KEY_DAYS = 30
+#: §7.3: a grant unused for this long shows as idle (never used counts from its creation).
+IDLE_GRANT_DAYS = 14
 NETWORK_BANNER = "Anyone who can reach this BOSS acts as the operator. Claim it to finish setup."
 
 
@@ -149,10 +151,10 @@ def posture(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dict[str
     # 3. risky delegations
     risky = _scalar(db, (
         "SELECT count(*) FROM identity_delegation_grants WHERE org_id = :o AND status = 'active' "
-        "AND (expires_at IS NULL OR last_used_at < :idle)"),
-        {"o": org_id, "idle": now - timedelta(days=30)})
+        "AND (expires_at IS NULL OR last_used_at < :idle OR (last_used_at IS NULL AND created_at < :idle))"),
+        {"o": org_id, "idle": now - timedelta(days=IDLE_GRANT_DAYS)})
     checks.append(_check("risky_delegations", "warn" if risky else "ok",
-                         f"{risky} delegations with no expiry or idle for 30 days", risky,
+                         f"{risky} delegations with no expiry or idle for {IDLE_GRANT_DAYS} days", risky,
                          "Review them in Identity › Agents."))
 
     # 4. legacy credentials still in use
@@ -200,6 +202,10 @@ def posture(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dict[str
     checks.append({**_check("audit_chain", status, text, 0, "Verify it in Identity › Audit."),
                    "verified_at": _iso(verified["at"]) if verified else None})
 
+    # 6b. the optional breach check (§4.2): on but HIBP unreachable means passwords were accepted
+    #     unchecked (the bundled blocklist is still the floor)
+    checks.append(breach_check(org_id, db=db))
+
     # 7. enforcement (H2): anything but enforce, globally or for any router, is red — shadow
     #    refuses nothing and is an upgrade-time setting only.
     checks.append(enforcement_check())
@@ -214,6 +220,22 @@ def posture(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dict[str
             "status": "critical" if any(c["status"] == "critical" for c in checks) else (
                 "warn" if any(c["status"] == "warn" for c in checks) else "ok"),
             "checks": checks}
+
+
+def breach_check(org_id: str, *, db: Any) -> dict[str, Any]:
+    from .passwords import hibp_unreachable_since
+    from .policy import get_policy
+
+    if not get_policy(org_id, db=db).hibp_check:
+        return _check("breach_check", "ok", "New passwords are checked against the bundled list of "
+                      "common passwords", 0, "Turn on the breach check (Have I Been Pwned) in the "
+                      "security policy to check them against known breaches too.")
+    if hibp_unreachable_since():
+        return _check("breach_check", "warn", "The breach check could not reach Have I Been Pwned in "
+                      "the last day, so some new passwords were accepted unchecked", 1,
+                      "Allow outbound HTTPS to api.pwnedpasswords.com, or turn the check off.")
+    return _check("breach_check", "ok", "New passwords are checked against known breaches", 0,
+                  "Nothing to do.")
 
 
 def public_origin_check(org_id: str, *, db: Any) -> dict[str, Any]:

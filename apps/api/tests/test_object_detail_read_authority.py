@@ -134,9 +134,13 @@ def test_cross_project_object_reports_are_denied(client, engine, monkeypatch):
             f"/v1/changesets/{ids['changeset']}/terraform-export",
             f"/v1/deployment-promotions/{ids['promotion']}",
         )
+        # A proposal id is a classified object kind (identity object_kinds): the central
+        # confinement answers another project's object as not found, the identity convention
+        # (§6.7, R3). The others are refused by their handlers' member check. Denied either way.
+        not_found = {f"/v1/self-improvement/proposals/{ids['proposal']}"}
         for path in paths:
             response = client.get(path, headers=headers)
-            assert response.status_code == 403, (path, response.text)
+            assert response.status_code == (404 if path in not_found else 403), (path, response.text)
             assert foreign not in response.text
 
         mixed = client.get(f"/v1/bakeoff/{mixed_batch}/report", headers=headers)

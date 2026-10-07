@@ -418,7 +418,7 @@ def build_identity_auth_router() -> APIRouter:
                     return error(400, "invitation_invalid")
                 pol = users.get_policy(inv.org_id, db=db)
                 try:
-                    check_new_password(body.password, email=inv.email, min_length=pol.password_min_length)
+                    check_new_password(body.password, email=inv.email, policy=pol)
                 except PasswordRejected as exc:
                     return error(422, exc.code)
                 from sqlalchemy import text as _text

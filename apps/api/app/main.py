@@ -1535,6 +1535,9 @@ async def lifespan(_: FastAPI):
         # provider-revoke retries and the audit re-key (identity/maintenance.py).
         from boss_engine.identity import maintenance as _identity_maintenance
 
+        _rekeyed = _identity_maintenance.rekey_at_boot(engine)   # N4: at boot only, never on a timer
+        if _rekeyed:
+            print(f"[identity] audit chain: {_rekeyed} rows from before the keyed chain re-keyed")
         _identity_maintenance.start(engine)
     except (_identity_vault.BootRefused, _identity_signing_keys.SigningKeysMissing) as exc:
         print(f"[identity] REFUSING TO START: {exc}. Restore the master key file (or BOSS_MASTER_KEY) "
@@ -2283,6 +2286,10 @@ async def require_transport_auth_for_v1(request: Request, call_next):
                     if attributed_permission
                     else None
                 )
+                from boss_engine.identity.approvals import MCP_REVIEWER as _mcp_reviewer
+
+                # §6.13: an approval this confirmation releases is the reviewing person's.
+                identity_reviewer_token = _mcp_reviewer.set(approved_by if attributed_permission else None)
                 try:
                     try:
                         response = await call_next(request)
@@ -2302,6 +2309,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
                         )
                     return response
                 finally:
+                    _mcp_reviewer.reset(identity_reviewer_token)
                     current_mcp_human_attribution.reset(reviewer_token)
         return await call_next(request)
     finally:
@@ -22904,6 +22912,8 @@ def approve_decision(
         # the independently authenticated human reviewer.
         payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
+        from boss_engine.identity.approvals import ApprovalPending
+
         try:
             row = decisions.transition(
                 connection,
@@ -22915,6 +22925,10 @@ def approve_decision(
                 external_ref=payload.external_ref,
                 content_hash=payload.content_hash,
             )
+        except ApprovalPending as pending:
+            # §6.13: the first of two approvals of a tier-3 decision is recorded (this transaction
+            # commits it); the decision stays pending for a second person.
+            return JSONResponse(status_code=202, content=pending.body())
         except DecisionNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidDecisionTransitionError as error:

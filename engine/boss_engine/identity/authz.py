@@ -179,7 +179,10 @@ def system_permissions(principal_id: str, *, db: Any = None) -> frozenset[str]:
 
 _HELD_SQL = text("""
 SELECT b.id AS binding_id, b.scope_type, b.scope_id, b.expires_at, r.key AS role_key,
-       r.system AS role_system,
+       (r.system AND r.org_id IS NULL) AS role_system,  -- the catalogue's fixed system roles only;
+                                                          -- an org's migration roles (legacy_*,
+                                                          -- legacy_bridge) are system=true only so
+                                                          -- nobody edits or binds them by hand
        g.name AS group_name, g.source AS group_source, rp.permission_key
   FROM identity_role_bindings b
   JOIN identity_access_roles r ON r.id = b.role_id AND (r.org_id IS NULL OR r.org_id = :org)
@@ -309,6 +312,14 @@ def _step_up_window_seconds(org_id: str, conn: Any) -> int:
         return DEFAULT_STEP_UP_SECONDS
     except Exception:  # noqa: BLE001 — a broken policy row must not widen the window
         return DEFAULT_STEP_UP_SECONDS
+
+
+#: Step-up permissions no API key ever uses, exemption or not: the identity administration (who
+#: exists, who may do what, credentials, sessions, Passports, delegation, providers, the policy and
+#: the audit export) and the approval rules. Pinned by test_identity_key_step_up_is_bounded.
+KEY_NEVER_STEPS_UP: frozenset[str] = frozenset(
+    k for k, m in PERMISSION_META.items()
+    if m.step_up and (m.category == "Identity and access" or k in ("approval_rule:manage", "owner:assign")))
 
 
 def _step_up_exempt(ctx: AuthContext) -> bool:
@@ -544,6 +555,11 @@ def check(ctx: AuthContext, permission: str, scope: ResolvedScope, *, db: Any = 
             return _finish(ctx, deny(meta.key, scope, DenyReason.MISSING_PERMISSION,
                                      base.removed_by.get(meta.key, ())))
         if meta.step_up:                                                # 4. step-up
+            if ctx.credential is not None and meta.key in KEY_NEVER_STEPS_UP:
+                # Whatever exempts a bearer from step-up (a service account's own key, §4.6), an
+                # identity-administration permission is never used by a key without a person's
+                # fresh second factor: a stolen key does not rewrite who may do what.
+                return _finish(ctx, deny(meta.key, scope, DenyReason.STEP_UP_REQUIRED))
             fresh = step_up_fresh_until(ctx, window_seconds=_step_up_window_seconds(p.org_id, conn))
             if fresh is None or fresh <= _now():
                 return _finish(ctx, deny(meta.key, scope, DenyReason.STEP_UP_REQUIRED))

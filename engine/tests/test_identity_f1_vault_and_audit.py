@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import os
 import uuid
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -30,6 +31,7 @@ from boss_engine.identity import audit, cli, vault
 from boss_engine.identity.audit import Outcome, SecurityEvent
 
 from ._identity_agents_support import MASTER_KEY, build_env, install_github, link_github, session_ctx
+from engine.tests.identity_s5_support import written_days_ago
 from engine.tests.identity_s5_support import ORG, community_install, db, s5_engine  # noqa: F401
 
 
@@ -265,14 +267,90 @@ def test_13_the_app_role_may_only_insert_and_select(app_role):
 
 def test_13_the_audited_prune_still_works_for_the_app_role(app_role):
     org = app_role.org
-    with app_role.begin() as c:
+    with app_role.begin() as c, written_days_ago(45):
         for i in range(3):
             audit.record(_ev(i, org), db=c)
     with app_role.begin() as c:
-        result = audit.prune(org, before=datetime.now(timezone.utc) + timedelta(seconds=1), db=c,
+        result = audit.prune(org, before=datetime.now(timezone.utc) - timedelta(days=30, seconds=1), db=c,
                              actor_principal_id="usr_owner")
         assert result.pruned == 3
         assert audit.verify_chain(org, db=c).ok
+
+
+def test_n3_the_app_role_cannot_forge_a_checkpoint_and_prune_with_it(app_role):
+    """The re-test's N3 repro: INSERT a forged audit.checkpoint, then call the prune function."""
+    import json
+
+    org = app_role.org
+    with app_role.begin() as c, written_days_ago(45):
+        for i in range(5):
+            audit.record(_ev(i, org), db=c)
+    with pytest.raises(DBAPIError, match="checkpoint is written only"):
+        with app_role.begin() as c:
+            c.execute(text(
+                "INSERT INTO identity_security_events (org_id, seq, stream, event_type, outcome, prev_hash, "
+                "hash, details, hash_alg) VALUES (:o, 6, 'security', 'audit.checkpoint', 'info', :p, :h, "
+                "CAST(:d AS jsonb), 2)"),
+                {"o": org, "p": os.urandom(32), "h": os.urandom(32), "d": json.dumps({"pruned_through_seq": 5})})
+    with pytest.raises(DBAPIError, match="no checkpoint"):
+        with app_role.begin() as c:
+            c.execute(text("SELECT identity_audit_prune(:o, 5, ARRAY['audit.checkpoint','bootstrap.claimed'])"),
+                      {"o": org})
+    with app_role.begin() as c:
+        assert c.execute(text("SELECT count(*) FROM identity_security_events WHERE org_id = :o"),
+                         {"o": org}).scalar() == 5
+
+
+def test_n3_nothing_younger_than_the_floor_is_checkpointed_or_pruned(app_role):
+    """Even through the one legitimate path, the database keeps the last 30 days, whoever asks."""
+    org = app_role.org
+    with app_role.begin() as c:
+        for i in range(3):
+            audit.record(_ev(i, org), db=c)
+    with pytest.raises(DBAPIError, match="retention floor"):
+        with app_role.begin() as c:
+            audit.prune(org, before=datetime.now(timezone.utc) + timedelta(seconds=1), db=c,
+                        actor_principal_id="usr_owner")
+    with app_role.begin() as c:
+        assert c.execute(text("SELECT count(*) FROM identity_security_events WHERE org_id = :o"),
+                         {"o": org}).scalar() == 3
+
+
+def test_n3_the_sql_floor_is_the_apis_floor(s5_engine):
+    from apps.api.app.routers.identity_admin import MIN_PRUNE_DAYS
+
+    with s5_engine.connect() as c:
+        floor = c.execute(text("SELECT extract(day FROM identity_audit_min_prune_age())")).scalar()
+    assert int(floor) == MIN_PRUNE_DAYS
+
+
+def test_n4_rekey_rewrites_only_a_whole_unkeyed_chain(app_role):
+    """N4: the app role cannot pick legacy rows and overwrite their hashes with arbitrary values."""
+    org = app_role.org
+    real = audit.chain_key
+    try:
+        audit.chain_key = lambda *a, **k: None
+        with app_role.begin() as c:
+            for i in range(3):
+                audit.record(_ev(i, org), db=c)              # unkeyed (alg 1) rows
+    finally:
+        audit.chain_key = real
+    for seqs, prevs, hashes in (
+            ([2], [os.urandom(32)], [os.urandom(32)]),                        # one row of three
+            ([1, 2, 3], [os.urandom(32)] * 3, [os.urandom(32)] * 3)):         # does not link
+        with pytest.raises(DBAPIError, match="identity_audit_rekey"):
+            with app_role.begin() as c:
+                c.execute(text("SELECT identity_audit_rekey(:o, :s, :p, :h)"),
+                          {"o": org, "s": seqs, "p": prevs, "h": hashes})
+
+
+def test_n4_the_rekey_runs_at_boot_not_on_the_maintenance_timer():
+    import inspect
+
+    from boss_engine.identity import maintenance
+
+    assert "_rekey" not in inspect.getsource(maintenance.tick)
+    assert "rekey_at_boot" in (Path(__file__).resolve().parents[2] / "apps/api/app/main.py").read_text()
 
 
 def test_13_truncate_is_refused_even_for_the_owner(db):

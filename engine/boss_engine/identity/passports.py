@@ -387,6 +387,13 @@ def reissue(ctx: AuthContext, old_agent_id: str, new_agent_id: str, *, db: Any) 
     db.execute(text("UPDATE identity_agent_passports SET reissued_from = :o WHERE agent_id = :n"),
                {"o": old_agent_id, "n": new_agent_id})
     new = require(new_agent_id, db=db)
+    # §6.11: a re-issued Passport is a ceiling granted now, so the caller must hold it (the
+    # caller's transaction rolls the new Passport back on a refusal).
+    from . import grants as _grants
+
+    over = sorted(new.ceiling - _grants.person_live(db, ctx.principal, None))
+    if over:
+        raise PassportError("forbidden", 403, permission=over[0])
     lineage.passport_event(db, new, "agent.passport.reissued", ctx=ctx, details={"from": old_agent_id})
     return new
 

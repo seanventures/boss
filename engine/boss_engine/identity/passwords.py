@@ -261,9 +261,47 @@ def _context_words(email: Optional[str], org_name: Optional[str]) -> list[str]:
 
 def check_new_password(password: str, *, email: Optional[str] = None,
                        org_name: Optional[str] = None, min_length: int = MIN_LENGTH,
-                       extra_words: Iterable[str] = ()) -> str:
+                       extra_words: Iterable[str] = (), policy: Any = None) -> str:
     """Return the normalised password, or raise PasswordRejected (`password_too_short`,
-    `password_too_long`, `password_too_common`). No composition rules (NIST 800-63B)."""
+    `password_too_long`, `password_too_common`, `password_breached`). No composition rules
+    (NIST 800-63B).
+
+    `policy` is the org's IdentityPolicy: EVERY path that sets a password passes it (a test
+    enforces it), so its minimum length and its optional HIBP breach check (§4.2) apply on all of
+    them. HIBP unreachable: accepted, and posture warns."""
+    if policy is not None:
+        min_length = int(getattr(policy, "password_min_length", min_length) or min_length)
+    value = _check_rules(password, email=email, org_name=org_name, min_length=min_length,
+                         extra_words=extra_words)
+    if policy is not None and getattr(policy, "hibp_check", False):
+        result = hibp_check(value)
+        if result.breached:
+            raise PasswordRejected("password_breached")
+        if not result.checked:
+            note_hibp_unreachable()
+    return value
+
+
+#: When the optional breach check last could not reach HIBP (process-local; posture reads it).
+_HIBP_UNREACHABLE_AT: Optional[float] = None
+
+
+def note_hibp_unreachable() -> None:
+    global _HIBP_UNREACHABLE_AT
+    import time
+
+    _HIBP_UNREACHABLE_AT = time.time()
+
+
+def hibp_unreachable_since(seconds: int = 86400) -> bool:
+    """Did a breach check fail to reach HIBP in the last `seconds`?"""
+    import time
+
+    return _HIBP_UNREACHABLE_AT is not None and time.time() - _HIBP_UNREACHABLE_AT < seconds
+
+
+def _check_rules(password: str, *, email: Optional[str], org_name: Optional[str], min_length: int,
+                 extra_words: Iterable[str]) -> str:
     value = normalize(password)
     if len(value) < max(8, min_length):
         raise PasswordRejected("password_too_short")

@@ -342,6 +342,92 @@ def create_grant(ctx: AuthContext, request: GrantRequest, *, db: Any) -> Delegat
     return grant
 
 
+def preview_grant(ctx: AuthContext, request: GrantRequest, *, db: Any) -> dict[str, Any]:
+    """POST /v1/identity/me/delegations/preview (§7.3, §10): what a create with this request would
+    do, changing nothing. `ok` is exactly "create_grant would accept it" — the create runs inside a
+    savepoint that is always rolled back — and the permission breakdown says why not."""
+    from . import passports
+
+    outcome: dict[str, Any] = {"ok": False, "error": None, "detail": {}}
+    expires_at = None
+    savepoint = db.begin_nested()
+    try:
+        made = create_grant(ctx, request, db=db)
+        outcome["ok"] = True
+        expires_at = made.expires_at
+    except GrantRefused as refused:
+        outcome["error"], outcome["detail"] = refused.code, dict(refused.detail)
+    finally:
+        savepoint.rollback()
+    requested = sorted(set(request.permissions))
+    not_delegable = sorted(k for k in requested if not catalogue.is_known(k) or not catalogue.meta(k).delegable)
+    agents, ceilings = [], []
+    for agent_id in request.agent_ids:
+        p = passports.get(agent_id, db=db)
+        if p is not None and p.org_id == ctx.principal.org_id:
+            agents.append({"id": agent_id, "name": p.role_key.capitalize(), "active": p.active})
+            ceilings.append(p.ceiling)
+    union = frozenset().union(*ceilings) if ceilings else frozenset()
+    over_ceiling = sorted(k for k in requested if k not in union and k not in not_delegable)
+    live_person = principal(db, ctx.principal.id)
+    over_access: set[str] = set()
+    if live_person is not None:
+        for project_id in request.project_ids:
+            over_access |= set(requested) - person_live(db, live_person, project_id)
+    pol = policy_for(ctx.principal.org_id, db=db)
+    return {**outcome,
+            "permissions": {"requested": requested,
+                            "grantable": sorted(set(requested) - set(not_delegable) - set(over_ceiling)
+                                                - over_access),
+                            "not_delegable": not_delegable, "over_ceiling": over_ceiling,
+                            "over_your_access": sorted(over_access)},
+            "agents": agents, "expires_at": expires_at.isoformat() if expires_at else None,
+            "max_days": min(int(pol.delegation_max_days), GRANT_MAX_DAYS)}
+
+
+#: §7.3: how long before a standing grant expires its person is reminded
+REMIND_BEFORE = timedelta(days=3)
+
+
+def remind_expiring(*, db: Any, now: Optional[datetime] = None) -> list[str]:
+    """Remind each person once, 3 days before a standing grant of theirs expires (§7.3): an email
+    with SMTP, and always the `notice.grant_expiring` event (My account shows grants with their
+    expiry either way). Task grants end with their run and are not reminded. Returns grant ids."""
+    from sqlalchemy import text
+
+    from . import audit
+    from .authn_support import smtp_configured
+
+    now = now or _now()
+    rows = db.execute(text(
+        "SELECT g.id, g.org_id, g.user_principal_id, g.expires_at, g.agent_ids, u.email, p.display_name "
+        "FROM identity_delegation_grants g JOIN identity_principals p ON p.id = g.user_principal_id "
+        "LEFT JOIN identity_users u ON u.principal_id = g.user_principal_id "
+        "WHERE g.status = 'active' AND g.task_run_id IS NULL AND g.reminded_at IS NULL "
+        "AND g.expires_at IS NOT NULL AND g.expires_at > :now AND g.expires_at <= :soon "
+        "FOR UPDATE OF g SKIP LOCKED"), {"now": now, "soon": now + REMIND_BEFORE}).mappings().all()
+    mail = smtp_configured()
+    reminded: list[str] = []
+    for r in rows:
+        if mail and r["email"]:
+            from . import email_signin
+
+            email_signin.DELIVER(
+                r["email"], "An agent's permission to act for you ends soon",
+                f"Your delegation {r['id']} (agents: {', '.join(r['agent_ids'])}) ends on "
+                f"{r['expires_at'].strftime('%Y-%m-%d %H:%M UTC')}. Work that relies on it will pause "
+                "then. Extend it under My account > Agents acting for me, or let it end.")
+        db.execute(text("UPDATE identity_delegation_grants SET reminded_at = :now WHERE id = :g"),
+                   {"now": now, "g": r["id"]})
+        audit.record(audit.SecurityEvent(
+            org_id=r["org_id"], event_type="notice.grant_expiring", outcome=audit.Outcome.INFO,
+            stream=audit.Stream.LINEAGE, on_behalf_of=r["user_principal_id"], grant_id=r["id"],
+            target_type="delegation_grant", target_id=r["id"],
+            details={"expires_at": r["expires_at"].isoformat(), "emailed": bool(mail and r["email"])}), db=db)
+        reminded.append(r["id"])
+    return reminded
+
+
 def mark_first_use(db: Any, grant: DelegationGrant) -> None:
     from sqlalchemy import text
 
@@ -435,7 +521,8 @@ def extend_grant(ctx: AuthContext, grant_id: str, days: int, *, db: Any) -> Dele
     if unusable:
         raise GrantRefused("exceeds_ceiling", 403, {"permissions": sorted(unusable)})
     new_exp = _now() + timedelta(days=days)
-    db.execute(text("UPDATE identity_delegation_grants SET expires_at = :e WHERE id = :g"), {"e": new_exp, "g": g.id})
+    db.execute(text("UPDATE identity_delegation_grants SET expires_at = :e, reminded_at = NULL WHERE id = :g"),
+               {"e": new_exp, "g": g.id})
     after = load(g.id, db=db)
     lineage.grant_event(db, after, "delegation.extended", ctx=ctx, details={"change": "extended", "days": days,
                                                             "expires_at": new_exp.isoformat()})
