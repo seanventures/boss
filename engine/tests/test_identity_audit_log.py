@@ -24,6 +24,7 @@ from boss_engine.identity.audit import AuditWriteRefused, Outcome, SecurityEvent
 from boss_engine.identity.authz import DenyReason
 from boss_engine.identity.enforcement import AuthzMode, Outcome as GuardOutcome, ShadowLedger
 from boss_engine.identity.legacy import LegacyKind
+from engine.tests.identity_s5_support import written_days_ago
 from engine.tests.identity_s5_support import (  # noqa: F401, F811  (db, s5_engine: fixtures)
     CONSOLE_KEY,
     NOW,
@@ -142,14 +143,15 @@ def test_a73_bridged_use_and_claimed_actors_are_recorded_once_a_day_not_per_requ
 
 def test_a74_the_log_is_append_only(db):
     community_install(db)
-    audit.record(ev(), db=db)
+    with written_days_ago(40):
+        audit.record(ev(), db=db)
     for statement in ("UPDATE identity_security_events SET outcome = 'failure'",
                       "DELETE FROM identity_security_events"):
         with pytest.raises(DBAPIError, match="append-only"):
             with db.begin_nested():
                 db.execute(text(statement))
     # the prune switch is transaction-local and switched off again by prune itself
-    audit.prune(ORG, before=datetime.now(timezone.utc) + timedelta(seconds=1), db=db,
+    audit.prune(ORG, before=datetime.now(timezone.utc) - timedelta(days=30, seconds=1), db=db,
                 actor_principal_id="usr_alice")
     with pytest.raises(DBAPIError, match="append-only"):
         with db.begin_nested():
@@ -277,11 +279,12 @@ def test_a77_no_audit_route_accepts_an_event_and_a_body_cannot_forge_one(db, mon
 # ---- A78 -----------------------------------------------------------------------------------------
 
 def test_a78_prune_writes_a_checkpoint_keeps_the_claim_and_the_chain_still_verifies(db):
-    owner = claimed(db)
-    for i in range(5):
-        audit.record(ev(target_id=f"usr_{i}"), db=db)
+    with written_days_ago(60):
+        owner = claimed(db)
+        for i in range(5):
+            audit.record(ev(target_id=f"usr_{i}"), db=db)
     total = len(events(db))
-    cut = datetime.now(timezone.utc) + timedelta(seconds=1)
+    cut = datetime.now(timezone.utc) - timedelta(days=30, seconds=1)
     result = audit.prune(ORG, before=cut, db=db, actor_principal_id=owner.principal_id,
                          ctx=owner.ctx)
     left = events(db)
@@ -294,9 +297,10 @@ def test_a78_prune_writes_a_checkpoint_keeps_the_claim_and_the_chain_still_verif
     # the last-Owner protection still sees the claim
     assert migration.claimed_at(db, ORG) is not None
     # life goes on, a second prune, still verifiable
-    for i in range(3):
-        audit.record(ev(target_id=f"usr_more_{i}"), db=db)
-    audit.prune(ORG, before=datetime.now(timezone.utc) + timedelta(seconds=1), db=db,
+    with written_days_ago(31):
+        for i in range(3):
+            audit.record(ev(target_id=f"usr_more_{i}"), db=db)
+    audit.prune(ORG, before=datetime.now(timezone.utc) - timedelta(days=30, seconds=1), db=db,
                 actor_principal_id=owner.principal_id)
     assert audit.verify_chain(ORG, db=db).ok
     # and a kept row cannot be edited without the checkpoint noticing

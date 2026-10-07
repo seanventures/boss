@@ -54,6 +54,7 @@ class PublicReason(StrEnum):
     COLLECTOR_SIGNED = "collector_signed"                   # Improve-BOSS collector machine routes (A1)
     LOOPBACK_HOST_ONLY = "loopback_host_only"               # answers only to a loopback peer (A1)
     API_DESCRIPTION = "api_description"                     # /openapi.json, /docs (A1; S2 decides)
+    EGRESS_SERVICE_CREDENTIAL = "egress_service_credential"  # /v1/identity/introspect: sys_egress's key only (A40)
 
 
 #: Reasons whose route has nothing to verify, so `verifier` may be None.

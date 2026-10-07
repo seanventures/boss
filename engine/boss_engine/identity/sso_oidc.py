@@ -97,6 +97,12 @@ class Provider:
     #: SAML: the AuthnContextClassRef values that count as MFA under "trust IdP MFA"; None or
     #: empty means BOSS's default list (sso_saml.MFA_CONTEXTS).
     trusted_authn_contexts: Optional[tuple[str, ...]] = None
+    #: §4.8: "client_secret" (vaulted secret) or "private_key_jwt" (RFC 7523 client assertion)
+    client_auth: str = "client_secret"
+    client_key_vault_item_id: Optional[str] = None
+    client_key_kid: Optional[str] = None
+    #: the assertion's `iss` when it is not the client id (Apple: the team id)
+    client_assertion_issuer: Optional[str] = None
 
     @property
     def sso_url(self) -> Optional[str]:
@@ -130,7 +136,8 @@ class StartedFlow:
 
 _PROVIDER_COLS = ("id, org_id, protocol, preset, name, issuer, client_id, client_secret_vault_item_id, "
                   "scopes, allowed_algs, saml_sp_entity_id, saml_certificates, domains, jit_mode, "
-                  "trust_idp_mfa, enforce_sso, groups_claim, status, saml_sso_url, trusted_authn_contexts")
+                  "trust_idp_mfa, enforce_sso, groups_claim, status, saml_sso_url, trusted_authn_contexts, "
+                  "client_auth, client_key_vault_item_id, client_key_kid, client_assertion_issuer")
 
 
 def provider_from_row(r: Any) -> Provider:
@@ -140,7 +147,11 @@ def provider_from_row(r: Any) -> Provider:
                     r.saml_sp_entity_id, tuple(r.saml_certificates or ()), tuple(r.domains or ()),
                     r.jit_mode, bool(r.trust_idp_mfa), bool(r.enforce_sso), r.groups_claim, r.status,
                     saml_sso_url=getattr(r, "saml_sso_url", None),
-                    trusted_authn_contexts=tuple(contexts) if contexts else None)
+                    trusted_authn_contexts=tuple(contexts) if contexts else None,
+                    client_auth=getattr(r, "client_auth", None) or "client_secret",
+                    client_key_vault_item_id=getattr(r, "client_key_vault_item_id", None),
+                    client_key_kid=getattr(r, "client_key_kid", None),
+                    client_assertion_issuer=getattr(r, "client_assertion_issuer", None))
 
 
 def load_provider(db: Any, provider_id: str, *, active_only: bool = True) -> Optional[Provider]:
@@ -331,14 +342,110 @@ def callback(db: Any, provider: Provider, *, params: dict[str, str], preauth: Op
     return CallbackResult(ident, payload.get("purpose", "login"), payload.get("link_principal"))
 
 
-def _client_secret(db: Any, provider: Provider) -> Optional[str]:
-    if not provider.client_secret_vault_item_id:
+def _vaulted(db: Any, provider: Provider, item_id: Optional[str]) -> Optional[str]:
+    if not item_id:
         return None
     system = Principal("sys_sso", PrincipalKind.SYSTEM, provider.org_id, PrincipalStatus.ACTIVE, "SSO")
     cred = vault.get_credential(
-        vault.ConnectionRef(provider.id, None, provider.client_secret_vault_item_id),
+        vault.ConnectionRef(provider.id, None, item_id),
         vault.CredentialPurpose.SSO_CLIENT, ctx=AuthContext(system, AuthMethod.SYSTEM), db=db)
     return cred.token
+
+
+def _client_secret(db: Any, provider: Provider) -> Optional[str]:
+    return _vaulted(db, provider, provider.client_secret_vault_item_id)
+
+
+# ---- private_key_jwt (RFC 7523; §4.8) -------------------------------------------------------------------
+
+ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+ASSERTION_SECONDS = 300
+
+
+def generate_client_key() -> str:
+    """A new P-256 private key (PEM) for a provider that registers BOSS's public key."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    return key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                             serialization.NoEncryption()).decode("ascii")
+
+
+def _load_private_key(pem: str) -> Any:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec, rsa
+
+    key = serialization.load_pem_private_key(pem.encode("ascii"), password=None)
+    if isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1):
+        return key
+    if isinstance(key, rsa.RSAPrivateKey) and key.key_size >= 2048:
+        return key
+    raise ValueError("the client key must be a P-256 EC key or an RSA key of 2048 bits or more")
+
+
+def client_key_alg(pem: str) -> str:
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    return "ES256" if isinstance(_load_private_key(pem), ec.EllipticCurvePrivateKey) else "RS256"
+
+
+def public_jwk(pem: str, kid: Optional[str]) -> dict[str, Any]:
+    """The PUBLIC half as a JWK (never the private parts), for the admin to register at the IdP."""
+    import json
+
+    import jwt
+
+    key = _load_private_key(pem)
+    alg = client_key_alg(pem)
+    algo = jwt.algorithms.ECAlgorithm(jwt.algorithms.ECAlgorithm.SHA256) if alg == "ES256" \
+        else jwt.algorithms.RSAAlgorithm(jwt.algorithms.RSAAlgorithm.SHA256)
+    jwk = json.loads(algo.to_jwk(key.public_key()))
+    jwk.update({"use": "sig", "alg": alg, **({"kid": kid} if kid else {})})
+    return {k: v for k, v in jwk.items() if k not in ("d", "p", "q", "dp", "dq", "qi")}
+
+
+def client_key_thumbprint(pem: str) -> str:
+    """A stable kid for a generated key: the RFC 7638 thumbprint of its public JWK (16 chars)."""
+    import base64
+    import hashlib
+    import json
+
+    jwk = public_jwk(pem, None)
+    members = {k: jwk[k] for k in (("crv", "kty", "x", "y") if jwk["kty"] == "EC" else ("e", "kty", "n"))}
+    digest = hashlib.sha256(json.dumps(members, separators=(",", ":"), sort_keys=True).encode()).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")[:16]
+
+
+def client_assertion(provider: Provider, pem: str, *, token_endpoint: str, now: Optional[int] = None) -> str:
+    """The signed client assertion. Apple's form (preset apple) is its `client_secret`: aud is the
+    issuer and iss the team id; the RFC 7523 form's aud is the token endpoint and iss = sub = client_id."""
+    import secrets as _secrets
+    import time
+
+    import jwt
+
+    issued = int(now if now is not None else time.time())
+    apple = provider.preset == "apple"
+    claims = {"iss": provider.client_assertion_issuer or provider.client_id, "sub": provider.client_id,
+              "aud": (provider.issuer if apple else token_endpoint), "iat": issued,
+              "exp": issued + ASSERTION_SECONDS, "jti": _secrets.token_urlsafe(16)}
+    headers = {"kid": provider.client_key_kid} if provider.client_key_kid else {}
+    return jwt.encode(claims, _load_private_key(pem), algorithm=client_key_alg(pem), headers=headers)
+
+
+def _client_authentication(db: Any, provider: Provider, token_endpoint: str) -> dict[str, str]:
+    """The token request's client authentication fields (never both a secret and an assertion)."""
+    if provider.client_auth == "private_key_jwt":
+        pem = _vaulted(db, provider, provider.client_key_vault_item_id)
+        if not pem:
+            raise SsoError("client_key_missing")
+        assertion = client_assertion(provider, pem, token_endpoint=token_endpoint)
+        if provider.preset == "apple":
+            return {"client_secret": assertion}
+        return {"client_assertion_type": ASSERTION_TYPE, "client_assertion": assertion}
+    secret = _client_secret(db, provider)
+    return {"client_secret": secret} if secret else {}
 
 
 def _exchange(db: Any, provider: Provider, doc: dict[str, Any], *, code: str, verifier: str,
@@ -346,9 +453,7 @@ def _exchange(db: Any, provider: Provider, doc: dict[str, Any], *, code: str, ve
     form = {"grant_type": "authorization_code", "code": code,
             "redirect_uri": redirect_uri(origin, provider.id), "code_verifier": verifier,
             "client_id": provider.client_id or ""}
-    secret = _client_secret(db, provider)
-    if secret:
-        form["client_secret"] = secret
+    form.update(_client_authentication(db, provider, doc["token_endpoint"]))
     try:
         resp = _fetch("POST", doc["token_endpoint"], data=urlencode(form).encode("ascii"),
                       headers={"Content-Type": "application/x-www-form-urlencoded",

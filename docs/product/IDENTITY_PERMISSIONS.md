@@ -37,7 +37,7 @@ This is the first draft of the one catalogue every BOSS API route, MCP tool, con
 | `user:revoke_sessions` | Sign a person out of every device. | ● | ● |  |  |  | step-up, org-only |
 | `group:read` | List groups and their members. | ● | ● |  |  | ● | org-only |
 | `group:manage` | Create, rename and delete groups. | ● | ● |  |  |  | step-up, org-only |
-| `group:manage_members` | Add and remove group members (manual groups only; IdP groups are read-only). | ● | ● |  |  |  | step-up, org-only |
+| `group:manage_members` | Add and remove group members (manual groups only; IdP groups are read-only). | ● | ● |  |  |  | step-up, critical, org-only |
 | `access_role:read` | See access roles and their permissions. | ● | ● | ● | ● | ● | org-only |
 | `access_role:manage` | Create, edit, clone and delete custom access roles. Never more than you hold. | ● | ● |  |  |  | step-up, org-only, critical |
 | `role_binding:read` | See who holds which access role, where. | ● | ● |  |  | ● | org-only |

@@ -88,6 +88,20 @@ class ToolSpec:
     #: scope (a project binding is not enough): True always, or the name of a boolean argument
     #: that widens the call to every project (mandate_standard's `all_projects`). M6/M7.
     org_scope: Any = False
+    #: An OPERATION-dependent permission: (argument name, ((value, permission), ...)). A tool
+    #: whose `action` argument picks between operations that have different permissions over
+    #: HTTP (decide: approve vs delegate vs execute) needs the chosen operation's permission,
+    #: not one key for all of them. A value not listed takes `permission`.
+    permission_by_arg: tuple = ()
+
+    def permission_for(self, args: Optional[dict]) -> Optional[str]:
+        """The permission THIS call needs (see `permission_by_arg`)."""
+        if self.permission_by_arg:
+            name, table = self.permission_by_arg
+            chosen = dict(table).get(str((args or {}).get(name) or ""))
+            if chosen:
+                return chosen
+        return self.permission
 
     def acts_org_wide(self, args: Optional[dict]) -> bool:
         if self.org_scope is True:
@@ -104,6 +118,8 @@ class ToolSpec:
 
         if self.permission is not None:
             require_known(self.permission)
+            for _value, key in (self.permission_by_arg[1] if self.permission_by_arg else ()):
+                require_known(key)
         elif not self.inherits_route_permission:
             raise CatalogueError(f"tool {self.name!r} declares no permission: pass permission= "
                                  "(a catalogue key) or inherits_route_permission=True")
@@ -164,6 +180,7 @@ class ToolRegistry:
         reversibility: Optional[Reversibility] = None,
         permission: Optional[str] = None,
         org_scope: Any = False,
+        permission_by_arg: tuple = (),
     ) -> Callable[[ToolHandler], ToolHandler]:
         """Decorator form: @registry.tool("list_x", "…", {...}, kind="read")."""
 
@@ -182,6 +199,7 @@ class ToolRegistry:
                     reversibility=reversibility or "safe",
                     permission=permission,
                     org_scope=org_scope,
+                    permission_by_arg=permission_by_arg,
                 )
             )
             return fn
@@ -382,7 +400,8 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
                     router_modes=settings.authz_router_modes)
     if mode == AuthzMode.OFF:
         return None
-    permission = str(getattr(spec, "permission", None) or "")
+    permission_for = getattr(spec, "permission_for", None)
+    permission = str((permission_for(args) if permission_for else getattr(spec, "permission", None)) or "")
     if getattr(spec, "inherits_route_permission", False):
         # API-surface tools are decided by the route they call — AS THE CALLER (M8: the bridge
         # forwards the caller's own credential, never a server key). A call with no verified

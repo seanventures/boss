@@ -16,7 +16,7 @@ INSERT INTO identity_permissions (key, resource, action, title, description, cat
   ('user:revoke_sessions', 'user', 'revoke_sessions', 'Sign a person out everywhere', 'Sign a person out of every device.', 'Identity and access', 'org', true, false, false, false, false, 1),
   ('group:read', 'group', 'read', 'View groups', 'List groups and their members.', 'Identity and access', 'org', false, false, false, false, false, 1),
   ('group:manage', 'group', 'manage', 'Manage groups', 'Create, rename and delete groups.', 'Identity and access', 'org', true, false, false, false, false, 1),
-  ('group:manage_members', 'group', 'manage_members', 'Manage group members', 'Add and remove group members (manual groups only; IdP groups are read-only).', 'Identity and access', 'org', true, false, false, false, false, 1),
+  ('group:manage_members', 'group', 'manage_members', 'Manage group members', 'Add and remove group members (manual groups only; IdP groups are read-only).', 'Identity and access', 'org', true, false, true, false, false, 1),
   ('access_role:read', 'access_role', 'read', 'View access roles', 'See access roles and their permissions.', 'Identity and access', 'org', false, false, false, false, false, 1),
   ('access_role:manage', 'access_role', 'manage', 'Manage access roles', 'Create, edit, clone and delete custom access roles. Never more than you hold.', 'Identity and access', 'org', true, false, true, false, false, 1),
   ('role_binding:read', 'role_binding', 'read', 'View role bindings', 'See who holds which access role, where.', 'Identity and access', 'org', false, false, false, false, false, 1),

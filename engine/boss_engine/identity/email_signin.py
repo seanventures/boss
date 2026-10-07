@@ -157,6 +157,13 @@ def request_sign_in(db: Any, facts: RequestFacts, *, kind: str, email: str) -> A
     return _uniform(started, [cookie])
 
 
+#: The one answer to a magic link that signs nobody in: unknown, used, expired, or opened in a
+#: browser other than the one that asked. Indistinguishable on purpose.
+LINK_REFUSED = {"error": "link_invalid",
+                "message": "This link no longer works here. Links work once, for 10 minutes, in the "
+                           "browser where you asked for them. Ask for a new one."}
+
+
 def verify_magic_link(db: Any, facts: RequestFacts, *, token: str) -> Answer:
     if not available():
         return Answer(404, dict(NOT_FOUND))
@@ -169,16 +176,15 @@ def verify_magic_link(db: Any, facts: RequestFacts, *, token: str) -> Answer:
             emit(db, org_id=org_id, event_type="auth.magic_link.rejected", outcome=Outcome.FAILURE,
                  ip=facts.ip, user_agent=facts.user_agent, request_id=facts.request_id,
                  details={"reason": "other_browser" if unbound else "invalid_or_used"})
-        if unbound is not None:
-            # A83: the token is real, but this is not the browser that asked for it.
-            return Answer(401, {"error": "wrong_browser",
-                                "message": "Open the link in the browser where you asked for it."})
-        return Answer(401, {"error": "link_invalid"})
+        # A83 refuses the other browser — and says so in ONE answer for every failure. A
+        # distinct "wrong browser" answer told whoever holds a token that it is real and live (an
+        # oracle for a guessed or leaked link); the audit event above keeps the difference.
+        return Answer(401, dict(LINK_REFUSED))
     if not consume_challenge(db, ch.id_hash):
-        return Answer(401, {"error": "link_invalid"})
+        return Answer(401, dict(LINK_REFUSED))
     user = users.by_id(db, ch.principal_id or "")
     if user is None or user.status != "active":
-        return Answer(401, {"error": "link_invalid"})
+        return Answer(401, dict(LINK_REFUSED))
     emit(db, org_id=user.org_id, event_type="auth.magic_link.used", outcome=Outcome.SUCCESS,
          target_type="user", target_id=user.principal_id, ip=facts.ip, user_agent=facts.user_agent,
          request_id=facts.request_id)
@@ -241,8 +247,7 @@ def reset_password(db: Any, facts: RequestFacts, *, token: str, new_password: st
     if ch is None or user is None or user.status != "active":
         return Answer(400, {"error": "reset_invalid"})
     try:
-        check_new_password(new_password, email=user.email,
-                           min_length=get_policy(user.org_id, db=db).password_min_length)
+        check_new_password(new_password, email=user.email, policy=get_policy(user.org_id, db=db))
     except PasswordRejected as exc:
         return Answer(422, {"error": exc.code})
     if not consume_challenge(db, ch.id_hash):
@@ -334,7 +339,7 @@ def complete_signup(db: Any, facts: RequestFacts, *, token: str, password: Optio
     password_hash = None
     if password:
         try:
-            check_new_password(password, email=email, min_length=pol.password_min_length)
+            check_new_password(password, email=email, policy=pol)
         except PasswordRejected as exc:
             return Answer(422, {"error": exc.code})
         password_hash = hash_password(password)
