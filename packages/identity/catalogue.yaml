@@ -208,7 +208,7 @@ categories:
         description: "Add and remove group members (manual groups only; IdP groups are read-only)."
         roles: [owner, admin]
         scope: org
-        flags: [step_up]
+        flags: [step_up, critical]   # a member gains the group's bindings: the effect of role_binding:assign
       - key: access_role:read
         title: "View access roles"
         description: "See access roles and their permissions."

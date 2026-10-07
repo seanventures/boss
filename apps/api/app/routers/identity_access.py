@@ -61,6 +61,11 @@ class RoleRevert(_Strict):
     confirm_critical: list[str] = Field(default_factory=list)
 
 
+class RoleReassign(_Strict):
+    to_role_id: str = Field(min_length=3, max_length=80)
+    delete: bool = True
+
+
 class RolePreview(_Strict):
     permissions: list[str] = Field(max_length=200)
 
@@ -86,6 +91,20 @@ class BindingCreate(_Strict):
     role_id: str = Field(min_length=3, max_length=80)
     expires_at: Optional[datetime] = None
     reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class AccessRequestApproval(_Strict):
+    role_id: str = Field(min_length=3, max_length=80)
+    expires_at: Optional[datetime] = None
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class AccessRequestDenial(_Strict):
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class SeatHolders(_Strict):
+    principal_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
 class AccessRequest(_Strict):
@@ -120,16 +139,25 @@ def require_production(request: Optional[Request], project_id: str, environment:
     """THE handler-side production check (the declaration-side one is `production=` on @permit,
     which the guard evaluates the same way). An operation whose target environment is production
     (object_rules.is_production_environment), or `always`, also needs deployment:production at
-    the TARGET's project — pass the target's project, not the caller's.
+    the TARGET's project — pass the target's project, not the caller's."""
+    from boss_engine.identity.object_rules import is_production_environment
+
+    if not always and not is_production_environment(environment):
+        return
+    require_permission(request, P.DEPLOYMENT_PRODUCTION, project_id, label="production")
+
+
+def require_permission(request: Optional[Request], permission: str, project_id: Optional[str], *,
+                       label: str = "handler") -> None:
+    """THE handler-side check of a SECOND catalogue permission an operation needs beyond its
+    route's declaration (the production rule, a job kind's own permission), at `project_id` (or
+    org scope when None), through the same PDP the guard uses.
 
     Refuses whenever THIS request is enforced (its per-route mode, as the guard decided it — not
     the global BOSS_AUTHZ_MODE alone); in shadow it records the would-deny; off does nothing.
     `request` may be None in a helper that has none: the guard's context variables carry the same."""
     from boss_engine.identity.enforcement import LEDGER, AuthzMode, Outcome
-    from boss_engine.identity.object_rules import is_production_environment
 
-    if not always and not is_production_environment(environment):
-        return
     from .. import identity_guard
 
     mode = (getattr(request.state, "identity_mode", None) if request is not None else None) \
@@ -151,14 +179,15 @@ def require_production(request: Optional[Request], project_id: str, environment:
         if mode == AuthzMode.ENFORCE.value:
             raise HTTPException(status_code=401, detail={"error": "unauthenticated"})
         return
-    decision = authz.check(ctx, P.DEPLOYMENT_PRODUCTION,
-                           ResolvedScope.in_project(ctx.principal.org_id, project_id))
+    org = ctx.principal.org_id
+    scope = ResolvedScope.in_project(org, project_id) if project_id else ResolvedScope.org_level(org)
+    decision = authz.check(ctx, permission, scope)
     if decision.allowed:
         return
     path = request.scope.get("path", "") if request is not None else "handler"
-    LEDGER.record(router_key="production", method="CHECK", path_template=path,
-                  outcome=Outcome(False, decision.reason, P.DEPLOYMENT_PRODUCTION,
-                                  "handler:require_production", ctx.principal.kind.value,
+    LEDGER.record(router_key=label, method="CHECK", path_template=path,
+                  outcome=Outcome(False, decision.reason, permission,
+                                  f"handler:{label}", ctx.principal.kind.value,
                                   decision=decision),
                   mode=AuthzMode(mode))
     if mode == AuthzMode.ENFORCE.value:
@@ -339,6 +368,39 @@ def declare_framework_routes(app: Any) -> None:
             setattr(route.endpoint, ACCESS_ATTR, declaration)
 
 
+_OPERATIONS_BY_PERMISSION: dict[int, dict[str, int]] = {}
+_TOOLS_BY_PERMISSION: dict[str, int] = {}
+
+
+def operation_counts(app: Any, added: set[str], removed: set[str]) -> dict[str, int]:
+    """§6.10: how many API operations are declared with a permission this change adds or removes."""
+    from boss_engine.identity.declarations import Permit
+
+    from .. import identity_guard
+
+    table = _OPERATIONS_BY_PERMISSION.get(id(app))
+    if table is None:
+        table = {}
+        for entry in identity_guard.route_inventory(app):
+            if isinstance(entry.access, Permit):
+                table[entry.access.permission] = table.get(entry.access.permission, 0) + len(entry.labels())
+        _OPERATIONS_BY_PERMISSION[id(app)] = table
+    return {"gained": sum(table.get(k, 0) for k in added), "lost": sum(table.get(k, 0) for k in removed)}
+
+
+def tool_counts(added: set[str], removed: set[str]) -> dict[str, int]:
+    """§6.10: how many MCP tools need a permission this change adds or removes."""
+    if not _TOOLS_BY_PERMISSION:
+        from boss_engine.tools import build_default_registry
+
+        for spec in build_default_registry().specs():
+            keys = {spec.permission} | {k for _v, k in (spec.permission_by_arg[1] if spec.permission_by_arg else ())}
+            for key in keys - {None}:
+                _TOOLS_BY_PERMISSION[key] = _TOOLS_BY_PERMISSION.get(key, 0) + 1
+    return {"gained": sum(_TOOLS_BY_PERMISSION.get(k, 0) for k in added),
+            "lost": sum(_TOOLS_BY_PERMISSION.get(k, 0) for k in removed)}
+
+
 def build_identity_access_router(engine: Any) -> APIRouter:
     router = APIRouter(tags=["identity"])
 
@@ -394,8 +456,13 @@ def build_identity_access_router(engine: Any) -> APIRouter:
     @router.post("/v1/identity/access-roles/{role_id}/preview")
     @permit(P.ACCESS_ROLE_READ, scope=Scope.org(), readonly_post=True)
     def preview_access_role(role_id: str, body: RolePreview, request: Request):
-        return run(request, lambda db, ctx: roles_service.preview(
-            db, ctx.principal.org_id, role_id, body.permissions))
+        def work(db, ctx):
+            out = roles_service.preview(db, ctx.principal.org_id, role_id, body.permissions)
+            added, removed = set(out["added"]), set(out["removed"])
+            out["routes"] = operation_counts(request.app, added, removed)
+            out["tools"] = tool_counts(added, removed)
+            return out
+        return run(request, work)
 
     @router.post("/v1/identity/access-roles", status_code=201)
     @permit(P.ACCESS_ROLE_MANAGE, scope=Scope.org())
@@ -424,6 +491,13 @@ def build_identity_access_router(engine: Any) -> APIRouter:
     def revert_access_role(role_id: str, body: RoleRevert, request: Request):
         return run(request, lambda db, ctx: roles_service.revert_role(
             db, ctx, role_id, body.version, confirm_critical=body.confirm_critical), write=True)
+
+    @router.post("/v1/identity/access-roles/{role_id}/reassign")
+    @permit(P.ACCESS_ROLE_MANAGE, scope=Scope.org())
+    def reassign_access_role(role_id: str, body: RoleReassign, request: Request):
+        """Move every binding of this role to another (each under §6.11), then delete it."""
+        return run(request, lambda db, ctx: bindings_service.reassign_role(
+            db, ctx, role_id, body.to_role_id, delete=body.delete), write=True)
 
     @router.delete("/v1/identity/access-roles/{role_id}", status_code=204)
     @permit(P.ACCESS_ROLE_MANAGE, scope=Scope.org())
@@ -606,29 +680,123 @@ def build_identity_access_router(engine: Any) -> APIRouter:
                     "permission": body.permission, "grantors": grantors}
         return run(request, work, write=True)
 
+    _REQUEST_COLUMNS = (
+        "SELECT r.id, r.requester_principal_id, p.display_name AS requester_name, r.permission_key, "
+        "r.project_id, r.reason, r.status, r.created_at, r.resolved_at, r.resolved_by "
+        "FROM identity_access_requests r JOIN identity_principals p ON p.id = r.requester_principal_id ")
+
+    def _candidate_roles(db, org: str, permission: str, project_id: Optional[str]) -> list[dict]:
+        """Roles that carry the permission and bind at the request's scope."""
+        rows = db.execute(text(
+            "SELECT r.id, r.key, r.name, r.bindable_scopes FROM identity_access_roles r JOIN "
+            "identity_access_role_permissions rp ON rp.role_id = r.id WHERE rp.permission_key = :k "
+            "AND NOT r.system AND (r.org_id IS NULL OR r.org_id = :o) ORDER BY r.builtin DESC, r.key"),
+            {"k": permission, "o": org}).mappings().all()
+        scope = "project" if project_id else "org"
+        return [{"id": r["id"], "key": r["key"], "name": r["name"]} for r in rows
+                if scope in r["bindable_scopes"]]
+
     @router.get("/v1/identity/access-requests")
     @permit(P.ROLE_BINDING_READ, scope=Scope.org())
     def list_access_requests(request: Request, status: str = "open"):
-        """Open (or decided) access requests, for whoever can see bindings."""
+        """Open (or decided) access requests, for whoever can see bindings, each with the roles
+        that would grant it."""
         def work(db, ctx):
-            rows = db.execute(text(
-                "SELECT r.id, r.requester_principal_id, p.display_name AS requester_name, r.permission_key, "
-                "r.project_id, r.reason, r.status, r.created_at, r.resolved_at, r.resolved_by "
-                "FROM identity_access_requests r JOIN identity_principals p ON p.id = r.requester_principal_id "
-                "WHERE r.org_id = :o AND r.status = :s ORDER BY r.created_at DESC LIMIT 200"),
-                {"o": ctx.principal.org_id, "s": status}).mappings().all()
-            return {"requests": [dict(r) for r in rows]}
+            org = ctx.principal.org_id
+            rows = db.execute(text(_REQUEST_COLUMNS + "WHERE r.org_id = :o AND r.status = :s "
+                                   "ORDER BY r.created_at DESC LIMIT 200"),
+                              {"o": org, "s": status}).mappings().all()
+            return {"requests": [{**dict(r), "candidate_roles": _candidate_roles(
+                db, org, r["permission_key"], r["project_id"])} for r in rows]}
         return run(request, work)
 
-    # ---- approval seats (read) -------------------------------------------------------------------
+    def _open_request(db, ctx, request_id: str) -> dict:
+        row = db.execute(text(_REQUEST_COLUMNS + "WHERE r.id = :i AND r.org_id = :o FOR UPDATE OF r"),
+                         {"i": request_id, "o": ctx.principal.org_id}).mappings().first()
+        if row is None:
+            raise AccessError(404, "not_found")
+        if row["status"] != "open":
+            raise AccessError(409, "already_resolved", extra={"status": row["status"]})
+        return dict(row)
+
+    def _resolve(db, ctx, row: dict, status: str, event: str, details: dict) -> dict:
+        from boss_engine.identity import audit as audit_module
+
+        db.execute(text("UPDATE identity_access_requests SET status = :s, resolved_at = now(), "
+                        "resolved_by = :b WHERE id = :i"),
+                   {"s": status, "b": ctx.principal.id, "i": row["id"]})
+        audit_module.record(audit_module.SecurityEvent.from_context(
+            ctx, event, audit_module.Outcome.SUCCESS, target_type="principal",
+            target_id=row["requester_principal_id"], permission=row["permission_key"],
+            scope=f"project:{row['project_id']}" if row["project_id"] else "org",
+            details={"request_id": row["id"], **details}), db=db)
+        return dict(db.execute(text(_REQUEST_COLUMNS + "WHERE r.id = :i"), {"i": row["id"]}).mappings().first())
+
+    @router.post("/v1/identity/access-requests/{request_id}/approve")
+    @permit(P.ROLE_BINDING_ASSIGN, scope=Scope.org())
+    def approve_access_request(request_id: str, body: AccessRequestApproval, request: Request):
+        """Grant an access request by binding a role that carries the permission, at the request's
+        scope, under every §6.11 rule (the same add_binding as POST /role-bindings)."""
+        def work(db, ctx):
+            row = _open_request(db, ctx, request_id)
+            if row["permission_key"] not in roles_service.permissions_of(db, body.role_id):
+                raise AccessError(422, "role_lacks_permission",
+                                  "That role does not carry the permission asked for.")
+            binding = bindings_service.add_binding(
+                db, ctx, subject_type="principal", subject_id=row["requester_principal_id"],
+                role_id=body.role_id, scope_type="project" if row["project_id"] else "org",
+                scope_id=row["project_id"], expires_at=body.expires_at,
+                reason=body.reason or f"access request {row['id']}")
+            return {"request": _resolve(db, ctx, row, "granted", "access.request_granted",
+                                        {"role_id": body.role_id, "binding_id": binding["id"]}),
+                    "binding": binding}
+        return run(request, work, write=True)
+
+    @router.post("/v1/identity/access-requests/{request_id}/deny")
+    @permit(P.ROLE_BINDING_ASSIGN, scope=Scope.org())
+    def deny_access_request(request_id: str, body: AccessRequestDenial, request: Request):
+        def work(db, ctx):
+            row = _open_request(db, ctx, request_id)
+            return {"request": _resolve(db, ctx, row, "declined", "access.request_declined",
+                                        {"reason": (body.reason or "")[:500]})}
+        return run(request, work, write=True)
+
+    # ---- approval seats (§6.13) -------------------------------------------------------------------
     @router.get("/v1/identity/seats")
     @permit(P.ROLE_BINDING_READ, scope=Scope.org())
     def list_approval_seats(request: Request):
+        from boss_engine.identity import approvals
+
         def work(db, ctx):
-            rows = db.execute(text("SELECT seat_key, principal_id, assigned_by, assigned_at "
-                                   "FROM identity_approval_seats WHERE org_id = :o ORDER BY seat_key"),
-                              {"o": ctx.principal.org_id}).mappings().all()
-            return {"seats": [dict(r) for r in rows]}
+            org = ctx.principal.org_id
+            return {"seats": approvals.seat_rows(db, org), "known_seats": approvals.known_seats(),
+                    "tiers": {str(t): list(seats) for t, seats in sorted(approvals.tier_seats().items())},
+                    "two_person_tiers": sorted(approvals.TWO_PERSON_TIERS),
+                    "vacant_tiers": approvals.seat_vacant_tiers(db, org),
+                    "single_operator_waiver": approvals.waiver(db, org)}
+        return run(request, work)
+
+    @router.put("/v1/identity/seats/{seat_key}")
+    @permit(P.APPROVAL_RULE_MANAGE, scope=Scope.org())
+    def put_approval_seat(seat_key: str, body: SeatHolders, request: Request):
+        """Replace who holds an approval seat (Owner; critical, step-up)."""
+        from boss_engine.identity import approvals
+
+        return run(request, lambda db, ctx: approvals.set_seat(db, ctx, seat_key, body.principal_ids),
+                   write=True)
+
+    @router.get("/v1/identity/decisions/{decision_id}/approvals")
+    @permit(P.DECISION_READ, scope=Scope.of("decision", path="decision_id"))
+    def decision_approvals(decision_id: str, request: Request):
+        """Who has approved a decision so far, and how many approvals it needs (§6.13)."""
+        from boss_engine.identity import approvals
+
+        def work(db, ctx):
+            row = db.execute(text("SELECT id, risk_tier FROM decisions WHERE id = :d"),
+                             {"d": decision_id}).mappings().first()
+            if row is None:
+                raise AccessError(404, "not_found")
+            return approvals.status(db, ctx.principal.org_id, dict(row))
         return run(request, work)
 
     return router

@@ -248,8 +248,9 @@ def test_j5_a_recovery_code_signs_in_once_notifies_and_forces_regeneration_below
     res = client.post("/v1/auth/mfa/recovery", json={"code": codes[0].lower()}, headers=HEADERS)
     assert res.status_code == 200, res.text
     assert res.json()["recovery_codes_remaining"] == 9 and res.json()["must_regenerate_recovery_codes"] is False
-    subject, _ = world.last_mail_to("gil@example.test")
-    assert "recovery code" in subject.lower()
+    # a sign-in from a new device also emails its own notice; the recovery-code notice is one of them
+    subjects = [s.lower() for to, s, _b in world.mail if to == "gil@example.test"]
+    assert any("recovery code" in s for s in subjects), subjects
     assert world.events_of("recovery_code.used")
     again = fresh_client()
     sign_in(again, "gil@example.test")

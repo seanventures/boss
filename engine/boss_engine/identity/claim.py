@@ -86,6 +86,11 @@ def _on_claimed(db: Any, org_id: str, owner_id: str, path: str, *, seat: Optiona
         return
     migration.on_claimed(org_id, owner_id, db=db, via=path,
                          assume_member=seat if seat in legacy_seats(db) else None)
+    # §6.13: the first Owner holds every approval seat nobody holds yet (a fresh install has no
+    # one else to approve a tier-2 or tier-3 decision); an Owner reassigns them later.
+    from .approvals import seat_the_first_owner
+
+    seat_the_first_owner(db, org_id, owner_id)
 
 
 def legacy_password_configured() -> bool:
@@ -197,7 +202,7 @@ def claim(db: Any, req: ClaimRequest, *, ip: Optional[str], bridged: Optional[Au
     password_hash = None
     if req.password:
         try:
-            check_new_password(req.password, email=email)
+            check_new_password(req.password, email=email, policy=users.get_policy(org_id, db=db))
         except PasswordRejected as exc:
             raise ClaimRefused(exc.code, 422) from None
         password_hash = hash_password(req.password)

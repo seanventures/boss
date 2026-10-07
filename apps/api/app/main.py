@@ -1535,6 +1535,9 @@ async def lifespan(_: FastAPI):
         # provider-revoke retries and the audit re-key (identity/maintenance.py).
         from boss_engine.identity import maintenance as _identity_maintenance
 
+        _rekeyed = _identity_maintenance.rekey_at_boot(engine)   # N4: at boot only, never on a timer
+        if _rekeyed:
+            print(f"[identity] audit chain: {_rekeyed} rows from before the keyed chain re-keyed")
         _identity_maintenance.start(engine)
     except (_identity_vault.BootRefused, _identity_signing_keys.SigningKeysMissing) as exc:
         print(f"[identity] REFUSING TO START: {exc}. Restore the master key file (or BOSS_MASTER_KEY) "
@@ -2283,6 +2286,10 @@ async def require_transport_auth_for_v1(request: Request, call_next):
                     if attributed_permission
                     else None
                 )
+                from boss_engine.identity.approvals import MCP_REVIEWER as _mcp_reviewer
+
+                # §6.13: an approval this confirmation releases is the reviewing person's.
+                identity_reviewer_token = _mcp_reviewer.set(approved_by if attributed_permission else None)
                 try:
                     try:
                         response = await call_next(request)
@@ -2302,6 +2309,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
                         )
                     return response
                 finally:
+                    _mcp_reviewer.reset(identity_reviewer_token)
                     current_mcp_human_attribution.reset(reviewer_token)
         return await call_next(request)
     finally:
@@ -5427,11 +5435,24 @@ def get_project_member(member_id: str, project_id: str) -> ProjectMemberSummary:
         return project_member_summary_from_service(member)
 
 
+def _refuse_legacy_access_under_enforce(carries_access: bool) -> None:
+    """Under enforce, the legacy member tables are not a grant path. A member or break-glass row
+    that carries roles or permissions was re-imported as identity bindings by the per-boot seed,
+    without §6.11 grant limits (an Admin could hand a placeholder an Owner-only capability). The
+    identity way is a role binding (with an expiry, for break-glass)."""
+    if carries_access and identity_guard.identity_enforced():
+        raise HTTPException(status_code=422, detail={
+            "error": "legacy_roles_retired",
+            "message": "Access is granted with role bindings now (Identity > People). A legacy "
+                       "member or break-glass record cannot carry roles or permissions."})
+
+
 @app.post("/v1/members", response_model=ProjectMemberSummary, status_code=201)
 @permit(P.ROLE_BINDING_ASSIGN, scope=Scope.project(body="project_id"))
 def upsert_project_member(
     payload: ProjectMemberUpsertRequest,
 ) -> ProjectMemberSummary:
+    _refuse_legacy_access_under_enforce(bool(payload.role_keys or payload.permissions))
     with begin(engine) as connection:
         require_project_actor(
             connection,
@@ -5478,6 +5499,7 @@ def list_org_members(org_id: str, project_id: str, actor: str = "ceo") -> OrgMem
 @app.post("/v1/org-members", response_model=OrgMemberSummary, status_code=201)
 @permit(P.ROLE_BINDING_ASSIGN, scope=Scope.org())
 def upsert_org_member(payload: OrgMemberUpsertRequest) -> OrgMemberSummary:
+    _refuse_legacy_access_under_enforce(bool(payload.role_keys or payload.permissions))
     with begin(engine) as connection:
         if not members.project_belongs_to_org(
             connection,
@@ -5531,6 +5553,7 @@ def list_break_glass_grants(
 def create_break_glass_grant(
     payload: BreakGlassGrantCreateRequest,
 ) -> BreakGlassGrantSummary:
+    _refuse_legacy_access_under_enforce(True)
     with begin(engine) as connection:
         require_project_actor(
             connection,
@@ -11956,6 +11979,7 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: open_bodies.Discove
             raise HTTPException(status_code=400, detail="outcome_index out of range")
         directive, title = build_promote_directive(run, idx)
         project_id = run["project_id"]
+        _require_job_kind_permission("meeting.step", project_id)
         # IDEMPOTENT BY IDENTITY. Promoting the SAME outcome of the SAME discovery is the same
         # request, however many times the button is pressed. This passed make_id("mtg") — a
         # fresh random id — so the dedupe check could never match and two presses produced two
@@ -21915,6 +21939,24 @@ def _job_effect_permission(kind: str) -> Optional[str]:
     return None
 
 
+def _require_job_kind_permission(kind: str, project_id: str) -> None:
+    """Under identity, a job's EFFECT is authorized by its kind's catalogue permission
+    (boss_engine.identity.job_permissions), at the job's project, beyond the route's
+    work_item:manage. A kind BOSS does not know is refused: no unmapped effect by default."""
+    from boss_engine.identity.job_permissions import permission_for
+
+    from .routers.identity_access import require_permission
+
+    permission = permission_for(kind)
+    if permission is None:
+        if identity_guard.identity_enforced():
+            raise HTTPException(status_code=422, detail={
+                "error": "unknown_job_kind",
+                "message": "BOSS has no worker for this kind of job, so it cannot be queued."})
+        return
+    require_permission(None, permission, project_id, label="job_kind")
+
+
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)
 @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"),
         confine=(Confine.body("task_id", "task"), Confine.body("work_item_id", "work_item"),
@@ -21923,11 +21965,14 @@ def _job_effect_permission(kind: str) -> Optional[str]:
                  Confine.body("allocation_id", "resource_allocation")))
 def create_job(payload: JobCreateRequest) -> JobSummary:
     with begin(engine) as connection:
-        actor = current_api_principal.get() or "ceo"
+        # Under enforce the actor is the verified principal (the actor rule); a hard-coded "ceo"
+        # was refused as actor_mismatch for everyone, so no identity caller could queue a job.
+        actor = identity_guard.request_actor() or current_api_principal.get() or "ceo"
         require_project_actor(connection, payload.project_id, actor, "workflow_execute")
         effect_permission = _job_effect_permission(payload.kind)
         if effect_permission:
             require_project_actor(connection, payload.project_id, actor, effect_permission)
+        _require_job_kind_permission(payload.kind, payload.project_id)
         job_payload = {
             **payload.payload,
             **(
@@ -22872,6 +22917,8 @@ def approve_decision(
         # the independently authenticated human reviewer.
         payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
         require_decision_actor_binding(connection, decision_id, payload.actor)
+        from boss_engine.identity.approvals import ApprovalPending
+
         try:
             row = decisions.transition(
                 connection,
@@ -22883,6 +22930,10 @@ def approve_decision(
                 external_ref=payload.external_ref,
                 content_hash=payload.content_hash,
             )
+        except ApprovalPending as pending:
+            # §6.13: the first of two approvals of a tier-3 decision is recorded (this transaction
+            # commits it); the decision stays pending for a second person.
+            return JSONResponse(status_code=202, content=pending.body())
         except DecisionNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidDecisionTransitionError as error:
@@ -25211,7 +25262,7 @@ def create_delivery_workflow(payload: WorkflowCreateBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/fork")
-@permit(P.WORKFLOW_CREATE, scope=Scope.project(body="project_id"))
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
 def fork_delivery_workflow(payload: WorkflowForkBody) -> dict:
     """Copy a workflow into one the customer owns and can edit.
 
@@ -25271,7 +25322,7 @@ def fork_delivery_workflow(payload: WorkflowForkBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/save")
-@permit(P.WORKFLOW_CREATE, scope=Scope.project(body="project_id"))
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
 def save_delivery_workflow(payload: WorkflowSaveBody) -> dict:
     """Publish a new version of a customer's own workflow.
 

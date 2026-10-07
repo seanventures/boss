@@ -499,7 +499,8 @@ def network_mode_configured(settings: Any) -> bool:
 
 
 def seed(db: Any, *, settings: Any = None, org_id: Optional[str] = None,
-         now: Optional[datetime] = None, apply_claimed: bool = True) -> SeedReport:
+         now: Optional[datetime] = None, apply_claimed: bool = True,
+         at_claim: bool = False) -> SeedReport:
     """M0, idempotent: re-running it changes nothing that is already mapped, maps what is new
     (members, grants, keys added since), and revokes env-key credentials removed from the env."""
     settings = _settings(settings)
@@ -519,6 +520,9 @@ def seed(db: Any, *, settings: Any = None, org_id: Optional[str] = None,
     db.execute(_sql("INSERT INTO identity_settings (org_id) VALUES (:o) ON CONFLICT DO NOTHING"),
                {"o": org_id})
     is_claimed = claimed_at(db, org_id) is not None
+    # Legacy member rows are a source of access only up to and including the claim (the claim's
+    # own seed, `at_claim`, maps what exists at that moment); afterwards identity is the authority.
+    legacy_grants = not is_claimed or at_claim
     worker_member = str(getattr(settings, "worker_principal", "system") or "system")
 
     # -- built-in system principals of the catalogue (sys_scim is per provider) --
@@ -568,6 +572,14 @@ def seed(db: Any, *, settings: Any = None, org_id: Optional[str] = None,
             report.system_members[member_id] = pid
             continue
         pid = _ensure_placeholder(db, org_id, member_id, info, report)
+        report.placeholders[member_id] = pid
+        if not legacy_grants:
+            # FX-B P0-6: after the claim, identity is the authority. A legacy member row written
+            # since (POST /v1/members, a SCIM group's roles) is NOT a grant: importing it here
+            # handed out access with none of §6.11's limits (a placeholder could be given an
+            # Owner-only capability by an Admin, landing at the next boot). Access after the
+            # claim is a role binding, made through the bindings API.
+            continue
         perms = member_permissions(info["capabilities"])
         role_id = legacy_role_for(db, org_id, perms, member_id)
         for project_id in info["projects"]:
@@ -575,10 +587,12 @@ def seed(db: Any, *, settings: Any = None, org_id: Optional[str] = None,
                  reason=f"legacy: member {member_id} of project {project_id}")
         if info["org_member"]:
             bind(db, org_id, pid, role_id, "org", org_id, reason=f"legacy: org member {member_id}")
-        report.placeholders[member_id] = pid
 
-    _seed_seats(db, org_id, members, report)
-    _seed_break_glass(db, org_id, members, report, now, worker_member)
+    if not legacy_grants:
+        report.notes.append("claimed: legacy members, seats and break-glass grants are not imported")
+    else:
+        _seed_seats(db, org_id, members, report)
+        _seed_break_glass(db, org_id, members, report, now, worker_member)
     _seed_env_keys(db, org_id, settings, members, report, now, worker_member)
     _seed_scim(db, org_id, settings, report)
     _seed_providers(db, org_id, report)
@@ -935,7 +949,7 @@ def on_claimed(org_id: str, owner_principal_id: str, *, db: Any, now: Optional[d
     same transaction. Returns the cutoff."""
     settings = _settings(settings)
     now = _now(now)
-    seed(db, settings=settings, org_id=org_id, now=now, apply_claimed=False)
+    seed(db, settings=settings, org_id=org_id, now=now, apply_claimed=False, at_claim=True)
     if assume_member:
         assume_legacy_member(org_id, owner_principal_id, assume_member, db=db)
     # Every agent gets its Passport now, sponsored by its role's sponsor or this Owner (S3 §7.1):

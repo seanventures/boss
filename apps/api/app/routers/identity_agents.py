@@ -141,6 +141,11 @@ def _passport_json(p, db=None) -> dict[str, Any]:
     if db is not None:
         from sqlalchemy import text
 
+        from boss_engine.identity import lineage as _lineage
+
+        out["lineage"] = [{"at": e["at"], "event": e["label"], "detail": e["detail"]}
+                          for e in _lineage.for_agent(db, p.org_id, p.agent_id, limit=10)["events"]]
+
         names = _names(db, [p.agent_id, p.sponsor_principal_id])
         out["name"] = names.get(p.agent_id, out["name"])
         out["sponsor"] = {"id": p.sponsor_principal_id, "name": names.get(p.sponsor_principal_id, p.sponsor_principal_id),
@@ -242,7 +247,7 @@ def build_identity_agents_router() -> APIRouter:
                             headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
     @router.post("/v1/identity/introspect")
-    @public(reason=PublicReason.AUTH_ENDPOINT, verifier=tokens.egress_caller_ok)
+    @public(reason=PublicReason.EGRESS_SERVICE_CREDENTIAL, verifier=tokens.egress_caller_ok)
     async def introspect(request: Request):
         # Never public in effect: only the egress service may ask (A40) — as sys_egress with its
         # boss_sak_ key, or with the legacy BOSS_EGRESS_SERVICE_KEY shared key.
@@ -393,6 +398,36 @@ def build_identity_agents_router() -> APIRouter:
     router.post("/v1/identity/agents/{agent_id}/revoke")(
         permit(P.AGENT_PASSPORT_REVOKE, scope=Scope.org())(_passport_action("revoke")))
 
+    @router.get("/v1/identity/agents/{agent_id}/lineage")
+    @permit(P.AGENT_PASSPORT_READ, scope=Scope.org())
+    def agent_lineage(agent_id: str, request: Request, limit: int = 50, before: Optional[int] = None):
+        """§7.12 lineage by agent: Passport, grant and token events, newest first (`before` pages)."""
+        from boss_engine.identity import lineage as _lineage
+
+        ctx = _ctx(request)
+        with _engine().begin() as db:
+            p = passports.get(agent_id, db=db)
+            if p is None or p.org_id != ctx.principal.org_id:
+                return _err("not_found", 404)
+            return _lineage.for_agent(db, ctx.principal.org_id, agent_id, limit=limit, before=before)
+
+    @router.post("/v1/identity/agents/{agent_id}/reissue", status_code=201)
+    @permit(P.AGENT_PASSPORT_MANAGE, scope=Scope.org())
+    def reissue_agent(agent_id: str, request: Request):
+        """§7.1: a revoked Passport comes back only as a new one (new id, `reissued_from`)."""
+        from boss_engine.identity.ids import new_id
+
+        try:
+            ctx = _ctx(request)
+            with _engine().begin() as db:
+                p = passports.get(agent_id, db=db)
+                if p is None or p.org_id != ctx.principal.org_id:
+                    return _err("not_found", 404)
+                new = passports.reissue(ctx, agent_id, new_id("agt"), db=db)
+                return JSONResponse(_passport_json(new, db), status_code=201)
+        except Exception as exc:  # noqa: BLE001
+            return _map(exc)
+
     @router.get("/v1/identity/agents/{agent_id}/cascade-preview")
     @permit(P.AGENT_PASSPORT_READ, scope=Scope.org())
     def agent_cascade_preview(agent_id: str, request: Request, action: str = "suspend"):
@@ -420,36 +455,10 @@ def build_identity_agents_router() -> APIRouter:
         sub-delegation, max_depth, expires_at). `kind: task` without a run id is bound to a fresh
         `pending:` id that the person's next matching run claims."""
         body = await request.json()
-        known = {"agents", "permissions", "projects", "resources", "allow_subdelegation", "allowed_children",
-                 "max_depth", "expires_at", "task_run_id", "purpose", "kind", "days", "github"}
-        if not isinstance(body, dict) or set(body) - known:
-            return _err("unknown_fields", 422)          # mass assignment: no user/org/status fields
         try:
-            import secrets as _secrets
-            from datetime import timedelta, timezone
-
-            kind = body.get("kind") or ("task" if body.get("task_run_id") else "standing")
-            if kind not in ("task", "standing", "schedule"):
-                return _err("invalid_request", 422)
-            task_run_id = body.get("task_run_id")
-            if kind == "task" and not task_run_id:
-                task_run_id = grants.PENDING_PREFIX + _secrets.token_urlsafe(12)
-            if task_run_id is not None and not (str(task_run_id).startswith(grants.PENDING_PREFIX)
-                                                or str(task_run_id).startswith("run_")):
-                return _err("invalid_request", 422)
-            expires_at = datetime.fromisoformat(body["expires_at"]) if body.get("expires_at") else None
-            if expires_at is None and body.get("days") and kind != "task":
-                expires_at = datetime.now(timezone.utc) + timedelta(days=int(body["days"]))
-            resources = dict(body.get("resources") or {})
-            if body.get("github") and "github" not in resources:
-                resources["github"] = body["github"]
-            req = GrantRequest(
-                agent_ids=tuple(body.get("agents") or ()), permissions=frozenset(body.get("permissions") or ()),
-                project_ids=tuple(body.get("projects") or ()), resources=resources,
-                allow_subdelegation=bool(body.get("allow_subdelegation", False)),
-                allowed_children=tuple(body.get("allowed_children") or ()),
-                max_depth=int(body.get("max_depth", delegation.DEFAULT_MAX_DEPTH)),
-                expires_at=expires_at, task_run_id=task_run_id, purpose=str(body.get("purpose") or ""))
+            req = _grant_request(body)
+            if isinstance(req, JSONResponse):
+                return req
             with _engine().begin() as db:
                 g = grants.create_grant(_ctx(request), req, db=db)
                 return JSONResponse(_grant_json(g, db), status_code=201)
@@ -457,6 +466,58 @@ def build_identity_agents_router() -> APIRouter:
             return _err("invalid_request", 422)
         except Exception as exc:  # noqa: BLE001
             return _map(exc)
+
+    @router.post("/v1/identity/me/delegations/preview")
+    @permit(P.DELEGATION_GRANT, scope=Scope.org(), readonly_post=True)
+    async def preview_delegation(request: Request):
+        """The create body, answered with what a create would do — nothing is written (§7.3)."""
+        body = await request.json()
+        try:
+            req = _grant_request(body)
+            if isinstance(req, JSONResponse):
+                return req
+            ctx = _ctx(request)
+            if not ctx.is_human_session:
+                return _err("people_only", 403)
+            with _engine().begin() as db:
+                return grants.preview_grant(ctx, req, db=db)
+        except (TypeError, ValueError):
+            return _err("invalid_request", 422)
+        except Exception as exc:  # noqa: BLE001
+            return _map(exc)
+
+    def _grant_request(body: Any):
+        """The console's shape ({agents, permissions, projects, kind, days, purpose, …}) or the long
+        form, as a GrantRequest — or the 422 refusal. Shared by create and preview."""
+        import secrets as _secrets
+        from datetime import timedelta, timezone
+
+        known = {"agents", "permissions", "projects", "resources", "allow_subdelegation", "allowed_children",
+                 "max_depth", "expires_at", "task_run_id", "purpose", "kind", "days", "github"}
+        if not isinstance(body, dict) or set(body) - known:
+            return _err("unknown_fields", 422)          # mass assignment: no user/org/status fields
+        kind = body.get("kind") or ("task" if body.get("task_run_id") else "standing")
+        if kind not in ("task", "standing", "schedule"):
+            return _err("invalid_request", 422)
+        task_run_id = body.get("task_run_id")
+        if kind == "task" and not task_run_id:
+            task_run_id = grants.PENDING_PREFIX + _secrets.token_urlsafe(12)
+        if task_run_id is not None and not (str(task_run_id).startswith(grants.PENDING_PREFIX)
+                                            or str(task_run_id).startswith("run_")):
+            return _err("invalid_request", 422)
+        expires_at = datetime.fromisoformat(body["expires_at"]) if body.get("expires_at") else None
+        if expires_at is None and body.get("days") and kind != "task":
+            expires_at = datetime.now(timezone.utc) + timedelta(days=int(body["days"]))
+        resources = dict(body.get("resources") or {})
+        if body.get("github") and "github" not in resources:
+            resources["github"] = body["github"]
+        return GrantRequest(
+            agent_ids=tuple(body.get("agents") or ()), permissions=frozenset(body.get("permissions") or ()),
+            project_ids=tuple(body.get("projects") or ()), resources=resources,
+            allow_subdelegation=bool(body.get("allow_subdelegation", False)),
+            allowed_children=tuple(body.get("allowed_children") or ()),
+            max_depth=int(body.get("max_depth", delegation.DEFAULT_MAX_DEPTH)),
+            expires_at=expires_at, task_run_id=task_run_id, purpose=str(body.get("purpose") or ""))
 
     async def _dry_run(request: Request) -> bool:
         if not request.headers.get("content-type", "").startswith("application/json"):
@@ -739,3 +800,18 @@ def install_consent_handler(app) -> None:
                        "it one under Identity › Agents."})
 
     app.add_exception_handler(AgentWithoutPassport, no_passport)
+
+    from boss_engine.identity.approvals import ApprovalPending, ApprovalRefused
+
+    async def approval_refused(_request, exc: ApprovalRefused):
+        return JSONResponse(status_code=exc.status, content=exc.body())
+
+    async def approval_pending(_request, exc: ApprovalPending):
+        # A path that let the exception escape its transaction did NOT keep the approval: say so
+        # plainly rather than report it recorded. POST /v1/decisions/{id}/approve keeps it (202).
+        return JSONResponse(status_code=409, content={
+            "error": "approve_from_the_decision", "message": "A tier-3 decision is approved by two "
+            "people, one at a time, from the decision itself."})
+
+    app.add_exception_handler(ApprovalRefused, approval_refused)
+    app.add_exception_handler(ApprovalPending, approval_pending)

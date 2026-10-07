@@ -7204,6 +7204,15 @@ CREATE TABLE IF NOT EXISTS identity_approval_seats (       -- governance seats (
   assigned_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (org_id, seat_key, principal_id)
 );
+-- §6.13 condition 4: the approvals a tier-3 decision has collected (two distinct people).
+CREATE TABLE IF NOT EXISTS identity_decision_approvals (
+  decision_id  TEXT NOT NULL,
+  org_id       TEXT NOT NULL REFERENCES orgs(id),
+  principal_id TEXT NOT NULL REFERENCES identity_principals(id),
+  seat_key     TEXT,
+  approved_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (decision_id, principal_id)
+);
 
 CREATE TABLE IF NOT EXISTS identity_service_accounts (
   principal_id        TEXT PRIMARY KEY REFERENCES identity_principals(id),
@@ -7279,6 +7288,8 @@ CREATE TABLE IF NOT EXISTS identity_delegation_grants (
   revoke_reason       TEXT
 );
 CREATE INDEX IF NOT EXISTS identity_delegation_grants_user ON identity_delegation_grants (user_principal_id, status);
+-- §7.3: "BOSS reminds the user 3 days before expiry" — once per grant (extending clears it).
+ALTER TABLE identity_delegation_grants ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS identity_delegation_grant_permissions (
   grant_id       TEXT NOT NULL REFERENCES identity_delegation_grants(id),
   permission_key TEXT NOT NULL REFERENCES identity_permissions(key),   -- trigger: must be delegable
@@ -7570,9 +7581,75 @@ DO $$ BEGIN
       ON identity_security_events FOR EACH STATEMENT EXECUTE FUNCTION identity_security_events_append_only();
   END IF;
 END $$;
+-- N3: a CHECKPOINT licenses a prune, so only the table's owner writes one — in practice only the
+-- SECURITY DEFINER identity_audit_checkpoint below. An app session that may INSERT events cannot
+-- forge `audit.checkpoint {pruned_through_seq}` and then prune with it.
+CREATE OR REPLACE FUNCTION identity_security_events_checkpoint_guard() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.event_type = 'audit.checkpoint'
+     AND current_user <> (SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = TG_RELID) THEN
+    RAISE EXCEPTION 'identity_security_events: a checkpoint is written only by identity_audit_checkpoint'
+      USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_security_events_checkpoint_guard'
+                 AND tgrelid = 'identity_security_events'::regclass) THEN
+    CREATE TRIGGER identity_security_events_checkpoint_guard BEFORE INSERT
+      ON identity_security_events FOR EACH ROW EXECUTE FUNCTION identity_security_events_checkpoint_guard();
+  END IF;
+END $$;
+-- The audit log's retention FLOOR, in SQL: nothing younger than this is ever checkpointed for
+-- pruning or pruned, whatever the caller (the API's own floor, identity_admin.MIN_PRUNE_DAYS, is
+-- the same; a test keeps them equal).
+CREATE OR REPLACE FUNCTION identity_audit_min_prune_age() RETURNS INTERVAL
+LANGUAGE sql IMMUTABLE AS $$ SELECT interval '30 days' $$;
+-- The one way to append a checkpoint: it must extend the org's chain (next seq, prev_hash = the
+-- newest row's hash) and name a range whose prunable rows are all older than the floor. The row's
+-- HMAC is computed by the API (the key is not in the database); verify_chain checks it.
+CREATE OR REPLACE FUNCTION identity_audit_checkpoint(p_row JSONB, p_prev BYTEA, p_hash BYTEA) RETURNS BIGINT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  v_org TEXT := p_row->>'org_id';
+  v_seq BIGINT := (p_row->>'seq')::BIGINT;
+  v_upper BIGINT := (p_row->'details'->>'pruned_through_seq')::BIGINT;
+  v_last RECORD;
+  v_id BIGINT;
+BEGIN
+  IF p_row->>'event_type' IS DISTINCT FROM 'audit.checkpoint' THEN
+    RAISE EXCEPTION 'identity_audit_checkpoint: not a checkpoint' USING ERRCODE = 'P0001';
+  END IF;
+  SELECT seq, hash INTO v_last FROM identity_security_events WHERE org_id = v_org ORDER BY seq DESC LIMIT 1;
+  IF v_last IS NULL OR v_seq IS DISTINCT FROM v_last.seq + 1 OR p_prev IS DISTINCT FROM v_last.hash THEN
+    RAISE EXCEPTION 'identity_audit_checkpoint: a checkpoint extends the chain' USING ERRCODE = 'P0001';
+  END IF;
+  IF v_upper IS NULL OR v_upper < 1 OR v_upper >= v_seq THEN
+    RAISE EXCEPTION 'identity_audit_checkpoint: no range' USING ERRCODE = 'P0001';
+  END IF;
+  IF EXISTS (SELECT 1 FROM identity_security_events WHERE org_id = v_org AND seq <= v_upper
+             AND event_type NOT IN ('audit.checkpoint', 'bootstrap.claimed', 'owner.recovered_by_host')
+             AND ts > now() - identity_audit_min_prune_age()) THEN
+    RAISE EXCEPTION 'identity_audit_checkpoint: events younger than the retention floor are kept'
+      USING ERRCODE = 'P0001';
+  END IF;
+  INSERT INTO identity_security_events (org_id, seq, ts, stream, event_type, outcome, actor_principal_id,
+      actor_kind, on_behalf_of, grant_id, chain, token_jti, credential_id, session_ref, target_type,
+      target_id, permission, scope, ip, user_agent, request_id, details, prev_hash, hash, hash_alg)
+  VALUES (v_org, v_seq, (p_row->>'ts')::TIMESTAMPTZ, p_row->>'stream', 'audit.checkpoint',
+      p_row->>'outcome', p_row->>'actor_principal_id', p_row->>'actor_kind', p_row->>'on_behalf_of',
+      p_row->>'grant_id', CASE WHEN jsonb_typeof(p_row->'chain') = 'null' THEN NULL ELSE p_row->'chain' END,
+      p_row->>'token_jti', p_row->>'credential_id', p_row->>'session_ref', p_row->>'target_type',
+      p_row->>'target_id', p_row->>'permission', p_row->>'scope', (p_row->>'ip')::INET,
+      p_row->>'user_agent', p_row->>'request_id', COALESCE(p_row->'details', '{}'::jsonb), p_prev, p_hash,
+      COALESCE((p_row->>'hash_alg')::SMALLINT, 2))
+  RETURNING id INTO v_id;
+  RETURN v_id;
+END $$;
 -- The prune (Owner, step-up, via audit.prune): deletes ONLY a range that the newest event of the
--- org already checkpoints (an audit.checkpoint naming exactly this upper bound), and never the
--- kept event types. Runs as boss_audit_owner.
+-- org already checkpoints (an audit.checkpoint naming exactly this upper bound), never the kept
+-- event types, and never a row younger than the retention floor. Runs as boss_audit_owner.
 CREATE OR REPLACE FUNCTION identity_audit_prune(p_org TEXT, p_upper BIGINT, p_keep TEXT[]) RETURNS BIGINT
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
@@ -7586,6 +7663,11 @@ BEGIN
      OR p_upper >= v_last.seq
      OR NOT (p_keep @> ARRAY['audit.checkpoint', 'bootstrap.claimed']) THEN
     RAISE EXCEPTION 'identity_audit_prune: no checkpoint for this range' USING ERRCODE = 'P0001';
+  END IF;
+  IF EXISTS (SELECT 1 FROM identity_security_events WHERE org_id = p_org AND seq <= p_upper
+             AND event_type <> ALL(p_keep) AND ts > now() - identity_audit_min_prune_age()) THEN
+    RAISE EXCEPTION 'identity_audit_prune: events younger than the retention floor are kept'
+      USING ERRCODE = 'P0001';
   END IF;
   DELETE FROM identity_security_events WHERE org_id = p_org AND seq <= p_upper AND event_type <> ALL(p_keep);
   GET DIAGNOSTICS v_n = ROW_COUNT;
@@ -7604,6 +7686,20 @@ BEGIN
      OR array_length(p_seqs, 1) IS DISTINCT FROM array_length(p_prev, 1) THEN
     RAISE EXCEPTION 'identity_audit_rekey: arrays differ' USING ERRCODE = 'P0001';
   END IF;
+  -- N4: one re-key of a WHOLE unkeyed chain, once: every row of the org is alg 1, the arrays name
+  -- exactly seq 1..n, and the new chain links (genesis, then each prev = the previous hash). No
+  -- picking single rows to overwrite; after it, no alg-1 row is left to re-key.
+  IF EXISTS (SELECT 1 FROM identity_security_events WHERE org_id = p_org AND hash_alg <> 1)
+     OR (SELECT count(*) FROM identity_security_events WHERE org_id = p_org) <> coalesce(array_length(p_seqs, 1), 0)
+     OR p_seqs IS DISTINCT FROM ARRAY(SELECT generate_series(1::BIGINT, coalesce(array_length(p_seqs, 1), 0)::BIGINT))
+     OR p_prev[1] IS DISTINCT FROM decode(repeat('00', 32), 'hex') THEN
+    RAISE EXCEPTION 'identity_audit_rekey: only a whole unkeyed chain is re-keyed' USING ERRCODE = 'P0001';
+  END IF;
+  FOR i IN 2 .. coalesce(array_length(p_seqs, 1), 0) LOOP
+    IF p_prev[i] IS DISTINCT FROM p_hash[i - 1] THEN
+      RAISE EXCEPTION 'identity_audit_rekey: the new chain does not link' USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
   FOR i IN 1 .. coalesce(array_length(p_seqs, 1), 0) LOOP
     UPDATE identity_security_events SET prev_hash = p_prev[i], hash = p_hash[i], hash_alg = 2
      WHERE org_id = p_org AND seq = p_seqs[i] AND hash_alg = 1;
@@ -7626,12 +7722,16 @@ BEGIN
     ALTER FUNCTION identity_security_events_append_only() OWNER TO boss_audit_owner;
     ALTER FUNCTION identity_audit_prune(TEXT, BIGINT, TEXT[]) OWNER TO boss_audit_owner;
     ALTER FUNCTION identity_audit_rekey(TEXT, BIGINT[], BYTEA[], BYTEA[]) OWNER TO boss_audit_owner;
+    ALTER FUNCTION identity_audit_checkpoint(JSONB, BYTEA, BYTEA) OWNER TO boss_audit_owner;
+    ALTER FUNCTION identity_security_events_checkpoint_guard() OWNER TO boss_audit_owner;
     REVOKE ALL ON identity_security_events FROM PUBLIC;
     EXECUTE format('REVOKE ALL ON identity_security_events FROM %I', v_app);
     EXECUTE format('GRANT SELECT, INSERT ON identity_security_events TO %I', v_app);
     EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE identity_security_events_id_seq TO %I', v_app);
     REVOKE ALL ON FUNCTION identity_audit_prune(TEXT, BIGINT, TEXT[]) FROM PUBLIC;
     REVOKE ALL ON FUNCTION identity_audit_rekey(TEXT, BIGINT[], BYTEA[], BYTEA[]) FROM PUBLIC;
+    REVOKE ALL ON FUNCTION identity_audit_checkpoint(JSONB, BYTEA, BYTEA) FROM PUBLIC;
+    EXECUTE format('GRANT EXECUTE ON FUNCTION identity_audit_checkpoint(JSONB, BYTEA, BYTEA) TO %I', v_app);
     EXECUTE format('GRANT EXECUTE ON FUNCTION identity_audit_prune(TEXT, BIGINT, TEXT[]) TO %I', v_app);
     EXECUTE format('GRANT EXECUTE ON FUNCTION identity_audit_rekey(TEXT, BIGINT[], BYTEA[], BYTEA[]) TO %I', v_app);
   EXCEPTION WHEN insufficient_privilege THEN
@@ -7649,6 +7749,7 @@ BEGIN
   EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE identity_security_events_id_seq TO %I', p_role);
   EXECUTE format('GRANT EXECUTE ON FUNCTION identity_audit_prune(TEXT, BIGINT, TEXT[]) TO %I', p_role);
   EXECUTE format('GRANT EXECUTE ON FUNCTION identity_audit_rekey(TEXT, BIGINT[], BYTEA[], BYTEA[]) TO %I', p_role);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION identity_audit_checkpoint(JSONB, BYTEA, BYTEA) TO %I', p_role);
 END $$;
 
 -- Ceilings and grants hold delegable permissions only (D12): a second, independent check.
@@ -7904,6 +8005,12 @@ ALTER TABLE identity_run_credentials ADD COLUMN IF NOT EXISTS claims JSONB;
 -- AuthnContextClassRef set that counts as MFA under "trust IdP MFA" (NULL: BOSS's default list).
 ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS saml_sso_url TEXT;
 ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS trusted_authn_contexts TEXT[];
+-- §4.8 OIDC client authentication: a vaulted client secret, or private_key_jwt (RFC 7523): BOSS
+-- signs a client assertion with a vaulted private key (generated by BOSS or uploaded, e.g. Apple's).
+ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS client_auth TEXT NOT NULL DEFAULT 'client_secret';
+ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS client_key_vault_item_id TEXT;
+ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS client_key_kid TEXT;
+ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS client_assertion_issuer TEXT;
 -- F3 (authentication security fixes). H1: a session of a person whose roles need MFA and who has
 -- no second factor is ENROLMENT-ONLY; enrolling the FIRST factor needs this session-bound grant
 -- (set at the claim, an invitation acceptance, the first sign-in ever, or the first sign-in after an

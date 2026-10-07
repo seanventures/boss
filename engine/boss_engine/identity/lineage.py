@@ -81,6 +81,78 @@ def token_event(db: Any, claims: RunTokenClaims, event_type: str, *, renewed_fro
                  "project": claims.task.project_id, "step": claims.task.step, **extra}))
 
 
+# ---- reading lineage back (§7.12 "by agent") -----------------------------------------------------------
+
+_LABELS = {
+    "agent.passport.born": "Passport issued", "agent.passport.sealed": "Definition sealed",
+    "agent.passport.ceiling_changed": "Ceiling changed", "agent.passport.sponsor_changed": "Sponsor changed",
+    "agent.passport.suspended": "Suspended", "agent.passport.resumed": "Resumed",
+    "agent.passport.revoked": "Revoked", "agent.passport.reissued": "Re-issued",
+    "agent.passport.rules_changed": "Spawn rules changed", "agent.passport.flagged": "Flagged for review",
+    "delegation.created": "Allowed to act for someone", "delegation.used_first": "First used a delegation",
+    "delegation.narrowed": "Delegation narrowed", "delegation.revoked": "Delegation revoked",
+    "delegation.expired": "Delegation expired", "delegation.suspended": "Delegation paused",
+    "delegation.extended": "Delegation extended", "token.issued": "Started a run",
+    "token.exchanged": "Handed work to a sub-agent", "token.denied": "Refused a token",
+    "credential.handed_out": "Used a credential", "egress.denied": "Outbound call refused",
+}
+
+
+def _detail(event_type: str, details: Mapping[str, Any], target_id: Optional[str]) -> str:
+    if event_type == "agent.passport.ceiling_changed":
+        parts = [f"added {', '.join(details.get('added') or [])}" if details.get("added") else "",
+                 f"removed {', '.join(details.get('removed') or [])}" if details.get("removed") else ""]
+        return "; ".join(p for p in parts if p) or "no change"
+    if event_type.startswith("token."):
+        return f"run {target_id}" + (f" in {details['project']}" if details.get("project") else "")
+    if event_type == "agent.passport.reissued":
+        return f"from {details.get('from')}"
+    if event_type == "delegation.created":
+        return ", ".join(details.get("permissions") or [])[:200]
+    reason = details.get("reason")
+    return str(reason)[:200] if reason else ""
+
+
+def for_agent(db: Any, org_id: str, agent_id: str, *, limit: int = 50,
+              before: Optional[int] = None) -> dict[str, Any]:
+    """An agent's lineage, newest first: lineage events where it is the target, the actor, in the
+    chain, or named by the grant the event is under. `before` pages by event id."""
+    from sqlalchemy import text
+
+    limit = max(1, min(int(limit), 200))
+    rows = db.execute(text(
+        "SELECT e.id, e.ts, e.event_type, e.outcome, e.actor_principal_id, e.on_behalf_of, e.grant_id, "
+        "e.token_jti, e.target_type, e.target_id, e.details FROM identity_security_events e "
+        "WHERE e.org_id = :o AND e.stream = 'lineage' AND (CAST(:b AS BIGINT) IS NULL OR e.id < :b) AND ("
+        " e.target_id = :a OR e.actor_principal_id = :a"
+        " OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(e.chain) = 'array' "
+        "            THEN e.chain ELSE '[]'::jsonb END) h WHERE split_part(h, '#', 1) = :a)"
+        " OR e.grant_id IN (SELECT g.id FROM identity_delegation_grants g WHERE g.org_id = :o "
+        "                   AND :a = ANY(g.agent_ids))) "
+        "ORDER BY e.id DESC LIMIT :n"),
+        {"o": org_id, "a": agent_id, "b": before, "n": limit + 1}).mappings().all()
+    more = len(rows) > limit
+    rows = rows[:limit]
+    ids = {r["actor_principal_id"] for r in rows if r["actor_principal_id"]}
+    names = {r[0]: r[1] for r in db.execute(text(
+        "SELECT id, display_name FROM identity_principals WHERE id = ANY(:i)"), {"i": sorted(ids)}).all()} \
+        if ids else {}
+    events = []
+    for r in rows:
+        details = r["details"] if isinstance(r["details"], Mapping) else {}
+        events.append({
+            "id": int(r["id"]), "at": r["ts"].isoformat(), "event": r["event_type"],
+            "label": _LABELS.get(r["event_type"], r["event_type"]),
+            "detail": _detail(r["event_type"], details, r["target_id"]), "outcome": r["outcome"],
+            "actor": ({"id": r["actor_principal_id"], "name": names.get(r["actor_principal_id"])}
+                      if r["actor_principal_id"] else None),
+            "on_behalf_of": r["on_behalf_of"], "grant_id": r["grant_id"],
+            "run_id": r["target_id"] if r["target_type"] == "run" else details.get("run"),
+            "jti": r["token_jti"], "parent_jti": details.get("parent_jti")})
+    return {"agent_id": agent_id, "events": events,
+            "next_before": events[-1]["id"] if more and events else None}
+
+
 def denied(db: Any, *, org_id: str, event_type: str, reason: str, run_id: Optional[str] = None,
            grant_id: Optional[str] = None, chain: Optional[list[str]] = None, sub: Optional[str] = None,
            jti: Optional[str] = None, permission: Optional[str] = None,
@@ -193,6 +265,20 @@ def _set_tool_auth(ctx: AuthContext) -> Any:
 def _reset_tool_auth(token: Any) -> None:
     var, tok = token
     var.reset(tok)
+
+
+_ENFORCED: contextvars.ContextVar[Optional[bool]] = contextvars.ContextVar("boss_identity_enforced", default=None)
+
+
+def mark_enforced(enforced: bool) -> None:
+    """The API's guard: whether IT enforced this request (its per-route mode), for engine code that
+    must decide the same way (approvals.deciding_context)."""
+    _ENFORCED.set(bool(enforced))
+
+
+def request_enforced() -> Optional[bool]:
+    """True/False when a request's guard decided; None outside a request (tools, background)."""
+    return _ENFORCED.get()
 
 
 def enter(ctx: AuthContext) -> None:

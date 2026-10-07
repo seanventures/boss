@@ -28,7 +28,7 @@ export interface MeSignInMethods {
 }
 
 export interface MeBanner {
-  kind: "network_bridge" | "legacy_password" | "legacy_api_key" | "owner_recovered" | "mfa_enrolment_required" | "recovery_codes_low" | "api_key_expiring";
+  kind: "network_bridge" | "legacy_password" | "legacy_api_key" | "owner_recovered" | "mfa_enrolment_required" | "recovery_codes_low" | "api_key_expiring" | "new_device";
   message: string;
   until: string | null;
 }
