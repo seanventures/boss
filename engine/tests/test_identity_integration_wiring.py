@@ -87,9 +87,12 @@ def test_first_boot_provisions_the_vault_key_before_anything_needs_the_server_ke
     vault.boot at first install (F1). The claim link mints a setup token (keyed hash), so the
     lifespan must boot the vault first — otherwise a fresh compose install printed no claim link."""
     main = (ROOT / "apps" / "api" / "app" / "main.py").read_text(encoding="utf-8")
+    # The link is announced by the lifespan's keeper task (announce_claim_link_once, at boot and
+    # every CLAIM_LINK_REANNOUNCE_SECONDS); the task starts only after the vault booted.
     boot = main.index("_identity_vault.boot(db=_connection)")
-    claim = main.index("_identity_claim.announce_setup_link(_connection)")
+    claim = main.index("_asyncio.create_task(_keep_claim_link_announced())")
     assert boot < claim
+    assert "_identity_claim.announce_setup_link(connection)" in main
     compose = (ROOT / "scripts" / "install" / "community-compose.yml").read_text(encoding="utf-8")
     for service in ("api", "worker", "egress"):
         assert compose.count("BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}") >= 3

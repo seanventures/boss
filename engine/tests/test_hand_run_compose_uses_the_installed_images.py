@@ -18,6 +18,7 @@ def test_compose_falls_back_to_the_tag_the_installer_builds():
     project = re.search(r'COMPOSE_PROJECT_NAME="\$\{COMPOSE_PROJECT_NAME:-([^}]+)\}"', installer).group(1)
     assert 'BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-$COMPOSE_PROJECT_NAME}"' in installer
     compose = (ROOT / "scripts" / "install" / "community-compose.yml").read_text()
-    tags = re.findall(r"image: boss-community-\w+:\$\{BOSS_COMMUNITY_IMAGE_TAG:-([^}]+)\}", compose)
-    assert len(tags) == 3, tags
+    # EVERY image this file names (api, worker, mcp-tools, egress, web — a hyphenated name too).
+    tags = re.findall(r"image: boss-community-[\w-]+:\$\{BOSS_COMMUNITY_IMAGE_TAG:-([^}]+)\}", compose)
+    assert len(tags) == compose.count("image: boss-community-") >= 3, tags
     assert set(tags) == {project}
