@@ -31,6 +31,7 @@ import type {
   AccessRole, ApiKey, AuditEvent, Binding, CascadePreview, Delegation, EffectiveAccess, EffectiveEntry, Factor, Person, SessionRow, WhyStep,
 } from "../../../../lib/identity/types";
 import { statusPill } from "../people-list";
+import { grantedByWords } from "../../../../lib/identity/adapt-people";
 
 import { PERSON_TABS, type PersonTab } from "./tabs";
 
@@ -274,7 +275,7 @@ function Bindings({ person }: { person: Person }) {
             <span className="idn-src" data-copy="data">
               {b.via_group
                 ? `Via group ${b.via_group.name} · ${b.via_group.source === "manual" ? "managed in BOSS" : `synced from ${b.via_group.source.toUpperCase()}`}`
-                : `Direct · granted by ${b.granted_by ?? "BOSS"}, ${shortDate(b.granted_at)}`}
+                : `Direct · granted by ${grantedByWords(b)}, ${shortDate(b.granted_at)}`}
             </span>
           </span>
           <span className="idn-src">{b.expires_at ? `expires ${shortDate(b.expires_at)}` : ""}</span>

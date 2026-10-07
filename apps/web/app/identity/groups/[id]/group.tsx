@@ -18,6 +18,7 @@ import type { AccessRole, Binding, Group, Person } from "../../../../lib/identit
 import type { ProjectChoice } from "../../../../lib/identity/types-people";
 import { EmptyState } from "../../../../components/identity/states";
 import { sourceWord } from "../groups-list";
+import { grantedByWords } from "../../../../lib/identity/adapt-people";
 import { BindRoleSheet, DeleteGroupSheet, GroupFormSheet, UnbindRoleSheet } from "../group-sheets";
 
 function useAct() {
@@ -134,7 +135,12 @@ export function GroupDetail({ group, people, roles = [], projects = null }: {
                       </a>
                     </td>
                     <td className="idn-right">
-                      {manual ? (
+                      {manual && (m.source ?? "manual") !== "manual" ? (
+                        <span className="idn-tag warn" data-testid={`member-source-${m.id}`}
+                          title="Synced at sign-in from your identity provider: change it there">
+                          from {m.source === "scim" ? "SCIM" : "OIDC"} sign-in
+                        </span>
+                      ) : manual ? (
                         <CanButton permission="group:manage_members" className="idn-btn sm" tip="They lose what the group grants" data-testid={`remove-member-${m.id}`}
                           onClick={() => act("Removing a member changes their access.", () => idDelete(`/v1/identity/groups/${encodeURIComponent(group.id)}/members/${encodeURIComponent(m.id)}`), "Member removed")}>
                           Remove
@@ -163,7 +169,7 @@ export function GroupDetail({ group, people, roles = [], projects = null }: {
           {group.bindings.map((b) => (
             <div key={b.id} className="idn-bind" data-testid={`group-binding-${b.id}`}>
               <RoleChip roleKey={b.role_key} name={b.role_name} scope={b.scope} />
-              <span className="idn-src" data-copy="data">granted by {b.granted_by ?? "BOSS"}{b.expires_at ? ` · ends ${b.expires_at.slice(0, 10)}` : ""}</span>
+              <span className="idn-src" data-copy="data">granted by {grantedByWords(b)}{b.expires_at ? ` · ends ${b.expires_at.slice(0, 10)}` : ""}</span>
               <span className="idn-row">
                 <a className="idn-btn sm ghost" href={`/identity/roles/${b.role_id}`}>Open</a>
                 <CanButton permission="role_binding:assign" className="idn-btn sm" tip="Members lose this role" data-testid={`group-unbind-${b.id}`}

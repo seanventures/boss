@@ -188,14 +188,18 @@ def _present(row: Any) -> dict:
             "role_id": row["role_id"], "role_key": row.get("role_key"),
             "scope": "org" if row["scope_type"] == "org" else f"project:{row['scope_id']}",
             "scope_type": row["scope_type"], "scope_id": row["scope_id"],
-            "granted_by": row["granted_by"], "granted_at": row["granted_at"],
+            "granted_by": row["granted_by"],
+            # Who granted it, in words (the console never shows a raw principal id).
+            "granted_by_name": row.get("granted_by_name"), "granted_at": row["granted_at"],
             "expires_at": row["expires_at"], "reason": row["reason"]}
 
 
-_SELECT = ("SELECT b.*, r.key AS role_key, g.name AS group_name, g.source AS group_source "
+_SELECT = ("SELECT b.*, r.key AS role_key, g.name AS group_name, g.source AS group_source, "
+           "gp.display_name AS granted_by_name "
            "FROM identity_role_bindings b "
            "JOIN identity_access_roles r ON r.id = b.role_id "
-           "LEFT JOIN identity_groups g ON b.subject_type = 'group' AND g.id = b.subject_id ")
+           "LEFT JOIN identity_groups g ON b.subject_type = 'group' AND g.id = b.subject_id "
+           "LEFT JOIN identity_principals gp ON gp.id = b.granted_by ")
 
 
 def list_bindings(db: Any, org_id: str, *, subject_id: Optional[str] = None,
