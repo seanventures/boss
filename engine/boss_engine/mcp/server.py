@@ -61,6 +61,21 @@ _REQUEST_AUTH: contextvars.ContextVar[Any] = contextvars.ContextVar("boss_mcp_re
 #: An HTTP request the transport admitted WITHOUT an identity (the legacy shared token): its tool
 #: calls carry none, and never fall back to the stdio session identity.
 _NO_IDENTITY = object()
+#: The `Authorization` value the HTTP request presented, when it verified as a BOSS identity: the
+#: API-surface tools forward exactly this to the API (M8), never the server's own key.
+_REQUEST_CREDENTIAL: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "boss_mcp_request_credential", default=None)
+
+
+def _mcp_mode() -> Any:
+    """The authz mode tool calls run under (router key `mcp`)."""
+    from ..config import get_settings
+    from ..identity.enforcement import mode_for
+    from ..tools.registry import TOOL_ROUTER_KEY
+
+    settings = get_settings()
+    return mode_for(TOOL_ROUTER_KEY, global_mode=settings.authz_mode,
+                    router_modes=settings.authz_router_modes)
 
 
 def _is_boss_credential(token: str) -> bool:
@@ -112,12 +127,16 @@ class MCPServer:
         api_surface: Any = None,
         api_domains: Optional[set[str]] = None,
         identity: Optional[Callable[[], Any]] = None,
+        session_credential: Optional[str] = None,
     ):
         """`identity` returns the verified caller identity for one call (stdio: the session's
         BOSS API key, re-checked live on every call). The HTTP transport authenticates each
         request's bearer instead."""
         self.ctx = ctx
         self.identity = identity
+        #: stdio: the `Authorization` value of the key the session was launched with (the same
+        #: key `identity` verifies). The API-surface tools call the API as this caller.
+        self.session_credential = session_credential
         self.project_id = project_id
         self.actor = actor
         self.registry = registry or build_default_registry()
@@ -233,8 +252,10 @@ class MCPServer:
         # enforce when there is none), and jobs it enqueues carry it (R8).
         auth = self._caller()
         from ..tools.registry import CURRENT_TOOL_AUTH
+        from .api_surface import CALLER_AUTHORIZATION
 
         tool_token = CURRENT_TOOL_AUTH.set(auth)
+        cred_token = CALLER_AUTHORIZATION.set(self._caller_credential(auth))
         try:
             if auth is not None:
                 from ..identity import lineage
@@ -250,8 +271,22 @@ class MCPServer:
                 {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, is_error=True
             ))
         finally:
+            CALLER_AUTHORIZATION.reset(cred_token)
             CURRENT_TOOL_AUTH.reset(tool_token)
         return _ok(rid, _tool_result(result, is_error=not result.get("ok", True)))
+
+    def _caller_credential(self, auth: Any) -> Optional[str]:
+        """The caller's own credential to forward to the API (M8): the HTTP request's bearer when
+        it verified as `auth`, else the stdio session's launch key. Never the shared
+        BOSS_MCP_HTTP_TOKEN, never the surface's configured key on another caller's behalf."""
+        request_auth = _REQUEST_AUTH.get()
+        if request_auth is _NO_IDENTITY:
+            return None
+        if request_auth is not None:
+            return _REQUEST_CREDENTIAL.get() if auth is not None else None
+        # stdio: the key this session was launched with IS the caller's own credential (the
+        # operator started the server with it); the API verifies it on every call.
+        return self.session_credential
 
     def _caller(self) -> Any:
         """The verified identity for this call: the HTTP request's, else the session's."""
@@ -313,6 +348,15 @@ class MCPServer:
             if server.http_token and scheme.lower() == "bearer" and hmac.compare_digest(
                 candidate.encode(), server.http_token.encode()
             ):
+                from ..identity.enforcement import AuthzMode  # noqa: PLC0415
+
+                if _mcp_mode() == AuthzMode.ENFORCE:
+                    # The shared token says the request came from someone holding it, not WHO:
+                    # under enforce nothing is done for nobody (M8/H2).
+                    raise HTTPException(
+                        status_code=401,
+                        detail="identity required: present your BOSS API key or run token",
+                        headers={"WWW-Authenticate": "Bearer"})
                 return None
             if candidate and _is_boss_credential(candidate):
                 from starlette.concurrency import run_in_threadpool  # noqa: PLC0415
@@ -338,9 +382,12 @@ class MCPServer:
             except json.JSONDecodeError:
                 return _err(None, -32700, "parse error")
             token = _REQUEST_AUTH.set(auth if auth is not None else _NO_IDENTITY)
+            cred = _REQUEST_CREDENTIAL.set(
+                request.headers.get("authorization") if auth is not None else None)
             try:
                 resp = server.handle(body)
             finally:
+                _REQUEST_CREDENTIAL.reset(cred)
                 _REQUEST_AUTH.reset(token)
             return resp if resp is not None else {"jsonrpc": "2.0", "result": {}}
 

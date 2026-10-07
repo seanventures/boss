@@ -10,6 +10,29 @@ from boss_engine.mcp import MCPServer
 from boss_engine.mcp.api_surface import ApiSurface, operation_alias
 from boss_engine.tools.registry import ToolRegistry, ToolSpec
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _caller_is_the_launch_key(monkeypatch):
+    """These tests drive the bridge as a stdio session would: the caller IS the key the surface
+    was launched with (M8: the bridge forwards the caller's own credential and refuses without
+    one — pinned in test_identity_f2_tools_mcp_caller.py)."""
+    from boss_engine.mcp import api_surface
+
+    original = ApiSurface.invoke
+
+    def invoke(self, *args, **kwargs):
+        if api_surface.CALLER_AUTHORIZATION.get():
+            return original(self, *args, **kwargs)
+        token = api_surface.CALLER_AUTHORIZATION.set(self.launch_authorization or "Bearer test-caller")
+        try:
+            return original(self, *args, **kwargs)
+        finally:
+            api_surface.CALLER_AUTHORIZATION.reset(token)
+
+    monkeypatch.setattr(ApiSurface, "invoke", invoke)
+
 
 SCHEMA = {
     "openapi": "3.1.0",

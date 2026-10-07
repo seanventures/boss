@@ -132,8 +132,9 @@ def test_mcp_http_decides_each_request_as_its_bearer_and_the_shared_token_identi
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "deploy", "arguments": {}}}
     ok = client.post("/mcp", json=body, headers={"Authorization": f"Bearer {good}"})
     assert _payload(ok.json())["done"] is True and calls[-1]["tool_auth"] is ALICE
+    # The shared token identifies nobody: under enforce the transport refuses it outright (M8).
     shared = client.post("/mcp", json=body, headers={"Authorization": "Bearer shared-token"})
-    assert _payload(shared.json())["error"] == "identity_unavailable" and len(calls) == 1
+    assert shared.status_code == 401 and len(calls) == 1
     assert client.post("/mcp", json=body, headers={"Authorization": f"Bearer {bad}"}).status_code == 401
     assert client.post("/mcp", json=body).status_code == 401
 

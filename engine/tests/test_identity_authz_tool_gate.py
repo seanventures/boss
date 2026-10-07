@@ -98,7 +98,11 @@ def test_shadow_records_and_proceeds_off_does_nothing(reg, monkeypatch):
 
 def test_api_surface_tools_defer_to_their_route(reg):
     r, _ = reg
-    assert r.invoke("api_x", None, project_id="p1", actor="x", args={})["api"]
+    # With a caller, the route decides (the bridge forwards the caller's own credential, M8).
+    assert r.invoke("api_x", None, project_id="p1", actor="x", args={}, auth=ALICE)["api"]
+    # With NO caller there is nobody for the route to decide about: refused under enforce (H2).
+    out = r.invoke("api_x", None, project_id="p1", actor="x", args={})
+    assert out["ok"] is False and out["error"] == "identity_unavailable"
 
 
 def test_the_workflow_runner_cannot_go_around_the_gate(monkeypatch):
