@@ -15,6 +15,7 @@
  *
  * The preview IS what is sent: reading it freezes the next payload (services/improve_boss.cut).
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
 import {
@@ -44,8 +45,8 @@ function Toggle({ on, label, disabled, onFlip, testId, tip }: {
   on: boolean; label: string; disabled?: boolean; onFlip: () => void; testId: string; tip?: string;
 }) {
   return (
-    <button type="button" role="switch" aria-checked={on} aria-label={label} className="im-switch" disabled={disabled}
-            data-testid={testId} title={tip} onClick={onFlip}>{on ? "On" : "Off"}</button>
+    <GatedButton permission="telemetry:manage" type="button" role="switch" aria-checked={on} aria-label={label} className="im-switch" disabled={disabled}
+            data-testid={testId} title={tip} onClick={onFlip}>{on ? "On" : "Off"}</GatedButton>
   );
 }
 
@@ -210,8 +211,8 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
               {urlError ? <span className="im-err" role="alert" data-testid="gv-url-error" data-user-text="">{urlError}</span> : null}
             </span>
             {v.url_source !== "env" ? (
-              <button type="button" className="ag-btn" disabled={busy !== "" || url === null || url === v.url}
-                      data-testid="gv-url-save" onClick={() => void saveUrl()}>Save</button>
+              <GatedButton permission="telemetry:manage" type="button" className="ag-btn" disabled={busy !== "" || url === null || url === v.url}
+                      data-testid="gv-url-save" onClick={() => void saveUrl()}>Save</GatedButton>
             ) : <span />}
           </li>
           <li className="im-row" data-testid="gv-sharing-mask">
@@ -223,8 +224,8 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
                      spellCheck={false} onChange={(e) => setMask(e.target.value)} />
               {maskError ? <span className="im-err" role="alert" data-user-text="">{maskError}</span> : null}
             </span>
-            <button type="button" className="ag-btn" disabled={busy !== "" || mask === null}
-                    data-testid="gv-mask-save" onClick={() => void saveMask()}>Save</button>
+            <GatedButton permission="telemetry:manage" type="button" className="ag-btn" disabled={busy !== "" || mask === null}
+                    data-testid="gv-mask-save" onClick={() => void saveMask()}>Save</GatedButton>
           </li>
         </ul>
       </section>
@@ -297,11 +298,11 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
                   title="Random. Not derived from this machine or anyone">{v.install_id}</span>
             <span className="gv-spacer" />
             <span className="im-actions">
-              <button type="button" className="ag-btn" disabled={busy !== ""} data-testid="gv-rotate"
-                      title="A new random id; the old one stops being used" onClick={() => void rotate()}>Rotate</button>
-              <button type="button" className="ag-btn" disabled={busy !== "" || Boolean(stop)} data-testid="gv-forget"
+              <GatedButton permission="telemetry:manage" type="button" className="ag-btn" disabled={busy !== ""} data-testid="gv-rotate"
+                      title="A new random id; the old one stops being used" onClick={() => void rotate()}>Rotate</GatedButton>
+              <GatedButton permission="telemetry:manage" type="button" className="ag-btn" disabled={busy !== "" || Boolean(stop)} data-testid="gv-forget"
                       title={stop ? `Can't reach a collector: ${stop}` : "Deletes everything sent under every id this install used, then rotates"}
-                      onClick={() => setConfirmForget(true)}>Delete what was sent</button>
+                      onClick={() => setConfirmForget(true)}>Delete what was sent</GatedButton>
             </span>
           </span>
           {stop ? <span className="im-muted" data-testid="gv-forget-why">Delete needs a collector · {locked ? `off by ${v.env_disabled}` : "none set"}</span> : null}
@@ -314,8 +315,8 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
           {confirmForget ? (
             <span className="im-confirm" role="alertdialog" aria-label="Delete what was sent">
               <span>Delete everything sent?</span>
-              <button type="button" className="ag-btn ag-btn-primary" data-testid="gv-forget-yes" disabled={busy !== ""}
-                      onClick={() => void forget()}>{busy === "forget" ? "Deleting…" : "Delete"}</button>
+              <GatedButton permission="telemetry:manage" type="button" className="ag-btn ag-btn-primary" data-testid="gv-forget-yes" disabled={busy !== ""}
+                      onClick={() => void forget()}>{busy === "forget" ? "Deleting…" : "Delete"}</GatedButton>
               <button type="button" className="ag-btn" onClick={() => setConfirmForget(false)}>Cancel</button>
             </span>
           ) : null}
@@ -340,11 +341,11 @@ export function SharingTab({ projectId, actor, paused }: { projectId: string; ac
             );
           })}
           <span className="im-actions">
-            <button type="button" className="ag-btn ag-btn-primary" disabled={!changed.length || busy !== ""}
+            <GatedButton permission="telemetry:manage" type="button" className="ag-btn ag-btn-primary" disabled={!changed.length || busy !== ""}
                     data-testid="gv-weights-save" title="Makes a new score version; every row is rescored"
-                    onClick={() => void saveWeights()}>Save</button>
+                    onClick={() => void saveWeights()}>Save</GatedButton>
             {v.score.weights.some((w) => w.value !== w.default) ? (
-              <button type="button" className="ag-btn" disabled={busy !== ""} onClick={() => void saveWeights(true)}>Reset</button>
+              <GatedButton permission="telemetry:manage" type="button" className="ag-btn" disabled={busy !== ""} onClick={() => void saveWeights(true)}>Reset</GatedButton>
             ) : null}
           </span>
         </div>

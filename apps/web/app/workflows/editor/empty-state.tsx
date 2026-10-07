@@ -9,6 +9,7 @@
  *
  * Nothing is saved until Save. Dragging a row from the palette onto the lane works here too.
  */
+import { GatedButton } from "../../../components/gated";
 import { Plus, Sparkle, SquaresFour, Stack } from "@phosphor-icons/react";
 import React, { useState } from "react";
 
@@ -96,10 +97,10 @@ export function EmptyState({ projectId, dispatch, onAddFirst, readOnly }: {
               <textarea className="wf-input" rows={3} placeholder="What should it do?" value={text} autoFocus
                         aria-label="What should it do?" onChange={(e) => setText(e.target.value)}
                         onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void draft(); }} />
-              <button type="button" className="wf-btn wf-btn-primary" disabled={!text.trim() || drafting}
+              <GatedButton permission="workflow:create" type="button" className="wf-btn wf-btn-primary" disabled={!text.trim() || drafting}
                       onClick={() => void draft()} data-testid="wf-draft-steps">
                 {drafting ? "Drafting…" : "Draft steps"}
-              </button>
+              </GatedButton>
             </div>
           ) : null}
         </div>

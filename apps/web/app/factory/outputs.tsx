@@ -405,10 +405,10 @@ function CommentsBody({ c, actor, onRefresh }: { c: Cockpit; actor: string; onRe
                 <span className="fx-clamp" title={cm.body} data-user-text>{cm.body}</span>
                 {cm.status === "open" ? (
                   <span className="fx-out-links">
-                    <button type="button" className="ag-btn" disabled={busy !== null} data-testid={`fx-resolve-${cm.id}`}
-                            onClick={() => void act(cm, "addressed")}>Resolve</button>
-                    <button type="button" className="ag-link" disabled={busy !== null} data-testid={`fx-dismiss-${cm.id}`}
-                            onClick={() => void act(cm, "dismissed")}>Dismiss</button>
+                    <GatedButton permission="code_task:steer" type="button" className="ag-btn" disabled={busy !== null} data-testid={`fx-resolve-${cm.id}`}
+                            onClick={() => void act(cm, "addressed")}>Resolve</GatedButton>
+                    <GatedButton permission="code_task:steer" type="button" className="ag-link" disabled={busy !== null} data-testid={`fx-dismiss-${cm.id}`}
+                            onClick={() => void act(cm, "dismissed")}>Dismiss</GatedButton>
                   </span>
                 ) : null}
               </span>
@@ -486,7 +486,7 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
       {booting ? <span className="fx-muted" data-testid="fx-preview-starting">Starting…</span> : null}
       {running ? <a className="ag-link" href={previewWebHref(p.id)} target="_blank" rel="noreferrer" data-testid="fx-preview-open">Open ↗</a> : null}
       <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy} data-testid="fx-preview-restart" onClick={() => void start()}>Restart</GatedButton>
-      {running ? <button type="button" className="ag-link" disabled={busy} data-testid="fx-preview-stop" onClick={() => void stop()}>Stop</button> : null}
+      {running ? <GatedButton permission="preview:manage" type="button" className="ag-link" disabled={busy} data-testid="fx-preview-stop" onClick={() => void stop()}>Stop</GatedButton> : null}
       <button type="button" className="ag-link" onClick={onLogs} data-testid="fx-preview-logs">Logs ▾</button>
       {p.expiresAt ? <span className="fx-muted" title={p.expiresAt}>Expires {new Date(p.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span> : null}
       {p.substrate ? <span className="fx-muted" title="Where the preview runs">{p.substrate}</span> : null}

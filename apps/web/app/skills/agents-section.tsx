@@ -6,6 +6,7 @@
  * set). Agents whose role recommends it carry a star. An ability that is not set up cannot be
  * given — only taken away.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { DotsThree, Star } from "@phosphor-icons/react";
@@ -52,24 +53,24 @@ export function AgentsSection({ ability, crew, projectId, actor, onChanged }: {
   return (
     <div className="kit-agents" data-testid="kit-agents">
       <div className="kit-agents-bar">
-        <button type="button" className="kit-btn kit-btn-sm" disabled={busy || cantGive}
+        <GatedButton permission="agent_ability:assign" type="button" className="kit-btn kit-btn-sm" disabled={busy || cantGive}
                 data-testid="kit-agents-recommended"
                 onClick={() => void write([...recommended], `Gave ${ability.label} to ${plural(recommended.size, "agent")}`)}>
           Recommended only
-        </button>
-        <button type="button" className="kit-btn kit-btn-sm" disabled={busy || cantGive} data-testid="kit-agents-everyone"
+        </GatedButton>
+        <GatedButton permission="agent_ability:assign" type="button" className="kit-btn kit-btn-sm" disabled={busy || cantGive} data-testid="kit-agents-everyone"
                 onClick={() => void write(crew.map((c) => c.role_key), `Gave ${ability.label} to ${plural(crew.length, "agent")}`)}>
           Everyone
-        </button>
+        </GatedButton>
         <span className="kit-confirm-wrap">
-          <button type="button" className="kit-btn kit-btn-sm" disabled={busy || held.size === 0}
-                  data-testid="kit-agents-clear" onClick={() => setConfirm(true)}>Clear</button>
+          <GatedButton permission="agent_ability:assign" type="button" className="kit-btn kit-btn-sm" disabled={busy || held.size === 0}
+                  data-testid="kit-agents-clear" onClick={() => setConfirm(true)}>Clear</GatedButton>
           {confirm ? (
             <span className="kit-pop" role="dialog" aria-label="Confirm clear" data-testid="kit-agents-clear-confirm">
               <strong>Take {ability.label} from {plural(held.size, "agent")}?</strong>
               <span className="kit-pop-actions">
-                <button type="button" className="kit-btn kit-btn-danger kit-btn-sm" data-testid="kit-agents-clear-yes"
-                        onClick={() => { setConfirm(false); void write([], `Took ${ability.label} from ${plural(held.size, "agent")}`); }}>Clear</button>
+                <GatedButton permission="agent_ability:assign" type="button" className="kit-btn kit-btn-danger kit-btn-sm" data-testid="kit-agents-clear-yes"
+                        onClick={() => { setConfirm(false); void write([], `Took ${ability.label} from ${plural(held.size, "agent")}`); }}>Clear</GatedButton>
                 <button type="button" className="kit-btn kit-btn-sm" onClick={() => setConfirm(false)}>Cancel</button>
               </span>
             </span>
@@ -93,7 +94,7 @@ export function AgentsSection({ ability, crew, projectId, actor, onChanged }: {
                   <Star size={12} weight="fill" aria-label="Recommended" />
                 </span>
               ) : null}
-              <button type="button" role="switch" aria-checked={on} aria-label={`${name} holds ${ability.label}`}
+              <GatedButton permission="agent_ability:assign" type="button" role="switch" aria-checked={on} aria-label={`${name} holds ${ability.label}`}
                       className="kit-switch" disabled={disabled}
                       data-tip={!on && cantGive ? `Set up ${ability.label} first` : undefined}
                       data-testid={`kit-agent-toggle-${c.role_key}`} onClick={() => toggle(c.role_key)} />
@@ -105,7 +106,7 @@ export function AgentsSection({ ability, crew, projectId, actor, onChanged }: {
                   <span className="kit-pop kit-menu" role="menu">
                     <a role="menuitem" href={`?area=workforce&role=${encodeURIComponent(c.role_key)}`}>Open agent</a>
                     {on && ability.mcp.length ? (
-                      <button type="button" role="menuitem" onClick={() => { setMenu(null); setNarrow(c.role_key); }}>Tools ▾</button>
+                      <GatedButton permission="agent_ability:assign" type="button" role="menuitem" onClick={() => { setMenu(null); setNarrow(c.role_key); }}>Tools ▾</GatedButton>
                     ) : null}
                   </span>
                 ) : null}

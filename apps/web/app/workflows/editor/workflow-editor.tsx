@@ -122,6 +122,9 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   const saveFlow = useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, actor, standardUsedFor: usedFor });
   // Saving publishes the workflow (POST /v1/delivery-workflows/save needs workflow:publish).
   const publishGate = useCan("workflow:publish");
+  // Delete (DELETE /v1/delivery-workflows/{id}) and Describe (…/draft) have their own permissions.
+  const deleteGate = useCan("workflow:delete");
+  const draftGate = useCan("workflow:create");
   useAutoCheck(state, dispatch, projectId);
 
   /* ── The URL ── */
@@ -430,7 +433,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
                 writeUrl({ wf: meta.copy.workflow_key, step: null, v: null }, true);
                 setKey(meta.copy.workflow_key);
               }}
-              onDescribe={describe} describeBlocked={describeBlocked}
+              onDescribe={describe} describeBlocked={!draftGate.allowed ? draftGate.reason : describeBlocked}
               onCheck={() => void saveFlow.check()} checking={saveFlow.checking}
               checkBlocked={noSteps ? "Add a step first" : null}
               onStart={saveFlow.start} startRef={saveFlow.startRef}
@@ -442,7 +445,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
               onUseFor={openSettings} onChanges={showChanges}
               onDiscard={() => dispatch({ type: "LOAD", spec: state.loaded ?? { steps: [] }, meta: state.loadedMeta })}
               onDelete={() => void deleteThis()}
-              deleteBlocked={meta.is_catalogue ? NO_DELETE_TIP : !meta.definition_id ? "Not saved yet" : null} />
+              deleteBlocked={!deleteGate.allowed ? deleteGate.reason : meta.is_catalogue ? NO_DELETE_TIP : !meta.definition_id ? "Not saved yet" : null} />
       {saveFlow.popover}
 
       {restore ? (

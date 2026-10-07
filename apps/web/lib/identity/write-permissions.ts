@@ -1,0 +1,167 @@
+/**
+ * EVERY CLIENT-SIDE WRITE THAT DOES NOT GO THROUGH A SERVER ACTION, AND THE PERMISSION ITS API
+ * ROUTE CHECKS (P1-18, IDENTITY.md §6.5).
+ *
+ * callAction buttons carry their permission (lib/call-action.ts, lib/identity/action-permissions.ts).
+ * The console's other writes leave the browser through lib/api-write.ts (apiWrite / runPress) —
+ * from a helper module (lib/agents.ts, lib/kit-api.ts …), a dispatcher that names its operation
+ * (`post("start")`, `setupWrite(p, "budget")`), or inline in a component. Each is listed here with
+ * the permission the control plane's route declares (apps/api @permit; FX-B's changed declarations
+ * in IDENTITY_BUILD §7: kit connect → integration:manage, workflow save/fork → workflow:publish).
+ *
+ * The UI reads it only to MIRROR: a control that would make a refused write is disabled up front
+ * with the reason (components/gated.tsx). The API decides every call.
+ * tests/every-write-is-pre-greyed.test.ts fails when a write path is missing here, or when a file
+ * that presses one does not gate its permission.
+ *
+ * "self": the caller's own account or a person's own chat — no permission beyond being signed in
+ * (or the route's permission is held by every role that can reach the screen).
+ */
+import type { Permission } from "./permissions.gen";
+
+export type WriteGate = Permission | "self";
+
+/** A helper (`module#export`, or `module#object.method`) → the permission(s) a press of it needs. */
+export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permission[]>> = {
+  // lib/agents.ts — /v1/agents, /v1/role-skills, /v1/role-mcp-servers, /v1/workflow-mappings
+  "lib/agents.ts#createAgent": "agent:create",                    // POST /v1/agents
+  "lib/agents.ts#updateAgent": "agent:update",                    // PATCH /v1/agents/{role}
+  "lib/agents.ts#deleteAgent": "agent:lifecycle",                 // DELETE /v1/agents/{role}
+  "lib/agents.ts#repointMapping": "workflow:publish",             // POST /v1/workflow-mappings/{id}/repoint
+  "lib/agents.ts#grantSkill": "agent_ability:assign",             // POST /v1/role-skills
+  "lib/agents.ts#revokeSkill": "agent_ability:assign",            // DELETE /v1/role-skills
+  "lib/agents.ts#grantMcp": "agent_ability:assign",               // POST /v1/role-mcp-servers
+  "lib/agents.ts#revokeMcp": "agent_ability:assign",              // DELETE /v1/role-mcp-servers
+
+  // lib/agent-world.ts — an agent's persona, lifecycle, memories, persona test
+  "lib/agent-world.ts#savePersona": "agent:update",               // PATCH /v1/agents/{role}
+  "lib/agent-world.ts#setLifecycle": "agent:lifecycle",           // POST /v1/agents/{role}/lifecycle
+  "lib/agent-world.ts#draftPersonaField": "agent:create",         // POST /v1/agents/{role}/persona/draft
+  "lib/agent-world.ts#forgetMemory": "memory:manage",             // POST /v1/memory/{id}/forget
+  "lib/agent-world.ts#runPersonaTest": "agent:test",              // POST /v1/agents/{role}/test
+
+  // lib/agent-instructions.ts — an agent's instruction documents
+  "lib/agent-instructions.ts#instructionsApi.add": "agent:update",          // POST /v1/agents/{role}/instructions
+  "lib/agent-instructions.ts#instructionsApi.update": "agent:update",       // PATCH …/instructions/{id}
+  "lib/agent-instructions.ts#instructionsApi.remove": "agent:update",       // DELETE …/instructions/{id}
+  "lib/agent-instructions.ts#instructionsApi.skillFromFile": "skill:manage", // POST /v1/skills/from-file
+
+  // lib/agent-converse.ts — a conversation with agents (create, turns, summary, proposals, start)
+  "lib/agent-converse.ts#converseApi": "meeting:convene",                       // POST /v1/conversations
+  // The hook's sends, summaries and proposals; its Start (workflow_run:start) is pressed only in
+  // converse-parts.tsx ProposalCard, which gates it there.
+  "lib/agent-converse.ts#useConversation": "meeting:convene",               // …/turns, …/summary, …/propose
+
+  // lib/kit-api.ts — Skills & MCP (FX-B §7: connect/disconnect need integration:manage)
+  "lib/kit-api.ts#kitApi.connect": "integration:manage",          // POST /v1/kit/{ability}/connect
+  "lib/kit-api.ts#kitApi.disconnect": "integration:manage",       // DELETE /v1/kit/{ability}/connection
+  "lib/kit-api.ts#kitApi.test": "skill:invoke",                   // POST /v1/kit/{ability}/test
+  "lib/kit-api.ts#kitApi.testAll": "skill:invoke",                // POST /v1/kit/test-all
+  "lib/kit-api.ts#kitApi.tryIt": "skill:invoke",                  // POST /v1/kit/{ability}/try
+  "lib/kit-api.ts#kitApi.holders": "agent_ability:assign",        // PUT /v1/kit/{ability}/holders
+  "lib/kit-api.ts#kitApi.policy": "skill:manage",                 // POST /v1/kit/{ability}/policy
+  "lib/kit-api.ts#kitApi.enabled": "skill:manage",                // POST /v1/kit/{ability}/enabled
+  "lib/kit-api.ts#kitApi.recommended": "agent_ability:assign",    // POST /v1/kit/recommended
+  "lib/kit-api.ts#kitApi.testCrew": "skill:invoke",               // POST /v1/kit/test-crew
+  "lib/kit-api.ts#mcpApi.test": "mcp_server:register",            // POST /v1/mcp/servers/test
+  "lib/kit-api.ts#mcpApi.register": "mcp_server:review",          // POST /v1/mcp/servers
+  "lib/kit-api.ts#mcpApi.update": "mcp_server:review",            // PATCH /v1/mcp/servers/{id}
+  "lib/kit-api.ts#mcpApi.review": "mcp_server:review",            // POST /v1/mcp/servers/{id}/review
+  "lib/kit-api.ts#mcpApi.remove": "mcp_server:review",            // DELETE /v1/mcp/servers/{id}
+  "lib/kit-api.ts#mcpApi.policy": "mcp_server:review",            // POST /v1/mcp/servers/{id}/policy
+  "lib/kit-api.ts#mcpApi.grant": "agent_ability:assign",          // POST /v1/role-mcp-servers
+  "lib/kit-api.ts#mcpApi.revoke": "agent_ability:assign",         // DELETE /v1/role-mcp-servers
+  "lib/kit-api.ts#mcpApi.roleTools": "agent_ability:assign",      // POST /v1/role-mcp-servers
+  "lib/kit-api.ts#mcpApi.addFromCatalogue": "mcp_server:review",  // POST /v1/mcp/catalogue/{key}
+
+  // lib/workflow-api.ts — the Workflow Studio editor (through /api/delivery-workflows)
+  "lib/workflow-api.ts#publishSpec": "workflow:publish",          // POST /v1/delivery-workflows/publish
+  "lib/workflow-api.ts#renameWorkflow": "workflow:create",        // PATCH /v1/delivery-workflows/{id}
+  "lib/workflow-api.ts#deleteWorkflow": "workflow:delete",        // DELETE /v1/delivery-workflows/{id}
+  "lib/workflow-api.ts#draftFromDescription": "workflow:create",  // POST /v1/delivery-workflows/draft
+
+  // lib/hardware.ts — Infra › hardware places
+  "lib/hardware.ts#registerLocalPlace": "host:manage",            // POST /v1/hardware/places/local
+  "lib/hardware.ts#enrollHardwareAgent": "host:manage",           // POST /v1/hardware/places/agents
+  "lib/hardware.ts#registerHardwareProvider": "host:manage",      // POST /v1/hardware/places/providers
+
+  // lib/stack-deploy.ts — stack deployments
+  "lib/stack-deploy.ts#createStackTarget": "deployment_target:manage", // POST /v1/deployments/stack/targets
+  "lib/stack-deploy.ts#planStackDeploy": "deployment:create",          // POST /v1/deployments/stack/plan
+  "lib/stack-deploy.ts#decideStackDeploy": "decision:approve",         // POST /v1/decisions/{id}/{verdict}
+  "lib/stack-deploy.ts#rollbackStackDeploy": "deployment:rollback",    // POST /v1/deployments/stack/{id}/rollback
+
+  // lib/knowledge-graph.ts, lib/security-scan.ts — the two client-side writes in those modules
+  "lib/knowledge-graph.ts#seedGraphFromInfra": "observability:manage", // POST /v1/observability-suite/graph-seed
+  "lib/security-scan.ts#evaluateSecurityGate": "assurance:run",        // POST /v1/security-scan/runs/{id}/gate
+
+  // app/delivery-workflows-ui.tsx — a run's answer pressed on another screen (Command Center)
+  "app/delivery-workflows-ui.tsx#sendRunAnswer": "workflow_run:control", // retry-step / skip-step / recheck / input
+
+  // app/factory/legacy-build-parts.tsx — Factory › retire a deploy target
+  "app/factory/legacy-build-parts.tsx#retireTarget": "deployment_target:manage", // DELETE /v1/deployment-targets/{id}
+};
+
+/** Dispatchers: the first string literal a call passes names the operation. */
+export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGate>>>> = {
+  // app/workflows/delivery-api.ts `post(action, …)` → /api/delivery-workflows → /v1/delivery-workflows/*
+  "app/workflows/delivery-api.ts#post": {
+    install: "workflow:install", apply: "workflow:publish", create: "workflow:create",
+    fork: "workflow:publish", save: "workflow:publish", start: "workflow_run:start",
+    advance: "worker:lease", define_step: "workflow:create", schedule: "workflow_schedule:manage",
+    schedule_enabled: "workflow_schedule:manage", publish: "workflow:publish", draft: "workflow:create",
+    retry_step: "workflow_run:control", skip_step: "workflow_run:control", recheck: "workflow_run:control",
+    set_input: "workflow_run:control", prepare_target: "deployment_target:manage",
+    start_preview: "preview:manage", stop: "workflow_run:control",
+  },
+  // lib/setup-client.ts `setupWrite(projectId, op, …)` → /api/setup → /v1/setup/*
+  "lib/setup-client.ts#setupWrite": {
+    checks: "setup:manage", repo_token: "github:connect", repo_select: "repository:register",
+    repo_app: "github:connect", repo_default: "repository:manage", repo_remove: "repository:manage",
+    models: "model_provider:manage", model_catalogue: "model_provider:manage", source_model: "model_provider:manage",
+    model_remove: "model_provider:manage", job: "setup:manage", budget: "budget:manage", try: "workflow_run:start",
+    decision_key: "model_provider:manage", routing: "setup:manage", routing_catalogue: "model_provider:manage",
+  },
+  // lib/improve.ts `improveWrite(op, …)` → /api/improve (lib/improve-ops.ts)
+  "lib/improve.ts#improveWrite": {
+    switch: "telemetry:manage", weights: "telemetry:manage", collector_url: "telemetry:manage",
+    mask_words: "telemetry:manage", rotate: "telemetry:manage", forget: "telemetry:manage",
+    share_run: "telemetry:share", backfill: "system:operate", experiment: "improvement:manage",
+    experiment_stop: "improvement:manage", experiment_promote: "improvement:manage",
+    feedback: "feedback:submit", prompt_shown: "feedback:submit", checkin: "feedback:submit",
+  },
+  // app/observability/obs-write.ts `obsWrite(path, …)`
+  "app/observability/obs-write.ts#obsWrite": {
+    "/v1/observability-suite/recommend": "observability:read",
+    "/v1/observability/stack/deploy": "observability:manage",
+    "/v1/observability-suite/health-check": "observability:manage",
+    "/v1/observability/apps/": "observability:manage",
+  },
+};
+
+/** Components that write inline (apiWrite / runPress in the file itself): what their presses need. */
+export const INLINE_WRITES: Readonly<Record<string, readonly WriteGate[]>> = {
+  "app/agent-quick-create.tsx": ["agent:publish"],                 // POST /v1/agent-studio/templates/{id}/install
+  "app/agent-ui.tsx": ["assistant:chat"],                          // /api/agent-thread, /api/agent clear
+  "app/agents-on-this.tsx": ["work_item:manage"],                  // POST /v1/projects/{id}/agents
+  "app/default-agent-picker.tsx": ["work_item:manage"],            // POST /v1/projects/{id}/agents
+  "app/ask-boss-hero.tsx": ["workflow:publish", "workflow_run:start", "discovery:create"], // apply, /api/builds, /api/discoveries
+  "app/delivery-workflows-ui.tsx": ["workflow_schedule:manage", "workflow:create", "deployment:create", "deployment_target:manage"],
+  "app/email-setup-ui.tsx": ["comms:manage"],                      // POST /v1/email/config
+  "app/factory/legacy-build-parts.tsx": ["deployment:create", "deployment_target:manage"], // /api/app-deploy, retire
+  "app/memory-ui.tsx": ["memory:manage"],                          // POST /v1/memory/{id}/{forget|review}
+  "app/run-report-ui.tsx": ["workflow_run:control", "workflow:publish"], // POST …/report, apply
+  "app/sandboxes-ui.tsx": ["sandbox:exec"],                        // POST /v1/sandboxes/{id}/exec
+  "app/setup/capacity-row.tsx": ["entitlement:manage"],            // /v1/entitlements/…
+  "app/skills/skill-drawer.tsx": ["skill:manage", "agent_ability:assign"], // /api/skills enable/disable/delete, assign
+  "app/skills/youtube-connection.tsx": ["integration:manage"],     // /v1/channels/youtube/*
+  "app/workflows/captain-can-run-it.tsx": ["agent_ability:assign"], // /api/skills assign → POST /v1/role-skills
+  "app/workflows/editor/define-step-modal.tsx": ["workflow:create"], // custom-steps POST/PATCH
+  "app/workflows/editor/inspector/workflow-settings.tsx": ["workflow:publish"], // apply
+  "app/workflows/new-project-composer.tsx": ["work_item:manage"],  // POST /v1/projects/{id}/agents
+  "app/workforce-ui.tsx": ["agent:update"],                        // PUT/DELETE /v1/console/v2/org/{agent}
+  "components/v2/AgentChat.tsx": ["assistant:chat"],               // POST /v1/engine/agent/chat
+  "components/v2/AutonomyControl.tsx": ["approval_rule:manage"],   // POST /v1/console/v2/autonomy
+  "components/v2/DeployControls.tsx": ["deployment:create", "deployment_target:manage"],
+  "components/v2/LaunchModal.tsx": ["meeting:convene"],            // POST /v1/meetings/prd
+};

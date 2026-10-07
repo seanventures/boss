@@ -2,6 +2,7 @@
 
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
 // so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+import { GatedButton } from "../gated";
 import React, { useState } from "react";
 import { apiWrite } from "../../lib/api-write";
 
@@ -123,7 +124,7 @@ export function LaunchModal({
               </p>
             ) : null}
             <div className="v2-controls-row">
-              <button
+              <GatedButton permission="meeting:convene"
                 type="button"
                 className="v2-btn"
                 disabled={busy || !brief.trim()}
@@ -131,7 +132,7 @@ export function LaunchModal({
                 data-testid="v2-launch-go"
               >
                 {busy ? "Convening the panel…" : "Convene the panel"}
-              </button>
+              </GatedButton>
               <button
                 type="button"
                 className="v2-btn v2-btn-quiet"

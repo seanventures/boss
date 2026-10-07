@@ -8,6 +8,7 @@
  *
  * Same API as before (/api/channels: save_client, connect, disconnect); only the screen changed.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useState } from "react";
 import { Copy } from "@phosphor-icons/react";
 
@@ -129,29 +130,29 @@ export function YoutubeConnection({ projectId, actor }: { projectId: string; act
         </span>
       </label>
       <div className="kit-actions">
-        <button type="button" className="kit-btn kit-btn-primary" data-testid="channel-save"
+        <GatedButton permission="integration:manage" type="button" className="kit-btn kit-btn-primary" data-testid="channel-save"
                 disabled={busy || !form.client_id.trim() || !form.client_secret.trim() || !form.redirect_uri.trim()}
-                onClick={() => void saveClient()}>Save</button>
-        <button type="button" className="kit-btn" data-testid="channel-connect" disabled={busy || !ready}
+                onClick={() => void saveClient()}>Save</GatedButton>
+        <GatedButton permission="integration:manage" type="button" className="kit-btn" data-testid="channel-connect" disabled={busy || !ready}
                 data-tip={ready ? "Sign in to the account you publish from" : "Save the Google client first"}
                 onClick={() => void connect(connected.length ? `youtube_${connected.length + 1}` : undefined)}>
           Connect
-        </button>
+        </GatedButton>
       </div>
       {connected.map((c) => (
         <div key={c.connection_key} className="kit-row" data-testid={`channel-${c.connection_key}`}>
           <span className="kit-fact" data-tip={c.unusable_reason ?? c.health}>{c.channel.title || c.connection_key}</span>
-          <button type="button" className="kit-link" disabled={busy} onClick={() => void connect(c.connection_key)}>Reconnect</button>
+          <GatedButton permission="integration:manage" type="button" className="kit-link" disabled={busy} onClick={() => void connect(c.connection_key)}>Reconnect</GatedButton>
           <span className="kit-confirm-wrap">
-            <button type="button" className="kit-link" disabled={busy} data-testid={`channel-disconnect-${c.connection_key}`}
-                    onClick={() => setConfirming(c.connection_key)}>Disconnect</button>
+            <GatedButton permission="integration:manage" type="button" className="kit-link" disabled={busy} data-testid={`channel-disconnect-${c.connection_key}`}
+                    onClick={() => setConfirming(c.connection_key)}>Disconnect</GatedButton>
             {confirming === c.connection_key ? (
               <span className="kit-pop" role="dialog" aria-label="Confirm disconnect">
                 <strong data-tip="BOSS revokes the token at Google">Disconnect YouTube?</strong>
                 <span>Agents lose YouTube</span>
                 <span className="kit-pop-actions">
-                  <button type="button" className="kit-btn kit-btn-danger kit-btn-sm" data-testid="channel-disconnect-yes"
-                          onClick={() => { setConfirming(null); void disconnect(c.connection_key); }}>Disconnect</button>
+                  <GatedButton permission="integration:manage" type="button" className="kit-btn kit-btn-danger kit-btn-sm" data-testid="channel-disconnect-yes"
+                          onClick={() => { setConfirming(null); void disconnect(c.connection_key); }}>Disconnect</GatedButton>
                   <button type="button" className="kit-btn kit-btn-sm" onClick={() => setConfirming(null)}>Cancel</button>
                 </span>
               </span>

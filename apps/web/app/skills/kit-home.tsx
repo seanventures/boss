@@ -9,6 +9,7 @@
  * abilities matrix for grants in bulk. `Library` is every skill and MCP server, with authoring
  * and any custom server. Everything is driven by GET /v1/kit, whose statuses the API computes.
  */
+import { useGate, GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { DotsThree, MagnifyingGlass, Sparkle } from "@phosphor-icons/react";
 
@@ -74,7 +75,11 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
     if (key) setTab("kit");
   }, []);
 
+  const testGate = useGate("skill:invoke");
+  const manageGate = useGate("skill:manage");
   const runTest = useCallback(async (key: string) => {
+    // A card's Test / Turn on: refused up front, in words, for a viewer who cannot (the API decides).
+    if (!testGate.allowed) { showToast("error", testGate.reason); return; }
     setTesting((t) => new Set(t).add(key));
     const r = await kitApi.test(projectId, actor, key);
     setTesting((t) => { const n = new Set(t); n.delete(key); return n; });
@@ -82,7 +87,7 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
     if (r.data.ok) showToast("success", `Test passed · ${r.data.fact ?? ""}`.trim());
     else showToast("error", `Test failed · ${shortError(r.data.error)}`);
     replace(r.data.ability);
-  }, [projectId, actor, replace]);
+  }, [projectId, actor, replace, testGate.allowed, testGate.reason]);
 
   const act = useCallback(async (key: string, action: CardAction) => {
     if (action === "test") return void runTest(key);
@@ -90,12 +95,13 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
     if (action === "connect" || action === "fix") return openAbility(key, "connection");
     if (action === "review") return openAbility(key, "tools");
     if (action === "turn_on") {
+      if (!manageGate.allowed) { showToast("error", manageGate.reason); return; }
       const r = await kitApi.enabled(projectId, actor, key, true);
       if (!r.ok) { showToast("error", shortError(r.error)); return; }
       showToast("success", `${r.data.label} on`);
       replace(r.data);
     }
-  }, [runTest, openAbility, projectId, actor, replace]);
+  }, [runTest, openAbility, projectId, actor, replace, manageGate.allowed, manageGate.reason]);
 
   const testAll = async () => {
     const keys = (kit?.abilities ?? []).filter((a) => !["setup", "needs_repo", "off"].includes(a.status)).map((a) => a.key);
@@ -140,17 +146,17 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
         {tab === "kit" && kit ? (
           <>
             <span className="kit-progress" data-tip={TIP.progress} data-testid="kit-progress">{kit.ready} of {kit.total} ready</span>
-            <button type="button" className="kit-btn" data-tip={TIP.testAll} data-testid="kit-test-all"
-                    disabled={testing.size > 0} onClick={() => void testAll()}>Test all</button>
-            <button type="button" className="kit-btn" data-tip={TIP.applyRecommended} data-testid="kit-apply-recommended"
-                    onClick={() => void applyRecommended()}><Sparkle size={14} weight="fill" /> Apply recommended</button>
+            <GatedButton permission="skill:invoke" type="button" className="kit-btn" data-tip={TIP.testAll} data-testid="kit-test-all"
+                    disabled={testing.size > 0} onClick={() => void testAll()}>Test all</GatedButton>
+            <GatedButton permission="agent_ability:assign" type="button" className="kit-btn" data-tip={TIP.applyRecommended} data-testid="kit-apply-recommended"
+                    onClick={() => void applyRecommended()}><Sparkle size={14} weight="fill" /> Apply recommended</GatedButton>
             <span className="kit-confirm-wrap">
               <button type="button" className="kit-icon-btn" aria-label="More" data-testid="kit-head-more"
                       onClick={() => setMenu((m) => !m)}><DotsThree size={18} /></button>
               {menu ? (
                 <span className="kit-pop kit-menu" role="menu">
-                  <button type="button" role="menuitem" data-testid="kit-menu-test-crew"
-                          onClick={() => { setMenu(false); setCrewOpen(true); }}>Test crew</button>
+                  <GatedButton permission="skill:invoke" type="button" role="menuitem" data-testid="kit-menu-test-crew"
+                          onClick={() => { setMenu(false); setCrewOpen(true); }}>Test crew</GatedButton>
                 </span>
               ) : null}
             </span>

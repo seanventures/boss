@@ -19,6 +19,7 @@
  * (GET /v1/entitlements/sources, /v1/entitlement-connection-sessions); every write goes through
  * apiWrite, then the list and the board are read again.
  */
+import { GatedButton } from "../../components/gated";
 import React, { forwardRef, useCallback, useEffect, useState } from "react";
 
 import { apiWrite } from "../../lib/api-write";
@@ -128,7 +129,7 @@ function KeyForm({ src, onSave }: { src: CapSource; onSave: (value: string, back
       <Tip tip={src.pooled ? "Jobs get leases, never this value." : "Yours alone. This value is never pooled."} className="su-faint">
         {src.pooled ? "Shared" : "Single owner"}
       </Tip>
-      <button type="submit" className="su-btn su-btn-sm su-btn-primary" disabled={busy || !value.trim()} data-testid="setup-cap-key-save">{label}</button>
+      <GatedButton permission="entitlement:manage" type="submit" className="su-btn su-btn-sm su-btn-primary" disabled={busy || !value.trim()} data-testid="setup-cap-key-save">{label}</GatedButton>
     </form>
   );
 }
@@ -150,8 +151,8 @@ function StartForm({ src, onStart }: { src: CapSource; onStart: (mode: string, s
         <span className="su-field-label">Scopes</span>
         <input value={scopes} aria-label="Scopes" placeholder="Comma separated" onChange={(e) => setScopes(e.target.value)} />
       </label>
-      <button type="submit" className="su-btn su-btn-sm" disabled={busy} data-testid="setup-cap-start"
-              title="Get the official login steps for this plan" data-tip="Get the official login steps for this plan">Start official session</button>
+      <GatedButton permission="entitlement:manage" type="submit" className="su-btn su-btn-sm" disabled={busy} data-testid="setup-cap-start"
+              title="Get the official login steps for this plan" data-tip="Get the official login steps for this plan">Start official session</GatedButton>
     </form>
   );
 }
@@ -201,7 +202,7 @@ function CompleteForm({ session, onDone }: { session: CapSession; onDone: (body:
         <span className="su-field-label">Resets</span>
         <input type="datetime-local" value={resetAt} aria-label="Resets" onChange={(e) => setResetAt(e.target.value)} />
       </label>
-      <button type="submit" className="su-btn su-btn-sm su-btn-primary" disabled={busy || !body} data-testid="setup-cap-complete">Complete session</button>
+      <GatedButton permission="entitlement:manage" type="submit" className="su-btn su-btn-sm su-btn-primary" disabled={busy || !body} data-testid="setup-cap-complete">Complete session</GatedButton>
     </form>
   );
 }
@@ -279,18 +280,18 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                   </>
                 ) : null}
                 {takesKey(src) && !onBoard.has(src.sourceId) ? (
-                  <button type="button" className="su-btn su-btn-sm" aria-expanded={editing} data-testid="setup-cap-key-open"
+                  <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm" aria-expanded={editing} data-testid="setup-cap-key-open"
                           onClick={() => setOpen(editing ? null : src.sourceId)}>
                     {src.credentialPresent ? "Rotate credential" : "Store credential"}
-                  </button>
+                  </GatedButton>
                 ) : null}
                 {isLogin(src) && src.connection === "connected" ? (
-                  <button type="button" className="su-btn su-btn-sm" data-testid="setup-cap-disconnect"
-                          onClick={() => setDisconnecting(src.sourceId)}>Disconnect session</button>
+                  <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm" data-testid="setup-cap-disconnect"
+                          onClick={() => setDisconnecting(src.sourceId)}>Disconnect session</GatedButton>
                 ) : null}
                 {isLogin(src) && src.connection !== "connected" ? (
-                  <button type="button" className="su-btn su-btn-sm" aria-expanded={editing} data-testid="setup-cap-start-open"
-                          onClick={() => setOpen(editing ? null : src.sourceId)}>Start official session</button>
+                  <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm" aria-expanded={editing} data-testid="setup-cap-start-open"
+                          onClick={() => setOpen(editing ? null : src.sourceId)}>Start official session</GatedButton>
                 ) : null}
               </div>
               {editing && takesKey(src) ? (
@@ -310,13 +311,13 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
               {disconnecting === src.sourceId ? (
                 <div className="su-confirm" role="alertdialog" data-testid="setup-cap-disconnect-confirm">
                   <strong>Disconnect {src.sourceId}?</strong>
-                  <button type="button" className="su-btn su-btn-sm su-btn-danger" data-testid="setup-cap-disconnect-yes"
+                  <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm su-btn-danger" data-testid="setup-cap-disconnect-yes"
                           onClick={async () => {
                             setDisconnecting(null);
                             await after(await post(`/v1/entitlements/sources/${encodeURIComponent(src.sourceId)}/disconnect`,
                                                    { project_id: projectId, reason: "Disconnected in Repo and models.", actor: who },
                                                    "Disconnect session", `setup:cap:${src.sourceId}`), "Session disconnected");
-                          }}>Disconnect</button>
+                          }}>Disconnect</GatedButton>
                   <button type="button" className="su-link" onClick={() => setDisconnecting(null)}>Keep</button>
                 </div>
               ) : null}

@@ -6,6 +6,7 @@
  * TTL and expiry), the five scope chips (kept per viewer), `Sync all`, `Clean up…` (the resource
  * janitor) and the resource drawer with its durable links.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useMemo, useState } from "react";
 
 import { buildHref, deployHref } from "../../lib/infra-view";
@@ -49,10 +50,10 @@ export function CloudResources(p: CloudViewProps & { scope: Scope; setScope: (s:
       <ZoneHead id="inf-cloud-resources" label="RESOURCES" count={rows.length}>
         {canWrite ? (
           <>
-            <button type="button" className="ag-btn" disabled={busy} data-testid="inf-resources-sync-all"
-                    title="Reads inventory and costs from every account" onClick={() => void syncAll()}>Sync all</button>
-            <button type="button" className="ag-btn" data-testid="inf-resources-cleanup"
-                    title="Runs the resource janitor" onClick={() => setCleaning(true)}>Clean up…</button>
+            <GatedButton permission="cloud_account:manage" type="button" className="ag-btn" disabled={busy} data-testid="inf-resources-sync-all"
+                    title="Reads inventory and costs from every account" onClick={() => void syncAll()}>Sync all</GatedButton>
+            <GatedButton permission="infra:terminate" type="button" className="ag-btn" data-testid="inf-resources-cleanup"
+                    title="Runs the resource janitor" onClick={() => setCleaning(true)}>Clean up…</GatedButton>
           </>
         ) : null}
       </ZoneHead>
@@ -172,8 +173,8 @@ function CleanUpSheet({ body, projectId, actor, poll, onClose }: CloudViewProps 
         </div>
         <ErrorLine error={error} />
         <div className="inf-actions">
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-cleanup-submit"
-                  title="Looks for resources nothing owns, up to the max">Clean up</button>
+          <GatedButton permission="infra:terminate" type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-cleanup-submit"
+                  title="Looks for resources nothing owns, up to the max">Clean up</GatedButton>
         </div>
       </form>
     </Sheet>

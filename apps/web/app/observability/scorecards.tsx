@@ -14,6 +14,7 @@
  * Every number is the server's (services/scorecards.view, services/experiments). Scores are only
  * compared within one score version.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 
 import {
@@ -122,10 +123,10 @@ function Scores({ projectId, actor, u }: { projectId: string; actor: string; u: 
       {t.n === 0 ? (
         <Empty testId="sc-empty">
           <span>No scorecards yet</span>
-          <button type="button" className="ag-btn" disabled={busy} data-testid="sc-backfill"
+          <GatedButton permission="system:operate" type="button" className="ag-btn" disabled={busy} data-testid="sc-backfill"
                   title="Score the runs BOSS already finished" onClick={() => void backfill()}>
             {busy ? "Scoring…" : "Score history"}
-          </button>
+          </GatedButton>
         </Empty>
       ) : (
         <>
@@ -229,8 +230,8 @@ function PromoteSheet({ e, arm, projectId, actor, onClose, onDone }: {
           </>
         ) : null}
         <span className="im-actions">
-          <button type="button" className="ag-btn ag-btn-primary" disabled={busy || !ready}
-                  data-testid="sc-promote-yes" onClick={() => void go()}>{busy ? "Promoting…" : "Promote"}</button>
+          <GatedButton permission="improvement:manage" type="button" className="ag-btn ag-btn-primary" disabled={busy || !ready}
+                  data-testid="sc-promote-yes" onClick={() => void go()}>{busy ? "Promoting…" : "Promote"}</GatedButton>
           <button type="button" className="ag-btn" onClick={onClose}>Cancel</button>
           {error ? <span className="im-err" role="alert" title={error}>Not promoted</span> : null}
         </span>
@@ -261,7 +262,7 @@ function ExperimentCard({ e, projectId, actor, onChange }: { e: Experiment; proj
         <span className="im-verdict" data-tone={e.compare.verdict === "a" || e.compare.verdict === "b" ? "green" : undefined}
               title={e.compare.why} data-testid="sc-exp-verdict">{e.compare.label}</span>
         <span className="ag-spacer" />
-        {running ? <button type="button" className="ag-btn" disabled={busy !== ""} onClick={() => void act("experiment_stop")}>Stop</button> : null}
+        {running ? <GatedButton permission="improvement:manage" type="button" className="ag-btn" disabled={busy !== ""} onClick={() => void act("experiment_stop")}>Stop</GatedButton> : null}
       </header>
       <div className="im-arms">
         {(["a", "b"] as const).map((arm) => {
@@ -279,9 +280,9 @@ function ExperimentCard({ e, projectId, actor, onChange }: { e: Experiment; proj
                 {e.capped_arms.includes(arm) ? <span className="obs-bad">Capped</span> : null}
               </span>
               {e.status !== "promoted" ? (
-                <button type="button" className={`ag-btn${winner ? " ag-btn-primary" : ""}`} disabled={busy !== ""}
+                <GatedButton permission="improvement:manage" type="button" className={`ag-btn${winner ? " ag-btn-primary" : ""}`} disabled={busy !== ""}
                         data-testid={`sc-promote-${arm}`} title="Makes this the project's setting; recorded in Govern changes"
-                        onClick={() => void act("experiment_promote", arm)}>Promote {arm.toUpperCase()}</button>
+                        onClick={() => void act("experiment_promote", arm)}>Promote {arm.toUpperCase()}</GatedButton>
               ) : null}
             </div>
           );
@@ -343,7 +344,7 @@ function NewExperiment({ view, projectId, actor, onDone }: { view: ExperimentsVi
       <label title="Stops when this many have finished">Units<input type="number" min={2} max={1000} value={f.units} onChange={set("units")} /></label>
       <label title="An arm over this takes no more builds">Cap per arm $<input type="number" min={1} value={f.cap} onChange={set("cap")} /></label>
       <span className="im-form-end">
-        <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="sc-new-start">Start</button>
+        <GatedButton permission="improvement:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="sc-new-start">Start</GatedButton>
         {error ? <span className="im-err" role="alert" title={error}>Not started</span> : null}
       </span>
     </form>
@@ -363,8 +364,8 @@ function Experiments({ projectId, actor }: { projectId: string; actor: string })
     <section className="obs-zone" aria-labelledby="sc-exp-head">
       <ZoneHead id="sc-exp-head" label="EXPERIMENTS" count={v.items.filter((e) => e.status === "running").length}
                 tip="Off until you start one. Never changes what needs approval.">
-        <button type="button" className="ag-btn" data-testid="sc-exp-add" aria-expanded={adding}
-                onClick={() => setAdding((a) => !a)}>{adding ? "Cancel" : "New experiment"}</button>
+        <GatedButton permission="improvement:manage" type="button" className="ag-btn" data-testid="sc-exp-add" aria-expanded={adding}
+                onClick={() => setAdding((a) => !a)}>{adding ? "Cancel" : "New experiment"}</GatedButton>
       </ZoneHead>
       {adding ? <NewExperiment view={v} projectId={projectId} actor={actor} onDone={() => { setAdding(false); read.reload(); }} /> : null}
       {v.items.length ? v.items.map((e) => <ExperimentCard key={e.id} e={e} projectId={projectId} actor={actor} onChange={read.reload} />)

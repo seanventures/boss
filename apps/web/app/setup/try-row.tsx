@@ -4,6 +4,7 @@
  * ③ Try it: one sentence becomes a pull request on the default repository. The finish line of
  * setup, and on the board a one-line Quick PR for small work.
  */
+import { GatedButton } from "../../components/gated";
 import React, { forwardRef, useEffect, useRef, useState } from "react";
 
 import { SetupFailure, setupWrite } from "../../lib/setup-client";
@@ -66,11 +67,11 @@ export const TryRow = forwardRef<HTMLElement, {
                    disabled={!view.ready}
                    onChange={(e) => setDirective(e.target.value)}
                    onKeyDown={(e) => { if (e.key === "Enter" && enabled) void start(); }} />
-            <button type="button" className="su-btn su-btn-primary" data-testid="su-try-open"
+            <GatedButton permission="workflow_run:start" type="button" className="su-btn su-btn-primary" data-testid="su-try-open"
                     disabled={!enabled || !directive.trim()} title={blocked} data-tip={blocked}
                     onClick={start}>
               Open a PR
-            </button>
+            </GatedButton>
           </div>
           {last ? (
             <div className="su-line" data-testid="su-try-progress">

@@ -7,6 +7,7 @@
  * answer is a 304 and no re-render. Nothing here refreshes the console — the promotion line
  * moves with this poll, not with a page refresh every 5 s as the old timeline did.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 import { RateIt } from "../improve/rate-it";
 
@@ -134,12 +135,12 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
         <DrawerSection label="Needs you" testId="inf-deploy-needs">
           <div className="inf-actions">
             {row.can.approve ? (
-              <button type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-deploy-approve"
-                      onClick={() => decide("approve")}>{busy === "approve" ? "Approving…" : "Approve"}</button>
+              <GatedButton permission="decision:approve" type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-deploy-approve"
+                      onClick={() => decide("approve")}>{busy === "approve" ? "Approving…" : "Approve"}</GatedButton>
             ) : null}
             {row.can.reject ? (
-              <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-reject"
-                      onClick={() => decide("reject")}>{busy === "reject" ? "Rejecting…" : "Reject"}</button>
+              <GatedButton permission="decision:approve" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-reject"
+                      onClick={() => decide("reject")}>{busy === "reject" ? "Rejecting…" : "Reject"}</GatedButton>
             ) : null}
           </div>
         </DrawerSection>
@@ -219,8 +220,8 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
 
       {row.kind === "registry" ? (
         <DrawerSection label="Health check" testId="inf-deploy-health-check" actions={(
-          <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-run-check"
-                  onClick={() => void healthCheck()}>{busy === "health" ? "Checking…" : "Run check"}</button>
+          <GatedButton permission="deployment:create" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-run-check"
+                  onClick={() => void healthCheck()}>{busy === "health" ? "Checking…" : "Run check"}</GatedButton>
         )}>
           {healthRows.length ? (
             <ul className="inf-dchecks">
@@ -257,15 +258,15 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
 
       <div className="inf-actions inf-dd-actions">
         {row.can.rollback ? (
-          <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-rollback-to"
+          <GatedButton permission="deployment:rollback" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-rollback-to"
                   title="Redeploy the last commit that went live here" onClick={() => void rollback()}>
             {busy === "rollback" ? "Rolling back…" : row.rollbackToSha7 ? `Roll back to ${row.rollbackToSha7}` : "Roll back"}
-          </button>
+          </GatedButton>
         ) : null}
         {row.can.redeploy ? (
-          <button type="button" className="ag-btn" disabled={busy !== null || (row.kind !== "delivery" && !row.targetId)}
+          <GatedButton permission="deployment:create" type="button" className="ag-btn" disabled={busy !== null || (row.kind !== "delivery" && !row.targetId)}
                   data-testid="inf-deploy-redeploy" title={row.kind === "delivery" ? "Run this deploy again" : "Plan this commit again on its target"}
-                  onClick={() => void redeploy()}>{busy === "redeploy" ? "Planning…" : "Redeploy"}</button>
+                  onClick={() => void redeploy()}>{busy === "redeploy" ? "Planning…" : "Redeploy"}</GatedButton>
         ) : null}
         {d.openUrl ? (
           <a className="ag-btn" href={d.openUrl} target="_blank" rel="noreferrer" data-testid="inf-deploy-open-app">Open app ↗</a>

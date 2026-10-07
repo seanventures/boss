@@ -5,6 +5,7 @@
  * into, an API key you paste, or a local model on your hardware. Every Connect stores the
  * credential and asks one tiny question — budgeted and receipted — before saying Working.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useRef, useState } from "react";
 import { Copy } from "@phosphor-icons/react";
 
@@ -253,13 +254,13 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
         {entry?.key_url ? <Out href={entry.key_url}>Get a key</Out> : null}
         {needsConsent ? <Consent checked={consent} onChange={setConsent} /> : null}
         <div className="su-line">
-          <button type="button" className="su-btn su-btn-primary" disabled={!ready}
+          <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-primary" disabled={!ready}
                   data-testid="su-model-connect"
                   title="Saves it, then asks one tiny question. Budgeted and receipted."
                   data-tip="Saves it, then asks one tiny question. Budgeted and receipted."
                   onClick={connect}>
             {busy ? "Checking…" : "Connect"}
-          </button>
+          </GatedButton>
           {refusal ? <Refusal headline={refusal.headline} fix={refusal.fix} /> : null}
         </div>
       </div>

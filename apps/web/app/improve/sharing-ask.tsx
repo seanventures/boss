@@ -9,6 +9,7 @@
  * its one opt-out. The installer's final message does not carry this (install.sh is unchanged),
  * so Setup and the README are where an operator meets it.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
 import { improveWrite, isSharing, readImprove, type SharingView } from "../../lib/improve";
@@ -48,8 +49,8 @@ export function SharingAsk({ projectId, actor }: { projectId: string; actor: str
         <>
           <ConsentText />
           <span className="im-ask-head">
-            <button type="button" className="ag-btn ag-btn-primary" disabled={busy} data-testid="su-sharing-on"
-                    onClick={() => void answer(true)}>Turn on</button>
+            <GatedButton permission="telemetry:manage" type="button" className="ag-btn ag-btn-primary" disabled={busy} data-testid="su-sharing-on"
+                    onClick={() => void answer(true)}>Turn on</GatedButton>
             <button type="button" className="ag-btn" disabled={busy} data-testid="su-sharing-no"
                     title="Off. Change it any time in Govern › Sharing." onClick={() => void answer(false)}>Not now</button>
           </span>

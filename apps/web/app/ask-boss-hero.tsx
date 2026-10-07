@@ -38,7 +38,7 @@ import { addFeaturePatch } from "../lib/compose-links";
 import { linkTo, navigate, plainClick } from "./agents/live-util";
 
 import { callAction } from "../lib/call-action";
-import { GatedButton } from "../components/gated";
+import { GatedButton, useGate } from "../components/gated";
 const NORMAL_SECONDS = 20;
 // The same bound the dock uses. A deep turn is genuinely longer since the answering agent
 // moved to Opus — 192s for 27 lookups, measured — and 120 handed control back in the middle of
@@ -971,6 +971,8 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
   const [current, setCurrent] = useState("");
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<{ text: string; title: string; bad: boolean } | null>(null);
+  // The default workflow is applied to new work (POST /v1/delivery-workflows/apply: workflow:publish).
+  const applyGate = useGate("workflow:publish");
 
   useEffect(() => {
     let alive = true;
@@ -1035,8 +1037,8 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
           control it names is a label competing with the thing it describes. */}
       <label className="askboss-wf-label" htmlFor="askboss-wf-select"
              title="The workflow every new project in this project will follow">Workflow</label>
-      <select id="askboss-wf-select" className="askboss-wf-select" value={current}
-              disabled={saving} onChange={(e) => void apply(e.target.value)}>
+      <select id="askboss-wf-select" className="askboss-wf-select" value={current} {...applyGate.props}
+              disabled={saving || !applyGate.allowed} onChange={(e) => void apply(e.target.value)}>
         <option value="">Standard (default)</option>
         {items.map((w) => (
           <option key={w.id} value={w.workflow_key}>
@@ -1333,6 +1335,10 @@ export function AskBossHero({
    * what. They are one box now: the same words either get answered or get built, and the
    * operator picks which by pressing a different button rather than by choosing a lane first.
    */
+  // Build starts a delivery workflow (POST /v1/delivery-workflows/start); Research opens a
+  // discovery. Both are pre-greyed for a viewer who cannot (components/gated.tsx).
+  const buildGate = useGate("workflow_run:start");
+  const researchGate = useGate("discovery:create");
   const assign = useCallback((text: string, startAnyway: string[] = []) => {
     const directive = text.trim();
     if (!directive || busy) return;
@@ -1591,7 +1597,7 @@ export function AskBossHero({
           className="askboss-form"
           // THE SAME ACTION THE PRIMARY BUTTON RUNS. A form whose submit handler disagrees with
           // the button sitting in it is how "Build" ran Ask for a day.
-          onSubmit={(e) => { e.preventDefault(); if (input.trim()) assign(input); }}
+          onSubmit={(e) => { e.preventDefault(); if (input.trim() && buildGate.allowed) assign(input); }}
         >
           <div
             className="askboss-box"
@@ -1633,7 +1639,7 @@ export function AskBossHero({
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
-                  if (input.trim()) assign(input);
+                  if (input.trim() && buildGate.allowed) assign(input);
                 }
               }}
               data-testid="askboss-input"
@@ -1672,7 +1678,7 @@ export function AskBossHero({
                 busy={busy}
                 disabled={busy || !input.trim()}
                 primary={{
-                  id: "build", label: "Build →", onRun: () => assign(input),
+                  id: "build", label: "Build →", onRun: () => assign(input), refused: buildGate.reason || undefined,
                   hint: "Down the governed path — a panel, a PRD you approve, then code",
                 }}
                 others={[
@@ -1690,7 +1696,7 @@ export function AskBossHero({
                   ...(researchAvailable ? [{ id: "research", label: "Research",
                     cost: "spends money",
                     hint: "Web sources first, into a cited dossier and candidate outcomes",
-                    onRun: () => research(input) }] : []),
+                    onRun: () => research(input), refused: researchGate.reason || undefined }] : []),
                 ]}
               />
               {layout === "hero" ? (

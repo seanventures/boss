@@ -8,6 +8,7 @@
  * on, and a cost typed in dollars (sent as micros). Every "change set" link lands here
  * (`?area=infra&view=cloud&cloud=changes&changeset=<id>`).
  */
+import { GatedButton } from "../../components/gated";
 import React, { useMemo, useState } from "react";
 
 import { showToast } from "../client-forms";
@@ -49,7 +50,7 @@ export function CloudChanges(p: CloudViewProps) {
             Drift{drifted ? <span className="cloud-seg-n">{drifted}</span> : null}
           </button>
         </span>
-        {canWrite ? <button type="button" className="ag-btn" data-testid="inf-change-new" onClick={() => setAdding(true)}>+ Change</button> : null}
+        {canWrite ? <GatedButton permission="infra:provision" type="button" className="ag-btn" data-testid="inf-change-new" onClick={() => setAdding(true)}>+ Change</GatedButton> : null}
       </ZoneHead>
       {rows.length === 0 ? <Empty testId="inf-cloud-empty">No changes yet</Empty> : (
         <div className="inf-table-wrap">
@@ -106,19 +107,19 @@ function ChangeDrawer({ change: c, actor, poll, canWrite, onClose }: CloudViewPr
       {c.summary ? <span className="inf-muted inf-trunc" data-copy="data" title={c.summary}>{c.summary}</span> : null}
       {canWrite && c.can.approve_deploy && c.decisionId ? (
         <div className="inf-actions">
-          <button type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-change-approve-deploy"
+          <GatedButton permission="decision:approve" type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-change-approve-deploy"
                   title="Deploys it, checks its health, and rolls back if the check fails" onClick={() => void act("approve_deploy")}>
-            {busy === "approve_deploy" ? "Approving…" : "Approve deploy"}</button>
-          <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-change-reject-deploy"
-                  onClick={() => void act("reject_deploy")}>{busy === "reject_deploy" ? "Rejecting…" : "Reject"}</button>
+            {busy === "approve_deploy" ? "Approving…" : "Approve deploy"}</GatedButton>
+          <GatedButton permission="decision:approve" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-change-reject-deploy"
+                  onClick={() => void act("reject_deploy")}>{busy === "reject_deploy" ? "Rejecting…" : "Reject"}</GatedButton>
         </div>
       ) : null}
       {canWrite && (c.can.approve || c.can.apply) ? (
         <div className="inf-actions">
-          {c.can.approve ? <button type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-change-approve"
-                                   onClick={() => void act("approve")}>Approve</button> : null}
-          {c.can.apply ? <button type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-change-apply"
-                                 title="Runs the operations against the provider" onClick={() => void act("apply")}>Apply</button> : null}
+          {c.can.approve ? <GatedButton permission="changeset:approve" type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-change-approve"
+                                   onClick={() => void act("approve")}>Approve</GatedButton> : null}
+          {c.can.apply ? <GatedButton permission="infra:provision" type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-change-apply"
+                                 title="Runs the operations against the provider" onClick={() => void act("apply")}>Apply</GatedButton> : null}
         </div>
       ) : null}
       <ErrorLine error={error} testId="inf-change-error" />
@@ -211,7 +212,7 @@ function ChangeSheet({ body, projectId, actor, poll, go, onClose }: CloudViewPro
           <textarea rows={2} value={f.rollback} onChange={set("rollback")} /></label>
         <ErrorLine error={error} testId="inf-change-sheet-error" />
         <div className="inf-actions">
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={busy || !checked.ok} data-testid="inf-change-submit">Create</button>
+          <GatedButton permission="infra:provision" type="submit" className="ag-btn ag-btn-primary" disabled={busy || !checked.ok} data-testid="inf-change-submit">Create</GatedButton>
         </div>
       </form>
     </Sheet>

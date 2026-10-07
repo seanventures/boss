@@ -29,6 +29,7 @@ import type { StudioAgent } from "../lib/agent-studio";
 import { apiWrite } from "../lib/api-write";
 import { callAction } from "../lib/call-action";
 import { GatedButton } from "../components/gated";
+import { useCan } from "../components/identity/identity-provider";
 import { createStudioAgent, seedStudioCatalog } from "./agent-studio-actions";
 import { HelpTip } from "./help-tip";
 import type { AgentIdentity, AvatarSpec, Persona } from "../lib/agent-world-types";
@@ -204,6 +205,9 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
   const taken = !!key && existing.has(key) && key !== made;
   const profile = wantsProfile(advanced);
 
+  // The profile step after create is an UPDATE (agent:update): an Operator may create but not
+  // update, so the step is skipped rather than sent to be refused.
+  const mayUpdate = useCan("agent:update").allowed;
   const submit = async () => {
     if (!name.trim()) { setFailed("Name it first"); return; }
     if (taken) { setFailed(`“${key}” exists — pick another name`); return; }
@@ -236,7 +240,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
         setBusy(false); setFailed(result.message); return;
       }
       const persona = birthPersona({ face, callsign, tagline });
-      await updateAgent(projectId, actor, key, {
+      if (mayUpdate) await updateAgent(projectId, actor, key, {
         ...(reportsTo ? { reports_to: reportsTo } : {}), ...(team !== "yours" ? { team } : {}), persona });
       setBusy(false);
       born(key, "", name.trim(), persona);
@@ -584,7 +588,7 @@ function TemplatePicker({ projectId, actor, orphans, existing, onCreated, onBorn
           return (
             <li key={t.id} data-testid={`aq-template-${t.id}`}>
               <span title={t.description || undefined}><b>{t.name}</b> <span className="detail">{t.category}</span></span>
-              <GatedButton permission="agent:create" type="button" className="wf-btn" disabled={!!working || (have && t.installed)}
+              <GatedButton permission="agent:publish" type="button" className="wf-btn" disabled={!!working || (have && t.installed)}
                       onClick={() => void install(t)}>
                 {have && t.installed ? "Added" : working === t.id ? "Adding…" : "Add"}
               </GatedButton>
@@ -724,10 +728,10 @@ function ArchetypePicker({ projectId, actor, existing, onBorn }: {
           </div>
           <label className="aw-field">
             <span>About me
-              <button type="button" className="ag-link" disabled={!!busy} data-testid="aq-draft-about"
+              <GatedButton permission="agent:create" type="button" className="ag-link" disabled={!!busy} data-testid="aq-draft-about"
                       title="One model call in its voice. Not saved until Create." onClick={() => void draft()}>
                 {busy === "draft" ? "Drafting…" : "Draft about me"}
-              </button>
+              </GatedButton>
             </span>
             <textarea rows={2} value={about} maxLength={280} placeholder="In first person"
                       onChange={(e) => setAbout(e.target.value)} />

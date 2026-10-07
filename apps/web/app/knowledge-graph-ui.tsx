@@ -1,5 +1,6 @@
 "use client";
 
+import { GatedButton } from "../components/gated";
 import React, { useState, useTransition } from "react";
 
 import type { KnowledgeGraphFeed, GraphSummary } from "../lib/knowledge-graph";
@@ -104,7 +105,7 @@ export function KnowledgeGraphPanel({ feed }: { feed: KnowledgeGraphFeed }) {
         )}
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-          <button
+          <GatedButton permission="observability:manage"
             type="button"
             disabled={pending}
             data-testid="kg-seed"
@@ -123,7 +124,7 @@ export function KnowledgeGraphPanel({ feed }: { feed: KnowledgeGraphFeed }) {
             style={btnStyle}
           >
             Seed from infra
-          </button>
+          </GatedButton>
           {seedNote ? (
             <span style={{ fontSize: 12, color: "var(--muted)" }} data-testid="kg-seed-note">{seedNote}</span>
           ) : null}

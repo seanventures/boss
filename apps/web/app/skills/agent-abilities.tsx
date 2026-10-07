@@ -12,6 +12,7 @@
  * outlined ★ = recommended for its role and not held. `All abilities ↗` opens Who can on this
  * agent's row.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { DotsThree, FileText, Plus, Star } from "@phosphor-icons/react";
 
@@ -152,7 +153,7 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
     const single = row === "mcp" && holds && a.mcp.length === 1 ? servers.find((s) => s.mcp_server_id === a.mcp[0].server_id) : undefined;
     return (
       <span className="ld-chip" key={`a:${a.key}`} data-held={holds || undefined}>
-        <button type="button" className="kit-chip kit-chip-btn" aria-pressed={holds}
+        <GatedButton permission="agent_ability:assign" type="button" className="kit-chip kit-chip-btn" aria-pressed={holds}
                 disabled={busy === `a:${a.key}` || off || !canEdit} data-tip={tip}
                 data-testid={`agent-ability-${a.key}`}
                 onClick={(e) => { if (coarsePointer()) openMenuOf(e.currentTarget); else void toggle(a); }}>
@@ -160,7 +161,7 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
           {a.label}
           {holds && asks(a) ? <span className="ld-dot" aria-label={LOADOUT_TIPS.asks} data-tip={LOADOUT_TIPS.asks} /> : null}
           {!holds ? <Star size={10} weight="fill" aria-label="Recommended" /> : null}
-        </button>
+        </GatedButton>
         {canEdit && !off ? (
           <ChipMenu testId={`agent-ability-${a.key}-more`} label={a.label}>
             {(close) => (<>
@@ -168,8 +169,8 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
               <a href={kitAbility(a.key)} role="menuitem">Open in Library ↗</a>
               {holds
                 ? <button type="button" role="menuitem" onClick={() => { close(); void toggle(a); }}>Remove</button>
-                : <button type="button" role="menuitem" data-testid={`agent-ability-${a.key}-give`}
-                          onClick={() => { close(); void toggle(a); }}>Give</button>}
+                : <GatedButton permission="agent_ability:assign" type="button" role="menuitem" data-testid={`agent-ability-${a.key}-give`}
+                          onClick={() => { close(); void toggle(a); }}>Give</GatedButton>}
             </>)}
           </ChipMenu>
         ) : null}
@@ -195,9 +196,9 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
           <ChipMenu testId={`agent-skill-${s.skill_id}-more`} label={s.label || s.skill_id}>
             {(close) => (<>
               <a href={libSkill(s.skill_id)} role="menuitem">Open in Library ↗</a>
-              <button type="button" role="menuitem" disabled={busy === `s:${s.skill_id}`}
+              <GatedButton permission="agent_ability:assign" type="button" role="menuitem" disabled={busy === `s:${s.skill_id}`}
                       onClick={() => { close(); void write(`s:${s.skill_id}`, s.label || s.skill_id, false,
-                        () => revokeSkill(projectId, actor, roleKey, s.skill_id)); }}>Remove</button>
+                        () => revokeSkill(projectId, actor, roleKey, s.skill_id)); }}>Remove</GatedButton>
             </>)}
           </ChipMenu>
         ) : null}
@@ -223,9 +224,9 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
             {(close) => (<>
               <ToolsItem projectId={projectId} actor={actor} roleKey={roleKey} server={m} onDone={() => { close(); onChanged(); }} />
               <a href={libMcp(m.mcp_server_id)} role="menuitem">Open in Library ↗</a>
-              <button type="button" role="menuitem" disabled={busy === `m:${m.mcp_server_id}`}
+              <GatedButton permission="agent_ability:assign" type="button" role="menuitem" disabled={busy === `m:${m.mcp_server_id}`}
                       onClick={() => { close(); void write(`m:${m.mcp_server_id}`, m.server, false,
-                        () => revokeMcp(projectId, actor, roleKey, m.mcp_server_id)); }}>Remove</button>
+                        () => revokeMcp(projectId, actor, roleKey, m.mcp_server_id)); }}>Remove</GatedButton>
             </>)}
           </ChipMenu>
         ) : null}
@@ -278,12 +279,12 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
               {(close) => (<>
                 <span className="ld-pop-head">From Library</span>
                 {availableServers.length ? availableServers.map((m) => (
-                  <button type="button" role="menuitem" key={m.mcp_server_id} data-testid={`loadout-mcp-pick-${m.mcp_server_id}`}
+                  <GatedButton permission="agent_ability:assign" type="button" role="menuitem" key={m.mcp_server_id} data-testid={`loadout-mcp-pick-${m.mcp_server_id}`}
                           data-tip={m.description || undefined} disabled={busy === `m:${m.mcp_server_id}`}
                           onClick={() => { close(); void write(`m:${m.mcp_server_id}`, m.server, true,
                             () => grantMcp(projectId, actor, roleKey, m.mcp_server_id)); }}>
                     {m.server}{m.enabled ? "" : " · off"}
-                  </button>
+                  </GatedButton>
                 )) : <span className="kit-faint ld-pop-empty">None left</span>}
                 <a href="?area=skills&tab=library&lib=mcp&add=1" role="menuitem" data-testid="loadout-mcp-new">Add new ↗</a>
               </>)}
@@ -326,11 +327,11 @@ function SkillPicker({ groups, busy, onPick }: {
             <span key={title} className="ld-picker-group">
               <span className="ld-picker-title">{title}</span>
               {shown.map((s) => (
-                <button type="button" role="menuitem" key={s.skill_id} disabled={busy === `s:${s.skill_id}`}
+                <GatedButton permission="agent_ability:assign" type="button" role="menuitem" key={s.skill_id} disabled={busy === `s:${s.skill_id}`}
                         data-tip={s.summary || undefined} data-testid={`loadout-skill-pick-${s.skill_id}`}
                         onClick={() => onPick(s)}>
                   {s.behaviour_kind === "guide" ? <FileText size={12} /> : null} {s.label || s.skill_id}
-                </button>
+                </GatedButton>
               ))}
             </span>
           ) : null;
@@ -395,8 +396,8 @@ function ToolsItem({ projectId, actor, roleKey, server, onDone }: {
         </label>
       ))}
       <span className="kit-pop-actions">
-        <button type="button" className="kit-btn kit-btn-sm kit-btn-primary" disabled={saving || !all?.length || picked.size === 0}
-                onClick={() => void save()}>Save</button>
+        <GatedButton permission="agent_ability:assign" type="button" className="kit-btn kit-btn-sm kit-btn-primary" disabled={saving || !all?.length || picked.size === 0}
+                onClick={() => void save()}>Save</GatedButton>
       </span>
     </span>
   );

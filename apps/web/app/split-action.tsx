@@ -30,14 +30,19 @@ export type Action = {
   onRun: () => void;
   /** Shown on the item — "spends money", "free". Never buried in a tooltip. */
   cost?: string;
+  /** The viewer lacks the permission this needs (components/gated.tsx useGate().reason): the
+   *  control stays visible, reads as disabled, says why, and does nothing when pressed. */
+  refused?: string;
 };
 
-export function SplitAction({ primary, others, disabled, busy }: {
+export function SplitAction({ primary: given, others, disabled, busy }: {
   primary: Action;
   others: Action[];
   disabled?: boolean;
   busy?: boolean;
 }) {
+  // A refused primary stays on its face, says why, and its press does nothing.
+  const primary: Action = given.refused ? { ...given, onRun: () => undefined } : given;
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -109,11 +114,13 @@ export function SplitAction({ primary, others, disabled, busy }: {
         // called it, which is a trap for every future caller too.
         type="button"
         disabled={disabled}
+        aria-disabled={primary.refused ? true : undefined}
         data-testid={`split-${primary.id}`}
-        title={primary.hint}
+        title={primary.refused || primary.hint}
         onClick={primary.onRun}
       >
         {busy ? <span className="askboss-spinner" aria-hidden /> : primary.label}
+        {primary.refused ? <span className="sr-only">{primary.refused}</span> : null}
       </button>
       {others.length ? <button
         className="split-action-caret"
@@ -139,7 +146,9 @@ export function SplitAction({ primary, others, disabled, busy }: {
               className="split-action-item"
               data-testid={`split-${a.id}`}
               disabled={disabled}
-              onClick={() => { setOpen(false); a.onRun(); }}
+              aria-disabled={a.refused ? true : undefined}
+              title={a.refused || undefined}
+              onClick={() => { if (a.refused) return; setOpen(false); a.onRun(); }}
             >
               <span className="split-action-item-head">
                 {a.label}
@@ -147,7 +156,7 @@ export function SplitAction({ primary, others, disabled, busy }: {
                     free ones is how somebody spends money by accident. */}
                 {a.cost ? <em className="split-action-cost">{a.cost}</em> : null}
               </span>
-              <span className="split-action-item-hint">{a.hint}</span>
+              <span className="split-action-item-hint">{a.refused || a.hint}</span>
             </button>
           ))}
         </div>, document.body) : null}

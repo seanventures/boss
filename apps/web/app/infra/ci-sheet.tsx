@@ -5,6 +5,7 @@
  * capability — whether the API answered, the vendor cards, Generate (a dry run: nothing is
  * written to any repository), Validate, the YAML editor, and BOSS's own record of pipeline runs.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useMemo, useState } from "react";
 
 import { generateCi, loadCi, validateCi, type CiState } from "./deploy-actions";
@@ -84,8 +85,8 @@ export function CiSheet({ projectId, onClose }: { projectId: string; onClose: ()
             <input value={framework} onChange={(e) => setFramework(e.target.value)} placeholder="Optional" autoComplete="off" /></label>
         </div>
         <div className="inf-actions">
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-ci-generate">
-            {busy === "gen" ? "Generating…" : "Generate"}</button>
+          <GatedButton permission="cicd:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-ci-generate">
+            {busy === "gen" ? "Generating…" : "Generate"}</GatedButton>
           <button type="button" className="ag-btn" disabled={busy !== null || !yaml.trim()} data-testid="inf-ci-validate"
                   onClick={() => void validate()}>{busy === "val" ? "Validating…" : "Validate"}</button>
           {path ? <code className="inf-mono inf-faint" data-copy="data">{path}</code> : null}
