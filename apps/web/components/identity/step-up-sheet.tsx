@@ -10,7 +10,8 @@ import { Key, Fingerprint } from "@phosphor-icons/react";
 
 import type { MeResponse } from "../../lib/identity/contract";
 import { IdentityError, idPost } from "../../lib/identity/api";
-import { getAssertion, PasskeyCancelled, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../lib/identity/webauthn";
+import { passkeyFailureWords } from "../../lib/identity/passkey-support";
+import { getAssertion, webauthnAvailable, type AssertionOptions, type Wrapped } from "../../lib/identity/webauthn";
 import { CodeInput, ErrorLine, Sheet } from "./kit";
 
 export function StepUpSheet({ reason, me, onDone }: { reason: string; me: MeResponse | null; onDone: (ok: boolean) => void }) {
@@ -29,8 +30,8 @@ export function StepUpSheet({ reason, me, onDone }: { reason: string; me: MeResp
       await call();
       onDone(true);
     } catch (e) {
-      if (e instanceof PasskeyCancelled) setError("Passkey cancelled");
-      else setError(e instanceof IdentityError ? (e.attemptsLeft !== null ? `Wrong code · ${e.attemptsLeft} left` : e.message) : "That didn't work");
+      setError(passkeyFailureWords(e) ?? (e instanceof IdentityError ? (e.attemptsLeft !== null ? `Wrong code · ${e.attemptsLeft} left` : e.message)
+        : `That didn't work · ${e instanceof Error && e.message ? e.message : "no answer"}`));
       setBusy(false);
     }
   };
