@@ -6,6 +6,7 @@
  * password, and the SSO identities linked to you. Every change here needs a fresh second factor:
  * the API answers step_up_required and the step-up sheet opens (useGuardedCall).
  */
+import { avatarTone } from "../../lib/identity/avatar";
 import React, { useEffect, useState } from "react";
 import { DeviceMobile, Fingerprint, Key, LinkSimple, LockSimple, PencilSimple, Plus, ShieldCheck, Trash } from "@phosphor-icons/react";
 
@@ -34,10 +35,7 @@ const FACTOR_ICON: Record<Factor["kind"], React.ReactNode> = {
 
 /** The avatar tone a person chose ("0".."7"), else one derived from their id. */
 export function toneOf(seed: string | null | undefined, id: string): number {
-  if (seed && /^[0-7]$/.test(seed)) return Number(seed);
-  let h = 0;
-  for (const c of String(id ?? "")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return h % 8;
+  return avatarTone(id, seed);
 }
 
 /** Your own name and avatar colour (PATCH /v1/identity/me). Nothing else about you changes here. */

@@ -53,6 +53,8 @@ export interface MeResponse {
   epoch: number;
   network_bound: boolean;
   banners: MeBanner[];
+  /** The person's chosen avatar colour, "0"–"7"; null: derived from the id (lib/identity/avatar.ts). */
+  avatar_seed: string | null;
 }
 
 /** GET /v1/identity/me/permissions?project_id= */

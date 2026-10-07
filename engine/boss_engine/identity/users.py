@@ -31,6 +31,7 @@ class UserRow:
     self_signed_up: bool
     last_login_at: Optional[datetime]
     legacy_member_ids: tuple[str, ...] = ()
+    avatar_seed: Optional[str] = None
 
     def principal(self) -> Principal:
         return Principal(self.principal_id, PrincipalKind.USER, self.org_id,
@@ -41,7 +42,7 @@ class UserRow:
 _USER_SELECT = (
     "SELECT p.id AS principal_id, p.org_id, p.status, p.display_name, p.network_bound, "
     "p.legacy_member_ids, u.email, u.email_verified_at, u.password_hash, u.mfa_required, "
-    "u.self_signed_up, u.last_login_at FROM identity_principals p "
+    "u.self_signed_up, u.last_login_at, u.avatar_seed FROM identity_principals p "
     "JOIN identity_users u ON u.principal_id = p.id ")
 
 
@@ -49,7 +50,7 @@ def _row(r: Any) -> UserRow:
     return UserRow(r.principal_id, r.org_id, r.status, r.display_name, r.email,
                    r.email_verified_at, r.password_hash, bool(r.mfa_required),
                    bool(r.network_bound), bool(r.self_signed_up), r.last_login_at,
-                   tuple(r.legacy_member_ids or ()))
+                   tuple(r.legacy_member_ids or ()), getattr(r, "avatar_seed", None))
 
 
 def by_email(db: Any, email: str) -> Optional[UserRow]:

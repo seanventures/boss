@@ -12,13 +12,9 @@ import { Key, Robot, ShieldCheck, ShieldWarning, SignOut, Devices, UserCircle } 
 import { idPost } from "../../lib/identity/api";
 import { useIdentity } from "./identity-provider";
 import { Face } from "./kit";
+import { avatarTone } from "../../lib/identity/avatar";
 
 
-function hueOf(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i += 1) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return h % 8;
-}
 
 export async function signOut(): Promise<void> {
   try { await idPost("/v1/auth/logout"); } catch { /* signed out either way */ }
@@ -33,7 +29,7 @@ export function AccountMenu() {
   return (
     <details className="idn-me" data-testid="account-menu">
       <summary aria-label={`My account: ${me.display_name}`}>
-        <Face name={me.display_name} tone={hueOf(me.principal_id)} size={26} />
+        <Face name={me.display_name} tone={avatarTone(me.principal_id, me.avatar_seed)} size={26} />
         <span><b>{first}</b><span className="idn-me-role"> · {primaryRoleLabel(me.access_roles)}</span></span>
         {mfa
           ? <ShieldCheck size={15} className="idn-ok" aria-label="MFA on" />

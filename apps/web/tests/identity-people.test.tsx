@@ -54,7 +54,7 @@ function perms(role: keyof typeof ROLE_PERMISSIONS): MePermissionsResponse {
 function me(name: string, roles: string[]): MeResponse {
   return { principal_id: "usr_x", kind: "user", display_name: name, email: "x@acme.dev", org: F.ORG, status: "active", access_roles: roles,
     sign_in: { password: true, totp: true, passkeys: 1, recovery_codes_remaining: 10, sso_links: [] }, mfa_required: true, mfa_at: null,
-    session_id: "ses_1", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [] };
+    session_id: "ses_1", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [], avatar_seed: null };
 }
 
 async function mount(node: React.ReactElement, role: keyof typeof ROLE_PERMISSIONS = "owner") {

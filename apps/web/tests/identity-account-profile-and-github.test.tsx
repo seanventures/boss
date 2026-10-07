@@ -65,7 +65,7 @@ afterEach(() => {
 const ME: MeResponse = {
   principal_id: "usr_sam", kind: "user", display_name: "Sam Okafor", email: "sam@acme.dev", org: F.ORG, status: "active", access_roles: ["operator"],
   sign_in: { password: true, totp: true, passkeys: 1, recovery_codes_remaining: 8, sso_links: [] }, mfa_required: true, mfa_at: null,
-  session_id: "ses_s1", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [],
+  session_id: "ses_s1", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [], avatar_seed: null
 };
 const PERMS: MePermissionsResponse = { epoch: 1, scope: "org", permissions: [...ROLE_PERMISSIONS.operator], step_up_fresh_until: null, catalogue_fingerprint: "x" };
 
