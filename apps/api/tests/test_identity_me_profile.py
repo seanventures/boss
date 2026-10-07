@@ -1,4 +1,4 @@
-"""A person edits their own name and avatar colour (Kaappu parity, FX-C): PATCH /v1/identity/me
+"""A person edits their own name and avatar colour (identity-provider parity, FX-C): PATCH /v1/identity/me
 changes only the caller, only display_name and avatar_seed (an allowlist: anything else is a 422),
 is audited as user.updated, and GET /v1/identity/me/profile reads it back. /v1/auth/options says
 the policy's password minimum, so every password field can."""

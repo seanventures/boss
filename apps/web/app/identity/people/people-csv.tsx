@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * PEOPLE AS CSV (Kaappu parity): export the directory as you see it, and invite many people from
+ * PEOPLE AS CSV (identity-provider parity): export the directory as you see it, and invite many people from
  * a file. Import reads `email[,role][,groups]` (a header row is optional; groups are separated by
  * `;` or `|`), shows every row with what is wrong before anything is sent, then invites each
  * row through the same call as Invite people — one invitation per address, step-up once.

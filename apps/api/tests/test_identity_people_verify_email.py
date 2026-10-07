@@ -1,4 +1,4 @@
-"""An admin marks a person's email verified (Kaappu parity, FX-C): POST
+"""An admin marks a person's email verified (identity-provider parity, FX-C): POST
 /v1/identity/users/{id}/verify-email sets email_verified_at once, is audited, shows in the person
 view as `email_verified`, needs user:update (with step-up), and keeps the Owner guard."""
 from __future__ import annotations

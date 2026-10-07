@@ -298,7 +298,7 @@ def build_identity_people_router() -> APIRouter:
     @router.post("/v1/identity/users/{user_id}/verify-email")
     @permit(P.USER_UPDATE)
     def verify_user_email(user_id: str, request: Request):
-        """An admin vouches for a person's address (Kaappu parity): set once, never unset here
+        """An admin vouches for a person's address (identity-provider parity): set once, never unset here
         (changing the email unverifies it again, users.change_email). The Owner guard applies."""
         try:
             with begin() as db:

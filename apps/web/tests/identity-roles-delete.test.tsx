@@ -115,7 +115,7 @@ describe("the impact preview's words", () => {
 
 describe("deleting a custom role", () => {
   it("one with holders moves them to another role first, in one call", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const assign = vi.fn();
     vi.spyOn(window.location, "assign").mockImplementation(assign);
     const el = await mount(owner, <RoleEditor role={captain()} versions={[]} roles={roles()} />);
@@ -133,7 +133,7 @@ describe("deleting a custom role", () => {
   });
 
   it("an unheld one is a plain DELETE; a 409 role_in_use switches to moving its holders", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
     // The console thought nobody held it; the API knows better.
     await mount(owner, <RoleEditor role={{ ...captain(), holders: 0 }} versions={[]} roles={roles()} />);
@@ -151,7 +151,7 @@ describe("deleting a custom role", () => {
     expect(q("[data-testid='delete-role-open']")?.getAttribute("title")).toBe("Needs “Manage access roles” · ask an Admin");
     act(() => root?.unmount());
     host?.remove();
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     await mount(owner, <RoleEditor role={roles().find((r) => r.key === "viewer")!} versions={[]} roles={roles()} />);
     expect(q("[data-testid='delete-role-open']")).toBeNull();
   });
@@ -159,7 +159,7 @@ describe("deleting a custom role", () => {
 
 describe("where a role binds", () => {
   it("is editable, keeps one on, and the save sends it only when changed", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     await mount(owner, <RoleEditor role={captain()} versions={[]} roles={roles()} />);
     await click(q("[data-testid='scope-project']"));
     expect(q("[data-testid='scope-project']")?.getAttribute("aria-pressed")).toBe("false");
@@ -172,7 +172,7 @@ describe("where a role binds", () => {
 
 describe("the roles list", () => {
   it("with no custom roles: says how to make one", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const el = await mount(owner, <RoleList roles={roles().filter((r) => r.builtin)} />);
     expect(q("[data-testid='roles-empty']")?.textContent).toContain("Clone a built-in role");
     expectClean(el);
@@ -186,7 +186,7 @@ describe("Identity › Overview", () => {
   };
 
   it("events read in words; none is an explained empty state", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const events = F.auditEvents(NOW).slice(0, 4);
     const el = await mount(owner, <Overview {...base()} events={events} />);
     expect(el.textContent).toContain(eventWords(events[0].event_type));
@@ -200,7 +200,7 @@ describe("Identity › Overview", () => {
   });
 
   it("a failed read says so, not 'needs a permission'", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const el = await mount(owner, <Overview posture={null} people={null} roles={null} groups={null} serviceAccounts={null} agents={null} events={null}
       failures={{ people: { status: 500, code: "error" }, events: { status: 503, code: "identity_unavailable" }, posture: { status: 500, code: "error" } }} />);
     expect(el.textContent).toContain("Couldn't load people");
@@ -211,7 +211,7 @@ describe("Identity › Overview", () => {
   });
 
   it("alone: the invite replaces the people table", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const me = F.people(NOW).filter((p) => p.id === "usr_param");
     const el = await mount(owner, <Overview posture={null} people={me} roles={roles()} groups={[]} serviceAccounts={[]} agents={[]} events={[]} />);
     expect(q("[data-testid='alone']")?.textContent).toContain("You're the only person here");
@@ -221,7 +221,7 @@ describe("Identity › Overview", () => {
   });
 
   it("draws a line only for a person who is acting, from the role they hold", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const posture = owner.get<import("../lib/identity/types").Posture>("/v1/identity/posture");
     const el = await mount(owner, <Overview {...base()} posture={posture} events={[]} />);
     const lines = el.querySelectorAll(".idn-wire path").length;

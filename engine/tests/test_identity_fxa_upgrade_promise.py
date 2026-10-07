@@ -385,6 +385,12 @@ def test_the_security_log_prunes_itself_past_retention_and_still_verifies(db, sh
     from datetime import datetime, timezone
 
     later = datetime.now(timezone.utc) + timedelta(days=hygiene.retention_days() + 2)
+    # The database's own floor (fx-b: never prune a row younger than 30 days of REAL time) is
+    # tested in test_identity_f1_vault_and_audit; this test moves the clock instead, so it lowers
+    # the floor inside its rolled-back transaction to exercise the hygiene step's wiring (below zero:
+    # now() is the transaction's start, and the events were written after it).
+    db.execute(text("CREATE OR REPLACE FUNCTION public.identity_audit_min_prune_age() RETURNS INTERVAL "
+                    "LANGUAGE sql IMMUTABLE AS $$ SELECT interval '-1 day' $$"))
     assert hygiene.audit_retention(db, org_id=ORG, now=later) > 0
     assert audit.verify_chain(ORG, db=db).ok
     assert db.execute(text("SELECT count(*) FROM identity_security_events WHERE org_id = :o AND "

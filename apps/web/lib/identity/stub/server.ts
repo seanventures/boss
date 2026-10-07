@@ -466,7 +466,7 @@ on("GET", "/v1/identity/users/([^/]+)", "user:read", ({ s, m }) => {
   return p ? ok(p) : notFound();
 });
 on("GET", "/v1/identity/users/([^/]+)/factors", "user:read", ({ s, m }) => ok({ factors: s.factors[m[1]] ?? [] }));
-for (const [action, perm] of [["disable", "user:disable"], ["enable", "user:disable"], ["reset-mfa", "user:reset_mfa"], ["revoke-sessions", "user:revoke_sessions"], ["reset-link", "user:update"]] as const) {
+for (const [action, perm] of [["disable", "user:disable"], ["enable", "user:disable"], ["reset-mfa", "user:reset_mfa"], ["revoke-sessions", "user:revoke_sessions"], ["reset-link", "user:reset_mfa"]] as const) {
   on("POST", `/v1/identity/users/([^/]+)/${action}`, perm, ({ s, m, who, now }) => {
     const p = s.people.find((x) => x.id === m[1]);
     if (!p) return notFound();

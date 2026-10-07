@@ -93,7 +93,7 @@ async function click(el: Element | null) {
 
 describe("a delegation's lineage", () => {
   it("draws every hop, narrowing left to right, with what a hop dropped struck through", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const d = owner.get<DelegationDetail>("/v1/identity/delegations/dlg_01JB7Q");
     const el = await mount(owner, <DelegationView initial={d} />);
     const hops = el.querySelectorAll(".idn-node");
@@ -111,7 +111,7 @@ describe("a delegation's lineage", () => {
   });
 
   it("shows the cascade first, then revokes and says what stopped", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const d = owner.get<DelegationDetail>("/v1/identity/delegations/dlg_01JB7Q");
     const el = await mount(owner, <DelegationView initial={d} />);
     // The cascade comes from the read-only preview route, never a POST.
@@ -129,7 +129,7 @@ describe("a delegation's lineage", () => {
   });
 
   it("a Viewer sees Revoke disabled with the permission it needs", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const d = owner.get<DelegationDetail>("/v1/identity/delegations/dlg_01JB7Q");
     const viewer = as("diego@acme.dev");
     const el = await mount(viewer, <DelegationView initial={d} />);
@@ -144,7 +144,7 @@ describe("a delegation's lineage", () => {
 
 describe("agents and Passports", () => {
   it("lists Passports, flags the agent with no sponsor, and links every grant", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const el = await mount(owner, <AgentsScreen agents={owner.get<{ agents: Passport[] }>("/v1/identity/agents").agents}
       delegations={owner.get<{ delegations: Delegation[] }>("/v1/identity/delegations").delegations} />);
     expect(el.querySelector("[data-testid='passport-herald']")?.textContent).toContain("No sponsor");
@@ -153,7 +153,7 @@ describe("agents and Passports", () => {
   });
 
   it("locks the never-delegable permissions in the ceiling editor", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const p = owner.get<Passport>("/v1/identity/agents/agt_forge/passport");
     const el = await mount(owner, <PassportScreen initial={p} grants={[]} />);
     await click(el.querySelector(".idn-mx-top .idn-fchip"));
@@ -167,7 +167,7 @@ describe("agents and Passports", () => {
 
 describe("the security audit log", () => {
   it("opens the denied event with its chain, why rows and the redacted event as data", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const page = owner.get<AuditPage>("/v1/identity/audit");
     const el = await mount(owner, <AuditScreen initial={page} initialFilters={EMPTY_FILTERS} initialEvent={null} />);
     const drawer = el.querySelector("[data-testid='audit-drawer']")!;
@@ -182,7 +182,7 @@ describe("the security audit log", () => {
   });
 
   it("selects a row by keyboard and verifies the chain through the route", async () => {
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const page = owner.get<AuditPage>("/v1/identity/audit");
     const el = await mount(owner, <AuditScreen initial={page} initialFilters={EMPTY_FILTERS} initialEvent={page.events[0].id} />);
     const second = el.querySelector(`[data-testid='event-${page.events[1].id}']`) as HTMLElement;
@@ -212,7 +212,7 @@ describe("the security audit log", () => {
 describe("Sign-in & SSO settings", () => {
   it("shows providers, the policy and the legacy countdown; an Admin cannot save the policy", async () => {
     const admin = as("priya@acme.dev");
-    const owner = as("param@kaappu.org");
+    const owner = as("param@example.com");
     const providers = owner.get<{ providers: Provider[] }>("/v1/identity/providers").providers;
     const policy = owner.get<SecurityPolicy>("/v1/identity/policy");
     const posture = owner.get<Posture>("/v1/identity/posture");
