@@ -293,3 +293,51 @@ def test_2_the_http_door_runs_the_readiness_preflight_for_child_runs_too():
     door = src[src.index("def start_workflow_run(payload: WorkflowRunStartRequest)"):]
     door = door[:door.index("workflow_runtime.start_run(")]
     assert "_delivery_readiness_or_409(" in door and "if not payload.parent_run_id" not in door
+
+
+# ---- R2: a RETRY (a new run of the same work) keeps its parent's grant -------------------------------------
+
+def _carry(env, who, *, parent="crun_p1", new="crun_q1"):
+    with env.db() as c, lineage.acting(who):
+        return consent.carry_retry_authority(c, parent_run_id=parent, new_run_id=new, project_id=env.project,
+                                             role_keys=["forge"], permissions=consent.CODE_TASK_PERMISSIONS,
+                                             repos=["acme/web"])
+
+
+def test_r2_a_retry_run_keeps_the_task_grant_its_parent_ran_under(env, monkeypatch):
+    """A retry is a NEW code task run: its own first job was stamped by whoever pressed retry or by
+    the worker (an auto-retry), so it lost the person's task-bound grant and was refused at Build.
+    The parent's authority is carried as a child run of the parent's (`<parent>/retry:<new>`), so the
+    task grant covers exactly the parent and its retries."""
+    _enforce(monkeypatch)
+    install_github(monkeypatch, env)
+    g = env.grant(agents=(env.forge,), children=(), repos=("acme/web",), task_run_id="run_ct:crun_p1")
+    _job(env, "job_p1", "crun_p1", lineage.Acting(principal_id=env.alice, org_id="org_boss", grant_id=g.id,
+                                                  run_id="run_ct:crun_p1"))
+    carried = _carry(env, lineage.SYSTEM_ACTING)
+    assert carried is not None and carried.grant_id == g.id and carried.principal_id == env.alice
+    assert carried.run_id == "run_ct:crun_p1/retry:crun_q1"
+    _job(env, "job_q1", "crun_q1", carried)                          # what start_code_task stamps
+    with lineage.acting(lineage.SYSTEM_ACTING):                      # the worker runs the retry
+        started = runs.start_code_task_run(env.engine, task_run_id="crun_q1", project_id=env.project,
+                                           owner="acme", repo="web", role_key="forge")
+    assert started is not None
+    shim, _ = started
+    with env.db() as c:
+        row = c.execute(text("SELECT grant_id, subject_principal_id FROM identity_run_credentials WHERE jti = :j"),
+                        {"j": shim.tokens[AUD_API].jti}).first()
+    assert tuple(row) == (g.id, env.alice)
+    runs.finish_code_task_run(env.engine, shim, org_id="org_boss")
+
+
+def test_r2_another_person_retrying_never_carries_the_original_grant(env, monkeypatch):
+    _enforce(monkeypatch)
+    g = env.grant(agents=(env.forge,), children=(), repos=("acme/web",), task_run_id="run_ct:crun_p2")
+    _job(env, "job_p2", "crun_p2", lineage.Acting(principal_id=env.alice, org_id="org_boss", grant_id=g.id,
+                                                  run_id="run_ct:crun_p2"))
+    bob = _key_ctx("usr_bob_r2")
+    assert _carry(env, bob, parent="crun_p2", new="crun_q2") is None
+    # a grant that no longer covers the retry (revoked) is not carried either
+    with env.db() as c:
+        c.execute(text("UPDATE identity_delegation_grants SET status = 'revoked' WHERE id = :g"), {"g": g.id})
+    assert _carry(env, lineage.SYSTEM_ACTING, parent="crun_p2", new="crun_q3") is None

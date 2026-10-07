@@ -42,6 +42,47 @@ def _github_summary(needs: dict[str, str], pattern: str) -> str:
     return ", ".join(parts) + (f" · pushes only to {pattern}" if needs.get("contents") == "write" else "")
 
 
+def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, project_id: Optional[str],
+                          role_keys: Iterable[str], permissions: Iterable[str], repos: Iterable[str] = ()
+                          ) -> Optional[Acting]:
+    """A RETRY KEEPS ITS GRANT (R2): the authority the parent build was started under (its first
+    code.task job), carried to the retry as a child run of the parent's (`<parent run>/retry:<new>`),
+    so a task-bound grant covers the retry exactly as it covered the parent — and nothing else.
+
+    Only when the caller may continue it (BOSS itself — an auto-retry, the worker — or the parent's
+    own person) and the grant STILL covers the retry's builder, permissions and repos; otherwise
+    None and the caller asks for authority as for any new build."""
+    from . import grants, lineage, passports, runs
+
+    parent = runs.original_build_authority(db, parent_run_id)
+    if parent is None or not parent.grant_id or getattr(parent, "system", False) or parent.chain:
+        return None
+    ctx = lineage.current_context()
+    ambient = lineage.current()
+    if ctx is not None and ctx.run_token is None and ctx.principal.id != parent.principal_id:
+        return None                                       # someone else's build: their own grant
+    if ctx is None and ambient is not None and not (
+            ambient.system or str(ambient.principal_id).startswith("sys_")
+            or ambient.principal_id == parent.principal_id):
+        return None
+    g = grants.load(parent.grant_id, db=db)
+    if g is None or g.user_principal_id != parent.principal_id:
+        return None
+    agent_ids = []
+    for rk in role_keys:
+        aid = runs.agent_for_role(db, project_id, rk)
+        if not aid or passports.get(aid, db=db) is None:
+            return None
+        agent_ids.append(aid)
+    base = parent.run_id or f"run_ct:{parent_run_id}"
+    run_id = f"{base}/retry:{new_run_id}"
+    needed = frozenset(k for k in permissions if catalogue.is_known(k) and catalogue.meta(k).delegable)
+    if not grants.covers(g, agent_ids=agent_ids, permissions=needed, project_id=project_id,
+                         repos=list(repos), run_id=run_id):
+        return None
+    return Acting(principal_id=parent.principal_id, org_id=parent.org_id, grant_id=g.id, run_id=run_id)
+
+
 def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_keys: Iterable[str],
                       permissions: Iterable[str], repos: Iterable[str] = (), task: str, run_id: Optional[str],
                       github_needs: Optional[dict[str, str]] = None, db: Any) -> Optional[Acting]:
@@ -52,20 +93,24 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
     (#5): they cannot consent mid-request, and the shared credential is never the alternative —
     they create a standing grant first. None only when there is no caller to act for (system
     work, which never acts on anyone's behalf) or the agents have no Passports yet."""
-    from . import grants, lineage, passports, runs
+    from . import grants, lineage, runs
 
     ctx = lineage.current_context()
     if ctx is None or ctx.run_token is not None:
         return None                                       # system work / inside a delegated run
     if not (ctx.principal.is_person or ctx.principal.kind.value == "service_account"):
         return None
-    agents = []
-    for rk in role_keys:
-        aid = runs.agent_for_role(db, project_id, rk)
-        p = passports.get(aid, db=db) if aid else None
-        if p is None:
-            return None                                   # identity not seeded for this agent yet
-        agents.append(p)
+    # The same rule as a workflow run's agents (_agents): an agent with no Passport yet gets one
+    # now (passports.upgrade_from_roles), and one that still has none is refused under enforce —
+    # never a build that starts with no grant and dies at Build (`builder_has_no_passport`).
+    role_keys = list(role_keys)
+    if lineage._enforced():  # noqa: SLF001
+        for rk in role_keys:
+            if not runs.agent_for_role(db, project_id, rk):
+                raise AgentWithoutPassport(rk)            # no such builder here: say so at start
+    agents = _agents(db, project_id, role_keys)
+    if not agents:
+        return None                                       # identity does not apply (no agent)
     needed = frozenset(k for k in permissions if catalogue.is_known(k) and catalogue.meta(k).delegable)
     repos = list(repos)
     grant = grants.find_covering(ctx.principal.id, agent_ids=[p.agent_id for p in agents], permissions=needed,
