@@ -202,7 +202,7 @@ docker compose -f scripts/install/community-compose.yml --env-file ~/boss/.env e
   python -m boss_engine.identity.cli seed-test-accounts --org org_boss --owner-email you@example.com \
   --out /tmp/seed.json --i-know      # --i-know: only if the install looks like production
 docker compose -f scripts/install/community-compose.yml --env-file ~/boss/.env exec -T -u boss api \
-  cat /tmp/seed.json > ~/seed.json && chmod 600 ~/seed.json
+  sh -c 'cat /tmp/seed.json && rm -f /tmp/seed.json' > ~/seed.json && chmod 600 ~/seed.json
 export BOSS_E2E_ACCOUNTS_FILE=~/seed.json      # BOSS_E2E_ROLE=viewer walks the Viewer's console
 scripts/e2e.sh all --target live --real-models
 ```
