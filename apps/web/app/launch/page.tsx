@@ -1,5 +1,10 @@
 import styles from "./launch.module.css";
 
+// Rendered per request, like every page: the CSP (middleware.ts) carries a fresh nonce that Next
+// stamps on its scripts. Prerendered, this page shipped scripts with no nonce and the browser
+// refused every one (round 3 role walk: "Loading the script … violates … script-src").
+export const dynamic = "force-dynamic";
+
 const workflow = [
   ["01", "Intent", "One directive enters a governed work queue."],
   ["02", "Evidence", "Roles, tests, and adversarial review make the case."],
