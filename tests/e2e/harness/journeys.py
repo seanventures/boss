@@ -14,19 +14,21 @@ an agent on one or left one to be picked, so the report would have said R3 and R
 whether they worked or not. REQUIRES below names, per requirement, the controls that ARE the
 requirement, and the self-test fails when no journey labelled with it uses all of them.
 
-  R1  skill_create      Skills → write one by hand → "Saved <key>" and it is in the list
-  R1  mcp_register      Capabilities → register the fakes' MCP server → listed there and under Skills
-  R2  agent_with_skill  Create agent with that skill and that MCP server → both grants are read
+  R1  skill_create      Skills & MCP › Library › New skill → saved → listed after a reload
+  R1  mcp_register      Library › MCP › Add MCP › Custom → the fakes' server tested and added →
+                        listed after a reload
+  R2  agent_with_skill  + New agent with that skill and that MCP server → both grants are read
                         back through the API the runtime uses (role-skills, role-mcp-servers)
-  R2  agent_update      Open the agent → give it another skill and an MCP server it does not hold
-                        → listed after a reload, and both read back as grants
-  R3  step_bindings     Your steps → one step bound to the skill, one to the MCP tool → placed in a
-                        workflow, saved, reloaded, RUN → the skill ran and the MCP fake was called
-  R4  step_agents       Two agent steps, one naming the R2 agent, one naming nobody → saved,
-                        reloaded, RUN → the run records the named agent and the auto-picked one
+  R2  agent_update      The agent's Passport › Loadout → + Add another skill and an MCP server it
+                        does not hold → shown after a reload, and both read back as grants
+  R3  step_bindings     Library › Steps → one step bound to the skill, one to the MCP tool →
+                        placed in a workflow in the editor, saved, reopened, RUN → the skill ran
+                        and the MCP fake was called
+  R4  step_agents       Two Agent task steps, one naming the R2 agent, one left on Auto → saved,
+                        reopened, RUN → the run records the named agent and the auto-picked one
                         with its reason
-  R6  workflow_build    (console smoke) two palette steps → saved → "2 steps" after a reload
-  R6  advance_now       (console smoke) Running → Advance now → a sentence that is not an error
+  R6  workflow_build    (console smoke) two built-in palette steps → saved → "2 steps" reopened
+  R6  advance_now       (console smoke) Runs → Advance now → a sentence that is not an error
   R7  live_gate         A run waiting at a gate → Agents › Live shows its row `Waiting on you` →
                         the amber You hop focuses its card → Approve on the card → the decision is
                         approved, the run moves on, and the pill fell by one and still equals what
@@ -47,96 +49,112 @@ from typing import Any, Callable, Optional
 
 # (journey, file under apps/web, testid) — the console's promise to each journey.
 JOURNEY_SELECTORS: tuple[tuple[str, str, str], ...] = (
-    ("skill_create", "app/skills-ui.tsx", "skill-form"),
-    ("skill_create", "app/skills-ui.tsx", "skill-label"),
-    ("skill_create", "app/skills-ui.tsx", "skill-key"),
-    ("skill_create", "app/skills-ui.tsx", "skill-summary"),
-    ("skill_create", "app/skills-ui.tsx", "skill-behaviour"),
-    ("skill_create", "app/skills-ui.tsx", "skill-executor"),
-    ("skill_create", "app/skills-ui.tsx", "skill-knowledge"),
-    ("skill_create", "app/skills-ui.tsx", "skill-save"),
-    ("skill_create", "app/skills-ui.tsx", "skill-note"),
-    ("skill_create", "app/skills-ui.tsx", "skill-list"),
-    ("skill_create", "app/skills-ui.tsx", "skills-custom"),
-    # Capabilities and Skills and MCP mount ONE shared panel (app/mcp-servers-ui.tsx, from the
-    # skills-mcp stream); its own form replaced Capabilities' server-action form at integration.
-    ("mcp_register", "app/mcp-servers-ui.tsx", "mcp-register-open"),
-    ("mcp_register", "app/mcp-servers-ui.tsx", "mcp-name"),
-    ("mcp_register", "app/mcp-servers-ui.tsx", "mcp-url"),
-    ("mcp_register", "app/mcp-servers-ui.tsx", "mcp-save"),
-    ("mcp_register", "app/mcp-servers-ui.tsx", "mcp-note"),
-    ("mcp_register", "app/skills-ui.tsx", "mcp-servers"),
-    ("mcp_register", "app/mcp-servers-ui.tsx", "mcp-list"),
+    # Skills & MCP is the one home for skills and MCP servers ("kit links", skills-mcp spec
+    # §5.1): the old Skills screen (skills-ui.tsx) and the shared MCP panel (mcp-servers-ui.tsx)
+    # were deleted. A skill is written in Library › New skill; its key is made from its name.
+    ("skill_create", "app/skills/kit-home.tsx", "kit-tab-${t}"),
+    ("skill_create", "app/skills/library.tsx", "kit-library"),
+    ("skill_create", "app/skills/library.tsx", "kit-lib-new-skill"),
+    ("skill_create", "app/skills/skill-drawer.tsx", "kit-skill-drawer"),
+    ("skill_create", "app/skills/skill-drawer.tsx", "skill-label"),
+    ("skill_create", "app/skills/skill-drawer.tsx", "skill-summary"),
+    ("skill_create", "app/skills/skill-drawer.tsx", "skill-behaviour"),
+    ("skill_create", "app/skills/skill-drawer.tsx", "skill-how-${h.id}"),
+    ("skill_create", "app/skills/skill-drawer.tsx", "skill-knowledge"),
+    ("skill_create", "app/skills/skill-drawer.tsx", "skill-save"),
+    ("skill_create", "app/skills/library.tsx", "kit-skill-list"),
+    ("skill_create", "app/skills/library.tsx", "kit-skill-${r.id}"),
+    # Library › MCP › Add MCP › Custom: the sheet tests the server before it registers it.
+    ("mcp_register", "app/skills/kit-home.tsx", "kit-tab-${t}"),
+    ("mcp_register", "app/skills/library.tsx", "kit-lib-mcp"),
+    ("mcp_register", "app/skills/library.tsx", "kit-lib-add-mcp"),
+    ("mcp_register", "app/skills/add-mcp-sheet.tsx", "kit-add-mcp"),
+    ("mcp_register", "app/skills/add-mcp-sheet.tsx", "kit-add-custom"),
+    ("mcp_register", "app/skills/add-mcp-sheet.tsx", "kit-custom-name"),
+    ("mcp_register", "app/skills/add-mcp-sheet.tsx", "kit-custom-url"),
+    ("mcp_register", "app/skills/add-mcp-sheet.tsx", "kit-custom-save"),
+    ("mcp_register", "app/skills/library.tsx", "kit-mcp-list"),
+    ("mcp_register", "app/skills/library.tsx", "kit-mcp-${s.name}"),
+    ("mcp_register", "app/skills/library.tsx", "kit-lib-error"),
+    # One + New agent dialog (Workflow Studio S4) replaced the creation wizard: Blank names the
+    # agent and grants skills and MCP servers on create; the Passport opens once it is born.
     ("agent_with_skill", "app/workforce-ui.tsx", "wf-new-agent"),
-    ("agent_with_skill", "app/agent-creation-wizard.tsx", "aw-dialog"),
-    ("agent_with_skill", "app/agent-creation-wizard.tsx", "aw-name"),
-    ("agent_with_skill", "app/agent-creation-wizard.tsx", "aw-next"),
-    ("agent_with_skill", "app/agent-creation-wizard.tsx", "aw-publish"),
-    ("agent_with_skill", "app/agent-creation-wizard.tsx", "aw-result"),
-    ("agent_with_skill", "app/agent-creation-wizard.tsx", "aw-complete"),
-    ("agent_with_skill", "app/agent-creation-wizard.tsx", "aw-pattern-${pattern.id}"),
-    ("agent_with_skill", "app/agent-creation-wizard.tsx", "aw-skill-${skill.id}"),
-    # Agents opens on Live (agents-home spec §3.1): the cards are on Directory, a tab away.
-    ("agent_with_skill", "app/workforce-ui.tsx", "agents-view-directory"),
+    ("agent_with_skill", "app/agent-quick-create.tsx", "agent-quick-create"),
+    ("agent_with_skill", "app/agent-quick-create.tsx", "aq-name"),
+    ("agent_with_skill", "app/agent-quick-create.tsx", "aq-skills"),
+    ("agent_with_skill", "app/agent-quick-create.tsx", "aq-skill-${s.skill_id}"),
+    ("agent_with_skill", "app/agent-quick-create.tsx", "aq-mcp-${m.mcp_server_id}"),
+    ("agent_with_skill", "app/agent-quick-create.tsx", "aq-create"),
+    ("agent_with_skill", "app/agent-quick-create.tsx", "aq-failed"),
+    ("agent_with_skill", "app/agents/agent-birth.tsx", "ag-birth"),
+    ("agent_with_skill", "app/agent-detail-ui.tsx", "agent-detail"),
+    # The Passport's Loadout (agent-loadout spec §3.2): one place per grant, + Add on each row.
     ("agent_update", "app/workforce-ui.tsx", "agents-view-directory"),
+    ("agent_update", "app/workforce-ui.tsx", "ag-home-search"),
     ("agent_update", "app/agents/roster-zones.tsx", "wf-open-${a.id}"),
+    ("agent_update", "app/agents/roster-zones.tsx", "ag-idle-more"),
     ("agent_update", "app/agent-detail-ui.tsx", "agent-detail"),
-    ("agent_update", "app/agent-detail-ui.tsx", "agent-skills"),
-    ("agent_update", "app/agent-detail-ui.tsx", "agent-skill-open"),
-    ("agent_update", "app/agent-detail-ui.tsx", "agent-skill-select"),
-    ("agent_update", "app/agent-detail-ui.tsx", "agent-skill-confirm"),
-    ("agent_update", "app/agent-detail-ui.tsx", "agent-skills-held"),
-    ("agent_update", "app/agent-detail-ui.tsx", "agent-skills-failed"),
-    # ARRIVED at integration: the agents stream's MCP grant controls (R2), moved here from
-    # PENDING_SELECTORS as the self-test requires the day they appear.
-    ("agent_with_skill", "app/agent-creation-wizard.tsx", "aw-mcp-${server.mcp_server_id}"),
-    ("agent_update", "app/agent-detail-ui.tsx", "agent-mcp-open"),
-    ("agent_update", "app/agent-detail-ui.tsx", "agent-mcp-select"),
-    ("agent_update", "app/agent-detail-ui.tsx", "agent-mcp-confirm"),
-    ("agent_update", "app/agent-detail-ui.tsx", "agent-mcp-held"),
-    ("agent_update", "app/agent-detail-ui.tsx", "agent-mcp-empty"),
-    ("agent_update", "app/agent-detail-ui.tsx", "agent-mcp-failed"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-tab-${t}"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-define-step"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-define-form"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-define-label"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-define-binding"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-define-save"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-define-error"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-define-empty"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-steps-list"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-palette-custom-${c.step_key}"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-tab-new"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-tab-edit"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-new-name"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-new-confirm"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-made"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-save"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-notice"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-target"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-head-meta"),
-    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-draft-${step.id}"),
-    ("step_agents", "app/delivery-workflows-ui.tsx", "dw-palette-agent-work"),
-    ("step_agents", "app/delivery-workflows-ui.tsx", "dw-agentwork-mode-${step.id}"),
-    ("step_agents", "app/delivery-workflows-ui.tsx", "dw-agentwork-text-${step.id}"),
-    ("step_agents", "app/delivery-workflows-ui.tsx", "dw-draft-captain-${step.id}"),
-    ("step_agents", "app/delivery-workflows-ui.tsx", "dw-tab-new"),
-    ("step_agents", "app/delivery-workflows-ui.tsx", "dw-new-name"),
-    ("step_agents", "app/delivery-workflows-ui.tsx", "dw-new-confirm"),
-    ("step_agents", "app/delivery-workflows-ui.tsx", "dw-save"),
-    ("step_agents", "app/delivery-workflows-ui.tsx", "dw-notice"),
-    ("step_agents", "app/delivery-workflows-ui.tsx", "dw-target"),
-    ("step_agents", "app/delivery-workflows-ui.tsx", "dw-head-meta"),
-    ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-tab-${t}"),
-    ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-tab-new"),
-    ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-new-name"),
-    ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-new-confirm"),
-    ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-made"),
-    ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-palette-${c.key}"),
-    ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-save"),
-    ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-notice"),
-    ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-target"),
-    ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-head-meta"),
+    ("agent_update", "app/agents/passport-loadout.tsx", "passport-loadout"),
+    ("agent_update", "app/skills/agent-abilities.tsx", "loadout-skills"),
+    ("agent_update", "app/skills/agent-abilities.tsx", "loadout-skills-add"),
+    ("agent_update", "app/skills/agent-abilities.tsx", "loadout-skill-pick-${s.skill_id}"),
+    ("agent_update", "app/skills/agent-abilities.tsx", "agent-skill-${s.skill_id}"),
+    ("agent_update", "app/skills/agent-abilities.tsx", "loadout-mcp"),
+    ("agent_update", "app/skills/agent-abilities.tsx", "loadout-mcp-add"),
+    ("agent_update", "app/skills/agent-abilities.tsx", "loadout-mcp-pick-${m.mcp_server_id}"),
+    ("agent_update", "app/skills/agent-abilities.tsx", "agent-mcp-${m.mcp_server_id}"),
+    ("agent_update", "app/skills/agent-abilities.tsx", "loadout-no-mcp"),
+    # Workflows (Workflow Studio S4): Runs and Library; a step of your own is defined in
+    # Library › Steps › + New step, a workflow is built in the editor Library › + New opens.
+    ("step_bindings", "app/delivery-workflows-ui.tsx", "dw-tab-library"),
+    ("step_bindings", "app/workflows/library.tsx", "wf-lib-view-${v}"),
+    ("step_bindings", "app/workflows/library.tsx", "wf-lib-new-step"),
+    ("step_bindings", "app/workflows/library.tsx", "wf-lib-steps"),
+    ("step_bindings", "app/workflows/library.tsx", "wf-step-row-${c.step_key}"),
+    ("step_bindings", "app/workflows/editor/define-step-modal.tsx", "wf-define-modal"),
+    ("step_bindings", "app/workflows/define-step-form.tsx", "dw-define-form"),
+    ("step_bindings", "app/workflows/define-step-form.tsx", "dw-define-label"),
+    ("step_bindings", "app/workflows/define-step-form.tsx", "dw-define-binding"),
+    ("step_bindings", "app/workflows/define-step-form.tsx", "dw-define-save"),
+    ("step_bindings", "app/workflows/define-step-form.tsx", "dw-define-error"),
+    ("step_bindings", "app/workflows/define-step-form.tsx", "dw-define-empty"),
+    ("step_bindings", "app/workflows/library.tsx", "wf-lib-new"),
+    ("step_bindings", "app/workflows/editor/workflow-editor.tsx", "wf-editor"),
+    ("step_bindings", "app/workflows/editor/top-bar.tsx", "wf-name"),
+    ("step_bindings", "app/workflows/editor/palette.tsx", "wf-pal-custom:${c.step_key}"),
+    ("step_bindings", "app/workflows/flow/step-node.tsx", "wf-node"),
+    ("step_bindings", "app/workflows/editor/top-bar.tsx", "wf-save"),
+    ("step_bindings", "app/workflows/editor/save/use-save-flow.tsx", "wf-issues"),
+    ("step_bindings", "app/workflows/library.tsx", "wf-lib-search"),
+    ("step_bindings", "app/workflows/library.tsx", "wf-card-open-${w.workflow_key}"),
+    ("step_bindings", "app/workflows/editor/summary-chips.tsx", "wf-chip-steps"),
+    ("step_agents", "app/delivery-workflows-ui.tsx", "dw-tab-library"),
+    ("step_agents", "app/workflows/library.tsx", "wf-lib-new"),
+    ("step_agents", "app/workflows/editor/workflow-editor.tsx", "wf-editor"),
+    ("step_agents", "app/workflows/editor/top-bar.tsx", "wf-name"),
+    ("step_agents", "app/workflows/editor/palette.tsx", "wf-pal-agent-task"),
+    ("step_agents", "app/workflows/flow/step-node.tsx", "wf-node"),
+    ("step_agents", "app/workflows/editor/inspector/step-inspector.tsx", "wf-inspector-${step.id}"),
+    ("step_agents", "app/workflows/editor/inspector/step-inspector.tsx", "wf-task-fixed"),
+    ("step_agents", "app/workflows/editor/inspector/step-inspector.tsx", "wf-task-text"),
+    ("step_agents", "app/workflows/editor/inspector/agent-combobox.tsx", "wf-agent-trigger"),
+    ("step_agents", "app/workflows/editor/inspector/agent-combobox.tsx", "wf-agent-option-${option.value}"),
+    ("step_agents", "app/workflows/editor/top-bar.tsx", "wf-save"),
+    ("step_agents", "app/workflows/editor/save/use-save-flow.tsx", "wf-issues"),
+    ("step_agents", "app/workflows/library.tsx", "wf-lib-search"),
+    ("step_agents", "app/workflows/library.tsx", "wf-card-open-${w.workflow_key}"),
+    ("step_agents", "app/workflows/editor/summary-chips.tsx", "wf-chip-steps"),
+    ("workflow_build", "app/delivery-workflows-ui.tsx", "dw-tab-library"),
+    ("workflow_build", "app/workflows/library.tsx", "wf-lib-new"),
+    ("workflow_build", "app/workflows/editor/workflow-editor.tsx", "wf-editor"),
+    ("workflow_build", "app/workflows/editor/top-bar.tsx", "wf-name"),
+    ("workflow_build", "app/workflows/editor/palette.tsx", "wf-pal-${entry.key}"),
+    ("workflow_build", "app/workflows/flow/step-node.tsx", "wf-node"),
+    ("workflow_build", "app/workflows/editor/top-bar.tsx", "wf-save"),
+    ("workflow_build", "app/workflows/library.tsx", "wf-lib-search"),
+    ("workflow_build", "app/workflows/library.tsx", "wf-card-open-${w.workflow_key}"),
+    ("workflow_build", "app/workflows/editor/summary-chips.tsx", "wf-chip-steps"),
+    ("advance_now", "app/delivery-workflows-ui.tsx", "dw-tab-runs"),
     ("advance_now", "app/delivery-workflows-ui.tsx", "dw-advance"),
     ("advance_now", "app/delivery-workflows-ui.tsx", "dw-notice"),
     # R7: Agents › Live (live-board stream) — a gate on a run, decided from its card.
@@ -189,11 +207,11 @@ PENDING_SELECTORS: tuple[tuple[str, str, str, str], ...] = (
 # every one of these (in JOURNEY_SELECTORS or PENDING_SELECTORS) AND press it in its own code —
 # both enforced by the self-test, so a table row alone cannot turn a smoke check into proof.
 REQUIRES: dict[str, tuple[str, ...]] = {
-    "R1": ("skill-save", "mcp-save"),
-    "R2": ("aw-skill-${skill.id}", "aw-mcp-${server.mcp_server_id}", "agent-skill-confirm",
-           "agent-mcp-open", "agent-mcp-confirm"),
-    "R3": ("dw-define-binding", "dw-palette-custom-${c.step_key}", "dw-save"),
-    "R4": ("dw-palette-agent-work", "dw-draft-captain-${step.id}", "dw-save"),
+    "R1": ("skill-save", "kit-custom-save"),
+    "R2": ("aq-skill-${s.skill_id}", "aq-mcp-${m.mcp_server_id}", "loadout-skill-pick-${s.skill_id}",
+           "loadout-mcp-add", "loadout-mcp-pick-${m.mcp_server_id}"),
+    "R3": ("dw-define-binding", "wf-pal-custom:${c.step_key}", "wf-save"),
+    "R4": ("wf-pal-agent-task", "wf-agent-option-${option.value}", "wf-save"),
 }
 
 WAIT_MS = 60_000
@@ -241,13 +259,6 @@ def _text(page, testid: str) -> str:
             timeout=2_000) or "").split())
     except Exception:  # noqa: BLE001
         return ""
-
-
-def _open_details(page, testid: str) -> None:
-    details = page.locator(f'details[data-testid="{testid}"]').first
-    details.wait_for(state="attached", timeout=WAIT_MS)
-    if details.get_attribute("open") is None:
-        details.locator("summary").first.click()
 
 
 def _wait_for_text(page, testid: str, pattern: str, *, timeout_s: float = 60) -> str:
@@ -386,82 +397,176 @@ def _step_line(step: dict[str, Any]) -> str:
     return f"{step.get('step_id')}={step.get('status')}" + (f" ({error})" if error else "")
 
 
-# ----------------------------------------------------------------------------- the builder
+# ----------------------------------------------------------------------------- toasts and keys
+def _toast(page, kind: str) -> str:
+    """The text of the newest visible `success` / `error` toast (client-forms' Toaster: the
+    Kit, the Loadout and the workflow editor all answer a write there), or ''."""
+    toasts = page.locator(f".toast.toast-{kind} >> visible=true")
+    try:
+        n = toasts.count()
+        return " ".join((toasts.nth(n - 1).inner_text(timeout=2_000) or "").split()) if n else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _skill_key_of(label: str) -> str:
+    """The key Library › New skill makes from a name (skill-drawer.tsx `keyOf`): the form has
+    no key field any more, so the journey predicts the key and looks for it."""
+    return re.sub(r"^_+|_+$", "", re.sub(r"[^a-z0-9]+", "_", label.strip().lower()))[:60]
+
+
+def _with_query(page, goto: Callable[[str], None], area: str, query: str) -> None:
+    """Open `area`, then the same URL with `query` added — the walk's `goto` waits for the area
+    by id, so a deep link (`setup&add=openai`) is opened in two steps rather than as an id."""
+    goto(area)
+    page.goto(f"{page.url}&{query}", wait_until="domcontentloaded")
+    page.locator(f'main[data-active="{area}"]').first.wait_for(state="attached", timeout=WAIT_MS)
+
+
+# ----------------------------------------------------------------------------- the editor
 def _new_workflow(page, goto: Callable[[str], None], name: str) -> None:
+    """Library › + New workflow opens the editor on an unsaved draft; the name is typed in its
+    bar (Workflow Studio S4 — the Design tab's name-and-confirm form is gone)."""
     goto("delivery_workflows")
-    _visible(page, "dw-tab-design").click()
-    _visible(page, "dw-tab-new").click()
-    _visible(page, "dw-new-name").fill(name)
-    _visible(page, "dw-new-confirm").click()
-    _wait_for_text(page, "dw-made", re.escape(name))
+    _visible(page, "dw-tab-library").click()
+    _visible(page, "wf-lib-new").click()
+    _visible(page, "wf-editor")
+    box = _visible(page, "wf-name")
+    box.fill(name)
+    box.press("Enter")
+    if box.input_value() != name:
+        raise JourneyFailed(f"typed {name!r} as the new workflow's name; the bar says "
+                            f"{box.input_value()!r}")
 
 
 def _add_from_palette(page, testid: str) -> None:
-    # By testid, and only once the palette is enabled again: pressing by index while the first
-    # add was still busy shifted the `:enabled` list and added one step, not two.
-    button = page.locator(f'[data-testid="{testid}"]:enabled').first
-    button.wait_for(state="visible", timeout=WAIT_MS)
-    button.click()
-    page.locator('[data-testid^="dw-palette-"]:enabled').first.wait_for(timeout=WAIT_MS)
-    page.wait_for_timeout(500)
+    """Click a palette row: it is placed after the selected step (the one just added), so rows
+    pressed in turn land in that order. Waits for the canvas to have one more node."""
+    before = len(_step_rows(page))
+    row = page.locator(f'[data-testid="{testid}"]:not([aria-disabled="true"]) >> visible=true').first
+    try:
+        row.wait_for(state="visible", timeout=WAIT_MS)
+    except Exception:  # noqa: BLE001
+        why = page.locator(f'[data-testid="{testid}"]').first
+        tip = why.get_attribute("data-tip") if why.count() else None
+        raise JourneyFailed(f"the palette has no usable [{testid}]"
+                            f"{': ' + tip if tip else ''}") from None
+    row.click()
+    deadline = time.time() + 30
+    while time.time() < deadline and len(_step_rows(page)) <= before:
+        page.wait_for_timeout(300)
+    if len(_step_rows(page)) <= before:
+        raise JourneyFailed(f"pressed [{testid}] in the palette; the canvas still has {before} "
+                            f"step(s)")
 
 
 def _step_rows(page) -> list[str]:
-    return page.locator("[data-step-row] >> visible=true").evaluate_all(
-        "els => els.map(e => e.getAttribute('data-step-row'))") or []
+    """The step ids on the editor's lane, in flow order."""
+    return page.locator('.wf-lane [data-testid="wf-node"] >> visible=true').evaluate_all(
+        "els => els.map(e => e.getAttribute('data-step-id'))") or []
+
+
+def _select_step(page, step_id: str) -> None:
+    """Click a node; its inspector opens (`wf-inspector-<id>`)."""
+    page.locator(f'.wf-lane [data-testid="wf-node"][data-step-id="{step_id}"]').first.click()
+    _visible(page, f"wf-inspector-{step_id}", timeout=15_000)
 
 
 SAVE_FAILED = re.compile(r"could not|fail|error|refus|denied|invalid|forbidden|\b[45]\d\d\b", re.I)
 
 
-def _save_and_reopen(page, goto: Callable[[str], None], name: str, steps: int) -> str:
-    """Save, demand the notice that says it worked, then load the screen afresh and reopen the
-    workflow by name: what the header says now came from the server, not from the canvas.
+def _wf_key_in_url(page) -> str:
+    match = re.search(r"[?&]wf=([^&#]+)", page.url)
+    return match.group(1) if match and match.group(1) != "new" else ""
+
+
+def _save_and_reopen(page, goto: Callable[[str], None], name: str, steps: int) -> tuple[str, str]:
+    """Save, demand the toast that says it worked, then load Workflows afresh and reopen the
+    workflow from the Library by name: what the summary says now came from the server, not from
+    the canvas. (workflow key, the steps chip's text).
 
     Round two accepted any notice without an em dash and read "2 steps" off the same page —
     client state — so an unsaved workflow passed."""
-    _visible(page, "dw-save").click()
-    said = _wait_for_text(page, "dw-notice", r"\bsave")
-    if not re.search(r"\bsave\b\s*—\s*done\b|\bsaved\b", said, re.I) or SAVE_FAILED.search(said):
+    _visible(page, "wf-save").click()
+    deadline = time.time() + 60
+    said, key = "", ""
+    while time.time() < deadline:
+        said = _toast(page, "success")
+        key = _wf_key_in_url(page)
+        if re.search(r"\bsaved\b", said, re.I) and key:
+            break
+        failed = _toast(page, "error")
+        if failed:
+            raise JourneyFailed(f"saving workflow {name!r} said: {failed}")
+        if _present(page, "wf-issues"):
+            raise JourneyFailed(f"saving workflow {name!r} was stopped by its check: "
+                                f"{_text(page, 'wf-issues')[:300]}")
+        page.wait_for_timeout(500)
+    else:
+        raise JourneyFailed(f"pressed Save on {name!r}; within 60s no 'Saved' and no workflow "
+                            f"key in the URL (toast {said!r})")
+    if SAVE_FAILED.search(said):
         raise JourneyFailed(f"saving workflow {name!r} said: {said}")
     goto("delivery_workflows")
-    _visible(page, "dw-tab-design").click()
-    if page.locator('[data-testid="dw-tab-edit"][aria-selected="false"]').count():
-        _visible(page, "dw-tab-edit").click()
+    _visible(page, "dw-tab-library").click()
+    _visible(page, "wf-lib-search").fill(name)
     try:
-        _visible(page, "dw-target").select_option(label=name, timeout=15_000)
+        _visible(page, f"wf-card-open-{key}", timeout=15_000).click()
     except Exception:  # noqa: BLE001
-        offered = [o["text"] for o in _options(page, "dw-target")]
-        raise JourneyFailed(f"after a reload, workflow {name!r} is not among the ones you can "
-                            f"edit ({len(offered)} offered)") from None
+        raise JourneyFailed(f"after a reload, workflow {name!r} ({key}) is not in the Library "
+                            f"to open") from None
     want = rf"\b{steps} steps?\b"
     try:
-        return _wait_for_text(page, "dw-head-meta", want, timeout_s=30)
+        return key, _wait_for_text(page, "wf-chip-steps", want, timeout_s=30)
     except JourneyFailed:
         raise JourneyFailed(f"saved {name!r} with {steps} steps; reopened after a reload it "
-                            f"says {_text(page, 'dw-head-meta')!r}") from None
+                            f"says {_text(page, 'wf-chip-steps')!r}") from None
 
 
 # ----------------------------------------------------------------------------- R1
-def skill_create(page, ctx: Context, goto: Callable[[str], None]) -> str:
-    key = f"e2e_skill_{ctx.stamp}"
+def _library(page, goto: Callable[[str], None], segment: str) -> None:
+    """Skills & MCP › Library, on its Skills or MCP segment."""
     goto("skills")
-    _open_details(page, "skill-form")
-    _visible(page, "skill-label").fill(f"E2E skill {ctx.stamp}")
-    _visible(page, "skill-key").fill(key)
+    _visible(page, "kit-tab-library").click()
+    _visible(page, "kit-library")
+    _visible(page, f"kit-lib-{segment}").click()
+
+
+def skill_create(page, ctx: Context, goto: Callable[[str], None]) -> str:
+    label = f"E2E skill {ctx.stamp}"
+    key = _skill_key_of(label)
+    _library(page, goto, "skills")
+    _visible(page, "kit-lib-new-skill").click()
+    _visible(page, "kit-skill-drawer")
+    _visible(page, "skill-label").fill(label)
     _visible(page, "skill-summary").fill("Answers from the knowledge below; made by the e2e "
                                          "harness's skill journey")
-    _visible(page, "skill-behaviour").select_option("builtin")
-    _visible(page, "skill-executor").fill("knowledge.only")
+    # A guide: it acts on nothing and its executor (skill.guide) hands back the knowledge, so a
+    # step bound to it runs anywhere. The old form's free-text executor `knowledge.only` is not
+    # offered by the Built-in picker, and no executor is registered under it.
+    _visible(page, "skill-how-guide").click()
     _visible(page, "skill-knowledge").fill("The answer is 42.")
     _visible(page, "skill-save").click()
-    said = _wait_for_text(page, "skill-note", r"saved|error|refus|invalid|denied|\d{3}")
-    if not re.search(rf"saved {re.escape(key)}", said, re.I):
-        raise JourneyFailed(f"saving skill {key} from the Skills form said: {said}")
-    _open_details(page, "skills-custom")
-    _wait_for_text(page, "skill-list", re.escape(key), timeout_s=30)
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        if _present(page, f"kit-skill-{key}") and re.search(r"\bsaved\b", _toast(page, "success"), re.I):
+            break
+        failed = _toast(page, "error")
+        if failed:
+            raise JourneyFailed(f"saving skill {label!r} from Library › New skill said: {failed}")
+        page.wait_for_timeout(500)
+    else:
+        raise JourneyFailed(f"saved skill {label!r}; within 60s the Library neither listed "
+                            f"{key} nor said why")
+    # From a fresh load: the list now came from the server.
+    _library(page, goto, "skills")
+    try:
+        _visible(page, f"kit-skill-{key}", timeout=30_000)
+    except Exception:  # noqa: BLE001
+        raise JourneyFailed(f"created skill {key}; after a reload Library › Skills does not list "
+                            f"it") from None
     ctx.skill_key = key
-    return f"created skill {key}; it is listed under Custom skills"
+    return f"created skill {key}; listed in Skills & MCP › Library after a reload"
 
 
 def mcp_register(page, ctx: Context, goto: Callable[[str], None]) -> str:
@@ -469,105 +574,105 @@ def mcp_register(page, ctx: Context, goto: Callable[[str], None]) -> str:
     # The fakes' MCP server (stubs/fakes.py `_mcp`): it lists one tool and keeps every call, so
     # R3 can bind that tool to a step and prove the step called it.
     url = f"{(ctx.fakes_url or 'http://127.0.0.1:9').rstrip('/')}/mcp"
-    goto("capabilities")
-    _visible(page, "mcp-register-open").click()
-    _visible(page, "mcp-name").fill(name)
-    _visible(page, "mcp-url").fill(url)
-    _visible(page, "mcp-save").click()
+    # Capabilities and the old Skills screen each had a register form; both are links to
+    # Skills & MCP › Library › MCP now, the one place a server is added.
+    _library(page, goto, "mcp")
+    _visible(page, "kit-lib-add-mcp").click()
+    _visible(page, "kit-add-mcp")
+    _visible(page, "kit-add-custom").click()
+    _visible(page, "kit-custom-name").fill(name)
+    _visible(page, "kit-custom-url").fill(url)
+    _visible(page, "kit-custom-save").click()
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        if _present(page, f"kit-mcp-{name}"):
+            break
+        failed = _toast(page, "error")
+        if failed:
+            raise JourneyFailed(f"registering MCP server {name} ({url}) said: {failed}")
+        page.wait_for_timeout(500)
+    else:
+        listed = _text(page, "kit-lib-error") or _text(page, "kit-mcp-list")
+        raise JourneyFailed(f"registered MCP server {name}; within 60s Library › MCP neither "
+                            f"listed it nor said why ({listed[:200] or 'no list shown'})")
+    _library(page, goto, "mcp")
     try:
-        _wait_for_text(page, "mcp-list", re.escape(name), timeout_s=60)
-    except Exception as exc:  # noqa: BLE001
-        raise JourneyFailed(f"registered MCP server {name} from Capabilities, and it never "
-                            f"appeared in the server list ({str(exc)[:200]})") from None
-    goto("skills")
-    _open_details(page, "mcp-servers")
-    try:
-        _wait_for_text(page, "mcp-list", re.escape(name), timeout_s=30)
-    except Exception as exc:  # noqa: BLE001
-        raise JourneyFailed(f"MCP server {name} is listed under Capabilities but not under "
-                            f"Skills and MCP → MCP servers ({str(exc)[:200]})") from None
+        _visible(page, f"kit-mcp-{name}", timeout=30_000)
+    except Exception:  # noqa: BLE001
+        raise JourneyFailed(f"MCP server {name} was added, and after a reload Library › MCP "
+                            f"does not list it ({_text(page, 'kit-lib-error')[:200] or 'no error shown'})"
+                            ) from None
     ctx.mcp_name = name
     if ctx.target is not None:
         items = (_api(ctx).get("/v1/mcp/servers", project_id=ctx.target.project_id)
                  or {}).get("items") or []
         ctx.mcp_server_id = next((str(i.get("id")) for i in items if i.get("name") == name), "")
-    return f"registered MCP server {name}; listed under Capabilities and under Skills"
+    return f"registered MCP server {name} in Skills & MCP › Library › MCP; listed after a reload"
 
 
 # ----------------------------------------------------------------------------- R2
 def agent_with_skill(page, ctx: Context, goto: Callable[[str], None]) -> str:
     """Create an agent and give it, on create, the R1 skill and the R1 MCP server; then check
-    the GRANT, not the wizard's screen. The wizard used to finish "is in the Studio" while
+    the GRANT, not the dialog's ticks. The wizard used to finish "is in the Studio" while
     writing only `requested_skills`, which the runtime never reads (map.json R2a)."""
     name = f"E2E Agent {ctx.stamp}"
     problems: list[str] = []
     goto("workforce")
-    _visible(page, "agents-view-directory").click()
     _visible(page, "wf-new-agent").click()
-    _visible(page, "aw-dialog")
-    # A preset fills the prompts and rules the wizard requires; the journey is about
-    # creating and assigning, not about typing a system prompt.
-    page.locator('[data-testid^="aw-pattern-"]:not([data-testid="aw-pattern-blank"])').first.click()
-    _visible(page, "aw-name").fill(name)
-    picked, mcp_picked = "", False
-    for _ in range(8):
-        boxes = page.locator('input[data-testid^="aw-skill-"]')
-        if not picked and boxes.count():
-            wanted = page.locator(f'input[data-testid="aw-skill-{ctx.skill_key}"]')
-            if ctx.skill_key and wanted.count():
-                wanted.first.check()
-                picked = ctx.skill_key
-            else:
-                offered = [boxes.nth(i).get_attribute("data-testid") for i in range(
-                    min(boxes.count(), 60))]
-                if ctx.skill_key:
-                    # Said, and the agent is still created with another skill: agent_update
-                    # and step_agents need an agent, and one missing control must not hide
-                    # what those two would find.
-                    problems.append(
-                        f"the agent wizard does not offer skill {ctx.skill_key}, created a "
-                        f"moment ago on the Skills screen, so it cannot be assigned on create "
-                        f"(it offers {len(offered)}: {', '.join(o[9:] for o in offered[:6] if o)}…)")
-                boxes.first.check()
-                picked = (offered[0] or "")[len("aw-skill-"):]
-        mcp_box = page.locator(f'input[data-testid="aw-mcp-{ctx.mcp_server_id}"]')
-        if not mcp_picked and ctx.mcp_server_id and mcp_box.count():
-            mcp_box.first.check()
-            mcp_picked = True
-        if page.locator('[data-testid="aw-publish"]').count():
-            break
-        _visible(page, "aw-next").click()
-        page.wait_for_timeout(300)
+    _visible(page, "agent-quick-create")
+    _visible(page, "aq-name").fill(name)
+    _visible(page, "aq-skills")
+    page.wait_for_timeout(1_000)      # the grantable skills and servers load after it opens
+    boxes = page.locator('input[data-testid^="aq-skill-"]')
+    picked = ""
+    wanted = page.locator(f'input[data-testid="aq-skill-{ctx.skill_key}"]')
+    if ctx.skill_key and wanted.count():
+        wanted.first.check()
+        picked = ctx.skill_key
+    elif boxes.count():
+        offered = [boxes.nth(i).get_attribute("data-testid") or "" for i in range(min(boxes.count(), 60))]
+        if ctx.skill_key:
+            # Said, and the agent is still created with another skill: agent_update and
+            # step_agents need an agent, and one missing control must not hide what they find.
+            problems.append(
+                f"the New agent dialog does not offer skill {ctx.skill_key}, created a moment ago "
+                f"in Skills & MCP, so it cannot be assigned on create (it offers {len(offered)}: "
+                f"{', '.join(o[len('aq-skill-'):] for o in offered[:6])}…)")
+        boxes.first.check()
+        picked = offered[0][len("aq-skill-"):]
     if not picked:
-        raise JourneyFailed("the agent wizard never offered a skill to assign")
-    if not mcp_picked:
-        problems.append(f"the agent wizard offers no way to give the agent an MCP server "
-                        f"(no [aw-mcp-{ctx.mcp_server_id or '<server id>'}] for {ctx.mcp_name or 'the R1 server'})"
-                        f", so R2 'MCP servers assigned on create' cannot be done")
-    _visible(page, "aw-publish").click()
+        raise JourneyFailed("the New agent dialog never offered a skill to assign"
+                            f" ({_text(page, 'aq-skills')[:120] or 'empty'})")
+    mcp_box = page.locator(f'input[data-testid="aq-mcp-{ctx.mcp_server_id}"]')
+    mcp_picked = bool(ctx.mcp_server_id and mcp_box.count())
+    if mcp_picked:
+        mcp_box.first.check()
+    else:
+        problems.append(f"the New agent dialog offers no way to give the agent an MCP server "
+                        f"(no [aq-mcp-{ctx.mcp_server_id or '<server id>'}] for "
+                        f"{ctx.mcp_name or 'the R1 server'}), so R2 'MCP servers assigned on "
+                        f"create' cannot be done")
+    _visible(page, "aq-create").click()
     deadline = time.time() + WAIT_MS / 1000
     finished = False
     while time.time() < deadline:
-        if page.locator('[data-testid="aw-complete"]').count():
-            said = _text(page, "aw-complete")
-            if name not in said:
-                raise JourneyFailed(f"the wizard finished but does not name {name}: {said[:200]}")
+        # Born: the birth plays, then the agent's Passport opens on it.
+        if _present(page, "agent-detail") and name in _text(page, "agent-detail"):
             finished = True
             break
-        result = page.locator('[data-testid="aw-result"]')
-        if result.count() and "bad" in (result.first.get_attribute("class") or ""):
-            raise JourneyFailed(f"publishing agent {name!r} with skill {picked} was refused: "
-                                f"{_text(page, 'aw-result')}")
+        if _present(page, "aq-failed"):
+            raise JourneyFailed(f"creating agent {name!r} with skill {picked} was refused: "
+                                f"{_text(page, 'aq-failed')}")
         page.wait_for_timeout(500)
     if not finished:
-        raise JourneyFailed(f"publishing agent {name!r} showed neither a result nor the finished "
-                            f"screen within {WAIT_MS // 1000}s")
+        raise JourneyFailed(f"pressed Create for {name!r}; within {WAIT_MS // 1000}s neither its "
+                            f"Passport opened nor the dialog said why")
     ctx.agent_name = name
     if ctx.target is not None:
         role = _role_of(ctx, name)
         if not role:
-            problems.append(f"the wizard says {name!r} is in the Studio, but no agent of that "
-                            f"name is on the roster (GET /v1/roles)")
+            problems.append(f"the Passport opened on {name!r}, but no agent of that name is on "
+                            f"the roster (GET /v1/roles)")
         else:
             ctx.agent_role = role
             held = _grants(ctx, role)
@@ -578,70 +683,95 @@ def agent_with_skill(page, ctx: Context, goto: Callable[[str], None]) -> str:
             if mcp_picked:
                 # The tick is a request; the grant is what a run gets. Read it back.
                 missing = _mcp_not_held(ctx, role, ctx.mcp_server_id, ctx.mcp_name,
-                                        "was created with it ticked in the wizard")
+                                        "was created with it ticked in the New agent dialog")
                 if missing:
                     problems.append(missing)
                     mcp_picked = False
     elif mcp_picked:
-        problems.append("ticked an MCP server in the wizard with no API to read the grant back "
-                        "from (the walk was given no target)")
+        problems.append("ticked an MCP server in the New agent dialog with no API to read the "
+                        "grant back from (the walk was given no target)")
     if problems:
         raise JourneyFailed("; ".join(problems))
     return (f"created agent {name!r} ({ctx.agent_role or 'role unknown'}) holding skill {picked}"
             f"{' and MCP server ' + ctx.mcp_name + ' (both read back as grants)' if mcp_picked else ''}")
 
 
-def _open_agent(page, goto: Callable[[str], None], role: str) -> None:
+def _open_agent(page, goto: Callable[[str], None], role: str, name: str = "") -> None:
+    """Agents › Directory, found by the search box (it matches names, not keys), opened: its
+    Passport and Loadout."""
     goto("workforce")
-    # Agents opens on Live; the agent cards are under Directory.
     _visible(page, "agents-view-directory").click()
-    _visible(page, f"wf-open-{role}").click()
+    _visible(page, "ag-home-search").fill(name or role)
+    card = page.locator(f'[data-testid="wf-open-{role}"] >> visible=true').first
+    try:
+        card.wait_for(state="visible", timeout=10_000)
+    except Exception:  # noqa: BLE001
+        if _present(page, "ag-idle-more"):
+            _visible(page, "ag-idle-more").click()
+        card.wait_for(state="visible", timeout=WAIT_MS)
+    card.click()
     _visible(page, "agent-detail")
-    _visible(page, "agent-skills")
+    _visible(page, "passport-loadout")
+
+
+def _skill_chip_shown(page, skill_id: str, label: str) -> bool:
+    """The Loadout's Skills row shows the skill: its own chip, or (when an ability covers it)
+    its name in the row."""
+    if _present(page, f"agent-skill-{skill_id}"):
+        return True
+    return bool(label) and re.search(rf"(?<![\w-]){re.escape(label)}(?![\w-])",
+                                     _text(page, "loadout-skills")) is not None
 
 
 def agent_update(page, ctx: Context, goto: Callable[[str], None]) -> str:
-    """Change an existing agent: give it a second skill and an MCP server from its own page,
-    reload, and check it stuck — on screen and in the grant the runtime reads."""
+    """Change an existing agent: give it a second skill and an MCP server from its Passport's
+    Loadout, reload, and check it stuck — on screen and in the grant the runtime reads."""
     role = ctx.agent_role
     if not role:
         raise JourneyFailed("there is no agent to update: agent_with_skill did not leave one "
                             "(run it first; it failed or was skipped)")
     problems: list[str] = []
-    _open_agent(page, goto, role)
+    _open_agent(page, goto, role, ctx.agent_name)
     before = _grants(ctx, role) if ctx.target is not None else set()
-    _visible(page, "agent-skill-open").click()
-    offered = [o["value"] for o in _options(page, "agent-skill-select") if o["value"]]
-    extra = next((s for s in offered if s not in before and s != ctx.skill_key), "")
+    _visible(page, "loadout-skills-add").click()
+    picks = page.locator('[data-testid^="loadout-skill-pick-"] >> visible=true')
+    try:
+        picks.first.wait_for(state="visible", timeout=15_000)
+    except Exception:  # noqa: BLE001
+        raise JourneyFailed(f"{role}'s Loadout › Skills › + Add offers no skill to give") from None
+    offered = [(picks.nth(i).get_attribute("data-testid") or "")[len("loadout-skill-pick-"):]
+               for i in range(picks.count())]
+    extra = next((s for s in offered if s and s not in before and s != ctx.skill_key), "")
     if not extra:
         raise JourneyFailed(f"the agent page offers no further skill to give {role} "
                             f"(it offers {offered[:6]})")
-    _visible(page, "agent-skill-select").select_option(extra)
-    _visible(page, "agent-skill-confirm").click()
+    pick = _visible(page, f"loadout-skill-pick-{extra}")
+    extra_label = " ".join((pick.inner_text() or "").split())
+    pick.click()
     deadline = time.time() + 30
     while time.time() < deadline:
-        if extra in _text(page, "agent-skills-held"):
+        if _skill_chip_shown(page, extra, extra_label):
             break
-        if _present(page, "agent-skills-failed"):
-            raise JourneyFailed(f"giving {role} skill {extra} said: "
-                                f"{_text(page, 'agent-skills-failed')}")
+        failed = _toast(page, "error")
+        if failed:
+            raise JourneyFailed(f"giving {role} skill {extra} said: {failed}")
         page.wait_for_timeout(500)
     given_id, given_name = _give_mcp_on_page(page, ctx, role, problems)
     # From a fresh load: what is shown now came from the server.
-    _open_agent(page, goto, role)
-    held_text = _text(page, "agent-skills-held")
-    if extra not in held_text:
-        problems.append(f"gave {role} skill {extra}; after a reload its page lists only: "
-                        f"{held_text[:200] or 'nothing'}")
+    _open_agent(page, goto, role, ctx.agent_name)
+    page.wait_for_timeout(1_000)      # the Loadout reads the Kit after the Passport renders
+    if not _skill_chip_shown(page, extra, extra_label):
+        problems.append(f"gave {role} skill {extra}; after a reload its Loadout shows only: "
+                        f"{_text(page, 'loadout-skills')[:200] or 'nothing'}")
     if ctx.target is not None and extra not in _grants(ctx, role):
         problems.append(f"gave {role} skill {extra} on its page, but role_skills does not hold it")
     if given_id:
         problems.extend(p for p in (
-            _mcp_not_listed_after_reload(page, role, given_name),
+            _mcp_not_listed_after_reload(page, role, given_id, given_name),
             _mcp_not_held(ctx, role, given_id, given_name, "was given it on its page")) if p)
     if problems:
         raise JourneyFailed("; ".join(dict.fromkeys(problems)))
-    return (f"gave {role} skill {extra} and MCP server {given_name} from its page; both still "
+    return (f"gave {role} skill {extra} and MCP server {given_name} from its Loadout; both still "
             f"there after a reload and read back as grants")
 
 
@@ -656,23 +786,33 @@ def _mcp_not_held(ctx: Context, role: str, server_id: str, name: str, how: str) 
     return ""
 
 
-def _mcp_not_listed_after_reload(page, role: str, name: str) -> str:
-    """'' when the agent's freshly loaded page lists `name` among the servers it holds. Required
-    whether or not that list renders: an agent holding nothing shows `agent-mcp-empty` instead,
-    and round three skipped the check exactly then, so a failed grant passed silently."""
-    try:
-        _wait_for_text(page, "agent-mcp-held", re.escape(name), timeout_s=30)
-        return ""
-    except JourneyFailed:
-        shown = _text(page, "agent-mcp-held") or _text(page, "agent-mcp-empty")
-        return (f"gave {role} MCP server {name}; after a reload its page lists "
-                f"{shown[:200] or 'no MCP server'}")
+def _mcp_shown(page, server_id: str, name: str) -> bool:
+    """The Loadout's MCP row shows the server: its chip, or its name as a whole word (an ability
+    chip covers a catalogue server). `e2e-mcp-1` must not be found inside `e2e-mcp-1-update`."""
+    if _present(page, f"agent-mcp-{server_id}"):
+        return True
+    return re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])",
+                     _text(page, "loadout-mcp")) is not None
+
+
+def _mcp_not_listed_after_reload(page, role: str, server_id: str, name: str) -> str:
+    """'' when the agent's freshly loaded Loadout lists the server among those it holds.
+    Required whether or not the row has chips: an agent holding nothing shows `No MCP`
+    instead, and round three skipped the check exactly then, so a failed grant passed."""
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if _mcp_shown(page, server_id, name):
+            return ""
+        page.wait_for_timeout(500)
+    shown = _text(page, "loadout-mcp") or _text(page, "loadout-no-mcp")
+    return (f"gave {role} MCP server {name}; after a reload its Loadout shows "
+            f"{shown[:200] or 'no MCP server'}")
 
 
 def _give_mcp_on_page(page, ctx: Context, role: str, problems: list[str]) -> tuple[str, str]:
-    """Give `role` an MCP server it does not hold, from its page: open the picker, pick, confirm,
-    and wait for the page to list it or say why not. (server id, name), or ('', '') with the
-    reason appended to `problems`."""
+    """Give `role` an MCP server it does not hold, from its Loadout: + Add on the MCP row, pick
+    the server (that IS the grant), and wait for the row to show it or a toast to say why not.
+    (server id, name), or ('', '') with the reason appended to `problems`."""
     if not ctx.mcp_server_id:
         problems.append("there is no MCP server to give: mcp_register did not leave one (run it "
                         "first; it failed or was skipped)")
@@ -684,51 +824,49 @@ def _give_mcp_on_page(page, ctx: Context, role: str, problems: list[str]) -> tup
     server_id, name = ctx.mcp_server_id, ctx.mcp_name
     if server_id in held:
         server_id, name = _second_mcp_server(ctx)
-    # The picker is behind "Give this agent an MCP server": not rendered until that is pressed.
-    deadline = time.time() + 15
-    while time.time() < deadline and not (_present(page, "agent-mcp-open")
-                                          or _present(page, "agent-mcp-select")):
-        page.wait_for_timeout(500)
-    if _present(page, "agent-mcp-open"):
-        _visible(page, "agent-mcp-open").click()
+    # The picker is behind the row's "+ Add": not rendered until that is pressed.
     try:
-        picker = _visible(page, "agent-mcp-select", timeout=10_000)
+        _visible(page, "loadout-mcp-add", timeout=15_000).click()
     except Exception:  # noqa: BLE001
         problems.append(f"the agent page offers no way to give {role} an MCP server (no "
-                        f"[agent-mcp-open] opening an [agent-mcp-select]), so R2 'MCP servers "
-                        f"assigned on update' cannot be done")
+                        f"[loadout-mcp-add] on its Loadout), so R2 'MCP servers assigned on "
+                        f"update' cannot be done")
         return "", ""
     try:
-        picker.select_option(server_id, timeout=15_000)
+        pick = _visible(page, f"loadout-mcp-pick-{server_id}", timeout=10_000)
     except Exception:  # noqa: BLE001
-        offered = [o["text"] for o in _options(page, "agent-mcp-select") if o["value"]]
+        offered = page.locator('[data-testid^="loadout-mcp-pick-"] >> visible=true').all_inner_texts()
         problems.append(f"the agent page's MCP picker does not offer {name} (it offers "
-                        f"{len(offered)}: {', '.join(offered[:6]) or 'nothing'})")
+                        f"{len(offered)}: {', '.join(' '.join(o.split()) for o in offered[:6]) or 'nothing'})")
         return "", ""
-    _visible(page, "agent-mcp-confirm").click()
+    pick.click()
     deadline = time.time() + 30
     while time.time() < deadline:
-        if name in _text(page, "agent-mcp-held"):
+        if _mcp_shown(page, server_id, name):
             return server_id, name
-        if _present(page, "agent-mcp-failed"):
-            problems.append(f"giving {role} MCP server {name} said: "
-                            f"{_text(page, 'agent-mcp-failed')}")
+        failed = _toast(page, "error")
+        if failed:
+            problems.append(f"giving {role} MCP server {name} said: {failed}")
             return "", ""
         page.wait_for_timeout(500)
     problems.append(f"gave {role} MCP server {name}; within 30s the page neither listed it nor "
-                    f"said why (it shows {_text(page, 'agent-mcp-held')[:160] or 'no held servers'})")
+                    f"said why (it shows {_text(page, 'loadout-mcp')[:160] or 'no MCP row'})")
     return server_id, name
 
 
 # ----------------------------------------------------------------------------- R3
 def _define_step(page, ctx: Context, goto: Callable[[str], None], label: str,
                  choose: Callable[[list[dict[str, str]]], str], what: str) -> str:
-    """Define one custom step on Your steps, bound by `choose(options)`; its step key, or ''
-    with the reason recorded by the caller (raised as JourneyFailed)."""
+    """Define one custom step in Workflows › Library › Steps, bound by `choose(options)`; its
+    step key, or JourneyFailed with the reason."""
     goto("delivery_workflows")
-    _visible(page, "dw-tab-steps").click()
-    _visible(page, "dw-define-step").click()
+    _visible(page, "dw-tab-library").click()
+    _visible(page, "wf-lib-view-steps").click()
+    _visible(page, "wf-lib-steps")
+    _visible(page, "wf-lib-new-step").click()
+    _visible(page, "wf-define-modal")
     _visible(page, "dw-define-form")
+    page.wait_for_timeout(500)
     if _present(page, "dw-define-empty"):
         raise JourneyFailed(f"cannot bind a step to {what}: the step builder says "
                             f"{_text(page, 'dw-define-empty')!r}")
@@ -746,17 +884,19 @@ def _define_step(page, ctx: Context, goto: Callable[[str], None], label: str,
         if _present(page, "dw-define-error"):
             raise JourneyFailed(f"defining step {label!r} ({what}) said: "
                                 f"{_text(page, 'dw-define-error')}")
-        if label in _text(page, "dw-steps-list"):
+        if not _present(page, "wf-define-modal") and label in _text(page, "wf-lib-steps"):
             break
         page.wait_for_timeout(500)
     else:
-        raise JourneyFailed(f"defined step {label!r} ({what}); it never appeared under Your steps")
+        raise JourneyFailed(f"defined step {label!r} ({what}); it never appeared in Library › Steps")
     body = _api(ctx).get("/v1/delivery-workflows/custom-steps",
                          project_id=ctx.target.project_id) or {}
     key = next((str(s.get("step_key")) for s in body.get("steps") or []
                 if s.get("label") == label), "")
     if not key:
         raise JourneyFailed(f"step {label!r} is listed on screen but the API has no such step")
+    if not _present(page, f"wf-step-row-{key}"):
+        raise JourneyFailed(f"the API has step {key} ({label!r}); Library › Steps has no row for it")
     return key
 
 
@@ -792,20 +932,15 @@ def step_bindings(page, ctx: Context, goto: Callable[[str], None]) -> str:
     name = f"E2E bound steps {ctx.stamp}"
     _new_workflow(page, goto, name)
     for kind, key in keys.items():
-        palette = page.locator(f'[data-testid="dw-palette-custom-{key}"]')
-        if not palette.count():
-            problems.append(f"the {kind} step {key} is not in the builder's palette")
-            continue
-        if not palette.first.is_enabled():
-            problems.append(f"the {kind} step {key} cannot be placed: "
-                            f"{palette.first.get_attribute('title') or 'no reason given'}")
-            continue
-        _add_from_palette(page, f"dw-palette-custom-{key}")
+        # Your steps, in the editor's palette (`wf-pal-custom:<step key>`).
+        try:
+            _add_from_palette(page, f"wf-pal-custom:{key}")
+        except JourneyFailed as exc:
+            problems.append(f"the {kind} step {key} cannot be placed: {exc}")
     placed = len(_step_rows(page))
     if not placed:
         raise JourneyFailed("; ".join(problems) or "no bound step could be placed")
-    _save_and_reopen(page, goto, name, placed)
-    workflow_key = _workflow_key(ctx, name)
+    workflow_key, _ = _save_and_reopen(page, goto, name, placed)
     saved = {str((s.get("binding") or {}).get("custom_step") or "") for s in _saved_steps(ctx, workflow_key)}
     lost = [k for k in keys.values() if k not in saved]
     if lost:
@@ -843,6 +978,17 @@ def step_bindings(page, ctx: Context, goto: Callable[[str], None]) -> str:
 
 
 # ----------------------------------------------------------------------------- R4
+def _named_on_screen(page, step_id: str) -> str:
+    """The agent a step's picker has chosen ('' for Auto): its option marked selected."""
+    _select_step(page, step_id)
+    _visible(page, "wf-agent-trigger").click()
+    chosen = page.locator('[data-testid^="wf-agent-option-"][aria-selected="true"] >> visible=true')
+    chosen.first.wait_for(state="visible", timeout=15_000)
+    value = (chosen.first.get_attribute("data-testid") or "")[len("wf-agent-option-"):]
+    page.keyboard.press("Escape")
+    return "" if value == "default" else value
+
+
 def step_agents(page, ctx: Context, goto: Callable[[str], None]) -> str:
     """R4: two agent steps — one naming the agent R2 made, one naming nobody — saved, reloaded
     and RUN; the run must record the named agent on the first and an auto-picked one, with its
@@ -850,12 +996,11 @@ def step_agents(page, ctx: Context, goto: Callable[[str], None]) -> str:
     problems: list[str] = []
     name = f"E2E agent steps {ctx.stamp}"
     _new_workflow(page, goto, name)
-    _add_from_palette(page, "dw-palette-agent-work")
-    _add_from_palette(page, "dw-palette-agent-work")
+    _add_from_palette(page, "wf-pal-agent-task")
+    _add_from_palette(page, "wf-pal-agent-task")
     rows = _step_rows(page)
     if len(rows) != 2:
-        raise JourneyFailed(f"pressed 'Let an agent work it out' twice; the canvas has "
-                            f"{len(rows)} step(s)")
+        raise JourneyFailed(f"pressed 'Agent task' twice; the canvas has {len(rows)} step(s)")
     named_id, auto_id = rows
     marker = f"E2E journey {ctx.stamp}"
     asks = {
@@ -864,9 +1009,18 @@ def step_agents(page, ctx: Context, goto: Callable[[str], None]) -> str:
         auto_id: f"{AGENT_STEP_MARKER} ({marker}): say what you can do with the skills you hold.",
     }
     for step_id, said in asks.items():
-        _visible(page, f"dw-agentwork-mode-{step_id}").select_option("fixed")
-        _visible(page, f"dw-agentwork-text-{step_id}").fill(said)
-    offered = [o["value"] for o in _options(page, f"dw-draft-captain-{named_id}") if o["value"]]
+        _select_step(page, step_id)
+        _visible(page, "wf-task-fixed").click()
+        _visible(page, "wf-task-text").fill(said)
+    # The step's Agent picker (the inspector's combobox): Auto, then every agent on the project.
+    _select_step(page, named_id)
+    _visible(page, "wf-agent-trigger").click()
+    options = page.locator('[data-testid^="wf-agent-option-"]:not([data-testid="wf-agent-option-name"])'
+                           ':not([data-testid="wf-agent-option-status"]) >> visible=true')
+    options.first.wait_for(state="visible", timeout=15_000)
+    offered = [(options.nth(i).get_attribute("data-testid") or "")[len("wf-agent-option-"):]
+               for i in range(options.count())]
+    offered = [o for o in offered if o and o != "default"]
     captain = ctx.agent_role if ctx.agent_role in offered else ""
     if not captain:
         problems.append(
@@ -880,13 +1034,12 @@ def step_agents(page, ctx: Context, goto: Callable[[str], None]) -> str:
         captain = next((o for o in offered if o in holders), offered[0] if offered else "")
     if not captain:
         raise JourneyFailed("; ".join(problems) + "; and it offers no agent at all")
-    _visible(page, f"dw-draft-captain-{named_id}").select_option(captain)
-    _save_and_reopen(page, goto, name, 2)
-    shown = {s: _visible(page, f"dw-draft-captain-{s}").input_value() for s in (named_id, auto_id)}
+    _visible(page, f"wf-agent-option-{captain}").click()
+    workflow_key, _ = _save_and_reopen(page, goto, name, 2)
+    shown = {s: _named_on_screen(page, s) for s in (named_id, auto_id)}
     if shown != {named_id: captain, auto_id: ""}:
         problems.append(f"named {captain} on the first step and nobody on the second; after a "
                         f"reload the pickers say {shown}")
-    workflow_key = _workflow_key(ctx, name)
     saved = {str(s.get("id")): str(s.get("captain") or "") for s in _saved_steps(ctx, workflow_key)}
     if saved.get(named_id) != captain or saved.get(auto_id):
         problems.append(f"the saved spec names agents {saved}, not {named_id}={captain} and "
@@ -923,29 +1076,37 @@ def workflow_build(page, ctx: Context, goto: Callable[[str], None]) -> str:
     step_agents."""
     name = f"E2E two-step {ctx.stamp}"
     _new_workflow(page, goto, name)
-    palette = page.locator('[data-testid^="dw-palette-"]:not([data-testid="dw-palette-agent-work"])'
-                           ':not([data-testid^="dw-palette-custom-"]):enabled')
-    if palette.count() < 2:
-        raise JourneyFailed(f"the step palette offers {palette.count()} built-in steps; a "
-                            f"two-step workflow needs two")
-    chosen = [palette.nth(i).get_attribute("data-testid") or "" for i in range(2)]
+    # The palette's Built-in group (`wf-pal-cap:<capability>`), usable rows only.
+    palette = page.locator('[data-testid^="wf-pal-cap:"]:not([aria-disabled="true"]) >> visible=true')
+    try:
+        palette.first.wait_for(state="visible", timeout=30_000)   # the palette loads after the editor
+    except Exception:  # noqa: BLE001
+        pass
+    # Two that need no input (no "Needs:" in their tooltip): a step needing one fails Save's
+    # check until it is wired, which is the editor working, not this smoke check's subject.
+    free = [palette.nth(i).get_attribute("data-testid") or "" for i in range(palette.count())
+            if "Needs:" not in (palette.nth(i).get_attribute("data-tip") or "")]
+    if len(free) < 2:
+        raise JourneyFailed(f"the step palette offers {len(free)} built-in steps that need no "
+                            f"input ({palette.count()} in all); a two-step workflow needs two")
+    chosen = free[:2]
     for testid in chosen:
         _add_from_palette(page, testid)
-    meta = _save_and_reopen(page, goto, name, 2)
-    return (f"built {name!r} from {', '.join(c[len('dw-palette-'):] for c in chosen if c)}; "
-            f"saved, and after a reload the header says {meta[:40]!r}")
+    _, meta = _save_and_reopen(page, goto, name, 2)
+    return (f"built {name!r} from {', '.join(c[len('wf-pal-cap:'):] for c in chosen if c)}; "
+            f"saved, and after a reload the summary says {meta[:40]!r}")
 
 
 def advance_now(page, ctx: Context, goto: Callable[[str], None]) -> str:
     """A console smoke check (R6): "Advance now" answers with a sentence, not a 403 — the
     boss-1 bug where it sent the console key to a worker-only route."""
     goto("delivery_workflows")
-    _visible(page, "dw-tab-running").click()
+    _visible(page, "dw-tab-runs").click()
     button = page.locator('[data-testid="dw-advance"]')
     try:
         button.first.wait_for(state="visible", timeout=20_000)
     except Exception:  # noqa: BLE001
-        raise JourneyFailed("'Advance now' is not on the Running tab: this install has no run "
+        raise JourneyFailed("'Advance now' is not on the Runs tab: this install has no run "
                             "to show. Run `workflows` first (as `all` does)") from None
     button.first.click()
     said = _wait_for_text(page, "dw-notice", r"advance|nothing to advance")
@@ -1143,9 +1304,9 @@ def setup_replace_token(page, ctx: Context, goto: Callable[[str], None]) -> str:
 
 def setup_deep_links(page, ctx: Context, goto: Callable[[str], None]) -> str:
     """J11: ?area=setup&add=openai opens Add a model on OpenAI; focus=jobs lands on the row."""
-    goto("setup&add=openai")
+    _with_query(page, goto, "setup", "add=openai")
     _visible(page, "su-model-drawer")
-    goto("setup&focus=jobs")
+    _with_query(page, goto, "setup", "focus=jobs")
     focused = page.locator('[data-testid="su-row-jobs"][data-focused="true"]').count()
     if not focused:
         raise JourneyFailed("focus=jobs did not land on Who does what")

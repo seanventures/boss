@@ -52,7 +52,9 @@ def test_every_console_area_in_areas_is_walked():
     declared = re.findall(r'\bid:\s*"([^"]+)"', block)
     walked = [a.id for a in discover.console_areas()]
     assert walked == declared
-    assert {"skills", "studio", "workforce", "delivery_workflows", "decisions"} <= set(walked)
+    # `studio` (Agent Studio) left AREAS in Workflow Studio S4: its links land on Agents or
+    # Workflows (app/legacy-areas.ts), and both are walked.
+    assert {"skills", "workforce", "delivery_workflows", "decisions", "setup"} <= set(walked)
 
 
 def test_every_static_console_route_is_walked():
