@@ -28,6 +28,7 @@ export default async function AccountSecurityPage({ searchParams }: Props) {
       identities={identities.ok ? identities.data.identities : []}
       host={options.host}
       linked={linked === "1"}
+      providers={options.providers}
     />
   );
 }
