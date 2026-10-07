@@ -25228,7 +25228,7 @@ def create_delivery_workflow(payload: WorkflowCreateBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/fork")
-@permit(P.WORKFLOW_CREATE, scope=Scope.project(body="project_id"))
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
 def fork_delivery_workflow(payload: WorkflowForkBody) -> dict:
     """Copy a workflow into one the customer owns and can edit.
 
@@ -25288,7 +25288,7 @@ def fork_delivery_workflow(payload: WorkflowForkBody) -> dict:
 
 
 @app.post("/v1/delivery-workflows/save")
-@permit(P.WORKFLOW_CREATE, scope=Scope.project(body="project_id"))
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
 def save_delivery_workflow(payload: WorkflowSaveBody) -> dict:
     """Publish a new version of a customer's own workflow.
 
