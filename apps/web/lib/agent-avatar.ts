@@ -21,6 +21,7 @@ import { EMBLEMS, EMBLEM_BY_ID, type Emblem } from "./avatar-kit/emblems";
 import { GENERIC_HATS, HAT_BY_ID, type Hat } from "./avatar-kit/hats";
 import { GLASS, OUTLINE, PALETTES, PALETTE_BY_ID, STATE_COLOURS, type Palette } from "./avatar-kit/palettes";
 import { own } from "./avatar-kit/dict";
+import { svgDataUri } from "./svg-data-uri";
 import { STATE_WORDS } from "./avatar-kit/states";
 import { VISORS, VISOR_BY_ID, eyeBars, mouthBars, type Visor } from "./avatar-kit/visors";
 
@@ -243,5 +244,5 @@ export function avatarSvg(spec: AvatarSpec, o: { size: number; state?: AvatarSta
 
 /** The face as a data: URI, for <img>, next/og and the A2A card's iconUrl. */
 export function avatarDataUri(spec: AvatarSpec, o: { size: number; state?: AvatarState; variant?: AvatarVariant }): string {
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(avatarSvg(spec, o))}`;
+  return svgDataUri(avatarSvg(spec, o));
 }

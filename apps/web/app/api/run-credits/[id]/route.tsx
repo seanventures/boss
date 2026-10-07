@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import type { Chain } from "../../../../lib/agent-world-types";
 import { API_URL, authHeaders } from "../../../../lib/client";
+import { svgDataUri } from "../../../../lib/svg-data-uri";
 import { apiWrite } from "../../../../lib/api-write";
 import { loadPath } from "../../../../lib/writing-get";
 import { toChain } from "../../../agents/act-wire";
@@ -51,7 +52,7 @@ function Card({ card }: { card: CreditsCard }) {
           <div key={`${f.roleKey ?? "p"}-${i}`} style={{ display: "flex", flexDirection: "column", alignItems: "center", width: col }}>
             {f.svg ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={`data:image/svg+xml;utf8,${encodeURIComponent(f.svg)}`} width={size} height={size} alt="" />
+              <img src={svgDataUri(f.svg)} width={size} height={size} alt="" />
             ) : f.roleKey ? (
               <div style={{ width: size, height: size, borderRadius: size, background: f.tone, border: `2px solid ${C.border}`,
                             display: "flex", alignItems: "center", justifyContent: "center", fontSize: size / 2.8,
