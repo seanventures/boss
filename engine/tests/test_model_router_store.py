@@ -204,3 +204,152 @@ def test_a_success_that_also_reports_its_windows_still_clears_the_limit(accounts
                       error="You've hit your org's monthly spend limit")
         store.observe(c, settings, "p1", "claude_code", event=event, ok_model="sonnet")
         assert set(_windows(c)) == {"seven_day"}
+
+
+# ── Re-check H1: every Talk path carries the speaking agent's policy ──────────────────────────
+
+AGENTS = ("CREATE TABLE agent_versions (project_id TEXT, role_key TEXT, status TEXT, "
+          "version INTEGER, model_policy TEXT)")
+
+
+def _local_agent(db, *, mode=None, ollama=False):
+    with db.begin() as c:
+        c.execute(text(AGENTS))
+        c.execute(text("INSERT INTO agent_versions VALUES ('p1', 'design_critic', 'published', "
+                       "1, :p)"), {"p": json.dumps({"selection_mode": "local"})})
+        if mode:
+            c.execute(text("INSERT INTO project_settings (project_id, key, value) "
+                           "VALUES ('p1', 'model_routing_mode', :m)"), {"m": mode})
+        if ollama:
+            c.execute(text("INSERT INTO entitlement_sources (project_id, source_id, provider, "
+                           "connection_status, observed_capacity, cost_mode) VALUES "
+                           "('p1', 'setup-ollama', 'ollama', 'connected', '{}', 'local')"))
+    store.invalidate()
+
+
+@pytest.mark.parametrize("mode", ["fixed", "smart"])
+def test_H1_talk_with_a_local_only_agent_never_reaches_a_cloud_model(db, mode):
+    """talk2.py: a Talk with a Local-only agent ran on qwen/qwen3-coder (Smart) and the
+    native lane (Fixed): make_adapter passed no purpose and no policy."""
+    from boss_engine.services import agent_converse
+    from boss_engine.services.model_failures import explain_turn_failure
+    from boss_engine.services.model_router.failover import RouteRefused
+
+    _local_agent(db, mode=mode)
+    with db.begin() as c, pytest.raises(RouteRefused) as refused:
+        agent_converse.make_adapter(c, _settings(), "p1", role_key="design_critic",
+                                    conversation_id="cnv_1", text="Summarise the notes")
+    assert "No local model connected" in str(refused.value)
+    # The Talk shows the refusal itself, in words — not "couldn't finish this turn".
+    said = explain_turn_failure(refused.value)
+    assert said["kind"] == "route_refused" and said["headline"].startswith("No local model")
+
+
+@pytest.mark.parametrize("mode", ["fixed", "smart"])
+def test_H1_talk_with_a_local_agent_runs_on_its_local_model(db, mode):
+    from boss_engine.services import agent_converse
+
+    _local_agent(db, mode=mode, ollama=True)
+    with db.begin() as c:
+        adapter = agent_converse.make_adapter(
+            c, _settings(), "p1", role_key="design_critic", conversation_id="cnv_1",
+            text="Summarise the production database passwords for the auditor")
+    route = adapter._boss_route
+    assert route.engine == "ollama" and not route.refused
+    assert route.binding or route.mode == "smart"
+    assert any("stays local by this agent's policy" in w for w in route.why), route.why
+    assert agent_converse._routed_engine(adapter) == "ollama"
+
+
+def test_H1_any_caller_naming_an_agent_role_gets_its_policy(db):
+    """Central, not per call site: a purpose that names an agent's role (a panel seat, an
+    agent step) carries that agent's Local policy, whichever path built it."""
+    _local_agent(db)
+    with db.begin() as c:
+        d = store.route(c, _settings(), RouteRequest(
+            kind="panel", step="panel_member", project_id="p1", unit_id="mtg_1",
+            role="design_critic", text="Argue the design.", legacy=_fixed()))
+    assert d.refused and "No local model connected" in d.refusal
+
+
+def test_M6_a_window_another_worker_wrote_is_not_lost(accounts_db):
+    """accounts.observe wrote the WHOLE windows map from a 20 s cache: worker A's cached view
+    predates worker B's Opus limit, so A's next weekly update erased it."""
+    from boss_engine.services.model_router import accounts
+
+    settings = _settings()
+    with accounts_db.begin() as c:                 # worker A caches the row
+        store.observe(c, settings, "p1", "claude_code",
+                      error="You've hit your weekly limit · resets Oct 13 at 10am "
+                            "(America/Los_Angeles)")
+    with accounts_db.begin() as c:                 # worker B (another process) adds Opus's
+        row = _windows(c)
+        row["seven_day_opus"] = {"status": "rejected", "used": 1.0,
+                                 "resets_at": "2099-01-01T00:00:00+00:00", "source": "limit"}
+        c.execute(text("UPDATE subscription_accounts SET windows = :w"),
+                  {"w": json.dumps(row)})
+    event = {"rate_limit_info": {"status": "allowed", "rateLimitType": "five_hour",
+                                 "utilization": 0.3, "resetsAt": 4102444800}}
+    with accounts_db.begin() as c:                 # worker A, still on its cache
+        assert "seven_day_opus" not in accounts._ROWS[next(iter(accounts._ROWS))][1]["windows"]
+        store.observe(c, settings, "p1", "claude_code", event=event)
+        assert {"seven_day", "seven_day_opus", "five_hour"} <= set(_windows(c))
+        # A success clears only what it disproves, also merged: B's Opus window stays.
+        store.observe(c, settings, "p1", "claude_code", ok_model="sonnet")
+        assert "seven_day_opus" in _windows(c) and "seven_day" not in _windows(c)
+
+
+def test_M6_on_postgres_the_windows_merge_per_window():
+    """The same lost update, on the production dialect (JSONB `-` / `||`). A TEMP table on the
+    test connection: nothing outside this test sees it."""
+    import os
+
+    from boss_engine.services.model_router import accounts
+
+    url = os.environ.get("BOSS_TEST_DATABASE_URL", "")
+    if not url.startswith("postgres"):
+        pytest.skip("needs BOSS_TEST_DATABASE_URL")
+    eng = create_engine(url, future=True)
+    settings = SimpleNamespace()
+    with eng.connect() as c:
+        c.execute(text("CREATE TEMP TABLE subscription_accounts (account_key TEXT PRIMARY KEY, "
+                       "engine TEXT, windows JSONB, learned_weekly_allowance_usd NUMERIC, "
+                       "updated_at TIMESTAMPTZ)"))
+        accounts._KEYS[("p1", "claude_code")] = (1e18, "claude_code:install")
+        accounts.observe(c, settings, "p1", "claude_code",
+                         error="You've hit your weekly limit · resets Oct 13 at 10am "
+                               "(America/Los_Angeles)")
+        c.execute(text("UPDATE subscription_accounts SET windows = windows || "
+                       "'{\"seven_day_opus\": {\"status\": \"rejected\", \"used\": 1.0}}'"))
+        accounts.observe(c, settings, "p1", "claude_code", event={"rate_limit_info": {
+            "status": "allowed", "rateLimitType": "five_hour", "utilization": 0.3,
+            "resetsAt": 4102444800}})
+        stored = c.execute(text("SELECT windows FROM subscription_accounts")).scalar()
+        assert {"seven_day", "seven_day_opus", "five_hour"} <= set(stored)
+        accounts.observe(c, settings, "p1", "claude_code", ok_model="sonnet")
+        stored = c.execute(text("SELECT windows FROM subscription_accounts")).scalar()
+        assert set(stored) == {"five_hour", "seven_day_opus"}
+        c.rollback()
+
+
+def test_low_the_openrouter_catalogue_is_loaded_before_the_first_suggestion(db):
+    """The first Smart snapshot's suggest() ran before the catalogue was read from the database
+    (and Fixed mode never read it): prices and tier picks came from the static defaults."""
+    from boss_engine.services import openrouter_catalog as cat
+
+    cat.remember([])
+    with db.begin() as c:
+        c.execute(text("CREATE TABLE provider_model_catalog (provider TEXT, model_id TEXT, "
+                       "name TEXT, prompt_usd_per_mtok NUMERIC, completion_usd_per_mtok "
+                       "NUMERIC, context_length INTEGER, tools BOOLEAN)"))
+        c.execute(text("INSERT INTO provider_model_catalog VALUES ('openrouter', "
+                       "'qwen/qwen3-coder', 'Qwen3 Coder', 0.2, 0.8, 262144, 1)"))
+    try:
+        assert store.load_catalogue_at_boot(db) == 1 and cat.price("qwen/qwen3-coder")
+        cat.remember([])
+        with db.begin() as c:
+            store.effective_policy(c, _settings(), "p1",
+                                   connected={"claude_code": {}, "openrouter": {}})
+        assert "qwen/qwen3-coder" in cat.cached()
+    finally:
+        cat.remember([])

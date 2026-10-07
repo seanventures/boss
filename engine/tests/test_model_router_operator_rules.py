@@ -379,3 +379,135 @@ def test_frontier_never_stands_in_on_a_model_it_cannot_name():
     assert d.refused and "No Frontier model" in d.refusal
     implement = go(b("implement", FEATURE), s)
     assert implement.engine == "native" and implement.fallback
+
+
+# ── Re-check 2 (FINDINGS.md, mr-recheck): each a class, each failing without its fix ─────────
+
+PII = {"title": "Summarise the PII export",
+       "instructions": "Summarise the customer PII export and the production database passwords."}
+
+
+def _agent(text, pol, **kw):
+    return RouteRequest(kind="agent", step="agent", project_id="p1", text=text,
+                        agent_policy=pol, **kw)
+
+
+@pytest.mark.parametrize("mode", ["smart", "fixed"])
+def test_H2_a_local_agent_runs_sensitive_work_on_its_local_model_and_says_so(mode):
+    """A Local agent WITH a local model was refused for any sensitive brief, with the false
+    "No local model connected". Local is the operator's explicit choice: the minimum applies
+    within the allowed sources."""
+    s = snap(mode=mode, sources={"claude_code": claude(), "openrouter": metered("openrouter"),
+                                 "ollama": local()})
+    d = go(_agent(PII["instructions"], {"selection_mode": "local"}), s)
+    assert not d.refused, d.refusal
+    assert d.engine == "ollama"
+    assert any("stays local by this agent's policy" in w for w in d.why), d.why
+    # And a sensitive BUILD stage on a Local allow-list policy is the same.
+    floored = go(_agent("Review the auth flow for security holes", {"selection_mode": "local"}),
+                 s)
+    assert floored.engine == "ollama" and not floored.refused
+
+
+def test_H2_the_no_local_model_message_is_only_said_when_it_is_true():
+    breaker.trip("ollama", "connection refused", seconds=60)
+    breaker.claim_trial("ollama")
+    s = snap(sources={"claude_code": claude(), "ollama": local()})
+    d = go(_agent("Summarise the notes", {"selection_mode": "local"}), s)
+    assert d.refused and "No local model connected" not in d.refusal
+    assert d.refusal.startswith("The local model (") and "failing" in d.refusal
+    assert d.retry_after_s is not None          # temporary: a stage would wait, not fail
+
+
+def test_H3_a_breaker_open_source_gets_one_half_open_trial_instead_of_a_refusal():
+    """walk2: a 503 on OpenRouter while Claude was exhausted hard-failed write_tests for the
+    breaker's 90 s, although OpenRouter had recovered."""
+    s = snap(sources={"claude_code": claude(weekly_spent=True),
+                      "openrouter": metered("openrouter")})
+    breaker.trip("openrouter", "Error code: 503 upstream", seconds=90)
+    # Right after the failure, no trial yet: refused, but only for now — with when to ask again.
+    first = go(b("write_tests", FEATURE), s)
+    assert first.refused and first.retry_after_s and first.retry_after_s <= breaker.TRIAL_GAP_S
+    breaker._TRIALS["openrouter"] -= breaker.TRIAL_GAP_S        # the gap has passed
+    trial = go(b("write_tests", FEATURE), s)
+    assert not trial.refused and trial.engine == "openrouter" and "half_open" in trial.rules
+    assert any("trial call" in w for w in trial.why)
+    # One trial per gap: a second route in the same moment does not pile on.
+    again = go(b("write_tests", FEATURE), s)
+    assert again.refused and again.retry_after_s
+
+
+def test_H3_a_temporary_refusal_waits_with_backoff_and_reason_then_routes():
+    from boss_engine.services.model_router.failover import wait_for_route
+
+    refused = type("D", (), {"refused": True, "retry_after_s": 3.0,
+                             "refusal": "No Frontier model can take this now (OpenRouter failing)"})
+    ok = type("D", (), {"refused": False, "retry_after_s": None, "engine": "openrouter"})
+    answers = [refused, refused, ok]
+    slept, said = [], []
+    d = wait_for_route(lambda: answers.pop(0), sleep=slept.append,
+                       on_wait=lambda dec, pause, waited: said.append((pause, waited)))
+    assert d is ok and slept == [5.0, 10.0] and said == [(5.0, 0.0), (10.0, 5.0)]
+
+
+def test_H3_the_wait_is_bounded_and_a_permanent_refusal_never_waits():
+    from boss_engine.services.model_router.failover import wait_for_route
+
+    s = snap(sources={"claude_code": claude(weekly_spent=True),
+                      "openrouter": metered("openrouter")})
+    breaker.trip("openrouter", "503", seconds=10_000)
+    slept = []
+
+    def route():
+        return go(b("write_tests", FEATURE), s)
+    d = wait_for_route(route, bound_s=40, sleep=lambda p: slept.append(p))
+    assert d.refused and sum(slept) == 40 and "Waited 40 s" in d.refusal
+    local_only = go(_agent("x", {"selection_mode": "local"}), snap())
+    assert local_only.retry_after_s is None                         # never waits
+    assert wait_for_route(lambda: local_only, sleep=slept.append) is local_only
+
+
+def test_H3_a_failed_half_open_trial_waits_and_tries_again_without_spending_a_hop():
+    from boss_engine.services.model_router.failover import FailoverAgent
+
+    outcomes = ["Error code: 503", "Error code: 503", None]
+
+    class OR:
+        def run_role(self, prompt, cwd, *, model=None, resume_session_id=None):
+            err = outcomes.pop(0)
+            if err:
+                raise RuntimeError(err)
+            return {"summary": "ok"}
+
+    trial = type("D", (), {"engine": "openrouter", "refused": False, "rules": ("half_open",)})()
+    agent = FailoverAgent(OR(), "m", "openrouter", reroute=lambda: (OR(), "m", trial))
+    assert agent.run_role("p", ".", model="m") == {"summary": "ok"}
+    assert breaker.open_reason("openrouter") is None            # a success closes the breaker
+
+
+def test_M5_budget_red_breaks_a_metered_session_onto_an_included_source():
+    s = snap(budget="red")
+    d = go(RouteRequest(kind="chat", step="chat", project_id="p1", text="hi", unit_id="t1",
+                        session_pin=Target("openrouter", "qwen/qwen3-coder")), s)
+    assert d.engine == "claude_code" and "session_broken" in d.rules
+    assert any("budget is spent" in w for w in d.why)
+
+
+@pytest.mark.parametrize("how", ["agent", "always"])
+def test_M5_a_metered_pin_is_refused_in_words_while_the_budget_is_red(how):
+    if how == "agent":
+        req = _agent("Summarise", {"selection_mode": "pinned",
+                                   "pinned_model": "openrouter:qwen/qwen3-coder"})
+        s = snap(budget="red")
+    else:
+        req = b("implement", FEATURE)
+        s = snap(budget="red", job_pins={"build": ("openrouter", "qwen/qwen3-coder")},
+                 pol=policy(hard_pins=("build",)))
+    d = go(req, s)
+    assert d.refused and not d.engine
+    assert d.refusal.startswith("Budget spent: this work is pinned to OpenRouter")
+    # Engine-only pins too (they used to run "pinned to OpenRouter anyway").
+    if how == "always":
+        d2 = go(req, snap(budget="red", job_pins={"build": ("openrouter", None)},
+                          pol=policy(hard_pins=("build",))))
+        assert d2.refused and "metered" in d2.refusal

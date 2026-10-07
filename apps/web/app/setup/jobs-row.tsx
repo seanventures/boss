@@ -71,6 +71,13 @@ function AddKey({ onDone }: { onDone: () => void }) {
   );
 }
 
+function storedLabel(job: Job): string {
+  const choice = job.choice!;
+  const source = job.options.find((o) => o.engine === choice.engine)?.label.split(" · ")[0]
+    ?? job.resolved?.label.split(" · ")[0] ?? choice.engine;
+  return choice.model ? `${source} · ${choice.model}` : source;
+}
+
 export function JobLine({ job }: { job: Job }) {
   const { projectId, view, apply } = useBoard();
   const [busy, setBusy] = useState(false);
@@ -104,6 +111,11 @@ export function JobLine({ job }: { job: Job }) {
         <select value={value} disabled={busy} aria-label={job.label} title={AUTO_TIP}
                 data-testid={`su-job-select-${job.job}`} onChange={(e) => void save(e.target.value)}>
           <option value="auto">{autoLabel}</option>
+          {job.choice && !job.options.some((o) => encode(o.engine, o.model) === value) ? (
+            // THE STORED CHOICE IS ALWAYS SHOWN: a model no longer among the options (renamed,
+            // its source re-listed) still reads as what is saved, never as "Auto".
+            <option value={value}>{storedLabel(job)}</option>
+          ) : null}
           {job.options.map((o) => (
             o.needs_key ? (
               <option key="add-key" value="add-key">{o.label} · Add key</option>

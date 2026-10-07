@@ -141,8 +141,11 @@ def effective_policy(connection: Any, settings: Any, project_id: Optional[str], 
     openrouter_models = None
     if "openrouter" in connected:
         try:
+            from .. import openrouter_catalog as cat
             from ..openrouter_catalog import suggest
 
+            if not cat.cached() and connection is not None:
+                cat.load(connection)        # before suggest(): the first snapshot sees prices
             openrouter_models = suggest()
         except Exception:  # noqa: BLE001
             openrouter_models = None
@@ -382,6 +385,19 @@ def snapshot(connection: Any, settings: Any, project_id: Optional[str], *,
 _CATALOGUE_REFRESHING = threading.Lock()
 
 
+def load_catalogue_at_boot(db_engine: Any) -> int:
+    """OpenRouter's persisted catalogue, into this process at start — Fixed mode prices calls
+    from it too (openai_adapter), and the first Smart snapshot suggests from it. Never raises."""
+    from .. import openrouter_catalog as cat
+
+    try:
+        with db_engine.connect() as connection:
+            return len(cat.load(connection))
+    except Exception:  # noqa: BLE001 — no table yet: the defaults stand
+        log.warning("OpenRouter catalogue not loaded at boot", exc_info=True)
+        return 0
+
+
 def _openrouter_catalogue(connection: Any, settings: Any, project_id: Optional[str]) -> None:
     """OpenRouter's priced catalogue: loaded from the database on first use, refreshed in the
     background when older than its TTL — never a network call on the routing path."""
@@ -471,6 +487,15 @@ def route(connection: Any, settings: Any, request: RouteRequest, *,
           ledger: Optional[EscalationLedger] = None, record_it: bool = True) -> RouteDecision:
     """The one call sites use: snapshot (cached), route (pure), record (one insert)."""
     mode = (request.mode_override or mode_of(connection, settings, request.project_id))
+    if request.agent_policy is None and request.role and request.kind in AGENT_KINDS:
+        # AN AGENT'S POLICY TRAVELS WITH ITS ROLE (re-check H1): whichever path asks for an
+        # agent's model — Talk, a panel seat, an agent step — its Local/Pinned policy binds,
+        # in Smart and Fixed, without each caller having to remember to look it up.
+        from dataclasses import replace
+
+        found = agent_model_policy(connection, request.project_id, request.role)
+        if found:
+            request = replace(request, agent_policy=found)
     agent_mode = str((request.agent_policy or {}).get("selection_mode") or "router").lower()
     # A Fixed route needs the connected sources only; Smart (or an agent's Local/Pinned policy,
     # or an experiment's Smart arm on a Fixed project) needs the whole picture, headroom too.
@@ -490,6 +515,9 @@ def route(connection: Any, settings: Any, request: RouteRequest, *,
         record(connection, decision)
     return decision
 
+
+#: The kinds of call an agent makes as itself (its role is an agent's role_key).
+AGENT_KINDS = frozenset({"chat", "agent", "panel"})
 
 _RECORDED: dict[str, float] = {}
 

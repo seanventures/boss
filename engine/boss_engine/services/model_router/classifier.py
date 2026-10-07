@@ -253,6 +253,10 @@ JEV_COOLDOWN_S = 60.0
 #: A classification made because a better classifier timed out is kept this long, not an hour.
 FALLBACK_TTL_S = 120.0
 _JEV_COOL_UNTIL = [0.0]
+#: The same for the cheap-model classifier: after it times out or fails, the rules answer for
+#: this long without asking it — a down Fast source must not cost every route its timeout.
+MODEL_COOLDOWN_S = 60.0
+_MODEL_COOL_UNTIL = [0.0]
 
 
 # ── The cascade ────────────────────────────────────────────────────────────────────────────────
@@ -269,6 +273,7 @@ class Classifier:
         with self._lock:
             self._cache.clear()
             _JEV_COOL_UNTIL[0] = 0.0
+            _MODEL_COOL_UNTIL[0] = 0.0
 
     def _get(self, key: str) -> Optional[Classification]:
         with self._lock:
@@ -329,7 +334,13 @@ class Classifier:
             result = replace(rules, classifier="rules", fallback_note=note)
             wants_model = config.backend == "model" or (
                 config.backend == "auto" and config.model_fallback)
-            if wants_model and model is not None and rules.confidence < config.model_below:
+            cooling = time.monotonic() < _MODEL_COOL_UNTIL[0]
+            if wants_model and model is not None and rules.confidence < config.model_below \
+                    and cooling:
+                result = replace(result, fallback_note=(note + "; " if note else "")
+                                 + "cheap model slow or failing — rules for a minute")
+                short = True
+            elif wants_model and model is not None and rules.confidence < config.model_below:
                 questions = questions or self._questions(signal, config)
                 try:
                     decider = model()
@@ -344,10 +355,12 @@ class Classifier:
                     result = replace(result, fallback_note=(note + "; " if note else "")
                                      + "cheap model timed out")
                     short = True
+                    _MODEL_COOL_UNTIL[0] = time.monotonic() + MODEL_COOLDOWN_S
                 except Exception:  # noqa: BLE001 — the rules' answer stands
                     result = replace(result, fallback_note=(note + "; " if note else "")
                                      + "cheap model failed")
                     short = True
+                    _MODEL_COOL_UNTIL[0] = time.monotonic() + MODEL_COOLDOWN_S
         # SENSITIVE WORK HAS A MINIMUM no classifier may lower (Decision 17).
         markers = sensitive_in(signal)
         floor = minimum_tier(signal, markers)

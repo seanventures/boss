@@ -600,6 +600,10 @@ def main() -> None:
             _install_log_capture(engine, service="worker")
         except Exception:  # noqa: BLE001 — never block the worker on a log handler
             LOGGER.warning("activity-log capture unavailable", exc_info=True)
+        # The model router's OpenRouter catalogue (prices, tier suggestions), in Fixed too.
+        from boss_engine.services.model_router.store import load_catalogue_at_boot
+
+        load_catalogue_at_boot(engine)
     LOGGER.info(
         "worker_started worker_id=%s database_connected=%s control_plane_url=%s github_configured=%s openai_configured=%s",
         settings.worker_id,

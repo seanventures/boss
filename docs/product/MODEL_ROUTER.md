@@ -180,20 +180,28 @@ version. It contains:
    this, so both keep working unchanged.
 2. **An agent pin (hard), read in Fixed mode too:** the Agent Studio model policy.
    - `pinned` → that engine and model;
-   - `local` → only local sources, ever. With none connected, the call is **refused in words**
-     ("No local model connected — connect one or change this agent's policy"), in chat and builds;
+   - `local` → only local sources, ever — and the operator's explicit choice, so a minimum (the
+     sensitive-work Frontier minimum, a floor) applies **within** the local sources: a Local agent
+     with a local model runs sensitive work locally and says so ("Sensitive work stays local by
+     this agent's policy"). With none connected, the call is **refused in words** ("No local
+     model connected — connect one or change this agent's policy"); with one connected that
+     cannot run now, the refusal names it and why. In Talk, panel seats, agent steps and builds;
+     the policy travels with the agent's role, so every path that names the role gets it;
    - `router` → routed like any step, with the role's floors.
 3. **A job preference (soft):** today's *Who does what* rows, migrated. On Smart a job's choice
-   picks the source and model *within* the tier — but a floor raises it ("Floor raised your pin:
-   haiku → opus"), and headroom rules and exhaustion can still move it.
+   picks the source and model *within* the tier — a floor raises it ("Floor raised your pin:
+   haiku → opus"), a model above the step's tier is lowered to that source's model for the tier
+   (a soft Opus preference never runs trivial work on Opus), and headroom rules and exhaustion
+   can still move it.
 4. **A job pin marked *Always* (hard):** the explicit "Always use, even when limited" choice, with
    a visible warning. Even then a floor raises the model on that source.
 5. **A profile's step pin (soft):** a profile that names a model for a step (`implement:
    claude_code:sonnet`) is a preference within the tier; one that names a Frontier-class model
    (`review_code: claude_code:opus`) is a Frontier floor, classified by tier, not by string.
 
-A pinned or session model is always recorded at **its own** tier, so a record never shows a tier
-that disagrees with the model that ran.
+Every route is recorded at **the model's own** tier — the operator's tier list first, then the
+model's class by name — whatever chose it (a pin, a session, a preference, a stand-in), so a record
+never shows a tier that disagrees with the model that ran.
 
 ### (c) Source selection: which source takes the tier *now*
 
@@ -249,7 +257,11 @@ its own window: an *Opus limit* makes Opus exhausted while Sonnet and Haiku stay
 (`subscription_accounts`: a stored key's secret ref, a hash prefix of the install token, or the
 host's CLI login), so one project hitting the weekly limit is known to every project on that
 login, and the learned allowance is the account's. A later **successful** call clears the
-rejected windows it proves wrong (a Sonnet success clears the week, not Opus's window).
+rejected windows it proves wrong (a Sonnet success clears the week, not Opus's window). Writes
+merge **per window** into the stored row (JSONB `-`/`||`), so two workers never erase each other's
+windows from a stale cache. The CLI's status wins over its number: `utilization: 1` with status
+`allowed` is near the limit, not exhausted. A reset given as a time of day alone ("resets
+12:30am (Australia/Sydney)") is never read as the weekly window, however far away it falls.
 
 **Nothing is stranded.**
 
@@ -257,14 +269,22 @@ rejected windows it proves wrong (a Sonnet success clears the week, not Opus's w
    **circuit breaker** for a short time, and the *same* step retries at once on the next source in
    its tier (a failed call has no session to preserve). A weekly limit reached mid-build reroutes
    the stage automatically — no manual retry.
-2. **At a boundary:** the same tier on any other connected source with a default model for it.
-3. **Sticky sessions** (a chat thread, an agent run) keep their model only while its source can
-   run; an exhausted or failing source starts a new session elsewhere.
-4. **Where nothing may run, a refusal in words:** Frontier goes subscription Frontier → metered
+2. **A breaker is half-open, and a stage waits rather than fails** (Decision 21). When nothing else
+   can take the work, a source out only because its breaker is open gets **one trial call** (at
+   most one per source every 20 s); a success closes the breaker. When even that is not yet due,
+   the refusal is marked temporary, and a build stage waits and asks again with a bounded backoff
+   (5, 10, 20, 30, 60 s…, up to 10 minutes), recording `code_task.stage_waiting` with the reason
+   in words. Only after the bound does the stage fail, and its message says how long it waited.
+3. **At a boundary:** the same tier on any other connected source with a default model for it.
+4. **Sticky sessions** (a chat thread, an agent run) keep their model only while its source can
+   run; an exhausted or failing source — or a metered one while the budget is red — starts a new
+   session elsewhere.
+5. **Where nothing may run, a refusal in words:** Frontier goes subscription Frontier → metered
    Frontier (OpenRouter Opus) → *"No Frontier model can take this now…"* — never silently a local
    model, unless the operator allowed local for Frontier. A Local-only agent never leaves its
    allow-list. With the **budget spent**, nothing new is metered: the subscription's lower tier
-   within the floors, else *"Waiting for budget or limit reset"*.
+   within the floors, else *"Waiting for budget or limit reset"*; an agent pin or an *Always* job pin
+   on a metered source is refused while red (*"Budget spent: this work is pinned to OpenRouter…"*).
 
 ### (d) Escalation: start low, move up on evidence
 
@@ -454,7 +474,9 @@ from Monday to Sunday:
    Routing therefore works with Jev held (today), absent (most installs) or slow.
 9. **Respect the Jev hold.** Live Jev calls are paused under BOSS-451. The router does not
    bypass that with a direct HTTP call. It shows *Jev · paused* and uses the rules. The cheap-model
-   classifier goes through the governed adapter: reserved, receipted and settled.
+   classifier goes through the governed adapter: reserved, receipted and settled. Like Jev, it has
+   a one-minute cooldown after it times out or fails, so a down Fast source never costs every
+   route its timeout.
 10. **Escalation is generic and recorded.** The two hard-coded escalations become rules over named
     signals. New signals (review asks for changes twice, a gate fails) use the same mechanism,
     and every escalation is visible on the route.
@@ -467,16 +489,22 @@ from Monday to Sunday:
 13. **"Smart vs Fixed" is an experiment knob.** The router's own value is measured on the same
     score as every other harness change, not asserted. The Smart arm on a Fixed project gets the
     full Smart snapshot, headroom included.
-14. **Limit state is live and account-wide; nothing is stranded.** *(New.)* Windows are pooled per
-    subscription account; a success clears what it disproves; a call-time failure trips a circuit
-    breaker and the same step retries on the next source; sticky sessions break when their
-    source cannot run.
-15. **Local means local.** *(New.)* A Local-only agent, or an allow-list with nothing connected in
-    it, refuses in words rather than falling back to the cloud — in chat and builds, in Fixed mode
-    too.
-16. **A spent budget means no new metered spend.** *(New.)* With the budget red, the router keeps
-    work on included sources (the subscription's lower tier within the floors) or waits, in
-    words; it never moves work to OpenRouter.
+14. **Limit state is live and account-wide; nothing is stranded.** *(New; revised after the
+    re-check.)* Windows are pooled per subscription account and merged per window, so concurrent
+    workers never lose one another's; a success clears what it disproves; a call-time failure
+    trips a circuit breaker and the same step retries on the next source; sticky sessions break
+    when their source cannot run.
+15. **Local means local — and Local is the operator's explicit choice.** *(New; revised after the
+    re-check.)* A Local-only agent, or an allow-list with nothing connected in it, refuses in words
+    rather than falling back to the cloud — in Talk, panel seats, agent steps and builds, in Fixed
+    mode too. The policy is found by the agent's role at the router, not by each caller. A
+    minimum (sensitive work, a floor) applies within the allowed sources, so a Local agent with a
+    local model runs sensitive work locally and says so.
+16. **A spent budget means no new metered spend.** *(New; revised after the re-check.)* With the
+    budget red, the router keeps work on included sources (the subscription's lower tier within
+    the floors) or waits, in words; it never moves work to OpenRouter. A sticky session on a
+    metered source breaks onto an included one, and an agent pin or an *Always* job pin on a
+    metered source is refused in words. A task pin (spend-cap failover, an experiment) is exempt.
 17. **Sensitive work has a minimum no classifier can lower.** *(New.)* Auth/OAuth, secrets,
     passwords, production databases, migrations, payments and security set Frontier for work (and
     Balanced for a chat answer). Jev or a model may raise it, never lower it, and a stated
@@ -490,7 +518,15 @@ from Monday to Sunday:
     15% and left at 20%; a policy value out of range is refused with its field, never clamped.
 20. **OpenRouter defaults have a quality floor.** *(New.)* Tier suggestions come from a curated
     list per tier with a minimum context (Fast is a good small coder, not a 3B model), and a
-    non-Frontier model is refused as the Frontier tier, with the reason.
+    non-Frontier model is refused as the Frontier tier, with the reason. The catalogue is loaded
+    from the database when a process starts (API and worker, Fixed mode too: it prices calls)
+    and before the first suggestion. Model names are tiered by whole size tokens ("27b" is not
+    "7b", "8x7b" is a mixture of experts) and markers (`-fast` is Fast).
+21. **A temporary outage never fails a stage.** *(New, from the re-check.)* A source whose
+    breaker is open gets one half-open trial call when nothing else can take the work; a
+    refusal that is only temporary carries when to ask again, and a build stage waits with a
+    bounded backoff (up to 10 minutes), saying why, before it fails. A soft preference stays
+    within the step's tier, and every route is recorded at its model's own tier.
 
 ## UI
 

@@ -75,3 +75,34 @@ def test_fixed_mode_provider_limits_read_the_same_corpus():
             assert signal is None, message
         else:
             assert signal is not None and signal.exhausted, message
+
+
+def test_low_a_time_of_day_reset_is_never_read_as_the_week():
+    """'You've hit your limit · resets 12:30am (Australia/Sydney)' seen at Thu 15:00 UTC is
+    ~22 h away and was filed as the WEEKLY window (teaching a wrong weekly allowance)."""
+    from datetime import datetime, timezone
+
+    from boss_engine.services.model_router.headroom import windows_from_limit_message
+
+    now = datetime(2026, 10, 8, 15, 0, tzinfo=timezone.utc)
+    got = windows_from_limit_message("You've hit your limit · resets 12:30am "
+                                     "(Australia/Sydney)", now)
+    assert list(got) == ["five_hour"] and got["five_hour"]["resets_at"].startswith(
+        "2026-10-09T13:30")
+    dated = windows_from_limit_message("You've hit your limit · resets Oct 13 at 10am "
+                                       "(America/Los_Angeles)", now)
+    assert list(dated) == ["seven_day"]
+
+
+def test_low_utilization_one_with_status_allowed_is_near_the_limit_not_exhausted():
+    from boss_engine.services.model_router.headroom import assess, windows_from_rate_limit_event
+
+    windows = windows_from_rate_limit_event({"rate_limit_info": {
+        "status": "allowed", "rateLimitType": "seven_day", "utilization": 1}})
+    h = assess("claude_code", {"windows": windows},
+               thresholds={"tight": 0.4, "near_limit": 0.15})
+    assert h.state == "near_limit"
+    rejected = windows_from_rate_limit_event({"rate_limit_info": {
+        "status": "rejected", "rateLimitType": "seven_day", "utilization": 1}})
+    assert assess("claude_code", {"windows": rejected},
+                  thresholds={"tight": 0.4, "near_limit": 0.15}).state == "exhausted"
