@@ -1400,7 +1400,7 @@ def _s2(env: Env, j: Journey, *, fresh: bool, api_env: dict[str, str] | None = N
         if head < 2.0:
             raise RuntimeError(f"not starting {env.args.stack2}: only {head:.1f} GiB free in the docker VM")
         s2 = Stack2.from_main(Path(env.args.env_file), project=env.args.stack2,
-                              out_dir=Path(env.args.env_file).parent)
+                              out_dir=Path(env.args.env_file).parent, main_project=env.args.project)
         env.shared["_s2"] = s2
         env.shared.setdefault("_cleanup", []).append(lambda: _s2_down(env))
         fresh = True
@@ -1845,7 +1845,9 @@ def j7(env: Env, j: Journey) -> None:
     j.check("API: carol is disabled in BOSS", u.get("status") == "disabled", expect="status disabled", actual=u.get("status"))
     if carol_in:
         gone = K.raw_fetch(cpage, "GET", "/v1/identity/me", csrf=False)
-        j.check("her live session ends", gone["status"] == 401, expect="401", actual=gone["status"])
+        gb = gone.get("body") if isinstance(gone.get("body"), dict) else {}
+        j.check("her live session ends", gone["status"] == 401, expect="401",
+                actual=f"{gone['status']} " + short({k: gb.get(k) for k in ("principal_id", "email", "auth_method", "method", "legacy", "error")}))
     landed2 = _sso_sign_in(cpage, web, pid, "carol", pw["carol"], j, "carol-after-scim-disable")
     if "/callback" in landed2:
         j.note("the SSO callback did not redirect; API log: " + _last_exception(s2))
