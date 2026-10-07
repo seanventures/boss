@@ -739,7 +739,7 @@ def build_identity_agents_router() -> APIRouter:
         return {"redirect": url}
 
     @router.get("/v1/identity/me/connections/{provider}/callback")
-    @authenticated(self_only=True)
+    @authenticated(self_only=True, people_only=True)
     def connect_callback(provider: str, request: Request, code: str = "", state: str = ""):
         from fastapi.responses import RedirectResponse
 
