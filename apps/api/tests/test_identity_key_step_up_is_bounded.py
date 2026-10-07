@@ -45,8 +45,12 @@ def world(engine) -> IdentityWorld:
 
 
 def _sak_ctx(world, sa, scopes):
-    cred = CredentialRef(id=f"key_{uuid.uuid4().hex[:8]}", kind="sak", principal_id=sa.id,
-                         scopes=frozenset(scopes))
+    key_id = f"key_{uuid.uuid4().hex[:8]}"
+    with world.engine.begin() as db:
+        db.execute(text("INSERT INTO identity_api_credentials (id, principal_id, kind, name, token_hash, scopes, "
+                        "created_by) VALUES (:id, :p, 'sak', 'ci', :h, :s, 'test')"),
+                   {"id": key_id, "p": sa.id, "h": uuid.uuid4().hex, "s": list(scopes)})
+    cred = CredentialRef(id=key_id, kind="sak", principal_id=sa.id, scopes=frozenset(scopes))
     return AuthContext(sa, AuthMethod.API_KEY, credential=cred)
 
 
