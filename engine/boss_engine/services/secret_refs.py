@@ -35,6 +35,9 @@ class SecretRefService:
         "platform_secret_store",
         "infisical",
         "database",
+        # The GitHub App connected in Setup › GitHub access: resolved at use time to a fresh
+        # 1-hour installation token by identity/github_setup.py. Nothing is stored for it.
+        "identity_github",
     }
     ALLOWED_SCOPE_TYPES = {"org", "workspace", "project"}
     ALLOWED_SECRET_KINDS = {
@@ -54,6 +57,7 @@ class SecretRefService:
         "platform_secret_store",
         "infisical",
         "database",
+        "identity_github",
     }
     ALLOWED_STATUSES = {
         "active",
@@ -513,6 +517,7 @@ class SecretRefService:
             "platform_secret_store": "platform_secret_store",
             "infisical": "infisical",
             "database": "database",
+            "identity_github": "identity_github",
         }[ref_kind]
 
     @staticmethod

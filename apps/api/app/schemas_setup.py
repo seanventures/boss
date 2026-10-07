@@ -192,6 +192,10 @@ class RepositoryTokenBody(_Body):
     accept_database_fallback: bool = False
 
 
+class RepositoryAppBody(_Body):
+    """Use the GitHub App connected in GitHub access (no fields beyond the project)."""
+
+
 class RepositorySelectBody(_Body):
     connection_id: str
     full_name: str

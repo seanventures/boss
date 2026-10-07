@@ -804,9 +804,33 @@ class DatabaseBackend:
             return {"ok": False, "kind": self.kind, "error": str(exc)}
 
 
+class IdentityGitHubBackend:
+    """`identity_github:app`: the GitHub App connected in Setup › GitHub access. Nothing is stored
+    under this reference: each read mints a 1-hour installation token (contents and pull requests
+    write, checks read; never admin or workflows) from the App's key in the identity vault."""
+
+    kind = "identity_github"
+
+    def get(self, key: str) -> str:
+        from boss_engine.db import begin
+        from boss_engine.identity import github_setup
+
+        if key != "app":
+            raise SecretUnavailable("identity_github references name the App: identity_github:app")
+        try:
+            with begin() as db:
+                return github_setup.installation_token_all(db)
+        except github_setup.GitHubSetupError as exc:
+            raise SecretUnavailable(f"the GitHub App is not usable: {exc.code}") from None
+        except Exception as exc:  # noqa: BLE001 — a refusal from GitHub, a missing key
+            raise SecretUnavailable(f"the GitHub App is not usable: {type(exc).__name__}") from None
+
+
 def backend_for(kind: str, settings: Settings) -> SecretBackend:
     """Map a stored `ref_kind`/`storage_backend` onto an implementation."""
     normalised = (kind or "").strip().lower()
+    if normalised == "identity_github":
+        return IdentityGitHubBackend()
     if normalised in ("env", "environment"):
         return EnvBackend()
     if normalised in ("database", "db", "postgres"):

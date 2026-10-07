@@ -7,10 +7,12 @@
 import React, { forwardRef, useEffect, useRef, useState } from "react";
 import { CircleNotch, Plus } from "@phosphor-icons/react";
 
+import { idGet } from "../../lib/identity/api";
 import { fetchRepos, fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import { ageLabel, daysUntil } from "../../lib/setup-stepper";
 import type { CheckResult, RepoEntry, SetupRefusal, SetupView, TokenFound } from "../../lib/setup-types";
 import { Drawer } from "./drawer";
+import { statusOf } from "./github-access-row";
 import { AskBoss, CONSENT_REFUSAL, Consent, RowMenu, toast, useBoard } from "./parts";
 import { Out, Pill, Refusal, Tip } from "./pill";
 import { RepoPicker } from "./repo-picker";
@@ -56,6 +58,29 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const needsConsent = view.secrets.needs_consent;
   const host = typeof window !== "undefined" ? window.location.hostname : "this server";
+  // THE APP FIRST: with a GitHub App connected in GitHub access, no token is pasted at all.
+  const [appAccount, setAppAccount] = useState<string | null>(null);
+  useEffect(() => {
+    if (connectionId) return;
+    let live = true;
+    idGet<unknown>("/v1/identity/github").then((raw) => {
+      const s = statusOf(raw);
+      if (live && s?.app.installed) setAppAccount(s.app.account ?? "");
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [connectionId]);
+
+  const useApp = async () => {
+    setPhase("checking");
+    setRefusal(null);
+    try {
+      setFound(await setupWrite<TokenFound>(projectId, "repo_app", {}, { label: "Use the GitHub App" }));
+      setPhase("found");
+    } catch (error) {
+      setRefusal(refusalOf(error));
+      setPhase("idle");
+    }
+  };
 
   const submit = async (value: string) => {
     if (!value.trim()) return;
@@ -121,7 +146,7 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
       <div className="su-form" data-testid="su-token-found">
         <div className="su-line">
           <span className="su-dot su-tone-green" aria-hidden="true" />
-          <span>Signed in as <span className="su-mono" data-user-text>@{found?.account_login}</span></span>
+          <span>{found?.source === "github_app" ? "GitHub App on" : "Signed in as"} <span className="su-mono" data-user-text>@{found?.account_login}</span></span>
           {days !== null && days <= EXPIRY_SHOWN_DAYS ? (
             <Tip tip="Builds stop when it expires. Make a new token before then." className="su-faint">
               Expires in {days}d
@@ -143,6 +168,16 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
   }
   return (
     <div className="su-form" data-testid="su-token-form">
+      {appAccount !== null ? (
+        <div className="su-line">
+          <button type="button" className="su-btn su-btn-primary" onClick={useApp} disabled={phase === "checking"}
+                  data-testid="su-use-app" title="No token: the App's short-lived tokens, for its repos."
+                  data-tip="No token: the App's short-lived tokens, for its repos.">
+            Use the GitHub App{appAccount ? ` · @${appAccount}` : ""}
+          </button>
+          <span className="su-faint">or paste a token</span>
+        </div>
+      ) : null}
       <label className="su-field">
         <span className="su-sr">Token</span>
         <input type="password" autoComplete="off" spellCheck={false} value={token}

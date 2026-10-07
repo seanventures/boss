@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from boss_engine.db import begin
 
 from ..schemas_setup import (
-    BudgetBody, ChecksBody, JobBody, ModelConnectBody, RepositorySelectBody,
+    BudgetBody, ChecksBody, JobBody, ModelConnectBody, RepositoryAppBody, RepositorySelectBody,
     RepositoryTokenBody, SetupView, SourceModelBody, TryBody, dump,
 )
 
@@ -80,6 +80,20 @@ def build_setup_router(
                     connection, get_settings(), body.project_id, body.token,
                     connection_id=body.connection_id,
                     accept_database_fallback=body.accept_database_fallback, actor=actor)
+            except setup_actions.SetupActionError as error:
+                fail(error)
+        raise AssertionError("unreachable")
+
+    @router.post("/v1/setup/repository/app")
+    @permit(P.GITHUB_CONNECT, scope=Scope.project(body="project_id"))
+    def post_repository_app(body: RepositoryAppBody) -> dict[str, Any]:
+        """Use the GitHub App connected in GitHub access: list what it can reach (no token)."""
+        actor = actor_for(body.actor)
+        with begin(engine) as connection:
+            require_actor(connection, body.project_id, actor, "github_manage")
+            try:
+                return setup_actions.repository_from_app(connection, get_settings(), body.project_id,
+                                                         actor=actor)
             except setup_actions.SetupActionError as error:
                 fail(error)
         raise AssertionError("unreachable")

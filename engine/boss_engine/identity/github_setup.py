@@ -356,6 +356,40 @@ def control_plane_token(db: Any, owner: str, repo: str) -> Optional[str]:
     return None
 
 
+def installation_token_all(db: Any) -> str:
+    """A 1-hour installation token for every repo the Setup-created App is installed on, with the
+    control plane's permissions. Backs Setup › Repo's "GitHub App" connection (secret ref
+    `identity_github:app`); the worker uses it, a build's sandbox never does."""
+    cfg = app_config(db)
+    if cfg["source"] != "setup" or not app_ready(db):
+        raise GitHubSetupError("app_not_connected", 409)
+    resp = github_app._call("POST", f"/app/installations/{cfg['installation_id']}/access_tokens",  # noqa: SLF001
+                            token=github_app.app_jwt(db), body={"permissions": dict(CONTROL_PLANE_PERMISSIONS)})
+    if resp.status not in (200, 201):
+        raise GitHubSetupError("mint_failed", 502, status=resp.status)
+    return str((resp.json() or {})["token"])
+
+
+def installation_repositories(db: Any) -> list[dict[str, Any]]:
+    """The repositories the App can reach, in Setup's repo-picker shape."""
+    token = installation_token_all(db)
+    out: list[dict[str, Any]] = []
+    for page in range(1, 4):
+        resp = github_app._call("GET", f"/installation/repositories?per_page=100&page={page}", token=token)  # noqa: SLF001
+        if resp.status != 200:
+            raise GitHubSetupError("repositories_unavailable", 502, status=resp.status)
+        items = (resp.json() or {}).get("repositories") or []
+        for item in items:
+            if isinstance(item, dict) and "/" in str(item.get("full_name") or ""):
+                owner = item.get("owner") if isinstance(item.get("owner"), dict) else {}
+                out.append({"full_name": str(item["full_name"]), "private": bool(item.get("private")),
+                            "default_branch": item.get("default_branch"),
+                            "owner_type": str(owner.get("type") or "Organization")})
+        if len(items) < 100:
+            break
+    return out
+
+
 # ---- what egress uses, and what posture says ----------------------------------------------------------------
 
 def mode(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
