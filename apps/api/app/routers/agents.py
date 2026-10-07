@@ -270,7 +270,7 @@ def build_agents_router(
             require_reader(connection, project_id)
             out = agent_instructions.listing(connection, project_id, role_key)
             out["can_edit"] = bool(actor_can and actor_can(connection, project_id, actor,
-                                                           "role_review"))
+                                                           "role_review", P.AGENT_UPDATE))
             return out
 
     @router.get("/v1/agents/{role_key}/instructions/{ins_id}")
