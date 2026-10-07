@@ -295,7 +295,7 @@ export function GitHubOperations({
         )}
         {canManage && selectedBinding ? (
           <div className="ghx-inline-actions">
-            <ActionForm permission="github:read" action={testGitHubConnectionAction}>
+            <ActionForm permission="github:manage" action={testGitHubConnectionAction}>
               <HiddenScope projectId={feed.projectId} actor={actor} />
               <input type="hidden" name="connection_id" value={selectedBinding.connection_id} />
               <input type="hidden" name="repository_binding_id" value={selectedBinding.id} />

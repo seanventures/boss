@@ -379,7 +379,7 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
 }
 
 export function ConfirmFeedback({ threadId, workflowName }: { threadId: string; workflowName?: string }) {
-  const [state, action, pending] = useActionState(callAction(confirmCodeTaskFeedbackAction, undefined, "feedback:submit"), null);
+  const [state, action, pending] = useActionState(callAction(confirmCodeTaskFeedbackAction, undefined, "code_task:steer"), null);
   return (
     <form action={action} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       <input type="hidden" name="thread_id" value={threadId} />
@@ -479,7 +479,7 @@ export function FeedbackControls({ runId, status, anchor = "", projectId }: {
   runId: string; status: string; anchor?: string; projectId: string;
 }) {
   const completed = status === "completed";
-  const [state, action, pending] = useActionState(callAction(submitCodeTaskFeedbackAction, undefined, "feedback:submit"), null);
+  const [state, action, pending] = useActionState(callAction(submitCodeTaskFeedbackAction, undefined, "code_task:steer"), null);
   const workflows = useProjectWorkflows(projectId);
   const [picked, setPicked] = useState<string | null>(null);
   const [message, setMessage] = useState("");
