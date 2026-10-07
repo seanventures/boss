@@ -242,3 +242,30 @@ def test_the_host_key_commands_are_host_shell_only():
             (root / "engine/boss_engine/mcp").rglob("*.py")):
         text_ = path.read_text(encoding="utf-8")
         assert "issue_host_key" not in text_ and "issue_mcp_key" not in text_, path
+
+
+# ---- a host that cannot fence the build sandbox keeps BOSS up (audit U6) ------------------------
+
+def test_a_host_without_the_network_fence_holds_builds_and_says_how_to_fix_it(tmp_path, monkeypatch):
+    from boss_engine.services import sandbox_identity
+
+    monkeypatch.setattr(sandbox_identity, "SHIM_ROOT", str(tmp_path))
+    monkeypatch.setenv("BOSS_SANDBOX_NETWORK", "enforce")
+    assert sandbox_identity.network_problem() is None
+    (tmp_path / sandbox_identity.NETWORK_PROBLEM_MARKER).write_text(
+        "iptables owner-match rules could not be installed\n")
+    assert not sandbox_identity.network_fenced()
+    reason = sandbox_identity.unavailable_reason()
+    assert "BOSS_SANDBOX_NETWORK=off" in reason and "SANDBOX.md" in reason
+    assert sandbox_identity.status()["network_problem"]
+
+
+def test_the_entrypoint_starts_without_the_fence_unless_told_to_refuse():
+    import pathlib
+
+    script = (pathlib.Path(__file__).resolve().parents[2] / "scripts/sandbox/entrypoint.sh").read_text()
+    failure = script[script.index("if ! fence_network; then"):script.index('chown root:root "$SHIM_ROOT/.network-fenced"')]
+    # the only exit on a failed fence is the explicit `required` mode
+    assert failure.count("exit 1") == 1
+    assert 'if [ "$MODE" = "required" ]; then' in failure
+    assert ".network-unfenced" in failure
