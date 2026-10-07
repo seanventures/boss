@@ -236,6 +236,16 @@ def claim(db: Any, req: ClaimRequest, *, ip: Optional[str], bridged: Optional[Au
     return user
 
 
+def proof_method(*, setup_token: Optional[str], legacy_password: Optional[str]) -> str:
+    """The sign-in method a successful claim's session records: the proof `_authorise` accepted,
+    in its precedence (a setup link, then the shared password, then the network bridge)."""
+    if setup_token:
+        return "setup_link"
+    if legacy_password:
+        return "legacy_password"
+    return "network"
+
+
 def claim_origin(path: str, req: ClaimRequest, headers: dict[str, str]) -> str:
     """The origin a claim binds (H2). The network path's was confirmed on screen and checked
     against the addressed host in `_authorise`; the others' is the browser's Origin header, which

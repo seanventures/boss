@@ -552,8 +552,12 @@ def build_identity_me_router() -> APIRouter:
                 if blocked:
                     return blocked
                 had = users.factors(db, ctx.principal.id).any_second_factor
-                if not totp.confirm_enrolment(db, principal=ctx.principal,
-                                              session_token=request.cookies.get(SESSION_COOKIE) or "",
+                token = request.cookies.get(SESSION_COOKIE) or ""
+                if not totp.has_pending_enrolment(db, principal=ctx.principal, session_token=token):
+                    # Not a wrong code: there is no key to check it against. Said as such, so the
+                    # console starts a fresh enrolment instead of "That code didn't work" forever.
+                    return error(409, "enrolment_expired")
+                if not totp.confirm_enrolment(db, principal=ctx.principal, session_token=token,
                                               code=body.code):
                     return error(400, "invalid_code")
                 emit(db, org_id=ctx.principal.org_id, event_type="mfa.enrolled", outcome=Outcome.SUCCESS,

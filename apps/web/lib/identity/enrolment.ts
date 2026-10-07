@@ -14,6 +14,10 @@ import type { MeResponse } from "./contract";
 
 export const ENROLMENT_REQUIRED = "mfa_enrolment_required";
 export const ENROLMENT_GRANT_REQUIRED = "enrolment_grant_required";
+/** 409 from confirming an authenticator: no live enrolment for this browser (the key expired or
+ *  was replaced) — the code was never checked. The step shows a fresh key instead. */
+export const ENROLMENT_EXPIRED = "enrolment_expired";
+export const ENROLMENT_EXPIRED_WORDS = "That key expired. Scan the new code (or type the new key), then enter the 6 digits.";
 
 export const ENROLMENT_GRANT_WORDS =
   "You can't add a second factor from this session. Ask an admin to reset your second factor, then sign in again.";

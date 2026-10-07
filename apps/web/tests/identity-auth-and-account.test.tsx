@@ -222,6 +222,30 @@ describe("Enrolment and recovery codes", () => {
   });
 });
 
+describe("An authenticator key that expired is replaced, never “That code didn't work” forever (hotfix, boss-1)", () => {
+  it("confirm answered 409 enrolment_expired: a NEW key is shown with the reason, and its code enrols", async () => {
+    let begins = 0;
+    routes({
+      "GET /v1/identity/me": { body: { csrf_token: "c" } },
+      "POST /v1/identity/me/mfa/totp/confirm": (body) => (body as { code: string }).code === "222222"
+        ? { body: { enrolled: true, recovery_codes: CODES } }
+        : { status: 409, body: { error: "enrolment_expired" } },
+      "POST /v1/identity/me/mfa/totp": () => { begins += 1; return { body: { secret: `KEYNUMBER${begins}`, otpauth_uri: "otpauth://totp/x", qr_svg: null } }; },
+    });
+    const el = await mount(<Enrol host="100.64.0.20" next="/identity" who={null} passkeyReason="passkey_needs_domain" />);
+    expect(el.textContent).toContain("KEYNUMBER1");
+    type(el.querySelector("input[aria-label='Digit 1 of 6']"), "111111");
+    await settle();
+    expect(begins).toBe(2);
+    expect(el.textContent).toContain("KEYNUMBER2");
+    expect(el.textContent).not.toContain("KEYNUMBER1");
+    expect(el.querySelector("[role='alert']")?.textContent).toContain("That key expired");
+    type(el.querySelector("input[aria-label='Digit 1 of 6']"), "222222");
+    await settle();
+    expect(el.textContent).toContain(CODES[9]);
+  });
+});
+
 describe("The real API's shapes (S1)", () => {
   it("a first passkey shows the recovery codes the API issued with it, and asks for no new set", async () => {
     routes({
