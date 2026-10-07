@@ -20,6 +20,7 @@ import {
   KINDS, createBody, emptyForm, formOf, idpUrls, missing, needsIssuer, patchBody, protocolOf, providerRefusal, reserveProviderId,
   type ProviderForm, type ProviderKind,
 } from "./provider-form";
+import { GUIDES, SIGN_IN_DOC, type Guide } from "../../../lib/identity/sso-guides";
 
 /** A value the admin copies into their IdP: label, the value, Copy. */
 export function CopyRow({ label, value, tip }: { label: string; value: string; tip?: string }) {
@@ -147,7 +148,7 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
         <section className="idn-sso-first" data-testid="provider-first">
           <b>1. Paste this into {kindLabel}</b>
           <IdpUrls origin={origin} provider={{ id: reserved, protocol, saved: false }} />
-          {kind === "google" ? <p className="idn-dim idn-small" data-copy="prose" data-testid="google-hint">While the Google app is in testing, add yourself as a Test user under Audience.</p> : null}
+          <SetupGuide kind={kind} />
         </section>
       ) : null}
       {!editing ? <b className="idn-sso-step">2. Its client ID and secret</b> : null}
@@ -229,9 +230,12 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
           </>
         ) : null}
       </div>
-      <div className="idn-hr" />
-      <span className="idn-label">For your IdP</span>
-      <IdpUrls origin={origin} provider={{ id: initial?.id ?? null, protocol, saml_sp_entity_id: form.saml_sp_entity_id || null }} />
+      {/* Adding shows these FIRST (step 1, above); editing shows them here. Never both. */}
+      {editing ? <>
+        <div className="idn-hr" />
+        <span className="idn-label">For your IdP</span>
+        <IdpUrls origin={origin} provider={{ id: initial?.id ?? null, protocol, saml_sp_entity_id: form.saml_sp_entity_id || null }} />
+      </> : null}
       {initial && origin && form.client_auth === "private_key_jwt" && initial.client_auth === "private_key_jwt" ? (
         <CopyRow label="BOSS public key" value={`${origin.replace(/\/+$/, "")}/v1/identity/providers/${encodeURIComponent(initial.id)}/jwks`} tip="Register this key URL in your IdP" />
       ) : null}
@@ -246,5 +250,38 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
         </button>
       </div>
     </Sheet>
+  );
+}
+
+/**
+ * "HOW TO SET THIS UP" for one provider kind (lib/identity/sso-guides.ts, the same table the docs
+ * are written from). Open the first time someone adds that kind, folded after that.
+ */
+export function SetupGuide({ kind }: { kind: string }) {
+  const guide = (GUIDES as Record<string, Guide | undefined>)[kind];
+  const [open] = useState(() => {
+    try {
+      const key = `boss.sso-guide-seen.${kind}`;
+      const seen = window.localStorage.getItem(key) === "1";
+      window.localStorage.setItem(key, "1");
+      return !seen;
+    } catch { return true; }
+  });
+  if (!guide) return null;
+  return (
+    <details className="idn-sso-guide" open={open} data-testid="setup-guide">
+      <summary>How to set this up</summary>
+      <ol>
+        {guide.steps.map((st, i) => (
+          <li key={i} data-copy="prose">
+            {st.text.replace("{redirect}", "the URL above")}
+            {st.link ? <> <a className="idn-link" href={st.link.href} target="_blank" rel="noopener noreferrer">{st.link.label} ↗</a></> : null}
+          </li>
+        ))}
+      </ol>
+      <p className="idn-small" data-copy="prose"><b>Copy back:</b> {guide.copyBack.join(", ")}</p>
+      <p className="idn-small idn-dim" data-copy="prose"><b>Watch out:</b> {guide.gotcha}</p>
+      <a className="idn-link idn-small" href={`${SIGN_IN_DOC}#${guide.anchor}`} target="_blank" rel="noopener noreferrer">Full guide ↗</a>
+    </details>
   );
 }

@@ -180,6 +180,8 @@ describe("Sign-in providers", () => {
     const redirect = new RegExp(`${ORIGIN}/v1/auth/sso/(idp_[a-z2-7]{26})/callback`).exec(first);
     expect(redirect, first).not.toBeNull();
     expect(q("[data-testid='provider-first'] button")?.textContent).toContain("Copy");
+    // Once: step 1 carries it, the form does not repeat it at the bottom.
+    expect((q("[data-testid='provider-sheet']")!.textContent ?? "").split("/callback").length - 1).toBe(1);
     expect(q("[data-testid='provider-save']")?.hasAttribute("disabled")).toBe(true);
     await type(q("#pv-issuer"), "https://acme2.okta.com");
     await type(q("#pv-cid"), "0oa2");
@@ -202,17 +204,28 @@ describe("Sign-in providers", () => {
     await mount(owner, settings(owner, []));
     await click(q("[data-testid='provider-add']"));
     await click(q("[data-testid='kind-google']"));
-    expect(q("[data-testid='google-hint']")?.textContent).toContain("Test user under Audience");
+    // The Test-user gotcha lives in the guide (one place), not in a second hint line.
+    expect(q("[data-testid='setup-guide']")?.textContent).toContain("only listed Test users can sign in");
+    // How to set this up: open the first time, numbered, deep links, and the full guide.
+    const guide = q("[data-testid='setup-guide']") as HTMLDetailsElement;
+    expect(guide.open).toBe(true);
+    expect(guide.querySelectorAll("ol li").length).toBe(4);
+    expect(guide.textContent).toContain("the URL above");
+    const links = [...guide.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    expect(links).toContain("https://console.cloud.google.com/auth/clients/create");
+    expect(links).toContain("https://boss.sean.network/docs/SIGN_IN_SETUP/#google");
+    expectClean(q("[data-testid='provider-sheet']")!);
     expect(q("[data-testid='provider-first']")?.textContent).toMatch(/\/v1\/auth\/sso\/idp_[a-z2-7]{26}\/callback/);
     act(() => root?.unmount()); host?.remove();
     await mount(owner, settings(owner, []));
     await click(q("[data-testid='provider-add']"));
     await click(q("[data-testid='kind-saml']"));
+    // Folded once seen: the Google guide opened above; a new kind opens its own the first time.
+    expect((q("[data-testid='setup-guide']") as HTMLDetailsElement).open).toBe(true);
     const first = q("[data-testid='provider-first']")!.textContent ?? "";
     expect(first).toContain(`${ORIGIN}/saml/v2/acs`);
     expect(first).toContain(`${ORIGIN}/saml/v2/metadata`);
     expect(first).not.toContain("provider_id="); // the metadata URL exists only once saved
-    expect(q("[data-testid='google-hint']")).toBeNull();
   });
 
   it("edits only what changed; Remove confirms and turns it off", async () => {

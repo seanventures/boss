@@ -40,7 +40,7 @@ BOSS signs people in with any OIDC or SAML provider: Keycloak, Okta, Microsoft E
 ### Add an OIDC provider
 
 1. In your identity provider, create an application (client) for BOSS:
-    - redirect URL: `https://boss.example.com/v1/auth/sso/<provider id>/callback` (the provider page in BOSS shows the exact URL);
+    - redirect URL: `https://boss.example.com/v1/auth/sso/<provider id>/callback` (BOSS shows the exact URL, ready to copy, as soon as you start adding the provider);
     - scopes: `openid email profile`.
 2. In BOSS, add the provider: preset (**Keycloak**, **Okta**, **Microsoft**, **Google**, or **generic**), its issuer URL, client id and client secret. The secret is kept in the vault and never shown again.
 3. **Test sign-in** runs discovery, fetches the signing keys and checks the redirect.
@@ -65,6 +65,101 @@ BOSS's SAML service provider details:
 These two paths, and SCIM's `/scim/v2`, are served by the BOSS API, not the console. In your HTTPS proxy, send `/saml/` and `/scim/` on the public address to the API (`127.0.0.1:8000` by default). See [Deploy](hostname.md).
 
 Add the provider in BOSS with the identity provider's entity id, sign-in URL and signing certificate (up to two, for rollover). Then test it as above.
+
+### Provider guides
+
+The same steps appear in BOSS under **How to set this up** when you add a provider, where the redirect URL is shown first, ready to copy.
+
+<!-- sso-guides:start (generated from apps/web/lib/identity/sso-guides.ts) -->
+
+#### Google
+
+1. In Google Cloud, create an OAuth client of type Web application. [Create a client](https://console.cloud.google.com/auth/clients/create)
+2. Under Authorized redirect URIs, add the redirect URL BOSS shows (`https://<your BOSS>/v1/auth/sso/<provider id>/callback`).
+3. Under Audience, add yourself (and anyone testing) as a Test user. [Audience](https://console.cloud.google.com/auth/audience)
+4. Copy the Client ID and Client secret into BOSS, then Add.
+
+Copy back into BOSS: Client ID, Client secret.
+
+Watch out: While the app's publishing status is Testing, only listed Test users can sign in.
+
+#### GitHub
+
+1. On GitHub, register a new OAuth app (under an organization's settings for a team). [New OAuth app](https://github.com/settings/applications/new)
+2. Set Authorization callback URL to the redirect URL BOSS shows (`https://<your BOSS>/v1/auth/sso/<provider id>/callback`).
+3. Generate a client secret.
+4. Copy the Client ID and the secret into BOSS, then Add.
+
+Copy back into BOSS: Client ID, Client secret.
+
+Watch out: A GitHub OAuth app has one callback URL: use one app per BOSS install.
+
+#### Microsoft Entra ID
+
+1. In Entra, open App registrations and choose New registration. [App registrations](https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
+2. Pick Web as the platform and set the redirect URI to the redirect URL BOSS shows (`https://<your BOSS>/v1/auth/sso/<provider id>/callback`).
+3. Under Certificates & secrets, add a client secret and copy its Value.
+4. Copy the Directory (tenant) ID, the Application (client) ID and the secret into BOSS, then Add.
+
+Copy back into BOSS: Tenant ID, Client ID, Client secret.
+
+Watch out: Use your Directory (tenant) ID, not "common": BOSS signs in one tenant's people.
+
+#### Okta
+
+1. In the Okta Admin Console, go to Applications › Create App Integration › OIDC › Web Application.
+2. Set Sign-in redirect URI to the redirect URL BOSS shows (`https://<your BOSS>/v1/auth/sso/<provider id>/callback`).
+3. Assign the people or groups who may sign in.
+4. Copy your Okta URL (the issuer), the Client ID and Client secret into BOSS, then Add.
+
+Copy back into BOSS: Issuer URL, Client ID, Client secret.
+
+Watch out: Only people assigned to the app can sign in.
+
+#### Keycloak
+
+1. In your realm's admin console, go to Clients › Create client (OpenID Connect).
+2. Turn on Client authentication, and set Valid redirect URIs to the redirect URL BOSS shows (`https://<your BOSS>/v1/auth/sso/<provider id>/callback`).
+3. Copy the client secret from the Credentials tab.
+4. Copy the realm URL (the issuer), the Client ID and secret into BOSS, then Add.
+
+Copy back into BOSS: Issuer URL, Client ID, Client secret.
+
+Watch out: The issuer is the realm URL, ending in /realms/<name>.
+
+#### Other OIDC
+
+1. In your provider, create a confidential web client with the authorization code flow.
+2. Set its redirect URL to the redirect URL BOSS shows (`https://<your BOSS>/v1/auth/sso/<provider id>/callback`), with scopes openid email profile.
+3. Copy the issuer URL, Client ID and Client secret into BOSS, then Add.
+
+Copy back into BOSS: Issuer URL, Client ID, Client secret.
+
+Watch out: The issuer must serve /.well-known/openid-configuration over https.
+
+#### SAML
+
+1. In your identity provider, create a SAML 2.0 application for BOSS.
+2. Give it BOSS's ACS URL (`https://<your BOSS>/saml/v2/acs`) and entity ID (`https://<your BOSS>/saml/v2/metadata`).
+3. Turn on signed assertions, and send the email as the NameID or an email attribute.
+4. Copy its entity ID, sign-in (SSO) URL and signing certificate into BOSS, then Add.
+
+Copy back into BOSS: IdP entity ID, SSO URL, Signing certificate.
+
+Watch out: BOSS refuses unsigned assertions: sign the assertion, not only the response.
+
+#### Apple
+
+1. In Apple Developer, create a Services ID with Sign in with Apple turned on. [Identifiers](https://developer.apple.com/account/resources/identifiers/list/serviceId)
+2. Under its configuration, add your domain and the return URL the redirect URL BOSS shows (`https://<your BOSS>/v1/auth/sso/<provider id>/callback`).
+3. Create a Sign in with Apple key and note its Key ID and your Team ID.
+4. Copy the Services ID (the client ID) and the client secret made from that key into BOSS, then Add.
+
+Copy back into BOSS: Services ID, Client secret.
+
+Watch out: Apple posts back to BOSS (form_post), and needs a real domain, not an IP address.
+
+<!-- sso-guides:end -->
 
 ### Providers from an older install
 
