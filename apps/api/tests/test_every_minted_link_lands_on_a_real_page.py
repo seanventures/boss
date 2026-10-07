@@ -76,9 +76,9 @@ def test_recover_owner_link_resets_the_password_and_enrols_straight_into_a_signe
     with engine.begin() as db:
         done = cli.recover_owner("sole@example.test", db=db, origin="https://boss.example.test")
     page, _, fragment = done.link.partition("#")
-    assert page == "https://boss.example.test" + links.AUTH_LINKS["recover_owner"].path
+    assert page == "https://boss.example.test" + links.AUTH_LINKS["owner_recovery"].path
     key, _, token = fragment.partition("=")
-    assert key == links.AUTH_LINKS["recover_owner"].fragment
+    assert key == links.AUTH_LINKS["owner_recovery"].fragment
     assert client.get("/v1/identity/me").status_code == 401         # recovery ended every session
 
     browser = fresh_client()
