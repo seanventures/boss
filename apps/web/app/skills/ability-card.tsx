@@ -12,6 +12,8 @@ import React from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 import { AgentAvatar } from "../agent-avatar";
+import { useGate } from "../../components/gated";
+import type { Permission } from "../../lib/identity/permissions.gen";
 import type { Ability, AbilityStatus } from "../../lib/kit-types";
 import { AbilityIcon } from "./ability-icons";
 import { BUTTON, PILL, PILL_TONE, agentName } from "./kit-copy";
@@ -48,9 +50,31 @@ export function HolderStack({ holders, max = 4, size = 20 }: { holders: string[]
   );
 }
 
+/** What each card action needs, when it writes (the kit route's own permission). */
+export type CardPermissions = Partial<Record<CardAction, Permission>>;
+
+/**
+ * A card button that writes, drawn greyed when the viewer lacks its permission: aria-disabled,
+ * the reason as its tooltip and to a screen reader, and a press does nothing (and never opens the
+ * card behind it).
+ */
+function GatedCardButton({ permission, className, testId, onPress, disabled, children }: {
+  permission: Permission; className: string; testId: string; onPress: () => void; disabled: boolean; children: React.ReactNode;
+}) {
+  const gate = useGate(permission);
+  return (
+    <button type="button" className={className} disabled={disabled} data-testid={testId} {...gate.props}
+            onClick={(e) => { e.stopPropagation(); if (gate.allowed) onPress(); }}>
+      {children}{gate.sr}
+    </button>
+  );
+}
+
 /** The card's one button: a link for the repo (it lives in Setup), a button otherwise. */
-export function PrimaryAction({ ability, status, onAction, compact }: {
+export function PrimaryAction({ ability, status, onAction, compact, permissions }: {
   ability: Ability; status: AbilityStatus; onAction: (a: CardAction) => void; compact?: boolean;
+  /** The permission each writing action needs; such a button is drawn greyed when refused. */
+  permissions?: CardPermissions;
 }) {
   const action = ACTION_OF[status];
   const label = BUTTON[status];
@@ -63,6 +87,13 @@ export function PrimaryAction({ ability, status, onAction, compact }: {
     return <a className={cls} href={ability.connect_href} data-testid={`kit-action-${ability.key}`}
               onClick={(e) => e.stopPropagation()}>{label}</a>;
   }
+  const needs = action ? permissions?.[action] : undefined;
+  if (action && needs) {
+    return (
+      <GatedCardButton permission={needs} className={cls} disabled={false} testId={`kit-action-${ability.key}`}
+                       onPress={() => onAction(action)}>{label}</GatedCardButton>
+    );
+  }
   return (
     <button type="button" className={cls} disabled={action === null}
             data-testid={`kit-action-${ability.key}`}
@@ -72,11 +103,12 @@ export function PrimaryAction({ ability, status, onAction, compact }: {
   );
 }
 
-export function AbilityCard({ ability, testing, onOpen, onAction }: {
+export function AbilityCard({ ability, testing, onOpen, onAction, permissions }: {
   ability: Ability;
   testing?: boolean;
   onOpen: () => void;
   onAction: (a: CardAction) => void;
+  permissions?: CardPermissions;
 }) {
   const status: AbilityStatus = testing ? "testing" : ability.status;
   const line = status === "failing" || status === "review" ? ability.status_line : null;
@@ -92,7 +124,7 @@ export function AbilityCard({ ability, testing, onOpen, onAction }: {
       </div>
       <div className="kit-card-row kit-card-foot">
         <HolderStack holders={ability.holders} />
-        <PrimaryAction ability={ability} status={status} onAction={onAction} />
+        <PrimaryAction ability={ability} status={status} onAction={onAction} permissions={permissions} />
       </div>
       {line ? (
         <div className="kit-card-line" data-tone={status === "failing" ? "red" : "amber"}
