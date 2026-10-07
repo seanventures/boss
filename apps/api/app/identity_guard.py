@@ -336,12 +336,26 @@ def request_actor() -> Optional[str]:
     return REQUEST_ACTOR.get() if identity_enforced() else None
 
 
+def actor_is_a_filter(fn: Any) -> Any:
+    """Mark a route whose `actor` query parameter SELECTS rows by actor (the audit log's "who did
+    it" filter) rather than claiming who acts. The actor rule leaves such a parameter alone; the
+    route's own permission (audit:read) already decides what may be filtered."""
+    fn._boss_actor_is_filter = True
+    return fn
+
+
 def _route_takes_actor(route: Any) -> tuple[bool, bool]:
     """(body has an `actor` field, query has an `actor` parameter) for a route; cached."""
     cached = getattr(route, "_boss_actor_params", None)
     if cached is not None:
         return cached
     in_body = in_query = False
+    if getattr(getattr(route, "endpoint", None), "_boss_actor_is_filter", False):
+        try:
+            route._boss_actor_params = (False, False)
+        except Exception:  # noqa: BLE001
+            pass
+        return False, False
     dependant = getattr(route, "dependant", None)
     if dependant is not None:
         in_query = any((p.alias or p.name) == ACTOR_FIELD for p in dependant.query_params)
@@ -370,6 +384,8 @@ def _bind_actor(conn: HTTPConnection, route: Any, ctx: Any, body: Any) -> None:
             claimed.append(str(body.get(ACTOR_FIELD)))
         body[ACTOR_FIELD] = actor            # the same dict FastAPI validates the handler's body from
     query_string = conn.scope.get("query_string", b"") or b""
+    if getattr(getattr(route, "endpoint", None), "_boss_actor_is_filter", False):
+        return                                    # `actor` here is a filter, not a claim
     if query_param or b"actor=" in query_string:
         from urllib.parse import parse_qsl, urlencode
 
