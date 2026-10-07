@@ -63,7 +63,7 @@ export function MagicLinkLanding({ host, next }: { host: string; next: string })
     <AuthStage label="Magic link">
       <Logo host={host} />
       <h1 className="idn-center">Signing you in</h1>
-      <div className="idn-state" role="status"><span className="idn-blink" aria-hidden /> Checking your link…</div>
+      <div className="idn-wait" role="status"><span className="idn-blink" aria-hidden /> Checking your link…</div>
       <Live text={state.kind === "done" ? "Signed in" : ""} />
     </AuthStage>
   );

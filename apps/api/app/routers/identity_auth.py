@@ -249,6 +249,8 @@ def build_identity_auth_router() -> APIRouter:
                 "providers": providers, "smtp": smtp, "signup": email_signin.signup_enabled(db),
                 "legacy_password": bool(claim_module.legacy_password_configured()),
                 "passkey": bool(public_origin(db)), "claim": claim_info,
+                # The policy's password minimum, so every "choose a password" field says it.
+                "password_min_length": pol.password_min_length if pol else 12,
             }, headers={"Cache-Control": "no-store"})
 
     @router.post("/v1/auth/invitations/preview")

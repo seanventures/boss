@@ -6,10 +6,11 @@
  * grant (person → agents), each opening the lineage view.
  */
 import React, { useMemo, useState } from "react";
-import { ArrowRight, LockSimple, Warning } from "@phosphor-icons/react";
+import { ArrowRight, LinkSimple, LockSimple, Robot, Warning } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../agent-avatar";
-import { Ago, Face, Pill, daysUntil, useNow } from "../../../components/identity/kit";
+import { Ago, Face, Perm, Pill, daysUntil, useNow } from "../../../components/identity/kit";
+import { EmptyState, ErrorState, type ReadFailure } from "../../../components/identity/states";
 import type { Delegation, Passport } from "../../../lib/identity/types";
 
 type Filter = "all" | "active" | "suspended" | "revoked" | "unsponsored";
@@ -30,7 +31,14 @@ function expiry(d: Delegation, now: number) {
   return <Pill tone={days <= 3 ? "warn" : "ok"}>{days}d left</Pill>;
 }
 
-export function AgentsScreen({ agents, delegations }: { agents: Passport[]; delegations: Delegation[] | null }) {
+/** A grant's kind in words. */
+export function kindWords(k: Delegation["kind"]): string {
+  return k === "task" ? "One build" : k === "schedule" ? "Scheduled" : "Standing";
+}
+
+export function AgentsScreen({ agents, delegations, delegationsFailure = null }: {
+  agents: Passport[]; delegations: Delegation[] | null; delegationsFailure?: ReadFailure | null;
+}) {
   const [filter, setFilter] = useState<Filter>("all");
   const now = useNow();
   const shown = useMemo(() => agents.filter((a) => filter === "all" ? true : filter === "unsponsored" ? !a.sponsor : a.status === filter), [agents, filter]);
@@ -52,7 +60,7 @@ export function AgentsScreen({ agents, delegations }: { agents: Passport[]; dele
       </div>
       {unsponsored ? (
         <div className="idn-note" role="status" data-copy="prose">
-          <Warning size={15} aria-hidden /> {unsponsored} {unsponsored === 1 ? "agent has" : "agents have"} no sponsor. Every agent needs an accountable person.
+          <Warning size={15} aria-hidden /> {unsponsored} {unsponsored === 1 ? "agent has" : "agents have"} no sponsor. Open one to assign an accountable person.
         </div>
       ) : null}
       <div className="idn-agent-grid" data-testid="passports">
@@ -66,14 +74,16 @@ export function AgentsScreen({ agents, delegations }: { agents: Passport[]; dele
                 {a.sponsor
                   ? <span className="idn-row" title="Accountable person"><Face name={a.sponsor.name} tone={a.sponsor.hue} size={22} /> {a.sponsor.name}</span>
                   : <span className="idn-warn idn-row"><Warning size={13} aria-hidden /> No sponsor</span>}
-                {a.ceiling_preset ? <span className="idn-chip" title="Ceiling preset">{a.ceiling_preset}</span> : null}
+                {a.ceiling_preset ? <span className="idn-chip" title="Access limit: the most anyone may delegate to it">{a.ceiling_preset}</span> : null}
               </span>
               <small>{a.active_grants} {a.active_grants === 1 ? "grant" : "grants"} · last run <Ago iso={a.last_run_at} /></small>
             </span>
             <Pill tone={statusTone(a.status)}>{a.status}</Pill>
           </a>
         ))}
-        {!shown.length ? <span className="idn-dim">No agents here</span> : null}
+        {!shown.length ? (agents.length
+          ? <span className="idn-dim">None match this filter</span>
+          : <EmptyState icon={<Robot size={20} />} title="No agents yet" testId="agents-empty">Each agent gets a Passport when it is created in Agent Studio.</EmptyState>) : null}
       </div>
 
       <section className="idn-card" id="delegations" aria-labelledby="idn-dlg-h">
@@ -81,7 +91,12 @@ export function AgentsScreen({ agents, delegations }: { agents: Passport[]; dele
           <h2 id="idn-dlg-h">Delegations</h2>
           {delegations ? <span className="idn-sub">{delegations.filter((d) => d.status === "active").length} active</span> : null}
         </div>
-        {delegations ? (
+        {delegations && !delegations.length ? (
+          <EmptyState compact icon={<LinkSimple size={16} />} title="No agent acts for anyone yet" testId="delegations-empty"
+            action={<a className="idn-btn sm" href="/account/agents?new=1">Let an agent act for me</a>}>
+            A person grants agents part of their access, for a while.
+          </EmptyState>
+        ) : delegations ? (
           <div className="idn-scroll">
             <table className="idn-t" data-testid="delegations">
               <thead><tr><th>Person → agents</th><th>Grant</th><th>Kind</th><th>Expires</th><th>Last used</th><th><span className="idn-sr">Open</span></th></tr></thead>
@@ -95,8 +110,8 @@ export function AgentsScreen({ agents, delegations }: { agents: Passport[]; dele
                         <span className="idn-stack">{d.agents.map((g) => <AgentAvatar key={g.id} agent={g.id.replace(/^agt_/, "")} size={24} tip={g.name} />)}</span>
                       </span>
                     </td>
-                    <td><a href={`/identity/agents/delegations/${d.id}`}><b>{d.label}</b><small className="idn-block idn-mono idn-dim">{d.id}</small></a></td>
-                    <td><span className="idn-chip">{d.kind}</span></td>
+                    <td><a href={`/identity/agents/delegations/${d.id}`} title={`Grant ${d.id}`}><b>{d.label}</b><small className="idn-block idn-dim">{d.user.name}</small></a></td>
+                    <td><span className="idn-chip">{kindWords(d.kind)}</span></td>
                     <td>{expiry(d, now)}</td>
                     <td className="idn-dim"><Ago iso={d.last_used_at} /></td>
                     <td><ArrowRight size={14} className="idn-dim" aria-hidden /></td>
@@ -105,7 +120,8 @@ export function AgentsScreen({ agents, delegations }: { agents: Passport[]; dele
               </tbody>
             </table>
           </div>
-        ) : <div className="idn-row idn-dim" data-testid="locked-delegations"><LockSimple size={14} aria-hidden /> Needs <code className="idn-perm">delegation:read_all</code></div>}
+        ) : delegationsFailure ? <ErrorState compact what="delegations" failure={delegationsFailure} />
+          : <div className="idn-row idn-dim" data-testid="locked-delegations"><LockSimple size={14} aria-hidden /> Needs <Perm p="delegation:read_all" sm /></div>}
       </section>
     </>
   );

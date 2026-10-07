@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 
 import { pageAllowed } from "../../../../../components/identity/route-shell";
+import { ErrorState } from "../../../../../components/identity/states";
 import { serverGet } from "../../../../../lib/identity/server";
 import type { Delegation, DelegationDetail } from "../../../../../lib/identity/types";
 import { detailOf } from "./detail";
@@ -24,7 +25,7 @@ export default async function DelegationPage({ params }: Props) {
   const read = await serverGet<Delegation | DelegationDetail>(`/v1/identity/delegations/${encodeURIComponent(id)}`);
   if (!read.ok) {
     if (read.status === 404 || read.status === 403) notFound();
-    return <div className="idn-card idn-dim" role="alert">Grant unavailable · {read.code}</div>;
+    return <ErrorState what="this grant" failure={read} />;
   }
   return <DelegationView initial={detailOf(read.data)} />;
 }

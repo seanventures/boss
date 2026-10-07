@@ -20,7 +20,7 @@ import { ConsentSheet, consentFromBody } from "../components/identity/consent-sh
 import { Overview } from "../app/identity/overview";
 import { SignIn } from "../app/(auth)/login/sign-in";
 import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
-import { ROLE_PERMISSIONS } from "../lib/identity/permissions.gen";
+import { PERMISSION_META, ROLE_PERMISSIONS } from "../lib/identity/permissions.gen";
 import * as F from "../lib/identity/stub/fixtures";
 import type { AuthOptions } from "../lib/identity/types";
 import { identityCopyAudit } from "./_helpers/identity-copy";
@@ -93,7 +93,7 @@ describe("Identity › Overview", () => {
     expect(invite.getAttribute("aria-disabled")).toBe("true");
     expect(invite.getAttribute("title")).toBe("Needs “Invite people” · ask an Admin");
     expect(el.querySelector("[data-testid='locked-people']")?.textContent).toContain("View people");
-    expect(el.textContent).toContain("audit:read");
+    expect(el.textContent).toContain(PERMISSION_META["audit:read"].title);
   });
 });
 
