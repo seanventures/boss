@@ -5,6 +5,7 @@
  */
 import { can, type CanResult, type PermissionSnapshot } from "./contract";
 import { PERMISSION_META, type Permission } from "./permissions.gen";
+import { askWho } from "./words";
 
 export const ASK_ADMIN = " · ask an Admin";
 
@@ -15,6 +16,6 @@ export function checkWith(org: PermissionSnapshot | null, project: PermissionSna
   const r = useProject
     ? can(project, permission, { kind: "project", projectId: projectId! }, now)
     : can(org, permission, { kind: "org" }, now);
-  if (!r.allowed && r.reason.startsWith("Needs ")) return { ...r, reason: r.reason + ASK_ADMIN };
+  if (!r.allowed && r.reason.startsWith("Needs ")) return { ...r, reason: `${r.reason} · ${askWho(permission)}` };
   return r;
 }

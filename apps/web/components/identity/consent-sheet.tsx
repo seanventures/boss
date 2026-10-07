@@ -51,7 +51,8 @@ export function ConsentSheet({ request, onClose }: { request: ConsentRequest; on
       request.onDecided?.(grant.id);
       onClose();
     } catch (e) {
-      setError(e instanceof IdentityError ? (e.detail ?? e.message) : "That didn't work");
+      // The API's own sentence when it wrote one; a bare code (no spaces) is never shown.
+      setError(e instanceof IdentityError ? (e.detail && /\s/.test(e.detail) ? e.detail : e.message) : "That didn't work");
       setBusy(null);
     }
   };
@@ -68,7 +69,7 @@ export function ConsentSheet({ request, onClose }: { request: ConsentRequest; on
       </p>
       <div className="idn-need">
         {known.map((p) => <Perm key={p} p={p} sm />)}
-        {other.map((p) => <span key={p} className="idn-perm sm">{p}</span>)}
+        {other.map((p) => <Perm key={p} p={p} sm />)}
         {request.github ? <span className="idn-chip"><GithubLogo size={13} aria-hidden /> {request.github.repos.join(", ") || request.github.repo} · {request.github.summary}</span> : null}
       </div>
       <div className="idn-opts" data-testid="consent-durations">

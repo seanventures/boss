@@ -29,6 +29,7 @@ import * as F from "../lib/identity/stub/fixtures";
 import { resetStub, stubHandle } from "../lib/identity/stub/server";
 import type { EffectiveAccess } from "../lib/identity/types";
 import { identityCopyAudit } from "./_helpers/identity-copy";
+import { needsWords } from "../lib/identity/words";
 import { req, signIn } from "./_helpers/identity-stub-session";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -53,7 +54,7 @@ function perms(role: keyof typeof ROLE_PERMISSIONS): MePermissionsResponse {
 function me(name: string, roles: string[]): MeResponse {
   return { principal_id: "usr_x", kind: "user", display_name: name, email: "x@acme.dev", org: F.ORG, status: "active", access_roles: roles,
     sign_in: { password: true, totp: true, passkeys: 1, recovery_codes_remaining: 10, sso_links: [] }, mfa_required: true, mfa_at: null,
-    session_id: "ses_1", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [] };
+    session_id: "ses_1", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [], avatar_seed: null };
 }
 
 async function mount(node: React.ReactElement, role: keyof typeof ROLE_PERMISSIONS = "owner") {
@@ -112,7 +113,7 @@ describe("Identity › People", () => {
     const { el } = await mount(<PeopleList people={F.people(NOW)} roles={F.roles(NOW)} />, "viewer");
     const invite = el.querySelector("[data-testid='people-invite']")!;
     expect(invite.getAttribute("aria-disabled")).toBe("true");
-    expect(invite.getAttribute("title")).toBe("Needs user:invite · ask an Admin");
+    expect(invite.getAttribute("title")).toBe("Needs “Invite people” · ask an Admin");
   });
 });
 
@@ -120,7 +121,7 @@ describe("a person's profile", () => {
   it("explains every permission: via which role, at which scope, or why not", async () => {
     const { el } = await mount(<PersonProfile {...samProps("access")} />);
     expect(el.querySelector("h1")?.textContent).toContain("Sam Okafor");
-    expect(el.textContent).toContain("Seat: release_manager");
+    expect(el.textContent).toContain("Approves as Release manager");
     // inherited bindings name their group, direct ones can be removed
     expect(el.querySelector("[data-testid='binding-rb_6']")?.textContent).toContain("Via group Builders");
     expect(el.querySelector("[data-testid='remove-rb_6']")).toBeNull();
@@ -175,7 +176,7 @@ describe("a person's profile", () => {
     for (const [id, p] of Object.entries(want)) {
       const b = viewer.el.querySelector(`[data-testid='${id}']`)!;
       expect(b.getAttribute("aria-disabled"), id).toBe("true");
-      expect(b.getAttribute("title")).toBe(`Needs ${p} · ask an Admin`);
+      expect(b.getAttribute("title")).toBe(needsWords(p));
     }
     await act(async () => { (viewer.el.querySelector("[data-testid='person-disable']") as HTMLButtonElement).click(); });
     expect(document.querySelector("[data-testid='confirm-disable']")).toBeNull();
@@ -204,7 +205,7 @@ describe("a person's profile", () => {
     const call = (fetchSpy.mock.calls as unknown as [string, RequestInit][]).find(([, init]) => init?.method === "POST")!;
     expect(call[0]).toBe("/v1/identity/role-bindings");
     const operator = F.roles(NOW).find((r) => r.key === "operator")!;
-    expect(JSON.parse(String(call[1].body))).toEqual({ subject_type: "principal", subject_id: "usr_sam", role_id: operator.id });
+    expect(JSON.parse(String(call[1].body))).toEqual({ subject_type: "principal", subject_id: "usr_sam", role_id: operator.id, expires_at: null });
   });
 });
 

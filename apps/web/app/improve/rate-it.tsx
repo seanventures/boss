@@ -10,6 +10,7 @@
  *
  * Every RateIt on a page shares ONE read: subjects are batched for a tick and asked together.
  */
+import { GatedButton } from "../../components/gated";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { ThumbsDown, ThumbsUp } from "@phosphor-icons/react";
 
@@ -127,17 +128,17 @@ export function RateIt({ projectId, actor, subject, id, testId }: {
     <span className="im-rate" data-testid={testId ?? `rate-${subject}`} role="group" aria-label={QUESTION[subject]}>
       {thumbs ? null : <span className="im-rate-q">{QUESTION[subject]}</span>}
       {ratings.map((r) => (
-        <button key={r} type="button" className="im-rate-btn" aria-pressed={rating === r} disabled={busy}
+        <GatedButton permission="feedback:submit" key={r} type="button" className="im-rate-btn" aria-pressed={rating === r} disabled={busy}
                 data-testid={`rate-${subject}-${r}`} onClick={() => void pick(r)}
                 title={thumbs ? RATING_WORDS[r] : undefined} aria-label={thumbs ? RATING_WORDS[r] : undefined}>
           {thumbs ? (r === "up" ? <ThumbsUp size={14} aria-hidden /> : <ThumbsDown size={14} aria-hidden />) : RATING_WORDS[r] ?? r}
-        </button>
+        </GatedButton>
       ))}
       {shownChips.length ? (
         <span className="im-chips" role="group" aria-label="Why? Optional">
           {shownChips.map((c) => (
-            <button key={c} type="button" className="im-chip" aria-pressed={chips.includes(c)} disabled={busy}
-                    data-testid={`rate-chip-${c}`} onClick={() => void toggle(c)}>{CHIP_WORDS[c] ?? c}</button>
+            <GatedButton permission="feedback:submit" key={c} type="button" className="im-chip" aria-pressed={chips.includes(c)} disabled={busy}
+                    data-testid={`rate-chip-${c}`} onClick={() => void toggle(c)}>{CHIP_WORDS[c] ?? c}</GatedButton>
           ))}
         </span>
       ) : null}

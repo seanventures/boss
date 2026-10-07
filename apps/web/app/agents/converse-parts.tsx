@@ -9,6 +9,7 @@
  * the room adds its state word under the face.
  */
 
+import { GatedButton, useGate } from "../../components/gated";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { ScopedRate } from "../improve/rate-it";
 
@@ -247,18 +248,18 @@ export function ProposalCard({ proposal, onStart, onDismiss, compact }: {
           <a className="ag-btn ag-btn-primary" href={runHref(runId)} data-testid="ag-open-run">Open run ↗</a>
         ) : proposal.status === "proposed" ? (<>
           {refused ? (
-            <button type="button" className="ag-btn ag-btn-primary" disabled={pending}
+            <GatedButton permission="workflow_run:start" type="button" className="ag-btn ag-btn-primary" disabled={pending}
                     data-testid="ag-start-anyway"
-                    onClick={() => void start(refused.missing.map((m) => m.key))}>Start anyway</button>
+                    onClick={() => void start(refused.missing.map((m) => m.key))}>Start anyway</GatedButton>
           ) : (
-            <button type="button" className="ag-btn ag-btn-primary" disabled={pending || blank.length > 0}
+            <GatedButton permission="workflow_run:start" type="button" className="ag-btn ag-btn-primary" disabled={pending || blank.length > 0}
                     title={blank.length ? `Needs ${blank.join(", ")}` : undefined}
                     data-testid="ag-start" onClick={() => void start()}>
               {pending ? "Starting…" : "Start"}
-            </button>
+            </GatedButton>
           )}
-          {onDismiss ? <button type="button" className="ag-btn" disabled={pending}
-                               onClick={() => onDismiss(proposal.proposalId)}>Dismiss</button> : null}
+          {onDismiss ? <GatedButton permission="meeting:convene" type="button" className="ag-btn" disabled={pending}
+                               onClick={() => onDismiss(proposal.proposalId)}>Dismiss</GatedButton> : null}
         </>) : (
           <span className="ag-muted">{proposal.status === "superseded" ? "Replaced" : "Dismissed"}</span>
         )}
@@ -353,6 +354,8 @@ export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocu
   /** A seat picked from the @ menu (the room lights its To chip). */
   onMention?: (roleKey: string) => void;
 }) {
+  // Sending a message convenes the agents (POST /v1/conversations/{id}/turns needs meeting:convene).
+  const sendGate = useGate("meeting:convene");
   const [value, setValue] = useState(initial ?? "");
   const [menu, setMenu] = useState<SeatInfo[]>([]);
   const [pick, setPick] = useState(0);
@@ -419,7 +422,7 @@ export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocu
                     choose(menu[pick]);
                   } else if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    send();
+                    if (sendGate.allowed) send();
                   } else if (e.key === "Escape" && menu.length) {
                     e.stopPropagation();
                     setMenu([]);
@@ -429,8 +432,8 @@ export function Composer({ placeholder, disabled, onSend, seats, extra, autoFocu
         {extra}
         <span className="ag-spacer" />
         {onStop ? <StopButton onStop={onStop} /> : (
-          <button type="button" className="ag-btn ag-btn-primary" disabled={disabled || !value.trim()}
-                  data-testid="ag-send" onClick={send}>Send</button>
+          <GatedButton permission="meeting:convene" type="button" className="ag-btn ag-btn-primary" disabled={disabled || !value.trim()}
+                  data-testid="ag-send" onClick={send}>Send</GatedButton>
         )}
       </div>
     </div>

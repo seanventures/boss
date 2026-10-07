@@ -6,6 +6,7 @@
  * is not in every prompt: the agent always sees `What it does` and reads the body only when it
  * calls it. It can't act — the risk is always `Reads`.
  */
+import { GatedButton } from "../../components/gated";
 import { X } from "@phosphor-icons/react";
 import React, { useState } from "react";
 
@@ -74,10 +75,10 @@ export function SkillFileSheet({ projectId, actor, roleKey, agentName, fileName,
       ) : null}
       <div className="kit-modal-foot">
         <button type="button" className="kit-btn" onClick={onClose}>Cancel</button>
-        <button type="button" className="kit-btn kit-btn-primary" data-testid="skill-file-create"
+        <GatedButton permission="skill:manage" type="button" className="kit-btn kit-btn-primary" data-testid="skill-file-create"
                 disabled={busy || !label.trim() || !summary.trim() || !body.trim()}
                 data-tip={`Creates it in the Library and gives it to ${agentName}`}
-                onClick={() => void create()}>{busy ? "Creating…" : "Create & give"}</button>
+                onClick={() => void create()}>{busy ? "Creating…" : "Create & give"}</GatedButton>
       </div>
     </ModalShell>
   );

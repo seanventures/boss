@@ -6,6 +6,7 @@
  * Sent ONCE, with a note, only when they press Send. Separate from the Improve BOSS switch, and the
  * only way content ever reaches the BOSS project.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
 import { improveWrite, isSharing, readImprove, type SharingView } from "../../lib/improve";
@@ -72,9 +73,9 @@ export function ShareRunSheet({ projectId, actor, unitKind, unitId, onClose }: {
         <textarea className="im-share-note" value={note} onChange={(e) => setNote(e.target.value)}
                   aria-label="A note for the BOSS project" placeholder="What went wrong?" data-testid="share-run-note" />
         <span className="im-actions">
-          <button type="button" className="ag-btn ag-btn-primary" disabled={busy || Boolean(stop) || bundle === null || !bundle.trim()}
+          <GatedButton permission="telemetry:share" type="button" className="ag-btn ag-btn-primary" disabled={busy || Boolean(stop) || bundle === null || !bundle.trim()}
                   data-testid="share-run-send" title="Sent once, now. Not part of Improve BOSS."
-                  onClick={() => void send()}>{busy ? "Sending…" : "Send"}</button>
+                  onClick={() => void send()}>{busy ? "Sending…" : "Send"}</GatedButton>
           <button type="button" className="ag-btn" onClick={onClose}>Cancel</button>
           {error ? <span className="im-err" role="alert" title={error}>Not sent</span> : null}
         </span>
@@ -90,9 +91,9 @@ export function ShareRunButton({ projectId, actor, unitKind, unitId }: {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button type="button" className="ag-link" data-testid="share-run-open"
+      <GatedButton permission="telemetry:share" type="button" className="ag-link" data-testid="share-run-open"
               title="Send this run, redacted and edited by you, to the BOSS project"
-              onClick={() => setOpen(true)}>Share this run</button>
+              onClick={() => setOpen(true)}>Share this run</GatedButton>
       {open ? <ShareRunSheet projectId={projectId} actor={actor} unitKind={unitKind} unitId={unitId}
                              onClose={() => setOpen(false)} /> : null}
     </>

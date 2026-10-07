@@ -7,13 +7,17 @@
  */
 import React, { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MagnifyingGlass, Plus, UsersThree } from "@phosphor-icons/react";
+import { FileArrowUp, MagnifyingGlass, Plus, UserPlus, UsersThree } from "@phosphor-icons/react";
 
 import { CanButton } from "../../../components/identity/identity-provider";
 import { InviteSheet } from "../../../components/identity/invite-sheet";
 import { Ago, Face, Pill } from "../../../components/identity/kit";
 import { BindingChips, SignIn } from "../../../components/identity/parts";
-import type { AccessRole, Person } from "../../../lib/identity/types";
+import { EmptyState, ErrorState, type ReadFailure } from "../../../components/identity/states";
+import type { AccessRole, Group, Person } from "../../../lib/identity/types";
+import type { AccessRequestRow } from "../../../lib/identity/types-people";
+import { AccessRequests } from "./access-requests";
+import { ExportCsvButton, ImportSheet } from "./people-csv";
 
 type Filter = { q: string; role: string; group: string; status: string; mfa: string; source: string };
 const NONE: Filter = { q: "", role: "", group: "", status: "", mfa: "", source: "" };
@@ -55,9 +59,15 @@ function Select({ label, value, onChange, options }: {
   );
 }
 
-export function PeopleList({ people, roles, invited: invitedCount = null }: { people: Person[]; roles: AccessRole[]; invited?: number | null }) {
+export function PeopleList({ people, roles, groups: allGroups = [], invited: invitedCount = null, failure = null, requests = null, requestsFailure = null }: {
+  people: Person[]; roles: AccessRole[]; groups?: Group[]; invited?: number | null;
+  /** The users read failed: say so, never "No people yet". */
+  failure?: ReadFailure | null;
+  requests?: AccessRequestRow[] | null; requestsFailure?: ReadFailure | null;
+}) {
   const [f, setF] = useState<Filter>(NONE);
   const [inviting, setInviting] = useState(false);
+  const [importing, setImporting] = useState(false);
   const router = useRouter();
   const set = (k: keyof Filter) => (v: string) => setF((x) => ({ ...x, [k]: v }));
   const groups = useMemo(() => {
@@ -75,12 +85,20 @@ export function PeopleList({ people, roles, invited: invitedCount = null }: { pe
     <>
       <div className="idn-sec-h">
         <h1 className="idn-h1">People</h1>
-        <span className="idn-sub">{active} active · {invited} invited</span>
+        {!failure ? <span className="idn-sub">{active} active · {invited} invited</span> : null}
         <span className="idn-spacer" />
+        {!failure ? <ExportCsvButton people={shown} /> : null}
+        <CanButton permission="user:invite" className="idn-btn sm" onClick={() => setImporting(true)} tip="Invite many people from a CSV file" data-testid="people-import">
+          <FileArrowUp size={14} aria-hidden /> Import
+        </CanButton>
         <CanButton permission="user:invite" className="idn-btn primary" onClick={() => setInviting(true)} tip="Invite by email, with an access role" data-testid="people-invite">
           <Plus size={15} weight="bold" aria-hidden /> Invite people
         </CanButton>
       </div>
+
+      <AccessRequests requests={requests} roles={roles} failure={requestsFailure} />
+
+      {failure ? <ErrorState what="people" failure={failure} testId="people-error" /> : null}
 
       <div className="idn-fb" role="search">
         <label className="idn-q">
@@ -96,7 +114,7 @@ export function PeopleList({ people, roles, invited: invitedCount = null }: { pe
         {filtered ? <button type="button" className="idn-link" onClick={() => setF(NONE)}>Clear</button> : null}
       </div>
 
-      <section className="idn-card" aria-label="People">
+      {!failure ? <section className="idn-card" aria-label="People">
         <div className="idn-scroll">
           <table className="idn-t" data-testid="people-table">
             <thead><tr><th>Person</th><th>Access</th><th>Groups</th><th>Sign-in</th><th>Last seen</th><th>Status</th></tr></thead>
@@ -128,9 +146,16 @@ export function PeopleList({ people, roles, invited: invitedCount = null }: { pe
             </tbody>
           </table>
         </div>
-        {!shown.length ? <div className="idn-empty">{filtered ? "No one matches" : "No people yet"}</div> : null}
-      </section>
-      {inviting ? <InviteSheet roles={roles} onClose={() => setInviting(false)} onInvited={() => router.refresh()} /> : null}
+        {!shown.length && filtered ? <div className="idn-empty">No one matches · <button type="button" className="idn-link" onClick={() => setF(NONE)}>Clear filters</button></div> : null}
+        {!people.length && !filtered ? (
+          <EmptyState icon={<UserPlus size={20} />} title="No people yet" testId="people-empty"
+            action={<CanButton permission="user:invite" className="idn-btn primary sm" onClick={() => setInviting(true)}>Invite people</CanButton>}>
+            Invite your team by email. Each person signs in as themselves, with the access role you choose.
+          </EmptyState>
+        ) : null}
+      </section> : null}
+      {inviting ? <InviteSheet roles={roles} groups={allGroups} onClose={() => setInviting(false)} onInvited={() => router.refresh()} /> : null}
+      {importing ? <ImportSheet roles={roles} groups={allGroups} people={people} onClose={() => setImporting(false)} onDone={() => router.refresh()} /> : null}
     </>
   );
 }

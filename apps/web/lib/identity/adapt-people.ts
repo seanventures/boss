@@ -18,6 +18,7 @@
  * the API; a binding synthesised from `access_roles` (when /role-bindings is unreadable) is
  * marked `synthetic` and offers nothing to press.
  */
+import { avatarTone } from "./avatar";
 import { PERMISSIONS, PERMISSION_META, isPermission, type Permission } from "./permissions.gen";
 import type { PrincipalStatus } from "./contract";
 import type {
@@ -36,11 +37,9 @@ const bool = (v: unknown): boolean => v === true;
 const has = (r: Raw, k: string): boolean => Object.prototype.hasOwnProperty.call(r, k) && r[k] !== undefined;
 const perms = (v: unknown): Permission[] => arr(v).map(String).filter(isPermission);
 
-/** A stable avatar hue from an id, for people and roles the API sends without one. */
-export function hueOf(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i += 1) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return h % 360;
+/** A stable avatar colour from an id, for people and roles the API sends without one (lib/identity/avatar.ts). */
+export function hueOf(id: string, seed?: string | null): number {
+  return avatarTone(id, seed);
 }
 
 function scopeLabel(r: Raw): ScopeLabel {
@@ -246,7 +245,7 @@ export function adaptPerson(raw: unknown, ctx: { bindings?: Binding[]; groups?: 
     seat: strOrNull(r.seat),
     self_signed_up: bool(r.self_signed_up),
     network_bound: bool(r.network_bound),
-    hue: num(r.hue, hueOf(id)),
+    hue: num(r.hue, hueOf(id, strOrNull(r.avatar_seed))),
   };
 }
 
@@ -385,5 +384,5 @@ export function adaptServiceAccount(raw: unknown, ctx: { keys?: ApiKey[]; bindin
 export function adaptGrantor(raw: unknown): Grantor {
   const r = obj(raw);
   const id = str(r.id ?? r.principal_id);
-  return { id, name: str(r.name ?? r.display_name, id), role: str(r.role), hue: num(r.hue, hueOf(id)) };
+  return { id, name: str(r.name ?? r.display_name, id), role: str(r.role), hue: num(r.hue, hueOf(id, strOrNull(r.avatar_seed))) };
 }

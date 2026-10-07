@@ -1,5 +1,6 @@
 "use client";
 
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 
 import { apiWrite } from "../../lib/api-write";
@@ -78,10 +79,10 @@ export function CaptainCanRunIt({ projectId, actor, step, mine, holdings, onGran
   return (
     <span className="dw-draft-grant" data-testid={`dw-grant-${step.id}`}>
       {captain} does not hold {skillId} — this step will be refused when it runs.
-      <button type="button" className="linklike" disabled={busy}
+      <GatedButton permission="agent_ability:assign" type="button" className="linklike" disabled={busy}
               data-testid={`dw-grant-do-${step.id}`} onClick={() => void grant()}>
         {busy ? "giving…" : `Give ${skillId} to ${captain}`}
-      </button>
+      </GatedButton>
       {failed ? <span className="dw-draft-forced"> {failed}</span> : null}
     </span>
   );

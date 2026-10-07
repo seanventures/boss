@@ -13,7 +13,7 @@ import { idPost } from "../../../lib/identity/api";
 import { AuthStage, Live, Logo, fragmentToken } from "../auth-parts";
 import { sayAuth } from "../auth-flow";
 
-export function Reset({ host, smtp, email: initialEmail }: { host: string; smtp: boolean; email: string }) {
+export function Reset({ host, smtp, email: initialEmail, minPassword = 12 }: { host: string; smtp: boolean; email: string; minPassword?: number }) {
   const [token, setToken] = useState<string | null>(null);
   const [email, setEmail] = useState(initialEmail);
   const [pw, setPw] = useState("");
@@ -55,11 +55,11 @@ export function Reset({ host, smtp, email: initialEmail }: { host: string; smtp:
       <AuthStage label="New password">
         <Logo host={host} />
         <h1>Choose a new password</h1>
-        <p className="idn-s" data-copy="prose">12 characters or more. A long phrase is easier to remember than symbols.</p>
-        <form onSubmit={(e) => { e.preventDefault(); if (pw.length >= 12 && pw === pw2) run(async () => { await idPost("/v1/auth/password/reset", { token, new_password: pw }); setPw(""); setPw2(""); setChanged(true); }); }} noValidate>
+        <p className="idn-s" data-copy="prose">{minPassword} characters or more. A long phrase is easier to remember than symbols.</p>
+        <form onSubmit={(e) => { e.preventDefault(); if (pw.length >= minPassword && pw === pw2) run(async () => { await idPost("/v1/auth/password/reset", { token, new_password: pw }); setPw(""); setPw2(""); setChanged(true); }); }} noValidate>
           <div className="idn-f">
             <label htmlFor="new-pw">New password</label>
-            <input id="new-pw" className="idn-i" type="password" autoComplete="new-password" minLength={12} required value={pw} onChange={(e) => setPw(e.target.value)} />
+            <input id="new-pw" className="idn-i" type="password" autoComplete="new-password" minLength={minPassword} required value={pw} onChange={(e) => setPw(e.target.value)} />
           </div>
           <div className="idn-f">
             <label htmlFor="new-pw2">Type it again</label>
@@ -68,7 +68,7 @@ export function Reset({ host, smtp, email: initialEmail }: { host: string; smtp:
             {mismatch ? <span id="pw-mismatch" className="idn-err">They don&apos;t match</span> : null}
           </div>
           {error ? <div className="idn-err" role="alert">{error}</div> : null}
-          <button type="submit" className="idn-big p" disabled={busy || pw.length < 12 || pw !== pw2}>{busy ? "Saving…" : "Set password"}</button>
+          <button type="submit" className="idn-big p" disabled={busy || pw.length < minPassword || pw !== pw2}>{busy ? "Saving…" : "Set password"}</button>
         </form>
         <Live text={busy ? "Saving" : ""} />
       </AuthStage>

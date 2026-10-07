@@ -5,6 +5,7 @@
  * or any server by URL. Both test first and store only what passed; a server someone adds starts
  * unreviewed until a person marks it reviewed in its drawer.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
 import type { McpCatalogueEntry } from "../../lib/kit-types";
@@ -83,8 +84,8 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
                   <span className="kit-chip">{e.auth === "none" ? "No key" : "Token"}</span>
                   <span className="kit-spacer" />
                   {e.added ? <span className="kit-faint">Added</span> : (
-                    <button type="button" className="kit-btn kit-btn-sm kit-btn-primary" disabled={busy}
-                            data-testid={`kit-cat-add-${e.key}`} onClick={() => void add(e)}>Add</button>
+                    <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-sm kit-btn-primary" disabled={busy}
+                            data-testid={`kit-cat-add-${e.key}`} onClick={() => void add(e)}>Add</GatedButton>
                   )}
                 </div>
                 {tokenFor === e.key ? (
@@ -146,10 +147,10 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded }: {
               </span>
             </div>
             <div className="kit-actions">
-              <button type="button" className="kit-btn kit-btn-primary" data-testid="kit-custom-save"
+              <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-primary" data-testid="kit-custom-save"
                       disabled={busy || !form.name.trim() || !form.url.trim()} onClick={() => void custom()}>
                 {busy ? "Testing…" : "Save & test"}
-              </button>
+              </GatedButton>
             </div>
           </div>
         )}

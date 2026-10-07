@@ -21,6 +21,7 @@
  * scrolls (the operator's note on the Run view, applied here from the start).
  */
 
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { RateScope } from "../improve/rate-it";
 
@@ -121,13 +122,13 @@ export function RoomView({ projectId, actor, conversationId, question, book, onC
           </span>
           <span className="ag-spacer" />
           {answering ? <StopButton onStop={live.stop} /> : null}
-          <button type="button" className="ag-btn" data-testid="ag-summarize"
+          <GatedButton permission="meeting:convene" type="button" className="ag-btn" data-testid="ag-summarize"
                   disabled={busy || nobodySpoke}
                   title={nobodySpoke ? "Ask the room something first" : "The lead sums up: decisions and next steps"}
-                  onClick={() => void live.summarize()}>Summarize</button>
-          <button type="button" className="ag-btn" disabled={busy || nobodySpoke}
+                  onClick={() => void live.summarize()}>Summarize</GatedButton>
+          <GatedButton permission="meeting:convene" type="button" className="ag-btn" disabled={busy || nobodySpoke}
                   title="Turn the discussion into a start you can review"
-                  onClick={() => void live.propose()}>Propose</button>
+                  onClick={() => void live.propose()}>Propose</GatedButton>
           <button type="button" className="ag-icon-btn" onClick={onClose} aria-label="Close" title="Close">×</button>
         </header>
 
@@ -298,10 +299,10 @@ function DecisionButton({ decisionId, onOpen }: { decisionId?: string; onOpen: (
   const [pending, setPending] = useState(false);
   if (id) return <a className="ag-btn" href={`?area=decisions&decision=${encodeURIComponent(id)}`}>Decision open ↗</a>;
   return (
-    <button type="button" className="ag-btn" disabled={pending} data-testid="ag-open-decision"
+    <GatedButton permission="meeting:convene" type="button" className="ag-btn" disabled={pending} data-testid="ag-open-decision"
             onClick={async () => { setPending(true); try { setId(await onOpen()); } finally { setPending(false); } }}>
       Open decision
-    </button>
+    </GatedButton>
   );
 }
 

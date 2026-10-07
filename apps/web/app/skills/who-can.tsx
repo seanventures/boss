@@ -8,6 +8,7 @@
  * that is not set up cannot be given (its cells are disabled, with why), only taken away. Every
  * change is counted and the last one can be undone. At phone width the matrix becomes a list.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { Sparkle, Star } from "@phosphor-icons/react";
@@ -158,20 +159,20 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
     const tip = off ? (holds ? "Held · not set up" : `Set up ${a.label} first`)
       : `${agentName(role)} · ${a.label}${rec ? " · Recommended" : ""}`;
     return (
-      <button type="button" className="kit-cell" aria-pressed={holds} disabled={busy || (off && !holds)}
+      <GatedButton permission="agent_ability:assign" type="button" className="kit-cell" aria-pressed={holds} disabled={busy || (off && !holds)}
               data-held={holds || undefined} data-rec={(rec && !holds) || undefined} data-off={off || undefined}
               data-tip={tip} aria-label={tip} data-testid={`kit-cell-${role}-${a.key}`}
               onClick={(e) => { if (e.shiftKey) void toggleRow(role); else void toggle(a, role); }}>
         {holds ? <span className="kit-cell-dot" /> : rec ? <span className="kit-cell-ring"><Star size={8} weight="fill" /></span> : null}
-      </button>
+      </GatedButton>
     );
   };
 
   return (
     <div className="kit-who" data-testid="kit-who">
       <div className="kit-head">
-        <button type="button" className="kit-btn" data-tip={TIP.applyRecommended} data-testid="kit-who-apply"
-                disabled={busy} onClick={() => void applyRecommended()}><Sparkle size={14} weight="fill" /> Apply recommended</button>
+        <GatedButton permission="agent_ability:assign" type="button" className="kit-btn" data-tip={TIP.applyRecommended} data-testid="kit-who-apply"
+                disabled={busy} onClick={() => void applyRecommended()}><Sparkle size={14} weight="fill" /> Apply recommended</GatedButton>
         <span className="kit-field-label">Show</span>
         <span className="kit-seg kit-seg-sm" role="radiogroup" aria-label="Show">
           <button type="button" role="radio" aria-checked={show === "all"} data-testid="kit-who-all" onClick={() => setShow("all")}>All</button>
@@ -181,8 +182,8 @@ export function WhoCan({ kit, crew, projectId, actor, focusRole, onChanged, onRe
         {actions.length ? (
           <>
             <span className="kit-faint" data-testid="kit-who-changes">{plural(actions.length, "change")}</span>
-            <button type="button" className="kit-link" disabled={busy || reloading} data-testid="kit-who-undo"
-                    data-tip={`Undo ${actions[actions.length - 1].label}`} onClick={() => void undo()}>Undo last</button>
+            <GatedButton permission="agent_ability:assign" type="button" className="kit-link" disabled={busy || reloading} data-testid="kit-who-undo"
+                    data-tip={`Undo ${actions[actions.length - 1].label}`} onClick={() => void undo()}>Undo last</GatedButton>
           </>
         ) : null}
       </div>

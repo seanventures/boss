@@ -17,6 +17,7 @@
  * SSH is off); host writes only when `can.install_key` / `can.install_docker` / `can.retire`.
  * Never a dead button.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
 import { registerLocalPlace } from "../../lib/hardware";
@@ -113,17 +114,17 @@ function Setup({ host, actor, refresh }: { host: HostDetail; actor: string; refr
       <StepBox index={host.stage.index} current={current} k="credential">
         <div className="inf-actions">
           {can.adopt_key ? (
-            <button type="button" className="ag-btn" data-testid="inf-stage-adopt" aria-expanded={adopting}
+            <GatedButton permission="host:manage" type="button" className="ag-btn" data-testid="inf-stage-adopt" aria-expanded={adopting}
                     title="Paste a private key that already reaches this machine"
-                    onClick={() => setAdopting((v) => !v)}>Use my key</button>
+                    onClick={() => setAdopting((v) => !v)}>Use my key</GatedButton>
           ) : null}
           {can.generate_key ? (
-            <button type="button" className={current === "credential" ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="inf-stage-generate"
+            <GatedButton permission="host:manage" type="button" className={current === "credential" ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="inf-stage-generate"
                     disabled={busy !== null}
                     title={current === "credential" ? "BOSS makes a key pair and shows the line to authorise" : redo}
                     onClick={() => void act("generate", () => generateHostKey(host.id, actor, store))}>
               {busy === "generate" ? "Generating…" : "Generate key"}
-            </button>
+            </GatedButton>
           ) : null}
           <label className="inf-inline-field" title="Where BOSS keeps the private half of this machine's key">
             <span>Store in</span>
@@ -144,7 +145,7 @@ function Setup({ host, actor, refresh }: { host: HostDetail; actor: string; refr
                         placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" data-testid="inf-stage-adopt-key" />
             </label>
             <div className="inf-actions">
-              <button type="submit" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-stage-adopt-submit">Adopt key</button>
+              <GatedButton permission="host:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-stage-adopt-submit">Adopt key</GatedButton>
             </div>
           </form>
         ) : null}
@@ -180,40 +181,40 @@ function Setup({ host, actor, refresh }: { host: HostDetail; actor: string; refr
         <div className="inf-actions">
           {command ? <CopyButton text={command} label="Copy command" testId="inf-stage-copy-command" /> : null}
           {can.verify ? (
-            <button type="button" className={current === "install" ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="inf-stage-ran"
+            <GatedButton permission="host:manage" type="button" className={current === "install" ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="inf-stage-ran"
                     disabled={busy !== null} title="Checks BOSS can now reach the machine (I've run it — verify)"
-                    onClick={() => void verify("ran", "I ran it")}>{busy === "ran" ? "Connecting…" : "I ran it"}</button>
+                    onClick={() => void verify("ran", "I ran it")}>{busy === "ran" ? "Connecting…" : "I ran it"}</GatedButton>
           ) : null}
         </div>
       </StepBox>
       <StepBox index={host.stage.index} current={current} k="verify">
         <div className="inf-actions">
           {can.verify ? (
-            <button type="button" className={current === "verify" ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="inf-stage-verify"
+            <GatedButton permission="host:manage" type="button" className={current === "verify" ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="inf-stage-verify"
                     disabled={busy !== null} title="Opens a real SSH session to the machine"
-                    onClick={() => void verify("verify", "Verify")}>{busy === "verify" ? "Connecting…" : "Verify"}</button>
+                    onClick={() => void verify("verify", "Verify")}>{busy === "verify" ? "Connecting…" : "Verify"}</GatedButton>
           ) : null}
           {can.install_key ? (
-            <button type="button" className="ag-btn" data-testid="inf-stage-install-key" disabled={busy !== null}
+            <GatedButton permission="host:manage" type="button" className="ag-btn" data-testid="inf-stage-install-key" disabled={busy !== null}
                     title="BOSS logs in once with your key and installs its own"
                     onClick={() => void act("install-key", () => installHostKey(host.id, actor, store))}>
               {busy === "install-key" ? "Installing…" : "Install key for me"}
-            </button>
+            </GatedButton>
           ) : null}
         </div>
       </StepBox>
       <StepBox index={host.stage.index} current={current} k="provision">
         <div className="inf-actions">
           {can.install_docker ? (
-            <button type="button" className={current === "provision" ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="inf-stage-docker"
+            <GatedButton permission="host:manage" type="button" className={current === "provision" ? "ag-btn ag-btn-primary" : "ag-btn"} data-testid="inf-stage-docker"
                     disabled={busy !== null} title="Install docker on the machine; BOSS ships apps as containers"
                     onClick={() => void act("docker", () => provisionHost(host.id, actor))}>
               {busy === "docker" ? "Installing…" : "Install Docker"}
-            </button>
+            </GatedButton>
           ) : null}
           {can.verify ? (
-            <button type="button" className="ag-btn" data-testid="inf-stage-verify-provision" disabled={busy !== null}
-                    onClick={() => void verify("verify-2", "Verify")}>Verify</button>
+            <GatedButton permission="host:manage" type="button" className="ag-btn" data-testid="inf-stage-verify-provision" disabled={busy !== null}
+                    onClick={() => void verify("verify-2", "Verify")}>Verify</GatedButton>
           ) : null}
         </div>
       </StepBox>
@@ -231,8 +232,8 @@ function CorrectRecord({ host, projectId, actor, refresh }: { host: HostDetail; 
   if (!host.can.correct) return null;
   if (!open) {
     return (
-      <button type="button" className="ag-btn" data-testid="inf-host-correct" title="Correct this computer's record"
-              onClick={() => setOpen(true)}>Correct record</button>
+      <GatedButton permission="host:manage" type="button" className="ag-btn" data-testid="inf-host-correct" title="Correct this computer's record"
+              onClick={() => setOpen(true)}>Correct record</GatedButton>
     );
   }
   return (
@@ -256,7 +257,7 @@ function CorrectRecord({ host, projectId, actor, refresh }: { host: HostDetail; 
         <label className="inf-field"><span>OS</span><input name="os" required defaultValue={fact(host.facts.os).replace("—", "")} placeholder="linux" autoComplete="off" /></label>
       </div>
       <div className="inf-actions">
-        <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-host-correct-save">Save</button>
+        <GatedButton permission="host:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-host-correct-save">Save</GatedButton>
         <button type="button" className="inf-link" onClick={() => setOpen(false)}>Cancel</button>
         <ErrorLine error={error} />
       </div>
@@ -308,9 +309,9 @@ export function RetireHostSheet({ host, projectId, actor, onClose, onRetired }: 
         ) : null}
         <TypedConfirm name={host.name} value={typed} onChange={setTyped} testId="inf-retire-confirm" />
         <div className="inf-actions">
-          <button type="submit" className="ag-btn" data-tone="reject" disabled={!ok || busy} data-testid="inf-retire-submit">
+          <GatedButton permission="host:manage" type="submit" className="ag-btn" data-tone="reject" disabled={!ok || busy} data-testid="inf-retire-submit">
             {busy ? "Retiring…" : "Retire"}
-          </button>
+          </GatedButton>
           <button type="button" className="inf-link" onClick={onClose}>Cancel</button>
           <ErrorLine error={error} testId="inf-retire-error" />
         </div>
@@ -393,14 +394,14 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
           </DrawerSection>
           {!h.thisComputer ? (
             <DrawerSection label="CHECKS" testId="inf-host-checks" actions={h.can.verify && canWrite ? (
-              <button type="button" className="ag-btn" data-testid="inf-host-reverify" disabled={busy !== null}
+              <GatedButton permission="host:manage" type="button" className="ag-btn" data-testid="inf-host-reverify" disabled={busy !== null}
                       title="Opens a real SSH session now" onClick={() => void run("reverify", async () => {
                         setError(null);
                         const r = await verifyHost(h.id, actor, "Re-verify");
                         if (!r.ok) { setError(r.error); return; }
                         showToast("success", "Verified");
                         afterWrite(detail.refresh);
-                      })}>{busy === "reverify" ? "Connecting…" : "Re-verify"}</button>
+                      })}>{busy === "reverify" ? "Connecting…" : "Re-verify"}</GatedButton>
             ) : undefined}>
               {h.findings.length ? (
                 <ul className="inf-checks">
@@ -434,8 +435,8 @@ export function HostDrawer({ projectId, actor, hostId, canWrite, onClose, onResi
           {canWrite && h.can.retire && !h.thisComputer ? (
             <DrawerSection label="RETIRE" testId="inf-host-retire-sec">
               <div className="inf-actions">
-                <button type="button" className="ag-btn" data-tone="reject" data-testid="inf-host-retire"
-                        title="Stops BOSS using this machine. Choose what to clean up." onClick={() => setRetiring(true)}>Retire…</button>
+                <GatedButton permission="host:manage" type="button" className="ag-btn" data-tone="reject" data-testid="inf-host-retire"
+                        title="Stops BOSS using this machine. Choose what to clean up." onClick={() => setRetiring(true)}>Retire…</GatedButton>
               </div>
             </DrawerSection>
           ) : null}

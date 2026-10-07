@@ -6,7 +6,7 @@
 .idn-dg .idn-top { flex-wrap: wrap; }
 .idn-agent-pick { display: inline-flex; align-items: center; gap: 7px; }
 .idn-key-picker { display: flex; flex-wrap: wrap; gap: 6px; max-height: 220px; overflow-y: auto; padding: 8px 0; }
-.idn-key-picker .idn-tg { font-family: var(--mono); font-size: 11.5px; }
+.idn-key-picker .idn-tg { font-size: 12px; }
 .idn-t td .idn-kid + span { display: block; font-size: 12.5px; color: var(--ink-soft); }
 .idn-cx > span:nth-child(2) { display: flex; flex-direction: column; }
 .idn-sheet .idn-form { margin-bottom: 8px; }
@@ -14,4 +14,18 @@
 @media (max-width: 560px) {
   .idn-dg .idn-top .idn-spacer { display: none; }
   .idn-key-picker { max-height: 180px; }
+}
+/* People picker (owners, sponsor), avatar tones, the "signed in as" row. */
+.idn-pick { flex-wrap: wrap; gap: 6px; }
+.idn-pick .idn-chip { display: inline-flex; align-items: center; gap: 6px; }
+.idn-x { display: inline-grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: 50%; background: none; color: var(--faint); cursor: pointer; padding: 0; }
+.idn-x:hover, .idn-x:focus-visible { color: var(--red); background: var(--red-soft); }
+.idn-tones { flex-wrap: wrap; gap: 8px; }
+.idn-tone { border: 2px solid transparent; border-radius: 50%; background: none; padding: 2px; cursor: pointer; line-height: 0; }
+.idn-tone[aria-checked="true"] { border-color: var(--teal); }
+.idn-tone:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.idn-me-row { gap: 12px; margin-bottom: 10px; }
+.idn-me-row b { font-size: 14px; }
+@media (max-width: 560px) {
+  .idn-sacols .idn-dh2 { flex-wrap: wrap; }
 }

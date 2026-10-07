@@ -10,6 +10,7 @@
  * Infra and Observability view. A control that cannot work here is not drawn: outward SSH off
  * hides every action that reaches a machine; a read-only viewer sees no write at all.
  */
+import { useGate, GatedButton } from "../../components/gated";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Polled } from "../../lib/factory-floor";
@@ -85,6 +86,7 @@ export function FleetTab({ projectId, actor, url, go, query, fleet }: InfraTabPr
     return (f?.unplaced ?? []).filter((r) => !needle || `${r.name} ${r.env ?? ""}`.toLowerCase().includes(needle));
   }, [f, query]);
 
+  const hostGate = useGate("host:manage");
   if (!f) {
     // Unreachable: Infra's header already says "Can't reach BOSS"; "Nothing to show" under it was
     // a second, false claim (an empty fleet nobody had read).
@@ -92,7 +94,7 @@ export function FleetTab({ projectId, actor, url, go, query, fleet }: InfraTabPr
   }
 
   const canAct = (a: StageAction): boolean => {
-    if (!canWrite || !a) return false;
+    if (!canWrite || !a || !hostGate.allowed) return false;
     if (a === "verify") return !!pre?.outwardSshAllowed;
     if (a === "install_docker") return !!pre?.hostWritesAllowed;
     return true;
@@ -145,7 +147,7 @@ export function FleetTab({ projectId, actor, url, go, query, fleet }: InfraTabPr
           <Empty testId="infra-fleet-empty">
             <span>No machines yet</span>
             {canWrite && pre?.outwardSshAllowed ? (
-              <button type="button" className="ag-btn" data-testid="inf-empty-add-host" onClick={() => openInfraAdd("host")}>Add host</button>
+              <GatedButton permission="host:manage" type="button" className="ag-btn" data-testid="inf-empty-add-host" onClick={() => openInfraAdd("host")}>Add host</GatedButton>
             ) : null}
           </Empty>
         ) : null}

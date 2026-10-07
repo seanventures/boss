@@ -106,7 +106,7 @@ describe("can()", () => {
   });
 
   it("says why it refuses, and never guesses across scopes", () => {
-    expect(can(snap, "deployment:production", here)).toMatchObject({ allowed: false, reason: "Needs deployment:production" });
+    expect(can(snap, "deployment:production", here)).toMatchObject({ allowed: false, reason: `Needs “${PERMISSION_META["deployment:production"].title}”` });
     expect(can(snap, "workflow:read", { kind: "project", projectId: "other" }).allowed).toBe(false);
     expect(can(snap, "workflow:read").allowed).toBe(false);
     expect(can(null, "workflow:read").allowed).toBe(false);
@@ -118,7 +118,7 @@ describe("can()", () => {
       org: { id: "org_boss", name: "BOSS" }, status: "active", access_roles: ["owner"],
       sign_in: { password: true, totp: false, passkeys: 1, recovery_codes_remaining: 10, sso_links: [] },
       mfa_required: true, mfa_at: null, session_id: "ses_1", session_expires_at: null,
-      csrf_token: "c", epoch: 4, network_bound: false, banners: [],
+      csrf_token: "c", epoch: 4, network_bound: false, banners: [], avatar_seed: null
     };
     expect(me.kind).toBe("user");
   });

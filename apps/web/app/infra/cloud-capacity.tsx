@@ -6,6 +6,7 @@
  * provider's API health, the counts the old fabric tiles showed, `+ Pool` (cost typed in
  * dollars, sent as micros), `Review scaling`, and the pool drawer's history and scale plans.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useMemo, useState } from "react";
 
 import { showToast } from "../client-forms";
@@ -54,9 +55,9 @@ export function CloudCapacity(p: CloudViewProps) {
       <ZoneHead id="inf-cloud-pools" label="POOLS" count={rows.length}>
         {canWrite ? (
           <>
-            <button type="button" className="ag-btn" data-testid="inf-capacity-add-pool" onClick={() => setSheet("pool")}>+ Pool</button>
-            <button type="button" className="ag-btn" data-testid="inf-capacity-review" title="Plans scaling from the queue and budget"
-                    onClick={() => setSheet("review")}>Review scaling</button>
+            <GatedButton permission="infra:provision" type="button" className="ag-btn" data-testid="inf-capacity-add-pool" onClick={() => setSheet("pool")}>+ Pool</GatedButton>
+            <GatedButton permission="infra:provision" type="button" className="ag-btn" data-testid="inf-capacity-review" title="Plans scaling from the queue and budget"
+                    onClick={() => setSheet("review")}>Review scaling</GatedButton>
           </>
         ) : null}
       </ZoneHead>
@@ -189,7 +190,7 @@ function PoolSheet({ body, projectId, actor, poll, onClose }: CloudViewProps & {
           <textarea rows={2} value={f.capabilities} onChange={set("capabilities")} /></label>
         <ErrorLine error={error} testId="inf-pool-error" />
         <div className="inf-actions">
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-pool-submit">Save pool</button>
+          <GatedButton permission="infra:provision" type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-pool-submit">Save pool</GatedButton>
         </div>
       </form>
     </Sheet>
@@ -223,7 +224,7 @@ function ReviewSheet({ projectId, actor, poll, pools, onClose }: CloudViewProps 
         </label>
         <ErrorLine error={error} />
         <div className="inf-actions">
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-review-submit">Review</button>
+          <GatedButton permission="infra:provision" type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-review-submit">Review</GatedButton>
         </div>
       </form>
     </Sheet>

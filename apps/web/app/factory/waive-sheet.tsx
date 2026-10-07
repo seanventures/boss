@@ -10,6 +10,7 @@ import React, { useEffect, useId, useRef, useState } from "react";
 
 import type { FailingGate } from "../../lib/agents-live-board";
 import { callAction } from "../../lib/call-action";
+import { GatedButton } from "../../components/gated";
 import { notifyChanged } from "../changed";
 import { showToast } from "../client-forms";
 import { waiveChecksAction } from "./floor-actions";
@@ -100,11 +101,11 @@ export function WaiveSheet({ runId, app, failing, projectId, actor, onClose, onD
         </label>
         {error ? <span className="ag-att-error" role="alert" data-user-text>{error}</span> : null}
         <div className="fx-sheet-actions">
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={!ready} aria-busy={busy || undefined}
+          <GatedButton permission="code_task:override" type="submit" className="ag-btn ag-btn-primary" disabled={!ready} aria-busy={busy || undefined}
                   title="Open the PR anyway. The merge still needs you." data-testid="fx-waive-submit">
             {busy ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
             Waive and open PR
-          </button>
+          </GatedButton>
           <button type="button" className="ag-link" onClick={onClose}>Cancel</button>
         </div>
       </form>

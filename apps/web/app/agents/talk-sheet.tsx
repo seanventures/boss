@@ -7,6 +7,7 @@
  * scopes the work and ends in a start card (§0.2 A.2).
  */
 
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useMemo, useRef } from "react";
 import { RateScope } from "../improve/rate-it";
 
@@ -82,12 +83,12 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
           onSend={(message) => void live.send(message)}
           onStop={answering ? live.stop : undefined}
           extra={plan ? (
-            <button type="button" className="ag-btn" data-testid="ag-propose"
+            <GatedButton permission="meeting:convene" type="button" className="ag-btn" data-testid="ag-propose"
                     disabled={busy || !spoke}
                     title={spoke ? "Turn this into a start you can review" : "Say what you want first"}
                     onClick={() => void live.propose()}>
               {lastAgent?.kind === "proposal" ? "Propose again" : "Propose"}
-            </button>
+            </GatedButton>
           ) : null} />
       </aside>
     </SeatBook.Provider>

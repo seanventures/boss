@@ -8,6 +8,7 @@
  * (the server converts), a budget reservation, and a release packet that must parse as a JSON
  * object before anything is sent.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useMemo, useState } from "react";
 
 import { showToast } from "../client-forms";
@@ -149,8 +150,8 @@ export function DeploySheet({ projectId, actor, onClose, onPlanned, initialTarge
           </div>
         ) : null}
         <div className="inf-actions">
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={busy || !targetId || !!pk.error || costBad}
-                  data-testid="inf-deploy-plan-btn">{busy ? "Planning…" : "Plan"}</button>
+          <GatedButton permission="deployment:create" type="submit" className="ag-btn ag-btn-primary" disabled={busy || !targetId || !!pk.error || costBad}
+                  data-testid="inf-deploy-plan-btn">{busy ? "Planning…" : "Plan"}</GatedButton>
           <ErrorLine error={error} testId="inf-deploy-sheet-error" />
         </div>
       </form>

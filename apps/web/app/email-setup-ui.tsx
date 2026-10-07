@@ -10,6 +10,7 @@
  * problem is reported.
  */
 
+import { GatedButton } from "../components/gated";
 import React, { useEffect, useState } from "react";
 
 import { apiWrite } from "../lib/api-write";
@@ -128,11 +129,11 @@ export function EmailSetup({ projectId, compact = false, onSaved }: {
                  data-testid="email-setup-password" />
         </label>
       </div>
-      <button type="button" className="cap-btn" data-testid="email-setup-save"
+      <GatedButton permission="comms:manage" type="button" className="cap-btn" data-testid="email-setup-save"
               disabled={busy || !host.trim() || !fromAddress.trim()}
               onClick={() => void save()}>
         {busy ? "Saving…" : "Save mail server"}
-      </button>
+      </GatedButton>
       {note ? (
         <p className={note.bad ? "dw-new-error" : "detail"} data-testid="email-setup-note">
           {note.text}

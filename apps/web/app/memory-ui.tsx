@@ -1,5 +1,6 @@
 "use client";
 
+import { GatedButton } from "../components/gated";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiWrite } from "../lib/api-write";
 
@@ -147,16 +148,16 @@ export function MemoryHome({ projectId, actor }: { projectId: string; actor: str
                   <span className="mem-body">{m.body}</span>
                 </div>
                 <div className="mem-row-actions">
-                  <button type="button" className="cap-btn primary" disabled={busy === m.id}
+                  <GatedButton permission="memory:manage" type="button" className="cap-btn primary" disabled={busy === m.id}
                           onClick={() => act(m, "review", "active")}
                           data-testid={`memory-accept-${m.id}`}>
                     {busy === m.id ? "…" : "Accept"}
-                  </button>
-                  <button type="button" className="linklike" disabled={busy === m.id}
+                  </GatedButton>
+                  <GatedButton permission="memory:manage" type="button" className="linklike" disabled={busy === m.id}
                           onClick={() => act(m, "review", "rejected")}
                           data-testid={`memory-reject-${m.id}`}>
                     Reject
-                  </button>
+                  </GatedButton>
                 </div>
               </li>
             ))}
@@ -183,11 +184,11 @@ export function MemoryHome({ projectId, actor }: { projectId: string; actor: str
                   <span className="detail mem-used">
                     {m.use_count > 0 ? `used ${m.use_count}×` : "never used"}
                   </span>
-                  <button type="button" className="linklike" disabled={busy === m.id}
+                  <GatedButton permission="memory:manage" type="button" className="linklike" disabled={busy === m.id}
                           onClick={() => act(m, "forget")}
                           data-testid={`memory-forget-${m.id}`}>
                     Retire
-                  </button>
+                  </GatedButton>
                 </div>
               </li>
             ))}

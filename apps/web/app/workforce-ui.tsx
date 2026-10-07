@@ -1,5 +1,6 @@
 "use client";
 
+import { GatedButton } from "../components/gated";
 import { DotsThree, MagnifyingGlass } from "@phosphor-icons/react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -573,12 +574,12 @@ export function OrgChartArea({ chart, projectId, actor, drift = null }: {
           <span className="detail">{treeNow.length} role{treeNow.length === 1 ? "" : "s"} in recent handoffs</span>
         ) : null}
         {view === "planned" && placedCount ? (
-          <button type="button" className="cap-btn" disabled={busy} data-testid="org-reset-all"
+          <GatedButton permission="agent:update" type="button" className="cap-btn" disabled={busy} data-testid="org-reset-all"
                   onClick={() => {
                     if (window.confirm("Clear all planned reporting lines for this project?")) void release("*");
                   }}>
             Clear planned structure
-          </button>
+          </GatedButton>
         ) : null}
       </div>
       {note ? <p className="org-note" data-tone="error"
@@ -645,15 +646,15 @@ export function OrgChartArea({ chart, projectId, actor, drift = null }: {
                     <button type="button" className="org-node-act" onClick={() => openAgent(n.id)}
                             data-testid={`org-work-${n.id}`}>Work</button>
                     {view === "planned" ? <>
-                      {parentId ? <button type="button" className="org-node-act" disabled={busy}
+                      {parentId ? <GatedButton permission="agent:update" type="button" className="org-node-act" disabled={busy}
                               title="Make this a top-level role"
                               data-testid={`org-top-${n.id}`}
-                              onClick={() => void place(n.id, null)}>Top level</button> : null}
+                              onClick={() => void place(n.id, null)}>Top level</GatedButton> : null}
                       {Object.prototype.hasOwnProperty.call(declared, n.id) ? (
-                        <button type="button" className="org-node-act" disabled={busy}
+                        <GatedButton permission="agent:update" type="button" className="org-node-act" disabled={busy}
                                 title="Remove this role from the planned structure"
                                 data-testid={`org-reset-${n.id}`}
-                                onClick={() => void release(n.id)}>Remove</button>
+                                onClick={() => void release(n.id)}>Remove</GatedButton>
                       ) : null}
                     </> : null}
                   </span>
@@ -698,10 +699,10 @@ export function OrgChartArea({ chart, projectId, actor, drift = null }: {
                     <option key={parent.id} value={parent.id}>{displayName(parent)}</option>
                   ))}
                 </select>
-                <button type="button" className="org-place-btn" disabled={busy}
+                <GatedButton permission="agent:update" type="button" className="org-place-btn" disabled={busy}
                         onClick={() => void place(n.id, placementTargets[n.id] || null)}>
                   Place
-                </button>
+                </GatedButton>
               </div>
             ))}
             {!rolesLoading && !rolesError && matchingPlaceable.length === 0 ? (

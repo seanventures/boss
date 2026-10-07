@@ -21,6 +21,7 @@ export default async function AuditLogPage({ searchParams }: Props) {
       initialFilters={filters}
       initialEvent={one("event") || null}
       verifyOnOpen={one("verify") === "1"}
+      failure={read.ok ? null : read}
     />
   );
 }

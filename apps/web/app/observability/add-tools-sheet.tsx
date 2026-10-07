@@ -7,6 +7,7 @@
  * catalogue sits below in the same sheet. Reads GET /v1/observability-suite/catalog; Recommend
  * is POST /v1/observability-suite/recommend (it changes nothing).
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
 import type { OssComponent, ObservabilitySuiteCatalog, RecommendResult, WorkloadProfile } from "../../lib/observability-suite";
@@ -72,9 +73,9 @@ export function AddToolsSheet({ onClose }: { onClose: () => void }) {
             {profiles.map((p) => <option key={p.id} value={p.id}>{p.title || p.id}</option>)}
           </select>
         </label>
-        <button type="button" className="ag-btn ag-btn-primary" data-testid="obs-tools-recommend" disabled={busy} onClick={recommend}>
+        <GatedButton permission="observability:read" type="button" className="ag-btn ag-btn-primary" data-testid="obs-tools-recommend" disabled={busy} onClick={recommend}>
           {busy ? "Recommending…" : "Recommend"}
-        </button>
+        </GatedButton>
         {error ? <span className="inf-error" title={error}>Not answered</span> : null}
       </div>
       {result ? (

@@ -7,6 +7,7 @@
  * skills, `Paste key`, `Use secret ref`). A credential is write-only: a reference is never drawn,
  * a pasted key is cleared the moment it is sent, and `Revoke…` asks for the account's name.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useMemo, useState } from "react";
 
 import { explainRawSecret } from "../../lib/hardware";
@@ -36,7 +37,7 @@ export function CloudAccounts(p: CloudViewProps) {
     <section className="cloud-sec" aria-labelledby="inf-cloud-accounts">
       <ZoneHead id="inf-cloud-accounts" label="ACCOUNTS" count={rows.length}>
         {canWrite ? (
-          <button type="button" className="ag-btn" data-testid="inf-account-new" onClick={() => setAdding(true)}>+ Account</button>
+          <GatedButton permission="cloud_account:manage" type="button" className="ag-btn" data-testid="inf-account-new" onClick={() => setAdding(true)}>+ Account</GatedButton>
         ) : null}
       </ZoneHead>
       {rows.length === 0 ? (
@@ -175,20 +176,20 @@ function AccountDrawer({ account: a, catalog, projectId, actor, canWrite, poll, 
               <textarea rows={2} value={policy.scopes} onChange={(e) => setPolicy({ ...policy, scopes: e.target.value })} /></label>
             <Toggles values={policy} set={(k, v) => setPolicy({ ...policy, [k]: v })} />
             <div className="inf-actions">
-              <button type="submit" className="ag-btn" disabled={busy !== null} data-testid="inf-account-save">Save policy</button>
-              <button type="button" className="ag-btn" disabled={busy !== null || a.can.test === false} data-testid="inf-account-test"
+              <GatedButton permission="cloud_account:manage" type="submit" className="ag-btn" disabled={busy !== null} data-testid="inf-account-save">Save policy</GatedButton>
+              <GatedButton permission="cloud_account:manage" type="button" className="ag-btn" disabled={busy !== null || a.can.test === false} data-testid="inf-account-test"
                       title="Calls the provider once with these credentials"
-                      onClick={() => void run("test", () => testAccount(projectId, actor, a.id), "Tested")}>Test</button>
-              <button type="button" className="ag-btn" disabled={busy !== null || a.can.sync === false} data-testid="inf-account-sync"
+                      onClick={() => void run("test", () => testAccount(projectId, actor, a.id), "Tested")}>Test</GatedButton>
+              <GatedButton permission="cloud_account:manage" type="button" className="ag-btn" disabled={busy !== null || a.can.sync === false} data-testid="inf-account-sync"
                       title="Reads inventory and costs from the provider"
-                      onClick={() => void run("sync", () => syncAccount(projectId, actor, a.id), "Sync started")}>Sync</button>
+                      onClick={() => void run("sync", () => syncAccount(projectId, actor, a.id), "Sync started")}>Sync</GatedButton>
               {a.can.enable ? (
-                <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-account-enable"
-                        onClick={() => void run("enable", () => enableAccount(projectId, actor, a.id), "Enabled")}>Enable</button>
+                <GatedButton permission="cloud_account:manage" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-account-enable"
+                        onClick={() => void run("enable", () => enableAccount(projectId, actor, a.id), "Enabled")}>Enable</GatedButton>
               ) : (
-                <button type="button" className="ag-btn" disabled={busy !== null || a.can.disable === false} data-testid="inf-account-disable"
+                <GatedButton permission="cloud_account:manage" type="button" className="ag-btn" disabled={busy !== null || a.can.disable === false} data-testid="inf-account-disable"
                         title="Stops every adapter call for this account"
-                        onClick={() => void run("disable", () => disableAccount(projectId, actor, a.id), "Disabled")}>Disable</button>
+                        onClick={() => void run("disable", () => disableAccount(projectId, actor, a.id), "Disabled")}>Disable</GatedButton>
               )}
             </div>
           </form>
@@ -215,7 +216,7 @@ function AccountDrawer({ account: a, catalog, projectId, actor, canWrite, poll, 
                 <select value={overlap} onChange={(e) => setOverlap(e.target.value)} data-testid="inf-account-overlap">
                   {["5", "15", "30", "60"].map((m) => <option key={m} value={m}>{m} min</option>)}
                 </select></label>
-              <button type="submit" className="ag-btn" disabled={busy !== null || def?.adapterStatus === "planned"}>Rotate</button>
+              <GatedButton permission="cloud_account:manage" type="submit" className="ag-btn" disabled={busy !== null || def?.adapterStatus === "planned"}>Rotate</GatedButton>
             </div>
           </form>
         </DrawerSection>
@@ -224,8 +225,8 @@ function AccountDrawer({ account: a, catalog, projectId, actor, canWrite, poll, 
       {manage && a.can.revoke !== false ? (
         <DrawerSection label="REVOKE" testId="inf-account-revoke-sec">
           <div className="inf-actions">
-            <button type="button" className="ag-btn" data-tone="reject" data-testid="inf-account-revoke"
-                    title="Permanent. Its history stays as evidence." onClick={() => setRevoking(true)}>Revoke…</button>
+            <GatedButton permission="cloud_account:manage" type="button" className="ag-btn" data-tone="reject" data-testid="inf-account-revoke"
+                    title="Permanent. Its history stays as evidence." onClick={() => setRevoking(true)}>Revoke…</GatedButton>
           </div>
         </DrawerSection>
       ) : null}
@@ -254,10 +255,10 @@ function AccountDrawer({ account: a, catalog, projectId, actor, canWrite, poll, 
           </dl>
           <TypedConfirm name={a.label} value={typed} onChange={setTyped} testId="inf-account-revoke-name" />
           <div className="inf-actions">
-            <button type="button" className="ag-btn" data-tone="reject" data-testid="inf-account-revoke-confirm"
+            <GatedButton permission="cloud_account:manage" type="button" className="ag-btn" data-tone="reject" data-testid="inf-account-revoke-confirm"
                     disabled={!confirmed(a.label, typed) || busy !== null}
                     onClick={() => void run("revoke", () => revokeAccount(projectId, actor, a.id), "Revoked")
-                      .then((ok) => { if (ok) { setRevoking(false); setTyped(""); } })}>Revoke</button>
+                      .then((ok) => { if (ok) { setRevoking(false); setTyped(""); } })}>Revoke</GatedButton>
             <button type="button" className="ag-link" onClick={() => { setRevoking(false); setTyped(""); }}>Cancel</button>
           </div>
         </Sheet>
@@ -372,7 +373,7 @@ function AddAccountSheet({ catalog, projectId, actor, poll, onClose }: CloudView
                 <input type="url" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://localhost:11434/v1" /></label>
             ) : null}
             <div className="inf-actions">
-              <button type="submit" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-paste-submit">Paste key</button>
+              <GatedButton permission="cloud_account:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-paste-submit">Paste key</GatedButton>
             </div>
           </>
         )}
@@ -402,7 +403,7 @@ function AddAccountSheet({ catalog, projectId, actor, poll, onClose }: CloudView
               <textarea rows={2} value={scopes} onChange={(e) => setScopes(e.target.value)} disabled={!available} /></label>
             <Toggles values={flags} set={(k, v) => setFlags({ ...flags, [k]: v })} disabled={!available} />
             <div className="inf-actions">
-              <button type="submit" className="ag-btn" disabled={!available || busy !== null} data-testid="inf-ref-submit">Connect</button>
+              <GatedButton permission="cloud_account:manage" type="submit" className="ag-btn" disabled={!available || busy !== null} data-testid="inf-ref-submit">Connect</GatedButton>
             </div>
           </form>
         )}

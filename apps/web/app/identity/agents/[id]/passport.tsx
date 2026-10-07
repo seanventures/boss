@@ -8,11 +8,15 @@
  * step-up, and never more than they hold themselves (§6.11).
  */
 import React, { useMemo, useState } from "react";
-import { ArrowRight, LockSimple, Pause, Play, Prohibit, ShieldCheck, Warning } from "@phosphor-icons/react";
+import { ArrowRight, LockSimple, Pause, Play, Prohibit, ShieldCheck, UserCircle, Warning } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../../agent-avatar";
 import { CanButton, useGuardedCall, useIdentity } from "../../../../components/identity/identity-provider";
-import { Ago, ErrorLine, Face, Pill, Sheet, shortDate } from "../../../../components/identity/kit";
+import { Ago, ErrorLine, Face, Perm, Pill, Sheet, shortDate } from "../../../../components/identity/kit";
+import { EmptyState } from "../../../../components/identity/states";
+import { permissionName } from "../../../../lib/identity/words";
+import { plainText } from "../../../../lib/identity/plain";
+import { PeoplePick, type PickPerson } from "../../service-accounts/people-pick";
 import { IdentityError, idPatch, idPost } from "../../../../lib/identity/api";
 import { PERMISSIONS, PERMISSION_META, type Permission } from "../../../../lib/identity/permissions.gen";
 import type { Delegation, Passport } from "../../../../lib/identity/types";
@@ -70,10 +74,49 @@ function RevokeSheet({ agent, onClose, onDone }: { agent: Passport; onClose: () 
   );
 }
 
-export function PassportScreen({ initial, grants }: { initial: Passport; grants: Delegation[] | null }) {
+/** Assign (or change) the person accountable for an agent: PATCH /v1/identity/agents/{id} {sponsor}. */
+function SponsorSheet({ agent, people, onClose, onDone }: { agent: Passport; people: PickPerson[]; onClose: () => void; onDone: (p: Passport) => void }) {
+  const { me } = useIdentity();
+  const guarded = useGuardedCall();
+  const list = me && !people.some((p) => p.id === me.principal_id)
+    ? [{ id: me.principal_id, name: me.display_name, hue: 0, email: me.email }, ...people] : people;
+  const [pick, setPick] = useState<string[]>(agent.sponsor ? [agent.sponsor.id] : []);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <Sheet title={agent.sponsor ? `Change ${agent.name}'s sponsor` : `Sponsor for ${agent.name}`} icon={<UserCircle size={18} aria-hidden />} onClose={onClose} testId="sponsor-sheet">
+      <p className="idn-lede2" data-copy="prose">The sponsor is the person accountable for what this agent does. They are told about its grants and lifecycle.</p>
+      <div className="idn-field">
+        <span className="idn-label">Sponsor</span>
+        <PeoplePick people={list} chosen={pick} onChange={(ids) => setPick(ids.slice(-1))} label="Choose a sponsor" single testId="sponsor-pick" />
+      </div>
+      <ErrorLine error={error} />
+      <div className="idn-mf">
+        <span className="idn-spacer" />
+        <button type="button" className="idn-btn ghost" onClick={onClose}>Cancel</button>
+        <button type="button" className="idn-btn primary" disabled={!pick.length || busy || pick[0] === agent.sponsor?.id} data-testid="sponsor-save"
+          onClick={async () => {
+            setBusy(true); setError(null);
+            try {
+              const next = await guarded(`A sponsor is accountable for ${agent.name}.`,
+                () => idPatch<Passport>(`/v1/identity/agents/${encodeURIComponent(agent.id)}`, { sponsor: pick[0] }));
+              showToast("success", "Sponsor set");
+              onDone(next);
+            } catch (e) {
+              if (!(e instanceof IdentityError && e.code === "step_up_cancelled")) setError(e instanceof IdentityError ? e.message : "Not saved");
+              setBusy(false);
+            }
+          }}>Save</button>
+      </div>
+    </Sheet>
+  );
+}
+
+export function PassportScreen({ initial, grants, people = [] }: { initial: Passport; grants: Delegation[] | null; people?: PickPerson[] }) {
   const [agent, setAgent] = useState(initial);
   const [ceiling, setCeiling] = useState<Set<Permission>>(new Set(initial.ceiling));
   const [revoking, setRevoking] = useState(false);
+  const [sponsoring, setSponsoring] = useState(false);
   const [saving, setSaving] = useState(false);
   const [onlyOn, setOnlyOn] = useState(true);
   const { org } = useIdentity();
@@ -104,11 +147,11 @@ export function PassportScreen({ initial, grants }: { initial: Passport; grants:
   const save = async () => {
     setSaving(true);
     try {
-      const next = await guarded(`Changing ${agent.name}'s ceiling changes what it can be given.`,
+      const next = await guarded(`Changing ${agent.name}'s access limit changes what it can be given.`,
         () => idPatch<Passport>(`/v1/identity/agents/${encodeURIComponent(agent.id)}/passport`, { ceiling: [...ceiling] }));
       setAgent(next);
       setCeiling(new Set(next.ceiling));
-      showToast("success", "Ceiling saved");
+      showToast("success", "Access limit saved");
     } catch (e) {
       showToast("error", e instanceof IdentityError ? e.message : "Not saved");
     } finally {
@@ -122,8 +165,8 @@ export function PassportScreen({ initial, grants }: { initial: Passport; grants:
         <AgentAvatar agent={agent.role_key} size={48} standalone state={agent.status === "active" ? "idle" : agent.status === "suspended" ? "paused" : "retired"} />
         <div>
           <nav className="idn-crumb" aria-label="Breadcrumb"><a href="/identity/agents">Agents</a><span aria-hidden>›</span><span aria-current="page">Passport</span></nav>
-          <h1>{agent.name} <Pill tone={statusTone(agent.status)}>{agent.status}</Pill>{agent.sealed ? <span className="idn-tag" title="Its ceiling changes only through a Passport edit">sealed</span> : null}</h1>
-          <span className="idn-dim">{agent.title} · <code className="idn-mono">{agent.id}</code></span>
+          <h1>{agent.name} <Pill tone={statusTone(agent.status)}>{agent.status}</Pill>{agent.sealed ? <span className="idn-tag" title="Its access limit changes only through a Passport edit">sealed</span> : null}</h1>
+          <span className="idn-dim" title={`Agent ${agent.id}`}>{agent.title}</span>
         </div>
         <span className="idn-spacer" />
         <div className="idn-acts">
@@ -139,11 +182,12 @@ export function PassportScreen({ initial, grants }: { initial: Passport; grants:
       <div className="idn-cols">
         <section className="idn-mx" aria-labelledby="idn-ceiling-h">
           <div className="idn-mx-top">
-            <h2 id="idn-ceiling-h" className="idn-h3">Ceiling</h2>
-            <span className="idn-sub idn-dim">{ceiling.size} delegable{agent.ceiling_preset ? ` · from ${agent.ceiling_preset}` : ""}</span>
+            <h2 id="idn-ceiling-h" className="idn-h3" title="Nobody can delegate more than this to the agent">Access limit</h2>
+            <span className="idn-sub idn-dim">{ceiling.size} allowed{agent.ceiling_preset ? ` · from ${agent.ceiling_preset}` : ""}</span>
             <span className="idn-spacer" />
             <button type="button" className="idn-fchip" aria-pressed={onlyOn} onClick={() => setOnlyOn((v) => !v)}>Only what it has</button>
           </div>
+          <p className="idn-dim idn-small" data-copy="prose">The most anyone may let this agent do. A grant never gives it more.</p>
           <div className="idn-mx-legend">
             <span><i className="idn-lg-on" />on</span><span><LockSimple size={11} aria-hidden /> never delegable</span><span>dashed: you don't hold it</span>
           </div>
@@ -152,7 +196,7 @@ export function PassportScreen({ initial, grants }: { initial: Passport; grants:
               <div className="idn-mx-cat">{g.category}</div>
               {g.resources.map((r) => (
                 <div key={r.resource} className="idn-mx-row">
-                  <span className="idn-res">{r.resource.replace(/_/g, " ")}<small>{r.resource}</small></span>
+                  <span className="idn-res">{r.resource.replace(/_/g, " ")}</span>
                   <span className="idn-acts2">
                     {r.perms.map((p) => {
                       const meta = PERMISSION_META[p];
@@ -163,7 +207,7 @@ export function PassportScreen({ initial, grants }: { initial: Passport; grants:
                         <button key={p} type="button" className="idn-tg" aria-pressed={on} data-locked={locked || undefined} data-change={change}
                           aria-disabled={locked || undefined} data-testid={`ceil-${p}`}
                           title={!meta.delegable ? "Never delegable" : !held(p) ? "You don't hold this" : meta.title}
-                          aria-label={`${p}${!meta.delegable ? ", never delegable" : ""}`}
+                          aria-label={`${meta.title}${!meta.delegable ? ", never delegable" : ""}`}
                           onClick={() => {
                             if (locked) return;
                             const next = new Set(ceiling);
@@ -184,8 +228,8 @@ export function PassportScreen({ initial, grants }: { initial: Passport; grants:
           {dirty ? (
             <div className="idn-ceil-save">
               <div className="idn-diff">
-                {added.map((p) => <div key={p} className="idn-dl p"><b>+</b>{p}</div>)}
-                {removed.map((p) => <div key={p} className="idn-dl m"><b>−</b>{p}</div>)}
+                {added.map((p) => <div key={p} className="idn-dl p"><b>+</b>{permissionName(p)}</div>)}
+                {removed.map((p) => <div key={p} className="idn-dl m"><b>−</b>{permissionName(p)}</div>)}
               </div>
               <div className="idn-save">
                 <CanButton permission="agent_passport:manage" className="idn-btn primary" onClick={save} disabled={saving} data-testid="save-ceiling">
@@ -202,7 +246,15 @@ export function PassportScreen({ initial, grants }: { initial: Passport; grants:
             <div className="idn-card-h"><h3 id="idn-pass-h">Passport</h3></div>
             <dl className="idn-kv">
               <dt>Sponsor</dt>
-              <dd>{agent.sponsor ? <><Face name={agent.sponsor.name} tone={agent.sponsor.hue} size={22} /> {agent.sponsor.name}</> : <span className="idn-warn"><Warning size={13} aria-hidden /> none · needs one</span>}</dd>
+              <dd className="idn-row">
+                {agent.sponsor ? <><Face name={agent.sponsor.name} tone={agent.sponsor.hue} size={22} /> {agent.sponsor.name}</> : <span className="idn-warn"><Warning size={13} aria-hidden /> No sponsor</span>}
+                {!revoked ? (
+                  <CanButton permission="agent_passport:manage" className={`idn-btn sm${agent.sponsor ? " ghost" : ""}`} onClick={() => setSponsoring(true)}
+                    tip="The person accountable for this agent" data-testid="assign-sponsor">
+                    {agent.sponsor ? "Change" : "Assign"}
+                  </CanButton>
+                ) : null}
+              </dd>
               <dt>GitHub</dt>
               <dd>{Object.entries(agent.external_ceiling.github ?? {}).map(([k, v]) => <span key={k} className="idn-chip">{k.replace(/_/g, " ")}: {v}</span>)}</dd>
               <dt>Starts others</dt>
@@ -216,7 +268,7 @@ export function PassportScreen({ initial, grants }: { initial: Passport; grants:
           <section className="idn-card" aria-labelledby="idn-grants-h">
             <div className="idn-card-h"><h3 id="idn-grants-h">Grants naming {agent.name}</h3><span className="idn-sub">{agent.active_grants} active</span></div>
             {grants === null ? (
-              <div className="idn-row idn-dim"><LockSimple size={14} aria-hidden /> Needs <code className="idn-perm">delegation:read_all</code></div>
+              <div className="idn-row idn-dim"><LockSimple size={14} aria-hidden /> Needs <Perm p="delegation:read_all" sm /></div>
             ) : grants.length ? grants.map((g) => (
               <a key={g.id} className="idn-dg" href={`/identity/agents/delegations/${g.id}`}>
                 <span className="idn-top">
@@ -227,7 +279,7 @@ export function PassportScreen({ initial, grants }: { initial: Passport; grants:
                   <ArrowRight size={13} className="idn-dim" aria-hidden />
                 </span>
               </a>
-            )) : <span className="idn-dim">No grants name it</span>}
+            )) : <EmptyState compact title="No grants name it" testId="passport-grants-empty">A person lets it act for them from My account › Agents.</EmptyState>}
           </section>
 
           <section className="idn-card" aria-labelledby="idn-lineage-h">
@@ -236,7 +288,7 @@ export function PassportScreen({ initial, grants }: { initial: Passport; grants:
               {agent.lineage.map((l) => (
                 <li key={`${l.at}-${l.event}-${l.detail}`} className="idn-mini-ev">
                   <span className="idn-dim">{shortDate(l.at)}</span>
-                  <span><b>{l.event.replace(/_/g, " ")}</b> <span className="idn-mono" data-copy="data">{l.detail}</span></span>
+                  <span title={l.detail}><b>{plainText(l.event.replace(/_/g, " "))}</b> <span data-copy="data">{plainText(l.detail)}</span></span>
                   <span />
                 </li>
               ))}
@@ -244,6 +296,7 @@ export function PassportScreen({ initial, grants }: { initial: Passport; grants:
           </section>
         </div>
       </div>
+      {sponsoring ? <SponsorSheet agent={agent} people={people} onClose={() => setSponsoring(false)} onDone={(p) => { setAgent(p); setSponsoring(false); }} /> : null}
       {revoking ? <RevokeSheet agent={agent} onClose={() => setRevoking(false)} onDone={(p) => { setAgent(p); setRevoking(false); }} /> : null}
     </>
   );

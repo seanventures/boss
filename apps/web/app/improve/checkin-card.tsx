@@ -6,6 +6,7 @@
  * BOSS?" plus an optional one-liner, kept on this install; it is sent only if the person ticks
  * Send it (and Improve BOSS is on).
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
 import { improveWrite, readImprove, type PromptsView } from "../../lib/improve";
@@ -50,8 +51,8 @@ export function CheckinCard({ projectId, actor }: { projectId: string; actor: st
         <h3 className="im-checkin-q" title="How disappointed would you be if you could no longer use BOSS?">
           If BOSS went away tomorrow?
         </h3>
-        <button type="button" className="im-x" aria-label="Not now" title="Not now. Asked again in a month at most."
-                data-testid="checkin-dismiss" disabled={busy} onClick={() => void done(true)}>×</button>
+        <GatedButton permission="feedback:submit" type="button" className="im-x" aria-label="Not now" title="Not now. Asked again in a month at most."
+                data-testid="checkin-dismiss" disabled={busy} onClick={() => void done(true)}>×</GatedButton>
       </div>
       <div className="im-checkin-row" role="radiogroup" aria-label="How disappointed would you be if you could no longer use BOSS?">
         {ANSWERS.map((a) => (
@@ -67,8 +68,8 @@ export function CheckinCard({ projectId, actor }: { projectId: string; actor: st
           <label className="im-muted" title="Only if Improve BOSS is on; otherwise it stays here">
             <input type="checkbox" checked={share} onChange={(e) => setShare(e.target.checked)} data-testid="checkin-share" /> Send it
           </label>
-          <button type="button" className="ag-btn ag-btn-primary" disabled={busy} data-testid="checkin-save"
-                  onClick={() => void done(false)}>Save</button>
+          <GatedButton permission="feedback:submit" type="button" className="ag-btn ag-btn-primary" disabled={busy} data-testid="checkin-save"
+                  onClick={() => void done(false)}>Save</GatedButton>
         </div>
       ) : null}
     </section>

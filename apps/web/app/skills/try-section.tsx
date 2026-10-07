@@ -5,6 +5,7 @@
  * tool works end to end, not only that the server answers. Only for an ability with a tier-0
  * tool set to Allow (the API refuses anything else).
  */
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 
 import type { Ability } from "../../lib/kit-types";
@@ -31,8 +32,8 @@ export function TrySection({ ability, projectId, actor }: { ability: Ability; pr
           <input type="text" value={value} placeholder={field.placeholder ?? ""} spellCheck={false}
                  data-testid="kit-try-input" onChange={(e) => setValue(e.target.value)}
                  onKeyDown={(e) => { if (e.key === "Enter" && value.trim()) void run(); }} />
-          <button type="button" className="kit-btn" disabled={busy || !value.trim()} data-testid="kit-try-run"
-                  onClick={() => void run()}>{busy ? "Testing…" : "Run"}</button>
+          <GatedButton permission="skill:invoke" type="button" className="kit-btn" disabled={busy || !value.trim()} data-testid="kit-try-run"
+                  onClick={() => void run()}>{busy ? "Testing…" : "Run"}</GatedButton>
         </span>
       </label>
       {out ? (

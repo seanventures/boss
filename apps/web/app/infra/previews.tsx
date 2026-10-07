@@ -8,6 +8,7 @@
  * live), `Restart`, `Stop` and `Build ↗`, each only where the row's `can` allows. One poll
  * (`usePreviews`, 10 s); the bar moves only when the poll lands.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 
 import { showToast } from "../client-forms";
@@ -88,17 +89,17 @@ function PreviewRowView({ row, projectId, actor, now, onLog, onChanged, live }: 
           <button type="button" className="ag-btn" data-testid="inf-preview-log-btn" onClick={() => onLog(row.id)}>Log</button>
         ) : null}
         {row.can.restart ? (
-          <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-preview-restart"
+          <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-preview-restart"
                   title="Start it again with the same build" onClick={() => void act("restart")}>
-            {busy === "restart" ? "Restarting…" : "Restart"}</button>
+            {busy === "restart" ? "Restarting…" : "Restart"}</GatedButton>
         ) : row.restartWhy ? (
-          <button type="button" className="ag-btn" disabled data-testid="inf-preview-restart"
-                  title={row.restartWhy} aria-description={row.restartWhy}>Restart</button>
+          <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled data-testid="inf-preview-restart"
+                  title={row.restartWhy} aria-description={row.restartWhy}>Restart</GatedButton>
         ) : null}
         {row.can.stop ? (
-          <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-preview-stop"
+          <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-preview-stop"
                   title="Stops the preview now. Start it again from the build." onClick={() => void act("stop")}>
-            {busy === "stop" ? "Stopping…" : "Stop"}</button>
+            {busy === "stop" ? "Stopping…" : "Stop"}</GatedButton>
         ) : null}
         {row.runId ? (
           <a className="inf-link" href={buildHref(row.runId)} title="Open the build that made this" data-testid="inf-preview-build"

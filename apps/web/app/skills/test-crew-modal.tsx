@@ -6,6 +6,7 @@
  * runtime reads them. The live check (optional) runs one call AS Juno and one AS Strata through
  * their own grants, with receipts.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { CheckCircle, XCircle } from "@phosphor-icons/react";
@@ -81,10 +82,10 @@ export function TestCrewModal({ projectId, actor, abilities, onClose, onDone, on
         </ul>
         {error ? <div className="kit-err" role="alert" data-tip={error}>Test failed</div> : null}
         <footer className="kit-modal-foot">
-          <button type="button" className="kit-btn kit-btn-primary" disabled={running}
+          <GatedButton permission="skill:invoke" type="button" className="kit-btn kit-btn-primary" disabled={running}
                   data-testid="kit-crew-run" onClick={() => void run()}>
             {running ? "Testing…" : "Run"}
-          </button>
+          </GatedButton>
         </footer>
     </ModalShell>
   );

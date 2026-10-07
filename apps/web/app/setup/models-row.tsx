@@ -4,6 +4,7 @@
  * ② Models: one row per model source — a subscription, a key, a local model, or one from the
  * install's settings file — each with its kind, the jobs it does now, and its last check.
  */
+import { GatedButton } from "../../components/gated";
 import React, { forwardRef, useState } from "react";
 import { Plus } from "@phosphor-icons/react";
 
@@ -40,7 +41,7 @@ function DefaultModel({ entry, onDone }: { entry: ModelEntry; onDone: () => void
           {options.map((m) => <option key={m} value={m} />)}
         </datalist>
       </label>
-      <button type="button" className="su-btn su-btn-sm su-btn-primary" disabled={busy || !value.trim()}
+      <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm su-btn-primary" disabled={busy || !value.trim()}
               onClick={async () => {
                 setBusy(true);
                 try {
@@ -50,7 +51,7 @@ function DefaultModel({ entry, onDone }: { entry: ModelEntry; onDone: () => void
                 } catch (error) {
                   toast((error as SetupFailure).refusal?.headline ?? "Check failed", "error");
                 } finally { setBusy(false); }
-              }}>Save</button>
+              }}>Save</GatedButton>
     </div>
   );
 }
@@ -119,24 +120,24 @@ function ModelLine({ entry, menuOpen, onReplace }: {
       {red || pill.tone === "amber" ? (
         <div className="su-line su-fix">
           {entry.pill.action === "replace" ? (
-            <button type="button" className="su-btn su-btn-sm"
+            <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm"
                     onClick={() => onReplace(entry.provider, entry.source_id)}>
               Replace
-            </button>
+            </GatedButton>
           ) : null}
           {entry.pill.action === "fix_link" && entry.pill.fix_url ? (
             <Out href={entry.pill.fix_url}>Fix</Out>
           ) : null}
           {entry.pill.action === "default_model" && canPick ? (
-            <button type="button" className="su-btn su-btn-sm" onClick={() => setPicking(true)}>
+            <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm" onClick={() => setPicking(true)}>
               Default model…
-            </button>
+            </GatedButton>
           ) : null}
           {entry.pill.action === "budget" ? (
             <a className="su-link" href="?area=setup&focus=budget">Budget</a>
           ) : null}
           {entry.pill.action === "test" || entry.pill.action === "fix_link" ? (
-            <button type="button" className="su-btn su-btn-sm" onClick={test} disabled={busy}>Test</button>
+            <GatedButton permission="setup:manage" type="button" className="su-btn su-btn-sm" onClick={test} disabled={busy}>Test</GatedButton>
           ) : null}
           {red ? <AskBoss row={entry.label} pillLabel={entry.pill.label} tip={entry.pill.tip} /> : null}
         </div>
@@ -146,8 +147,8 @@ function ModelLine({ entry, menuOpen, onReplace }: {
         <div className="su-confirm" role="alertdialog" data-testid="su-remove-confirm">
           <strong>Remove {entry.label}?</strong>
           <span>{confirm.map((job) => `${job} goes back to Auto.`).join(" ")}</span>
-          <button type="button" className="su-btn su-btn-sm su-btn-danger"
-                  data-testid="su-remove-confirm-yes" onClick={() => void remove(true)}>Remove</button>
+          <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm su-btn-danger"
+                  data-testid="su-remove-confirm-yes" onClick={() => void remove(true)}>Remove</GatedButton>
           <button type="button" className="su-link" onClick={() => setConfirm(null)}>Keep</button>
         </div>
       ) : null}
@@ -205,10 +206,10 @@ export const ModelsRow = forwardRef<HTMLElement, {
           <ModelLine key={entry.source_id} entry={entry} menuOpen={source === entry.source_id}
                      onReplace={(provider, sourceId) => setDrawer({ provider, sourceId })} />
         ))}
-        <button type="button" className="su-link su-add" data-testid="su-add-model-open"
+        <GatedButton permission="model_provider:manage" type="button" className="su-link su-add" data-testid="su-add-model-open"
                 onClick={() => setDrawer({ provider: start.provider })}>
           <Plus size={12} aria-hidden="true" />Add model
-        </button>
+        </GatedButton>
       </div>
     );
   }

@@ -9,7 +9,7 @@
  */
 import { ROLE_PERMISSIONS, isPermission, type Permission } from "../permissions.gen";
 import type { StubOn } from "./server";
-import { stubErr, stubNotFound, stubOk, stubState } from "./server";
+import { stubAudit, stubErr, stubNotFound, stubOk, stubState } from "./server";
 
 export function registerRoleRoutes(on: StubOn): void {
   on("GET", "/v1/identity/access-roles/([^/]+)/versions/(\\d+)", "access_role:read", ({ m }) => {
@@ -31,6 +31,14 @@ export function registerRoleRoutes(on: StubOn): void {
     if (b.name !== undefined && (typeof b.name !== "string" || !b.name.trim())) return stubErr(422, "invalid_fields");
     if (typeof b.name === "string") sa.name = b.name.trim();
     if (typeof b.description === "string") sa.description = b.description;
+    // Owners (FX-C W4): ids of active people; an account always keeps at least one.
+    const owners = (req.body as { owner_principal_ids?: unknown } | null)?.owner_principal_ids;
+    if (owners !== undefined) {
+      const people = Array.isArray(owners) ? owners.map((id) => stubState().people.find((p) => p.id === id && p.status === "active")) : [];
+      if (!people.length || people.some((p) => !p)) return stubErr(422, "invalid_owners");
+      sa.owners = people.map((p) => ({ id: p!.id, name: p!.display_name.split(" ")[0], hue: p!.hue }));
+      sa.orphaned = false;
+    }
     return stubOk(sa);
   });
 
@@ -44,5 +52,33 @@ export function registerRoleRoutes(on: StubOn): void {
       for (const p of builtin ?? s.roles.find((r) => r.key === b.role_key)?.permissions ?? []) if (isPermission(p)) set.add(p);
     }
     return stubOk({ permissions: [...set].sort() });
+  });
+
+  // Delete a custom role: refused while anyone holds it (409 role_in_use, as roles.py), or moved
+  // first with POST …/reassign (FX-B contract §6).
+  const holdersOf = (key: string) => stubState().people.flatMap((p) => p.bindings.filter((b) => b.role_key === key).map((b) => ({ p, b })));
+  on("DELETE", "/v1/identity/access-roles/([^/]+)", "access_role:manage", ({ m, who, now }) => {
+    const s = stubState();
+    const role = s.roles.find((r) => r.id === m[1]);
+    if (!role) return stubNotFound();
+    if (role.builtin) return stubErr(409, "builtin_read_only");
+    const held = new Set(holdersOf(role.key).map((x) => x.b.id)).size;
+    if (held) return stubErr(409, "role_in_use", { bindings: held, message: "Reassign its bindings first." });
+    s.roles = s.roles.filter((r) => r.id !== role.id);
+    stubAudit(s, now, { event_type: "access_role.deleted", what: role.name, headline: "An access role was deleted" }, who);
+    return { status: 204, body: null };
+  });
+  on("POST", "/v1/identity/access-roles/([^/]+)/reassign", "access_role:manage", ({ m, req, who, now }) => {
+    const s = stubState();
+    const role = s.roles.find((r) => r.id === m[1]);
+    const b = (req.body ?? {}) as { to_role_id?: unknown; delete?: unknown };
+    const to = s.roles.find((r) => r.id === b.to_role_id);
+    if (!role || !to) return stubNotFound();
+    if (role.id === to.id) return stubErr(422, "same_role");
+    const moving = holdersOf(role.key);
+    for (const { b: bind } of moving) { bind.role_id = to.id; bind.role_key = to.key; bind.role_name = to.name; }
+    if (b.delete) s.roles = s.roles.filter((r) => r.id !== role.id);
+    stubAudit(s, now, { event_type: "access_role.deleted", what: `${role.name} → ${to.name}`, headline: "An access role's holders were moved" }, who);
+    return stubOk({ moved: new Set(moving.map((x) => x.b.id)).size, bindings: moving.map((x) => x.b), deleted: Boolean(b.delete) });
   });
 }

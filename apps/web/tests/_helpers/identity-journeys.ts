@@ -80,8 +80,8 @@ export const JOURNEYS: Journey[] = [
   ] },
   { id: "J11", title: "The Viewer walk", persona: "viewer", needs: ["S2"], steps: [
     { go: "/", do: "Read the rail", expect: "Only areas the Viewer can open; Identity present (directory:read)" },
-    { go: "/identity", do: "Click every enabled control", expect: "No mutating request returns 2xx; Invite disabled with “Needs user:invite · ask an Admin”" },
-    { go: "/identity/people", do: "Open directly", expect: "AccessDenied: “You can't open People”, Needs user:read, Admins named, Request access" },
+    { go: "/identity", do: "Click every enabled control", expect: "No mutating request returns 2xx; Invite disabled with “Needs “Invite people” · ask an Admin”" },
+    { go: "/identity/people", do: "Open directly", expect: "AccessDenied: “You can't open People”, Needs “View people”, Admins named, Request access" },
   ] },
   { id: "J12", title: "Role editor: clone Operator, remove deployment:create", persona: "admin", needs: ["S2"], steps: [
     { go: "/identity/roles", do: "Clone Operator", expect: "A custom copy opens in the editor" },

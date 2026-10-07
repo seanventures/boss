@@ -8,11 +8,13 @@
  * Fixed is the old page: each job pinned as before (Pin a job), the profile as its preset.
  * Every write is one PUT of a partial policy; the server answers with the whole view.
  */
+import { GatedButton } from "../../components/gated";
 import React, { forwardRef, useEffect, useMemo, useState } from "react";
 import { CaretRight, Plus, X } from "@phosphor-icons/react";
 
 import { shortLabel } from "../../lib/model-routes";
 import { SetupFailure, setupWrite } from "../../lib/setup-client";
+import { useGate } from "../../components/gated";
 import type {
   HeadroomRule, Routing, RouteTarget, SetupView, Tier,
 } from "../../lib/setup-types";
@@ -39,10 +41,13 @@ const dec = (v: string) => {
 function useSave() {
   const { projectId, view, apply } = useBoard();
   const [busy, setBusy] = useState(false);
+  // Routing is PUT /v1/setup/routing (setup:manage): a viewer without it sees every control
+  // marked unavailable with the reason, and a press does nothing.
+  const gate = useGate("setup:manage");
   const save = async (policy: Record<string, unknown>, label: string) => {
     // Controls are never disabled while saving — a disabled button drops keyboard focus to
     // <body>. A second press during a save is ignored here instead.
-    if (busy) return false;
+    if (busy || !gate.allowed) return false;
     setBusy(true);
     try {
       const next = await setupWrite<SetupView>(projectId, "routing", {
@@ -57,7 +62,7 @@ function useSave() {
       return false;
     } finally { setBusy(false); }
   };
-  return { save, busy };
+  return { save, busy, gate };
 }
 
 /** Focus a control by test id after the next render — for when the pressed one unmounted
@@ -92,7 +97,7 @@ function useOptions(routing: Routing): RouteTarget[] {
 
 function TierCard({ routing, tier }: { routing: Routing; tier: (Routing["tiers"])[number] }) {
   const options = useOptions(routing);
-  const { save, busy } = useSave();
+  const { save, busy, gate } = useSave();
   const [primary, fallback] = [tier.targets[0], tier.targets[1]];
   const withCurrent = (t?: RouteTarget) =>
     t && !options.some((o) => enc(o) === enc(t)) ? [t, ...options] : options;
@@ -109,7 +114,7 @@ function TierCard({ routing, tier }: { routing: Routing; tier: (Routing["tiers"]
   return (
     <div className="mr-tier" data-testid={`mr-tier-${tier.tier}`}>
       <Tip tip={tier.criteria} className="mr-tier-name"><TierDot tier={tier.tier} />{tier.label}</Tip>
-      <select aria-label={`${tier.label} model`} value={primary ? enc(primary) : ""} aria-busy={busy || undefined}
+      <select {...gate.props} aria-label={`${tier.label} model`} value={primary ? enc(primary) : ""} aria-busy={busy || undefined}
               data-testid={`mr-tier-select-${tier.tier}`}
               onChange={(e) => {
                 const next = dec(e.target.value) as RouteTarget;
@@ -121,7 +126,7 @@ function TierCard({ routing, tier }: { routing: Routing; tier: (Routing["tiers"]
       </select>
       <label className="mr-fallback" title="Used when the first is out of headroom or failing.">
         <span className="su-faint">then</span>
-        <select aria-label={`${tier.label} fallback`} value={fallback ? enc(fallback) : ""}
+        <select {...gate.props} aria-label={`${tier.label} fallback`} value={fallback ? enc(fallback) : ""}
                 aria-busy={busy || undefined} data-testid={`mr-tier-fallback-${tier.tier}`}
                 onChange={(e) => void write([primary,
                   e.target.value ? dec(e.target.value) as RouteTarget : undefined])}>
@@ -135,7 +140,7 @@ function TierCard({ routing, tier }: { routing: Routing; tier: (Routing["tiers"]
 }
 
 function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
-  const { save, busy } = useSave();
+  const { save, busy, gate } = useSave();
   const [adding, setAdding] = useState(false);
   const [step, setStep] = useState(routing.floor_steps[0]?.step ?? "implement");
   const [tier, setTier] = useState<Tier>("frontier");
@@ -145,7 +150,7 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
     <div className="mr-section" data-testid="mr-floors">
       <div className="mr-line">
         <span className="mr-sub" title="Minimum tiers. Profiles are presets.">Floors</span>
-        <select aria-label="Floor preset" value={routing.floor_preset} aria-busy={busy || undefined}
+        <select {...gate.props} aria-label="Floor preset" value={routing.floor_preset} aria-busy={busy || undefined}
                 data-testid="mr-preset" title="The pipeline profile, as floors."
                 onChange={(e) => void save({ floor_preset: e.target.value }, "Floors")}>
           {routing.presets.map((p) => <option key={p.name} value={p.name}>{p.label}</option>)}
@@ -160,7 +165,7 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
                   data-testid="mr-floor">
               <strong>{f.describe}</strong>
               <span>≥ {f.tier_label}</span>
-              <button type="button" className="mr-x" aria-label={`Remove ${f.describe} floor`}
+              <GatedButton permission="setup:manage" type="button" className="mr-x" aria-label={`Remove ${f.describe} floor`}
                       aria-busy={busy || undefined}
                       data-testid={`mr-floor-x-${i}`}
                       onClick={async () => {
@@ -169,7 +174,7 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
                         refocus(i < routing.floors.length - 1 ? `mr-floor-x-${i}` : "mr-floor-add");
                       }}>
                 <X size={11} aria-hidden="true" />
-              </button>
+              </GatedButton>
             </span>
           ))}
           {adding ? (
@@ -185,7 +190,7 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
                       onChange={(e) => setTier(e.target.value as Tier)} data-testid="mr-floor-tier">
                 {TIERS.map((t) => <option key={t} value={t}>≥ {TIER_LABEL[t]}</option>)}
               </select>
-              <button type="button" className="su-btn su-btn-sm su-btn-primary" aria-busy={busy || undefined}
+              <GatedButton permission="setup:manage" type="button" className="su-btn su-btn-sm su-btn-primary" aria-busy={busy || undefined}
                       data-testid="mr-floor-save"
                       onClick={async () => {
                         if (await save({ floor_preset: "custom",
@@ -193,13 +198,13 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
                           setAdding(false);
                           refocus("mr-floor-add");
                         }
-                      }}>Add</button>
-              <button type="button" className="su-link"
-                      onClick={() => { setAdding(false); refocus("mr-floor-add"); }}>Cancel</button>
+                      }}>Add</GatedButton>
+              <GatedButton permission="setup:manage" type="button" className="su-link"
+                      onClick={() => { setAdding(false); refocus("mr-floor-add"); }}>Cancel</GatedButton>
             </span>
           ) : (
-            <button type="button" className="mr-chip mr-chip-add" data-testid="mr-floor-add"
-                    onClick={() => setAdding(true)}><Plus size={11} aria-hidden="true" />Floor</button>
+            <GatedButton permission="setup:manage" type="button" className="mr-chip mr-chip-add" data-testid="mr-floor-add"
+                    onClick={() => setAdding(true)}><Plus size={11} aria-hidden="true" />Floor</GatedButton>
           )}
         </div>
       ) : null}
@@ -233,7 +238,7 @@ function Meter({ h }: { h: Routing["headroom"][number] }) {
 }
 
 function Headroom({ routing, metersOnly = false }: { routing: Routing; metersOnly?: boolean }) {
-  const { save, busy } = useSave();
+  const { save, busy, gate } = useSave();
   const refocus = useRefocus();
   const rule: HeadroomRule | undefined = routing.headroom_rules[0];
   const subs = routing.headroom;
@@ -260,7 +265,7 @@ function Headroom({ routing, metersOnly = false }: { routing: Routing; metersOnl
       {rule ? (
         <div className="mr-line mr-rule" data-testid="mr-rule">
           <span>When</span>
-          <select aria-label="When" value={rule.when} aria-busy={busy || undefined} data-testid="mr-rule-when"
+          <select {...gate.props} aria-label="When" value={rule.when} aria-busy={busy || undefined} data-testid="mr-rule-when"
                   onChange={(e) => void write({ ...rule, when: e.target.value })}>
             {routing.headroom_states.filter((s) => s.state !== "exhausted")
               .map((s) => <option key={s.state} value={s.state}>{s.label.toLowerCase()}</option>)}
@@ -269,12 +274,12 @@ function Headroom({ routing, metersOnly = false }: { routing: Routing; metersOnl
           {(["fast", "balanced"] as Tier[]).map((t) => {
             const on = rule.tiers.includes(t);
             return (
-              <button key={t} type="button" className={`mr-chip mr-toggle mr-chip-${t}`}
+              <GatedButton permission="setup:manage" key={t} type="button" className={`mr-chip mr-toggle mr-chip-${t}`}
                       aria-pressed={on} aria-busy={busy || undefined} data-testid={`mr-rule-tier-${t}`}
                       onClick={() => {
                         const tiers = on ? rule.tiers.filter((x) => x !== t) : [...rule.tiers, t];
                         void (tiers.length ? write({ ...rule, tiers }) : write(null));
-                      }}>{TIER_LABEL[t]}</button>
+                      }}>{TIER_LABEL[t]}</GatedButton>
             );
           })}
           <span>to</span>
@@ -286,16 +291,16 @@ function Headroom({ routing, metersOnly = false }: { routing: Routing; metersOnl
           </select>
           <Tip tip="Frontier work and floors keep the subscription until it is exhausted."
                className="mr-chip mr-chip-frontier mr-keep">Frontier stays</Tip>
-          <button type="button" className="mr-x" aria-label="Remove headroom rule" aria-busy={busy || undefined}
+          <GatedButton permission="setup:manage" type="button" className="mr-x" aria-label="Remove headroom rule" aria-busy={busy || undefined}
                   data-testid="mr-rule-x"
                   onClick={async () => { await write(null); refocus("mr-rule-add"); }}>
-            <X size={11} aria-hidden="true" /></button>
+            <X size={11} aria-hidden="true" /></GatedButton>
         </div>
       ) : targets.length ? (
-        <button type="button" className="mr-chip mr-chip-add" data-testid="mr-rule-add"
+        <GatedButton permission="setup:manage" type="button" className="mr-chip mr-chip-add" data-testid="mr-rule-add"
                 onClick={async () => { await write(draft); refocus("mr-rule-when"); }}>
           <Plus size={11} aria-hidden="true" />Move cheap work near limit
-        </button>
+        </GatedButton>
       ) : (
         <Tip tip="Connect OpenRouter or a local model to move cheap work off a subscription."
              className="su-faint">No other source</Tip>
@@ -305,7 +310,7 @@ function Headroom({ routing, metersOnly = false }: { routing: Routing; metersOnl
 }
 
 function Classifier({ routing }: { routing: Routing }) {
-  const { save, busy } = useSave();
+  const { save, busy, gate } = useSave();
   const c = routing.classifier;
   const [criteria, setCriteria] = useState(c.criteria);
   useEffect(() => setCriteria(c.criteria), [c.criteria]);
@@ -339,9 +344,9 @@ function Classifier({ routing }: { routing: Routing }) {
                       onChange={(e) => setCriteria({ ...criteria, [t]: e.target.value })} />
           </label>
         ))}
-        <button type="button" className="su-btn su-btn-sm su-btn-primary" aria-busy={busy || undefined}
+        <GatedButton permission="setup:manage" type="button" className="su-btn su-btn-sm su-btn-primary" aria-busy={busy || undefined}
                 data-testid="mr-criteria-save"
-                onClick={() => void save({ classifier: { criteria } }, "Criteria")}>Save criteria</button>
+                onClick={() => void save({ classifier: { criteria } }, "Criteria")}>Save criteria</GatedButton>
       </details>
     </div>
   );
@@ -379,7 +384,7 @@ function Pins({ open, onToggle, routing }: {
   open: boolean; onToggle: () => void; routing?: Routing | null;
 }) {
   const { view } = useBoard();
-  const { save, busy } = useSave();
+  const { save, busy, gate } = useSave();
   const pinned = view.jobs.filter((j) => j.choice).length;
   const smart = routing?.mode === "smart";
   const hard = new Set(routing?.hard_pins ?? []);
@@ -440,7 +445,7 @@ export const RoutingRow = forwardRef<HTMLElement, { mode: string; focused: boole
     // Pin a job is open on Fixed (it IS the configuration there) and on a deep link.
     const [pins, setPins] = useState<boolean | null>(null);
     useEffect(() => { if (focused) { setPins(true); setOpen(true); } }, [focused]);
-    const { save, busy } = useSave();
+    const { save, busy, gate } = useSave();
     const collapsed = mode === "collapsed" && !open && !focused;
     const smart = routing?.mode === "smart";
     const none = view.models.length === 0;
@@ -462,12 +467,12 @@ export const RoutingRow = forwardRef<HTMLElement, { mode: string; focused: boole
             <div className="mr-line">
               <div className="mr-seg" role="group" aria-label="Routing">
                 {(["smart", "fixed"] as const).map((m) => (
-                  <button key={m} type="button" aria-pressed={routing.mode === m} disabled={none} aria-busy={busy || undefined}
+                  <GatedButton permission="setup:manage" key={m} type="button" aria-pressed={routing.mode === m} disabled={none} aria-busy={busy || undefined}
                           data-testid={`mr-mode-${m}`} title={MODE_TIP[m]} data-tip={MODE_TIP[m]}
                           onClick={() => routing.mode !== m && void save({ mode: m },
                             m === "smart" ? "Smart routing" : "Fixed routing")}>
                     {m === "smart" ? "Smart" : "Fixed"}
-                  </button>
+                  </GatedButton>
                 ))}
               </div>
               <span className="su-faint">{none ? "Connect a model first" : smart ? "Picks per step" : "As pinned per job"}</span>

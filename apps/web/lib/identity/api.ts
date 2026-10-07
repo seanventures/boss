@@ -8,6 +8,7 @@ import { CSRF_HEADER, ME_PATH } from "./contract";
 import { isPermission, type Permission } from "./permissions.gen";
 import { apiWrite, type WriteMethod } from "../api-write";
 import { sendToEnrolment } from "./enrolment";
+import { needsWords } from "./words";
 
 export type IdentityErrorCode =
   | "unauthenticated" | "step_up_required" | "forbidden" | "csrf_failed" | "not_found" | "invalid_credentials"
@@ -40,7 +41,7 @@ export class IdentityError extends Error {
 /** The words for a refusal. Short: they land in toasts (≤ 4 words) and inline lines. */
 export function errorSentence(status: number, code: string, permission?: unknown): string {
   if (code === "step_up_required") return "Confirm it's you";
-  if (code === "forbidden") return typeof permission === "string" ? `Needs ${permission}` : "Not allowed";
+  if (code === "forbidden") return typeof permission === "string" ? needsWords(permission) : "Not allowed";
   if (code === "unauthenticated") return "Sign in again";
   if (code === "csrf_failed") return "Reload and retry";
   if (code === "invalid_credentials") return "Wrong email or password";

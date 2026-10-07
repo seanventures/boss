@@ -1,5 +1,6 @@
 "use client";
 
+import { GatedButton } from "../../../../components/gated";
 import React, { useState } from "react";
 import { Warning } from "@phosphor-icons/react";
 
@@ -54,12 +55,12 @@ export function GrantRow({ projectId, actor, roleKey, agentName, lacks, onGrante
           {failed[skill] ? (
             <span className="wf-red wf-grant-fail" title={failed[skill]} role="alert">Not granted</span>
           ) : null}
-          <button type="button" className="wf-btn wf-btn-sm" data-testid={`wf-grant-${skill}`}
+          <GatedButton permission="agent_ability:assign" type="button" className="wf-btn wf-btn-sm" data-testid={`wf-grant-${skill}`}
                   disabled={!actor || busy !== null}
                   title={actor ? `Give ${labelOf(skill)} to ${agentName}` : "Sign in to grant skills"}
                   onClick={() => void grant(skill)}>
             {busy === skill ? "Granting…" : "Grant"}
-          </button>
+          </GatedButton>
         </div>
       ))}
     </div>

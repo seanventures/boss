@@ -5,6 +5,7 @@
  * (role_mcp_servers.tools). Rarely used, so it lives behind the agent's ⋯. Narrowing below what
  * the ability needs makes the agent stop holding the ability — said by its toggle afterwards.
  */
+import { useGate } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
 import type { Ability } from "../../lib/kit-types";
@@ -27,6 +28,7 @@ export function ToolsNarrow({ ability, role, projectId, actor, onClose }: {
   const toolsOf = (server: string) => ability.tools.filter((t) => t.ref.startsWith(`mcp:${server}.`))
     .map((t) => t.ref.slice(`mcp:${server}.`.length));
 
+  const narrowGate = useGate("agent_ability:assign");
   const set = async (serverId: string, server: string, tool: string, on: boolean) => {
     const all = toolsOf(server);
     const current = granted?.[serverId]?.length ? granted[serverId] : all;
@@ -49,7 +51,7 @@ export function ToolsNarrow({ ability, role, projectId, actor, onClose }: {
             const on = list.length === 0 || list.includes(tool);
             return (
               <label key={tool} className="kit-check">
-                <input type="checkbox" checked={on} disabled={busy || granted === null}
+                <input {...narrowGate.props} type="checkbox" checked={on} disabled={(busy || granted === null) || !narrowGate.allowed}
                        onChange={(e) => void set(m.server_id, m.name, tool, e.target.checked)} />
                 <span>{tool}</span>
               </label>

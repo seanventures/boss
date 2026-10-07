@@ -15,6 +15,7 @@
  * All the routes stay; only the console converges. The stack-target rules are the old form's
  * (lib/stack-deploy targetFormProblem), said in the operator's words.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
 import type { Rack } from "../../lib/infra-view";
@@ -197,9 +198,9 @@ export function AppTargetSheet({ projectId, actor, racks, hostId, onClose, onCre
           </>
         )}
         <div className="inf-actions">
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={busy || (kind === "machine" && !vms.length)} data-testid="inf-target-create">
+          <GatedButton permission="deployment_target:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy || (kind === "machine" && !vms.length)} data-testid="inf-target-create">
             {busy ? "Creating…" : "Create"}
-          </button>
+          </GatedButton>
           <ErrorLine error={error} testId="inf-target-sheet-error" />
         </div>
       </form>

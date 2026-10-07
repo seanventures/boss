@@ -7,6 +7,7 @@
  * re-checks every call.
  */
 import { isPermission, PERMISSION_META, type Permission } from "./permissions.gen";
+import { permissionName } from "./words";
 
 export type { Permission } from "./permissions.gen";
 
@@ -52,6 +53,8 @@ export interface MeResponse {
   epoch: number;
   network_bound: boolean;
   banners: MeBanner[];
+  /** The person's chosen avatar colour, "0"–"7"; null: derived from the id (lib/identity/avatar.ts). */
+  avatar_seed: string | null;
 }
 
 /** GET /v1/identity/me/permissions?project_id= */
@@ -73,7 +76,7 @@ export type CanScope = { kind: "org" } | { kind: "project"; projectId: string };
 
 export interface CanResult {
   allowed: boolean;
-  /** Tooltip for a disabled control: "Needs workflow:publish", "Sign in again to confirm (step-up)". */
+  /** Tooltip for a disabled control: "Needs “Publish workflows” · ask an Admin" (lib/identity/words.ts). */
   reason: string;
   /** True when allowed but the action will first ask for step-up (passkey/TOTP). */
   needsStepUp: boolean;
@@ -121,7 +124,7 @@ export function can(
     return { allowed: false, reason: "Access for this project is still loading", needsStepUp: false };
   }
   if (!snapshot.permissions.has(permission)) {
-    return { allowed: false, reason: `Needs ${permission}`, needsStepUp: false };
+    return { allowed: false, reason: `Needs “${permissionName(permission)}”`, needsStepUp: false };
   }
   const fresh = snapshot.stepUpFreshUntil !== null && snapshot.stepUpFreshUntil > now;
   const needsStepUp = meta.stepUp && !fresh;

@@ -324,7 +324,7 @@ function perms(role: keyof typeof ROLE_PERMISSIONS): MePermissionsResponse {
 const ME: MeResponse = {
   principal_id: "usr_sam", kind: "user", display_name: "Sam Okafor", email: "sam@acme.dev", org: F.ORG, status: "active", access_roles: ["operator"],
   sign_in: { password: true, totp: true, passkeys: 1, recovery_codes_remaining: 8, sso_links: ["Okta"] }, mfa_required: false, mfa_at: null,
-  session_id: "ses_1", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [],
+  session_id: "ses_1", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [], avatar_seed: null
 };
 function asOperator(node: React.ReactElement) {
   return <IdentityProvider me={ME} org={perms("operator")}><NowProvider now={NOW}>{node}</NowProvider></IdentityProvider>;
@@ -376,7 +376,7 @@ describe("My account", () => {
   it("revoking a grant shows the cascade first", async () => {
     routes({ "POST /v1/identity/me/delegations/dlg_01JB7Q/revoke": { body: { halts: 3, items: [{ kind: "runs", label: "Halts running agents", detail: "Atlas, Forge, Vera", count: 3 }] } } });
     const el = await mount(asOperator(<AgentsForMe delegations={F.delegations(NOW).filter((d) => d.user.id === "usr_sam")} agents={null} connections={[]} untilRevokedAllowed={false} openNew={false} />));
-    await click(el.querySelector("[aria-label='Revoke grant dlg_01JB7Q']"));
+    await click(el.querySelector("[data-testid='grant-dlg_01JB7Q'] button.danger"));
     expect(document.querySelector("[data-testid='cascade']")?.textContent).toContain("Halts running agents");
     expect(document.querySelector("[data-testid='revoke-confirm']")?.textContent).toContain("Revoke and halt 3 runs");
     expect(calls[0].body).toEqual({ dry_run: true });

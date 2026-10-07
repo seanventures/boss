@@ -20,12 +20,13 @@ import React, { useEffect, useId, useRef, useState } from "react";
 
 import { resolveDecisionAction } from "../actions";
 import { callAction } from "../../lib/call-action";
+import { GatedButton, useGate } from "../../components/gated";
 import { retryBuildAction } from "../factory/floor-actions";
 import { WaiveSheet } from "../factory/waive-sheet";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
 import { ReasonChips, rejectKind, sendReasons } from "../improve/rate-it";
-import { sendRunAnswer, type RunAction } from "../delivery-workflows-ui";
+import { RUN_ANSWER_PERMISSION, sendRunAnswer, type RunAction } from "../delivery-workflows-ui";
 import { actOnSystemFindingAction } from "../system-health-actions";
 import { actOnInfraAttentionAction } from "../infra/infra-attention-actions";
 import type { AttentionAction, AttentionAnswer, AttentionItem } from "../../lib/agents-live-board";
@@ -124,6 +125,8 @@ export function infraOpenPatch(open: string): Record<string, string | null> {
 
 export function AttentionCard({ item, projectId, actor, density = "card", focusKey, enter, still, onDone, onRefresh, orgId, dim }: AttentionCardProps) {
   useIdentityVersion();
+  // Approve/Reject pre-greyed for a viewer who may not decide (P1-18); A/R do nothing either.
+  const decideGate = useGate("decision:approve");
   const titleId = useId();
   const hintId = useId();
   const box = useRef<HTMLDivElement>(null);
@@ -317,7 +320,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
   }
 
   function onKey(e: React.KeyboardEvent) {
-    if (!inline || e.altKey || e.metaKey || e.ctrlKey) return;
+    if (!inline || e.altKey || e.metaKey || e.ctrlKey || !decideGate.allowed) return;
     const t = e.target as HTMLElement;
     if (t.closest("input, textarea, select")) return;
     const key = e.key.toLowerCase();
@@ -384,13 +387,13 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
 
       <div className="ag-att-actions">
         {direct.map((a) => (
-          <button key={a.action} type="button" className="ag-btn" data-tone={a.tone || undefined}
+          <GatedButton key={a.action} permission="decision:approve" type="button" className="ag-btn" data-tone={a.tone || undefined}
                   data-testid={`ag-att-${a.action}`} title={a.effect || undefined}
                   disabled={busy !== null} aria-busy={busy === a.action || undefined}
                   onClick={() => press(a)}>
             {busy === a.action ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
             <span data-user-text>{a.label}</span>
-          </button>
+          </GatedButton>
         ))}
         {item.kind === "approval" && !inline && decisionId ? (
           <a className="ag-btn" href={linkTo(decisionPatch(decisionId), orgId)} data-testid="ag-att-review"
@@ -406,18 +409,18 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
           <a className="ag-btn" href={build.previewUrl} target="_blank" rel="noreferrer" data-testid="ag-att-open-preview">Open preview ↗</a>
         ) : null}
         {(item.kind === "gate_override" || item.kind === "budget_refused") && build ? (
-          <button type="button" className="ag-btn" data-testid="ag-att-retry"
+          <GatedButton permission="code_task:retry" type="button" className="ag-btn" data-testid="ag-att-retry"
                   disabled={!build.retryable || busy !== null} title={!build.retryable ? build.retryReason : undefined}
                   aria-busy={busy === "retry" || undefined} onClick={() => void retryBuild()}>
             {busy === "retry" ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
             Retry
-          </button>
+          </GatedButton>
         ) : null}
         {item.kind === "gate_override" && build ? (
-          <button type="button" className="ag-btn" data-testid="ag-att-waive" disabled={busy !== null}
+          <GatedButton permission="code_task:override" type="button" className="ag-btn" data-testid="ag-att-waive" disabled={busy !== null}
                   title="Open the PR anyway. The merge still needs you." onClick={() => setWaiving(true)}>
             Waive…
-          </button>
+          </GatedButton>
         ) : null}
         {item.kind === "budget_refused" ? (
           <a className="ag-btn" data-testid="ag-att-raise-budget" href={linkTo({ area: "budget", view: null, role: null }, orgId)}
@@ -427,28 +430,28 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
           </a>
         ) : null}
         {item.kind === "failed_step" ? item.answers.map((a) => (
-          <button key={a.key} type="button" className="ag-btn" data-testid={`ag-att-answer-${a.key}`}
+          <GatedButton key={a.key} permission={RUN_ANSWER_PERMISSION} type="button" className="ag-btn" data-testid={`ag-att-answer-${a.key}`}
                   disabled={!a.enabled || busy !== null} title={!a.enabled ? a.reason : undefined}
                   aria-busy={busy === a.key || undefined} onClick={() => void answer(a)}>
             {busy === a.key ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
             <span data-user-text>{a.label}</span>
-          </button>
+          </GatedButton>
         )) : null}
         {item.kind === "system_health" && !done ? item.answers.map((a) => (
-          <button key={a.key} type="button" className="ag-btn" data-testid={`ag-att-option-${a.key}`}
+          <GatedButton key={a.key} permission="system:operate" type="button" className="ag-btn" data-testid={`ag-att-option-${a.key}`}
                   disabled={!a.enabled || busy !== null} title={a.reason || undefined}
                   aria-busy={busy === a.key || undefined} onClick={() => void choose(a)}>
             {busy === a.key ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
             <span data-user-text>{a.label}</span>
-          </button>
+          </GatedButton>
         )) : null}
         {item.kind === "infra" && !done ? item.answers.filter((a) => a.key !== "open").map((a) => (
-          <button key={a.key} type="button" className="ag-btn" data-testid={`ag-att-infra-${a.key}`}
+          <GatedButton key={a.key} permission="infra:provision" type="button" className="ag-btn" data-testid={`ag-att-infra-${a.key}`}
                   disabled={!a.enabled || busy !== null} title={a.reason || undefined}
                   aria-busy={busy === a.key || undefined} onClick={() => void chooseInfra(a)}>
             {busy === a.key ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
             <span data-user-text>{a.label}</span>
-          </button>
+          </GatedButton>
         )) : null}
         {item.kind === "infra" && item.open ? (
           <a className="ag-btn" data-testid="ag-att-infra-open" href={linkTo(infraOpenPatch(item.open), orgId)}
@@ -477,8 +480,8 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
       {confirming ? (
         <div className="ag-att-confirm" role="alertdialog" aria-label="Reject this?" data-testid="ag-att-confirm">
           <span>Reject this?</span>
-          <button type="button" className="ag-btn" data-tone="reject" data-testid="ag-att-confirm-reject"
-                  title={confirming.effect || undefined} onClick={() => void decide(confirming)}>Reject</button>
+          <GatedButton permission="decision:approve" type="button" className="ag-btn" data-tone="reject" data-testid="ag-att-confirm-reject"
+                  title={confirming.effect || undefined} onClick={() => void decide(confirming)}>Reject</GatedButton>
           <button type="button" className="ag-link" onClick={() => setConfirming(null)}>Cancel</button>
           <ReasonChips value={why} onChange={setWhy} testId="ag-att-why" />
         </div>
@@ -487,9 +490,9 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
       {stopping ? (
         <div className="ag-att-confirm" role="alertdialog" aria-label="Stop this run?" data-testid="ag-att-stop">
           <span>Stop this run?</span>
-          <button type="button" className="ag-btn" data-tone="reject" data-testid="ag-att-stop-confirm"
+          <GatedButton permission={RUN_ANSWER_PERMISSION} type="button" className="ag-btn" data-tone="reject" data-testid="ag-att-stop-confirm"
                   title="It ends here; nothing after the refused approval runs"
-                  onClick={() => void answer(stopping, undefined, true)}>Stop</button>
+                  onClick={() => void answer(stopping, undefined, true)}>Stop</GatedButton>
           <button type="button" className="ag-link" onClick={() => setStopping(null)}>Cancel</button>
         </div>
       ) : null}
@@ -498,11 +501,11 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
         <div className="ag-att-confirm" role="alertdialog" aria-label={`${confirmingOpt.label}?`}
              data-testid="ag-att-option-confirm">
           <span data-user-text>{confirmingOpt.label}?</span>
-          <button type="button" className="ag-btn" data-tone="reject" data-testid="ag-att-option-confirm-yes"
+          <GatedButton permission="system:operate" type="button" className="ag-btn" data-tone="reject" data-testid="ag-att-option-confirm-yes"
                   title={confirmingOpt.reason || undefined}
                   onClick={() => void choose(confirmingOpt, true)}>
             <span data-user-text>{confirmingOpt.label}</span>
-          </button>
+          </GatedButton>
           <button type="button" className="ag-link" onClick={() => setConfirmingOpt(null)}>Cancel</button>
         </div>
       ) : null}
@@ -515,8 +518,8 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
             <input type="text" value={skipWhy} autoFocus maxLength={200} data-testid="ag-att-skip-why"
                    aria-label="Why skip?" onChange={(e) => setSkipWhy(e.target.value)} />
           </label>
-          <button type="submit" className="ag-btn" data-testid="ag-att-skip-confirm" disabled={!skipWhy.trim()}
-                  title="Kept on the step and in the run's history">Skip</button>
+          <GatedButton permission={RUN_ANSWER_PERMISSION} type="submit" className="ag-btn" data-testid="ag-att-skip-confirm" disabled={!skipWhy.trim()}
+                  title="Kept on the step and in the run's history">Skip</GatedButton>
           <button type="button" className="ag-link" onClick={() => setSkipping(null)}>Cancel</button>
         </form>
       ) : null}

@@ -9,6 +9,7 @@
  * reaches a server or an access log, it is wiped from the address bar at once, and the token
  * goes to the API only in a POST body (/v1/auth/invitations/preview and /accept).
  */
+import { passwordMin, type AuthOptionsWithPolicy } from "../../../lib/identity/types-account";
 import React, { useEffect, useRef, useState } from "react";
 import { Key, UserPlus } from "@phosphor-icons/react";
 
@@ -45,6 +46,7 @@ export function InviteLanding({ options }: { options: AuthOptions }) {
 }
 
 export function InviteAccept({ token, invitation, options }: { token: string; invitation: InvitationPreview | null; options: AuthOptions }) {
+  const minPw = passwordMin(options as AuthOptionsWithPolicy);
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -62,7 +64,7 @@ export function InviteAccept({ token, invitation, options }: { token: string; in
   }
 
   const days = invitation.expires_at ? Math.max(0, Math.ceil((Date.parse(invitation.expires_at) - Date.now()) / 86_400_000)) : null;
-  const ok = name.trim().length > 0 && password.length >= 12;
+  const ok = name.trim().length > 0 && password.length >= minPw;
 
   const accept = async () => {
     setBusy(true);
@@ -105,9 +107,9 @@ export function InviteAccept({ token, invitation, options }: { token: string; in
         </div>
         <div className="idn-f">
           <label htmlFor="inv-pw">Choose a password</label>
-          <input id="inv-pw" className="idn-i" type="password" autoComplete="new-password" minLength={12} required value={password}
+          <input id="inv-pw" className="idn-i" type="password" autoComplete="new-password" minLength={minPw} required value={password}
             onChange={(e) => setPassword(e.target.value)} aria-describedby="inv-pw-hint" />
-          <span id="inv-pw-hint" className="idn-dim idn-hint">12 characters or more</span>
+          <span id="inv-pw-hint" className="idn-dim idn-hint">{minPw} characters or more</span>
         </div>
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
         <button type="submit" className="idn-big p" disabled={!ok || busy} data-testid="invite-accept">{busy ? "Joining…" : "Join and continue"}</button>

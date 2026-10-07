@@ -67,7 +67,7 @@ export function TotpStep({ onDone, guard }: {
             <code className="idn-secret-key" data-copy="data" aria-label="Authenticator key">{enrol.secret}</code>
           </div>
         </div>
-      ) : !error ? <div className="idn-state" role="status"><span className="idn-blink" aria-hidden /> Preparing…</div> : null}
+      ) : !error ? <div className="idn-wait" role="status"><span className="idn-blink" aria-hidden /> Preparing…</div> : null}
       <CodeInput value={code} onChange={setCode} onComplete={confirm} label="Code from your app" invalid={!!error} autoFocus={false} />
       <button type="button" className="idn-big p" disabled={busy || code.length < 6 || !enrol} onClick={() => confirm(code)}>
         {busy ? "Checking…" : "Confirm code"}

@@ -8,6 +8,7 @@
 import React, { createContext, useContext, useEffect, useId, useRef, type ReactNode } from "react";
 
 import { PERMISSION_META, type Permission } from "../../lib/identity/permissions.gen";
+import { permissionName, permissionTip } from "../../lib/identity/words";
 
 // ---- time: the server's clock, so the first paint and hydration say the same thing ----------
 
@@ -88,10 +89,14 @@ export function RoleChip({ roleKey, name, scope }: { roleKey: string; name: stri
   );
 }
 
+/**
+ * A permission, as people read it: its NAME ("Invite people"); the key (user:invite) is only the
+ * tooltip. The one renderer of a permission on every identity screen (lib/identity/words.ts).
+ */
 export function Perm({ p, state, sm = false }: { p: Permission | string; state?: "off" | "ghost"; sm?: boolean }) {
   const meta = (PERMISSION_META as Record<string, (typeof PERMISSION_META)[Permission] | undefined>)[p];
   const cls = ["idn-perm", sm ? "sm" : "", state ?? (meta?.critical ? "crit" : "")].filter(Boolean).join(" ");
-  return <code className={cls} title={meta ? meta.title : undefined}>{p}</code>;
+  return <span className={cls} title={permissionTip(p)} data-permission={p}>{permissionName(p)}</span>;
 }
 
 export function Pill({ tone, children, tip }: { tone: "ok" | "warn" | "bad" | "info" | "mute"; children: ReactNode; tip?: string }) {
