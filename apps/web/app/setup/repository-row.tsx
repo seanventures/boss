@@ -183,9 +183,10 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
       ) : null}
       <label className="su-field">
         <span className="su-sr">Token</span>
-        <input {...tokenGate.props} type="password" autoComplete="off" spellCheck={false} value={token}
+        <input type="password" autoComplete="off" spellCheck={false} value={token}
                placeholder="Paste token" aria-label="Paste token" data-testid="su-token-input"
                title="Stored in BOSS's secret store. Never shown again."
+               {...tokenGate.props}
                disabled={(phase === "checking") || !tokenGate.allowed}
                onChange={(e) => onChange(e.target.value)}
                onKeyDown={(e) => { if (e.key === "Enter") void submit(token); }} />

@@ -151,8 +151,8 @@ function Floors({ routing, smart }: { routing: Routing; smart: boolean }) {
     <div className="mr-section" data-testid="mr-floors">
       <div className="mr-line">
         <span className="mr-sub" title="Minimum tiers. Profiles are presets.">Floors</span>
-        <select {...gate.props} aria-label="Floor preset" value={routing.floor_preset} aria-busy={busy || undefined}
-                data-testid="mr-preset" title="The pipeline profile, as floors."
+        <select aria-label="Floor preset" value={routing.floor_preset} aria-busy={busy || undefined}
+                data-testid="mr-preset" title="The pipeline profile, as floors." {...gate.props}
                 onChange={(e) => void save({ floor_preset: e.target.value }, "Floors")}>
           {routing.presets.map((p) => <option key={p.name} value={p.name}>{p.label}</option>)}
           {!routing.presets.some((p) => p.name === routing.floor_preset)
