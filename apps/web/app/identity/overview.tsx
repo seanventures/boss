@@ -21,6 +21,7 @@ import type { AccessRole, AuditEvent, Group, Passport, Person, Posture, PostureC
 const CHECK_ICON: Record<PostureCheck["id"], React.ReactNode> = {
   mfa: <ShieldCheck size={13} aria-hidden />, keys: <Key size={13} aria-hidden />, delegations: <Robot size={13} aria-hidden />,
   legacy: <Warning size={13} aria-hidden />, owners: <UsersThree size={13} aria-hidden />, audit: <LinkSimple size={13} aria-hidden />,
+  enforcement: <ShieldCheck size={13} aria-hidden />,
 };
 
 function Ring({ score }: { score: number }) {

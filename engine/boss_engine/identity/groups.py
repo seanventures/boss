@@ -66,10 +66,10 @@ def _binding_ceilings(db: Any, ctx: AuthContext, group_id: str) -> list[dict]:
                            "WHERE org_id = :o AND subject_type = 'group' AND subject_id = :g"),
                       {"o": org, "g": group_id}).mappings().all()
     for b in rows:
-        if b["role_id"] == OWNER_ROLE_ID:
-            require(ctx, "owner:assign", scope_of(org, "org", org), db=db)          # A31
         require_ceiling(ctx, permissions_of(db, b["role_id"]), scope_of(org, b["scope_type"], b["scope_id"]),
                         db=db)
+        if b["role_id"] == OWNER_ROLE_ID:
+            require(ctx, "owner:assign", scope_of(org, "org", org), db=db)          # A31
     return [dict(b) for b in rows]
 
 

@@ -299,7 +299,7 @@ def test_posture_has_s4s_shape(db, monkeypatch):
     report = client.get("/v1/identity/posture").json()
     assert S4_POSTURE_KEYS <= set(report)
     assert [c["id"] for c in report["checks"]] == ["mfa", "keys", "delegations", "legacy",
-                                                   "owners", "audit"]
+                                                   "owners", "audit", "enforcement"]
     for check in report["checks"]:
         assert S4_CHECK_KEYS <= set(check) and check["status"] in ("ok", "warn", "bad")
         assert check["fix"] is None or set(check["fix"]) == {"label", "href"}

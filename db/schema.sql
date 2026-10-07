@@ -7535,8 +7535,8 @@ END $$;
 -- Last-Owner protection (§6.12): deferred to commit, so two concurrent demotions cannot both land.
 -- Fires only when a change REMOVES Owner reach from a real person: an owner binding deleted or
 -- retargeted, an active owner leaving `active`, or a member leaving a group that carries Owner (SCIM,
--- OIDC group sync, a person's deletion, any path). So it never blocks an install that has not
--- claimed its first Owner yet (no person holds Owner then). It takes the SAME advisory lock as the
+-- OIDC group sync, a person's deletion, any path). An org that has not recorded its claim
+-- (bootstrap.claimed) is not protected yet. It takes the SAME advisory lock as the
 -- application (bindings.lock_owners: hashtext('identity_owner:' || org)), so two transactions that each
 -- remove one of two Owners serialise and the second sees the first's commit. Only a PERMANENT Owner
 -- binding counts as an Owner remaining: one with expires_at lapses with nothing to refuse it.
@@ -7553,17 +7553,6 @@ BEGIN
       RETURN NULL;
     END IF;
     v_org := OLD.org_id;
-    -- the reach removed was a real person's (directly, or through a group with a person in it)
-    IF NOT EXISTS (
-      SELECT 1 FROM identity_principals p
-       WHERE p.kind = 'user' AND NOT p.network_bound
-         AND ((OLD.subject_type = 'principal' AND p.id = OLD.subject_id)
-           OR (OLD.subject_type = 'group' AND p.id IN (SELECT m.principal_id FROM identity_group_members m
-                                                       WHERE m.group_id = OLD.subject_id)))
-    ) AND NOT EXISTS (SELECT 1 FROM identity_security_events e
-                      WHERE e.org_id = v_org AND e.event_type = 'bootstrap.claimed') THEN
-      RETURN NULL;
-    END IF;
   ELSIF TG_TABLE_NAME = 'identity_group_members' THEN
     SELECT b.org_id INTO v_org FROM identity_role_bindings b
      WHERE b.subject_type = 'group' AND b.subject_id = OLD.group_id AND b.role_id = 'arl_owner'
@@ -7589,6 +7578,11 @@ BEGIN
     ) THEN
       RETURN NULL;
     END IF;
+  END IF;
+  -- an org that never had a real Owner (pre-claim) is not protected yet
+  IF NOT EXISTS (SELECT 1 FROM identity_security_events e
+                 WHERE e.org_id = v_org AND e.event_type = 'bootstrap.claimed') THEN
+    RETURN NULL;
   END IF;
   PERFORM pg_advisory_xact_lock(hashtext('identity_owner:' || v_org));
   IF NOT EXISTS (

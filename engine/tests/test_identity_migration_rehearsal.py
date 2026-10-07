@@ -92,8 +92,11 @@ def test_goldeneye_upgrades_claims_by_passkey_and_the_network_bridge_ends(db):
         "settings:update": True, "deployment:production": True}      # step-up: a bridge cannot
     worker = legacy.bridge(worker_request(), db=db, now=NOW, settings=cfg)
     assert worker.principal.id == LEGACY_WORKER_PRINCIPAL
-    assert all(allowed(db, worker, "worker:lease", "secret:lease", "code_task:create",
-                       *every_capability).values())
+    # H3: the worker key holds what the worker calls (the worker protocol and the jobs it
+    # runs), never the console's reach: no identity writes, no owner:assign
+    assert all(allowed(db, worker, "worker:lease", "secret:lease", "code_task:create").values())
+    assert not any(allowed(db, worker, "user:invite", "role_binding:assign", "owner:assign",
+                           "settings:update").values())
 
     # the network bridge (no env change: the console says so, from a trusted proxy)
     visitor = legacy.bridge(network_request(), db=db, now=NOW, settings=cfg)
@@ -417,7 +420,8 @@ def test_the_console_key_loses_identity_writes_at_the_claim_and_everything_at_th
     # the real Owner holds what the key lost: no lockout
     assert all(fake_check(db, claim.ctx, p, now=NOW).allowed for p in IDENTITY_WRITES
                if p != "delegation:grant")
-    # the other legacy system principals (worker, metatron, coo) are not narrowed by the claim
+    # the worker key keeps its minimal worker set (H3: it never held identity writes); metatron,
+    # coo and the rest are narrowed like the console key (test_identity_f2_legacy.py)
     assert legacy.system_permissions(LEGACY_WORKER_PRINCIPAL, db=db) == migration.WORKER_LEGACY_SET
 
     # at the cutoff (once the Owner has a session) the key holds nothing

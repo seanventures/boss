@@ -169,6 +169,8 @@ def require_covers(db: Any, ctx: AuthContext, target_principal_id: str, permissi
         return
     missing = uncovered(db, ctx, target_principal_id)
     if missing:
+        if target_principal_id in owner_ids(db, ctx.principal.org_id):
+            permission = "owner:assign"         # acting on an Owner takes another Owner
         raise AccessError(403, "forbidden", "They hold access you don't.",
                           {"reason": "target_exceeds_actor", "permission": permission,
                            "missing": {k: v[:20] for k, v in missing.items()}})
