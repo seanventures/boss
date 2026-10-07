@@ -815,7 +815,8 @@ class Walk:
                 self.find("ungated-press-refused", role, (m.get("press") or "").split(" :: ")[-1][:40],
                           re.sub(TOKEN_RE, "<id>", m["path"]), m.get("page") or "",
                           f"enabled control '{m.get('press')}' sent {m['method']} {m['path']} -> 403",
-                          "a control the role cannot use is shown disabled with the reason", severity="soft")
+                          # hard since round 3 (D7, P1-18: every control a role cannot use is pre-greyed)
+                          "a control the role cannot use is shown disabled with the reason")
             if m in self_service or not (200 <= m["status"] < 300):
                 continue
             what = re.sub(TOKEN_RE, "<id>", m["path"]) + (f" action={m['action']}" if m.get("action") else "")

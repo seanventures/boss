@@ -188,15 +188,15 @@ function NewBuildButton({ open, setOpen, onPlan, onDirect, onBenchmark, hasBench
       </button>
       {open ? (
         <span className="fx-menu" role="menu" data-testid="fx-new-menu" onKeyDown={onMenuKey}>
-          <button type="button" role="menuitem" onClick={pick(onPlan)} title="A PRD first, then the build">Plan it with Juno</button>
+          <GatedButton permission="meeting:convene" type="button" role="menuitem" onClick={pick(onPlan)} title="A PRD first, then the build">Plan it with Juno</GatedButton>
           <button type="button" role="menuitem" title="Pick a workflow to run"
                   onClick={pick(() => navigate({ area: "delivery_workflows", new: "1", build: null, run: null, view: null }))}>
             From a workflow
           </button>
-          <button type="button" role="menuitem" onClick={pick(onDirect)} title="An already-specified change, no PRD"
-                  data-testid="fx-new-direct">Direct change</button>
+          <GatedButton permission="code_task:create" type="button" role="menuitem" onClick={pick(onDirect)} title="An already-specified change, no PRD"
+                  data-testid="fx-new-direct">Direct change</GatedButton>
           {hasBenchmarks ? (
-            <button type="button" role="menuitem" onClick={pick(onBenchmark)} title="Build a pinned example app">From a benchmark</button>
+            <GatedButton permission="code_task:create" type="button" role="menuitem" onClick={pick(onBenchmark)} title="Build a pinned example app">From a benchmark</GatedButton>
           ) : null}
         </span>
       ) : null}

@@ -13,6 +13,7 @@
  * An install that still carries BOSS_GITHUB_TOKEN gets one button that moves it into the vault.
  * GitHub's redirects land back here with `?github=app_connected|app_failed`.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useState } from "react";
 import { CircleNotch, GithubLogo } from "@phosphor-icons/react";
 
@@ -136,12 +137,12 @@ function AppCard({ status, reload }: { status: GitHubStatus; reload: () => void 
           <input value={owner} onChange={(e) => setOwner(e.target.value.replace(/[^A-Za-z0-9-]/g, ""))}
                  placeholder="acme" aria-label="GitHub org" data-testid="gh-app-owner" maxLength={100} />
         </label>
-        <button type="button" className="su-btn su-btn-primary" onClick={create} disabled={busy}
+        <GatedButton permission="github:connect" type="button" className="su-btn su-btn-primary" onClick={create} disabled={busy}
                 data-testid="gh-app-create" title="Opens GitHub with the App's permissions filled in."
                 data-tip="Opens GitHub with the App's permissions filled in.">
           {busy ? <CircleNotch className="su-spin" size={12} aria-hidden /> : <GithubLogo size={14} aria-hidden />}
           Create the App on GitHub
-        </button>
+        </GatedButton>
       </>
     );
   } else if (!app.installed) {
