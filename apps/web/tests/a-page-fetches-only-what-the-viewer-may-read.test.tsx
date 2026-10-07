@@ -15,7 +15,7 @@
  *      provider's own effects run) is already gated;
  *   5. a locked read renders as a locked panel, never as "Can't reach BOSS API".
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import React, { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -28,7 +28,7 @@ import { IMPROVE_READS } from "../lib/improve-ops";
 import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
 import { installMirror } from "../lib/identity/mirror";
 import { ROLE_PERMISSIONS, type Permission } from "../lib/identity/permissions.gen";
-import { API_READS, installReadGate, isLocked, lockedResponse, permissionForRead, permissionForV1, readRefusal } from "../lib/identity/read-gates";
+import { API_READ_OPS, installReadGate, isLocked, lockedResponse, permissionForRead, permissionForV1, readRefusal } from "../lib/identity/read-gates";
 import { READ_ROUTES } from "../lib/identity/read-routes.gen";
 // @ts-expect-error a plain .mjs script, shared with the generator
 import { readRoutesSource } from "../scripts/read-routes.mjs";
@@ -48,8 +48,32 @@ describe("1. the gate's table is the API's", () => {
     expect(readFileSync(join(WEB, "lib/identity/read-routes.gen.ts"), "utf8")).toBe(readRoutesSource(MATRIX));
     expect(READ_ROUTES.length).toBeGreaterThan(400);
   });
-  it.each(Object.entries(API_READS))("%s reaches /v1/%s, a route the matrix declares", (_proxy, upstream) => {
-    expect(MATRIX_GET.has(`/v1/${upstream}`), upstream).toBe(true);
+  // Follow-up 2: EVERY GET proxy is mapped, by operation. A new app/api/**/route.ts that exports
+  // GET and has no entry fails here, as does an operation whose route the API does not declare.
+  function routes(dir: string): string[] {
+    return readdirSync(join(WEB, dir)).flatMap((name) => {
+      const p = join(dir, name);
+      if (statSync(join(WEB, p)).isDirectory()) return routes(p);
+      return /^route\.tsx?$/.test(name) ? [p] : [];
+    });
+  }
+  const getProxies = routes("app/api")
+    .filter((f) => /export (async function|function|const) GET\b/.test(readFileSync(join(WEB, f), "utf8")))
+    .map((f) => "/" + f.replace(/^app\//, "").replace(/\/route\.tsx?$/, "")
+      .replace(/\[\[\.\.\.[^\]]+\]\]/g, "{...}").replace(/\[[^\]]+\]/g, "{}"));
+  it("finds the GET proxies (the scan is not empty)", () => {
+    expect(getProxies.length).toBeGreaterThan(40);
+  });
+  it.each(getProxies.filter((p) => p !== "/api/improve"))("%s has an entry in API_READ_OPS", (proxy) => {
+    expect(API_READ_OPS[proxy], `map ${proxy} in lib/identity/read-gates.ts API_READ_OPS`).toBeDefined();
+  });
+  it("names no proxy that does not exist", () => {
+    expect(Object.keys(API_READ_OPS).filter((k) => !getProxies.includes(k))).toEqual([]);
+  });
+  const opRoutes = Object.entries(API_READ_OPS).flatMap(([proxy, read]) => "none" in read ? []
+    : Object.entries(read.ops).flatMap(([op, r]) => (typeof r === "string" ? [r] : [...r]).map((route) => [`${proxy} ${op || "(default)"}`, route] as const)));
+  it.each(opRoutes)("%s reads /v1/%s, a route the matrix declares", (_op, route) => {
+    expect(MATRIX_GET.has(`/v1/${route.replace(/\{[^}]*\}/g, "{}")}`), route).toBe(true);
   });
   it.each(Object.keys(IMPROVE_READS))("/api/improve?view=%s maps to a declared route", (view) => {
     expect(permissionForRead(`/api/improve?view=${view}&project_id=p&id=x`), view).not.toBeNull();
@@ -67,6 +91,14 @@ describe("2. each read the role walk caught maps to the permission the API check
     ["/api/improve?view=sharing&project_id=p", "telemetry:read"],
     ["/api/run-acts?view=chain&run_id=wfr_1&project_id=p", "workflow_run:read"],
     ["/api/kit?project_id=p", "skill:read"],
+    ["/api/agent?view=briefing&project_id=p", "assistant:chat"],
+    ["/api/delivery-workflows?project_id=p", "workflow:read"],
+    ["/api/delivery-workflows?view=repositories&project_id=p", "repository:read"],
+    ["/api/govern?view=spend&project_id=p", "budget:read"],
+    ["/api/sandboxes/sb_1/tree", "sandbox:read"],
+    ["/api/hardware/places?project_id=p", "host:read"],
+    ["/api/run-credits/crun_1?project_id=p", "code_task:read"],
+    ["/api/setup?project_id=p&repos=c1", "github:read"],
     ["/api/mcp?project_id=p", "mcp_server:read"],
   ])("%s → %s", (url, permission) => {
     expect(permissionForRead(url)).toBe(permission);
@@ -118,6 +150,14 @@ describe("3. the gate", () => {
     await window.fetch("/v1/agents/identities?project_id=other");
     await window.fetch("/v1/identity/audit?project_id=p");
     expect(sent).toHaveLength(4);
+  });
+  it("a composite read is sent when any part is readable, and locked only when none is", async () => {
+    mirror(["work_item:read"]);
+    await window.fetch("/api/agent?view=workspace&project_id=p");
+    expect(sent).toHaveLength(1);
+    mirror([]);
+    expect(isLocked(await window.fetch("/api/agent?view=workspace&project_id=p"))).toBe(true);
+    expect(sent).toHaveLength(1);
   });
   it("with no mirror (no provider, identity unreadable) everything is sent", async () => {
     installMirror(null);
