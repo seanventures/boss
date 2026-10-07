@@ -1,6 +1,6 @@
 """A92 (IDENTITY.md §15.3): after EVERY sign-in method that can be driven in-process, no session or
 access token is placed in a redirect URL, a query string, or a response body field a script could
-store — and the session cookie is HttpOnly (Kaappu put `oauth_token` in the redirect URL and the
+store — and the session cookie is HttpOnly (a reference identity provider put `oauth_token` in the redirect URL and the
 token in localStorage).
 
 Each flow runs on a recording client: every response (and every redirect hop) the browser would see
