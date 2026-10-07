@@ -17,6 +17,7 @@
  *   - The Table (`From · To · Handoffs · Failed · Waiting · Last`) is the accessible Flow: always
  *     in the DOM, visually hidden in Map mode, and the whole of Flow under 640px.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { CaretDown, CaretRight, Play, X } from "@phosphor-icons/react";
 
@@ -479,9 +480,9 @@ export function OrgFlow(props: OrgFlowProps): React.ReactElement {
               <span>No handoffs yet</span>
               <a className="ag-btn" href={consoleHref({ area: "delivery_workflows", view: null, layout: null, days: null,
                                                          isolate: null, run: null, focus: null, role: null })}>Start work ↗</a>
-              <button type="button" className="ag-link" onClick={() => openPlan()}>
+              <GatedButton permission="meeting:convene" type="button" className="ag-link" onClick={() => openPlan()}>
                 Plan it with <span data-user-text>{identityOf("pm").callsign || identityOf("pm").name}</span>
-              </button>
+              </GatedButton>
             </>
           ) : (
             <>

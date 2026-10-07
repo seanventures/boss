@@ -13,6 +13,7 @@
  * One read (`/v1/agents/live-board`, polled by the area shell) feeds every section. A section
  * with nothing in it says so in one line and keeps its place, so the page never jumps.
  */
+import { GatedButton } from "../../components/gated";
 import { CaretDown, CaretRight, CheckCircle, WarningCircle } from "@phosphor-icons/react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
@@ -313,8 +314,8 @@ export function LiveBoardView({ projectId, actor, live, paused, focusId, search,
                onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate({ area: "delivery_workflows", tab: "library", view: null, role: null }); } }}>
               Start work ↗
             </a>
-            <button type="button" className="ag-link" data-testid="ag-live-plan"
-                    onClick={() => openPlan("pm", { from: "roster" })}>Plan it with Juno</button>
+            <GatedButton permission="meeting:convene" type="button" className="ag-link" data-testid="ag-live-plan"
+                    onClick={() => openPlan("pm", { from: "roster" })}>Plan it with Juno</GatedButton>
           </div>
         ) : grouped ? (
           <ul className="ag-mission-list">
