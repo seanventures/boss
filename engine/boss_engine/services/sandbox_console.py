@@ -134,17 +134,22 @@ def list_sandboxes(settings: Settings) -> dict:
 
 
 def list_helpers(settings: Settings) -> dict:
-    """The governed helper allowlist (no break-glass needed), grouped for display."""
-    base = _require_host(settings)
+    """The governed helper allowlist (no break-glass needed), grouped for display.
+
+    Like list_sandboxes: no micro-VM host (the Community compose stack has none) or an unreachable
+    one is an ANSWER — an empty catalogue that says why (`unavailable`, which the console shows) —
+    not a 503 for every caller allowed to read it (the round-3 API sweep's last expected failure)."""
+    base = _base(settings)
+    if not base:
+        return {"categories": {}, "commands": [],
+                "unavailable": "sandbox host not configured (BOSS_SANDBOX_AGENT_URL is empty)"}
     try:
         with httpx.Client(timeout=10) as c:
             r = c.get(f"{base}/v1/sandbox/helpers", headers=_auth_headers(settings))
         r.raise_for_status()
         return r.json()
-    except SandboxPlaneError:
-        raise
-    except Exception as e:  # noqa: BLE001
-        raise _map_host_error(settings, e) from e
+    except Exception as e:  # noqa: BLE001 — unreachable is reported, never 500/503
+        return {"categories": {}, "commands": [], "unavailable": str(_map_host_error(settings, e))[:200]}
 
 
 # ---- Micro-VM inspection (retained rootfs of a failed/incomplete task) ----------- #
