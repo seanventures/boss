@@ -776,6 +776,11 @@ def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner
                                       github_needs=BUILD_GITHUB_NEEDS),
                              grant_id=acting.grant_id, db=db, audiences=(AUD_API,))
     remember_engine(engine)
+    # The worker's own GitHub writes for this build (opening its PR) use tokens bound to this run:
+    # revoked with the run's other tokens at run end (identity/github_setup.py).
+    from . import github_setup
+
+    github_setup.bind_control_plane_run(shim.run_id)
     return shim, egress_access(shim, owner=owner, repo=repo)
 
 
@@ -945,6 +950,9 @@ def _note_shared_token_use(engine: Any, *, owner: str, repo: str, project_id: Op
 
 
 def finish_code_task_run(engine: Any, shim: Shim, *, org_id: str) -> None:
+    from . import github_setup
+
+    github_setup.unbind_control_plane_run(shim.run_id)
     close_shim_socket(shim.run_id)
     with engine.begin() as db:
         end_run(shim.run_id, db=db, org_id=org_id)

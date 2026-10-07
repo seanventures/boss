@@ -130,6 +130,9 @@ def app_jwt(db: Any, *, now: Optional[int] = None) -> str:
     return signing_input.decode() + "." + jwks.b64u(sig)
 
 
+CONTROL_PLANE_KIND = "control_plane"
+
+
 @dataclass(frozen=True)
 class InstallationToken:
     token: str = field(repr=False)
@@ -137,7 +140,8 @@ class InstallationToken:
     repositories: tuple[str, ...] = ()
     permissions: Mapping[str, str] = field(default_factory=dict)
     #: "installation" (the App's, revoked at run end) | "as_me" (the person's own connection) |
-    #: "org_token" (the org's fine-grained token). Only an installation token is revoked at GitHub.
+    #: "org_token" (the org's fine-grained token) | "control_plane" (the worker's own App token for
+    #: this run's PR, github_setup). Only App tokens (installation, control_plane) are revoked at GitHub.
     kind: str = "installation"
 
 
@@ -283,7 +287,8 @@ def _credential_for_run(claims: RunTokenClaims, repos: list[str], perms: Mapping
 
 def cached_for_run(run_id: str) -> Optional[InstallationToken]:
     with _lock:
-        toks = [t for t in _RUN_TOKENS.get(run_id, []) if t.expires_at - datetime.now(timezone.utc) > timedelta(minutes=5)]
+        toks = [t for t in _RUN_TOKENS.get(run_id, []) if t.kind != CONTROL_PLANE_KIND  # the worker's, never egress's
+                and t.expires_at - datetime.now(timezone.utc) > timedelta(minutes=5)]
     return toks[-1] if toks else None
 
 
@@ -296,7 +301,7 @@ def revoke_runs(run_ids: list[str], reason: str = "") -> int:
                 doomed.extend(_RUN_TOKENS.pop(rid))
     count = 0
     for tok in doomed:
-        if tok.kind != "installation":
+        if tok.kind not in ("installation", CONTROL_PLANE_KIND):
             continue                         # a person's or the org's own token is never revoked by a run
         if revoke_installation_token(tok.token):
             count += 1

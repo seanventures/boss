@@ -17,7 +17,10 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import threading
 import time
+from contextvars import ContextVar
+from dataclasses import replace
 from typing import Any, Iterable, Optional
 
 from . import audit, github_app, jwks, vault
@@ -338,6 +341,61 @@ CONTROL_PLANE_PERMISSIONS = {"contents": "write", "pull_requests": "write", "met
                              "checks": "read", "statuses": "read"}
 
 
+# Every installation token minted for the control plane is ACCOUNTED FOR: during a build it is
+# registered under that build's run (github_app._RUN_TOKENS) and revoked at GitHub with the run's
+# other tokens at run end (runs.end_run -> github_app.revoke_runs); outside a build (a Setup check,
+# CI polling after the run) it is revoked at GitHub once it is CONTROL_PLANE_TTL_SECONDS old, at
+# the next mint. GitHub's own 1-hour expiry is the backstop, never the plan.
+CONTROL_PLANE_TTL_SECONDS = 600
+_CP_RUN: "ContextVar[Optional[str]]" = ContextVar("boss_github_control_plane_run", default=None)
+_CP_BOUND: dict[str, Any] = {}
+_UNSCOPED: list[tuple[float, str]] = []
+_cp_lock = threading.Lock()
+
+
+def bind_control_plane_run(run_id: str) -> None:
+    """From here until unbind (same thread), control-plane tokens belong to this run."""
+    _CP_BOUND[run_id] = _CP_RUN.set(run_id)
+
+
+def unbind_control_plane_run(run_id: str) -> None:
+    token = _CP_BOUND.pop(run_id, None)
+    try:
+        if token is not None:
+            _CP_RUN.reset(token)
+            return
+    except ValueError:                 # unbound from another context: just clear this one
+        pass
+    if _CP_RUN.get() == run_id:
+        _CP_RUN.set(None)
+
+
+def _account_for(tok: "github_app.InstallationToken") -> None:
+    run_id = _CP_RUN.get()
+    if run_id:
+        with github_app._lock:  # noqa: SLF001 — the run's token list, revoked at run end
+            github_app._RUN_TOKENS.setdefault(run_id, []).append(tok)  # noqa: SLF001
+        return
+    now = time.time()
+    with _cp_lock:
+        _UNSCOPED.append((now, tok.token))
+        due = [t for at, t in _UNSCOPED if now - at >= CONTROL_PLANE_TTL_SECONDS]
+        _UNSCOPED[:] = [(at, t) for at, t in _UNSCOPED if now - at < CONTROL_PLANE_TTL_SECONDS]
+    for old in due:
+        github_app.revoke_installation_token(old)
+
+
+def sweep_control_plane_tokens(*, everything: bool = False) -> int:
+    """Revoke unscoped control-plane tokens that are due (all of them with everything=True)."""
+    now = time.time()
+    with _cp_lock:
+        due = [t for at, t in _UNSCOPED if everything or now - at >= CONTROL_PLANE_TTL_SECONDS]
+        _UNSCOPED[:] = [] if everything else [(at, t) for at, t in _UNSCOPED if now - at < CONTROL_PLANE_TTL_SECONDS]
+    for old in due:
+        github_app.revoke_installation_token(old)
+    return len(due)
+
+
 def control_plane_token(db: Any, owner: str, repo: str) -> Optional[str]:
     """The credential the WORKER uses for one repo when the operator connected GitHub in Setup ›
     GitHub access: an installation token of the Setup-created App (1 hour, this repo only), else
@@ -347,7 +405,9 @@ def control_plane_token(db: Any, owner: str, repo: str) -> Optional[str]:
     cfg = app_config(db)
     if cfg["source"] == "setup" and app_ready(db):
         try:
-            return github_app.mint_installation_token([full], CONTROL_PLANE_PERMISSIONS, db=db).token
+            tok = github_app.mint_installation_token([full], CONTROL_PLANE_PERMISSIONS, db=db)
+            _account_for(replace(tok, kind=github_app.CONTROL_PLANE_KIND))
+            return tok.token
         except github_app.GitHubRefused:
             pass
     token = org_token(db)
@@ -367,7 +427,13 @@ def installation_token_all(db: Any) -> str:
                             token=github_app.app_jwt(db), body={"permissions": dict(CONTROL_PLANE_PERMISSIONS)})
     if resp.status not in (200, 201):
         raise GitHubSetupError("mint_failed", 502, status=resp.status)
-    return str((resp.json() or {})["token"])
+    token = str((resp.json() or {})["token"])
+    from datetime import datetime, timedelta, timezone
+
+    _account_for(github_app.InstallationToken(token=token, expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                                              repositories=(), permissions=dict(CONTROL_PLANE_PERMISSIONS),
+                                              kind=github_app.CONTROL_PLANE_KIND))
+    return token
 
 
 def installation_repositories(db: Any) -> list[dict[str, Any]]:
