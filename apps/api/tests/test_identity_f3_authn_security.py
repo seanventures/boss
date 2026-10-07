@@ -281,3 +281,73 @@ def test_l4_a_second_bootstrap_claimed_row_is_refused_by_the_database(world, eng
                             "outcome, prev_hash, hash) VALUES (:o, 999, 'security', 'bootstrap.claimed', "
                             "'success', :p, :h)"), {"o": org, "p": b"\0" * 32, "h": b"\2" * 32})
     assert "identity_one_claim_per_org" in str(exc.value)
+
+
+# ---- M1: SSO identities are keyed by provider; an IdP vouches for an email only in its domains -------
+
+def test_m1_a_second_provider_never_signs_in_as_the_first_providers_person(world, engine):
+    from apps.api.tests.test_identity_authn_sso import make_provider
+    from boss_engine.identity import social, sso_oidc
+    from boss_engine.identity.signin import RequestFacts
+
+    a = make_provider(engine, issuer="https://idp-a.example.com")
+    b = make_provider(engine, issuer="https://idp-b.example.com")
+    pid = make_user(engine, "owner@corp.test", role="owner")
+    with engine.begin() as db:
+        pa = sso_oidc.load_provider(db, a)
+        pb = sso_oidc.load_provider(db, b)
+        ident = sso_oidc.FederatedIdentity(issuer="https://idp-a.example.com", subject="sub-1",
+                                           email="owner@corp.test", email_verified=True)
+        social.link(db, principal_id=pid, provider=pa, ident=ident)
+        # provider B presents an identity naming A's issuer and subject: it is not A's person
+        answer = social.resolve(db, pb, ident, RequestFacts(origin=ORIGIN))
+    assert answer.status == 403, answer.body
+    assert not answer.cookies
+
+
+def test_m1_an_issuer_names_one_provider_per_org(world, engine):
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from apps.api.tests.test_identity_authn_sso import make_provider
+
+    make_provider(engine, issuer="https://shared-idp.example.com")
+    with pytest.raises(IntegrityError):
+        make_provider(engine, issuer="https://SHARED-idp.example.com")
+
+
+def test_m1_saml_and_oidc_invitations_need_a_provider_trusted_for_the_domain(world, engine, monkeypatch):
+    from apps.api.tests.test_identity_authn_sso import invite, make_provider
+    from boss_engine.identity import social, sso_oidc
+    from boss_engine.identity.signin import RequestFacts
+
+    invite(engine, "boss@corp.test", role="owner")
+    untrusted = make_provider(engine, issuer="https://any-idp.example.com", domains=())
+    trusted = make_provider(engine, issuer="https://corp-idp.example.com", domains=("corp.test",))
+    ident = sso_oidc.FederatedIdentity(issuer="x", subject="s-9", email="boss@corp.test", email_verified=True)
+    with engine.begin() as db:
+        refused = social.resolve(db, sso_oidc.load_provider(db, untrusted), ident, RequestFacts(origin=ORIGIN))
+    assert refused.status == 403 and refused.body["error"] == "not_invited", refused.body
+    with engine.begin() as db:
+        accepted = social.resolve(db, sso_oidc.load_provider(db, trusted),
+                                  sso_oidc.FederatedIdentity(issuer="https://corp-idp.example.com", subject="s-9",
+                                                             email="boss@corp.test", email_verified=True),
+                                  RequestFacts(origin=ORIGIN))
+    assert accepted.status == 200, accepted.body
+
+
+def test_m1_a_saml_assertion_verifies_an_email_only_in_the_providers_domains(world, engine):
+    """The SAML half through the real ACS: an IdP not listed for corp.test names an invited Owner's
+    address; the invitation is not claimed."""
+    from apps.api.tests.test_identity_authn_sso import (SamlIdP, IDP_ENTITY, SSO_URL, assert_refused,
+                                                        invite, make_provider, post_acs, saml_start)
+
+    idp = SamlIdP()
+    pid = make_provider(engine, protocol="saml", issuer=IDP_ENTITY, client_id=SSO_URL,
+                        certificates=(idp.pem,), domains=("other.test",))
+    invite(engine, "pat@corp.test", role="owner")
+    client = fresh_client()
+    rid = saml_start(client, pid)
+    res = post_acs(client, idp.encode(idp.response(idp.sign(idp.assertion_xml(in_response_to=rid)),
+                                                   in_response_to=rid)))
+    assert_refused(res)

@@ -251,10 +251,13 @@ def consume_response(db: Any, *, saml_response: str, preauth: Optional[str], ori
     ctx_ref = assertion.find(f"{{{SAML}}}AuthnStatement/{{{SAML}}}AuthnContext/{{{SAML}}}AuthnContextClassRef")
     mfa = bool(provider.trust_idp_mfa and ctx_ref is not None
                and (ctx_ref.text or "").strip() in trusted_mfa_contexts(provider))
-    # An enterprise IdP's signed assertion vouches for the email it names.
+    # M1: a SAML IdP's signed assertion vouches for an email ONLY in a domain the admin listed on
+    # the provider (its `domains`). Issuers are free text, and any IdP can name any address.
+    trusted = {d.lower().lstrip("@") for d in (provider.domains or ())}
+    domain = email.rsplit("@", 1)[1].lower() if email and "@" in email else ""
     return SamlResult(provider, FederatedIdentity(
         issuer=provider.issuer or "", subject=name_id.text.strip(), email=email,
-        email_verified=bool(email), name=name, groups=groups, mfa=mfa))
+        email_verified=bool(email and domain in trusted), name=name, groups=groups, mfa=mfa))
 
 
 def _spend_assertion_id(db: Any, assertion_id: str, expires: datetime) -> None:

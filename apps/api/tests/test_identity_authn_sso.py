@@ -117,7 +117,7 @@ def idp(world, monkeypatch):
 
 
 def make_provider(engine, *, protocol: str = "oidc", preset: str = "generic", issuer: Optional[str] = ISSUER,
-                  client_id: Optional[str] = CLIENT_ID, jit_mode: str = "off", domains: tuple = (),
+                  client_id: Optional[str] = CLIENT_ID, jit_mode: str = "off", domains: tuple = ("corp.test",),
                   trust_idp_mfa: bool = False, groups_claim: Optional[str] = None,
                   certificates: tuple = (), status: str = "active", algs: tuple = ("RS256", "ES256", "EdDSA")) -> str:
     from boss_engine.identity import ids
@@ -235,9 +235,12 @@ def test_a90_an_unknown_subject_creates_nothing_without_invitation_jit_or_signup
     before = counts(engine)
     assert_refused(login_via(fresh_client(), pid, idp)[0], "not_invited")
     assert counts(engine) == before
-    # an unverified email never qualifies, even with JIT on for its domain
-    jit = make_provider(engine, issuer="https://idp.example.com", client_id=CLIENT_ID, jit_mode="domain",
-                        domains=("else.test",))
+    # an unverified email never qualifies, even with JIT on for its domain (one provider per issuer,
+    # F3/M1: the same provider, switched to JIT)
+    jit = pid
+    with engine.begin() as db:
+        db.execute(text("UPDATE identity_providers SET jit_mode = 'domain', domains = '{else.test}' "
+                        "WHERE id = :p"), {"p": jit})
     idp.claims = {"email": "stranger@else.test", "email_verified": False, "sub": "s-unknown"}
     assert_refused(login_via(fresh_client(), jit, idp)[0], "not_invited")
     assert counts(engine) == before
@@ -249,7 +252,9 @@ def test_a90_jit_domain_and_self_signup_create_a_person_with_no_access_roles(wor
     client = fresh_client()
     assert_signed_in(login_via(client, jit, idp)[0])
     assert client.get("/v1/identity/me").json()["access_roles"] == []
-    plain = make_provider(engine)
+    plain = jit           # one provider per issuer (F3/M1): the same provider, JIT off
+    with engine.begin() as db:
+        db.execute(text("UPDATE identity_providers SET jit_mode = 'off' WHERE id = :p"), {"p": plain})
     set_policy(engine, signup_enabled=True, signup_domains=["other.test"])
     idp.claims = {"email": "outsider@nope.test", "sub": "s-out"}
     assert_refused(login_via(fresh_client(), plain, idp)[0], "not_invited")
@@ -355,7 +360,7 @@ def test_a64_no_code_exchange_without_a_pkce_verifier(world, engine, idp):
 
 def test_a65_provider_as_state_presented_at_provider_bs_callback_is_refused(world, engine, idp):
     a = make_provider(engine)
-    b = make_provider(engine)
+    b = make_provider(engine, issuer="https://idp-b.example.com")   # one provider per issuer (F3/M1)
     invite(engine, "pat@corp.test")
     client = fresh_client()
     q = start(client, a, idp)
@@ -438,16 +443,18 @@ def _give_passkey(engine, email: str) -> None:
 
 
 def test_trust_idp_mfa_counts_only_when_on_and_amr_says_mfa(world, engine, idp):
+    # One provider per issuer (F3/M1): the same provider, with trust_idp_mfa switched on.
     plain = make_provider(engine)
-    trusted = make_provider(engine, trust_idp_mfa=True)
+    trusted = plain
     invite(engine, "pat@corp.test")
     assert_signed_in(login_via(fresh_client(), plain, idp)[0])
     _give_passkey(engine, "pat@corp.test")
-    with engine.begin() as db:
-        db.execute(text("UPDATE identity_user_identities SET provider_id = :p"), {"p": plain})
     idp.claims = {"amr": ["mfa", "pwd"]}
     res, _ = login_via(fresh_client(), plain, idp)            # not trusted: BOSS MFA step
     assert res.headers["location"] == f"{ORIGIN}/signin?step=mfa"
+    with engine.begin() as db:
+        db.execute(text("UPDATE identity_providers SET trust_idp_mfa = true WHERE id = :p"), {"p": trusted})
+    sso_oidc.clear_caches()
     client = fresh_client()
     res, _ = login_via(client, trusted, idp)                   # trusted + amr mfa: fresh MFA
     assert_signed_in(res)
