@@ -104,8 +104,8 @@ def test_scim_can_never_assign_access_roles(world, engine):
 
 def test_scim_groups_are_read_only_scim_groups_with_members(world, engine):
     key = make_scim_key(engine)
-    a = make_user(engine, "sam@example.test")
-    b = make_user(engine, "tia@example.test")
+    a = _provisioned(engine, make_user(engine, "sam@example.test"))
+    b = _provisioned(engine, make_user(engine, "tia@example.test"))
     client = fresh_client()
     res = client.post("/scim/v2/Groups", headers=_bearer(key),
                       json={"displayName": "Builders", "externalId": "okta-1", "members": [{"value": a}]})
@@ -153,3 +153,33 @@ def test_a72_a_scim_key_calling_role_bindings_is_403(world, engine, monkeypatch)
     res = fresh_client().post("/v1/identity/me/api-keys", headers=_bearer(key),
                               json={"name": "x", "scopes": ["scim:provision"]})
     assert res.status_code in (401, 403)
+
+
+def test_round2_c_scim_group_writes_have_the_user_write_limits(world, engine):
+    """Integration round 2 (c): a SCIM key may not move people it did not provision, nor an
+    Owner/Admin, by group membership; and never adds anyone to a group an admin bound to Owner or
+    Admin (that would place an Owner by IdP group)."""
+    from boss_engine.identity import users as users_module
+    from apps.api.tests.identity_s1_world import org_id
+
+    key = make_scim_key(engine)
+    mine = _provisioned(engine, make_user(engine, "own-scim@example.test"))
+    theirs = make_user(engine, "invited@example.test")                 # invited in BOSS
+    client = fresh_client()
+    refused = client.post("/scim/v2/Groups", headers=_bearer(key),
+                          json={"displayName": "Ops", "members": [{"value": theirs}]})
+    assert refused.status_code == 403
+    res = client.post("/scim/v2/Groups", headers=_bearer(key), json={"displayName": "Admins"})
+    gid = res.json()["id"]
+    with engine.begin() as db:
+        users_module.add_binding(db, org_id=org_id(db), subject_id=gid, subject_type="group",
+                                 role_key="admin", granted_by="test")
+    added = client.patch(f"/scim/v2/Groups/{gid}", headers=_bearer(key), json={"Operations": [
+        {"op": "add", "path": "members", "value": [{"value": mine}]}]})
+    assert added.status_code == 403
+    put = client.put(f"/scim/v2/Groups/{gid}", headers=_bearer(key),
+                     json={"displayName": "Admins", "members": [{"value": mine}]})
+    assert put.status_code == 403
+    with engine.begin() as db:
+        assert db.execute(text("SELECT count(*) FROM identity_group_members WHERE group_id = :g"),
+                          {"g": gid}).scalar() == 0

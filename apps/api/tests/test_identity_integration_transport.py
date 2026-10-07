@@ -8,6 +8,7 @@ authenticated once by identity (the guard reuses it), and nothing else gets thro
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import text
 
 from apps.api.tests.identity_s1_world import (  # noqa: F401  (fixtures)
     HEADERS,
@@ -89,13 +90,14 @@ def test_in_shadow_a_session_without_a_legacy_seat_is_still_refused_by_the_legac
 def test_removing_the_last_owner_on_any_path_is_a_409_never_a_500(world, engine):
     """The SCIM group that carries the only Owner binding is deleted: the deferred last-Owner
     trigger refuses the commit, and the API answers a conflict (SCIM-shaped on SCIM routes)."""
-    from sqlalchemy import text
 
     from apps.api.tests.identity_s1_world import make_scim_key, mark_claimed, org_id
     from boss_engine.identity import users
 
     key = make_scim_key(engine)
     owner = make_user(engine, "only-owner@example.test", role=None)
+    with engine.begin() as db:   # provisioned by this SCIM connection (SCIM writes only its own)
+        db.execute(text("UPDATE identity_principals SET created_by = 'sys_scim_okta' WHERE id = :p"), {"p": owner})
     client = fresh_client()
     res = client.post("/scim/v2/Groups", headers={"Authorization": f"Bearer {key}"},
                       json={"displayName": "Owners", "externalId": "okta-owners",
