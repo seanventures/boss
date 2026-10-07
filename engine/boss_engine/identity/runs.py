@@ -17,6 +17,7 @@ import contextlib
 import hashlib
 import secrets
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator, Mapping, Optional
@@ -48,7 +49,7 @@ class Shim:
     key: dpop.DPoPKey = field(default_factory=dpop.DPoPKey.generate, repr=False)
     tokens: dict[str, IssuedToken] = field(default_factory=dict, repr=False)
     egress_credential: Optional[str] = field(default=None, repr=False)
-    renewed_at: float = field(default_factory=lambda: __import__("time").monotonic(), repr=False)
+    renewed_at: float = field(default_factory=time.monotonic, repr=False)
 
     def authorization(self, audience: str, method: str, url: str) -> dict[str, str]:
         """Headers for one call: `Authorization: DPoP <token>` and a fresh `DPoP` proof."""

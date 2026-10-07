@@ -837,12 +837,18 @@ def run(args: Any, *, timeout: Optional[float] = None, input: Any = None,  # noq
     return completed
 
 
+def boss_run(args: Any, **kwargs: Any) -> subprocess.CompletedProcess:
+    """`run` for BOSS's OWN operations on a run's behalf — the docker CLI, a clone with BOSS's
+    credential, process inspection: never as the run's sandbox uid (sandbox_identity)."""
+    return run(args, sandboxed=False, **kwargs)
+
+
 __all__ = [
     "DEFAULT_GRACE_SECONDS", "Owner", "OwnedPopen", "ProcInfo", "TOKEN_ENV", "current_owner",
     "ledger", "live", "live_owner_ids", "members", "owner_scope", "pids_with_token", "popen",
     "processes", "run", "set_ledger", "terminate_all", "terminate_owner", "terminate_tree",
     "was_cancelled", "zombie_count", "OwnerCancelled", "begin_drain", "draining", "orphan_trees", "poll_all",
-    "sweep_orphans", "token_census",
+    "sweep_orphans", "token_census", "boss_run",
 ]
 
 
