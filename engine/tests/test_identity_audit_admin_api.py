@@ -252,15 +252,17 @@ def test_policy_has_s4s_shape_and_a_round_trip_changes_nothing(db, monkeypatch):
     assert same.json()["github_require_user_repo_access_auto"] is True   # D28 stays automatic
 
     changed = client.put("/v1/identity/policy", json={
-        **current, "breach_check": True, "delegation_max_depth": 2, "legacy_cutoff_days": 45,
+        **current, "breach_check": True, "delegation_max_depth": 2, "legacy_cutoff_days": 20,
         "signup": {"enabled": True, "domains": ["acme.dev"]}}).json()
     assert changed["breach_check"] and changed["delegation_max_depth"] == 2
     assert changed["signup"] == {"enabled": True, "domains": ["acme.dev"]}
     diff = events(db, "policy.changed")[-1]["details"]["diff"]
     assert set(diff) == {"hibp_check", "org_max_depth", "legacy_cutoff_days", "signup_enabled",
                          "signup_domains"}
-    # F3/M3: no policy moves a bridge past the absolute cutoff (claim + 30 days)
-    assert changed["network_mode"]["ends_at"] == current["network_mode"]["ends_at"]
+    # F3/M3: no policy moves a bridge past the absolute cutoff (claim + 30 days): above 30 is
+    # refused outright (U11: the docs promised up to 90)
+    refused = client.put("/v1/identity/policy", json={**current, "legacy_cutoff_days": 45})
+    assert refused.status_code == 422, refused.text
     pinned = client.put("/v1/identity/policy",
                         json={"github_require_user_repo_access": True}).json()
     assert pinned["github_require_user_repo_access"] and not \
