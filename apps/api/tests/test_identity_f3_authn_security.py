@@ -351,3 +351,90 @@ def test_m1_a_saml_assertion_verifies_an_email_only_in_the_providers_domains(wor
     res = post_acs(client, idp.encode(idp.response(idp.sign(idp.assertion_xml(in_response_to=rid)),
                                                    in_response_to=rid)))
     assert_refused(res)
+
+
+# ---- M2: SCIM writes only to the people it provisioned, never an Owner/Admin; email changes -------
+
+def _scim(key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {key}"}
+
+
+def test_m2_scim_cannot_rewrite_an_owners_email(world, engine):
+    from apps.api.tests.identity_s1_world import make_scim_key
+
+    key = make_scim_key(engine)
+    owner = make_user(engine, "real-owner@example.test", role="owner")
+    client = fresh_client()
+    res = client.patch(f"/scim/v2/Users/{owner}", headers=_scim(key), json={
+        "Operations": [{"op": "replace", "path": "emails", "value": [{"value": "attacker@evil.test", "primary": True}]}]})
+    assert res.status_code == 403, res.text
+    assert client.put(f"/scim/v2/Users/{owner}", headers=_scim(key),
+                      json={"userName": "attacker@evil.test"}).status_code == 403
+    assert client.delete(f"/scim/v2/Users/{owner}", headers=_scim(key)).status_code == 403
+    with engine.begin() as db:
+        assert db.execute(text("SELECT email FROM identity_users WHERE principal_id = :p"),
+                          {"p": owner}).scalar() == "real-owner@example.test"
+
+
+def test_m2_scim_writes_only_to_people_this_connection_provisioned(world, engine):
+    from apps.api.tests.identity_s1_world import make_scim_key
+
+    key = make_scim_key(engine)
+    invited = make_user(engine, "invited@example.test", role="operator")      # made in BOSS
+    client = fresh_client()
+    assert client.patch(f"/scim/v2/Users/{invited}", headers=_scim(key), json={
+        "Operations": [{"op": "replace", "path": "active", "value": False}]}).status_code == 403
+    mine = client.post("/scim/v2/Users", headers=_scim(key), json={"userName": "mine@example.test"}).json()["id"]
+    assert client.patch(f"/scim/v2/Users/{mine}", headers=_scim(key), json={
+        "Operations": [{"op": "replace", "path": "displayName", "value": "Mine"}]}).status_code == 200
+    # promoted to Admin in BOSS: SCIM can no longer change them
+    with engine.begin() as db:
+        from boss_engine.identity import users
+        from boss_engine.identity.authn_support import default_org_id
+
+        users.add_binding(db, org_id=default_org_id(db), subject_id=mine, role_key="admin", granted_by="test")
+    assert client.patch(f"/scim/v2/Users/{mine}", headers=_scim(key), json={
+        "Operations": [{"op": "replace", "path": "displayName", "value": "X"}]}).status_code == 403
+
+
+def test_m2_scim_active_true_does_not_undo_an_admins_disable(world, engine):
+    from apps.api.tests.identity_s1_world import make_scim_key
+
+    key = make_scim_key(engine)
+    client = fresh_client()
+    pid = client.post("/scim/v2/Users", headers=_scim(key), json={"userName": "dis@example.test"}).json()["id"]
+    with engine.begin() as db:
+        db.execute(text("UPDATE identity_principals SET status = 'disabled', status_changed_by = 'usr_admin' "
+                        "WHERE id = :p"), {"p": pid})
+    res = client.patch(f"/scim/v2/Users/{pid}", headers=_scim(key), json={
+        "Operations": [{"op": "replace", "path": "active", "value": True}]})
+    assert res.status_code == 409, res.text
+
+
+def test_m2_an_email_change_unverifies_and_tells_the_old_address(world, engine):
+    from apps.api.tests.identity_s1_world import make_scim_key
+
+    world.smtp = True
+    key = make_scim_key(engine)
+    client = fresh_client()
+    pid = client.post("/scim/v2/Users", headers=_scim(key), json={"userName": "old@example.test"}).json()["id"]
+    with engine.begin() as db:
+        db.execute(text("UPDATE identity_users SET email_verified_at = now() WHERE principal_id = :p"), {"p": pid})
+    res = client.patch(f"/scim/v2/Users/{pid}", headers=_scim(key), json={
+        "Operations": [{"op": "replace", "path": "userName", "value": "new@example.test"}]})
+    assert res.status_code == 200, res.text
+    subject, _body = world.last_mail_to("old@example.test")
+    assert "email address" in subject
+    with engine.begin() as db:
+        assert db.execute(text("SELECT email_verified_at FROM identity_users WHERE principal_id = :p"),
+                          {"p": pid}).scalar() is None
+
+
+def test_m2_mail_sign_in_and_reset_need_a_verified_address(world, engine):
+    world.smtp = True
+    pid = make_user(engine, "unverified@example.test")
+    with engine.begin() as db:
+        db.execute(text("UPDATE identity_users SET email_verified_at = NULL WHERE principal_id = :p"), {"p": pid})
+    r = fresh_client().post("/v1/auth/password/forgot", json={"email": "unverified@example.test"}, headers=HEADERS)
+    assert r.status_code == 202
+    assert world.mail == []

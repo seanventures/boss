@@ -263,8 +263,8 @@ def build_identity_people_router() -> APIRouter:
                     other = users.by_email(db, email)
                     if other and other.principal_id != u.principal_id:
                         return error(409, "email_in_use")
-                    db.execute(text("UPDATE identity_users SET email = :e, email_verified_at = NULL "
-                                    "WHERE principal_id = :id"), {"e": email, "id": u.principal_id})
+                    # M2 (F3): unverified again, reset links voided, the old address told.
+                    users.change_email(db, u, email, by=ctx.principal.id)
                 emit(db, org_id=ctx.principal.org_id, event_type="user.updated", outcome=Outcome.SUCCESS,
                      ctx=ctx, target_type="user", target_id=u.principal_id, details={"fields": sorted(raw)})
                 fresh = users.by_id(db, u.principal_id)
