@@ -224,7 +224,7 @@ def verify_authentication(db: Any, *, purpose: str, origin: Optional[str], bindi
         raise PasskeyError("unknown_credential")
     # The credential must belong to the principal the challenge names (mfa/step_up), and its user
     # handle — when the authenticator returns one, always for discoverable credentials — must map
-    # to that same principal (Kaappu's unbound-challenge flaw, A6).
+    # to that same principal (the unbound-challenge flaw, A6).
     if pending.principal_id and pending.principal_id != row.principal_id:
         raise PasskeyError("user_mismatch")
     handle = parsed.response.user_handle

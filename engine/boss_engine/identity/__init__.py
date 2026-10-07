@@ -1,6 +1,6 @@
 """BOSS Identity: principals, the permission catalogue, the one decision function, delegation,
 the vault and the security audit log. Spec: docs/product/IDENTITY.md. Build plan and stream
-ownership: docs/product/IDENTITY_BUILD.md.
+ownership: docs/maintainers/IDENTITY_BUILD.md.
 
 Phase 0 froze the public surface re-exported here. The functions that raise NotImplementedError
 are filled in by the streams named in their docstrings; nothing outside this package may decide

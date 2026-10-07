@@ -1,44 +1,51 @@
 # Sign in to Mission Control
 
-Mission Control is the web console for your self-hosted BOSS install. This page explains how owner sign-in works, how to reach the console from another computer, and what a TLS proxy must do before you expose it on a hostname.
+Mission Control is the web console for your BOSS install. This page explains how people sign in, what happens to the old shared password, and how to reach the console from another computer over HTTPS.
 
-!!! note "Named accounts"
-    From this release, each person signs in with their own account, and the shared password becomes the credential you use once to claim the install. [Upgrade to named accounts](IDENTITY_UPGRADE.md) explains the claim and when the shared password stops working.
+## Named accounts
 
-## How sign-in works
+Each person signs in as themselves and holds an access role (Owner, Admin, Operator, Viewer or Auditor). What they see and can do follows that role, project by project. [People and access](PEOPLE_AND_ACCESS.md) explains roles, groups and invitations.
 
-A single owner password signs you in, and all of the owner's projects appear in the project picker.
+The first person to open a new or upgraded install **claims** it at `/claim` and becomes the first Owner. The sign-in page shows **This BOSS has no Owner yet. Claim it** until then. [Upgrade to named accounts](IDENTITY_UPGRADE.md) walks through the claim.
 
-The installer generates `BOSS_CONSOLE_PASSWORD` and `BOSS_CONSOLE_SESSION_SECRET` in the private `.env` on the machine where BOSS runs, and passes them only to the web service. After sign-in, the browser receives a signed, HttpOnly session cookie that lasts eight hours. The browser never receives `BOSS_API_KEY`.
+## Ways to sign in
 
-Manage the password from the install directory:
-
-| Command | Effect |
+| Method | Needs |
 | --- | --- |
-| `python3 scripts/install/console_password.py show` | Prints the password in the terminal. |
-| `python3 scripts/install/console_password.py reset` | Rotates the password and invalidates existing sessions. |
+| Passkey | Works once BOSS knows its public address (HTTPS, or `http://localhost`). |
+| Email and password, then a second factor | A passkey or an authenticator app. Owners, Admins and Auditors must have one. |
+| Email link or 6-digit email code | Email (SMTP) set up. See [Sign-in setup](SIGN_IN_SETUP.md). |
+| Single sign-on (OIDC or SAML) and social sign-in | A provider set up in **Identity › Sign-in & SSO**. |
+| The shared password, no email | Only for 30 days after the claim, as **Operator**. See below. |
 
-The console password is separate from the API key. The [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md) has the full commands.
+Lost your second factor? Use a recovery code. If you have none left, an Admin can reset your MFA (**Identity › People ›** you **› Reset MFA**).
 
-## What the session protects
+Your own settings are under **My account**: **Security** (password, passkeys, authenticator app, recovery codes), **Sessions**, **Agents for me** and **API keys**.
 
-Every page, `/v1/*` proxy request, and `/api/*` route requires a valid session:
+## The shared console password
 
-- An unauthenticated API request returns `401` before the privileged key is attached.
-- An unauthenticated page request redirects to sign-in on the same browser origin.
-- State-changing browser requests must carry a matching `Origin` header.
-- `POST /api/auth/logout` clears the session.
-- If either console secret is missing or too short, protected requests fail with `503`.
+Older installs have one shared password, `BOSS_CONSOLE_PASSWORD` (`boss password` shows it). With named accounts it changes role:
 
-!!! warning "Single-owner access only"
-    The owner session protects the whole console, but it does not create separate browser identities or per-project authorization. `GET /v1/projects` currently returns all orgs and projects to a valid service key. A shared, multi-user deployment must not rely on this owner login for tenant isolation. Before offering multi-user hosting, add principal-scoped reads and individual OIDC or SAML browser sessions against an identity provider you run.
+1. **Before the claim**, it only proves you run this BOSS, on the claim screen.
+2. **For 30 days after the claim**, it still signs in: choose **Use the shared password** on the sign-in page. No email is needed. You are **Shared console password**, with the **Operator** role, and every page shows how many days are left.
+3. **After that**, it is refused. Ask an Owner to invite you.
+
+An Owner can extend the 30 days once, by at most 30 more. Rotate the password with `python3 scripts/install/console_password.py reset` while it is still in use.
+
+## What a session protects
+
+- Every page and every `/v1/*` request needs a valid session (or an API key, for scripts).
+- The session cookie is `__Host-`, HttpOnly and `Secure`. Its token never appears in a page or a response body.
+- Writes from the browser must come from the console's own origin and carry the session's CSRF token.
+- **Sign out** in the account menu ends the session. **My account › Sessions** ends the others.
+- Sessions end after 12 hours idle or 7 days at most (an Owner can change both in **Identity › Sign-in & SSO**).
+
+!!! note "Safari and plain http://localhost"
+    Sign-in cookies are always `Secure`. Chrome, Edge and Firefox accept them on `http://localhost` and `http://127.0.0.1`; Safari does not, so signing in on a plain-HTTP laptop install seems to do nothing in Safari. Use another browser there, or put the console behind HTTPS.
 
 ## Reach the console
 
-The installer binds the web listener to `127.0.0.1` and keeps the console secrets in the local `.env`. On the install machine, open `http://127.0.0.1:3000`.
-
-!!! note "Safari and plain http://localhost"
-    Sign-in cookies are `__Host-` cookies, which are always `Secure`. Chrome, Edge and Firefox accept them on `http://localhost` and `http://127.0.0.1`; Safari does not, so signing in on a plain-HTTP laptop install seems to do nothing in Safari. Use another browser there, or put the console behind HTTPS.
+The installer binds the web listener to `127.0.0.1`. On the install machine, open `http://127.0.0.1:3000`.
 
 From another computer, you have two options.
 
@@ -72,7 +79,7 @@ A preview runs an app BOSS built, which is code you have not reviewed yet, so it
 
 The console rejects remote plain HTTP, including the login form.
 
-`--console-origin` writes `BOSS_CONSOLE_PUBLIC_ORIGIN` to `.env`, for example `https://console.example` with no trailing slash. Your proxy must **overwrite** these headers with fixed values:
+`--console-origin` writes `BOSS_CONSOLE_PUBLIC_ORIGIN` to `.env`, for example `https://console.example` with no trailing slash. Sign-in uses it as BOSS's public address: cookies, passkeys, CSRF checks and every emailed link. (`BOSS_PUBLIC_URL`, when set, takes precedence.) Your proxy must **overwrite** these headers with fixed values:
 
 | Header | Value |
 | --- | --- |

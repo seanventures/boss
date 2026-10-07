@@ -4,7 +4,7 @@ An invitation names an email, the access roles (role key + scope) and manual gro
 gets, and is single use for 7 days. The invited roles must be a subset of the inviter's own
 permissions at each scope (no escalation by invitation). The token is 32 random bytes, SHA-256 at
 rest; with SMTP it is emailed, otherwise it is shown ONCE to the authenticated inviter to hand
-over out of band — never from a public endpoint (Kaappu's flaw).
+over out of band — never from a public endpoint (a common flaw).
 
 An invitation is also the ONLY email-based binding of a federated identity, and only to an
 unclaimed invitation, never to an existing account (pre-account takeover, A61, A89).

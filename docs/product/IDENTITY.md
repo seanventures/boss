@@ -1,7 +1,7 @@
 # BOSS Identity: authentication and authorization
 
 Status: **SPEC, operator decisions recorded (§16, D25–D34); Phase 0 interfaces frozen.** Date: 2026-10-06. Base: main @ b1befb7d.
-Build plan, stream ownership and the amendments Phase 0 made: [IDENTITY_BUILD.md](IDENTITY_BUILD.md). The generated catalogue table: [IDENTITY_CATALOGUE.md](IDENTITY_CATALOGUE.md).
+Build plan, stream ownership and the amendments Phase 0 made: [IDENTITY_BUILD.md](../maintainers/IDENTITY_BUILD.md). The generated catalogue table: [IDENTITY_CATALOGUE.md](IDENTITY_CATALOGUE.md).
 Companion: [IDENTITY_PERMISSIONS.md](IDENTITY_PERMISSIONS.md) holds the permission catalogue, the built-in role table, and the route, MCP tool and page mapping. The console mockups are in `~/Downloads/boss-identity-mockup/`.
 
 ---
@@ -27,18 +27,18 @@ Built in, with no SDK, no plugin framework and no policy language. Tables are pl
 **Principles**
 
 - **Fail closed everywhere.** That means no route without a declaration and no fallback to unverified claims. A security dependency that is down never results in "allow". Neither does a stale cache served on error, or a vault that silently falls back to plaintext.
-- **Identity comes only from a verified credential.** It never comes from a body field, a query parameter or a client-set header. That rules out `actor`, `x-user-id` and `?accountId=`. Kaappu's worst flaws all came from trusting asserted identity.
+- **Identity comes only from a verified credential.** It never comes from a body field, a query parameter or a client-set header. That rules out `actor`, `x-user-id` and `?accountId=`. The worst identity flaws come from trusting asserted identity.
 - **One authority.** The API decides. The console mirrors the API's answers for UX, and is never asked to decide.
 - **Narrowing only.** No token, grant, key or role can carry more than the principal that created it holds.
 - **Everything revocable, everything attributable.** Every action answers four questions in the UI: who did it, for whom, by which chain, and under which grant.
-- **Secrets are never printed, not even in part.** BOSS's existing rule extends to every credential this spec introduces, including the key prefixes that Kaappu showed.
+- **Secrets are never printed, not even in part.** BOSS's existing rule extends to every credential this spec introduces, including key prefixes, which many products show.
 
 **Non-goals (v1)**
 
 - BOSS does not become a general-purpose IdP. It has no SAML IdP role, does not host other apps' logins, and does not broker federation.
 - No ReBAC or per-object sharing such as "share this one workflow with Bob". That waits until a customer needs it. It is not bolted onto RBAC.
 - No deny rules. Role bindings are a union. Agent intersection narrows, but it is not a deny.
-- No nested groups and no role inheritance. Kaappu built both and never wired them up.
+- No nested groups and no role inheritance. Both are easy to build and hard to reason about.
 - No OpenFGA and no policy language.
 
 ---
@@ -53,7 +53,7 @@ Built in, with no SDK, no plugin framework and no policy language. Tables are pl
 | **System** (`system`) | `sys_` | Never | built-in: `sys_worker`, `sys_collector`, `sys_scim_*`, `sys_host_cli` | fixed, not editable | the Owners |
 
 Every principal row has `status ∈ {pending, active, disabled, suspended, revoked}`.
-- `revoked` is terminal. That is a deliberate break from Kaappu, where `reactivate` undid revocation.
+- `revoked` is terminal. A `reactivate` that undoes revocation is a common flaw; BOSS has none.
 - `disabled` applies to people and service accounts. `suspended` applies to agents.
 - Every enforcement point checks status live.
 
@@ -118,7 +118,7 @@ Users can see and end their own sessions. Admins with `session:revoke` can end a
 ### 4.4 MFA: TOTP
 
 - **Parameters:** RFC 6238 with SHA-1, 6 digits and 30 s steps, for compatibility with every authenticator. A window of ±1 step.
-- **Storage:** the secret is 20 random bytes, encrypted with AES-256-GCM under the vault KEK, with AAD = `principal_id`. **It is never stored in plaintext**, which was Kaappu flaw #8.
+- **Storage:** the secret is 20 random bytes, encrypted with AES-256-GCM under the vault KEK, with AAD = `principal_id`. **It is never stored in plaintext**, a common flaw.
 - **Replay:** BOSS stores the last accepted time-step and rejects any code at or below it.
 - **Attempts:** 5 per challenge, after which the challenge is burned. 20 per hour per user. Failures count toward the account's soft lock.
 - **Enrolment:** the user must have authenticated in the last 10 minutes and confirm a valid code. BOSS shows a QR code and the text secret **once**. Removing TOTP requires step-up, and MFA-required roles cannot remove their last factor.
@@ -127,7 +127,7 @@ Users can see and end their own sessions. Admins with `session:revoke` can end a
 
 - **Implementation:** `py_webauthn`. The RP ID is the host of `BOSS_PUBLIC_URL`. Origins must match exactly. Attestation is `none` (privacy). An optional AAGUID allowlist is available for enterprises.
 - **Requirements:** `userVerification: required` and discoverable (resident) credentials. A passkey is a **complete, phishing-resistant sign-in on its own**, so the user enters no password, and it also satisfies MFA after a password.
-- **Challenges:** 32 random bytes. BOSS stores their hash in `identity_auth_challenges` with a 5-minute TTL, bound to the pre-auth cookie, single use. During authentication the credential's user handle must map to the principal that the challenge resolves to (fixes Kaappu's unbound challenge).
+- **Challenges:** 32 random bytes. BOSS stores their hash in `identity_auth_challenges` with a 5-minute TTL, bound to the pre-auth cookie, single use. During authentication the credential's user handle must map to the principal that the challenge resolves to (an unbound challenge is a common flaw).
 - **Sign count:** a counter regression raises a security event and a posture flag. It does not block, because synced passkeys report 0.
 - **Limits:** up to 10 passkeys per user. Each can be named and shows when it was last used.
 
@@ -143,12 +143,12 @@ Users can see and end their own sessions. Admins with `session:revoke` can end a
 | Situation | Path | Safeguards |
 |---|---|---|
 | Forgot password, SMTP configured | Email link: 32 random bytes, stored hashed, 30-minute expiry, single use | The response is identical whether or not the account exists. The link always uses `BOSS_PUBLIC_URL`, never the `Host` header. A reset does not bypass MFA: the user still needs a second factor afterwards. |
-| Forgot password, no SMTP | An admin issues a reset link (`user:update`, step-up) | The link is shown once, **to the authenticated admin**, to hand over out of band. Kaappu's flaw was returning secrets from a *public* endpoint. This endpoint is not public. |
+| Forgot password, no SMTP | An admin issues a reset link (`user:update`, step-up) | The link is shown once, **to the authenticated admin**, to hand over out of band. Returning secrets from a *public* endpoint is a common flaw. This endpoint is not public. |
 | Lost MFA | One of 10 recovery codes: 12 base32 characters, argon2id-hashed (small profile), single use | Using a code notifies the user. Below 3 remaining codes, BOSS forces regeneration. |
 | Lost MFA and codes | Admin reset (`user:reset_mfa`, step-up) | Resetting an Owner requires another Owner. The user must re-enrol MFA at the next sign-in. The event is critical-audited and notifies every admin. |
 | Sole Owner locked out | Host CLI: `docker exec boss-api boss identity recover-owner --email …` | The CLI needs host shell access. It prints a 15-minute single-use link to stdout. Actor: `sys_host_cli`. Every Owner sees a banner for 7 days. |
 
-Magic-link sign-in and email codes **are offered, only when SMTP is configured**, and built to the rules in §4.14 (D26). Kaappu shipped both with critical bugs; §4.14 lists each one and the test that keeps it out. There is **no phone or SMS** method of any kind (SIM-swap risk).
+Magic-link sign-in and email codes **are offered, only when SMTP is configured**, and built to the rules in §4.14 (D26). Both are easy to get wrong; §4.14 lists each known pitfall and the test that keeps it out. There is **no phone or SMS** method of any kind (SIM-swap risk).
 
 ### 4.8 SSO sign-in (OIDC and SAML)
 
@@ -166,7 +166,7 @@ The existing `enterprise_identity_providers`, `self_hosted_identity.py` and SAML
 - **Callback checks:**
   - `state` matches and is bound to this browser;
   - the RFC 9207 `iss` parameter matches, when it is present;
-  - the code exchange includes the verifier, and there is **no exchange without one** (fixes Kaappu);
+  - the code exchange includes the verifier, and there is **no exchange without one**;
   - the id_token signature verifies against the provider's JWKS. The JWKS is cached for 1 h and refetched on an unknown `kid`, at most once a minute. Only configured algorithms are accepted;
   - `iss` matches exactly, `aud` contains the client id, `azp` matches when there are multiple audiences, `exp`, `iat` and `nbf` hold within 60 s of skew, and `nonce` matches.
 - **Identity:** the user is identified by **`(iss, sub)`, never by email.** Userinfo is used only for display fields.
@@ -218,7 +218,7 @@ Rate-limit counters live in Postgres (`identity_rate_limits`, an unlogged table)
 **Client IP.** BOSS uses the socket peer, unless the peer is in `BOSS_TRUSTED_PROXIES` (CIDRs). In that case it takes the right-most untrusted `X-Forwarded-For` hop. A client-sent XFF is never trusted otherwise. This builds on the recent "real client IPs" fix.
 
 **Anti-enumeration.** Unknown users, wrong passwords and locked accounts all return the same body: `{"error":"invalid_credentials"}`. For an unknown user, BOSS runs a dummy argon2id verification so timing matches.
-- A disabled account is revealed **only after the correct password** ("This account is disabled. Ask an admin."). Kaappu revealed "banned" before checking the password.
+- A disabled account is revealed **only after the correct password** ("This account is disabled. Ask an admin."). Revealing "banned" before checking the password is a common account oracle.
 - Forgot-password always returns 202.
 - Sign-up is **off by default**. People join by invitation, JIT, SCIM, or, only when an Owner turns it on, self sign-up (§4.15). Self sign-up answers with the same uniform response as forgot-password.
 
@@ -235,27 +235,27 @@ There are no default credentials, ever.
 
 **Existing install** (`BOSS_CONSOLE_PASSWORD` set): the claim screen accepts the legacy password as the setup credential. The legacy password is proof that you are the operator (§12). After the claim the legacy password maps to Operator for 30 days, then stops working (D25).
 
-**Network-trusted install** (`BOSS_CONSOLE_AUTH=network`, e.g. shared-server): the network trust that already makes a visitor the operator is the claim credential. See §4.12.
+**Network-trusted install** (`BOSS_CONSOLE_AUTH=network`, e.g. an install reached over a private network): the network trust that already makes a visitor the operator is the claim credential. See §4.12.
 
-### 4.12 Trusted-network mode is a migration bridge only (today's `BOSS_CONSOLE_AUTH=network`, e.g. shared-server)
+### 4.12 Trusted-network mode is a migration bridge only (today's `BOSS_CONSOLE_AUTH=network`)
 
-Operator decision D27: shared-server moves to **passkeys and real accounts**. There is **no Tailscale-header trust** and **no permanent network operator**. Network-trusted mode survives only as the bridge that gets an install from "anyone on the tailnet is the operator" to "a named Owner signed in with a passkey".
+Operator decision D27: network-trusted installs move to **passkeys and real accounts**. There is **no Tailscale-header trust** and **no permanent network operator**. Network-trusted mode survives only as the bridge that gets an install from "anyone on the private network is the operator" to "a named Owner signed in with a passkey".
 
 **Before the first claim.** Requests from a private peer (the existing network check) are bridged to `usr_network_operator`, a `network_bound` person:
 - It holds an Owner-equivalent set, so behaviour is identical to today and nothing breaks at upgrade.
 - It may **claim the first Owner** (below), and it may not touch any other identity setting.
 - Every response carries the banner *"Anyone who can reach this BOSS acts as the operator. Claim it to finish setup."*; every audit row records the client IP; writes still need same-origin and CSRF checks; posture is red.
 
-**How shared-server gets its first Owner without setting env or reading logs.** shared-server's operations go through the tailnet ops API (POST /deploy); nobody sets environment variables or reads container logs there. So the claim needs neither a setup token nor `BOSS_PUBLIC_URL`:
+**How a network-trusted install gets its first Owner without setting env or reading logs.** Some installs are operated only through a deploy API; nobody sets environment variables or reads container logs there. So the claim needs neither a setup token nor `BOSS_PUBLIC_URL`:
 1. The bridged console shows **Claim this BOSS** to the network-bridged visitor. Network trust is the proof of being the operator, exactly as the legacy password is on a password install.
-2. The claim screen shows the **origin it will bind to**, taken from the browser's request (`Origin`, which must equal `Host` and be `https://…`, e.g. `https://shared-server.<tailnet>.ts.net`). The claimant confirms it. It is stored as `identity_settings.policy.public_origin` and from then on is the WebAuthn RP ID and the CSRF origin; `BOSS_PUBLIC_URL`, when set, wins. Changing it later needs an Owner with step-up.
+2. The claim screen shows the **origin it will bind to**, taken from the browser's request (`Origin`, which must equal `Host` and be `https://…`, e.g. `https://boss.example.com`). The claimant confirms it. It is stored as `identity_settings.policy.public_origin` and from then on is the WebAuthn RP ID and the CSRF origin; `BOSS_PUBLIC_URL`, when set, wins. Changing it later needs an Owner with step-up.
 3. The claimant enters name and email and **registers a passkey** (required on this path; a password is optional). If the browser has no platform authenticator, a password plus TOTP is accepted instead and posture shows "No passkey on the only Owner".
 4. The claim is single-use and rate-limited (10/h per IP); once any real Owner exists it answers 404 for good (A14).
-5. `boss identity setup-link` and the logged setup URL (§4.11) still work where an operator can reach them; shared-server does not need them.
+5. `boss identity setup-link` and the logged setup URL (§4.11) still work where an operator can reach them; a network-trusted install does not need them.
 
 **After the claim.** The network bridge maps to **Operator** (D25's role) for at most **30 days** (the same clock as the legacy password), then refuses: visitors see the sign-in page. An Owner can end it sooner with **Require sign-in** (one click, step-up). The network principal is then disabled and its history keeps its name. There is no setting that makes it permanent.
 
-**Not offered:** identity from proxy headers (`Tailscale-User-Login` and the like). A header is an assertion the API cannot verify on its own; passkeys give per-person identity on the tailnet without it.
+**Not offered:** identity from proxy headers (`Tailscale-User-Login` and the like). A header is an assertion the API cannot verify on its own; passkeys give per-person identity on the private network without it.
 
 ### 4.13 The SSRF-safe outbound client
 
@@ -313,7 +313,7 @@ boss_egr_…                                                                    
 
 - **Prefix and checksum:** the prefix tells a secret scanner what it found. The checksum lets BOSS reject a typo before any database lookup, and lets scanners match without false positives.
 - **Storage:** `api_credentials.token_hash = SHA-256(token)`, with a unique index, looked up by hash. 256 bits of entropy makes a slow hash unnecessary. Comparison is constant-time.
-- **Display:** after the shown-once dialog, BOSS shows **no part of the key**. Keys are identified by a random public id (`key_7f3k2q`), a name, the owner, scopes, created, last used (time, IP, client) and expiry. This goes further than GitHub's and Kaappu's visible prefixes, by BOSS rule.
+- **Display:** after the shown-once dialog, BOSS shows **no part of the key**. Keys are identified by a random public id (`key_7f3k2q`), a name, the owner, scopes, created, last used (time, IP, client) and expiry. This goes further than products that show a visible prefix, by BOSS rule.
 
 ### 5.2 Scopes
 
@@ -391,7 +391,7 @@ permissions:
 
 Generated from that file and committed. CI fails if a regenerated file differs from the committed one:
 - `engine/boss_engine/identity/permissions_gen.py`: a `Permission` `StrEnum`, plus the metadata dict.
-- `apps/web/lib/identity/permissions.gen.ts`: `export type Permission = "workflow:publish" | …`, a literal union with **no `${string}` escape hatch**. Kaappu's union accepted any string.
+- `apps/web/lib/identity/permissions.gen.ts`: `export type Permission = "workflow:publish" | …`, a literal union with **no `${string}` escape hatch**. A union that accepts any string checks nothing.
 - `db/identity_seed.sql`: `identity_permissions` and the built-in `identity_access_roles` / `identity_access_role_permissions`, upserted at boot. A permission removed from the catalogue is removed from custom roles at boot, and that removal is audited.
 - The role table in `docs/product/IDENTITY_PERMISSIONS.md`.
 
@@ -673,7 +673,7 @@ effective(hop_n) = perms_live(user, scope)
   and no agent appears twice in the chain
 ```
 
-**Depth cap: the minimum along the chain.** A child can never raise it. That was Kaappu's bug.
+**Depth cap: the minimum along the chain.** A child can never raise it.
 
 ### 7.5 The token service (RFC 8693)
 
@@ -686,7 +686,7 @@ effective(hop_n) = perms_live(user, scope)
 | **Run token** | JWT, EdDSA (Ed25519) | `boss-run+jwt` | **5 min**, renewed by the supervisor | exactly one of `boss:api`, `boss:mcp`, `boss:egress` | `run` key family |
 | **Actor assertion** | JWT, EdDSA | `boss-actor+jwt` | 60 s | `boss:token` | `actor` key family |
 
-Signing keys live in `identity_signing_keys`, with the private key encrypted under the vault KEK. They rotate every 30 days. **Two keys are published at a time**, at `/.well-known/boss-jwks.json`. BOSS refuses to boot without its keys and never generates an ephemeral key silently. That was Kaappu flaw #3.
+Signing keys live in `identity_signing_keys`, with the private key encrypted under the vault KEK. They rotate every 30 days. **Two keys are published at a time**, at `/.well-known/boss-jwks.json`. BOSS refuses to boot without its keys and never generates an ephemeral key silently. A silent ephemeral key is a common flaw.
 
 **The exchange.** `POST /v1/identity/token`, with `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`:
 
@@ -713,7 +713,7 @@ Signing keys live in `identity_signing_keys`, with the private key encrypted und
    - same org.
 4. Depth: `depth+1 ≤ min(org.max_depth, grant.max_depth, every passport's max_depth)`, and the child is not already in the chain.
 5. Re-check, live, that every principal in the chain is active and that the grant is active.
-6. `new_scope = requested ∩ parent.scope ∩ ceiling(child)`. **Empty means empty, never "the requested set".** That was Kaappu flaw #5.
+6. `new_scope = requested ∩ parent.scope ∩ ceiling(child)`. **Empty means empty, never "the requested set".** Falling back to the requested set is a common flaw.
 7. `exp = min(now+300 s, parent exp + 0, grant.expires_at)`.
 8. Mint the token, write the `token.issued` lineage row, and return it.
 
@@ -771,7 +771,7 @@ The `identity_vault_items` table holds every long-lived external secret BOSS own
 | KEK | Read from `BOSS_MASTER_KEY_FILE` (preferred; Docker secret) or `BOSS_MASTER_KEY` (32 bytes, base64). A **key check value** is stored. **Boot refuses** (`vault.boot`) when the key does not match, or when the key file is missing for a vault that has data; the API never serves with a vault it cannot open. The key file is created only at **first install** (no registered KEK, no item), explicitly and logged — a runtime read never creates one. External KMS (AWS KMS, GCP KMS, Vault Transit) is optional, in Phase 5. |
 | Rotation | `boss identity rotate-master-key` re-wraps every DEK in one transaction and audits it. |
 | Who may decrypt | Only `boss_engine/identity/vault.py`. A CI test fails if any other module imports `vault._decrypt`. |
-| Failure | A decryption failure is a hard error plus a `vault.decrypt_failed` critical event. **There is never a plaintext fallback.** That was Kaappu's converter flaw. |
+| Failure | A decryption failure is a hard error plus a `vault.decrypt_failed` critical event. **There is never a plaintext fallback.** A plaintext fallback is a common flaw. |
 | Provider refresh | On demand, when the token is requested with less than 5 minutes left. It is **single-flight**: `SELECT … FOR UPDATE` on the row, refresh, then write the new refresh token — all in the vault's **own transaction, committed before the caller continues**, so a rollback of the caller's business transaction can never lose a refresh token the provider already burned. If the provider refuses or rotated but the write failed, the item becomes `needs_reauth` (also in its own transaction, so it sticks) rather than retried in a loop. A background sweeper only touches refresh tokens that are close to their 6-month expiry. |
 | Revocation | Disconnecting, or deleting a user, calls the provider's revoke endpoint **first**; the local ciphertext is shredded only once the provider confirms. If the provider is unreachable the item is revoked locally at once (unusable) but kept, `provider_revoke_pending`, and identity maintenance retries. For GitHub that is `DELETE /applications/{client_id}/grant`. |
 
@@ -828,7 +828,7 @@ The target is effect within 5 seconds, end to end, and a test proves it (§15.3)
 | **Person disabled** (admin, or SCIM `active=false`) | Sessions are revoked. PATs are suspended, not deleted. Grants are suspended. Runs on their behalf are halted. Their vault items become unusable. Service accounts they solely own are flagged orphaned. |
 | **Person deleted** | Everything above, plus provider-side revocation of their OAuth grants, a wipe of their vault items, and erasure of their PII. Audit rows keep a tombstone id. |
 | **Passport suspended** | Every run whose chain contains the agent is halted. Grants naming it are paused. Its autonomous schedules are paused. |
-| **Passport revoked** | Terminal. Grants naming it are revoked. Passports born by it (`born_by=agent:<id>`) are **suspended pending review**, the whole subtree and not only direct children (Kaappu only flagged children). |
+| **Passport revoked** | Terminal. Grants naming it are revoked. Passports born by it (`born_by=agent:<id>`) are **suspended pending review**, the whole subtree and not only direct children (flagging only direct children is a common gap). |
 | **API key revoked or expired** | Immediate: it is a hash lookup with no cache beyond the epoch. |
 | **Session revoked** | Immediate. |
 | **Role or binding removed** | The epoch bumps. Live intersection shrinks every OBO token of that person at its next call. No token reissue is needed. |
@@ -879,11 +879,11 @@ These follow from the permissions not being delegable. In addition, the token se
 - When the app's role is a Postgres **superuser** (a stock compose install), privileges cannot bind it; the triggers and the keyed chain still make tampering detectable.
 - A daily anchor (the latest hash and seq) goes into the activity log, and into the export when export is configured.
 
-Writes to this log are **not best-effort**. A security event is written in the same transaction as the change it describes. If the write fails, the change fails. Kaappu swallowed audit exceptions.
+Writes to this log are **not best-effort**. A security event is written in the same transaction as the change it describes. If the write fails, the change fails. Swallowing audit exceptions is a common flaw.
 
 **Retention:** 400 days by default. Only an Owner can prune (`activity:prune`, step-up), and a prune writes a `checkpoint` event that holds the hash of the pruned range, so the chain stays verifiable.
 
-**There is no write API.** Audit rows are produced only by the code paths below. Kaappu had a public audit write endpoint.
+**There is no write API.** Audit rows are produced only by the code paths below. A public audit write endpoint is a common flaw.
 
 ### 8.2 What is logged
 
@@ -992,7 +992,7 @@ A list, and group detail: members, source badge (read-only for IdP groups), role
 
 ### 9.7 Sign-in, MFA and passkey screens (mockup e)
 
-The sign-in page follows the layout the operator chose from Kaappu's, in BOSS tokens, fonts and the dark theme (D33). Top to bottom:
+The sign-in page follows the layout the operator chose, in BOSS tokens, fonts and the dark theme (D33). Top to bottom:
 - **The BOSS mark** and a short welcome ("Welcome back" and one line).
 - **A row of social and SSO icon buttons**, one per provider the Owner has configured: the OIDC presets Google, GitHub (OAuth 2.0), Microsoft and Apple, plus any enterprise OIDC or SAML provider (Okta, Entra, Keycloak…) by name. **Hidden entirely when none is configured.** One provider becomes a full-width "Continue with X" button.
 - **A prominent "Sign in with a passkey"** primary button (hidden only when the browser has no WebAuthn).
@@ -1095,7 +1095,7 @@ GET  /.well-known/boss-jwks.json
 - `422` for unknown permission keys and mass assignment
 - `429` with `Retry-After`
 
-Error bodies never contain stack traces or exception text. Kaappu returned `e.getMessage()`.
+Error bodies never contain stack traces or exception text. Returning exception text is a common flaw.
 
 ---
 
@@ -1345,9 +1345,9 @@ Two guarantees hold throughout:
 | **M2 Shadow** | The PDP runs on every route in **shadow mode**. Legacy credentials map to legacy principals: the shared password maps to `usr_legacy_shared` with the **Operator** role (D25); `BOSS_API_KEY` maps to `sys_legacy_console` (Owner-equivalent); `BOSS_API_KEYS` with `BOSS_API_KEY_PRINCIPALS` are hashed into `api_credentials(kind=legacy_env)` bound to the mapped principals. The body `actor` is **ignored for authorization** and logged when it differs from the principal (`legacy.claimed_actor_ignored`). | Identity → Overview lists every legacy path still in use, with counts and last use, and a **shadow-deny report** per router. | `BOSS_AUTHZ_MODE=off`. |
 | **M3 People** | The Owner invites people (or wires SSO/SCIM). The console signs in with **sessions**. Server-side, it stops using `BOSS_API_KEY` and forwards the person's cookie. MCP clients are told to switch to PATs: a banner, plus `legacy.api_key_used` counts per client. | A banner on the legacy shared password: "*N* people still use the shared password: invite them." | Legacy paths still work. |
 | **M4 Enforce** | Routers flip to `enforce` one by one once their shadow denials are zero for 7 days or explained. When all are flipped, the global mode becomes `enforce`. Agents get run tokens. The worker moves to `sys_worker` plus job run tokens, and `BOSS_WORKER_PRINCIPAL` maps to it. | Shadow report → green. | Per-router flip back to shadow. |
-| **M5 Retire legacy** | **The legacy password stops working** 30 days after the claim (D25; an Owner may extend it, step-up, audited). `BOSS_API_KEY` stops being accepted after the same date, unless the operator explicitly keeps `sys_legacy_console`, shown in red. Env API keys keep working as `legacy_env` until each one is rotated in the UI into a real `boss_sak_` key. | A countdown banner from 14 days before. | Extend the date in policy (Owner, step-up). |
+| **M5 Retire legacy** | **The legacy password stops working** 30 days after the claim (D25; an Owner may extend it once, by at most 30 days, step-up, audited). `BOSS_API_KEY` stops being accepted after the same date; nothing keeps it longer. A person's env API keys stop at the same date; the worker's keeps working. Host tools move to the `Host tools` service account's key (`BOSS_HOST_API_KEY`). | A countdown banner on every page for the whole window, and `Deprecation`/`Sunset` headers on legacy responses. | Extend the date once (Owner, step-up). |
 
-**Network-trusted installs (shared-server)** (D27, §4.12)
+**Network-trusted installs** (D27, §4.12)
 - At M0, `usr_network_operator` is created with the Owner-equivalent bridge set, so behaviour is identical to today. It carries the network banner and posture flag, and it can claim.
 - At M1, the operator claims a real account through the network-bridge claim: origin confirmed, passkey registered. No env change and no log access are needed.
 - From the claim, the bridge maps to Operator and **ends 30 days later** (or at **Require sign-in**, whichever is first). There is no permanent network operator and no proxy-header identity.
@@ -1365,7 +1365,7 @@ Two guarantees hold throughout:
 
 ### 13.1 Phase 0: freeze the interfaces (1 week, one owner, reviewed by the operator)
 
-**Done on branch `id/identity`; what was frozen, where, and the amendments it needed are in [IDENTITY_BUILD.md](IDENTITY_BUILD.md). The build runs as the five streams defined there (S1–S5), which supersede the A–J table in §13.2.**
+**Done on branch `id/identity`; what was frozen, where, and the amendments it needed are in [IDENTITY_BUILD.md](../maintainers/IDENTITY_BUILD.md). The build runs as the five streams defined there (S1–S5), which supersede the A–J table in §13.2.**
 
 These are frozen and committed before any stream starts. Once frozen, a change needs a written amendment:
 
@@ -1397,13 +1397,13 @@ These are frozen and committed before any stream starts. Once frozen, a change n
 | **G · SSO and SCIM** | OIDC RP, SAML SP, linking, JIT, group sync, enforce-SSO, SCIM rewire | sign-in core session API | J7, A61–A72 |
 | **H · Audit** | security events, hash chain, verify, export, redaction filter, egress log | events interface | A73–A80 |
 | **I · Console** | Identity area (8 pages), My account, sign-in screens, `<Can>` across all areas, impact preview, lineage view | OpenAPI, console contracts; mock server from OpenAPI | Playwright journeys; independent tester walks every screen |
-| **J · Migration** | M0–M5, legacy principals, posture items, network mode, CLI commands | everything above (integrates last) | migration rehearsal on a shared-server snapshot |
+| **J · Migration** | M0–M5, legacy principals, posture items, network mode, CLI commands | everything above (integrates last) | migration rehearsal on a production-like snapshot |
 
 ### 13.3 Phases (each ends with a release candidate)
 
 | Phase | Ships | Exit criteria |
 |---|---|---|
-| **P1 · Real people** | A, D (PATs), H, J M0–M3, B in **shadow**, I: sign-in, My account, People, Overview | Claim works on a fresh install and on a shared-server-snapshot rehearsal. The shared password still works. Every sign-in is audited. The shadow-deny report renders. |
+| **P1 · Real people** | A, D (PATs), H, J M0–M3, B in **shadow**, I: sign-in, My account, People, Overview | Claim works on a fresh install and on a production-like snapshot rehearsal. The shared password still works. Every sign-in is audited. The shadow-deny report renders. |
 | **P2 · Enforce** | B and C complete, roles, groups, custom roles, impact preview, service accounts, the full console `<Can>` | Route-coverage tests pass with **zero** undeclared routes, tools or areas. The matrix test is green. The cross-project 404 suite is green. Every router in enforce. M4. |
 | **P3 · Delegation** | E, F | An agent run uses no shared key. GitHub writes go only through egress. Revocation cascade ≤5 s. The prompt-injection exfiltration test finds no token. |
 | **P4 · SSO console sign-in** | G | OIDC (Keycloak, Okta, Entra, Google) and SAML (Okta, Entra) sign-in pass. SCIM deprovisioning cascades. |
@@ -1548,10 +1548,10 @@ Per BOSS practice:
 | J11 | **Viewer walk:** as Viewer, visit every area and click every enabled control. No mutating request returns 2xx. Disabled controls show the permission tooltip. |
 | J12 | Role editor: clone Operator → remove `deployment:create` → the impact preview lists the correct people, pages and route counts → save with step-up → an affected user's Deploy button disables live (epoch push). |
 | J13 | Service account: create → key shown once → use it in CI to deploy → rotate with 1 h overlap → the old key fails after grace. |
-| J14 | Network mode (shared-server rehearsal): banner shown, actions attributed to Network operator with IP → claim a real Owner → Require sign-in → the network principal is disabled, its history intact. |
+| J14 | Network mode (rehearsal): banner shown, actions attributed to Network operator with IP → claim a real Owner → Require sign-in → the network principal is disabled, its history intact. |
 | J15 | The audit log: filter by a grant → open an event → the chain drawer → export (step-up) → verify chain ✓. |
 
-### 15.3 Adversarial security tests (each is a named test, drawn from the pitfalls checklist and Kaappu's flaws)
+### 15.3 Adversarial security tests (each is a named test, drawn from the pitfalls checklist and flaws common in identity products)
 
 **Sign-in and sessions**
 - **A1** stuffing: 25 attempts/min from one IP → 429.
@@ -1569,26 +1569,26 @@ Per BOSS practice:
 - **A13** 50 parallel sign-ins do not exceed memory (the semaphore).
 - **A13b** token-exchange flood → 429.
 - **A14** setup claim after an Owner exists → 404.
-- **A15** **no public endpoint returns an OTP, reset token, magic link or session token** in a response body. This is a Kaappu regression test, found by crawling every public route.
+- **A15** **no public endpoint returns an OTP, reset token, magic link or session token** in a response body. A regression test, found by crawling every public route.
 - **A16** a disabled user with the correct password gets the disabled message. With a wrong password they get the generic one.
 - **A17** with SMTP unconfigured, the magic-link and email-code endpoints answer 404 and the tabs do not render. With it configured, see A81–A92.
 - **A18** a password change revokes other sessions.
 - **A19** a login response sets cookies only with the `__Host-`, Secure and HttpOnly attributes.
 - **A20** `secure:false` is impossible: the API refuses to set a session cookie over plain HTTP except on localhost.
 
-**Email sign-in, social sign-in and self sign-up (D26, D30, D31; Kaappu's flaws as regressions)**
+**Email sign-in, social sign-in and self sign-up (D26, D30, D31; common flaws as regressions)**
 - **A81** no response body of `/v1/auth/magic-link`, `/v1/auth/email-code` or `/v1/auth/signup` ever contains the link, its token or the code (crawl every public auth route, as A15).
 - **A82** a magic link or code is single use: the second use fails, and so does any use after 10 minutes.
 - **A83** a magic link opened in a different browser (no matching `__Host-boss_preauth` state cookie) does not sign in; it shows "Open the link in the browser where you asked for it".
 - **A84** at rest only `SHA-256(token)` and `argon2id(code)` exist: a DB dump contains neither (schema scan of `identity_auth_challenges`).
-- **A85** known and unknown addresses get byte-identical responses and median timings within 20% (Kaappu's magic-link 404 was an account oracle).
+- **A85** known and unknown addresses get byte-identical responses and median timings within 20% (a magic-link 404 for an unknown address is an account oracle).
 - **A86** per-email (5/h) and per-IP (20/h) limits on both email methods → 429 with `Retry-After`; email code verification has 5 attempts per code, then the code is burned.
 - **A87** an Owner or Admin who signs in by magic link or email code still needs a second factor or a passkey before the session is issued; no email method satisfies MFA.
 - **A88** the magic-link token never appears in a GET URL that the API logs: the link carries it in the fragment, and the console POSTs it (access-log sweep, A80).
-- **A89** social sign-in links only by `(issuer, subject)`: an IdP or social provider asserting the email of an existing account, with or without `email_verified`, links nothing and signs nothing in (Kaappu linked by email).
+- **A89** social sign-in links only by `(issuer, subject)`: an IdP or social provider asserting the email of an existing account, with or without `email_verified`, links nothing and signs nothing in (linking by email is a common takeover).
 - **A90** a first social sign-in with an unknown subject creates no user and no org unless an open invitation for that verified email, or a JIT domain rule, or enabled self sign-up allows it.
 - **A91** with self sign-up off (the default) `/v1/auth/signup` answers 404 and the console shows "Ask an admin to invite you"; with it on, an address outside the domain allow-list gets the uniform response and nothing is created; a self-signed-up person starts with no access roles.
-- **A92** no session or access token is ever placed in a redirect URL, query string or `localStorage` after any sign-in method (Kaappu put `oauth_token` in the redirect URL and the token in localStorage).
+- **A92** no session or access token is ever placed in a redirect URL, query string or `localStorage` after any sign-in method (a token in a redirect URL or localStorage is a common flaw).
 
 **Credentials**
 - **A21** an expired key → 401.
@@ -1698,10 +1698,10 @@ Per BOSS practice:
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | **The API is the only authority. Next.js is a pass-through.** | Kaappu had two enforcement layers that disagreed, and a fallback to unverified claims. With one authority there is one bug surface. |
+| D1 | **The API is the only authority. Next.js is a pass-through.** | Two enforcement layers that disagree, and a fallback to unverified claims, are a common flaw. With one authority there is one bug surface. |
 | D2 | **Opaque server-side sessions, not JWTs, for people.** | Instant revocation, no claim staleness, no key-confusion surface. The console never needs a self-contained token. |
 | D3 | **JWTs only for run tokens: 5 minutes, EdDSA, DPoP-bound, one audience, separate key families.** | That is where self-contained tokens earn their keep (sandboxes, the proxy). Everything else is opaque. |
-| D4 | **The catalogue is a YAML file in code, generating Python, TS, SQL and docs. No runtime-created permissions, no wildcards.** | It removes Kaappu's three drifting copies, its seeder bug and its typo-creates-permission bug. A permission added later never flows silently into a custom role. |
+| D4 | **The catalogue is a YAML file in code, generating Python, TS, SQL and docs. No runtime-created permissions, no wildcards.** | It removes drifting copies, seeder bugs and typo-creates-permission bugs. A permission added later never flows silently into a custom role. |
 | D5 | **Deny by default at boot.** An undeclared route stops the API from starting. | A CI test can be skipped. A server that won't start cannot be. |
 | D6 | **Page permission = the read permission of the page's primary resource.** No separate `page:*` keys. | A page you can open but whose data you can't read, or the reverse, is a broken state. Role maps for pages are derived and shown in the role editor. |
 | D7 | **Disable with a tooltip, don't hide.** | Discoverability, and the console UX rule. Hiding makes people think features don't exist. |
@@ -1727,19 +1727,19 @@ Per BOSS practice:
 
 | # | Decision | Consequence in this spec |
 |---|---|---|
-| D25 | **After the first Owner is claimed, the old shared console password maps to Operator for 30 days, then stops working.** | §4.11, §12 M2 and M5. `usr_legacy_shared` holds Operator; the countdown banner starts 14 days before. An Owner may extend (step-up, audited). |
+| D25 | **After the first Owner is claimed, the old shared console password maps to Operator for 30 days, then stops working.** | §4.11, §12 M2 and M5. `usr_legacy_shared` holds Operator and signs in with no email; the countdown banner shows on every page for the whole window. An Owner may extend once, by at most 30 days (step-up, audited). |
 | D26 | **Magic link and email code are allowed, only when SMTP is configured, and built safely** (§4.14): emailed only, never in a response; single use; 10-minute TTL; bound to the requesting browser by a state cookie; hashed at rest; per-email and per-IP rate limits; a uniform response whether the address exists or not; never a way around MFA for Owner or Admin. **No phone/SMS.** | §4.7, §4.14, §9.7, A17, A81–A88, A92. Replaces D19's "no email OTP or magic links". |
-| D27 | **shared-server moves to passkeys:** real accounts, no Tailscale-header trust, no permanent network operator. Network-trusted mode is a migration bridge only; shared-server claims its first Owner through the network-bridge claim, with no env change. | §4.12, §12. |
+| D27 | **Network-trusted installs move to passkeys:** real accounts, no Tailscale-header trust, no permanent network operator. Network-trusted mode is a migration bridge only; such an install claims its first Owner through the network-bridge claim, with no env change. | §4.12, §12. |
 | D28 | **The GitHub user-repo-access guard applies only on multi-person installs** (more than one active human). | §7.9. |
 | D29 | **A one-person install keeps the single-operator tier-3 waiver.** | §6.13 unchanged. |
 | D30 | **SMTP is optional.** Without it, password reset is admin-mediated and the email sign-in tabs are hidden. | §4.7, §9.7. |
 | D31 | **Social sign-in links accounts by `(issuer, subject)` only, never by email.** A first social sign-in with an unknown subject creates nothing unless an invitation, a JIT domain rule or enabled self sign-up allows it. | §4.8, §4.15, A89, A90. |
 | D32 | **Self sign-up exists but is off by default**, with an optional domain allow-list; "New here? Create account" appears only when an Owner enables it. Otherwise: "Ask an admin to invite you". | §4.10, §4.15, §9.7, A91. |
-| D33 | **The sign-in page takes Kaappu's layout in BOSS style:** mark and welcome, configured social/SSO icon row (hidden when none), prominent passkey button, "or use email", tabs Password \| Magic link \| Email code. | §9.7; mockup `signin`. |
+| D33 | **The sign-in page layout, in BOSS style:** mark and welcome, configured social/SSO icon row (hidden when none), prominent passkey button, "or use email", tabs Password \| Magic link \| Email code. | §9.7; mockup `signin`. |
 | D34 | **Operator includes `workflow:publish` and `deployment:create`.** Production keeps `deployment:production` and its approval gate. | Catalogue unchanged from the draft (it already did); pinned by `test_operator_includes_publish_and_non_production_deploys`. |
 
 ---
 
 ## 17. Open questions for the operator
 
-All six were answered on 2026-10-06; see D25 (legacy password), D27 (shared-server and network mode), D29 (tier-3 waiver), D34 (Operator's reach), D30 (SMTP) and D28 (GitHub guard). New questions go to IDENTITY_BUILD.md §7 as amendments.
+All six were answered on 2026-10-06; see D25 (legacy password), D27 (network mode), D29 (tier-3 waiver), D34 (Operator's reach), D30 (SMTP) and D28 (GitHub guard). New questions go to IDENTITY_BUILD.md §7 as amendments.

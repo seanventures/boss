@@ -33,15 +33,15 @@ ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 
 Leave the tunnel open, then open [http://127.0.0.1:3000](http://127.0.0.1:3000) on the computer that started it. The ports on the VM stay bound to loopback.
 
-Your first sign-in uses the owner password created on the install machine, which is separate from the API key. From the install directory, show it in a terminal (so it is not piped into a log):
+The first time, the console asks you to **claim** BOSS: you become its first Owner. The console password created on the install machine proves it is you. From the install directory, show it in a terminal (so it is not piped into a log):
 
 ```sh
 python3 scripts/install/console_password.py show
 ```
 
-The [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md) documents this command and its `reset` counterpart. Never paste the password or the API key into a ticket.
+Then enter it on the claim screen with your name and email, and add a passkey. From then on you sign in as yourself, and invite your team in **Identity › People**. Never paste the password or a key into a ticket.
 
-Self-hosted SSO against an identity provider you run can be set up later.
+Single sign-on against an identity provider you run can be set up later: see [Sign-in setup](SIGN_IN_SETUP.md).
 
 ## Submit a first goal in Command Center
 
@@ -83,9 +83,9 @@ From the install directory:
 make metatron
 ```
 
-This opens the terminal inside the API container using the install's configured key and project.
+This opens the terminal inside the API container using the host tools' key and the install's project.
 
-From a checkout where `BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID` are already set in the environment:
+From a checkout where `BOSS_API_URL`, `BOSS_PROJECT_ID` and your own key in `BOSS_API_KEY` are set in the environment:
 
 ```sh
 python3 scripts/metatron_tui.py

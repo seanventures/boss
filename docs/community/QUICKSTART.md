@@ -34,24 +34,25 @@ cd boss
 
 Either way, the installer records the release in `.boss-release`, and reruns and upgrades stay on it instead of moving to `main`. Run the rest of this guide from the install directory.
 
-When the installer finishes, you see a summary card confirming that BOSS Community is running. It lists Mission Control at `http://127.0.0.1:3000`, how to get the console password, the release, the models it connected, the seeded local project `boss-dogfood`, and the install directory. The API key line tells you the key is stored in `.env` rather than printed.
+When the installer finishes, you see a summary card confirming that BOSS Community is running. It lists Mission Control at `http://127.0.0.1:3000`, how to get the console password (you use it once, to claim the install), the release, the models it connected, the seeded local project `boss-dogfood`, and the install directory. The API key line tells you the key is stored in `.env` rather than printed.
 
 The installer also puts a `boss` command on your `PATH` that works from any directory:
 
 ```bash
 boss open        # console address
-boss password    # console password, in a terminal only
+boss password    # console password (proves it is you when you claim), terminal only
 boss doctor      # check the install can do its job
 boss status      # release, services, and health
 boss connect     # the Models step again: keys, logins, Ollama, a local model
 boss upgrade     # back up, then move to the newest release
 boss uninstall   # stop BOSS and keep data
+boss identity setup-link   # a one-hour link to claim BOSS, instead of the password
 ```
 
 What the installer sets up:
 
 - The API, console, and database listen on `127.0.0.1` only.
-- Credentials go into `.env` in the install directory with mode `0600`. The file never leaves the machine, and neither the API key nor the console password is printed.
+- Credentials go into `.env` in the install directory with mode `0600`. The file never leaves the machine, and no key or password is printed.
 - Your checkout is installed as-is. If it is ahead of the default branch or has diverged from it, the installer keeps your source rather than rewinding the tree. Pass `--ref` only when you want a different commit; a ref that has diverged stops the install instead of installing the wrong source.
 
 !!! note "Docker permissions"
@@ -72,13 +73,20 @@ ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
 
 Then open `http://127.0.0.1:3000` on the computer that opened the tunnel.
 
-To sign in, display the console password in a terminal on the install machine. The password is separate from the API key and is never written to logs:
+The first time, the console says **This BOSS has no Owner yet. Claim it.** Claiming makes you the first Owner:
 
-```bash
-boss password
-```
+1. Show the console password in a terminal on the install machine. It is never written to logs:
 
-Without the `boss` command, run `python3 scripts/install/console_password.py show` from the install directory.
+    ```bash
+    boss password
+    ```
+
+    Without the `boss` command, run `python3 scripts/install/console_password.py show` from the install directory. Or run `boss identity setup-link` for a link that works once, for one hour.
+
+2. On the claim screen, enter the password (or open the link), your name and email.
+3. Add a passkey, or a password and an authenticator app.
+
+From then on you sign in as yourself. Invite your team in **Identity › People** (see [People and access](PEOPLE_AND_ACCESS.md)).
 
 After you sign in, BOSS opens on **Repo and models** until a repository and a model are connected: paste a GitHub token, connect a model, and open your first PR from **Try it**. Then open **Command Center**. On a new install, the planned layout in **Agent Studio → Team** is empty, and **Agent Studio → + New agent → From template** offers the starter definitions. Installing a definition does not start any work. For session details and remote access, see [Sign in to Mission Control](CONSOLE_AUTH.md).
 
@@ -86,10 +94,12 @@ After you sign in, BOSS opens on **Repo and models** until a repository and a mo
 
 This step confirms that the control plane can store work. It does not call a model, send email, or deploy anything.
 
-From the directory you passed to `--dir`:
+From the directory you passed to `--dir`, load the API address and the host tools' key into your shell (the key is never printed):
 
 ```bash
+grep -q '^BOSS_HOST_API_KEY=' .env || boss identity host-key
 source ./boss-community.env.sh
+export BOSS_API_KEY="$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env)"
 curl -fsS "$BOSS_API_URL/health"
 curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" \
   "$BOSS_API_URL/v1/edition?project_id=$BOSS_PROJECT_ID"
@@ -105,7 +115,7 @@ Each command should complete without an error:
 | --- | --- |
 | `/health` | A health response with no secrets in it. |
 | `/v1/edition` | The edition for the local project in `BOSS_PROJECT_ID`. |
-| `/v1/tasks` | The new task, titled `Local note`, created by the `ceo` actor (the owner key). |
+| `/v1/tasks` | The new task, titled `Local note`, created by the **Host tools** service account. |
 
 Now run the task command a second time. The API rejects the repeated `dedupe_key` instead of creating a duplicate task. Every effect in BOSS carries a dedupe key for exactly this reason.
 
