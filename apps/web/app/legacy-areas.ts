@@ -10,7 +10,7 @@
  * table somewhere else is how a door ends up on a blank area.
  */
 
-import { AREA_IDS } from "../lib/area-ids";
+import { AREA_IDS, isAreaId, type AreaId } from "../lib/area-ids";
 
 /** Parameters only the retired surfaces read. Dropped when the link is rewritten. */
 const STUDIO_ONLY = ["studio_mode", "mode", "studio_workflow", "workflow", "studio_role"];
@@ -34,6 +34,39 @@ const INFRA_ONLY = ["infra_view", "provider_account_id"];
 
 /** Setup's old `step=` names, and the board row each one is. */
 const SETUP_STEPS: Record<string, string> = { github: "repository", model: "models" };
+
+/** A rail label as typed: case, spaces, hyphens, underscores and `&` do not matter. */
+export function railLabelKey(value: string): string {
+  return value.trim().toLowerCase().replace(/&/g, " ").replace(/[\s_-]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+/** Rail labels (railLabelKey form) whose key is not already the area id. */
+export const RAIL_LABEL_AREAS: Readonly<Record<string, AreaId>> = {
+  command_center: "overview",
+  factory: "code_tasks",
+  agent_studio: "workforce",
+  approvals: "decisions",
+  activity_log: "activity",
+  research: "discovery",
+  panels: "meetings",
+  boss_agent: "agent",
+  mission_dashboard: "dashboard",
+  task_board: "work",
+  jobs: "work",
+  work_allocation: "portfolio",
+  agent_processes: "processes",
+  task_shepherd: "shepherd",
+  ai_sre: "ai-sre",
+  evidence: "reports",
+  qa: "reports",
+  repo_and_models: "setup",
+  skills_mcp: "skills",
+  skills_and_mcp: "skills",
+  communications: "comms",
+  operations: "ops",
+  access_and_packs: "org",
+  identity: "enterprise",
+};
 
 function copyWithout(params: URLSearchParams, drop: string[]): URLSearchParams {
   const next = new URLSearchParams();
@@ -170,6 +203,23 @@ export function resolveLegacyArea(params: URLSearchParams): URLSearchParams | nu
     const next = copyWithout(params, []);
     next.set("area", "delivery_workflows");
     return next;
+  }
+
+  // AN AREA NAMED BY ITS RAIL LABEL (round 3, W3). `?area=factory` is what a person, an agent or
+  // a walk types for the rail's "Factory", whose id is `code_tasks`; it fell back to the Command
+  // Center, which has no PR column, so "the Factory shows the PR" could never be seen. Every rail
+  // label (ConsoleShell AREAS, the Community copy in lib/edition.ts) lands on its area —
+  // tests/an-area-opens-by-its-rail-label.test.ts keeps this table whole. An id is never re-read.
+  if (area !== null && !isAreaId(area)) {
+    // The table for labels that are not their id; otherwise the label's own key ("Infra" → infra,
+    // "Govern" → govern, which the next pass resolves like any alias).
+    const key = railLabelKey(area);
+    const id = RAIL_LABEL_AREAS[key] ?? (key && key !== area ? key : undefined);
+    if (id) {
+      const next = copyWithout(params, []);
+      next.set("area", id);
+      return next;
+    }
   }
 
   if (area === "delivery_workflows") {
