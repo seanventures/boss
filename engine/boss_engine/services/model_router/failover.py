@@ -68,6 +68,57 @@ def note_failure(engine: str, error: BaseException | str) -> Optional[str]:
     return kind
 
 
+#: How long a stage waits for a temporarily failing source before it fails (Decision 21), and
+#: the backoff between asks — each ask is a half-open trial of the source (breaker.claim_trial).
+WAIT_BOUND_S = 600.0
+BACKOFF_S = (5.0, 10.0, 20.0, 30.0, 60.0)
+
+
+def wait_for_route(route: Callable[[], Any], *,
+                   on_wait: Optional[Callable[[Any, float, float], None]] = None,
+                   bound_s: Optional[float] = None,
+                   sleep: Callable[[float], None] = time.sleep) -> Any:
+    """NEVER STRANDED BY A TEMPORARY OUTAGE: a route refused only because its sources are out
+    for now (`retry_after_s`) is asked again after a bounded backoff, with the reason in words
+    (`on_wait(decision, pause_s, waited_s)`), until it routes or the bound passes. A refusal
+    that is not temporary (Local means local, the budget is spent) returns at once."""
+    from dataclasses import is_dataclass, replace
+
+    bound = WAIT_BOUND_S if bound_s is None else float(bound_s)
+    decision = route()
+    waited, n = 0.0, 0
+    while getattr(decision, "refused", False) \
+            and getattr(decision, "retry_after_s", None) is not None and waited < bound:
+        pause = min(max(float(decision.retry_after_s), BACKOFF_S[min(n, len(BACKOFF_S) - 1)]),
+                    bound - waited)
+        if on_wait is not None:
+            try:
+                on_wait(decision, pause, waited)
+            except Exception:  # noqa: BLE001 — the record of a wait is not the wait
+                log.warning("could not record a wait", exc_info=True)
+        sleep(pause)
+        waited += pause
+        n += 1
+        decision = route()
+    if getattr(decision, "refused", False) and waited and is_dataclass(decision):
+        decision = replace(decision, refusal=f"{decision.refusal} Waited {_minutes(waited)} "
+                                             "for it to recover.", retry_after_s=None)
+    return decision
+
+
+def waiting_words(decision: Any, pause: float, step: str = "") -> str:
+    """'Write tests is waiting for a model: … Asking again in 20 s.'"""
+    from .tiers import step_label
+
+    what = step_label(step) if step else "This work"
+    return (f"{what} is waiting for a model: {decision.refusal.rstrip('.')}. Asking again in "
+            f"{int(round(pause))} s (gives up after {_minutes(WAIT_BOUND_S)}).")
+
+
+def _minutes(seconds: float) -> str:
+    return f"{int(round(seconds))} s" if seconds < 90 else f"{round(seconds / 60)} min"
+
+
 class FailoverAgent:
     """A build stage's agent that, on a limit or transient failure, retries the same call on
     the next source the router picks. `reroute()` → (agent, model, decision)."""
@@ -83,21 +134,33 @@ class FailoverAgent:
 
     def _call(self, method: str, *args: Any, **kwargs: Any) -> Any:
         hops = 0
+        trials_since: Optional[float] = None
         while True:
             try:
                 if "model" in kwargs:
                     kwargs["model"] = self._model
-                return getattr(self._agent, method)(*args, **kwargs)
+                out = getattr(self._agent, method)(*args, **kwargs)
+                breaker.close(self._engine)          # it ran: not failing (a half-open trial)
+                return out
             except Exception as error:  # noqa: BLE001 — classified below, re-raised if not ours
                 kind = note_failure(self._engine, error)
                 if kind is None or hops >= MAX_HOPS:
                     raise
-                hops += 1
                 failed = self._engine
                 agent, model, decision = self._reroute()
+                trial = "half_open" in tuple(getattr(decision, "rules", ()) or ())
                 if decision is None or getattr(decision, "refused", False) or \
-                        getattr(decision, "engine", "") in ("", failed):
+                        getattr(decision, "engine", "") == "" or (
+                        decision.engine == failed and not trial):
                     raise
+                # A half-open trial (after a bounded wait) does not spend a hop: the wait's
+                # bound is what ends it — WAIT_BOUND_S from the first trial, then the error.
+                if trial:
+                    trials_since = trials_since or time.monotonic()
+                    if time.monotonic() - trials_since > WAIT_BOUND_S:
+                        raise
+                else:
+                    hops += 1
                 log.info("stage call failed on %s (%s); retrying on %s", failed, kind,
                          decision.engine)
                 if self._on_hop is not None:
@@ -150,6 +213,7 @@ class FailoverChatAdapter:
             started = time.monotonic()
             try:
                 result = getattr(self._inner, method)(*args, **kwargs)
+                breaker.close(self._decision.engine)
             except Exception as error:  # noqa: BLE001
                 self._record_call({"model": self._decision.model or ""}, started, False,
                                   str(error))

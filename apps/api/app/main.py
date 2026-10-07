@@ -1192,6 +1192,10 @@ def _warm_read_paths() -> None:
     optimisation must never be able to fail a boot or delay readiness.
     """
     def _warm() -> None:
+        # The model router's OpenRouter catalogue (prices, tier suggestions), Fixed mode too.
+        from boss_engine.services.model_router.store import load_catalogue_at_boot
+
+        load_catalogue_at_boot(engine)
         try:
             project_id = resolve_list_project_id(None)
         except Exception:  # noqa: BLE001

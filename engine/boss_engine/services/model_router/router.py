@@ -20,7 +20,7 @@ from .classifier import CLASSIFIER, Classification, Classifier, TaskSignal
 from .escalation import EscalationLedger
 from .headroom import Headroom
 from .policy import LOCAL_ENGINES, RoutingPolicy, Target, model_tier, tier_model
-from .selection import SourceState, engine_label, select
+from .selection import METERED_KINDS, SourceState, engine_label, select, tier_of
 from .tiers import (
     BALANCED, CODING_STEPS, FRONTIER, LEGACY_CLASS, MECHANICAL_STEPS, TIER_LABELS, TIERS,
     at_least, down, job_for, rank, step_label,
@@ -113,6 +113,9 @@ class RouteDecision:
     refusal: str = ""
     #: Obeyed even in Fixed mode (an Agent Studio Local/Pinned policy).
     binding: bool = False
+    #: A refusal that is only temporary (a source's breaker is open): ask again in this long.
+    #: A build stage waits and asks again (failover.wait_for_route) instead of failing.
+    retry_after_s: Optional[float] = None
 
     @property
     def label(self) -> str:
@@ -142,6 +145,7 @@ class RouteDecision:
             "moved_by_headroom": self.moved_by_headroom, "budget_lite": self.budget_lite,
             "latency_ms": round(self.latency_ms, 3), "headroom": dict(self.headroom or {}),
             "refused": self.refused, "refusal": self.refusal, "binding": self.binding,
+            "retry_after_s": self.retry_after_s,
         }
 
 
@@ -305,9 +309,12 @@ class Router:
         allowed: Optional[set[str]] = None
         strict = False
         hard_is_job = False
+        # BUDGET RED: no new metered spend — a session, an agent pin and an "Always" job pin
+        # included (Decision 16). A task pin is exempt: spend-cap failover writes it.
+        no_metered = snapshot.budget_state == "red" and not request.task_pin
         session = request.session_pin
         if session and session.engine:
-            problem = _blocked(session, snapshot)
+            problem = _blocked(session, snapshot, no_metered=no_metered)
             if problem is None:
                 hard = session
                 why.append("Same model for the whole session (prompt cache)")
@@ -339,6 +346,12 @@ class Router:
                 engine_pin = None if hard else pinned.engine
             why.append("The agent runs on local models only")
             rules.append("pin:agent_local")
+            if c.sensitive or (floor and rank(floor) > rank(c.tier)):
+                # LOCAL IS THE OPERATOR'S EXPLICIT CHOICE: the minimum (sensitive work ≥
+                # Frontier, a floor) applies WITHIN the allowed sources — local runs it.
+                why.append("Sensitive work stays local by this agent's policy" if c.sensitive
+                           else f"{TIER_LABELS[floor]} work stays local by this agent's policy")
+                rules.append("local_by_policy")
         if hard is None and engine_pin is None and allowed is None and agent_mode != "pinned":
             pin = snapshot.job_pins.get(job)
             if pin and pin[0]:
@@ -372,21 +385,27 @@ class Router:
         # (c) a source for the tier
         fallback = moved = False
         refusal = ""
-        no_metered = snapshot.budget_state == "red" and not request.task_pin
+        retry_after: Optional[float] = None
+        local_ok = agent_mode == "local"
         if hard is not None:
             state = snapshot.sources.get(hard.engine)
             target = hard
+            if no_metered and state is not None and state.kind in METERED_KINDS:
+                target = None
+                refusal = (f"Budget spent: this work is pinned to {engine_label(hard.engine)}"
+                           f" · {hard.model}, which is metered, and there is no new metered "
+                           "spend while the budget is red. Raise the budget or unpin it.")
         else:
             chosen = select(tier, policy, snapshot.sources, allowed=allowed,
                             engine_pin=engine_pin, preferred=preferred,
-                            no_metered=no_metered, strict=strict)
+                            no_metered=no_metered, strict=strict, local_ok=local_ok)
             if chosen.target is None and no_metered:
                 # BUDGET RED: no new metered spend. An included source's lower tier, down to
                 # the floor, before a refusal (Decision 16).
                 for lower in (t for t in reversed(TIERS[:rank(tier)])
                               if rank(t) >= rank(floor or "fast")):
                     retry = select(lower, policy, snapshot.sources, allowed=allowed,
-                                   no_metered=True, strict=strict)
+                                   no_metered=True, strict=strict, local_ok=local_ok)
                     if retry.target is not None:
                         chosen.notes.append(f"Budget spent: {TIER_LABELS[lower]} on an "
                                             "included source instead")
@@ -398,9 +417,12 @@ class Router:
                 rules.append("headroom")
             if chosen.fallback:
                 rules.append("fallback")
+            if chosen.trial:
+                rules.append("half_open")
             fallback, moved = chosen.fallback, chosen.moved_by_headroom
             target, state = chosen.target, chosen.source
             refusal = chosen.refusal
+            retry_after = chosen.retry_after_s
         if target is None:
             refusal = refusal or "Nothing connected can take this work."
             why.append(refusal)
@@ -410,11 +432,10 @@ class Router:
                 classification=c, rules=tuple(rules) + ("refused",), role=request.role,
                 unit_id=request.unit_id,
                 project_id=request.project_id or snapshot.project_id, fallback=True,
-                refused=True, refusal=refusal)
-        # THE RECORD NEVER DISAGREES WITH THE MODEL: a pinned or session model is recorded at
-        # its own tier, whatever tier the task asked for.
-        if hard is not None:
-            tier = model_tier(target.engine, target.model) or tier
+                refused=True, refusal=refusal, retry_after_s=retry_after)
+        # THE RECORD NEVER DISAGREES WITH THE MODEL: whatever chose it (a pin, a session, a
+        # preference, a stand-in), the route is recorded at the model's own tier when known.
+        tier = tier_of(policy, target.engine, target.model, tier) or tier
         picked = f"{TIER_LABELS[tier]} · {engine_label(target.engine)}" + (
             f" · {target.model}" if target.model else "")
         reason = picked + " — " + _headline(why, c)
@@ -452,11 +473,12 @@ def _agent_mode(request: RouteRequest) -> str:
     return str((request.agent_policy or {}).get("selection_mode") or "router").lower()
 
 
-def _blocked(target: Target, snapshot: Snapshot) -> Optional[str]:
-    """Why a pinned session's source can't run now (exhausted, limited, failing), or None."""
+def _blocked(target: Target, snapshot: Snapshot, *, no_metered: bool = False) -> Optional[str]:
+    """Why a pinned session's source can't run now (exhausted, limited, failing, metered while
+    the budget is red), or None."""
     from .selection import _why_not
 
-    return _why_not(target, snapshot.sources.get(target.engine), None)
+    return _why_not(target, snapshot.sources.get(target.engine), None, no_metered=no_metered)
 
 
 def _headline(why: list[str], c: Classification) -> str:

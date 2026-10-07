@@ -56,7 +56,10 @@ class Window:
 
     @property
     def spent(self) -> bool:
-        return self.used >= 0.999 or self.status == "rejected"
+        # The CLI's own status wins over the number: `utilization: 1` with status `allowed` is a
+        # call that went through at the edge — near the limit, not past it.
+        return self.status == "rejected" or (
+            self.used >= 0.999 and self.status not in ("allowed", "allowed_warning"))
 
     def to_dict(self) -> dict[str, Any]:
         return {"used": round(self.used, 4),
@@ -272,6 +275,11 @@ def retry_after_seconds(text: Optional[str]) -> Optional[float]:
     return n / 1000.0 if unit == "ms" else n * 60 if unit.startswith("m") and unit != "ms" else n
 
 
+#: A reset given as a time of day alone ("12:30am", "3pm"): within a day — never read as the
+#: week, however far away that time falls (a Sydney reset seen from UTC is ~22 h away).
+_TIME_ONLY = re.compile(r"^\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*$", re.IGNORECASE)
+
+
 def windows_from_limit_message(text: Optional[str], now: Optional[datetime] = None
                                ) -> dict[str, dict[str, Any]]:
     """The provider's own limit sentence → the window it closed, with its reset when it said
@@ -294,8 +302,9 @@ def windows_from_limit_message(text: Optional[str], now: Optional[datetime] = No
                 if groups.get("when") else None
             if what:
                 kind = _WINDOW_WORDS.get(what, WEEKLY)
-            elif resets is not None and resets - now > timedelta(hours=5, minutes=5):
-                kind = WEEKLY            # "your limit" that resets days away is the week
+            elif resets is not None and resets - now > timedelta(hours=5, minutes=5) \
+                    and not _TIME_ONLY.match(groups.get("when") or ""):
+                kind = WEEKLY            # "your limit" that resets on a later DAY is the week
             else:
                 kind = SESSION           # "your limit" / "usage limit reached": the 5-hour one
             close(kind, resets)
@@ -396,6 +405,8 @@ def assess(engine: str, capacity: Optional[Mapping[str, Any]], *,
     weekly = windows.get(WEEKLY)
     if weekly is not None:
         left = 1.0 - weekly.used
+        if left <= 0.0 and not weekly.spent:
+            left = 0.01                  # allowed at 100%: near the limit, still running
         state = state_for(left, thresholds, previous)
         if weekly.status == "allowed_warning" and state == PLENTY:
             state = TIGHT

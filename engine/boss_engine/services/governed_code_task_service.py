@@ -2074,6 +2074,22 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     def _route_ids() -> dict:
         return {s: r["route_id"] for s, r in stage_routes.items() if r.get("route_id")}
 
+    def _await_route(step: str, **kw):
+        """The stage's route — and NEVER STRANDED BY A TEMPORARY OUTAGE: a refusal only because
+        its sources are out for now waits (bounded backoff, a half-open trial each time) and
+        asks again, saying so in words, instead of failing the stage (Decision 21)."""
+        from .model_router.failover import wait_for_route, waiting_words
+
+        def on_wait(decision, pause: float, waited: float) -> None:
+            words = waiting_words(decision, pause, step)
+            logger.info("run %s: %s", run_id, words)
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.stage_waiting", "boss", "code_task_run",
+                           run_id, {"step": step, "why": words, "retry_in_s": round(pause),
+                                    "waited_s": round(waited)})
+
+        return wait_for_route(lambda: stage_router.route(step, **kw), on_wait=on_wait)
+
     def _routed_agent(step: str, decision):
         """(agent, model) for a decision. Smart mode wraps the agent so a limit or a
         transient failure at call time retries the SAME stage on the next source at once
@@ -2087,7 +2103,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         def reroute():
             _route_store.invalidate(project_id)
-            nxt = stage_router.route(step)
+            nxt = _await_route(step)
             if nxt.refused:
                 return None, None, nxt
             e2, m2 = _take(step, nxt)
@@ -2107,15 +2123,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
     def _route(step: str):
         """Resolve a step to (agent, model) through the router."""
-        return _routed_agent(step, stage_router.route(step))
+        return _routed_agent(step, _await_route(step))
 
     def _route_escalated(step: str):
         """The step again, one boundary later, on the evidence that its route produced no
         usable output (write_tests) or that this is the final attempt (implement). Fixed mode:
         the hard-problems lane, as before; Smart mode: the escalation rules."""
         signal = "no_output" if step == "write_tests" else "final_attempt"
-        return _routed_agent(step, stage_router.route(step, signal=signal,
-                                                      previous=stage_routes.get(step)))
+        return _routed_agent(step, _await_route(step, signal=signal,
+                                                previous=stage_routes.get(step)))
 
     def _vm_escalation(step: str, escalate: bool, signal: str) -> str:
         """A micro-VM stage's escalation. Fixed: the hard-problems engine override, as before.
@@ -2132,7 +2148,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         """Like _route but returns (engine_name, model) without building a host agent —
         the micro-VM substrate maps the route onto guest engine env instead. (No budget
         pressure here, as before.)"""
-        return _take(step, stage_router.route(step, budget=False))
+        return _take(step, _await_route(step, budget=False))
 
     # ---- Hybrid substrate (VAG / sandbox spec §2): the governed pipeline's WORKING
     # stages (write tests / implement / regression / mutation — the ones that EXECUTE

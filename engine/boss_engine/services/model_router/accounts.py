@@ -216,20 +216,46 @@ def observe(connection: Any, settings: Any, project_id: Optional[str], engine: s
 
             used = _used_usd(connection, project_id).get(engine)
             learned = round(used, 2) if used else learned
+        # NO LOST UPDATE ACROSS PROCESSES (re-check M6): `windows` above was built from a
+        # cache up to CACHE_TTL_S old, so writing it whole would erase a window another worker
+        # wrote meanwhile. Only THIS call's windows are written — merged per window into the
+        # stored row (JSONB `-` / `||` on Postgres; a fresh read in the write's transaction on
+        # SQLite, whose writers are serialised) — and the merged row is what is cached.
+        mine = {kind: windows[kind] for kind in patch}
         with connection.begin_nested():
-            connection.execute(text(
-                "INSERT INTO subscription_accounts (account_key, engine, windows, "
-                "learned_weekly_allowance_usd, updated_at) VALUES (:k, :e, :w, :l, :t) "
-                "ON CONFLICT (account_key) DO UPDATE SET windows = EXCLUDED.windows, "
-                "learned_weekly_allowance_usd = EXCLUDED.learned_weekly_allowance_usd, "
-                "updated_at = EXCLUDED.updated_at")
-                if connection.dialect.name == "sqlite" else text(
-                "INSERT INTO subscription_accounts (account_key, engine, windows, "
-                "learned_weekly_allowance_usd, updated_at) VALUES (:k, :e, CAST(:w AS JSONB), "
-                ":l, :t) ON CONFLICT (account_key) DO UPDATE SET windows = EXCLUDED.windows, "
-                "learned_weekly_allowance_usd = EXCLUDED.learned_weekly_allowance_usd, "
-                "updated_at = EXCLUDED.updated_at"),
-                {"k": key, "e": engine, "w": json.dumps(windows), "l": learned, "t": now})
+            if connection.dialect.name == "sqlite":
+                row = connection.execute(text(
+                    "SELECT windows FROM subscription_accounts WHERE account_key = :k"),
+                    {"k": key}).first()
+                fresh = _json(row[0]) if row else {}
+                for kind in cleared:
+                    fresh.pop(kind, None)
+                fresh.update(mine)
+                connection.execute(text(
+                    "INSERT INTO subscription_accounts (account_key, engine, windows, "
+                    "learned_weekly_allowance_usd, updated_at) VALUES (:k, :e, :w, :l, :t) "
+                    "ON CONFLICT (account_key) DO UPDATE SET windows = EXCLUDED.windows, "
+                    "learned_weekly_allowance_usd = COALESCE(EXCLUDED."
+                    "learned_weekly_allowance_usd, subscription_accounts."
+                    "learned_weekly_allowance_usd), updated_at = EXCLUDED.updated_at"),
+                    {"k": key, "e": engine, "w": json.dumps(fresh), "l": learned, "t": now})
+                windows = fresh
+            else:
+                row = connection.execute(text(
+                    "INSERT INTO subscription_accounts (account_key, engine, windows, "
+                    "learned_weekly_allowance_usd, updated_at) VALUES (:k, :e, "
+                    "CAST(:w AS JSONB), :l, :t) ON CONFLICT (account_key) DO UPDATE SET "
+                    "windows = (COALESCE(subscription_accounts.windows, '{}'::jsonb) "
+                    "- CAST(:cleared AS text[])) || CAST(:w AS JSONB), "
+                    "learned_weekly_allowance_usd = COALESCE(EXCLUDED."
+                    "learned_weekly_allowance_usd, subscription_accounts."
+                    "learned_weekly_allowance_usd), updated_at = EXCLUDED.updated_at "
+                    "RETURNING windows, learned_weekly_allowance_usd"),
+                    {"k": key, "e": engine, "w": json.dumps(mine), "cleared": cleared,
+                     "l": learned, "t": now}).first()
+                if row is not None:
+                    windows = _json(row[0])
+                    learned = float(row[1]) if row[1] is not None else learned
         with _LOCK:
             _ROWS[key] = (time.monotonic() + CACHE_TTL_S,
                           {"windows": windows, "learned_weekly_allowance_usd": learned})

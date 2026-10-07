@@ -11,6 +11,8 @@ and nothing goes stale.
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
@@ -57,12 +59,17 @@ DEFAULT_CRITERIA = {
 #: really running, and for refusing a non-frontier model as the Frontier tier. Frontier is
 #: checked first (gpt-5 before "mini"), so "gpt-5-mini" is not Frontier because of the order
 #: below: the fast markers are checked against the name before the frontier ones.
-_FAST_MARKERS = ("haiku", "-mini", "mini-", "nano", "flash", "-small", "ministral", "3b", "1b",
-                 "7b", "8b", "lite")
+_FAST_MARKERS = ("haiku", "-mini", "mini-", "nano", "flash", "-small", "ministral", "lite",
+                 "-fast")
+#: A parameter count in the name ("llama-3.1-8b", "qwen2.5-7b-instruct"): small (< 10B) is
+#: Fast. Matched as a whole size token, so "gemma-3-27b" is not "7b" and "mixtral-8x7b" (a
+#: mixture of experts) is not "7b" either.
+_SIZE = re.compile(r"(?:^|[-_/:])(\d+(?:\.\d+)?)b(?=$|[-_:.])")
 _FRONTIER_MARKERS = ("opus", "gpt-5", "gemini-2.5-pro", "gemini-3-pro", "grok-4",
                      "claude-sonnet-4.5-thinking")
 _BALANCED_MARKERS = ("sonnet", "deepseek", "qwen", "coder", "kimi", "glm", "llama", "mistral",
-                     "gpt-4", "gemini", "codestral", "devstral")
+                     "mixtral", "gemma", "gpt-oss", "gpt-4", "gemini", "codestral", "devstral",
+                     "grok-3", "grok-code")
 
 
 def model_tier(engine: str, model: Optional[str]) -> Optional[str]:
@@ -75,7 +82,8 @@ def model_tier(engine: str, model: Optional[str]) -> Optional[str]:
         if alias and name == alias:
             return tier
     base = name.rsplit("/", 1)[-1]
-    if any(m in base for m in _FAST_MARKERS):
+    size = _SIZE.search(base)
+    if any(m in base for m in _FAST_MARKERS) or (size and float(size.group(1)) < 10):
         return FAST
     if any(m in base for m in _FRONTIER_MARKERS) or base.startswith(("o3", "o4")):
         return FRONTIER

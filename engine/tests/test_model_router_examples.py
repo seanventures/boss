@@ -245,9 +245,35 @@ def test_13_a_build_pinned_to_codex_runs_on_codex():
     assert d.engine == "codex" and d.tier == "balanced" and "prefer:job" in d.rules
 
 
-def test_13b_a_job_pinned_to_a_model_is_a_hard_pin():
+def test_13b_a_soft_model_preference_stays_within_the_steps_tier():
+    """Re-check M4: "Fast · Claude Code · sonnet" — a soft preference ran its own model at the
+    step's tier, and a soft Opus preference ran trivial work on Opus. A preference picks the
+    source within the tier; only an "Always" (hard) pin runs its own model, at its own tier."""
     d = route(build("implement", COPY_FIX), snap(job_pins={"build": ("claude_code", "opus")}))
-    assert (d.engine, d.model) == ("claude_code", "opus") and d.tier == "fast"
+    assert (d.tier, d.engine, d.model) == ("fast", "claude_code", "haiku"), d.why
+    assert any("this Fast work uses haiku" in w for w in d.why)
+    sonnet = route(build("implement", COPY_FIX),
+                   snap(job_pins={"build": ("claude_code", "sonnet")}))
+    assert (sonnet.tier, sonnet.model) == ("fast", "haiku")
+    hard = route(build("implement", COPY_FIX),
+                 snap(job_pins={"build": ("claude_code", "opus")},
+                      pol=policy(hard_pins=("build",))))
+    # Hard: its own model — recorded at the MODEL's tier, never the step's.
+    assert (hard.tier, hard.engine, hard.model) == ("frontier", "claude_code", "opus")
+
+
+@pytest.mark.parametrize("pins", [{}, {"build": ("claude_code", "opus")},
+                                  {"build": ("claude_code", "sonnet")},
+                                  {"build": ("openrouter", "anthropic/claude-opus-4.1")}])
+@pytest.mark.parametrize("spec", ["COPY_FIX", "FULL_STACK"])
+def test_the_recorded_tier_always_equals_the_models_tier(pins, spec):
+    from boss_engine.services.model_router.selection import tier_of
+
+    s = snap(job_pins=pins)
+    for step in ("implement", "plan", "review_code", "standards"):
+        d = route(build(step, globals()[spec]), s)
+        assert d.tier == tier_of(s.policy, d.engine, d.model, d.tier), (step, d.why)
+        assert d.tier == (tier_of(s.policy, d.engine, d.model) or d.tier)
 
 
 # 14 ─ the weekly limit is hit: frontier leaves for the next frontier target

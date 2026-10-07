@@ -167,6 +167,18 @@ def test_a_failing_cheap_model_keeps_the_rules_answer():
     assert c.classifier == "rules" and "cheap model failed" in c.fallback_note
 
 
+def test_low_a_failing_cheap_model_is_not_asked_again_for_a_minute():
+    """No negative cooldown: a down Fast source cost every route its full timeout."""
+    on = replace(policy().classifier, model_fallback=True)
+    bad = _Decider(fail=True)
+    clf = Classifier()
+    for i in range(3):
+        c = clf.classify(TaskSignal(kind="workflow_step", step="model_call", text=f"x{i}"), on,
+                         model=lambda: bad)
+        assert c.classifier == "rules"
+    assert bad.calls == 1 and "rules for a minute" in c.fallback_note
+
+
 def test_rules_only_never_asks_anyone():
     rules_only = replace(policy().classifier, backend="rules")
     jev = _Decider()
@@ -407,3 +419,17 @@ def test_a_builds_own_profile_adds_its_floors():
         kind="build_stage", step="review_code", project_id="p1", spec=spec,
         extra_floors=floors_from_profile(resolve_profile("balanced"))), lean)
     assert with_profile.tier == "frontier" and "floor" in with_profile.rules
+
+
+@pytest.mark.parametrize("model,tier", [
+    ("x-ai/grok-4-fast", "fast"), ("x-ai/grok-4", "frontier"),
+    ("google/gemma-3-27b-it", "balanced"), ("mistralai/mixtral-8x7b-instruct", "balanced"),
+    ("openai/gpt-oss-120b", "balanced"), ("llama3.1:8b", "fast"), ("qwen2.5-coder:7b", "fast"),
+    ("meta-llama/llama-3.2-3b-instruct", "fast"), ("llama3.1:70b", "balanced"),
+    ("openai/gpt-5-mini", "fast"), ("anthropic/claude-opus-4.1", "frontier"),
+])
+def test_low_model_tier_reads_sizes_as_whole_tokens(model, tier):
+    """grok-4-fast read as Frontier, gemma-3-27b as Fast ("7b"), mixtral-8x7b as Fast."""
+    from boss_engine.services.model_router.policy import model_tier
+
+    assert model_tier("openrouter", model) == tier

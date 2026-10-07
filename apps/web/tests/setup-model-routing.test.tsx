@@ -156,6 +156,18 @@ describe("Model routing", () => {
     expect(writes(api).at(-1)?.policy).toEqual({ hard_pins: ["review"] });
   });
 
+  it("a stored job model reads as itself, never as Auto (re-check LOW)", async () => {
+    const view = board();
+    view.jobs = view.jobs.map((j) => j.job === "build"
+      ? { ...j, choice: { engine: "claude_code", model: "opus" } } : j);
+    fakeApi(view);
+    mounted = await mountBoard(view);
+    await click(q(document.body, "su-more-jobs"));
+    const select = q(document.body, "su-job-select-build") as HTMLSelectElement;
+    expect(select.value).toBe("claude_code::opus");
+    expect(select.selectedOptions[0]?.textContent).toBe("Claude Code · opus");
+  });
+
   it("focus=routing lands on the row with the jobs open", async () => {
     fakeApi(board());
     mounted = await mountBoard(board(), "?area=setup&focus=routing");
