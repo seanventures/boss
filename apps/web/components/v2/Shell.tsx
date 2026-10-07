@@ -6,6 +6,9 @@ import { AutonomyControl } from "./AutonomyControl";
 import { LaunchButton } from "./LaunchButton";
 import { ConsoleToggle } from "./ConsoleToggle";
 import type { CompanyOverview } from "../../lib/v2/overview";
+import { IdentityProvider } from "../identity/identity-provider";
+import { loadIdentity } from "../../lib/identity/server";
+import { identityStubEnabled } from "../../lib/identity/stub/enabled";
 
 /**
  * The v2 shell: top bar, project strip, sidebar, autonomy footer.
@@ -52,7 +55,30 @@ function money(n: number | null | undefined): string {
   return "$" + Math.round(n).toLocaleString();
 }
 
-export function Shell({
+/**
+ * THE v2 SCREENS MIRROR WHO IS SIGNED IN (round 3 role walk). The Shell rendered no
+ * IdentityProvider, so every gated control under it — the autonomy footer's "Switch to Full auto"
+ * (approval_rule:manage, Owner only) — asked the unmirrored default, which allows everything:
+ * a Viewer saw it live. Like ConsoleShell, the Shell loads the person's org and project
+ * permissions and provides them; the API still decides every call.
+ */
+export async function Shell(props: {
+  active: V2NavId;
+  overview: CompanyOverview;
+  orgId?: string;
+  children: ReactNode;
+}) {
+  const projectId = props.overview.company.id || null;
+  const identity = await loadIdentity(projectId);
+  return (
+    <IdentityProvider me={identity.me} org={identity.org} project={identity.project} projectId={projectId}
+      stub={identityStubEnabled()} unavailable={!identity.me || !identity.org}>
+      <ShellFrame {...props} />
+    </IdentityProvider>
+  );
+}
+
+function ShellFrame({
   active,
   overview,
   orgId,

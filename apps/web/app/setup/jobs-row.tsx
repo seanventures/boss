@@ -110,7 +110,7 @@ export function JobLine({ job }: { job: Job }) {
       {none ? (
         <span className="su-faint">Connect a model first</span>
       ) : (
-        <select {...jobGate.props} value={value} disabled={(busy) || !jobGate.allowed} aria-label={job.label} title={AUTO_TIP}
+        <select value={value} disabled={(busy) || !jobGate.allowed} aria-label={job.label} title={AUTO_TIP} {...jobGate.props}
                 data-testid={`su-job-select-${job.job}`} onChange={(e) => void save(e.target.value)}>
           <option value="auto">{autoLabel}</option>
           {job.choice && !job.options.some((o) => encode(o.engine, o.model) === value) ? (
