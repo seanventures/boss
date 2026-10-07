@@ -608,6 +608,22 @@ def route_mode(scope: dict) -> AuthzMode:
     return mode_for(key, global_mode=settings.authz_mode, router_modes=settings.authz_router_modes)
 
 
+def network_bridge_applies(conn: HTTPConnection) -> bool:
+    """A credential-less request on a network-trusted install (BOSS_CONSOLE_AUTH=network, or the
+    console container saying so as a trusted proxy) from a private peer: the network bridge
+    (legacy.classify -> NETWORK_MODE, usr_network_operator) is who it is. Under
+    BOSS_REQUIRE_API_AUTH — compose's only setting — the transport refused it before identity ran,
+    so the bridge was dead (R2 #10)."""
+    if conn.cookies.get(authn.SESSION_COOKIE) or conn.headers.get("authorization") \
+            or conn.headers.get("x-boss-api-key"):
+        return False
+    try:
+        path = legacy.classify(_credentials(conn))
+    except Exception:  # noqa: BLE001 — cannot tell: not the bridge
+        return False
+    return path is not None and path.kind == legacy.LegacyKind.NETWORK_MODE
+
+
 def presents_identity_credential(conn: HTTPConnection) -> bool:
     """A session cookie, or an Authorization bearer that is a boss_ key or a run token (JWT). The
     legacy console key / env keys (opaque hex) are not identity credentials: the bridge maps them."""
