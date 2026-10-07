@@ -54,6 +54,7 @@ export function errorSentence(status: number, code: string, permission?: unknown
   if (code === "confirmation_required") return "Confirm critical changes";
   if (code === "consent_required") return "Needs your consent";
   if (code === "no_second_factor" || code === "mfa_enrolment_required") return "Add a second factor first";
+  if (code === "enrolment_expired") return "That key expired — start again";
   if (code === "enrolment_grant_required") return "Ask an admin to reset your second factor";
   if (code === "task_grants_end_with_their_run") return "Ends with its run";
   if (code === "revoked_is_terminal") return "Already ended";
