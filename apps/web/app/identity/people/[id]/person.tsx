@@ -128,6 +128,11 @@ function Header({ person, roles, emailVerified, onSheet }: { person: Person; rol
         <CanButton permission="user:reset_mfa" className="idn-btn sm" onClick={() => onSheet("mfa")} tip="Remove their factors; they enrol again" data-testid="person-reset-mfa">
           <Key size={14} aria-hidden /> Reset MFA
         </CanButton>
+        {!disabled ? (
+          <CanButton permission="user:reset_mfa" className="idn-btn sm" onClick={() => onSheet("resetlink")} tip="A one-time link to set a new password, shown once" data-testid="person-reset-link">
+            <LockSimple size={14} aria-hidden /> Reset link
+          </CanButton>
+        ) : null}
         <CanButton permission="user:disable" className={`idn-btn sm${disabled ? "" : " danger"}`} onClick={() => onSheet(disabled ? "enable" : "disable")}
           tip={disabled ? "Let them sign in again" : "Stop every session, key and grant"} data-testid="person-disable">
           <Prohibit size={14} aria-hidden /> {disabled ? "Enable" : "Disable"}
@@ -139,7 +144,7 @@ function Header({ person, roles, emailVerified, onSheet }: { person: Person; rol
 
 // ---- sheets -------------------------------------------------------------------------------------
 
-type SheetKind = "add" | "signout" | "mfa" | "disable" | "enable";
+type SheetKind = "add" | "signout" | "mfa" | "disable" | "enable" | "resetlink";
 
 function AddAccessSheet({ person, roles, projects, onClose }: { person: Person; roles: AccessRole[]; projects: ProjectChoice[] | null; onClose: () => void }) {
   const { org } = useIdentity();
@@ -208,14 +213,74 @@ function AddAccessSheet({ person, roles, projects, onClose }: { person: Person; 
   );
 }
 
-const CONSEQUENCES: Record<Exclude<SheetKind, "add">, { title: string; lines: string[]; button: string; path: string; done: string; reason: string }> = {
+const CONSEQUENCES: Record<Exclude<SheetKind, "add" | "resetlink">, { title: string; lines: string[]; button: string; path: string; done: string; reason: string }> = {
   signout: { title: "Sign out everywhere?", lines: ["Every session on every device ends now.", "Their keys and grants keep working."], button: "Sign out everywhere", path: "revoke-sessions", done: "Signed out", reason: "Ending someone's sessions is sensitive." },
   mfa: { title: "Reset MFA?", lines: ["Their passkeys, authenticator and recovery codes are removed.", "They enrol a new factor at next sign-in.", "Every admin is told; it is audited as critical."], button: "Reset MFA", path: "reset-mfa", done: "MFA reset", reason: "Resetting a second factor is critical." },
   disable: { title: "Disable this person?", lines: ["Sessions end and their keys are suspended.", "Grants they gave agents are suspended; runs for them halt.", "Service accounts they alone own are flagged orphaned."], button: "Disable", path: "disable", done: "Disabled", reason: "Disabling someone stops all their access." },
   enable: { title: "Enable this person?", lines: ["They can sign in again.", "Suspended keys and grants stay suspended until renewed."], button: "Enable", path: "enable", done: "Enabled", reason: "Enabling someone restores their access." },
 };
 
-function ConfirmSheet({ person, kind, onClose }: { person: Person; kind: Exclude<SheetKind, "add">; onClose: () => void }) {
+/**
+ * THE ADMIN RESET LINK (FX-C P1-17). Without email, /reset tells a person "an admin can issue you a
+ * link" — this is that control: a 30-minute, single-use link shown ONCE to the admin, to hand over
+ * out of band. It never bypasses their second factor.
+ */
+function ResetLinkSheet({ person, onClose }: { person: Person; onClose: () => void }) {
+  const guarded = useGuardedCall();
+  const [busy, setBusy] = useState(false);
+  const [link, setLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <Sheet title="Issue a password reset link?" icon={<LockSimple size={18} aria-hidden />} onClose={onClose} testId="reset-link-sheet">
+      <div className="idn-who-s"><Face name={person.display_name} tone={person.hue} size={34} /><span><b>{person.display_name}</b><small>{person.email}</small></span></div>
+      {link ? (
+        <>
+          <p className="idn-lede2" data-copy="prose">Give them this link yourself. It works once, for 30 minutes, and is not shown again.</p>
+          <div className="idn-row">
+            <input className="idn-input" readOnly value={link} aria-label="Reset link" data-testid="reset-link-value" onFocus={(e) => e.currentTarget.select()} />
+            <button type="button" className="idn-btn sm" data-testid="reset-link-copy"
+              onClick={() => { void navigator.clipboard?.writeText(link).then(() => setCopied(true), () => setCopied(false)); }}>
+              {copied ? <><Check size={14} aria-hidden /> Copied</> : "Copy"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <ul className="idn-cascade-list" aria-label="What this does">
+          <li data-copy="prose">A one-time link to set a new password, valid for 30 minutes.</li>
+          <li data-copy="prose">Setting it signs them out everywhere; their second factor is still needed.</li>
+          <li data-copy="prose">It is shown once, here, and audited.</li>
+        </ul>
+      )}
+      <ErrorLine error={error} />
+      <div className="idn-mf">
+        <span className="idn-spacer" />
+        {link ? <button type="button" className="idn-btn primary" onClick={onClose}>Done</button> : (
+          <>
+            <button type="button" className="idn-btn ghost" onClick={onClose}>Cancel</button>
+            <button type="button" className="idn-btn primary" disabled={busy} data-testid="reset-link-go"
+              onClick={async () => {
+                setBusy(true);
+                setError(null);
+                try {
+                  const out = await guarded("Issuing a reset link hands over a sign-in factor.",
+                    () => idPost<{ link: string }>(`/v1/identity/users/${encodeURIComponent(person.id)}/reset-link`));
+                  setLink(out.link);
+                } catch (e) {
+                  setError(refusal(e));
+                }
+                setBusy(false);
+              }}>
+              {busy ? "Issuing…" : "Issue reset link"}
+            </button>
+          </>
+        )}
+      </div>
+    </Sheet>
+  );
+}
+
+function ConfirmSheet({ person, kind, onClose }: { person: Person; kind: Exclude<SheetKind, "add" | "resetlink">; onClose: () => void }) {
   const c = CONSEQUENCES[kind];
   const act = useAct();
   const [busy, setBusy] = useState(false);
@@ -730,7 +795,8 @@ export function PersonProfile({ person, tab, factors, sessions, effective, proje
       {tab === "audit" ? (events ? <Activity events={events} full /> : <Hidden what="Audit" permission="audit:read" failure={failures.events} />) : null}
 
       {sheet === "add" ? <AddAccessSheet person={person} roles={roles} projects={projects} onClose={() => setSheet(null)} /> : null}
-      {sheet && sheet !== "add" ? <ConfirmSheet person={person} kind={sheet} onClose={() => setSheet(null)} /> : null}
+      {sheet === "resetlink" ? <ResetLinkSheet person={person} onClose={() => setSheet(null)} /> : null}
+      {sheet && sheet !== "add" && sheet !== "resetlink" ? <ConfirmSheet person={person} kind={sheet} onClose={() => setSheet(null)} /> : null}
     </>
   );
 }
