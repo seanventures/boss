@@ -9,6 +9,7 @@ import React, { useId, useRef, type ReactNode } from "react";
 import { AppleLogo, GithubLogo, Globe } from "@phosphor-icons/react";
 
 import type { ProviderOffer } from "../../lib/identity/sign-in-offers";
+import { AUTH_LINKS, type AuthLinkKind } from "../../lib/identity/auth-links.gen";
 
 export function AuthStage({ children, wide = false, label }: { children: ReactNode; wide?: boolean; label: string }) {
   return (
@@ -169,10 +170,21 @@ export function safeNextClient(value: string | null | undefined): string {
   return value;
 }
 
-/** The fragment's `t` (links carry their token after #, so it never reaches an access log). */
-export function fragmentToken(): string {
+/**
+ * The token of a link the engine minted, read from the fragment key the ONE table names
+ * (lib/identity/auth-links.gen.ts, from engine/boss_engine/identity/links.py). Links carry their
+ * token after #, so it never reaches an access log. Every page a link lands on reads it this way;
+ * tests/every-minted-link-lands-on-a-real-page.test.ts holds them to it.
+ */
+export function linkToken(kind: AuthLinkKind): string {
   if (typeof window === "undefined") return "";
+  const key = AUTH_LINKS[kind].fragment;
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
   const query = new URLSearchParams(window.location.search);
-  return hash.get("t") ?? query.get("t") ?? "";
+  return hash.get(key) ?? query.get(key) ?? "";
+}
+
+/** The fragment's `t`: the magic-link page's older spelling of `linkToken("magic_link")`. */
+export function fragmentToken(): string {
+  return linkToken("magic_link");
 }

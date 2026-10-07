@@ -22,7 +22,7 @@ import { codesOf, type RecoveryCodes } from "../../../lib/identity/types-auth";
 import { claimOrigin, claimPathFor, claimProof } from "../../../lib/identity/claim-path";
 import { passkeyBlockWords } from "../../../lib/identity/passkey-support";
 import { webauthnAvailable } from "../../../lib/identity/webauthn";
-import { AuthStage, Live, Logo, fragmentToken } from "../auth-parts";
+import { AuthStage, Live, Logo, linkToken } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
 import { CopyCommand } from "../copy-command";
 import { RecoveryCodesView } from "../recovery-codes";
@@ -82,7 +82,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
 
   useEffect(() => {
     setPasskeys(webauthnAvailable());
-    setToken(fragmentToken());
+    setToken(linkToken("setup"));
     setPageOrigin(window.location.origin);
     // An address no browser can hold a passkey for (an IP, plain http): the authenticator app is
     // the way in, said in one plain line — never a prompt the browser will refuse.
