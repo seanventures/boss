@@ -2123,7 +2123,32 @@ def refused_reservation(engine, jobs, *, run_id: str, project_id: str, reservati
 # --------------------------------------------------------------------------- #
 def run_code_task(engine, settings: Settings, jobs, run_id: str,
                   *, fencing_token: Optional[str] = None) -> dict:
-    """Execute one full code-task attempt. Safe to re-run after a crash."""
+    """Execute one full code-task attempt. Safe to re-run after a crash.
+
+    Everything the attempt starts is owned by the run and runs as the run's own sandbox uid
+    (sandbox_identity, IDENTITY.md §7.6) — never as the control plane's."""
+    from . import owned_process
+    from .sandbox_identity import bind as _sandbox_bind
+
+    from .sandbox_identity import SandboxUnavailable
+
+    try:
+        with owned_process.owner_scope("code_run", run_id, fresh=True), _sandbox_bind(run_id):
+            return _run_code_task(engine, settings, jobs, run_id, fencing_token=fencing_token)
+    except SandboxUnavailable as exc:
+        # Fail closed: a build never runs unisolated when isolation is required.
+        with _transaction(engine) as c:
+            run = load_code_task_run(c, run_id)
+            if run is not None and run["status"] == "running":
+                return _fail(c, run_id, run["project_id"], f"Sandbox unavailable: {exc}",
+                             status="blocked", failure_class="needs_human", reason_code="sandbox_unavailable")
+        return {"status": "blocked", "done": True, "reason": "sandbox_unavailable"}
+    finally:
+        owned_process.terminate_owner(run_id, reason="run_ended", grace=2.0)
+
+
+def _run_code_task(engine, settings: Settings, jobs, run_id: str,
+                   *, fencing_token: Optional[str] = None) -> dict:
     with _transaction(engine) as c:
         run = load_code_task_run(c, run_id)
     if run is None:

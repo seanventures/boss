@@ -47,11 +47,32 @@ class HarnessMcp:
             out += ["--disallowedTools", ",".join(self.disallowed)]
         return out
 
+    def move_into(self, sandbox: Any) -> None:
+        """Into the run's sandbox directory (sandbox_identity): the agent runs as the run's uid
+        and must read its own file, and no other run's uid may (the run directory is 2770)."""
+        if not self.path or sandbox is None:
+            return
+        old_dir = os.path.dirname(self.path)
+        directory = _private_dir(sandbox)
+        target = os.path.join(directory, "mcp.json")
+        shutil.copyfile(self.path, target)
+        os.chmod(target, 0o644)
+        shutil.rmtree(old_dir, ignore_errors=True)
+        from .resource_ledger import release_dir
+        release_dir(old_dir, "moved")
+        self.path = target
+
     def cleanup(self) -> None:
         if self.path:
             shutil.rmtree(os.path.dirname(self.path), ignore_errors=True)
             from .resource_ledger import release_dir
             release_dir(os.path.dirname(self.path), "cleanup")
+
+
+def _private_dir(sandbox: Any) -> str:
+    directory = tempfile.mkdtemp(prefix="mcp-", dir=str(sandbox.run_dir))
+    os.chmod(directory, 0o2755)
+    return directory
 
 
 def _cli_name(server_name: str) -> str:
@@ -100,12 +121,21 @@ def prepare(connection: Connection, settings: Any, project_id: str,
     planned = plan(connection, settings, project_id, role)
     if not planned["servers"]:
         return HarnessMcp(path="", servers=[])
-    directory = tempfile.mkdtemp(prefix="boss-mcp-")
+    from .sandbox_identity import current as _sandbox
+
+    sandbox = _sandbox()
+    if sandbox is not None:
+        # Inside the run's 2770 directory: readable by the run's uid, by no other run's.
+        directory = _private_dir(sandbox)
+        mode = 0o644
+    else:
+        directory = tempfile.mkdtemp(prefix="boss-mcp-")
+        os.chmod(directory, 0o700)
+        mode = 0o600
     from .resource_ledger import claim_dir
     claim_dir(directory)
-    os.chmod(directory, 0o700)
     path = os.path.join(directory, "mcp.json")
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         json.dump({"mcpServers": planned["servers"]}, handle)
     return HarnessMcp(path=path, servers=sorted(planned["servers"]),

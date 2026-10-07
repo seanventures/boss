@@ -17,6 +17,7 @@ Every failure is uniform to the caller (401 `unauthenticated`, 400 `invalid_gran
 """
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import threading
@@ -54,6 +55,8 @@ from .principal import (
     RunTokenClaims,
     TaskBinding,
 )
+
+log = logging.getLogger("boss.identity.tokens")
 
 ISSUER_ENV = "BOSS_PUBLIC_URL"
 EGRESS_SERVICE_KEY_ENV = "BOSS_EGRESS_SERVICE_KEY"
@@ -657,8 +660,40 @@ def decide(claims: RunTokenClaims, permission: str, scope: Any, *, db: Any):
 
 # ---- introspection ---------------------------------------------------------------------------------------
 
+EGRESS_SERVICE_KEY_FILE_ENV = "BOSS_EGRESS_SERVICE_KEY_FILE"
+
+
+def egress_service_key() -> str:
+    """The API <-> boss-egress shared key: BOSS_EGRESS_SERVICE_KEY, else the file named by
+    BOSS_EGRESS_SERVICE_KEY_FILE (on the identity volume both mount). "" when neither is set."""
+    value = (os.environ.get(EGRESS_SERVICE_KEY_ENV) or "").strip()
+    if value:
+        return value
+    path = (os.environ.get(EGRESS_SERVICE_KEY_FILE_ENV) or "").strip()
+    if path:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return fh.read().strip()
+        except OSError:
+            return ""
+    return ""
+
+
+def ensure_egress_service_key_file() -> bool:
+    """At API boot: create the shared key file if it is configured and absent (0600, random, never
+    logged). True when it was created. The egress service only ever reads it."""
+    path = (os.environ.get(EGRESS_SERVICE_KEY_FILE_ENV) or "").strip()
+    if not path or (os.environ.get(EGRESS_SERVICE_KEY_ENV) or "").strip() or os.path.exists(path):
+        return False
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(secrets.token_urlsafe(48))
+    log.warning("created the boss-egress service key file %s (first start)", path)
+    return True
+
+
 def egress_service_key_ok(presented: Optional[str]) -> bool:
-    expected = os.environ.get(EGRESS_SERVICE_KEY_ENV) or ""
+    expected = egress_service_key()
     return bool(expected) and bool(presented) and secrets.compare_digest(presented.encode(), expected.encode())
 
 

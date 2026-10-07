@@ -145,6 +145,24 @@ def assert_ready(*, db: Any) -> None:
             raise SigningKeysMissing(f"no active {family} signing key")
 
 
+def require_keys(*, org_id: str, db: Any) -> None:
+    """The API's boot step: rotate what is due, then REFUSE (SigningKeysMissing) unless both
+    families have an active key whose private half decrypts from the vault. A process that cannot
+    sign never starts and then fails each run with a 500 and no lineage."""
+    from sqlalchemy import text
+
+    rotate_if_due(org_id=org_id, db=db)
+    assert_ready(db=db)
+    for family in FAMILIES:
+        row = db.execute(text("SELECT kid, private_vault_item_id FROM identity_signing_keys "
+                              "WHERE family = :f AND status = 'active' ORDER BY activated_at DESC LIMIT 1"),
+                         {"f": family}).mappings().first()
+        try:
+            _private(row["kid"], row["private_vault_item_id"], db)
+        except Exception as exc:  # noqa: BLE001 — any failure to open the key is a refusal
+            raise SigningKeysMissing(f"the active {family} signing key cannot be opened") from exc
+
+
 def _private(kid: str, item_id: str, db: Any) -> Ed25519PrivateKey:
     from . import vault
 

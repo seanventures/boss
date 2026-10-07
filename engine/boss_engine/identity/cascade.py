@@ -389,10 +389,22 @@ def revoke_cascade(trigger: CascadeTrigger, target_id: str, *, actor: AuthContex
                                    details={"reason": reason[:200], "runs_halted": len(plan["runs"]),
                                             "descendants_suspended": plan["passports"]})
 
-    payload = json.dumps({"trigger": trigger.value, "target": target_id, "runs": plan["runs"][:200]})
-    db.execute(text("SELECT pg_notify(:c, :p)"), {"c": NOTIFY_CHANNEL, "p": payload[:7900]})
+    notify(db, trigger=trigger.value, target_id=target_id, runs=list(plan["runs"]), reason=why)
     _after_commit(db, list(plan["runs"]), why)
     return report
+
+
+def notify(db: Any, *, trigger: str, target_id: str, runs: list[str], reason: str) -> int:
+    """Record the cascade's runs and NOTIFY only the row id: a payload is capped at 8000 bytes,
+    and a truncated one is broken JSON that a listener drops (the runs are then never revoked at
+    GitHub). The listener fetches the runs by id."""
+    from sqlalchemy import text
+
+    notice = int(db.execute(text("INSERT INTO identity_revocation_notices (trigger, target_id, runs, reason) "
+                                 "VALUES (:t, :g, :r, :why) RETURNING id"),
+                            {"t": trigger, "g": target_id[:200], "r": runs, "why": reason[:300]}).scalar_one())
+    db.execute(text("SELECT pg_notify(:c, :p)"), {"c": NOTIFY_CHANNEL, "p": json.dumps({"notice": notice})})
+    return notice
 
 
 def _after_commit(db: Any, run_ids: list[str], reason: str) -> None:

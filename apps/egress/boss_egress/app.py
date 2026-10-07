@@ -6,12 +6,20 @@
                                      (server to server, `X-Boss-Egress-Key`: BOSS_EGRESS_SERVICE_KEY)
     /_boss/healthz                   liveness
 
-On start it LISTENs on `identity_revocation`: a cascade's runs have their GitHub installation tokens
-revoked at GitHub immediately (the per-request live check already refuses them).
+Every request is judged on its RAW path (scope["raw_path"]), canonicalised once by the proxy, and
+on its source address (the sandbox's network identity, #16).
+
+On start it LISTENs on `identity_revocation`. A notice's payload is only the id of an
+identity_revocation_notices row (so it is never truncated); that row's runs have their GitHub
+installation tokens revoked at GitHub immediately (the per-request live check already refuses
+them). The listener reconnects after any database error and catches up on every notice written
+while it was away.
+
+connect.py serves the sandbox's only other route out, on its own port: an allowlisted HTTPS
+CONNECT proxy for model providers and package registries.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
@@ -38,22 +46,68 @@ def _engine():
     return create_engine(url.replace("postgresql://", "postgresql+psycopg://"), pool_size=5, max_overflow=5)
 
 
-def listen_for_revocations(engine: Any, stop: threading.Event) -> None:
-    """LISTEN identity_revocation -> revoke the runs' GitHub installation tokens at GitHub."""
-    raw = engine.raw_connection()
-    try:
-        pg = raw.driver_connection          # psycopg 3
-        pg.autocommit = True
-        pg.execute(f"LISTEN {cascade.NOTIFY_CHANNEL}")
-        while not stop.is_set():
-            for note in pg.notifies(timeout=1.0, stop_after=1):
+def process_notices(engine: Any, after_id: int) -> int:
+    """Revoke the GitHub tokens of every notice newer than `after_id`; return the newest id."""
+    from sqlalchemy import text
+
+    with engine.begin() as db:
+        rows = db.execute(text("SELECT id, runs, reason FROM identity_revocation_notices WHERE id > :a ORDER BY id"),
+                          {"a": after_id}).all()
+    for row in rows:
+        try:
+            github_app.revoke_runs(list(row[1] or []), str(row[2] or "cascade")[:200])
+        except Exception:  # noqa: BLE001
+            log.warning("could not revoke the GitHub tokens of revocation notice %s", row[0])
+        after_id = max(after_id, int(row[0]))
+    return after_id
+
+
+def _latest_notice(engine: Any) -> int:
+    from sqlalchemy import text
+
+    with engine.begin() as db:
+        return int(db.execute(text("SELECT coalesce(max(id), 0) FROM identity_revocation_notices")).scalar() or 0)
+
+
+def listen_for_revocations(engine: Any, stop: threading.Event, *, backoff_max: float = 30.0,
+                           start_after: Optional[int] = None) -> None:
+    """LISTEN identity_revocation -> revoke the runs' GitHub installation tokens at GitHub.
+
+    Survives the database going away: on any error it reconnects with backoff, and on every
+    (re)connect it first catches up on the notices written while it was not listening."""
+    last: Optional[int] = start_after
+    delay = 0.5
+    while not stop.is_set():
+        raw = None
+        try:
+            if last is None:
+                last = _latest_notice(engine)        # tokens minted before this process are not held here
+            raw = engine.raw_connection()
+            pg = raw.driver_connection               # psycopg 3
+            pg.autocommit = True
+            pg.execute(f"LISTEN {cascade.NOTIFY_CHANNEL}")
+            last = process_notices(engine, last)     # catch up on anything missed while away
+            delay = 0.5
+            while not stop.is_set():
+                for _note in pg.notifies(timeout=1.0, stop_after=1):
+                    last = process_notices(engine, last)
+        except Exception:  # noqa: BLE001 — the database went away: reconnect
+            log.warning("revocation listener lost its connection; reconnecting in %.1fs", delay)
+            stop.wait(delay)
+            delay = min(delay * 2, backoff_max)
+        finally:
+            if raw is not None:
                 try:
-                    payload = json.loads(note.payload)
-                    github_app.revoke_runs(list(payload.get("runs") or []), "cascade")
+                    raw.close()
                 except Exception:  # noqa: BLE001
-                    log.warning("could not process a revocation notice")
-    finally:
-        raw.close()
+                    pass
+
+
+def _raw_path(request: Request) -> str:
+    raw = request.scope.get("raw_path")
+    if isinstance(raw, (bytes, bytearray)):
+        return bytes(raw).split(b"?", 1)[0].decode("latin-1")
+    return request.url.path
 
 
 def build_app(engine: Optional[Any] = None, *, upstream=None, listen: bool = False) -> Starlette:
@@ -63,8 +117,9 @@ def build_app(engine: Optional[Any] = None, *, upstream=None, listen: bool = Fal
 
     async def forward(request: Request) -> Response:
         body = await request.body()
-        req = EgressRequest(method=request.method, path=request.url.path, query=request.url.query,
-                            headers={k.lower(): v for k, v in request.headers.items()}, body=body)
+        req = EgressRequest(method=request.method, path=_raw_path(request), query=request.url.query,
+                            headers={k.lower(): v for k, v in request.headers.items()}, body=body,
+                            peer=(request.client.host if request.client else "unknown"))
         from starlette.concurrency import run_in_threadpool
 
         resp = await run_in_threadpool(proxy.handle, req)

@@ -164,8 +164,52 @@ def canonical_json(row: Mapping[str, Any]) -> bytes:
                       default=str).encode("utf-8")
 
 
-def chain_hash(prev_hash: bytes, row: Mapping[str, Any]) -> bytes:
-    """hash = SHA-256(prev_hash ‖ canonical_json(row))."""
+#: hash_alg values: 1 = SHA-256 (rows from before the keyed chain), 2 = HMAC-SHA-256 keyed (#13).
+ALG_SHA256 = 1
+ALG_HMAC = 2
+
+
+def chain_key() -> Optional[bytes]:
+    """The chain's HMAC key: derived from the identity server key (BOSS_IDENTITY_SERVER_KEY, else
+    the vault master key) — material the database never holds, so a row cannot be rewritten
+    consistently by anyone who has only the database. None when neither is configured (a dev
+    process with no vault): the chain is then unkeyed, and posture says so."""
+    configured = ""
+    try:
+        from ..config import get_settings
+
+        configured = (get_settings().identity_server_key or "").strip()
+    except Exception:  # noqa: BLE001
+        configured = ""
+    base: Optional[bytes] = None
+    if configured:
+        try:
+            import base64
+
+            base = base64.b64decode(configured, validate=True)
+        except ValueError:
+            base = None
+    if base is None:
+        from .authn_support import _master_key_bytes
+
+        base = _master_key_bytes()
+    if not base:
+        return None
+    return hmac.new(base, b"boss identity audit chain v2", hashlib.sha256).digest()
+
+
+def chain_hash(prev_hash: bytes, row: Mapping[str, Any], *, alg: Optional[int] = None,
+               key: Optional[bytes] = None) -> bytes:
+    """hash = HMAC-SHA-256(chain key, prev_hash ‖ canonical_json(row)) (alg 2, the default when a
+    chain key exists); SHA-256(prev_hash ‖ canonical_json(row)) for alg 1."""
+    if alg is None:
+        key = key if key is not None else chain_key()
+        alg = ALG_HMAC if key else ALG_SHA256
+    if alg == ALG_HMAC:
+        key = key if key is not None else chain_key()
+        if not key:
+            raise AuditWriteRefused("the keyed audit chain needs the identity server key")
+        return hmac.new(key, prev_hash + canonical_json(row), hashlib.sha256).digest()
     return hashlib.sha256(prev_hash + canonical_json(row)).digest()
 
 
@@ -312,23 +356,25 @@ def record(event: SecurityEvent, *, db: Any) -> RecordedEvent:
     ts = datetime.now(timezone.utc)
     row = event_row(clean, seq=seq, ts=ts)
     row["details"] = clean.details
-    digest = chain_hash(prev_hash, row)
+    key = chain_key()
+    alg = ALG_HMAC if key else ALG_SHA256
+    digest = chain_hash(prev_hash, row, alg=alg, key=key)
     params = {k: row.get(k) for k in HASHED_FIELDS}
     params.update(outcome=clean.outcome.value, stream=clean.stream.value,
                   chain=None if row.get("chain") is None else json.dumps(row["chain"]),
                   details=json.dumps(row["details"], ensure_ascii=False),
-                  prev_hash=prev_hash, hash=digest)
+                  prev_hash=prev_hash, hash=digest, hash_alg=alg)
     inserted = db.execute(_sql(
-        "INSERT INTO identity_security_events (" + ", ".join(_INSERT_COLUMNS) + ") VALUES ("
+        "INSERT INTO identity_security_events (" + ", ".join(_INSERT_COLUMNS) + ", hash_alg) VALUES ("
         + ", ".join(f"CAST(:{c} AS JSONB)" if c in ("chain", "details")
                     else f"CAST(:{c} AS INET)" if c == "ip" else f":{c}"
-                    for c in _INSERT_COLUMNS) + ") RETURNING id"), params).first()
+                    for c in _INSERT_COLUMNS) + ", :hash_alg) RETURNING id"), params).first()
     return RecordedEvent(id=int(inserted[0]), seq=seq, hash=digest)
 
 
 # ---- reading rows back -------------------------------------------------------------------------
 
-_SELECT = ("SELECT id, " + ", ".join(HASHED_FIELDS) + ", prev_hash, hash "
+_SELECT = ("SELECT id, " + ", ".join(HASHED_FIELDS) + ", prev_hash, hash, hash_alg "
            "FROM identity_security_events")
 
 
@@ -399,11 +445,16 @@ def verify_chain(org_id: str, *, db: Any, from_seq: Optional[int] = None) -> Cha
 
     checked = 0
     last_seq = 0
+    key = chain_key()
     for row in _iter_rows(db, org_id, from_seq=from_seq or 0):
         seq = int(row["seq"])
         last_seq = seq
         checked += 1
-        broken = chain_hash(row["prev_hash"], row) != row["hash"]
+        alg = int(row.get("hash_alg") or ALG_SHA256)
+        if key is not None and alg != ALG_HMAC:
+            broken = True                 # an unkeyed row in a keyed chain: never accepted (#13)
+        else:
+            broken = chain_hash(row["prev_hash"], row, alg=alg, key=key) != row["hash"]
         if not broken and seq <= pruned_through and expected_prev is None:
             # a row kept by a prune: it must be exactly the one the checkpoint recorded
             broken = retained.get(seq) != row["hash"].hex()
@@ -421,8 +472,75 @@ def verify_chain(org_id: str, *, db: Any, from_seq: Optional[int] = None) -> Cha
             return ChainVerification(False, org_id, checked, seq, first_break_seq=seq,
                                      verified_at=datetime.now(timezone.utc))
         expected_seq, expected_prev = seq + 1, row["hash"]
+    # THE ANCHORS (#13): every published daily anchor must still be in the chain — a row with that
+    # seq and that hash, or a pruned range a checkpoint accounts for. A chain cut back to before
+    # an anchor (rows deleted from the end) breaks here even though what is left links up.
+    for anchor_seq, anchor_hex in _anchors(db, org_id):
+        if from_seq and anchor_seq < from_seq:
+            continue
+        if anchor_seq > last_seq:
+            return ChainVerification(False, org_id, checked, last_seq, first_break_seq=last_seq + 1,
+                                     verified_at=datetime.now(timezone.utc))
+        if anchor_seq <= pruned_through and anchor_seq not in retained:
+            if anchor_seq in anchor_hash and anchor_hash[anchor_seq].hex() != anchor_hex:
+                return ChainVerification(False, org_id, checked, last_seq, first_break_seq=anchor_seq,
+                                         verified_at=datetime.now(timezone.utc))
+            continue
+        stored = db.execute(_sql("SELECT hash FROM identity_security_events WHERE org_id = :o AND seq = :s"),
+                            {"o": org_id, "s": anchor_seq}).first()
+        if stored is None or bytes(stored[0]).hex() != anchor_hex:
+            return ChainVerification(False, org_id, checked, last_seq, first_break_seq=anchor_seq,
+                                     verified_at=datetime.now(timezone.utc))
     return ChainVerification(True, org_id, checked, last_seq,
                              verified_at=datetime.now(timezone.utc))
+
+
+def _anchors(db: Any, org_id: str) -> list[tuple[int, str]]:
+    """(seq, hash hex) of every daily anchor published for this org (the activity log)."""
+    if not db.execute(_sql("SELECT to_regclass('events') IS NOT NULL")).scalar():
+        return []
+    rows = db.execute(_sql("SELECT data FROM events WHERE event_type = 'identity.audit_anchor' "
+                           "AND data->>'org_id' = :o"), {"o": org_id}).scalars().all()
+    out = []
+    for data in rows:
+        d = data if isinstance(data, dict) else json.loads(data or "{}")
+        try:
+            out.append((int(d["seq"]), str(d["hash"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return sorted(out)
+
+
+def rekey(org_id: str, *, db: Any) -> int:
+    """Once, at boot: re-hash the rows written before the keyed chain (hash_alg 1) with the chain
+    key, IF their old chain verifies. Only their hash columns change (the table's trigger checks
+    it), through identity_audit_rekey. Returns the number of rows re-keyed."""
+    key = chain_key()
+    if key is None:
+        return 0
+    if not db.execute(_sql("SELECT 1 FROM identity_security_events WHERE org_id = :o AND hash_alg = 1 LIMIT 1"),
+                      {"o": org_id}).first():
+        return 0
+    db.execute(_sql("SELECT pg_advisory_xact_lock(:k)"), {"k": _lock_key(org_id)})
+    rows = list(_iter_rows(db, org_id))
+    prev = GENESIS_HASH
+    seqs, prevs, hashes = [], [], []
+    for row in rows:
+        alg = int(row.get("hash_alg") or ALG_SHA256)
+        if alg != ALG_SHA256:
+            return 0                              # a mixed chain is not re-keyed: verify reports it
+        if chain_hash(row["prev_hash"], row, alg=ALG_SHA256) != row["hash"]:
+            return 0                              # a broken old chain is never laundered into a keyed one
+        new = chain_hash(prev, row, alg=ALG_HMAC, key=key)
+        seqs.append(int(row["seq"]))
+        prevs.append(prev)
+        hashes.append(new)
+        prev = new
+    if not seqs or seqs[0] != 1:
+        return 0                                  # pruned history: left for an operator decision
+    db.execute(_sql("SELECT identity_audit_rekey(:o, :s, :p, :h)"),
+               {"o": org_id, "s": seqs, "p": prevs, "h": hashes})
+    return len(seqs)
 
 
 def head(org_id: str, *, db: Any) -> Optional[tuple[int, bytes]]:
@@ -446,7 +564,7 @@ def prune(org_id: str, *, before: datetime, db: Any, actor_principal_id: str,
           actor_kind: Optional[str] = None, ctx: Optional[AuthContext] = None) -> PruneResult:
     """Delete the events older than `before`, after writing an `audit.checkpoint` that holds the
     hash of the pruned range, so the chain still verifies. `bootstrap.claimed` and earlier
-    checkpoints are kept (KEEP_ON_PRUNE). The DELETE is allowed only inside this transaction."""
+    checkpoints are kept (KEEP_ON_PRUNE). The DELETE happens only inside identity_audit_prune."""
     db.execute(_sql("SELECT pg_advisory_xact_lock(:k)"), {"k": _lock_key(org_id)})
     newest_kept = db.execute(_sql(
         "SELECT min(seq) FROM identity_security_events WHERE org_id = :o AND ts >= :b"),
@@ -477,14 +595,10 @@ def prune(org_id: str, *, before: datetime, db: Any, actor_principal_id: str,
                               actor_principal_id=actor_principal_id, actor_kind=actor_kind,
                               details=details)
     checkpoint = record(event, db=db)
-    db.execute(_sql("SELECT set_config('boss.identity_audit_prune', 'on', true)"))
-    try:
-        db.execute(_sql(
-            "DELETE FROM identity_security_events WHERE org_id = :o AND seq <= :u "
-            "AND event_type <> ALL(:keep)"),
-            {"o": org_id, "u": upper, "keep": sorted(KEEP_ON_PRUNE)})
-    finally:
-        db.execute(_sql("SELECT set_config('boss.identity_audit_prune', 'off', true)"))
+    # The DELETE runs inside identity_audit_prune, as boss_audit_owner: it deletes only the range
+    # the checkpoint just written names. No session switch exists for an app session to set (#13).
+    db.execute(_sql("SELECT identity_audit_prune(:o, :u, :keep)"),
+               {"o": org_id, "u": upper, "keep": sorted(KEEP_ON_PRUNE)})
     return PruneResult(len(doomed), int(upper), checkpoint.seq, len(retained))
 
 
