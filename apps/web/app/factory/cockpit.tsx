@@ -26,6 +26,7 @@ import { openDockAbout } from "../../lib/dock-subject";
 import { previewWebHref } from "../../lib/browser-links";
 import { isConsoleLive, subscribeConsoleLive } from "../../lib/console-live";
 import { callAction } from "../../lib/call-action";
+import { GatedButton } from "../../components/gated";
 import { retryCodeTaskWithStateAction } from "../actions";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
@@ -378,7 +379,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                 <span id={menuId} role="menu" className="fx-ck-menu" data-testid="fx-ck-menu">
                   {stoppable ? <button type="button" role="menuitem" className="fx-phone-only" onClick={() => { setMenu(false); setSteering(true); }}>Steer</button> : null}
                   {stoppable ? <button type="button" role="menuitem" className="fx-phone-only" title={stopTip} onClick={() => { setMenu(false); setConfirmStop(true); }}>Stop</button> : null}
-                  {c.retryable ? <button type="button" role="menuitem" data-testid="fx-menu-retry" title={retryTip(c)} onClick={() => void doRetry()}>Retry</button> : null}
+                  {c.retryable ? <GatedButton permission="code_task:retry" type="button" role="menuitem" data-testid="fx-menu-retry" title={retryTip(c)} onClick={() => void doRetry()}>Retry</GatedButton> : null}
                   <button type="button" role="menuitem" data-testid="fx-menu-change" onClick={() => { setMenu(false); setChangeIt(true); }}>Change it</button>
                   <button type="button" role="menuitem" data-testid="fx-menu-ask" onClick={() => {
                     setMenu(false);

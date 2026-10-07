@@ -20,6 +20,8 @@ import {
 } from "../../lib/agents-org-board";
 import { AgFace } from "./agent-face";
 import type { OrgActions } from "./org-actions";
+import { ORG_GIVE_PERMISSION, ORG_MOVE_PERMISSION } from "./org-permissions";
+import { GatedButton } from "../../components/gated";
 import {
   Drawer, MenuPop, WaitItem, kitHref, liveState, nameOf, teamLabel, workflowHref,
 } from "./org-shared";
@@ -155,8 +157,8 @@ export function OrgAgentPanel({ board, live, roleKey, days, actions, onClose }: 
                       <a className="ag-link" href={kitHref(a.ability)} data-testid={`ag-org-agent-setup-${a.ability}`}
                          title={`${a.label} must be set up in the Kit first`}>Set up first ↗</a>
                     ) : actions ? (
-                      <button type="button" className="ag-link" data-testid={`ag-org-agent-give-${a.ability}`}
-                              onClick={() => void actions.give(a.ability, a.label, roleKey)}>Give</button>
+                      <GatedButton permission={ORG_GIVE_PERMISSION} type="button" className="ag-link" data-testid={`ag-org-agent-give-${a.ability}`}
+                              onClick={() => void actions.give(a.ability, a.label, roleKey)}>Give</GatedButton>
                     ) : null}
                   </li>
                 ))}
@@ -168,8 +170,8 @@ export function OrgAgentPanel({ board, live, roleKey, days, actions, onClose }: 
                     {g.needsSetup ? (
                       <a className="ag-link" href={kitHref(g.ability)} title={`${g.label} must be set up in the Kit first`}>Set up first ↗</a>
                     ) : actions ? (
-                      <button type="button" className="ag-link" data-testid={`ag-org-agent-give-${g.ability}`}
-                              onClick={() => void actions.give(g.ability, g.label, roleKey)}>Give</button>
+                      <GatedButton permission={ORG_GIVE_PERMISSION} type="button" className="ag-link" data-testid={`ag-org-agent-give-${g.ability}`}
+                              onClick={() => void actions.give(g.ability, g.label, roleKey)}>Give</GatedButton>
                     ) : null}
                   </li>
                 ))}
@@ -190,11 +192,11 @@ export function OrgAgentPanel({ board, live, roleKey, days, actions, onClose }: 
                 {moveOpen ? (
                   <MenuPop label="Move to…" onClose={() => setMoveOpen(false)}>
                     {teamKeys.map((k) => (
-                      <button key={k} type="button" role="menuitem" data-testid={`ag-zones-move-${k}`}
+                      <GatedButton key={k} permission={ORG_MOVE_PERMISSION} type="button" role="menuitem" data-testid={`ag-zones-move-${k}`}
                               disabled={team?.key === k} title={TEAM_LABELS[k]?.tip}
                               onClick={() => { setMoveOpen(false); void actions.move(roleKey, k, teamLabel(k, board)); }}>
                         {teamLabel(k, board)}
-                      </button>
+                      </GatedButton>
                     ))}
                   </MenuPop>
                 ) : null}

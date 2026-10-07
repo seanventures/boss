@@ -8,6 +8,7 @@
 import React, { useState } from "react";
 
 import { callAction } from "../../lib/call-action";
+import { useGate } from "../../components/gated";
 import { mcpApi } from "../../lib/kit-api";
 import { importSkillAction } from "../actions";
 import { showToast } from "../client-forms";
@@ -20,6 +21,10 @@ export function ImportSheet({ projectId, actor, onClose, onImported }: {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Pre-greyed (P1-18): an mcpServers JSON registers servers; anything else imports a skill.
+  const skillGate = useGate("skill:manage");
+  const mcpGate = useGate("mcp_server:register");
+  const gate = text.trim().startsWith("{") ? mcpGate : skillGate;
 
   const run = async () => {
     setBusy(true); setError(null);
@@ -61,8 +66,8 @@ export function ImportSheet({ projectId, actor, onClose, onImported }: {
                   onChange={(e) => setText(e.target.value)} />
         {error ? <div className="kit-err" role="alert" data-tip={error}>{shortError(error)}</div> : null}
         <footer className="kit-modal-foot">
-          <button type="button" className="kit-btn kit-btn-primary" disabled={busy || !text.trim()}
-                  data-testid="kit-import-run" onClick={() => void run()}>Import</button>
+          <button type="button" className="kit-btn kit-btn-primary" disabled={busy || !text.trim()} {...gate.props}
+                  data-testid="kit-import-run" onClick={gate.guard(() => void run())}>Import{gate.sr}</button>
         </footer>
     </ModalShell>
   );

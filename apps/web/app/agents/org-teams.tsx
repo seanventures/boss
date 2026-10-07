@@ -26,6 +26,8 @@ import {
 import { openRoom } from "../../lib/converse-doors";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import type { OrgActions } from "./org-actions";
+import { ORG_GIVE_PERMISSION } from "./org-permissions";
+import { GatedButton } from "../../components/gated";
 import {
   MenuPop, WaitItem, consoleHref, kitHref, liveFirst, liveState, nameOf, teamLabel, teamTip, workflowHref,
 } from "./org-shared";
@@ -401,12 +403,12 @@ function GapsRow({ team, actions }: { team: OrgTeam; actions: OrgActions | null 
                     <span data-user-text>{g.label}</span> · Set up first ↗
                   </a>
                 ) : (
-                  <button key={`${g.ability}:${g.roleKey}`} type="button" role="menuitem"
+                  <GatedButton key={`${g.ability}:${g.roleKey}`} permission={ORG_GIVE_PERMISSION} type="button" role="menuitem"
                           data-testid={`ag-orgteam-give-${g.ability}-${g.roleKey}`}
                           title={`Give ${g.label} to ${nameOf(g.roleKey)}`}
                           onClick={() => { setOpen(false); void actions.give(g.ability, g.label, g.roleKey); }}>
                     <span data-user-text>{g.label}</span> → <span data-user-text>{nameOf(g.roleKey)}</span>
-                  </button>
+                  </GatedButton>
                 )))}
               </MenuPop>
             ) : null}
@@ -470,8 +472,8 @@ function TeamMenu(p: CardProps) {
               <span className="org-menu-head">
                 Give {rec.abilities} {rec.abilities === 1 ? "ability" : "abilities"} to {rec.roles.length} {rec.roles.length === 1 ? "agent" : "agents"}
               </span>
-              <button type="button" role="menuitem" data-testid={`ag-orgteam-give-recommended-yes-${team.key}`}
-                      onClick={() => { setOpen(false); setConfirm(false); void actions?.giveRecommended(rec.roles); }}>Give</button>
+              <GatedButton permission={ORG_GIVE_PERMISSION} type="button" role="menuitem" data-testid={`ag-orgteam-give-recommended-yes-${team.key}`}
+                      onClick={() => { setOpen(false); setConfirm(false); void actions?.giveRecommended(rec.roles); }}>Give</GatedButton>
               <button type="button" role="menuitem" onClick={() => setConfirm(false)}>Cancel</button>
             </>
           ) : (
@@ -482,8 +484,8 @@ function TeamMenu(p: CardProps) {
                         onClick={() => { setOpen(false); openRoom({ seats }); }}>Open room</button>
               ) : null}
               {rec.abilities && actions ? (
-                <button type="button" role="menuitem" data-testid={`ag-orgteam-give-recommended-${team.key}`}
-                        onClick={() => setConfirm(true)}>Give recommended</button>
+                <GatedButton permission={ORG_GIVE_PERMISSION} type="button" role="menuitem" data-testid={`ag-orgteam-give-recommended-${team.key}`}
+                        onClick={() => setConfirm(true)}>Give recommended</GatedButton>
               ) : null}
               <a role="menuitem" href={consoleHref({ area: "workforce", view: "activity", layout: null, days: null,
                                                      isolate: null, run: null, focus: null, role: null })}>Activity ↗</a>
