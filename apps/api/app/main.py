@@ -2174,6 +2174,19 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     authenticated_token = current_transport_authenticated.set(True)
     auth_method_token = current_auth_method.set(auth_method)
     try:
+        # ENFORCED ROUTE (round 2 f): the key's legacy member ("ceo") must not be the actor every
+        # handler records — the request is the legacy principal identity mapped the key to
+        # (sys_legacy_console, a legacy service account, ...). Authenticated once, here; the guard
+        # reuses it.
+        from boss_engine.identity.enforcement import AuthzMode as _AuthzMode
+
+        if identity_guard.route_mode(request.scope) == _AuthzMode.ENFORCE:
+            try:
+                _legacy_ctx = await run_in_threadpool(identity_guard.request_auth, request)
+            except Exception:  # noqa: BLE001 — the guard refuses it with the right status
+                _legacy_ctx = None
+            if _legacy_ctx is not None:
+                current_api_principal.set(str(_legacy_ctx.principal.id))
         read_project_id = requested_get_project_id(request)
         if read_project_id:
             try:
