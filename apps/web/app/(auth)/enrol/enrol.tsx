@@ -11,6 +11,7 @@ import { CaretRight, DeviceMobile, Fingerprint } from "@phosphor-icons/react";
 import { idPost } from "../../../lib/identity/api";
 import { codesOf, type RecoveryCodes } from "../../../lib/identity/types-auth";
 import { webauthnAvailable } from "../../../lib/identity/webauthn";
+import { passkeyBlockWords } from "../../../lib/identity/passkey-support";
 import { Face } from "../../../components/identity/kit";
 import { AuthStage, Live, Logo, safeNextClient } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
@@ -19,7 +20,12 @@ import { TotpStep } from "./totp-step";
 
 type Stage = "choose" | "totp" | "codes";
 
-export function Enrol({ host, next, who }: { host: string; next: string; who: { name: string; email: string; hue: number } | null }) {
+export function Enrol({ host, next, who, passkeyReason = null }: {
+  host: string; next: string; who: { name: string; email: string; hue: number } | null;
+  /** /v1/auth/options passkey_reason: passkey_needs_domain on an IP address (passkey-support). */
+  passkeyReason?: string | null;
+}) {
+  const [noPasskey, setNoPasskey] = useState<string | null>(null);
   const [stage, setStage] = useState<Stage>("choose");
   const [passkeys, setPasskeys] = useState(true);
   const [codes, setCodes] = useState<string[] | null>(null);
@@ -28,9 +34,13 @@ export function Enrol({ host, next, who }: { host: string; next: string; who: { 
   const target = safeNextClient(next);
 
   useEffect(() => {
-    setPasskeys(webauthnAvailable());
+    const blocked = passkeyBlockWords(passkeyReason, window.location);
+    setNoPasskey(blocked);
+    setPasskeys(webauthnAvailable() && !blocked);
+    // No passkey possible here: the authenticator app IS the choice, not a link under a dead button.
+    if (blocked) setStage("totp");
     primeCsrf().catch(() => undefined);
-  }, []);
+  }, [passkeyReason]);
 
   /** The codes issued with the first factor; only when there were none, ask for a set. */
   const toCodes = async (issued: string[] = []) => {
@@ -61,6 +71,7 @@ export function Enrol({ host, next, who }: { host: string; next: string; who: { 
         <Logo host={host} />
         <h1>Add an authenticator</h1>
         <p className="idn-s" data-copy="prose">Scan the code with your authenticator app, then enter the 6 digits it shows. The key is shown only now.</p>
+        {noPasskey ? <div className="idn-note" data-copy="prose" data-testid="no-passkey-here">{noPasskey}</div> : null}
         <TotpStep onDone={(issued) => { toCodes(issued).catch((e) => setError(sayAuth(e))); }} />
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
         <div className="idn-alt">
@@ -86,7 +97,7 @@ export function Enrol({ host, next, who }: { host: string; next: string; who: { 
           <Fingerprint size={18} weight="bold" aria-hidden /> {busy ? "Waiting for your device…" : "Create a passkey"}
         </button>
       ) : (
-        <div className="idn-note" data-copy="prose">This browser has no passkeys. Use an authenticator app.</div>
+        <div className="idn-note" data-copy="prose" data-testid="no-passkey-here">{noPasskey ?? "This browser has no passkeys. Use an authenticator app."}</div>
       )}
       {error ? <div className="idn-err" role="alert">{error}</div> : null}
       <div className="idn-alt">

@@ -16,6 +16,7 @@ import type { AuthOptions, Factor } from "../../lib/identity/types";
 import { probeSsoLink, ssoLinkStartPath } from "../../lib/identity/sso-link";
 import { codesOf, type LinkedIdentity, type RecoveryCodes } from "../../lib/identity/types-auth";
 import { webauthnAvailable } from "../../lib/identity/webauthn";
+import { PASSKEY_NEEDS_DOMAIN_WORDS, PASSKEY_NEEDS_HTTPS_WORDS, passkeyBlockWords, passkeyFailureWords } from "../../lib/identity/passkey-support";
 import { useGuardedCall, useIdentity } from "../../components/identity/identity-provider";
 import { Ago, ErrorLine, Face, Pill, Sheet } from "../../components/identity/kit";
 import type { MyProfile } from "../../lib/identity/types-account";
@@ -25,8 +26,19 @@ import { RecoveryCodesView } from "../(auth)/recovery-codes";
 import { TotpStep } from "../(auth)/enrol/totp-step";
 
 function said(e: unknown): string {
-  return e instanceof IdentityError ? e.message : "That didn't work";
+  const passkey = passkeyFailureWords(e);
+  if (passkey) return passkey;
+  if (e instanceof IdentityError) return PASSKEY_CODES[e.code] ?? e.message;
+  return `That didn't work · ${e instanceof Error && e.message ? e.message : "no answer"}`;
 }
+
+/** The API's passkey refusals, in the same words the sign-in screens use. */
+const PASSKEY_CODES: Record<string, string> = {
+  passkey_needs_domain: PASSKEY_NEEDS_DOMAIN_WORDS,
+  passkey_needs_https: PASSKEY_NEEDS_HTTPS_WORDS,
+  passkey_limit_reached: "You already have 10 passkeys. Remove one first",
+  passkey_verification_failed: "The device's answer didn't check out. Try again",
+};
 
 const FACTOR_ICON: Record<Factor["kind"], React.ReactNode> = {
   passkey: <Fingerprint size={16} aria-hidden />, totp: <DeviceMobile size={16} aria-hidden />,
@@ -81,7 +93,9 @@ function ProfileSheet({ profile, id, onClose, onSaved }: { profile: MyProfile; i
   );
 }
 
-export function AccountSecurity({ me, factors: initialFactors, identities: initialIdentities, host, linked = false, providers = [], passwordMin = 12, profile: initialProfile = null }: {
+export function AccountSecurity({ me, factors: initialFactors, identities: initialIdentities, host, linked = false, providers = [], passwordMin = 12, profile: initialProfile = null, passkeyReason = null }: {
+  /** /v1/auth/options passkey_reason (passkey-support): no "Add a passkey" where none can be made. */
+  passkeyReason?: string | null;
   me: MeResponse | null; factors: Factor[]; identities: LinkedIdentity[]; host: string;
   /** The security policy's password minimum (GET /v1/auth/options). */
   passwordMin?: number;
@@ -107,7 +121,12 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
   const [pwError, setPwError] = useState<string | null>(null);
   // Known only in the browser: read after mount, so the server's first paint and hydration agree.
   const [canPasskey, setCanPasskey] = useState(false);
-  useEffect(() => { setCanPasskey(webauthnAvailable()); }, []);
+  const [noPasskey, setNoPasskey] = useState<string | null>(null);
+  useEffect(() => {
+    const blocked = passkeyBlockWords(passkeyReason, window.location);
+    setNoPasskey(blocked);
+    setCanPasskey(webauthnAvailable() && !blocked);
+  }, [passkeyReason]);
   useEffect(() => {
     if (!linked) return;
     showToast("success", "Single sign-on linked");
@@ -211,7 +230,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
                 <Plus size={14} weight="bold" aria-hidden /> Add a passkey
               </button>
             </div>
-          ) : null}
+          ) : noPasskey ? <div className="idn-note" data-copy="prose" data-testid="no-passkey-here">{noPasskey}</div> : null}
         </section>
 
         <section className="idn-card" aria-labelledby="acc-pw-h">

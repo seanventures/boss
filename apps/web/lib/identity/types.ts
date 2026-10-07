@@ -443,6 +443,9 @@ export interface AuthOptions {
   shared_password?: { until: string | null } | null;
   /** S1: passkeys work only once a public origin is bound; false hides "Sign in with a passkey". */
   passkey?: boolean;
+  /** Why passkeys can't be offered: passkey_needs_domain (an IP address), passkey_needs_https, or
+   *  public_origin_unset (nothing bound yet — a claim binds it). Null/absent: they can. */
+  passkey_reason?: string | null;
   /** The public URL BOSS binds cookies, passkeys and emailed links to (H2). Null: none bound —
    *  emailed sign-in cannot work, so it is not offered. Absent: an API that does not say. */
   public_origin?: string | null;

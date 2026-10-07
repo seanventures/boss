@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import secrets
 from dataclasses import dataclass
@@ -42,7 +43,7 @@ PURPOSES = frozenset({"login", "mfa", "step_up", "register"})
 
 
 class PasskeyError(Exception):
-    """`code`: unavailable | challenge_invalid | verification_failed | unknown_credential |
+    """`code`: unavailable | needs_domain | needs_https | challenge_invalid | verification_failed | unknown_credential |
     user_mismatch | limit_reached | aaguid_not_allowed | counter_regressed (`regressed` names the
     blocked credential: its principal and id, so the caller can record it)."""
 
@@ -66,13 +67,38 @@ def _multi_device(verified: Any) -> bool:
     return str(getattr(kind, "value", kind)).lower().endswith("multi_device")
 
 
-def rp_for(origin: Optional[str]) -> tuple[str, str]:
+#: Why a passkey cannot be made for an origin (PasskeyError codes; the API answers `passkey_<code>`).
+NEEDS_DOMAIN = "needs_domain"     # an IP literal: WebAuthn forbids an IP address as the RP ID
+NEEDS_HTTPS = "needs_https"       # plain http on a non-localhost host: not a secure context
+
+
+def passkey_blocker(origin: Optional[str]) -> Optional[str]:
+    """None when a browser can make a passkey for `origin`, else why not. WebAuthn's RP ID must be
+    a registrable DOMAIN (an IPv4/IPv6 literal is refused by every browser before the authenticator
+    is even asked) on a secure context (https, or http on localhost / *.localhost). BOSS never
+    hands out options a browser is bound to refuse (round 3: boss-1 at https://100.93.58.20)."""
     if not origin:
-        raise PasskeyError("unavailable")
-    host = urlsplit(origin).hostname
+        return "unavailable"
+    parts = urlsplit(origin)
+    host = (parts.hostname or "").strip("[]").lower()
     if not host:
-        raise PasskeyError("unavailable")
-    return host, origin
+        return "unavailable"
+    try:
+        ipaddress.ip_address(host)
+        return NEEDS_DOMAIN
+    except ValueError:
+        pass
+    if parts.scheme != "https" and not (host == "localhost" or host.endswith(".localhost")):
+        return NEEDS_HTTPS
+    return None
+
+
+def rp_for(origin: Optional[str]) -> tuple[str, str]:
+    blocked = passkey_blocker(origin)
+    if blocked:
+        raise PasskeyError(blocked)
+    host = urlsplit(origin or "").hostname or ""
+    return host, origin or ""
 
 
 def user_handle_for(principal_id: str) -> bytes:
