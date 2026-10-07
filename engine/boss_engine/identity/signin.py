@@ -514,6 +514,11 @@ def passkey_verify(db: Any, facts: RequestFacts, *, credential: Any, purpose: st
                                                   binding_secret=binding or "", credential=credential)
     except passkeys.PasskeyError as exc:
         org = default_org_id(db)
+        if org and exc.regressed is not None:
+            emit(db, org_id=org, event_type="passkey.counter_regressed", outcome=Outcome.DENIED,
+                 ip=facts.ip, user_agent=facts.user_agent, request_id=facts.request_id,
+                 target_type="passkey", target_id=exc.regressed.passkey_id,
+                 details={"blocked": True, "principal": exc.regressed.principal_id})
         if org:
             emit(db, org_id=org, event_type="auth.passkey.failed", outcome=Outcome.FAILURE,
                  ip=facts.ip, user_agent=facts.user_agent, request_id=facts.request_id,

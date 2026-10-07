@@ -7740,6 +7740,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS identity_providers_issuer_per_org ON identity_
   WHERE issuer IS NOT NULL AND issuer <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS identity_user_identities_provider_subject
   ON identity_user_identities (provider_id, issuer, subject);
+-- L3: a passkey whose sign counter went backwards is flagged (and, when device-bound, refused).
+ALTER TABLE identity_webauthn_credentials ADD COLUMN IF NOT EXISTS counter_regressed_at TIMESTAMPTZ;
 -- L4: an org is claimed once. The advisory lock serialises claims; this makes a second
 -- `bootstrap.claimed` impossible even if a code path forgets the lock.
 CREATE UNIQUE INDEX IF NOT EXISTS identity_one_claim_per_org ON identity_security_events (org_id)
