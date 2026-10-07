@@ -66,7 +66,8 @@ EVENT_TYPES: frozenset[str] = frozenset({
     # agents (stream = lineage for passport/grant/token events)
     "agent.passport.born", "agent.passport.sealed", "agent.passport.ceiling_changed",
     "agent.passport.sponsor_changed", "agent.passport.suspended", "agent.passport.resumed",
-    "agent.passport.revoked", "agent.passport.reissued",
+    "agent.passport.revoked", "agent.passport.reissued", "agent.passport.rules_changed",
+    "agent.passport.flagged",
     "delegation.created", "delegation.used_first", "delegation.narrowed", "delegation.revoked",
     "delegation.expired", "delegation.suspended", "delegation.extended",
     "token.issued", "token.exchanged", "token.denied", "credential.handed_out",

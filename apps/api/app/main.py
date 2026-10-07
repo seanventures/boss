@@ -1522,6 +1522,11 @@ async def lifespan(_: FastAPI):
                     _identity_passports.upgrade_from_roles(org_id=_org, db=_connection,
                                                            default_sponsor=_owners[0])
         print(f"[identity] vault ready (key {_kek or 'none configured, empty vault'}); signing keys provisioned")
+        # The scheduled half of the cascade (grant expiry, workflow-run grants), key rotation,
+        # provider-revoke retries and the audit re-key (identity/maintenance.py).
+        from boss_engine.identity import maintenance as _identity_maintenance
+
+        _identity_maintenance.start(engine)
     except (_identity_vault.BootRefused, _identity_signing_keys.SigningKeysMissing) as exc:
         print(f"[identity] REFUSING TO START: {exc}. Restore the master key file (or BOSS_MASTER_KEY) "
               "this vault was written with; BOSS never serves with a vault it cannot open.", flush=True)

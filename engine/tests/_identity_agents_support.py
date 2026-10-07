@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS roles (id TEXT PRIMARY KEY, role_key TEXT, agent_id T
   project_id TEXT, display_name TEXT, sponsor TEXT, spec JSONB);
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS spec JSONB;
 CREATE TABLE IF NOT EXISTS code_task_runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running');
+ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS spec JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE TABLE IF NOT EXISTS code_task_stop_requests (run_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, actor TEXT NOT NULL,
   reason TEXT, phase TEXT, requested_at TIMESTAMPTZ NOT NULL DEFAULT now(), honoured_at TIMESTAMPTZ);
 CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, paused_at TIMESTAMPTZ,
@@ -68,7 +69,7 @@ _TRUNCATE = ("identity_security_events", "identity_egress_log", "identity_egress
              "identity_agent_ceilings", "identity_agent_passports", "identity_signing_keys", "identity_vault_items",
              "identity_vault_keks", "identity_sessions", "identity_api_credentials", "identity_principals",
              "code_task_stop_requests", "code_task_runs", "workflow_runs", "workflow_schedules", "roles", "jobs",
-             "identity_legacy_mappings", "projects", "workspaces", "identity_revocation_notices")
+             "identity_legacy_mappings", "projects", "workspaces", "identity_revocation_notices", "identity_rate_limits")
 
 _schema_ready = False
 
@@ -279,14 +280,15 @@ def build_env(monkeypatch) -> Env:
 
 
 def start(env: Env, grant_id: str, *, agent=None, run="run_ct:task1", scope=BUILDER, repos=(), audiences=None,
-          person=None):
+          person=None, github_needs=None):
     from boss_engine.identity import runs
     from boss_engine.identity.delegation import AUD_API
 
     with env.db() as c:
         return runs.start_run(session_ctx(person or env.alice),
                               runs.RunStart(run_id=run, agent_id=agent or env.atlas, project_id=env.project,
-                                            repos=tuple(repos), scope=frozenset(scope)),
+                                            repos=tuple(repos), scope=frozenset(scope),
+                                            github_needs=github_needs),
                               grant_id=grant_id, db=c, audiences=audiences or (AUD_API,))
 
 

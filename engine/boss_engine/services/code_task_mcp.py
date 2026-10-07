@@ -101,7 +101,13 @@ def plan(connection: Connection, settings: Any, project_id: str, role_key: str
             continue  # nothing on it the harness may call
         try:
             headers = auth_headers(connection, settings, project_id, server)
-        except Exception:  # noqa: BLE001 — a token that cannot be read: leave the server out
+            # NO PASSTHROUGH (MCP security BCP): the file an agent's harness reads may carry only
+            # the upstream server's own auth, never a BOSS session, key, run token or egress
+            # credential. A server whose configured auth is one of those is left out.
+            from boss_engine.identity.tokens import refuse_passthrough
+
+            headers = refuse_passthrough(headers or {})
+        except Exception:  # noqa: BLE001 — a token that cannot be read, or a BOSS credential: leave it out
             continue
         servers[name] = {"type": "http", "url": server["url"], **({"headers": headers}
                                                                   if headers else {})}

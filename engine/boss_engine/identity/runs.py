@@ -156,6 +156,11 @@ def end_run(run_id: str, *, db: Any, org_id: str, reason: str = "run ended") -> 
                     "AND revoked_at IS NULL"), {"r": run_id, "c": run_id + "/%"})
     grants.end_task_grants(run_id, db=db, org_id=org_id)
     github_app.revoke_runs([run_id], reason)
+    # A SEPARATE boss-egress process holds the run's installation tokens in ITS memory: tell it
+    # (identity_revocation_notices + NOTIFY), so they are revoked at GitHub there too.
+    from . import cascade
+
+    cascade.notify(db, trigger="run_ended", target_id=run_id, runs=[run_id], reason=reason)
     with _lock:
         for rid in [k for k in _SHIMS if k == run_id or k.startswith(run_id + "/")]:
             _SHIMS.pop(rid, None)
@@ -659,6 +664,8 @@ def _no_authority(reason: str, *, task_run_id: str) -> None:
 
 
 BUILD_SCOPE = frozenset({"code_task:read", "code_task:steer", "repository:read", "github:read", "github:sync"})
+#: What a build declares it does on GitHub (the run's step needs): push its branch, open its PR.
+BUILD_GITHUB_NEEDS = {"contents": "write", "pull_requests": "write", "checks": "read", "statuses": "read"}
 
 
 def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner: str, repo: str,
@@ -720,7 +727,8 @@ def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner
                 rid = f"run_ct:{task_run_id}"
             shim = start_run(subject_for(acting, db=db),
                              RunStart(run_id=rid, agent_id=agent_id, project_id=project_id,
-                                      repos=(f"{owner}/{repo}",), scope=BUILD_SCOPE),
+                                      repos=(f"{owner}/{repo}",), scope=BUILD_SCOPE,
+                                      github_needs=BUILD_GITHUB_NEEDS),
                              grant_id=acting.grant_id, db=db, audiences=(AUD_API,))
     remember_engine(engine)
     return shim, egress_access(shim, owner=owner, repo=repo)
