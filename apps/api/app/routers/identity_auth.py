@@ -25,6 +25,7 @@ from boss_engine.identity.authn import AuthnError, RequestCredentials
 from boss_engine.identity.authn_support import origin_of, public_origin
 from boss_engine.identity.passwords import PasswordBusy, PasswordRejected, check_new_password, hash_password
 from boss_engine.identity.principal import AuthContext
+from boss_engine.identity import webauthn as passkeys_module
 from boss_engine.identity.signin import Answer, RequestFacts
 
 
@@ -263,6 +264,10 @@ def build_identity_auth_router() -> APIRouter:
             from boss_engine.config import get_settings
 
             bound = public_origin(db)
+            judged = bound or (claim_info or {}).get("origin") or _browser_origin(request) or origin
+            blocker = passkeys_module.passkey_blocker(judged)
+            passkey_reason = (f"passkey_{blocker}" if blocker and blocker != "unavailable"
+                              else None if bound else "public_origin_unset")
             return JSONResponse({
                 "org_name": org_name, "host": (origin.split("://", 1)[-1] if origin else ""),
                 # H2: the bound origin links, passkeys and SSO use (None: none is bound, so BOSS
@@ -273,7 +278,13 @@ def build_identity_auth_router() -> APIRouter:
                 "providers": providers, "smtp": smtp, "signup": email_signin.signup_enabled(db),
                 "legacy_password": bool(claim_module.legacy_password_configured()),
                 "shared_password": _shared_password_offer(db, org) if claim_info is None else None,
-                "passkey": bool(public_origin(db)), "claim": claim_info,
+                # Passkeys only where a browser can make one: a bound origin whose host is a domain
+                # on a secure context. `passkey_reason` says why not — judged on the bound origin, or
+                # (unclaimed) the one this browser is on, which the claim would bind — e.g.
+                # passkey_needs_domain for https://100.64.0.20 (webauthn.passkey_blocker).
+                "passkey": bool(bound) and passkey_reason is None,
+                "passkey_reason": passkey_reason,
+                "claim": claim_info,
                 # The policy's password minimum, so every "choose a password" field says it.
                 "password_min_length": pol.password_min_length if pol else 12,
             }, headers={"Cache-Control": "no-store"})

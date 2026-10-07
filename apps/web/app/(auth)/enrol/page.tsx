@@ -20,5 +20,5 @@ export default async function EnrolPage({ searchParams }: Props) {
   if (!me.ok) redirect(`/login?next=${encodeURIComponent(`/enrol?next=${next}`)}`);
   const options = await loadAuthOptions();
   const who = { name: me.data.display_name, email: me.data.email ?? "", hue: avatarTone(me.data.principal_id, me.data.avatar_seed) };
-  return <Enrol host={options.host} next={next} who={who} />;
+  return <Enrol host={options.host} next={next} who={who} passkeyReason={options.passkey_reason ?? null} />;
 }

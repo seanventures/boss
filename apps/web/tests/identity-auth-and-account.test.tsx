@@ -403,3 +403,78 @@ describe("My account", () => {
     expect(calls[0].body).toEqual({ dry_run: true });
   });
 });
+
+describe("Passkeys need a domain, and every passkey failure says why (round 3, boss-1)", () => {
+  const ON_IP = "passkey_needs_domain";
+  const LINE = "Passkeys need a domain name. This BOSS is reached by an IP address.";
+
+  it("claim on an IP address: no passkey offered, the authenticator app is the way in, one plain line", async () => {
+    window.history.replaceState(null, "", "/claim#t=setup_abc");
+    const el = await mount(<ClaimFlow options={options({ path: "setup_token", origin: null, expires_at: null, seats: [] }, { passkey: false, passkey_reason: ON_IP })} />);
+    expect(el.querySelector("[data-testid='no-passkey-here']")?.textContent).toBe(LINE);
+    expect(el.querySelector("[data-testid='claim-submit']")?.textContent).toContain("Claim and add an authenticator");
+    expect(el.querySelector("#claim-pw")).not.toBeNull();
+    expect(el.textContent).not.toContain("Create a passkey");
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("enrolment on an IP address opens on the authenticator app with the line, and offers no passkey", async () => {
+    routes({ "POST /v1/identity/me/mfa/totp": { body: { secret: "JBSWY3DPEHPK3PXP", otpauth_uri: "otpauth://totp/x", qr_svg: null } },
+             "GET /v1/identity/me": { body: { csrf_token: "c" } } });
+    const el = await mount(<Enrol host="100.64.0.20" next="/identity" who={null} passkeyReason={ON_IP} />);
+    expect(el.querySelector("[data-testid='totp-step']")).not.toBeNull();
+    expect(el.querySelector("[data-testid='no-passkey-here']")?.textContent).toBe(LINE);
+    expect(el.querySelector("[data-testid='enrol-passkey']")).toBeNull();
+    expect(el.textContent).not.toContain("Use a passkey instead");
+    // No QR from the API: no image box at all, only the key.
+    expect(el.querySelector("[data-testid='totp-step'] img")).toBeNull();
+    expect(el.textContent).toContain("JBSWY3DPEHPK3PXP");
+  });
+
+  it("My account on an IP address: no “Add a passkey”, the line instead", async () => {
+    const el = await mount(asOperator(<AccountSecurity me={ME} factors={F.factors(NOW).usr_sam} identities={[]} host="100.64.0.20" passkeyReason={ON_IP} />));
+    expect(el.querySelector("[data-testid='add-passkey']")).toBeNull();
+    expect(el.querySelector("[data-testid='no-passkey-here']")?.textContent).toBe(LINE);
+  });
+
+  it("the QR is drawn as a namespaced SVG image, even when the API's SVG lacks xmlns", async () => {
+    routes({ "POST /v1/identity/me/mfa/totp": { body: { secret: "K", otpauth_uri: "otpauth://totp/x", qr_svg: '<svg width="8" height="8"><path d="M0 0h8v8H0z"/></svg>' } },
+             "GET /v1/identity/me": { body: { csrf_token: "c" } } });
+    const el = await mount(<Enrol host="boss.acme.dev" next="/identity" who={null} passkeyReason={ON_IP} />);
+    const src = el.querySelector("[data-testid='totp-qr']")?.getAttribute("src") ?? "";
+    expect(src.startsWith("data:image/svg+xml;base64,")).toBe(true);
+    expect(atob(src.split(",")[1])).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
+  });
+
+  for (const [name, words] of [
+    ["NotAllowedError", "Passkey cancelled or timed out"],
+    ["SecurityError", "This address can't hold a passkey"],
+    ["InvalidStateError", "This device already has a passkey here"],
+    ["NotSupportedError", "This device can't make this kind of passkey"],
+    ["ConstraintError", "This device can't verify it's you"],
+    ["UnknownError", "The device's passkey store failed"],
+  ] as const) {
+    it(`a ${name} from the device says why: “${words}…”`, async () => {
+      routes({
+        "GET /v1/identity/me": { body: { csrf_token: "c" } },
+        "POST /v1/identity/me/passkeys/options": { body: { publicKey: { challenge: "eA", rp: { name: "BOSS" }, user: { id: "dQ", name: "p", displayName: "P" }, pubKeyCredParams: [] } } },
+      });
+      Object.defineProperty(navigator, "credentials", { value: { get: vi.fn(), create: vi.fn(async () => { throw new DOMException("x", name); }) }, configurable: true });
+      const el = await mount(<Enrol host="boss.acme.dev" next="/identity" who={null} />);
+      await click(el.querySelector("[data-testid='enrol-passkey']"));
+      const said = el.querySelector("[role='alert']")?.textContent ?? "";
+      expect(said).toContain(words);
+      expect(said).not.toBe("That didn't work");
+    });
+  }
+
+  it("the API's refusal of passkey options is said in the same plain words", async () => {
+    routes({
+      "GET /v1/identity/me": { body: { csrf_token: "c" } },
+      "POST /v1/identity/me/passkeys/options": { status: 409, body: { error: ON_IP } },
+    });
+    const el = await mount(<Enrol host="boss.acme.dev" next="/identity" who={null} />);
+    await click(el.querySelector("[data-testid='enrol-passkey']"));
+    expect(el.querySelector("[role='alert']")?.textContent).toBe(LINE);
+  });
+});

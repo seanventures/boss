@@ -7,6 +7,10 @@
  * prompt is shown and the stub's verify accepts. A real API never sends that field.
  */
 
+import { PasskeyFailure } from "./passkey-support";
+
+export { PasskeyFailure };
+
 type B64 = string;
 export type AssertionOptions = {
   stub?: boolean;
@@ -64,15 +68,26 @@ function extensions(pk: PublicKeyCredential): Record<string, unknown> {
   try { return (pk.getClientExtensionResults?.() ?? {}) as Record<string, unknown>; } catch { return {}; }
 }
 
-export class PasskeyCancelled extends Error {
-  constructor() { super("passkey_cancelled"); this.name = "PasskeyCancelled"; }
+/** The person backed out, or the prompt timed out (NotAllowedError / AbortError). */
+export class PasskeyCancelled extends PasskeyFailure {
+  constructor(reason = "NotAllowedError") { super(reason); this.name = "PasskeyCancelled"; }
+}
+
+/** Every browser refusal carries its DOMException name, so the screen can say WHY (passkey-support). */
+function failure(error: unknown): unknown {
+  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
+    if (error.name === "NotAllowedError" || error.name === "AbortError") return new PasskeyCancelled(error.name);
+    return new PasskeyFailure(error.name, error.message);
+  }
+  if (error instanceof TypeError) return new PasskeyFailure("TypeError", error.message);
+  return error;
 }
 
 /** Ask the device for a passkey assertion. Throws PasskeyCancelled when the person backs out. */
 export async function getAssertion(given: Wrapped<AssertionOptions>): Promise<Record<string, unknown>> {
   const options = unwrapOptions(given);
   if (options.stub) return { stub: true };
-  if (!webauthnAvailable()) throw new Error("webauthn_unavailable");
+  if (!webauthnAvailable()) throw new PasskeyFailure("webauthn_unavailable");
   let cred: Credential | null;
   try {
     cred = await navigator.credentials.get({
@@ -85,8 +100,7 @@ export async function getAssertion(given: Wrapped<AssertionOptions>): Promise<Re
       },
     });
   } catch (error) {
-    if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError")) throw new PasskeyCancelled();
-    throw error;
+    throw failure(error);
   }
   if (!cred) throw new PasskeyCancelled();
   const pk = cred as PublicKeyCredential;
@@ -105,7 +119,7 @@ export async function getAssertion(given: Wrapped<AssertionOptions>): Promise<Re
 export async function createCredential(given: Wrapped<RegistrationOptions>): Promise<Record<string, unknown>> {
   const options = unwrapOptions(given);
   if (options.stub) return { stub: true };
-  if (!webauthnAvailable()) throw new Error("webauthn_unavailable");
+  if (!webauthnAvailable()) throw new PasskeyFailure("webauthn_unavailable");
   let cred: Credential | null;
   try {
     cred = await navigator.credentials.create({
@@ -117,8 +131,7 @@ export async function createCredential(given: Wrapped<RegistrationOptions>): Pro
       },
     });
   } catch (error) {
-    if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError")) throw new PasskeyCancelled();
-    throw error;
+    throw failure(error);
   }
   if (!cred) throw new PasskeyCancelled();
   const pk = cred as PublicKeyCredential;
