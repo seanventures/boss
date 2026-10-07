@@ -4,7 +4,7 @@
 // misspelt permission anywhere in apps/web is a type error.
 
 export const CATALOGUE_VERSION = 1 as const;
-export const CATALOGUE_FINGERPRINT = "d20655423828c38a";
+export const CATALOGUE_FINGERPRINT = "9966fa420cdde42e";
 
 export const PERMISSIONS = [
   "directory:read",
@@ -220,7 +220,7 @@ export const PERMISSION_META: Readonly<Record<Permission, PermissionMeta>> = {
   "user:revoke_sessions": { key: "user:revoke_sessions", title: "Sign a person out everywhere", description: "Sign a person out of every device.", category: "Identity and access", roles: ["owner", "admin"], scope: "org", stepUp: true, delegable: false, critical: false, systemOnly: false },
   "group:read": { key: "group:read", title: "View groups", description: "List groups and their members.", category: "Identity and access", roles: ["owner", "admin", "auditor"], scope: "org", stepUp: false, delegable: false, critical: false, systemOnly: false },
   "group:manage": { key: "group:manage", title: "Manage groups", description: "Create, rename and delete groups.", category: "Identity and access", roles: ["owner", "admin"], scope: "org", stepUp: true, delegable: false, critical: false, systemOnly: false },
-  "group:manage_members": { key: "group:manage_members", title: "Manage group members", description: "Add and remove group members (manual groups only; IdP groups are read-only).", category: "Identity and access", roles: ["owner", "admin"], scope: "org", stepUp: true, delegable: false, critical: false, systemOnly: false },
+  "group:manage_members": { key: "group:manage_members", title: "Manage group members", description: "Add and remove group members (manual groups only; IdP groups are read-only).", category: "Identity and access", roles: ["owner", "admin"], scope: "org", stepUp: true, delegable: false, critical: true, systemOnly: false },
   "access_role:read": { key: "access_role:read", title: "View access roles", description: "See access roles and their permissions.", category: "Identity and access", roles: ["owner", "admin", "operator", "viewer", "auditor"], scope: "org", stepUp: false, delegable: false, critical: false, systemOnly: false },
   "access_role:manage": { key: "access_role:manage", title: "Manage access roles", description: "Create, edit, clone and delete custom access roles. Never more than you hold.", category: "Identity and access", roles: ["owner", "admin"], scope: "org", stepUp: true, delegable: false, critical: true, systemOnly: false },
   "role_binding:read": { key: "role_binding:read", title: "View role bindings", description: "See who holds which access role, where.", category: "Identity and access", roles: ["owner", "admin", "auditor"], scope: "org", stepUp: false, delegable: false, critical: false, systemOnly: false },

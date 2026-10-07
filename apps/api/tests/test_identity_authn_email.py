@@ -156,8 +156,11 @@ def test_a83_a_magic_link_opened_in_another_browser_signs_nothing_in(world, engi
     asker.post("/v1/auth/magic-link", json={"email": "mb@example.test"}, headers=HEADERS)
     token = _token_from(world.last_mail_to("mb@example.test")[1])
     res = other.post("/v1/auth/magic-link/verify", json={"token": token}, headers=HEADERS)
-    assert res.status_code == 401 and res.json()["error"] == "wrong_browser"
+    assert res.status_code == 401 and res.json()["error"] == "link_invalid"
     assert "browser where you asked" in res.json()["message"]
+    # no oracle: a live token opened elsewhere answers exactly like a made-up one
+    made_up = other.post("/v1/auth/magic-link/verify", json={"token": "x" * len(token)}, headers=HEADERS)
+    assert (made_up.status_code, made_up.json()) == (res.status_code, res.json())
     assert other.cookies.get(authn.SESSION_COOKIE) is None
     # it still works where it was asked for (the wrong browser did not burn it)
     assert asker.post("/v1/auth/magic-link/verify", json={"token": token}, headers=HEADERS).status_code == 200

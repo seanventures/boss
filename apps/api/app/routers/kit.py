@@ -145,7 +145,7 @@ def build_kit_router(
                 raise
 
     @router.post("/v1/kit/{ability}/connect")
-    @permit(P.SKILL_MANAGE, scope=Scope.project(body="project_id"))
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.project(body="project_id"))   # stores credentials: critical
     def connect(ability: str, body: ConnectBody) -> dict[str, Any]:
         """Save & test: the ENTERED values are tested first and stored only if the test passes;
         a failure answers 422 {field, message} and writes nothing."""
@@ -163,7 +163,7 @@ def build_kit_router(
             return kit.ability_view(connection, settings(), body.project_id, ability)
 
     @router.delete("/v1/kit/{ability}/connection")
-    @permit(P.SKILL_MANAGE, scope=Scope.project(query="project_id"))
+    @permit(P.INTEGRATION_MANAGE, scope=Scope.project(query="project_id"))  # removes credentials
     def disconnect(ability: str, project_id: str, actor: Optional[str] = None
                    ) -> dict[str, Any]:
         spec = _ability(project_id, ability)
