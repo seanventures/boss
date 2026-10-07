@@ -135,7 +135,7 @@ describe("a delegation's lineage", () => {
     const el = await mount(viewer, <DelegationView initial={d} />);
     const revoke = el.querySelector("[data-testid='revoke-grant']")!;
     expect(revoke.getAttribute("aria-disabled")).toBe("true");
-    expect(revoke.getAttribute("title")).toContain("Needs delegation:revoke_any");
+    expect(revoke.getAttribute("title")).toContain("Needs “Revoke any delegation”");
     await click(revoke);
     // Nothing was sent: no dry run (it cannot), no revoke.
     expect(calls.filter((c) => c.path.endsWith("/revoke") || c.path.endsWith("/cascade-preview"))).toEqual([]);
@@ -204,7 +204,7 @@ describe("the security audit log", () => {
     for (const id of ["verify-chain", "export-audit"]) {
       const b = el.querySelector(`[data-testid='${id}']`)!;
       expect(b.getAttribute("aria-disabled")).toBe("true");
-      expect(b.getAttribute("title")).toContain("Needs audit:export");
+      expect(b.getAttribute("title")).toContain("Needs “Export and verify");
     }
   });
 });
@@ -220,7 +220,7 @@ describe("Sign-in & SSO settings", () => {
     expect(el.querySelector("[data-testid='provider-idp_okta']")?.textContent).toContain("OIDC");
     expect(el.querySelector("[data-testid='legacy-legacy_password']")?.textContent).toMatch(/\d+ days left/);
     const save = el.querySelector("[data-testid='save-policy']")!;
-    expect(save.getAttribute("title")).toContain("Needs security_policy:manage");
+    expect(save.getAttribute("title")).toContain("Needs “Manage the security policy”");
     expect(identityCopyAudit(el)).toEqual({ labels: [], prose: [], tips: [] });
   });
 });

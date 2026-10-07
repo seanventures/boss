@@ -54,7 +54,7 @@ describe("can() at the right scope", () => {
     expect(checkWith(org, project, "acme-web", "user:read").allowed).toBe(true);
   });
   it("says what is missing and who to ask", () => {
-    expect(checkWith(org, null, null, "user:invite").reason).toBe("Needs user:invite · ask an Admin");
+    expect(checkWith(org, null, null, "user:invite").reason).toBe("Needs “Invite people” · ask an Admin");
   });
 });
 

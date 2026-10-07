@@ -91,8 +91,8 @@ describe("Identity › Overview", () => {
     );
     const invite = el.querySelector("[data-testid='overview-invite']")!;
     expect(invite.getAttribute("aria-disabled")).toBe("true");
-    expect(invite.getAttribute("title")).toBe("Needs user:invite · ask an Admin");
-    expect(el.querySelector("[data-testid='locked-people']")?.textContent).toContain("user:read");
+    expect(invite.getAttribute("title")).toBe("Needs “Invite people” · ask an Admin");
+    expect(el.querySelector("[data-testid='locked-people']")?.textContent).toContain("View people");
     expect(el.textContent).toContain("audit:read");
   });
 });
@@ -195,7 +195,7 @@ describe("the sheets and the denied page", () => {
   it("AccessDenied names the permission and who can grant it", async () => {
     const el = await mount(<AccessDenied permission="user:read" page="People" />);
     expect(el.textContent).toContain("You can't open People");
-    expect(el.textContent).toContain("user:read");
+    expect(el.textContent).toContain("View people");
     expect(el.querySelector("[data-testid='access-denied-grantors']")?.textContent).toBe("Admins: Priya");
     expect(el.querySelector("[data-testid='request-access']")).not.toBeNull();
   });

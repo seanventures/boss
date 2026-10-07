@@ -26,6 +26,9 @@ import { registerPeopleRoutes } from "./routes-people";
 import { registerRoleRoutes } from "./routes-roles";
 import { registerAgentRoutes } from "./routes-agents";
 import { registerAuthRoutes } from "./routes-auth";
+import { registerSsoRoutes } from "./routes-sso";
+import { registerGroupRoutes } from "./routes-groups";
+import { registerAccountRoutes } from "./routes-account";
 
 export type StubRequest = {
   method: string;
@@ -931,3 +934,6 @@ registerPeopleRoutes(on);
 registerRoleRoutes(on);
 registerAgentRoutes(on);
 registerAuthRoutes(on);
+registerSsoRoutes(on);
+registerGroupRoutes(on);
+registerAccountRoutes(on);

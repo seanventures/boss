@@ -173,7 +173,7 @@ describe("the role editor", () => {
     await mount(<RoleEditor role={releaseCaptain()} versions={[]} />, ROLE_PERMISSIONS.viewer);
     const cell = q('[data-perm="code_task:create"]')!;
     expect(cell.getAttribute("aria-disabled")).toBe("true");
-    expect(cell.getAttribute("title")).toMatch(/Needs access_role:manage/);
+    expect(cell.getAttribute("title")).toMatch(/Needs “Manage access roles”/);
     await click(cell);
     expect(q('[data-testid="unsaved"]')).toBeNull();
     expect(q('[data-testid="save"]')!.getAttribute("aria-disabled")).toBe("true");
@@ -271,7 +271,7 @@ describe("service accounts and keys", () => {
     const el = await mount(<ServiceAccounts initial={F.serviceAccounts(NOW)} roles={F.roles(NOW)} noExpiryAllowed={false} maxDays={365} selected={null} />, ROLE_PERMISSIONS.auditor);
     const btn = q('[data-testid="new-key"]')!;
     expect(btn.getAttribute("aria-disabled")).toBe("true");
-    expect(btn.getAttribute("title")).toMatch(/Needs service_account_key:manage/);
+    expect(btn.getAttribute("title")).toMatch(/Needs “Manage service account keys”/);
     expect(audit(el)).toEqual({ labels: [], prose: [], tips: [] });
   });
 

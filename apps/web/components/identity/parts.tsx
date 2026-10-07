@@ -6,7 +6,7 @@ import { LockSimple, ShieldCheck, Warning } from "@phosphor-icons/react";
 
 import type { Binding, Person, SignInSummary } from "../../lib/identity/types";
 import type { Permission } from "../../lib/identity/permissions.gen";
-import { RoleChip } from "./kit";
+import { Perm, RoleChip } from "./kit";
 
 export function signInWords(s: SignInSummary): { text: string; ok: boolean } {
   if (s.passkeys > 0) return { text: `passkey${s.passkeys > 1 ? ` ×${s.passkeys}` : ""}${s.totp ? " +1" : ""}`, ok: true };
@@ -42,7 +42,7 @@ export function Locked({ permission, what }: { permission: Permission; what: str
   return (
     <div className="idn-card" data-testid={`locked-${what.toLowerCase().replace(/\s+/g, "-")}`}>
       <div className="idn-card-h"><h3>{what}</h3></div>
-      <div className="idn-row idn-dim"><LockSimple size={15} aria-hidden /> Needs <code className="idn-perm">{permission}</code></div>
+      <div className="idn-row idn-dim"><LockSimple size={15} aria-hidden /> Needs <Perm p={permission} sm /></div>
     </div>
   );
 }
