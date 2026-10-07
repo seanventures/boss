@@ -25,6 +25,7 @@ import { showToast } from "../../client-forms";
 import { IdentityError, idDelete, idGet, idPatch, idPost } from "../../../lib/identity/api";
 import { PERMISSION_META, isPermission, type Permission } from "../../../lib/identity/permissions.gen";
 import type { AccessRole, ApiKey, IssuedSecret, ServiceAccount } from "../../../lib/identity/types";
+import { grantReach, type GrantReach } from "../../../lib/identity/grant-limit";
 
 type Preset = "read" | "mcp" | "ci" | "custom";
 const PRESETS: { id: Preset; label: string; tip: string }[] = [
@@ -265,9 +266,10 @@ function bindable(roles: AccessRole[]): AccessRole[] {
   return roles.filter((r) => r.key !== "owner" && !r.system);
 }
 
-function useHeld(): (r: AccessRole) => boolean {
+/** The grant limit (lib/identity/grant-limit.ts), against the viewer's org permissions. */
+function useReach(): (r: AccessRole) => GrantReach {
   const { org } = useIdentity();
-  return (r: AccessRole) => !org || r.permissions.every((p) => org.permissions.has(p));
+  return (r: AccessRole) => grantReach(org?.permissions, r);
 }
 
 type FirstKey = { name: string; preset: Exclude<Preset, "custom">; days: number };
@@ -278,7 +280,7 @@ function NewAccount({ roles, people, maxDays, onClose, onMade }: {
 }) {
   const guarded = useGuardedCall();
   const { me } = useIdentity();
-  const reachable = useHeld();
+  const reach = useReach();
   const meId = me?.principal_id ?? null;
   const pickable: PickPerson[] = useMemo(() => {
     const list = [...people];
@@ -288,7 +290,7 @@ function NewAccount({ roles, people, maxDays, onClose, onMade }: {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [owners, setOwners] = useState<string[]>(meId ? [meId] : []);
-  const [role, setRole] = useState(() => bindable(roles).find((r) => r.key === "viewer" && reachable(r))?.key ?? "");
+  const [role, setRole] = useState(() => bindable(roles).find((r) => r.key === "viewer" && reach(r).ok)?.key ?? "");
   const [withKey, setWithKey] = useState(false);
   const [key, setKey] = useState<FirstKey>({ name: "", preset: "ci", days: Math.min(90, maxDays) });
   const [error, setError] = useState<string | null>(null);
@@ -342,10 +344,10 @@ function NewAccount({ roles, people, maxDays, onClose, onMade }: {
           <span className="idn-label" id="sa-role-l">Access role</span>
           <div className="idn-segs" role="radiogroup" aria-labelledby="sa-role-l">
             {bindable(roles).map((r) => {
-              const ok = reachable(r);
+              const { ok, reason } = reach(r);
               return (
                 <button key={r.id} type="button" role="radio" aria-checked={role === r.key} aria-pressed={role === r.key}
-                  aria-disabled={!ok || undefined} title={ok ? r.description : "You don't hold all of it"}
+                  aria-disabled={!ok || undefined} title={reason || undefined} data-role={r.key}
                   onClick={() => { if (ok) setRole(r.key); }}><RoleChip roleKey={r.key} name={r.name} /></button>
               );
             })}
@@ -613,7 +615,7 @@ function EditAccount({ sa, roles, people, focus, onClose, onSaved }: {
   onClose: () => void; onSaved: () => void;
 }) {
   const guarded = useGuardedCall();
-  const reachable = useHeld();
+  const reach = useReach();
   const pickable: PickPerson[] = useMemo(() => {
     const list = [...people];
     for (const o of sa.owners) if (!list.some((p) => p.id === o.id)) list.push({ id: o.id, name: o.name, hue: o.hue });
@@ -677,10 +679,10 @@ function EditAccount({ sa, roles, people, focus, onClose, onSaved }: {
           <div className="idn-segs" role="group" aria-labelledby="edit-roles-l" data-testid="edit-roles">
             {bindable(roles).map((r) => {
               const on = chosen.includes(r.id);
-              const ok = reachable(r);
+              const { ok, reason } = reach(r);
               return (
                 <button key={r.id} type="button" aria-pressed={on} aria-disabled={!ok || undefined}
-                  title={ok ? r.description : "You don't hold all of it"} data-role={r.key}
+                  title={reason || undefined} data-role={r.key}
                   onClick={() => { if (ok) toggle(r.id); }}><RoleChip roleKey={r.key} name={r.name} /></button>
               );
             })}

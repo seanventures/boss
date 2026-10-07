@@ -154,15 +154,17 @@ export function registerGroupRoutes(on: StubOn): void {
   });
 
   // Access requests (A13), FX-B's approve/deny contract.
-  on("GET", "/v1/identity/access-requests", "role_binding:read", ({ s, req }) => {
-    const status = req.query.get("status") ?? "open";
-    const rows = overlay(s).requests.filter((r) => r.status === status).map((r) => ({
+  const requestRows = (s: S, status: string, projectId?: string) => overlay(s).requests
+    .filter((r) => r.status === status && (projectId === undefined || r.project_id === projectId)).map((r) => ({
       ...r,
       candidate_roles: s.roles.filter((x) => !x.system && (x.permissions as string[]).includes(r.permission_key) && (!r.project_id || x.bindable_scopes.includes("project")))
         .map((x) => ({ id: x.id, key: x.key, name: x.name })),
     }));
-    return stubOk({ requests: rows });
-  });
+  on("GET", "/v1/identity/access-requests", "role_binding:read", ({ s, req }) =>
+    stubOk({ requests: requestRows(s, req.query.get("status") ?? "open") }));
+  // A project Admin's queue (FXB-API-CONTRACTS §9): that project's requests only.
+  on("GET", "/v1/identity/projects/([^/]+)/access-requests", "role_binding:assign", ({ s, m, req }) =>
+    stubOk({ requests: requestRows(s, req.query.get("status") ?? "open", decodeURIComponent(m[1])) }));
   on("POST", "/v1/identity/access-requests/([^/]+)/approve", "role_binding:assign", ({ s, m, req, who, now }) => {
     const r = overlay(s).requests.find((x) => x.id === m[1]);
     if (!r) return stubNotFound();
