@@ -59,6 +59,7 @@ export function errorSentence(status: number, code: string, permission?: unknown
   if (code === "revoked_is_terminal") return "Already ended";
   if (code === "too_long") return "Longer than policy allows";
   if (code === "role_exists") return "That key is taken";
+  if (code === "github_access_lacking") return "Connect your GitHub first";
   if (status === 429) return "Too many tries";
   if (status === 404) return "Not found";
   if (status === 409) return "Changed meanwhile — reload";
