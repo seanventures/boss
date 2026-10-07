@@ -47,12 +47,14 @@ describe("the scan: every screen that gives a role asks grantReach", () => {
     });
   }
   const givers = ["app/identity", "components/identity", "app/account"].flatMap(walk)
-    .filter((f) => /\brole_(id|key):/.test(readFileSync(join(WEB, f), "utf8")));
+    .filter((f) => /\b(to_)?role_(id|key):/.test(readFileSync(join(WEB, f), "utf8")));
 
   it("finds the pickers (invite, service accounts, groups, a person, access requests)", () => {
     expect(givers).toEqual(expect.arrayContaining([
       "components/identity/invite-sheet.tsx", "app/identity/service-accounts/service-accounts.tsx",
       "app/identity/groups/group-sheets.tsx", "app/identity/people/[id]/person.tsx", "app/identity/people/access-requests.tsx",
+      // Delete a role → move its holders: that gives them the target role (to_role_id).
+      "app/identity/roles/[id]/role-editor.tsx",
     ]));
   });
   it.each(givers)("%s mirrors the grant limit through grantReach", (file) => {
