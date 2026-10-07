@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from e2e.identity import kit as K
-from e2e.identity.stack2 import Stack2, _env_lines
+from e2e.identity.stack2 import Stack2, _env_lines, refresh_secrets
 
 REPO = K.REPO
 PORTS3 = {"BOSS_WEB_PORT": "53300", "BOSS_API_PORT": "58300", "BOSS_POSTGRES_PORT": "55803",
@@ -58,8 +58,7 @@ class Stack3(Stack2):
         values["BOSS_PREVIEW_ORIGIN"] = f"http://127.0.0.1:{PORTS3['BOSS_PREVIEW_PORT']}"
         values["BOSS_AUTHZ_MODE"] = "enforce"
         values["COMPOSE_PROFILES"] = "web"
-        for k in FRESH:
-            values[k] = secrets.token_urlsafe(32)
+        refresh_secrets(values, FRESH)
         values["INFISICAL_ENCRYPTION_KEY"] = secrets.token_hex(16)
         values.update(extra or {})
         for k in FRESH:

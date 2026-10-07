@@ -38,6 +38,24 @@ def _env_lines(path: Path) -> list[tuple[str, str]]:
     return out
 
 
+def refresh_secrets(values: dict[str, str], names: tuple[str, ...]) -> None:
+    """Give every name in `names` a fresh secret AND carry it into the values that embed the old
+    one. install.sh writes BOSS_API_KEYS=<api key>,<worker key> and BOSS_API_KEY_PRINCIPALS=
+    <api key>:ceo,<worker key>:system; renewing only BOSS_WORKER_API_KEY left the API accepting
+    the OLD worker key, so the copied stack's worker was refused 401 on every poll and no job was
+    ever leased (round 3: the fence scenario's builds sat "queued" forever)."""
+    old = {k: values.get(k, "") for k in names}
+    for k in names:
+        values[k] = secrets.token_urlsafe(32)
+    for k, v in list(values.items()):
+        if k in names or not v:
+            continue
+        for name, was in old.items():
+            if was and len(was) >= 16 and was in v:
+                v = v.replace(was, values[name])
+        values[k] = v
+
+
 def image_tag_of(project: str) -> str:
     """The image tag the compose project's api container runs (boss-community-api:<tag>)."""
     done = subprocess.run(["docker", "inspect", f"{project}-api-1", "--format", "{{.Config.Image}}"],
@@ -77,8 +95,7 @@ class Stack2:
                                "pass the main stack's compose project (main_project) so its image tag is used")
         values["BOSS_CONSOLE_PUBLIC_ORIGIN"] = f"http://localhost:{ports['BOSS_WEB_PORT']}"
         values["BOSS_PREVIEW_ORIGIN"] = f"http://127.0.0.1:{ports['BOSS_PREVIEW_PORT']}"
-        for k in FRESH:
-            values[k] = secrets.token_urlsafe(32)
+        refresh_secrets(values, FRESH)
         values["INFISICAL_ENCRYPTION_KEY"] = secrets.token_hex(16)
         K.write_private(env_file, "".join(f"{k}={v}\n" for k, v in values.items()))
         return cls(project, env_file, out_dir / f"{project}.override.yml", ports)
