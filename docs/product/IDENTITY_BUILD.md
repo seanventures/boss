@@ -376,3 +376,20 @@ The five streams merged in order (S1 → S5 → S2 → S3 → S4), then three fo
 | I7 | A run's consent asks for each step's tool permission and brings the step's capability captain. Revoking a grant also stops a queued or running build under it. | The enforce-mode walk: a build step was refused mid-run; a revoked build ran on. |
 | I8 | 500 bodies carry the class and request id, never the message; the deferred last-Owner trigger answers 409 `last_owner` on every path. | S5's flag; a SCIM delete gave a 500. |
 | I9 | A passkey-first claim needs no password. | The console's passkey path sent none and the claim answered 422. |
+
+### 8.1 Round 2: the three security fixers (F1 agents, F2 authorization, F3 authentication)
+
+Merged F1 → F2 → F3 (conflicts: conftests, compose, social.py, posture/console shapes). Gaps closed between them:
+
+| # | Change | Why |
+|---|---|---|
+| R2-a | The vault boots before the claim link; the first Owner's claim provisions the signing keys; compose documents first-install key creation. | server_key() fails closed (F3) and the key file is made only at first install (F1): a fresh compose install printed no claim link and had no signing keys until a restart (the org is seeded after the API boots). |
+| R2-b | Promotion into an MFA-required role (binding or group) opens a first-factor enrolment window (72 h, consumed at the next sign-in). | Enrolment-only sessions (F3/H1) stranded promoted people. |
+| R2-c | SCIM group membership writes carry the user-write limits (own provisioned people only, never Owner/Admin) and never add to a group bound to Owner/Admin. | F3/M2 covered user writes only. |
+| R2-d | The MCP bridge presents a DPoP-bound `boss:api` run token of the caller's run (its shim, or a first-hop sibling); deeper chains are refused. | Agent runs could not use API-surface tools (F2/M8 fails closed). |
+| R2-e | Work with no grant clones as BOSS's audited read-only system agent (`agt_sys_repo_reader`, autonomous, Viewer, read-only GitHub ceiling); under enforce without egress it is refused. | The shared-token fallback (F1 leftover). |
+| R2-f | Under enforce a legacy API key acts as its legacy principal, never the `ceo` seat. | Actor attribution. |
+| R2-g | Legacy SCIM group capabilities are not imported as bindings; they are written on the group for Owner review, and earlier seeded bindings are removed. | The old shared SCIM bearer could set them. |
+| R2-h | A sandboxed process starts from the agent allow-list, never the control plane's environment. | DATABASE_URL reached the sandbox when a caller passed no env. |
+| R2-i | Egress answers git's first request with `WWW-Authenticate: Basic`; the bare handshake is not audited. | Found on the compose stack: every clone and push through egress failed. |
+| R2-j | The audit log's `actor` filter is exempt from the actor rule; Verify opens the step-up sheet. | Found on the compose stack: the Owner's audit log was empty. |
