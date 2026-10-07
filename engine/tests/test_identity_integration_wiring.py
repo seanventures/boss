@@ -80,3 +80,16 @@ def test_a_compose_install_gets_a_persistent_master_key_file_and_server_key(tmp_
     assert key_file.read_bytes() == written
     authn_support.reset_server_key_for_tests()
     vault.reset_master_key_cache()
+
+
+def test_first_boot_provisions_the_vault_key_before_anything_needs_the_server_key():
+    """Integration round 2 (a): server_key() fails closed (F3) and the key file is made only by
+    vault.boot at first install (F1). The claim link mints a setup token (keyed hash), so the
+    lifespan must boot the vault first — otherwise a fresh compose install printed no claim link."""
+    main = (ROOT / "apps" / "api" / "app" / "main.py").read_text(encoding="utf-8")
+    boot = main.index("_identity_vault.boot(db=_connection)")
+    claim = main.index("_identity_claim.announce_setup_link(_connection)")
+    assert boot < claim
+    compose = (ROOT / "scripts" / "install" / "community-compose.yml").read_text(encoding="utf-8")
+    for service in ("api", "worker", "egress"):
+        assert compose.count("BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}") >= 3
