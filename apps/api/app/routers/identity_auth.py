@@ -104,12 +104,16 @@ def origin_guard(request: Request, db: Any) -> Optional[JSONResponse]:
 
 
 def _run(request: Request, flow) -> JSONResponse:
+    from boss_engine.identity.passwords import hashing_for
+
     try:
         with begin() as db:
             blocked = origin_guard(request, db)
             if blocked is not None:
                 return blocked
-            return render(flow(db, facts(request, db)))
+            f = facts(request, db)
+            with hashing_for(f.ip):     # L2: this address's share of the argon2 queue
+                return render(flow(db, f))
     except PasswordBusy:
         return JSONResponse(status_code=429, content={"error": "busy"}, headers={"Retry-After": "2"})
 

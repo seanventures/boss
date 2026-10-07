@@ -17,7 +17,7 @@ def _small(monkeypatch):
     from boss_engine.config import get_settings
 
     monkeypatch.setattr(get_settings(), "argon2_profile", "small")
-    monkeypatch.setattr(get_settings(), "identity_server_key", "")
+    monkeypatch.setattr(get_settings(), "identity_server_key", "dGVzdC1vbmx5LWlkZW50aXR5LXNlcnZlci1rZXktLS0tLS0tLS0tLS0tLS0=")   # test-only (F3/L2)
     authn_support.reset_server_key_for_tests()
     yield
     authn_support.reset_server_key_for_tests()
