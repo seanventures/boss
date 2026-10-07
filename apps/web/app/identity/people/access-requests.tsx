@@ -114,6 +114,11 @@ export function AccessRequests({ requests, roles, failure = null, project = null
 }) {
   const guarded = useGuardedCall();
   const router = useRouter();
+  const { projectId: mirroredProject } = useIdentity();
+  // A request is judged at ITS project only when that is the project the console mirrors (its
+  // snapshot is loaded); any other project's request is judged by the org snapshot, which is
+  // what an org Admin decides it with. Otherwise it would read "still loading" for good.
+  const judgedAt = (r: AccessRequestRow) => (r.project_id && r.project_id === mirroredProject ? r.project_id : null);
   const [approving, setApproving] = useState<AccessRequestRow | null>(null);
   if (failure) return <ErrorState compact what="access requests" failure={failure} testId="requests-error" />;
   const open = (requests ?? []).filter((r) => r.status === "open");
@@ -137,7 +142,7 @@ export function AccessRequests({ requests, roles, failure = null, project = null
             <small className="idn-dim" data-copy="data">{r.reason ? `“${r.reason}” · ` : ""}<Ago iso={r.created_at} /></small>
           </span>
           <span className="idn-row">
-            <CanButton permission="role_binding:assign" projectId={r.project_id ?? null} className="idn-btn sm" tip="Close it without granting" data-testid={`request-deny-${r.id}`}
+            <CanButton permission="role_binding:assign" projectId={judgedAt(r)} className="idn-btn sm" tip="Close it without granting" data-testid={`request-deny-${r.id}`}
               onClick={async () => {
                 try {
                   await guarded("Declining is recorded.", () => idPost(`/v1/identity/access-requests/${encodeURIComponent(r.id)}/deny`, { reason: null }));
@@ -149,7 +154,7 @@ export function AccessRequests({ requests, roles, failure = null, project = null
               }}>
               <X size={13} aria-hidden /> Deny
             </CanButton>
-            <CanButton permission="role_binding:assign" projectId={r.project_id ?? null} className="idn-btn sm primary" tip="Grant it through a role" data-testid={`request-approve-${r.id}`}
+            <CanButton permission="role_binding:assign" projectId={judgedAt(r)} className="idn-btn sm primary" tip="Grant it through a role" data-testid={`request-approve-${r.id}`}
               onClick={() => setApproving(r)}>
               <Check size={13} aria-hidden /> Approve
             </CanButton>
