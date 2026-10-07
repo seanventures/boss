@@ -574,13 +574,13 @@ def start_code_task(
             identity_acting = _consent.carry_retry_authority(
                 connection, parent_run_id=parent_run, new_run_id=run_id, project_id=project_id,
                 role_keys=[builder], permissions=_consent.CODE_TASK_PERMISSIONS,
-                repos=[f"{owner}/{repo}"] if (repo_host or "github") == "github" else [])
+                repos=_consent_repos(owner, repo, repo_host))
     if not simulated and identity_acting is None:
         from boss_engine.identity import consent as _consent
 
         identity_acting = _consent.require_authority(
             org_id=None, project_id=project_id, role_keys=[builder],
-            permissions=_consent.CODE_TASK_PERMISSIONS, repos=[f"{owner}/{repo}"] if (repo_host or "github") == "github" else [],
+            permissions=_consent.CODE_TASK_PERMISSIONS, repos=_consent_repos(owner, repo, repo_host),
             task=title, run_id=f"run_ct:{run_id}", db=connection)
     if substrate:  # per-run substrate override (retry fallback: microvm infra-failure -> local)
         spec["substrate"] = substrate
@@ -2154,6 +2154,16 @@ def refused_reservation(engine, jobs, *, run_id: str, project_id: str, reservati
 # --------------------------------------------------------------------------- #
 #  The job handler                                                            #
 # --------------------------------------------------------------------------- #
+def _consent_repos(owner: Optional[str], repo: Optional[str], repo_host: Optional[str]) -> list[str]:
+    """The GitHub repositories a build's grant must cover: `owner/repo` when the build names one on
+    GitHub, else none. A build with no repository asked for consent on a repo called "/" (round 3
+    upgrade walk), which no grant can ever cover, so the start answered 409 for good."""
+    owner, repo = str(owner or "").strip().strip("/"), str(repo or "").strip().strip("/")
+    if (repo_host or "github") != "github" or not owner or not repo:
+        return []
+    return [f"{owner}/{repo}"]
+
+
 def run_code_task(engine, settings: Settings, jobs, run_id: str,
                   *, fencing_token: Optional[str] = None) -> dict:
     """Execute one full code-task attempt. Safe to re-run after a crash.
