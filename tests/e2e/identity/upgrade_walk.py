@@ -109,7 +109,7 @@ class Env:
 
     # -- the stack
     def tools(self, **extra: str) -> dict[str, str]:
-        return U.tool_env("bossfxd3", self.shim, extra=extra or None)
+        return U.tool_env("bossfxd3", self.shim, tag=self.args.tag, extra=extra or None)
 
     def boss(self, *cmd: str, timeout: int = 600) -> dict[str, Any]:
         assert self.inst is not None
@@ -132,7 +132,7 @@ class Env:
         elif env_file.exists():      # a bossfxd3 left by an earlier, interrupted run
             U.Stack3("bossfxd3", env_file, env_file.parent / "bossfxd3.override.yml", dict(U.PORTS3)).down()
         self.wait_headroom()
-        st = U.Stack3.create(Path(self.args.shape_env), env_file, extra=extra_env)
+        st = U.Stack3.create(Path(self.args.shape_env), env_file, extra=extra_env, tag=self.args.tag)
         self.st = st
         self.inst = U.make_install(self.work, env_file)
         st.use_env(self.inst / ".env")
@@ -1134,9 +1134,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--shape-env", default=str(DEFAULT_OUT / "stack.env"), help="an env file whose SHAPE is copied")
     ap.add_argument("--env-file", default=str(DEFAULT_OUT / "stack3.env"))
     ap.add_argument("--keep", action="store_true", help="leave bossfxd3 up at the end (debugging)")
+    ap.add_argument("--tag", default="", help="image tag the walk's stacks run (default: --main-project's)")
+    ap.add_argument("--main-project", default="", help="the compose project whose images are under test")
     ap.add_argument("--headed", action="store_true")
     args = ap.parse_args(argv)
     args.selected = [s.strip() for s in args.only.split(",") if s.strip()]
+    # THE IMAGES UNDER TEST, never a stale tag: the walk used to run on `fxda` (an earlier round's
+    # build) whatever branch was being proved.
+    if not args.tag and args.main_project:
+        from e2e.identity.stack2 import image_tag_of
+        args.tag = image_tag_of(args.main_project)
+    if not args.tag or args.tag == "boss-community":
+        ap.error("name the images under test: --main-project <compose project> or --tag <tag> (never boss-community)")
     bad = [s for s in args.selected if s not in SCENARIOS]
     if bad:
         ap.error(f"unknown scenario(s): {bad}")
@@ -1201,7 +1210,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 def _write(path: Path, args: argparse.Namespace, results: list[dict[str, Any]], env: Env, started: float) -> None:
     doc = {"walk": "upgrade_walk", "started": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(started)),
-           "seconds": round(time.time() - started), "only": args.selected, "images": "boss-community-*:fxda",
+           "seconds": round(time.time() - started), "only": args.selected, "images": f"boss-community-*:{args.tag}",
            "summary": {r["id"]: r["status"] for r in results},
            "counts": {s: sum(1 for r in results for c in r["checks"] if c["status"] == s) for s in ("pass", "fail", "xfail")},
            "findings": env.findings, "teardown": getattr(env, "teardown", None), "journeys": results}
