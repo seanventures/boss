@@ -171,8 +171,16 @@ export function adaptBinding(raw: unknown, index?: RoleIndex): Binding & { subje
     scope: scopeLabel(r), subject_id: str(r.subject_id),
     subject_type: r.subject_type === "group" || vg ? "group" : "principal",
     via_group: vg ? { id: str(vg.id), name: str(vg.name, str(vg.id)), source: groupSource(vg.source ?? vg.provider) } : null,
-    granted_by: strOrNull(r.granted_by), granted_at: str(r.granted_at), expires_at: strOrNull(r.expires_at),
+    granted_by: strOrNull(r.granted_by), granted_by_name: strOrNull(r.granted_by_name),
+    granted_at: str(r.granted_at), expires_at: strOrNull(r.expires_at),
   };
+}
+
+/** "granted by Ada" — a name, or plain words; never a principal id (FX-C P1-11). */
+export function grantedByWords(b: Pick<Binding, "granted_by" | "granted_by_name">): string {
+  if (b.granted_by_name) return b.granted_by_name;
+  if (!b.granted_by) return "BOSS";
+  return /^(sys_|sso:|scim)/.test(b.granted_by) ? "BOSS" : "an admin";
 }
 
 /**
@@ -186,7 +194,7 @@ export function adaptGroup(raw: unknown, ctx: { bindings?: Binding[]; names?: Na
     const id = str(m.id ?? m.principal_id);
     const known = ctx.names?.get(id);
     return { id, name: str(m.name ?? m.display_name, known?.name ?? id), email: str(m.email, known?.email ?? ""),
-      hue: num(m.hue, known?.hue ?? hueOf(id)) };
+      hue: num(m.hue, known?.hue ?? hueOf(id)), source: groupSource(m.source) };
   });
   return {
     id: str(r.id), name: str(r.name), description: str(r.description), source,

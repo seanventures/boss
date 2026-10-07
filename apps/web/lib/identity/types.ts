@@ -29,6 +29,8 @@ export interface Binding {
   subject_id: string;
   via_group: (Ref & { source: GroupSource }) | null;
   granted_by: string | null;
+  /** Who granted it, in words (the API's display name); the raw id is never shown. */
+  granted_by_name?: string | null;
   granted_at: string;
   expires_at: string | null;
   /** Drawn from a person's `access_roles` when /role-bindings was unreadable: nothing to remove. */
@@ -122,7 +124,9 @@ export interface Group {
   source: GroupSource;
   provider: string | null;
   synced_at: string | null;
-  members: (Ref & { email: string; hue: number })[];
+  /** `source`: where THIS membership comes from — a manual group can hold members an IdP
+   *  sign-in synced (a mapped IdP group), and those are read-only like a synced group's. */
+  members: (Ref & { email: string; hue: number; source?: GroupSource })[];
   /** The API's count (a list row carries no members). */
   member_count?: number;
   bindings: Binding[];
