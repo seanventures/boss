@@ -407,6 +407,19 @@ def _load(db: Any, item_id: str, *, for_update: bool = False) -> dict[str, Any]:
     return dict(row)
 
 
+def org_github_token(item_id: str, *, db: Any) -> str:
+    """The org's FALLBACK GitHub token (a fine-grained PAT held as an org connection: no owner).
+    Only boss-egress calls this, to act for a run whose repos the connection covers; it never
+    reaches a sandbox. A person's own connection is never readable here (get_credential)."""
+    row = _load(db, item_id)
+    if (row["kind"] != VaultItemKind.LEGACY_PAT.value or row.get("owner_principal_id") is not None
+            or row.get("provider") != "github"):
+        raise VaultForbidden("not_an_org_github_connection")
+    if row["status"] != "active":
+        raise VaultNeedsReauth(row["status"])
+    return _open(db, row)
+
+
 def read_secret(item_id: str, *, db: Any, kind: VaultItemKind) -> str:
     """Internal decrypt for identity's OWN org-level material (signing keys, the App key, OIDC and
     TOTP secrets). Refuses user connections: those go through `get_credential` and its owner check."""

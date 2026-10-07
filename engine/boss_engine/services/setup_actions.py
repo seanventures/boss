@@ -249,7 +249,44 @@ def select_repository(connection: Connection, settings: Any, project_id: str, co
     if make_default or not has_primary:
         _promote(connection, project_id, binding_id, actor)
     check_repository(connection, settings, project_id, binding_id, actor=actor, http=http)
+    _mirror_token_into_vault(connection, service, project_id, current["id"], actor)
     return binding_id
+
+
+def _mirror_token_into_vault(connection: Connection, service: Any, project_id: str, connection_id: str,
+                             actor: str) -> None:
+    """A token pasted in Setup › Repo becomes the vault's org GitHub connection, scoped to the repos
+    bound to it. Under enforce that is the only way a build reaches GitHub with it: boss-egress reads it
+    from the vault, the sandbox never sees it (identity/github_setup.py)."""
+    from ..identity import github_setup, vault
+
+    try:
+        ref = service.secret_refs.require_usable(
+            connection, project_id=project_id,
+            credential_ref=service._credential_ref(connection, project_id, connection_id))
+        token = service._resolve_secret(ref, connection)
+        org_id = connection.execute(
+            text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                 "WHERE p.id = :p"), {"p": project_id}).scalar()
+        if not token or not org_id:
+            return
+        repos = [str(r) for r in connection.execute(
+            text("SELECT full_name FROM github_repository_bindings WHERE connection_id = :c "
+                 "AND status = 'active'"), {"c": connection_id}).scalars()]
+        current = github_setup.org_token(connection, str(org_id))
+        if current is not None and vault.org_github_token(current["id"], db=connection) == token:
+            for repo in repos:
+                github_setup.add_repo_to_org_token(repo=repo, org_id=str(org_id), db=connection)
+            return
+        with connection.begin_nested():
+            github_setup.store_org_token(token=token, repos=repos,
+                                         org_id=str(org_id), db=connection,
+                                         by=actor if actor.startswith("usr_") else "", check=False)
+    except Exception as exc:  # noqa: BLE001 — Setup's own check already said whether the token works
+        import logging
+
+        logging.getLogger(__name__).warning("setup: the GitHub token was not kept as the org connection (%s: %s)",
+                                            type(exc).__name__, getattr(exc, "code", ""))
 
 
 def remove_repository(connection: Connection, project_id: str, binding_id: str,

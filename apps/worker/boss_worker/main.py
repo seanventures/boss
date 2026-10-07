@@ -591,6 +591,16 @@ def main() -> None:
 
     engine = get_engine(settings)
     db_ready = database_is_reachable(engine)
+    if db_ready:
+        # A BOSS_GITHUB_TOKEN already moved into the vault (Setup › Repo) is not read from this
+        # process's environment under enforce: builds reach GitHub only through boss-egress.
+        try:
+            from boss_engine.identity import github_setup as _identity_github
+
+            if _identity_github.forget_env_token_if_moved(engine, settings):
+                settings.github_token = None
+        except Exception:  # noqa: BLE001 — never block the worker on this
+            pass
     # The worker is where the coding pipeline actually runs, so it is where the interesting
     # lines are written — which command took four minutes, how long a stage queued. Capturing
     # them only in the API would consolidate the half that matters least.

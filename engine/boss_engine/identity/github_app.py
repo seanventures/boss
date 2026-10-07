@@ -87,7 +87,9 @@ def api_base() -> str:
 
 def _call(method: str, path: str, *, token: str, scheme: str = "Bearer", body: Any = None) -> Response:
     headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
-               "Authorization": f"{scheme} {token}", "User-Agent": "boss-identity"}
+               "User-Agent": "boss-identity"}
+    if token:
+        headers["Authorization"] = f"{scheme} {token}"
     data = None
     if body is not None:
         headers["Content-Type"] = "application/json"
@@ -112,7 +114,9 @@ def _app_private_key_pem(db: Any) -> str:
 
 def app_jwt(db: Any, *, now: Optional[int] = None) -> str:
     """RS256 App JWT (GitHub's format; BOSS's own tokens are EdDSA)."""
-    app_id = os.environ.get(APP_ID_ENV)
+    from .github_setup import app_config
+
+    app_id = app_config(db)["app_id"]
     if not app_id:
         raise GitHubRefused("app_not_configured", 503)
     key = serialization.load_pem_private_key(_app_private_key_pem(db).encode(), password=None)
@@ -132,10 +136,15 @@ class InstallationToken:
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     repositories: tuple[str, ...] = ()
     permissions: Mapping[str, str] = field(default_factory=dict)
+    #: "installation" (the App's, revoked at run end) | "as_me" (the person's own connection) |
+    #: "org_token" (the org's fine-grained token). Only an installation token is revoked at GitHub.
+    kind: str = "installation"
 
 
 def mint_installation_token(repos: list[str], permissions: Mapping[str, str], *, db: Any) -> InstallationToken:
-    inst = os.environ.get(INSTALLATION_ENV)
+    from .github_setup import app_config
+
+    inst = app_config(db)["installation_id"]
     if not inst:
         raise GitHubRefused("app_not_installed", 503)
     if not repos:
@@ -235,11 +244,41 @@ def mint_for_run(claims: RunTokenClaims, *, task: TaskBinding, db: Any):
     perms = run_permissions(claims, db=db)
     if set(perms) == {"metadata"}:
         raise GitHubRefused("no_github_permissions")
-    tok = mint_installation_token(repos, perms, db=db)
+    tok = _credential_for_run(claims, repos, perms, db=db)
     with _lock:
         _RUN_TOKENS.setdefault(task.run_id, []).append(tok)
     return vault.ShortLivedCredential(token=tok.token, expires_at=tok.expires_at, provider="github",
                                       scopes=frozenset(f"{k}:{v}" for k, v in perms.items()))
+
+
+def _credential_for_run(claims: RunTokenClaims, repos: list[str], perms: Mapping[str, str], *,
+                        db: Any) -> InstallationToken:
+    """WHICH GitHub credential egress uses for this run (Setup › Repo; github_setup):
+      1. the person's own connection, when their grant says "act as me on GitHub";
+      2. the org's GitHub App: an installation token for exactly these repos and permissions;
+      3. the org's fine-grained token, only when it was given for every one of these repos.
+    None of them ever reaches the sandbox: egress injects it and applies every rule to the request."""
+    from . import grants, github_setup, tokens, vault
+
+    if claims.mode.value == "obo" and claims.grant_id and grants.allows_as_user(claims.grant_id, "github", db=db):
+        try:
+            cred = vault.get_credential(vault.ConnectionRef("github", claims.sub),
+                                        vault.CredentialPurpose.GITHUB_AS_USER,
+                                        ctx=tokens.context_for(claims, db=db), db=db)
+        except (vault.VaultNotFound, vault.VaultNeedsReauth):
+            raise GitHubRefused("as_me_not_connected", 409) from None
+        return InstallationToken(token=cred.token, expires_at=cred.expires_at, repositories=tuple(repos),
+                                 permissions=dict(perms), kind="as_me")
+    if github_setup.app_ready(db, claims.org_id):
+        return mint_installation_token(repos, perms, db=db)
+    org = github_setup.org_token(db, claims.org_id)
+    if org is not None:
+        if not {r.lower() for r in repos} <= set(org["repos"]):
+            raise GitHubRefused("repo_outside_org_token")
+        return InstallationToken(token=vault.org_github_token(org["id"], db=db),
+                                 expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+                                 repositories=tuple(repos), permissions=dict(perms), kind="org_token")
+    raise GitHubRefused("github_not_connected", 503)
 
 
 def cached_for_run(run_id: str) -> Optional[InstallationToken]:
@@ -257,6 +296,8 @@ def revoke_runs(run_ids: list[str], reason: str = "") -> int:
                 doomed.extend(_RUN_TOKENS.pop(rid))
     count = 0
     for tok in doomed:
+        if tok.kind != "installation":
+            continue                         # a person's or the org's own token is never revoked by a run
         if revoke_installation_token(tok.token):
             count += 1
     return count
@@ -289,11 +330,11 @@ def user_has_repo_access(person_id: str, repo: str, need: str, *, db: Any) -> bo
 def _oauth_refresh(refresh_token: str) -> tuple[str, Optional[str], int]:
     from . import vault
 
-    cid, secret = os.environ.get(CLIENT_ID_ENV), os.environ.get(CLIENT_SECRET_ENV)
+    cid, secret = _client_credentials()
     if not cid or not secret:
         raise vault.RefreshRejected("client_not_configured")
     body = f"client_id={cid}&client_secret={secret}&grant_type=refresh_token&refresh_token={refresh_token}"
-    resp = TRANSPORT("POST", "https://github.com/login/oauth/access_token",
+    resp = TRANSPORT("POST", f"{_web_base()}/login/oauth/access_token",
                      {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
                      body.encode())
     data = resp.json() if resp.status == 200 else {}
@@ -304,7 +345,7 @@ def _oauth_refresh(refresh_token: str) -> tuple[str, Optional[str], int]:
 
 
 def _oauth_revoke(access_token: str, refresh_token: Optional[str]) -> None:
-    cid, secret = os.environ.get(CLIENT_ID_ENV), os.environ.get(CLIENT_SECRET_ENV)
+    cid, secret = _client_credentials()
     if not cid or not secret:
         return
     basic = base64.b64encode(f"{cid}:{secret}".encode()).decode()
@@ -326,6 +367,27 @@ def commit_trailers(*, person_name: str, person_email: Optional[str], grant_id: 
 
 
 # ---- connecting a person's own GitHub (user-to-server OAuth) ---------------------------------------------
+
+def _web_base() -> str:
+    from .github_setup import web_base
+
+    return web_base()
+
+
+def _client_credentials() -> tuple[Optional[str], Optional[str]]:
+    """The App's OAuth client: the env (an operator's explicit setting) or the App made in Setup."""
+    cid, secret = os.environ.get(CLIENT_ID_ENV), os.environ.get(CLIENT_SECRET_ENV)
+    if cid and secret:
+        return cid, secret
+    try:
+        from ..db import begin
+        from .github_setup import app_config, client_secret
+
+        with begin() as db:
+            return app_config(db)["client_id"], client_secret(db)
+    except Exception:  # noqa: BLE001 — not configured
+        return None, None
+
 
 STATE_TTL_SECONDS = 600
 
@@ -352,12 +414,12 @@ def oauth_state(person_id: str, provider: str = "github", *, now: Optional[int] 
 def authorize_url(person_id: str, redirect_uri: str) -> str:
     from urllib.parse import urlencode
 
-    cid = os.environ.get(CLIENT_ID_ENV)
+    cid = _client_credentials()[0]
     if not cid:
         raise GitHubRefused("provider_not_configured", 409)
     q = urlencode({"client_id": cid, "redirect_uri": redirect_uri, "state": oauth_state(person_id),
                    "allow_signup": "false"})
-    return f"https://github.com/login/oauth/authorize?{q}"
+    return f"{_web_base()}/login/oauth/authorize?{q}"
 
 
 def complete_oauth(*, person_id: str, org_id: str, code: str, state: str, redirect_uri: str, db: Any) -> str:
@@ -384,11 +446,11 @@ def complete_oauth(*, person_id: str, org_id: str, code: str, state: str, redire
                        {"n": str(data.get("n")), "e": int(data["e"])}).scalar()
     if not fresh:
         raise GitHubRefused("state_replayed", 400)
-    cid, secret = os.environ.get(CLIENT_ID_ENV), os.environ.get(CLIENT_SECRET_ENV)
+    cid, secret = _client_credentials()
     if not cid or not secret:
         raise GitHubRefused("provider_not_configured", 409)
     body = urlencode({"client_id": cid, "client_secret": secret, "code": code, "redirect_uri": redirect_uri}).encode()
-    resp = TRANSPORT("POST", "https://github.com/login/oauth/access_token",
+    resp = TRANSPORT("POST", f"{_web_base()}/login/oauth/access_token",
                      {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}, body)
     tok = resp.json() if resp.status == 200 else {}
     if not tok or tok.get("error") or not tok.get("access_token"):

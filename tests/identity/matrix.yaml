@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1358 operations.
+# 1368 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -682,6 +682,16 @@
 "POST /v1/identity/delegations/{grant_id}/revoke": ["permit delegation:revoke_any @ org", "OA"]
 "GET /v1/identity/epoch": ["authenticated:self", "OAPVU"]
 "GET /v1/identity/epoch/stream": ["authenticated:self", "OAPVU"]
+"GET /v1/identity/github": ["permit github:read @ org", "OAPVU"]
+"DELETE /v1/identity/github/app": ["permit github:connect @ org", "OA"]
+"GET /v1/identity/github/app/created": ["public:oauth_state_bound_callback", "OAPVU"]
+"POST /v1/identity/github/app/installation": ["permit github:connect @ org", "OA"]
+"GET /v1/identity/github/app/installations": ["permit github:connect @ org", "OA"]
+"GET /v1/identity/github/app/installed": ["public:oauth_state_bound_callback", "OAPVU"]
+"POST /v1/identity/github/app/manifest": ["permit github:connect @ org", "OA"]
+"DELETE /v1/identity/github/token": ["permit github:connect @ org", "OA"]
+"POST /v1/identity/github/token": ["permit github:connect @ org", "OA"]
+"POST /v1/identity/github/token/migrate-env": ["permit github:connect @ org", "OA"]
 "GET /v1/identity/grantors": ["authenticated", "OAPVU"]
 "GET /v1/identity/groups": ["permit group:read @ org", "OAU"]
 "POST /v1/identity/groups": ["permit group:manage @ org", "OA"]
