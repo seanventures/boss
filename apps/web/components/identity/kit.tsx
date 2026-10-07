@@ -8,7 +8,7 @@
 import React, { createContext, useContext, useEffect, useId, useRef, type ReactNode } from "react";
 
 import { PERMISSION_META, type Permission } from "../../lib/identity/permissions.gen";
-import { permissionName, permissionTip } from "../../lib/identity/words";
+import { deltaParts, permissionName, permissionTip } from "../../lib/identity/words";
 
 // ---- time: the server's clock, so the first paint and hydration say the same thing ----------
 
@@ -97,6 +97,19 @@ export function Perm({ p, state, sm = false }: { p: Permission | string; state?:
   const meta = (PERMISSION_META as Record<string, (typeof PERMISSION_META)[Permission] | undefined>)[p];
   const cls = ["idn-perm", sm ? "sm" : "", state ?? (meta?.critical ? "crit" : "")].filter(Boolean).join(" ");
   return <span className={cls} title={permissionTip(p)} data-permission={p}>{permissionName(p)}</span>;
+}
+
+/** A count's change: "+3 −2", one side when the other is zero, "no change" when both are. */
+export function Delta({ gained, lost }: { gained: number; lost: number }) {
+  const d = deltaParts(gained, lost);
+  if (d.none) return <span className="idn-dim" title="Nothing gained or lost">no change</span>;
+  return (
+    <>
+      {d.gained ? <span className="idn-plus">{d.gained}</span> : null}
+      {d.gained && d.lost ? " " : null}
+      {d.lost ? <span className="idn-minus">{d.lost}</span> : null}
+    </>
+  );
 }
 
 export function Pill({ tone, children, tip }: { tone: "ok" | "warn" | "bad" | "info" | "mute"; children: ReactNode; tip?: string }) {
