@@ -76,14 +76,18 @@ def test_every_declared_action_and_its_outcome_exist_in_the_console_source():
             for testid, _ in entry.fill:
                 if not declared_in_source(_source(entry.source), testid):
                     missing.append(f"{area}: field [{testid}] is not in apps/web/{entry.source}")
+            then_file = entry.then_source or entry.source
             for testid in entry.then:
-                if not declared_in_source(_source(entry.source), testid):
-                    missing.append(f"{area}: follow-up [{testid}] is not in apps/web/{entry.source}")
+                if not declared_in_source(_source(then_file), testid):
+                    missing.append(f"{area}: follow-up [{testid}] is not in apps/web/{then_file}")
             outcome_file = entry.expect_source or entry.source
-            for testid in selector_testids(entry.expect) + selector_testids(entry.grows) \
-                    + selector_testids(entry.unless):
+            for testid in selector_testids(entry.expect) + selector_testids(entry.grows):
                 if not declared_in_source(_source(outcome_file), testid):
                     missing.append(f"{area}: outcome [{testid}] is not in apps/web/{outcome_file}")
+            unless_file = entry.unless_source or outcome_file
+            for testid in selector_testids(entry.unless):
+                if not declared_in_source(_source(unless_file), testid):
+                    missing.append(f"{area}: 'already done' [{testid}] is not in apps/web/{unless_file}")
             assert entry.expect or entry.grows or not entry.opens, \
                 f"{area}: opening a <details> needs an expected content selector"
     assert not missing, "\n".join(missing)
@@ -206,8 +210,8 @@ def test_a_smoke_journey_with_the_right_table_rows_is_still_not_proof():
 
     code = _module_functions_reached(workflow_build, set())
     assert not _pressed_in(code, "dw-define-binding")
-    assert not _pressed_in(code, "dw-palette-custom-${c.step_key}")
-    assert _pressed_in(code, "dw-save")            # reached through _save_and_reopen
+    assert not _pressed_in(code, "wf-pal-custom:${c.step_key}")
+    assert _pressed_in(code, "wf-save")            # reached through _save_and_reopen
     assert all(_pressed_in(_module_functions_reached(fn, set()), c)
                for req, _, fn in JOURNEYS if req == "R3" for c in REQUIRES["R3"])
 

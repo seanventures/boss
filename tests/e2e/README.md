@@ -30,6 +30,7 @@ console key to a worker-only route) were invisible to all of them.
 | API | `python -m apps.api.serve` (uvicorn, forwarded-header trust from `BOSS_TRUSTED_PROXIES`) — the image's own entry point | |
 | Worker | `python -m apps.worker.boss_worker.main` | runs advance on their own, as on an install |
 | Console | `next build` + `next start` (`--web-mode dev` for `next dev`) | |
+| People | the first Owner is claimed through the console's origin with a setup link minted on the host shell; then `seed-test-accounts` makes one person per role, a custom `developer` role and a service account, credentials only in `<run dir>/seed-accounts.json` (0600) | the console has no shared password any more (IDENTITY.md §4.11); the walk signs in as `BOSS_E2E_ROLE` (default `owner`) |
 | Auth | `BOSS_REQUIRE_API_AUTH=true`, owner key → `ceo`, worker key → `system` | exactly `scripts/install/community-compose.yml` |
 | Edition | `community` (`--edition` to change) | what boss-1 runs |
 
@@ -100,8 +101,8 @@ are cancelled; on a live install, runs held at a gate are left for you to look a
 with the `curl` that cancels each. A fixture that cannot be set up is a failed precondition in
 the report (and fails the suite), never a traceback; a transient 5xx while polling is retried.
 
-**`console`** — signs in through `/login` with the console password, chooses the org on the org
-gate, then visits every entry of `AREAS` in `apps/web/app/ConsoleShell.tsx` at
+**`console`** — signs in through `/login` as a person (email, password, then the authenticator
+code; `harness/identity.py`), chooses the org on the org gate, then visits every entry of `AREAS` in `apps/web/app/ConsoleShell.tsx` at
 `/?org=<org>&area=<id>`, presses every sidebar entry (`[data-area-nav=<id>]`) and visits every
 static page route under `apps/web/app`. Routes with a dynamic segment (`/v2/missions/[id]`) are
 listed in the report as not walked.
@@ -195,8 +196,14 @@ every stack ever recorded here, and everything each one started.
 set -a; . ~/boss/.env; set +a
 export BOSS_E2E_API_URL="http://127.0.0.1:${BOSS_API_PORT:-8000}" \
        BOSS_E2E_OWNER_KEY="$BOSS_API_KEY" BOSS_E2E_WORKER_KEY="$BOSS_WORKER_API_KEY" \
-       BOSS_E2E_CONSOLE_URL="http://127.0.0.1:${BOSS_WEB_PORT:-3000}" \
-       BOSS_E2E_CONSOLE_PASSWORD="$BOSS_CONSOLE_PASSWORD"
+       BOSS_E2E_CONSOLE_URL="http://127.0.0.1:${BOSS_WEB_PORT:-3000}"
+# the console walk signs in as a seeded person: seed them once (an Owner's email), copy the file out
+docker compose -f scripts/install/community-compose.yml --env-file ~/boss/.env exec -T -u boss api \
+  python -m boss_engine.identity.cli seed-test-accounts --org org_boss --owner-email you@example.com \
+  --out /tmp/seed.json --i-know      # --i-know: only if the install looks like production
+docker compose -f scripts/install/community-compose.yml --env-file ~/boss/.env exec -T -u boss api \
+  sh -c 'cat /tmp/seed.json && rm -f /tmp/seed.json' > ~/seed.json && chmod 600 ~/seed.json
+export BOSS_E2E_ACCOUNTS_FILE=~/seed.json      # BOSS_E2E_ROLE=viewer walks the Viewer's console
 scripts/e2e.sh all --target live --real-models
 ```
 

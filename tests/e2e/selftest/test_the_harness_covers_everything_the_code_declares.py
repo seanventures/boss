@@ -52,7 +52,9 @@ def test_every_console_area_in_areas_is_walked():
     declared = re.findall(r'\bid:\s*"([^"]+)"', block)
     walked = [a.id for a in discover.console_areas()]
     assert walked == declared
-    assert {"skills", "studio", "workforce", "delivery_workflows", "decisions"} <= set(walked)
+    # `studio` (Agent Studio) left AREAS in Workflow Studio S4: its links land on Agents or
+    # Workflows (app/legacy-areas.ts), and both are walked.
+    assert {"skills", "workforce", "delivery_workflows", "decisions", "setup"} <= set(walked)
 
 
 def test_every_static_console_route_is_walked():
@@ -60,7 +62,9 @@ def test_every_static_console_route_is_walked():
     routes = set(discover.console_routes())
     for page in discover.WEB_APP.rglob("page.tsx"):
         rel = page.relative_to(discover.WEB_APP).parent
-        if any(p.startswith("[") for p in rel.parts) or (rel.parts and rel.parts[0] == "api"):
+        # A route group, `(auth)`, is not part of the URL: app/(auth)/login/page.tsx is /login.
+        parts = [p for p in rel.parts if not (p.startswith("(") and p.endswith(")"))]
+        if any(p.startswith("[") for p in parts) or (parts and parts[0] == "api"):
             continue
-        assert ("/" + "/".join(rel.parts)) in routes
+        assert ("/" + "/".join(parts)) in routes
     assert "/" in routes and "/v2" in routes

@@ -26,6 +26,12 @@ class Target:
     owner_principal: str = "ceo"
     console_url: Optional[str] = None
     console_password: Optional[str] = None
+    # WHO THE CONSOLE WALK SIGNS IN AS. The console has people now (IDENTITY.md): the walk signs
+    # in through /login as a seeded account, read from the 0600 file `seed-test-accounts` wrote
+    # (harness/identity.py). `walk_role` picks the person: owner by default, so every screen and
+    # action is reachable; any other role walks that role's console.
+    accounts_file: Optional[str] = None
+    walk_role: str = "owner"
     model_stub_url: Optional[str] = None   # None on a live install with real models
     fakes_url: Optional[str] = None
     smtp_port: Optional[int] = None
@@ -52,7 +58,11 @@ def live_target_from_env(env: Optional[dict[str, str]] = None) -> Target:
     """A live install, named entirely by environment so no secret ever lands in argv or a file.
 
     BOSS_E2E_API_URL, BOSS_E2E_OWNER_KEY are required; BOSS_E2E_WORKER_KEY, BOSS_E2E_PROJECT,
-    BOSS_E2E_CONSOLE_URL and BOSS_E2E_CONSOLE_PASSWORD are optional. On boss-1 these come from
+    BOSS_E2E_CONSOLE_URL, BOSS_E2E_ACCOUNTS_FILE and BOSS_E2E_ROLE are optional. To walk the
+    console of a live install, seed its test accounts on the host first
+    (`python -m boss_engine.identity.cli seed-test-accounts --org org_boss --owner-email <you>
+    --out <file>` inside the api container), copy the 0600 file here, and name it in
+    BOSS_E2E_ACCOUNTS_FILE. On boss-1 these come from
     ~/boss/.env: BOSS_API_KEY is the owner key, BOSS_WORKER_API_KEY the worker key.
     """
     env = dict(os.environ if env is None else env)
@@ -72,6 +82,8 @@ def live_target_from_env(env: Optional[dict[str, str]] = None) -> Target:
         owner_principal=env.get("BOSS_E2E_OWNER_PRINCIPAL") or "ceo",
         console_url=(env.get("BOSS_E2E_CONSOLE_URL") or "").rstrip("/") or None,
         console_password=env.get("BOSS_E2E_CONSOLE_PASSWORD") or None,
+        accounts_file=env.get("BOSS_E2E_ACCOUNTS_FILE") or None,
+        walk_role=env.get("BOSS_E2E_ROLE") or "owner",
     )
     if not target.worker_key:
         target.notes.append(
