@@ -104,6 +104,25 @@ def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=N
             registered = None
         if registered:
             return registered
+    # A FOURTH: GitHub connected in Setup › GitHub access (identity/github_setup.py) — the App
+    # created from a manifest, or the org's fine-grained token — both held in the vault.
+    try:
+        from boss_engine.identity import github_setup
+
+        if connection is not None:
+            with connection.begin_nested():
+                held = github_setup.control_plane_token(connection, owner, repo)
+        else:
+            from boss_engine.db import begin
+
+            with begin() as db:
+                held = github_setup.control_plane_token(db, owner, repo)
+    except Exception as error:  # noqa: BLE001 — never a new way for a build to die
+        logging.getLogger(__name__).debug("github: vault connection lookup failed for %s/%s: %s",
+                                          owner, repo, type(error).__name__)
+        held = None
+    if held:
+        return held
     raise GitHubAppConfigurationError(
         "No GitHub credentials for %s/%s: the App has no installation for it, "
         "BOSS_GITHUB_TOKEN is not set, and this project has no repository connected in Setup."
