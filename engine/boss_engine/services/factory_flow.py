@@ -269,9 +269,10 @@ class FactoryFlowService:
     def ensure_schema(self, connection: Any) -> None:
         if self._schema_ready:
             return
-        for statement in (chunk.strip() for chunk in SCHEMA_SQL.split(";")):
-            if statement:
-                connection.exec_driver_sql(statement)
+        from ..db import ensure_service_schema
+
+        # applied at boot (db.SERVICE_SCHEMAS); DDL here only when the table is really missing
+        ensure_service_schema(connection, SCHEMA_SQL)
         self._schema_ready = True
 
     def board(self, connection: Any, project_id: str, *, limit: int = 20) -> dict[str, Any]:

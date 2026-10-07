@@ -31,9 +31,14 @@ URL_RE = re.compile(r"/claim#t=(bst_[A-Za-z0-9_\-]+)")
 
 
 def _setup_token(capsys) -> str:
+    from apps.api.app import main
+
     client = fresh_client()
     status = client.get("/v1/auth/setup/status")
     assert status.status_code == 200 and status.json()["claimed"] is False
+    capsys.readouterr()
+    # the API's own keeper prints it (at boot, and whenever the last link expires) — never a GET
+    assert main.announce_claim_link_once() is True
     printed = capsys.readouterr().out
     m = URL_RE.search(printed)
     assert m, "the claim URL is printed to the logs, with the token in the fragment"
@@ -64,7 +69,10 @@ def test_setup_token_claim_makes_the_first_owner_and_then_answers_404_for_good(w
         r = _claim(again, email="second@example.test", **body)
         assert r.status_code == 404, (body, r.text)
     assert again.get("/v1/auth/setup/status").json() == {"claimed": True}
-    # and no new setup link is minted or printed once claimed
+    # and no new setup link is minted or printed once claimed (the keeper stops)
+    from apps.api.app import main
+
+    assert main.announce_claim_link_once() is False
     assert "claim#t=" not in capsys.readouterr().out
 
 
