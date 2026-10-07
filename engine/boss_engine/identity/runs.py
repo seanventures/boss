@@ -288,6 +288,50 @@ def shim_for(run_id: str) -> Optional[Shim]:
         return _SHIMS.get(run_id)
 
 
+# ---- the MCP bridge: an agent run calling an API-surface tool ---------------------------------------------
+#
+# An API-surface tool forwards the call to the API AS THE CALLER (M8). An agent run's own token is
+# bound to its run's DPoP key (and, over MCP HTTP, to audience boss:mcp), so it cannot be forwarded.
+# The bridge presents a `boss:api` run token of THE SAME RUN instead: in-process delegated work
+# already holds one (its shim); otherwise the bridge mints a sibling for the same first-hop agent,
+# person, grant, task and scope, bound to a key only the bridge holds. A deeper chain is never
+# re-minted as a first hop (that would skip the parent hops' ceilings): it is refused.
+
+_BRIDGE: dict[str, Shim] = {}
+
+
+def bridge_headers(ctx: AuthContext, method: str, path: str, *, engine: Any,
+                   request_origin: str) -> Optional[dict[str, str]]:
+    """`Authorization: DPoP …` + `DPoP` proof headers for one API call made for the run `ctx` acts
+    in, or None when `ctx` is not an agent run (or the run cannot be bridged: fail closed)."""
+    from . import lineage
+    from .authn_support import public_origin
+
+    rt = getattr(ctx, "run_token", None)
+    if rt is None:
+        return None
+    shim = shim_for(rt.task.run_id)
+    if shim is None or AUD_API not in shim.tokens or shim.jti(AUD_API) != rt.jti:
+        shim = _BRIDGE.get(rt.jti)
+    if shim is None:
+        if rt.chain.depth != 1 or rt.chain.current is None:
+            return None
+        with engine.begin() as db:
+            subject = subject_for(lineage.Acting.from_context(ctx), db=db)
+            shim = Shim(run_id=rt.task.run_id)
+            shim.tokens[AUD_API] = tokens.mint_run_token(
+                subject=subject, agent=AgentInstance(rt.chain.current.agent_id, rt.task.run_id),
+                grant_id=rt.grant_id, task=rt.task, audience=AUD_API, scope=frozenset(rt.scope),
+                cnf_jkt=shim.key.jkt, db=db)
+        with _lock:
+            if len(_BRIDGE) > 512:
+                _BRIDGE.clear()
+            _BRIDGE[rt.jti] = shim
+    with engine.begin() as db:
+        base = public_origin(db) or request_origin
+    return shim.authorization(AUD_API, method.upper(), base.rstrip("/") + path)
+
+
 # ---- the per-run egress credential ---------------------------------------------------------------------
 
 SANDBOX_ADDRS_ENV = "BOSS_SANDBOX_SOURCE_ADDRS"
