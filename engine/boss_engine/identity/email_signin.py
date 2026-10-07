@@ -97,6 +97,10 @@ def _eligible(db: Any, email: str) -> Optional[users.UserRow]:
     user = users.by_email(db, email) if email and "@" in email else None
     if user is None or user.status != "active" or user.email_verified_at is None:
         return None
+    from .signin import sso_enforced_for
+
+    if sso_enforced_for(db, user.email):
+        return None    # Enforce SSO: no email sign-in or reset for this domain (same answer)
     return user
 
 
@@ -287,7 +291,11 @@ def request_signup(db: Any, facts: RequestFacts, *, name: str, email: str) -> An
     secret, cookie = _new_preauth()
     pol = get_policy(org_id, db=db)
     token = random_token()
-    allowed = "@" in email and len(email) <= 320 and _domain_allowed(email, tuple(pol.signup_domains))
+    from .signin import sso_enforced_for
+
+    # Enforce SSO: that domain signs up through its provider (JIT), never by email
+    allowed = ("@" in email and len(email) <= 320 and _domain_allowed(email, tuple(pol.signup_domains))
+               and not sso_enforced_for(db, email))
     exists = users.by_email(db, email) is not None if allowed else False
     if allowed and not exists:
         create_challenge(db, kind="self_signup_verify", binding_secret=secret,

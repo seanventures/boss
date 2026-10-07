@@ -292,3 +292,127 @@ def test_rc5_sso_providers_are_imported_once_switched_off(db, shared):
     assert rows["eip_adfs"]["issuer"] == "urn:adfs" and rows["eip_adfs"]["saml_sso_url"] == "https://adfs.example/sso"
     assert {r["status"] for r in rows.values()} == {"disabled"}     # no secret yet: an Owner turns it on
     assert migration.seed(db, settings=shared, org_id=ORG).providers == 0   # once
+
+
+# ---- Enforce SSO holds for every way in (P2; IDENTITY.md §4.8) ---------------------------------------
+
+def test_enforce_sso_refuses_every_first_factor_but_its_own_provider(db, shared, monkeypatch):
+    from boss_engine.identity import email_signin, users
+
+    _claim(db, shared)
+    db.execute(text("INSERT INTO identity_providers (id, org_id, protocol, name, domains, enforce_sso, "
+                    "status) VALUES ('idp_acme', :o, 'oidc', 'Acme', ARRAY['acme.test'], true, 'active'), "
+                    "('idp_other', :o, 'oidc', 'Other', ARRAY[]::text[], false, 'active')"), {"o": ORG})
+    pid = users.create_user(db, org_id=ORG, email="dana@acme.test", display_name="Dana",
+                            email_verified=True, created_by="test")
+    dana = users.by_id(db, pid)
+    for method in ("pwd", "magic_link", "email_code", "sso:idp_other", "passkey"):
+        refused = signin.sso_refusal(db, dana, _facts(), method=method)
+        assert refused is not None and refused.body == {"error": "sso_required"}, method
+    assert signin.sso_refusal(db, dana, _facts(), method="sso:idp_acme") is None
+    # the same path every flow takes
+    assert signin.finish_first_factor(db, dana, _facts(), method="magic_link",
+                                      email_method=True).status == 403
+    # no email sign-in, reset or sign-up is sent for that domain (the same uniform answer)
+    assert email_signin._eligible(db, "dana@acme.test") is None  # noqa: SLF001
+    # an Owner keeps the passkey break-glass
+    owner = users.by_id(db, users.create_user(db, org_id=ORG, email="root@acme.test",
+                                              display_name="Root", email_verified=True))
+    migration.bind(db, ORG, owner.principal_id, "arl_owner", "org", ORG)
+    assert signin.sso_refusal(db, owner, _facts(), method="passkey") is None
+    assert signin.sso_refusal(db, owner, _facts(), method="pwd") is not None
+
+
+# ---- identity housekeeping (P2): keys, the security log's retention, the egress log, the catalogue ---
+
+def _sak(db, *, expires=None, created=None, name="ci"):
+    from boss_engine.identity import host_tools
+
+    host_tools.issue_host_key(db, org_id=ORG, revoke_others=False)     # the account and role
+    created_key = host_tools._mint(db, ORG, host_tools.HOST_TOOLS_PRINCIPAL, name,  # noqa: SLF001
+                                   frozenset({"system:read"}), None, revoke_others=False)
+    db.execute(text("UPDATE identity_api_credentials SET expires_at = :e, created_at = "
+                    "COALESCE(:c, created_at) WHERE id = :k"),
+               {"e": expires, "c": created, "k": created_key.id})
+    return created_key.id
+
+
+def test_keys_are_reminded_once_logged_when_expired_and_revoked_when_unused(db, shared, monkeypatch):
+    from datetime import datetime, timezone
+
+    from boss_engine.identity import hygiene, policy, users
+    from engine.tests.identity_s5_support import events
+
+    claim, now = _claim(db, shared)
+    soon = _sak(db, expires=now + timedelta(days=2), name="soon")
+    gone = _sak(db, expires=now - timedelta(hours=1), name="gone")
+    first = hygiene.key_hygiene(db, org_id=ORG, now=now)
+    assert first["expired"] == 1 and first["reminded"] == 2           # 14 and 3 days, once each
+    again = hygiene.key_hygiene(db, org_id=ORG, now=now)
+    assert again == {"expired": 0, "reminded": 0, "auto_revoked": 0}
+    assert {e["target_id"] for e in events(db, "api_key.expired")} == {gone}
+    # the owner of the service account sees it on every page
+    db.execute(text("UPDATE identity_service_accounts SET owner_principal_ids = ARRAY[:p] WHERE "
+                    "principal_id = (SELECT principal_id FROM identity_api_credentials WHERE id = :k)"),
+               {"p": claim.principal_id, "k": soon})
+    banners = posture.banners(claim.ctx, db=db, now=now)
+    assert any(b["kind"] == "api_key_expiring" and "soon" in b["message"] for b in banners)
+    # the unused-key policy revokes, audited
+    real = policy.get_policy
+    monkeypatch.setattr(policy, "get_policy", lambda org, *, db=None: __import__("dataclasses").replace(
+        real(org, db=db), key_auto_revoke_unused_days=30))
+    stale = _sak(db, expires=now + timedelta(days=200), created=now - timedelta(days=45), name="stale")
+    db.execute(text("UPDATE identity_api_credentials SET last_used_at = :t WHERE id = :k"),
+               {"t": now - timedelta(days=40), "k": stale})
+    done = hygiene.key_hygiene(db, org_id=ORG, now=now)
+    assert done["auto_revoked"] >= 1
+    assert db.execute(text("SELECT revoked_at FROM identity_api_credentials WHERE id = :k"),
+                      {"k": stale}).scalar() is not None
+
+
+def test_the_security_log_prunes_itself_past_retention_and_still_verifies(db, shared):
+    from boss_engine.identity import audit, hygiene
+
+    _claim(db, shared)
+    from datetime import datetime, timezone
+
+    later = datetime.now(timezone.utc) + timedelta(days=hygiene.retention_days() + 2)
+    assert hygiene.audit_retention(db, org_id=ORG, now=later) > 0
+    assert audit.verify_chain(ORG, db=db).ok
+    assert db.execute(text("SELECT count(*) FROM identity_security_events WHERE org_id = :o AND "
+                           "event_type = 'bootstrap.claimed'"), {"o": ORG}).scalar() == 1
+
+
+def test_the_egress_log_has_daily_partitions_and_keeps_30_days(db):
+    from datetime import datetime, timezone
+
+    from boss_engine.identity import hygiene
+
+    now = datetime.now(timezone.utc)
+    db.execute(text("INSERT INTO identity_egress_log (ts, org_id, run_id, provider, method, "
+                    "path_template, decision) VALUES (:t, :o, 'run_old', 'github', 'GET', '/x', 'allowed')"),
+               {"t": now - timedelta(days=45), "o": ORG})
+    out = hygiene.egress_partitions(db, now=now)
+    assert out["purged"] >= 1
+    tomorrow = (now + timedelta(days=1)).strftime("%Y%m%d")
+    assert db.execute(text("SELECT to_regclass(:n)"), {"n": f"identity_egress_log_{tomorrow}"}).scalar()
+    assert hygiene.egress_partitions(db, now=now)["created"] == 0          # idempotent
+
+
+def test_a_permission_dropped_from_the_catalogue_is_retired_with_an_event(db, shared):
+    from boss_engine.identity import hygiene
+    from engine.tests.identity_s5_support import events
+
+    _claim(db, shared)
+    db.execute(text("INSERT INTO identity_permissions (key, resource, action, title, description, "
+                    "category, scope_kind, step_up, delegable, critical, system_only, catalogue_version) "
+                    "VALUES ('ghost:haunt', 'ghost', 'haunt', 'Haunt', 'Gone.', 'Operations', 'org', "
+                    "false, false, false, false, 0)"))
+    role = migration.ensure_custom_role(db, ORG, "ghosts", "Ghosts", ["ghost:haunt", "system:read"],
+                                        system=False)
+    assert hygiene.retire_removed_permissions(db, org_id=ORG) == ["ghost:haunt"]
+    assert db.execute(text("SELECT count(*) FROM identity_access_role_permissions WHERE role_id = :r"),
+                      {"r": role}).scalar() == 1
+    event = events(db, "catalogue.permission_removed")[-1]
+    assert event["target_id"] == "ghost:haunt" and event["details"]["roles"] == 1
+    assert hygiene.retire_removed_permissions(db, org_id=ORG) == []

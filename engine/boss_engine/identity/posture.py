@@ -298,6 +298,21 @@ def banners(ctx: Any, *, db: Any, now: Optional[datetime] = None) -> list[dict[s
             out.append({"kind": "legacy_api_key", "until": until,
                         "message": "The shared API key stops working soon. Switch to a personal "
                                    "or service-account key."})
+    if ctx.principal.kind.value == "user":
+        # §5.3: a key of yours (or of a service account you own) expires within 14 days
+        row = db.execute(_sql(
+            "SELECT k.name, k.expires_at FROM identity_api_credentials k WHERE k.revoked_at IS NULL "
+            "AND k.kind IN ('pat', 'sak') AND k.expires_at > :now AND k.expires_at <= :soon AND "
+            "(k.principal_id = :p OR k.principal_id IN (SELECT principal_id FROM "
+            "identity_service_accounts WHERE :p = ANY(owner_principal_ids))) ORDER BY k.expires_at "
+            "LIMIT 1"), {"p": ctx.principal.id, "now": now,
+                         "soon": now + timedelta(days=COUNTDOWN_BANNER_DAYS)}).first()
+        if row is not None:
+            days = max(0, (row[1] - now).days)
+            out.append({"kind": "api_key_expiring", "until": row[1],
+                        "message": f"Your API key \"{row[0]}\" stops working "
+                                   + ("today" if days == 0 else "tomorrow" if days == 1
+                                      else f"in {days} days") + ". Make a new one."})
     from .recovery import must_regenerate
 
     if ctx.principal.kind.value == "user" and must_regenerate(db, ctx.principal.id):
