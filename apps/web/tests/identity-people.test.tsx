@@ -205,7 +205,7 @@ describe("a person's profile", () => {
     const call = (fetchSpy.mock.calls as unknown as [string, RequestInit][]).find(([, init]) => init?.method === "POST")!;
     expect(call[0]).toBe("/v1/identity/role-bindings");
     const operator = F.roles(NOW).find((r) => r.key === "operator")!;
-    expect(JSON.parse(String(call[1].body))).toEqual({ subject_type: "principal", subject_id: "usr_sam", role_id: operator.id });
+    expect(JSON.parse(String(call[1].body))).toEqual({ subject_type: "principal", subject_id: "usr_sam", role_id: operator.id, expires_at: null });
   });
 });
 

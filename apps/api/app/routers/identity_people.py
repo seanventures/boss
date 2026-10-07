@@ -83,6 +83,7 @@ def _person_view(db: Any, u: users.UserRow, *, detail: bool = False) -> dict[str
         "access_roles": users.role_keys(db, u.principal_id), "mfa": f.any_second_factor,
         "mfa_required": users.mfa_required(db, u), "password": bool(u.password_hash),
         "self_signed_up": u.self_signed_up, "network_bound": u.network_bound,
+        "email_verified": u.email_verified_at is not None,
         "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None}
     if detail:
         view["factors"] = {"totp": f.totp, "passkeys": f.passkeys,
@@ -288,6 +289,31 @@ def build_identity_people_router() -> APIRouter:
                     users.change_email(db, u, email, by=ctx.principal.id)
                 emit(db, org_id=ctx.principal.org_id, event_type="user.updated", outcome=Outcome.SUCCESS,
                      ctx=ctx, target_type="user", target_id=u.principal_id, details={"fields": sorted(raw)})
+                fresh = users.by_id(db, u.principal_id)
+                assert fresh is not None
+                return JSONResponse(_person_view(db, fresh))
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.post("/v1/identity/users/{user_id}/verify-email")
+    @permit(P.USER_UPDATE)
+    def verify_user_email(user_id: str, request: Request):
+        """An admin vouches for a person's address (Kaappu parity): set once, never unset here
+        (changing the email unverifies it again, users.change_email). The Owner guard applies."""
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                u = _target(db, ctx, user_id)
+                if u is None:
+                    return error(404, "not_found")
+                blocked = _owner_guard(db, ctx, u, removing=False, permission="user:update")
+                if blocked:
+                    return blocked
+                if u.email_verified_at is None:
+                    db.execute(text("UPDATE identity_users SET email_verified_at = now() WHERE principal_id = :id "
+                                    "AND email_verified_at IS NULL"), {"id": u.principal_id})
+                    emit(db, org_id=ctx.principal.org_id, event_type="user.email_verified", outcome=Outcome.SUCCESS,
+                         ctx=ctx, target_type="user", target_id=u.principal_id, details={"by": "admin"})
                 fresh = users.by_id(db, u.principal_id)
                 assert fresh is not None
                 return JSONResponse(_person_view(db, fresh))

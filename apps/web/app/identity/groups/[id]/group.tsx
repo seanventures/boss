@@ -8,14 +8,17 @@
  */
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowsClockwise, Info, Plus, UsersThree } from "@phosphor-icons/react";
+import { ArrowsClockwise, Info, PencilSimple, Plus, Trash, UsersThree } from "@phosphor-icons/react";
 
 import { showToast } from "../../../client-forms";
 import { CanButton, useGuardedCall } from "../../../../components/identity/identity-provider";
 import { Ago, Face, RoleChip, Sheet } from "../../../../components/identity/kit";
 import { IdentityError, idDelete, idPost } from "../../../../lib/identity/api";
-import type { Group, Person } from "../../../../lib/identity/types";
+import type { AccessRole, Binding, Group, Person } from "../../../../lib/identity/types";
+import type { ProjectChoice } from "../../../../lib/identity/types-people";
+import { EmptyState } from "../../../../components/identity/states";
 import { sourceWord } from "../groups-list";
+import { BindRoleSheet, DeleteGroupSheet, GroupFormSheet, UnbindRoleSheet } from "../group-sheets";
 
 function useAct() {
   const guarded = useGuardedCall();
@@ -71,9 +74,14 @@ function AddMember({ group, people, onClose }: { group: Group; people: Person[];
   );
 }
 
-export function GroupDetail({ group, people }: { group: Group; people: Person[] | null }) {
+type GroupSheet = { kind: "edit" } | { kind: "delete" } | { kind: "bind" } | { kind: "unbind"; binding: Binding };
+
+export function GroupDetail({ group, people, roles = [], projects = null }: {
+  group: Group; people: Person[] | null; roles?: AccessRole[]; projects?: ProjectChoice[] | null;
+}) {
   const act = useAct();
   const [adding, setAdding] = useState(false);
+  const [sheet, setSheet] = useState<GroupSheet | null>(null);
   const manual = group.source === "manual";
   return (
     <>
@@ -84,17 +92,27 @@ export function GroupDetail({ group, people }: { group: Group; people: Person[] 
           <h1 className="idn-h1">{group.name} <span className={`idn-tag${manual ? "" : " warn"}`}>{sourceWord(group)}</span></h1>
           <span className="idn-dim" data-copy="data">{group.description}</span>
         </div>
-        {manual ? (
-          <CanButton permission="group:manage_members" className="idn-btn primary" onClick={() => setAdding(true)} tip="Members inherit this group's access roles" data-testid="group-add-member">
-            <Plus size={14} aria-hidden /> Add member
-          </CanButton>
-        ) : null}
+        <div className="idn-acts">
+          {manual ? (
+            <>
+              <CanButton permission="group:manage" className="idn-btn sm" onClick={() => setSheet({ kind: "edit" })} tip="Rename or describe it" data-testid="group-edit">
+                <PencilSimple size={14} aria-hidden /> Edit
+              </CanButton>
+              <CanButton permission="group:manage" className="idn-btn sm danger" onClick={() => setSheet({ kind: "delete" })} tip="Members lose what it grants" data-testid="group-delete">
+                <Trash size={14} aria-hidden /> Delete
+              </CanButton>
+              <CanButton permission="group:manage_members" className="idn-btn primary sm" onClick={() => setAdding(true)} tip="Members inherit this group's access roles" data-testid="group-add-member">
+                <Plus size={14} aria-hidden /> Add member
+              </CanButton>
+            </>
+          ) : null}
+        </div>
       </div>
 
       {!manual ? (
         <div className="idn-note info" data-testid="idp-read-only">
           <Info size={16} aria-hidden />
-          <span data-copy="prose">Synced from {group.provider ?? "your IdP"}{group.synced_at ? <>, <Ago iso={group.synced_at} /></> : ""}. Change its members there; access roles are bound here.</span>
+          <span data-copy="prose">Synced from {group.provider ?? "your identity provider"}{group.synced_at ? <>, <Ago iso={group.synced_at} /></> : ""}. Change its members there; give it access roles here.</span>
         </div>
       ) : null}
 
@@ -128,21 +146,45 @@ export function GroupDetail({ group, people }: { group: Group; people: Person[] 
               </tbody>
             </table>
           </div>
-          {!group.members.length ? <div className="idn-empty">No members</div> : null}
+          {!group.members.length ? (
+            <EmptyState compact icon={<UsersThree size={18} />} title="No members yet" testId="group-no-members">
+              {manual ? "Add people to give them this group's roles." : `Members arrive from ${group.provider ?? "your identity provider"}.`}
+            </EmptyState>
+          ) : null}
         </section>
         <section className="idn-card" aria-labelledby="idn-gb-h">
-          <div className="idn-card-h"><h2 id="idn-gb-h">Access roles</h2><span className="idn-sub">every member inherits these</span></div>
+          <div className="idn-card-h">
+            <h2 id="idn-gb-h">Access roles</h2><span className="idn-sub">every member inherits these</span>
+            <span className="idn-spacer" />
+            <CanButton permission="role_binding:assign" className="idn-btn sm" onClick={() => setSheet({ kind: "bind" })} tip="Every member gets this role" data-testid="group-bind">
+              <Plus size={14} aria-hidden /> Add role
+            </CanButton>
+          </div>
           {group.bindings.map((b) => (
-            <div key={b.id} className="idn-bind">
+            <div key={b.id} className="idn-bind" data-testid={`group-binding-${b.id}`}>
               <RoleChip roleKey={b.role_key} name={b.role_name} scope={b.scope} />
-              <span className="idn-src" data-copy="data">granted by {b.granted_by ?? "BOSS"}</span>
-              <a className="idn-btn sm" href={`/identity/roles/${b.role_id}`}>Open</a>
+              <span className="idn-src" data-copy="data">granted by {b.granted_by ?? "BOSS"}{b.expires_at ? ` · ends ${b.expires_at.slice(0, 10)}` : ""}</span>
+              <span className="idn-row">
+                <a className="idn-btn sm ghost" href={`/identity/roles/${b.role_id}`}>Open</a>
+                <CanButton permission="role_binding:assign" className="idn-btn sm" tip="Members lose this role" data-testid={`group-unbind-${b.id}`}
+                  onClick={() => setSheet({ kind: "unbind", binding: b })}>
+                  Remove
+                </CanButton>
+              </span>
             </div>
           ))}
-          {!group.bindings.length ? <div className="idn-empty">No access roles bound</div> : null}
+          {!group.bindings.length ? (
+            <EmptyState compact title="No access roles yet" testId="group-no-roles">
+              Add a role and every member inherits it.
+            </EmptyState>
+          ) : null}
         </section>
       </div>
       {adding && people ? <AddMember group={group} people={people} onClose={() => setAdding(false)} /> : null}
+      {sheet?.kind === "edit" ? <GroupFormSheet group={group} onClose={() => setSheet(null)} /> : null}
+      {sheet?.kind === "delete" ? <DeleteGroupSheet group={group} onClose={() => setSheet(null)} /> : null}
+      {sheet?.kind === "bind" ? <BindRoleSheet group={group} roles={roles} projects={projects} onClose={() => setSheet(null)} /> : null}
+      {sheet?.kind === "unbind" ? <UnbindRoleSheet group={group} binding={sheet.binding} onClose={() => setSheet(null)} /> : null}
     </>
   );
 }

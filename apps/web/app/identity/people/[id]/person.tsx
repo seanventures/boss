@@ -11,14 +11,19 @@ import React, { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowsClockwise, ArrowUpRight, CaretDown, Check, Clock, Desktop, DeviceMobile, EnvelopeSimple, Fingerprint, GithubLogo,
-  Key, LinkSimple, LockSimple, MagnifyingGlass, Plus, Prohibit, ShieldCheck, ShieldWarning, User, UsersThree, X,
+  Key, LinkSimple, LockSimple, MagnifyingGlass, Plus, Prohibit, SealCheck, ShieldCheck, ShieldWarning, User, UsersThree, X,
 } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../../agent-avatar";
 import { showToast } from "../../../client-forms";
 import { CanButton, useGuardedCall, useIdentity } from "../../../../components/identity/identity-provider";
 import { Ago, clock, ErrorLine, Face, Perm, Pill, RoleChip, Sheet, shortDate, useNow, daysUntil } from "../../../../components/identity/kit";
-import { SignIn } from "../../../../components/identity/parts";
+import { Locked, SignIn } from "../../../../components/identity/parts";
+import { ErrorState, type ReadFailure } from "../../../../components/identity/states";
+import { eventWords, permissionName } from "../../../../lib/identity/words";
+import type { ProjectChoice } from "../../../../lib/identity/types-people";
+import { ProjectPicker } from "../../groups/group-sheets";
+import { ExpiryField, expiresAt, type ExpiryChoice } from "../expiry";
 import { IdentityError, idDelete, idPost } from "../../../../lib/identity/api";
 import { PERMISSION_META, PERMISSIONS, type Permission } from "../../../../lib/identity/permissions.gen";
 import type {
@@ -39,7 +44,15 @@ type Props = {
   delegations: Delegation[] | null;
   keys: ApiKey[] | null;
   events: AuditEvent[] | null;
+  /** Projects to bind in (Add access); null when unreadable, and the project is typed instead. */
+  projects?: ProjectChoice[] | null;
+  /** From /users/{id}: true, false, or null when the API did not say. */
+  emailVerified?: boolean | null;
+  /** Why a part is missing: a 403 shows what it needs, anything else is an error with Try again. */
+  failures?: PersonFailures;
 };
+
+export type PersonFailures = Partial<Record<"factors" | "sessions" | "effective" | "delegations" | "keys" | "events", ReadFailure>>;
 
 function refusal(e: unknown): string {
   if (e instanceof IdentityError) return e.code === "step_up_cancelled" ? "Not confirmed" : e.message;
@@ -67,9 +80,10 @@ const scopeName = (s: string) => (s === "org" ? "org" : s.replace(/^project:/, "
 
 // ---- the header ---------------------------------------------------------------------------------
 
-function Header({ person, roles, onSheet }: { person: Person; roles: AccessRole[]; onSheet: (s: SheetKind) => void }) {
+function Header({ person, roles, emailVerified, onSheet }: { person: Person; roles: AccessRole[]; emailVerified: boolean | null; onSheet: (s: SheetKind) => void }) {
   const p = person;
   const disabled = p.status === "disabled";
+  const act = useAct();
   void roles;
   return (
     <section className="idn-ph" aria-labelledby="idn-person-h">
@@ -77,7 +91,17 @@ function Header({ person, roles, onSheet }: { person: Person; roles: AccessRole[
       <div className="idn-ph-main">
         <h1 id="idn-person-h">{p.display_name} {statusPill(p)}</h1>
         <div className="idn-meta">
-          <span><EnvelopeSimple size={14} aria-hidden /> <span data-copy="data">{p.email}</span></span>
+          <span><EnvelopeSimple size={14} aria-hidden /> <span data-copy="data">{p.email}</span>
+            {emailVerified === false ? (
+              <>
+                {" "}<Pill tone="warn" tip="They have not proved they own this address">unverified</Pill>
+                <CanButton permission="user:update" className="idn-link" tip="You vouch that the address is theirs" data-testid="person-verify-email"
+                  onClick={() => act("Vouching for an email address is recorded.", () => idPost(`/v1/identity/users/${encodeURIComponent(p.id)}/verify-email`), "Marked verified")}>
+                  <SealCheck size={13} aria-hidden /> Mark verified
+                </CanButton>
+              </>
+            ) : null}
+          </span>
           {p.sign_in.sso ? <span><LinkSimple size={14} aria-hidden /> {p.sign_in.sso} SSO linked</span> : null}
           {p.last_seen_at ? <span><Clock size={14} aria-hidden /> <span>Signed in <Ago iso={p.last_seen_at} />{p.last_seen_from ? `, ${p.last_seen_from}` : null}</span></span> : <span><Clock size={14} aria-hidden /> Never signed in</span>}
           <span><User size={14} aria-hidden /> Joined {shortDate(p.joined_at)}{p.joined_by ? ` by ${p.joined_by}` : ""}</span>
@@ -115,14 +139,17 @@ function Header({ person, roles, onSheet }: { person: Person; roles: AccessRole[
 
 type SheetKind = "add" | "signout" | "mfa" | "disable" | "enable";
 
-function AddAccessSheet({ person, roles, onClose }: { person: Person; roles: AccessRole[]; onClose: () => void }) {
+function AddAccessSheet({ person, roles, projects, onClose }: { person: Person; roles: AccessRole[]; projects: ProjectChoice[] | null; onClose: () => void }) {
   const { org } = useIdentity();
   const act = useAct();
   const held = org?.permissions;
-  const projects = [...new Set(person.bindings.filter((b) => b.scope.startsWith("project:")).map((b) => b.scope.slice(8)))];
+  const now = useNow();
+  const theirs = [...new Set(person.bindings.filter((b) => b.scope.startsWith("project:")).map((b) => b.scope.slice(8)))];
   const [role, setRole] = useState<string>("");
   const [where, setWhere] = useState<"org" | "project">("org");
-  const [project, setProject] = useState(projects[0] ?? "");
+  const [project, setProject] = useState(projects?.[0]?.id ?? theirs[0] ?? "");
+  const [expiry, setExpiry] = useState<ExpiryChoice>("none");
+  const [date, setDate] = useState("");
   const [busy, setBusy] = useState(false);
   const chosen = roles.find((r) => r.key === role);
   const canProject = !chosen || chosen.bindable_scopes.includes("project");
@@ -156,24 +183,20 @@ function AddAccessSheet({ person, roles, onClose }: { person: Person; roles: Acc
             aria-disabled={!canProject || undefined} title={canProject ? "One project only" : "This role binds at org only"}
             onClick={() => { if (canProject) setWhere("project"); }}>One project</button>
         </div>
-        {where === "project" ? (
-          <>
-            <label className="idn-sr" htmlFor="aa-project">Project id</label>
-            <input id="aa-project" className="idn-input" placeholder="acme-web" value={project} onChange={(e) => setProject(e.target.value)} />
-          </>
-        ) : null}
+        {where === "project" ? <ProjectPicker id="aa-project" projects={projects} value={project} onChange={setProject} /> : null}
       </div>
+      <ExpiryField id="aa-exp" choice={expiry} date={date} onChoice={setExpiry} onDate={setDate} />
       <div className="idn-mf">
         <span className="idn-spacer" />
         <button type="button" className="idn-btn ghost" onClick={onClose}>Cancel</button>
         <button type="button" className="idn-btn primary" data-testid="add-access-save"
-          disabled={!role || busy || (where === "project" && !project.trim())}
+          disabled={!role || busy || (where === "project" && !project.trim()) || (expiry === "date" && !expiresAt("date", date, now))}
           onClick={async () => {
             setBusy(true);
             const out = await act("Granting access changes what they can do.",
               // The API binds by role id; a project binding goes to that project's own route.
               () => idPost(where === "org" ? "/v1/identity/role-bindings" : `/v1/identity/projects/${encodeURIComponent(project.trim())}/role-bindings`,
-                { subject_type: "principal", subject_id: person.id, role_id: chosen?.id ?? "" }), "Access added");
+                { subject_type: "principal", subject_id: person.id, role_id: chosen?.id ?? "", expires_at: expiresAt(expiry, date, now) }), "Access added");
             setBusy(false);
             if (out !== null) onClose();
           }}>
@@ -242,7 +265,7 @@ function Bindings({ person }: { person: Person }) {
     <section className="idn-card" aria-labelledby="idn-bind-h">
       <div className="idn-card-h">
         <h2 id="idn-bind-h">Access roles</h2>
-        <span className="idn-sub">{person.bindings.length} bindings · union, never deny</span>
+        <span className="idn-sub" title="Each role adds access; none takes any away">{person.bindings.length} {person.bindings.length === 1 ? "role" : "roles"} · they add up</span>
       </div>
       {person.bindings.map((b) => (
         <div key={b.id} className="idn-bind" data-testid={`binding-${b.id}`}>
@@ -260,7 +283,7 @@ function Bindings({ person }: { person: Person }) {
               ? <a className="idn-btn sm" href={`/identity/groups/${b.via_group.id}`}>Group</a>
               : <span className="idn-btn sm ghost" title="Change it in your identity provider">{b.via_group.source === "scim" ? "SCIM" : "IdP"}</span>
           ) : b.synthetic ? (
-            <span className="idn-btn sm ghost" title="Bindings need role_binding:read to manage">Role</span>
+            <span className="idn-btn sm ghost" title={`Managing it needs “${permissionName("role_binding:read")}”`}>Role</span>
           ) : (
             <CanButton permission="role_binding:assign" className="idn-btn sm" tip="Remove this binding" data-testid={`remove-${b.id}`}
               onClick={() => act("Removing access changes what they can do.", () => idDelete(b.scope.startsWith("project:")
@@ -271,7 +294,7 @@ function Bindings({ person }: { person: Person }) {
           )}
         </div>
       ))}
-      {!person.bindings.length ? <div className="idn-empty">No access roles yet</div> : null}
+      {!person.bindings.length ? <div className="idn-empty">No access roles yet · use Add access</div> : null}
     </section>
   );
 }
@@ -540,6 +563,10 @@ function RevokeGrant({ grant, onClose }: { grant: Delegation; onClose: () => voi
   );
 }
 
+function outcomeWord(o: string): string {
+  return o === "ok" ? "done" : o === "denied" ? "refused" : o === "failed" ? "failed" : o === "info" ? "noted" : o.replace(/_/g, " ");
+}
+
 function Activity({ events, full = false }: { events: AuditEvent[]; full?: boolean }) {
   return (
     <section className="idn-card" aria-labelledby="idn-act-h">
@@ -551,11 +578,11 @@ function Activity({ events, full = false }: { events: AuditEvent[]; full?: boole
       {events.slice(0, full ? 100 : 5).map((e) => (
         <a key={e.id} className="idn-mini-ev" href={`/identity/audit?event=${e.id}`}>
           <span className="idn-dim idn-mono">{clock(e.at).slice(0, 5)}</span>
-          <span data-copy="data">{e.headline}{full ? <> · <span className="idn-mono">{e.event_type}</span></> : null}</span>
-          <span className={e.outcome === "ok" ? "idn-ok" : e.outcome === "denied" || e.outcome === "failed" ? "idn-bad" : "idn-warn"}>{e.outcome}</span>
+          <span data-copy="data">{e.headline}{full ? <> · <span className="idn-dim" title={e.event_type}>{eventWords(e.event_type)}</span></> : null}</span>
+          <span className={e.outcome === "ok" ? "idn-ok" : e.outcome === "denied" || e.outcome === "failed" ? "idn-bad" : "idn-warn"}>{outcomeWord(e.outcome)}</span>
         </a>
       ))}
-      {!events.length ? <div className="idn-empty">Nothing yet</div> : null}
+      {!events.length ? <div className="idn-empty">No security events for them yet</div> : null}
     </section>
   );
 }
@@ -566,7 +593,7 @@ function Keys({ keys }: { keys: ApiKey[] }) {
     <section className="idn-card" aria-labelledby="idn-keys-h">
       <div className="idn-card-h">
         <h2 id="idn-keys-h">API keys</h2>
-        <span className="idn-sub" title="BOSS never shows a key again, only its id">Shown once, then only its id</span>
+        <span className="idn-sub" title="BOSS never shows a key's secret again">Shown once, then only its name</span>
       </div>
       <div className="idn-scroll">
         <table className="idn-t">
@@ -574,7 +601,7 @@ function Keys({ keys }: { keys: ApiKey[] }) {
           <tbody>
             {keys.map((k) => (
               <tr key={k.id} data-testid={`key-${k.id}`}>
-                <td><span className="idn-kid">{k.id}</span><span data-copy="data">{k.name}</span></td>
+                <td><span data-copy="data" title={k.id}>{k.name || "Unnamed key"}</span></td>
                 <td><span className="idn-scopes">{k.scopes.map((p) => <Perm key={p} p={p} sm />)}</span></td>
                 <td className="idn-dim"><Ago iso={k.last_used_at} />{k.last_used_client ? <small className="idn-block" data-copy="data">{k.last_used_client}</small> : null}</td>
                 <td>{k.status === "revoked" ? <Pill tone="mute">revoked</Pill> : k.expires_at ? <Ago iso={k.expires_at} /> : <Pill tone="warn">never</Pill>}</td>
@@ -591,7 +618,7 @@ function Keys({ keys }: { keys: ApiKey[] }) {
           </tbody>
         </table>
       </div>
-      {!keys.length ? <div className="idn-empty">No personal keys</div> : null}
+      {!keys.length ? <div className="idn-empty">No personal API keys</div> : null}
     </section>
   );
 }
@@ -611,7 +638,6 @@ function OverviewTab({ person }: { person: Person }) {
           <dt>Last sign-in</dt><dd><Ago iso={p.last_seen_at} />{p.last_seen_from ? ` · ${p.last_seen_from}` : ""}</dd>
           <dt>Joined</dt><dd>{shortDate(p.joined_at)}{p.joined_by ? ` by ${p.joined_by}` : ""}</dd>
           <dt>Seat</dt><dd>{p.seat ?? "none"}</dd>
-          <dt>Id</dt><dd><code className="idn-mono">{p.id}</code></dd>
         </dl>
       </section>
       <section className="idn-card" aria-labelledby="idn-ovg-h">
@@ -627,10 +653,10 @@ function OverviewTab({ person }: { person: Person }) {
   );
 }
 
-function SecurityTab({ person, factors, onSheet }: { person: Person; factors: Factor[] | null; onSheet: (s: SheetKind) => void }) {
+function SecurityTab({ person, factors, failure, onSheet }: { person: Person; factors: Factor[] | null; failure?: ReadFailure; onSheet: (s: SheetKind) => void }) {
   return (
     <div className="idn-cols">
-      {factors ? <Factors person={person} factors={factors} /> : <div className="idn-card idn-dim">Factors hidden</div>}
+      {factors ? <Factors person={person} factors={factors} /> : <Hidden what="Sign-in and MFA" permission="user:read" failure={failure} />}
       <section className="idn-card" aria-labelledby="idn-adm-h">
         <div className="idn-card-h"><h2 id="idn-adm-h">Admin actions</h2></div>
         <div className="idn-adm">
@@ -648,18 +674,23 @@ function SecurityTab({ person, factors, onSheet }: { person: Person; factors: Fa
   );
 }
 
-function Hidden({ what, permission }: { what: string; permission: Permission }) {
-  return (
-    <section className="idn-card">
-      <div className="idn-card-h"><h2>{what}</h2></div>
-      <div className="idn-row idn-dim"><LockSimple size={15} aria-hidden /> Needs <code className="idn-perm">{permission}</code></div>
-    </section>
-  );
+/** A part the page could not show: what it needs when refused (403 or never asked), else the error. */
+function Hidden({ what, permission, failure }: { what: string; permission: Permission; failure?: ReadFailure }) {
+  if (failure && failure.status !== 403) {
+    return (
+      <section className="idn-card">
+        <div className="idn-card-h"><h2>{what}</h2></div>
+        <ErrorState compact what={what.toLowerCase()} failure={failure} />
+      </section>
+    );
+  }
+  const p = (failure?.permission ?? permission) as Permission;
+  return <Locked permission={p} what={what} />;
 }
 
 // ---- the page -----------------------------------------------------------------------------------
 
-export function PersonProfile({ person, tab, factors, sessions, effective, projectEffective, roles, delegations, keys, events }: Props) {
+export function PersonProfile({ person, tab, factors, sessions, effective, projectEffective, roles, delegations, keys, events, projects = null, emailVerified = null, failures = {} }: Props) {
   const [sheet, setSheet] = useState<SheetKind | null>(null);
   const counts: Partial<Record<PersonTab, number>> = {
     sessions: sessions?.length, delegations: delegations?.length, keys: keys?.filter((k) => k.status !== "revoked").length,
@@ -667,7 +698,7 @@ export function PersonProfile({ person, tab, factors, sessions, effective, proje
   return (
     <>
       <nav className="idn-crumb" aria-label="Breadcrumb"><a href="/identity/people">People</a> <span aria-hidden>›</span> <span>{person.display_name}</span></nav>
-      <Header person={person} roles={roles} onSheet={setSheet} />
+      <Header person={person} roles={roles} emailVerified={emailVerified} onSheet={setSheet} />
       <nav className="idn-subtabs" aria-label="Profile sections">
         {PERSON_TABS.map((t) => (
           <a key={t.id} href={`?tab=${t.id}`} aria-current={tab === t.id ? "page" : undefined} data-tab={t.id}>
@@ -680,24 +711,24 @@ export function PersonProfile({ person, tab, factors, sessions, effective, proje
         <div className="idn-cols">
           <div className="idn-colr">
             <Bindings person={person} />
-            {effective ? <Effective eff={effective} projects={projectEffective} /> : <Hidden what="Effective access" permission="user:read" />}
+            {effective ? <Effective eff={effective} projects={projectEffective} /> : <Hidden what="Effective access" permission="user:read" failure={failures.effective} />}
           </div>
           <div className="idn-colr">
             {factors ? <Factors person={person} factors={factors} /> : null}
-            {sessions ? <Sessions person={person} sessions={sessions} /> : <Hidden what="Sessions" permission="session:read" />}
-            {delegations ? <Grants person={person} delegations={delegations} /> : <Hidden what="Agents acting for them" permission="delegation:read_all" />}
+            {sessions ? <Sessions person={person} sessions={sessions} /> : <Hidden what="Sessions" permission="session:read" failure={failures.sessions} />}
+            {delegations ? <Grants person={person} delegations={delegations} /> : <Hidden what="Agents acting for them" permission="delegation:read_all" failure={failures.delegations} />}
             {events ? <Activity events={events} /> : null}
           </div>
         </div>
       ) : null}
       {tab === "overview" ? <OverviewTab person={person} /> : null}
-      {tab === "sessions" ? (sessions ? <Sessions person={person} sessions={sessions} full /> : <Hidden what="Sessions" permission="session:read" />) : null}
-      {tab === "security" ? <SecurityTab person={person} factors={factors} onSheet={setSheet} /> : null}
-      {tab === "delegations" ? (delegations ? <Grants person={person} delegations={delegations} full /> : <Hidden what="Delegations" permission="delegation:read_all" />) : null}
-      {tab === "keys" ? (keys ? <Keys keys={keys} /> : <Hidden what="API keys" permission="api_key:read" />) : null}
-      {tab === "audit" ? (events ? <Activity events={events} full /> : <Hidden what="Audit" permission="audit:read" />) : null}
+      {tab === "sessions" ? (sessions ? <Sessions person={person} sessions={sessions} full /> : <Hidden what="Sessions" permission="session:read" failure={failures.sessions} />) : null}
+      {tab === "security" ? <SecurityTab person={person} factors={factors} failure={failures.factors} onSheet={setSheet} /> : null}
+      {tab === "delegations" ? (delegations ? <Grants person={person} delegations={delegations} full /> : <Hidden what="Delegations" permission="delegation:read_all" failure={failures.delegations} />) : null}
+      {tab === "keys" ? (keys ? <Keys keys={keys} /> : <Hidden what="API keys" permission="api_key:read" failure={failures.keys} />) : null}
+      {tab === "audit" ? (events ? <Activity events={events} full /> : <Hidden what="Audit" permission="audit:read" failure={failures.events} />) : null}
 
-      {sheet === "add" ? <AddAccessSheet person={person} roles={roles} onClose={() => setSheet(null)} /> : null}
+      {sheet === "add" ? <AddAccessSheet person={person} roles={roles} projects={projects} onClose={() => setSheet(null)} /> : null}
       {sheet && sheet !== "add" ? <ConfirmSheet person={person} kind={sheet} onClose={() => setSheet(null)} /> : null}
     </>
   );

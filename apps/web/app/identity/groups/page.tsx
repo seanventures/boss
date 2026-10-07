@@ -8,5 +8,5 @@ export const dynamic = "force-dynamic";
 export default async function GroupsPage() {
   if (!(await pageAllowed("/identity/groups"))) return null;
   const dir = await loadDirectory();
-  return <GroupsList groups={dir.groups} />;
+  return <GroupsList groups={dir.groups} failure={dir.failures.groups ?? null} />;
 }
