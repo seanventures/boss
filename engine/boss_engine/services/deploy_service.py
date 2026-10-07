@@ -158,7 +158,7 @@ def render_plan_markdown(plan: dict) -> str:
 # This set exists because the cleanup path used to unlink whatever `_ssh_key_file` returned —
 # which in the (preferred) file-reference mode is the OPERATOR'S OWN private key. Every deploy
 # destroyed the credential it had just used, and the next one failed with "does not exist".
-# That is what happened to ~/.ssh/kaappu-demo.pem, and it is why deploys from this laptop had
+# That is what happened to an operator's ~/.ssh/demo-host.pem, and it is why deploys from a laptop had
 # been broken long before anyone looked: the failure appeared one run after its cause.
 #
 # The general shape: a function that returns "a path" from two sources, where ownership differs
