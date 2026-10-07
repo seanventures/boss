@@ -19,7 +19,7 @@ import { Ago, Face, Perm, RoleChip, useNow, agoText } from "../../components/ide
 import { BindingChips, Locked, SignIn } from "../../components/identity/parts";
 import { EmptyState, ErrorState, type ReadFailure } from "../../components/identity/states";
 import type { Permission } from "../../lib/identity/permissions.gen";
-import { eventWords, keyCount } from "../../lib/identity/words";
+import { eventWords, keyCount, outcomeWords } from "../../lib/identity/words";
 import type { AccessRole, AuditEvent, Group, Passport, Person, Posture, PostureCheck, ServiceAccount } from "../../lib/identity/types";
 
 const CHECK_ICON: Record<PostureCheck["id"], React.ReactNode> = {
@@ -72,8 +72,6 @@ function Wires({ left, right, links }: { left: number; right: number; links: [nu
 }
 
 /** The outcome of an event, as a word (the API's ok/denied/failed/notice). */
-const OUTCOME_WORD: Record<string, string> = { ok: "done", denied: "refused", failed: "failed", notice: "notice" };
-
 /** A panel the viewer may not open names the permission (one line, inside its card). */
 function Needs({ icon, what, p }: { icon: React.ReactNode; what: string; p: Permission }) {
   return <div className="idn-row idn-dim">{icon} {what} need <Perm p={p} sm /></div>;
@@ -355,7 +353,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
                     : <Face name={e.actor.name} tone={e.actor.hue} size={30} />}
                   <span>
                     <span className="idn-t1" data-copy="data">{e.headline}</span>
-                    <span className="idn-m" title={e.event_type}>{eventWords(e.event_type)} · {OUTCOME_WORD[e.outcome] ?? e.outcome}</span>
+                    <span className="idn-m" title={e.event_type}>{eventWords(e.event_type)} · {outcomeWords(e.outcome)}</span>
                   </span>
                   <span className="idn-when"><Ago iso={e.at} bare /></span>
                 </a>

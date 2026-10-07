@@ -19,7 +19,7 @@ import { ArrowCounterClockwise, CaretDown, CaretRight, ClockCounterClockwise, Co
 
 import { AgentAvatar } from "../../../agent-avatar";
 import { CanButton, useCan, useGuardedCall, useIdentity } from "../../../../components/identity/identity-provider";
-import { ErrorLine, Face, Perm, Sheet, shortDate } from "../../../../components/identity/kit";
+import { Delta, ErrorLine, Face, Perm, Sheet, shortDate } from "../../../../components/identity/kit";
 import { showToast } from "../../../client-forms";
 import { IdentityError, idDelete, idGet, idPatch, idPost } from "../../../../lib/identity/api";
 import { permissionName } from "../../../../lib/identity/words";
@@ -442,11 +442,11 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
                   <span className="idn-dim" data-copy="data">{preview.affected.people.map((p) => p.name).join(", ")}</span>
                 </div>
                 <div className="idn-gl">
-                  <div><b><span className="idn-plus">+{preview.pages.gained.length}</span>{preview.pages.lost.length ? <span className="idn-minus"> −{preview.pages.lost.length}</span> : null}</b>
+                  <div><b><Delta gained={preview.pages.gained.length} lost={preview.pages.lost.length} /></b>
                     <span>page{preview.pages.gained.length === 1 ? "" : "s"}</span>
                     {preview.pages.gained[0] ? <span className="idn-gl-sub" data-copy="data">{preview.pages.gained[0]}</span> : null}</div>
-                  <div><b><span className="idn-plus">+{preview.routes.gained}</span> <span className="idn-minus">−{preview.routes.lost}</span></b><span>API operations</span></div>
-                  <div><b><span className="idn-plus">+{preview.tools.gained}</span> <span className="idn-minus">−{preview.tools.lost}</span></b><span>MCP tools</span></div>
+                  <div><b><Delta gained={preview.routes.gained} lost={preview.routes.lost} /></b><span>API operations</span></div>
+                  <div><b><Delta gained={preview.tools.gained} lost={preview.tools.lost} /></b><span>MCP tools</span></div>
                 </div>
                 <div className="idn-hr" />
                 {preview.affected.agents.map((a) => (
