@@ -2,7 +2,7 @@
 import { networkTrustedConsole } from "../lib/console-session";
 import { accessForArea } from "../lib/identity/area-access";
 import { checkWith } from "../lib/identity/check";
-import { enrolHref, needsEnrolment } from "../lib/identity/enrolment";
+import { enrolHref, needsEnrolment, signInAgainHref } from "../lib/identity/enrolment";
 import { EnrolmentGate } from "../components/identity/enrolment-gate";
 import { ORG_ONBOARD_PERMISSION } from "./org-gate-permission";
 import { snapshotFrom } from "../lib/identity/contract";
@@ -426,8 +426,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // AN ENROLMENT-ONLY SESSION sees the way to enrol, not a console of refusals (H1).
   const enrolment = await loadIdentityCached(null);
   if (needsEnrolment(enrolment.me, enrolment.problem)) {
-    const back = new URLSearchParams(resolvedSearchParams).toString();
-    return <EnrolmentGate href={enrolHref(back ? `/?${back}` : "/")} />;
+    const enrolBack = new URLSearchParams(resolvedSearchParams).toString();
+    return <EnrolmentGate href={enrolHref(enrolBack ? `/?${enrolBack}` : "/")} />;
+  }
+  // A DEAD SESSION SIGNS IN, before the org list is asked for (lib/identity/enrolment.ts
+  // signInAgainHref). RENDERED, NOT REDIRECTED (see above): a page that sends the browser on,
+  // keeping its place.
+  const back = new URLSearchParams(resolvedSearchParams).toString();
+  const signIn = signInAgainHref(enrolment.problem, back ? `/?${back}` : "/");
+  if (signIn) {
+    return (
+      <main className="idn-auth" data-testid="sign-in-again">
+        <meta httpEquiv="refresh" content={`0;url=${signIn}`} />
+        <a className="idn-big p" href={signIn}>Sign in again</a>
+      </main>
+    );
   }
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
@@ -568,18 +581,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // an area the viewer cannot open is neither fetched nor rendered — the shell shows
   // <AccessDenied> for it — so no area loads and then 403s.
   const identity = await loadIdentityCached(activeProjectId);
-  if (identity.problem === "unauthenticated" && !networkTrustedConsole()) {
-    // RENDERED, NOT REDIRECTED (see above): a session the API no longer honours gets a page that
-    // sends the browser to sign in, keeping its place. middleware.ts already sends a visitor with
-    // no session cookie there before this renders; this is the stale-cookie case.
-    const signIn = `/login?next=${encodeURIComponent(`/?area=${initialArea ?? "overview"}&org=${activeOrgId}`)}`;
-    return (
-      <main className="idn-auth" data-testid="sign-in-again">
-        <meta httpEquiv="refresh" content={`0;url=${signIn}`} />
-        <a className="idn-big p" href={signIn}>Sign in again</a>
-      </main>
-    );
-  }
   const identityUnavailable = !identity.org;
   const orgSnap = identity.org ? snapshotFrom(identity.org) : null;
   const projectSnap = identity.project ? snapshotFrom(identity.project) : null;
