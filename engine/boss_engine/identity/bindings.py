@@ -311,6 +311,10 @@ def add_binding(db: Any, ctx: AuthContext, *, subject_type: str, subject_id: str
         {"st": subject_type, "s": subject_id, "r": role_id, "t": scope_type, "i": scope_id}).first()
     if exists:
         raise AccessError(409, "binding_exists")
+    from . import signin as _signin
+
+    affected = _people_of(db, subject_type, subject_id)
+    before = _signin.mfa_required_now(db, affected)
     binding_id = new_id("rbd")
     db.execute(text(
         "INSERT INTO identity_role_bindings (id, org_id, subject_type, subject_id, role_id, "
@@ -323,7 +327,17 @@ def add_binding(db: Any, ctx: AuthContext, *, subject_type: str, subject_id: str
                 target_type=subject_type, target_id=subject_id, scope=label,
                 details={"role": role["key"], "binding_id": binding_id})
     authz.bump_epoch(org, db=db, reason="role_binding.added")
+    _signin.grant_first_factor_on_promotion(db, affected, was_required=before)
     return get_binding(db, org, binding_id)
+
+
+def _people_of(db: Any, subject_type: str, subject_id: str) -> list[str]:
+    """The user principals a binding on this subject reaches (the person, or a group's people)."""
+    if subject_type == "principal":
+        return [subject_id]
+    return [r[0] for r in db.execute(text(
+        "SELECT m.principal_id FROM identity_group_members m JOIN identity_principals p ON "
+        "p.id = m.principal_id WHERE m.group_id = :g AND p.kind = 'user'"), {"g": subject_id}).all()]
 
 
 def remove_binding(db: Any, ctx: AuthContext, binding_id: str, *,

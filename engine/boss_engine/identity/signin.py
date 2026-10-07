@@ -252,6 +252,45 @@ def grant_first_factor_after_reset(db: Any, principal_id: str) -> None:
                {"s": RESET_GRANT_SECONDS, "p": principal_id})
 
 
+PROMOTION_GRANT_SECONDS = 72 * 3600
+
+
+def grant_first_factor_on_promotion(db: Any, principal_ids: Any, *, was_required: dict) -> list[str]:
+    """Integration round 2 (b): a person PROMOTED into an MFA-required role (a binding, or joining a
+    group that holds one) who has no second factor would otherwise be stranded — every later
+    password-only sign-in is enrolment-less (H1). Like an admin's MFA reset, their next sign-in may
+    enrol a FIRST factor within PROMOTION_GRANT_SECONDS. `was_required` is principal -> bool taken
+    before the change; only people for whom the change made MFA required get the window, and an
+    existing window is never extended. Returns who got one."""
+    from sqlalchemy import text
+
+    granted = []
+    for pid in principal_ids:
+        if was_required.get(pid, True):
+            continue
+        user = users.by_id(db, pid)
+        if user is None or user.network_bound or not users.mfa_required(db, user):
+            continue
+        if users.factors(db, pid).any_second_factor:
+            continue
+        db.execute(text("UPDATE identity_users SET first_factor_grant_until = now() + "
+                        "make_interval(secs => :s) WHERE principal_id = :p AND "
+                        "(first_factor_grant_until IS NULL OR first_factor_grant_until < now())"),
+                   {"s": PROMOTION_GRANT_SECONDS, "p": pid})
+        granted.append(pid)
+    return granted
+
+
+def mfa_required_now(db: Any, principal_ids: Any) -> dict:
+    """principal -> is MFA required for them right now (people only; others count as required, so
+    the promotion grant never applies to them)."""
+    out = {}
+    for pid in principal_ids:
+        user = users.by_id(db, pid)
+        out[pid] = True if user is None else bool(users.mfa_required(db, user))
+    return out
+
+
 def may_enrol(db: Any, row: sessions.SessionRow, user: users.UserRow) -> Optional[tuple[int, str]]:
     """May this session add a second factor? None when yes, else (status, error).
 
