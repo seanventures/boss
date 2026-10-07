@@ -13,6 +13,7 @@
  * model on that provider, `&source=<id>` opens that model's menu, legacy `step=github|model` maps
  * to focus. Rows whose last check is over a day old are re-checked in the background on open.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowClockwise } from "@phosphor-icons/react";
 
@@ -211,7 +212,7 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
           ) : null}
           <span className="su-spacer" />
           {/* Nothing connected, nothing to test: the button waits for something to check. */}
-          <button type="button" className="su-btn" data-testid="su-test-all"
+          <GatedButton permission="setup:manage" type="button" className="su-btn" data-testid="su-test-all"
                   disabled={checking.has("all")
                     || (!view.repository.repos.length && !view.models.length)}
                   onClick={testAll}
@@ -219,7 +220,7 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
                   data-tip="Re-checks GitHub access and asks each model one tiny question.">
             <ArrowClockwise size={14} aria-hidden="true" className={checking.has("all") ? "su-spin" : undefined} />
             Test all
-          </button>
+          </GatedButton>
         </header>
         <RepositoryRow ref={ref("repository")} mode={rowMode(view, "repository")}
                        step={stepNumber(view, "repository")} focused={focus === "repository"} />

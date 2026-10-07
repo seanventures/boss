@@ -22,6 +22,7 @@ import {
 } from "./actions";
 
 import { callAction } from "../lib/call-action";
+import { GatedButton } from "../components/gated";
 type Step = {
   step: string; label: string; status: "pending" | "running" | "ok" | "failed" | "skipped";
   duration_ms?: number | null; log?: string; error?: string;
@@ -517,9 +518,9 @@ export function DeployWizard({ targets }: { targets: WizardTarget[] }) {
           )}
 
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <button style={btn} disabled={starting} onClick={start}>
+            <GatedButton permission="deployment:create" style={btn} disabled={starting} onClick={start}>
               {starting ? "planning…" : "Create deployment plan"}
-            </button>
+            </GatedButton>
             <button style={btn} onClick={() => setOpen(false)}>Cancel</button>
             {err && <span role="alert" className="detail"
                           style={{ color: "#f85149", fontSize: 12 }}>{err}</span>}
@@ -650,12 +651,12 @@ export function RecentDeployments({ deployments }: { deployments?: Deployment[] 
                   ? "plan details" : "steps & logs"}
             </button>
             {/* Request a new reviewable plan while preserving this run's history. */}
-            <button style={{ ...btn, padding: "2px 9px", fontSize: 11 }}
+            <GatedButton permission="deployment:create" style={{ ...btn, padding: "2px 9px", fontSize: 11 }}
                     disabled={busy === d.id}
                     title="Create a new ChangeSet for redeployment review"
                     onClick={() => again(d.id)}>
               {busy === d.id ? "planning…" : "plan redeploy"}
-            </button>
+            </GatedButton>
           </div>
           {d.status === "awaiting_approval" && openId !== d.id && (
             <div className="detail" style={{ fontSize: 12, marginTop: 4 }}>

@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CodeTaskRun, PreviewRec, QaBenchmarkApp } from "@boss/api-client";
 import { callAction } from "../lib/call-action";
+import { GatedButton } from "../components/gated";
 import { useConsoleLive } from "../lib/console-live";
 import { openPlan } from "../lib/converse-doors";
 import { useFactoryFloor } from "../lib/factory-floor";
@@ -145,8 +146,8 @@ function DirectChangeSheet({ projectId, actor, owner, repo, onClose, onStarted }
         </label>
         {error ? <span className="ag-att-error" role="alert" data-user-text>{error}</span> : null}
         <div className="fx-sheet-actions">
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} aria-busy={busy || undefined}
-                  data-testid="fx-direct-start">Start build</button>
+          <GatedButton permission="code_task:create" type="submit" className="ag-btn ag-btn-primary" disabled={busy} aria-busy={busy || undefined}
+                  data-testid="fx-direct-start">Start build</GatedButton>
           <button type="button" className="ag-link" onClick={onClose}>Cancel</button>
         </div>
       </form>

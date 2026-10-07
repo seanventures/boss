@@ -7,6 +7,7 @@
  * REFERENCE, never the secret). App target and Secret live in target-sheet.tsx and
  * secrets-sheet.tsx.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 
 import { enrollCommand, enrollHardwareAgent, explainRawSecret, registerHardwareProvider } from "../../lib/hardware";
@@ -68,10 +69,10 @@ export function HostSheet({ projectId, actor, onClose, onAdded }: {
             <input name="admin_identity_file" placeholder="~/.ssh/id_ed25519" autoComplete="off" spellCheck={false} data-testid="inf-host-identity" /></label>
         </div>
         <div className="inf-actions">
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-host-submit"
+          <GatedButton permission="host:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-host-submit"
                   title="Records the machine and makes its key (Add VM and generate its key)">
             {busy ? "Adding…" : "Add host"}
-          </button>
+          </GatedButton>
           <ErrorLine error={error} testId="inf-host-sheet-error" />
         </div>
       </form>
@@ -103,9 +104,9 @@ export function EnrollSheet({ projectId, actor, onClose }: { projectId: string; 
           <span>Machine name</span>
           <input name="name" required placeholder="build-vm" autoComplete="off" data-testid="inf-enroll-name" /></label>
         <div className="inf-actions">
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-enroll-submit">
+          <GatedButton permission="host:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-enroll-submit">
             {busy ? "Preparing…" : "Show enroll command"}
-          </button>
+          </GatedButton>
           <ErrorLine error={error} />
         </div>
       </form>
@@ -158,8 +159,8 @@ export function HwAccountSheet({ projectId, actor, onClose }: { projectId: strin
           <span>Secret</span>
           <input name="secret_ref" required placeholder="env:BOSS_AWS_SECRET" autoComplete="off" spellCheck={false} data-testid="inf-hwaccount-secret" /></label>
         <div className="inf-actions">
-          <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-hwaccount-submit"
-                  title="Nothing is created or changed on the provider">{busy ? "Registering…" : "Register account"}</button>
+          <GatedButton permission="host:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-hwaccount-submit"
+                  title="Nothing is created or changed on the provider">{busy ? "Registering…" : "Register account"}</GatedButton>
           <ErrorLine error={error} testId="inf-hwaccount-error" />
         </div>
       </form>

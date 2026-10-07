@@ -2,6 +2,7 @@
 
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
 // so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+import { GatedButton } from "../gated";
 import React, { useState } from "react";
 import { apiWrite } from "../../lib/api-write";
 
@@ -93,7 +94,7 @@ export function AutonomyControl({
             Gates under ${threshold.toLocaleString()} will approve themselves with no human
             review. Deploys, merges, sends and anything irreversible will still wait for you.
           </p>
-          <button
+          <GatedButton permission="approval_rule:manage"
             type="button"
             className="v2-btn"
             disabled={busy}
@@ -101,7 +102,7 @@ export function AutonomyControl({
             data-testid="v2-autonomy-confirm-yes"
           >
             Turn on Full auto
-          </button>
+          </GatedButton>
           <button
             type="button"
             className="v2-btn v2-btn-quiet"
@@ -113,7 +114,7 @@ export function AutonomyControl({
           </button>
         </div>
       ) : (
-        <button
+        <GatedButton permission="approval_rule:manage"
           type="button"
           className="v2-btn v2-btn-quiet v2-autonomy-toggle"
           disabled={busy}
@@ -123,7 +124,7 @@ export function AutonomyControl({
           data-testid="v2-autonomy-toggle"
         >
           {busy ? "Saving…" : isAuto ? "Return to supervised" : "Switch to Full auto"}
-        </button>
+        </GatedButton>
       )}
 
       {note ? (

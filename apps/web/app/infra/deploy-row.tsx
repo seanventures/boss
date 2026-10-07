@@ -8,6 +8,7 @@
  * day (TODAY · YESTERDAY · <weekday>) — the Deploys tab and the target drawer's RECENT DEPLOYS
  * both draw it.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 
 import { showToast } from "../client-forms";
@@ -118,18 +119,18 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
           </button>
         ) : null}
         {actions && row.can.approve ? (
-          <button type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-deploy-row-approve"
-                  onClick={() => void decide("approve")}>{busy === "approve" ? "Approving…" : "Approve"}</button>
+          <GatedButton permission="decision:approve" type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-deploy-row-approve"
+                  onClick={() => void decide("approve")}>{busy === "approve" ? "Approving…" : "Approve"}</GatedButton>
         ) : null}
         {actions && row.can.reject ? (
-          <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-row-reject"
-                  onClick={() => void decide("reject")}>Reject</button>
+          <GatedButton permission="decision:approve" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-row-reject"
+                  onClick={() => void decide("reject")}>Reject</GatedButton>
         ) : null}
         {actions && row.can.rollback ? (
-          <button type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-rollback"
+          <GatedButton permission="deployment:rollback" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-rollback"
                   title="Redeploy the last commit that went live here" onClick={() => void rollback()}>
             {busy === "rollback" ? "Rolling back…" : "Roll back"}
-          </button>
+          </GatedButton>
         ) : null}
         {error ? <span className="inf-error inf-trunc" role="alert" title={inWords(error)} data-copy="data">Couldn&apos;t do that</span> : null}
       </span>

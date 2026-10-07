@@ -31,6 +31,7 @@ import { IDEAS, IdeaCover } from "../ask-boss-hero";
 import { consoleHref } from "../url-intent";
 import { apiWrite } from "../../lib/api-write";
 import { callAction } from "../../lib/call-action";
+import { useGate } from "../../components/gated";
 import { confirmCodeTaskFeedbackAction, conveneFeaturePanelAction, submitCodeTaskFeedbackAction,
          type FeedbackActionResult } from "../actions";
 import { showToast } from "../client-forms";
@@ -655,6 +656,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   /** WHO IS ON IT, recorded as a CHOICE — but only when it differs from what start_run already
    *  seeded. Writing an identical list back as `operator` would claim a decision nobody made. */
   const assignTeam = async (title: string) => {
+    // Recording the team is POST /v1/projects/{id}/agents (work_item:manage). A viewer who
+    // cannot keeps the seeded team rather than send a write that is refused.
+    if (!teamGate.allowed) return;
     const chosenAgents = draft.agents;
     const sameAsDefault = chosenAgents.length === defaultAgents.length
       && chosenAgents.every((a) => defaultAgents.includes(a));
@@ -779,8 +783,17 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     if (started.ok) onStarted(started.id);
   };
 
+  // Pre-greyed (P1-18) by what the primary press will do: steer a quick change, convene a
+  // spec-first panel, or start a workflow run.
+  const steerGate = useGate("code_task:steer");
+  const conveneGate = useGate("meeting:convene");
+  const runGate = useGate("workflow_run:start");
+  const teamGate = useGate("work_item:manage");
+  const primaryGate = adding && addPath === QUICK ? steerGate : adding && addPath === SPEC ? conveneGate : runGate;
+
   const primary = async () => {
     if (busy || (blocked && !(adding && proposal?.proposal))) return;
+    if (!primaryGate.allowed) { showToast("error", primaryGate.reason); return; }
     setBusy(true);
     setError(null);
     try {
@@ -1328,9 +1341,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
               <button type="button" className="np-btn" data-testid="np-cancel" onClick={onCancel}>Cancel</button>
             ) : null}
             <button type="button" className="np-btn np-primary" data-testid="dw-new-start"
-                    disabled={busy || (!!blocked && !(adding && proposal?.proposal))}
-                    onClick={() => void primary()}>
-              {startLabel}<span className="np-kbd" aria-hidden>⌘↵</span>
+                    disabled={busy || (!!blocked && !(adding && proposal?.proposal))} {...primaryGate.props}
+                    onClick={primaryGate.guard(() => void primary())}>
+              {startLabel}<span className="np-kbd" aria-hidden>⌘↵</span>{primaryGate.sr}
             </button>
           </span>
         </span>

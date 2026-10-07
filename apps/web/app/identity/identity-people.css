@@ -61,3 +61,18 @@
   .idn-glist { grid-template-columns: minmax(0, 1fr); }
   .idn-h1 { font-size: 20px; }
 }
+
+/* group picker chips (invite), access requests, CSV import preview */
+.idn-wrap { flex-wrap: wrap; }
+.idn-chip-btn { cursor: pointer; min-height: 30px; }
+.idn-chip-btn[aria-pressed="true"] { color: var(--ink); border-color: color-mix(in srgb, var(--teal) 55%, transparent); background: color-mix(in srgb, var(--teal) 12%, transparent); }
+.idn-requests { margin-bottom: 14px; border-color: color-mix(in srgb, var(--amber) 32%, transparent); }
+.idn-requests h2 { display: inline-flex; align-items: center; gap: 8px; }
+.idn-req { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.idn-req-who { display: flex; flex-direction: column; gap: 4px; flex: 1 1 260px; min-width: 0; }
+.idn-req-who b { font-size: 13.5px; }
+.idn-req-who small { font-size: 12px; }
+.idn-import-preview { max-height: 240px; overflow-y: auto; margin-top: 12px; }
+.idn-import-preview tr[data-ok="false"] td { opacity: 0.85; }
+.idn-dh .idn-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.idn-meta .idn-link { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; font-size: 12.5px; }

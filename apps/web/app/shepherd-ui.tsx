@@ -23,6 +23,7 @@ import {
 } from "./actions";
 
 import { callAction } from "../lib/call-action";
+import { GatedButton } from "../components/gated";
 type Reasoning = {
   id: string; task_ref: string; step_no: number; observe: string;
   hypothesis: string | null; confidence: number | null;
@@ -154,7 +155,7 @@ export function ShepherdConsole({ initial }: { initial?: Overview | null }) {
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {(e.options ?? []).map((o, i) => (
-                    <button key={i} className="cap-btn" onClick={() => answer(e.id, o.label)}>
+                    <GatedButton key={i} permission="autopilot:operate" className="cap-btn" onClick={() => answer(e.id, o.label)}>
                       {o.label}
                       {o.est_cost_usd > 0 && (
                         <span className="detail" style={{ marginLeft: 6 }}>
@@ -163,7 +164,7 @@ export function ShepherdConsole({ initial }: { initial?: Overview | null }) {
                           {o.estimate_source === "prior" ? " (est.)" : ""}
                         </span>
                       )}
-                    </button>
+                    </GatedButton>
                   ))}
                 </div>
               </div>
@@ -176,10 +177,10 @@ export function ShepherdConsole({ initial }: { initial?: Overview | null }) {
       <section className="ct-block">
         <div className="ct-block-title" style={{ display: "flex", justifyContent: "space-between" }}>
           <span>How it is thinking</span>
-          <button className="cap-btn" onClick={sweep} disabled={busy}
+          <GatedButton permission="autopilot:operate" className="cap-btn" onClick={sweep} disabled={busy}
                   data-testid="shepherd-sweep">
             {busy ? "Reasoning…" : "↻ Re-examine failures"}
-          </button>
+          </GatedButton>
         </div>
         <div style={{ display: "grid", gap: 12 }}>
           {data.reasoning.length === 0 && (

@@ -24,6 +24,8 @@ import { callAction } from "../lib/call-action";
 import type { Permission } from "../lib/identity/permissions.gen";
 import { useCan, useIdentity } from "../components/identity/identity-provider";
 import { FormPermission } from "../components/identity/form-permission";
+import { useGate } from "../components/gated";
+import { permissionName } from "../lib/identity/words";
 export type ToastType = 'success' | 'error';
 
 interface Toast {
@@ -171,7 +173,7 @@ export function ActionForm({
     let outcome = await submit();
     const identity = (outcome.data as { identity?: { error?: string } } | undefined)?.identity;
     if (!outcome.ok && identity?.error === 'step_up_required') {
-      if (await stepUp(permission ? `This needs ${permission}.` : 'This needs a fresh check.')) outcome = await submit();
+      if (await stepUp(permission ? `This needs “${permissionName(permission)}”.` : 'This needs a fresh check.')) outcome = await submit();
     } else if (!outcome.ok && identity?.error === 'forbidden') {
       refresh().catch(() => undefined);
     }
@@ -283,9 +285,13 @@ export function ProviderEasyConnectForm({ children, className }: { children: Rea
   const [secretRefId, setSecretRefId] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const refresh = useConsoleRefresh();
+  // Pre-greyed (P1-18): every SubmitButton inside inherits the permission below; a submit by
+  // Enter while refused says why instead of calling.
+  const gate = useGate("cloud_account:manage");
 
   const handleAction = (formData: FormData) => {
     setLocalError(null);
+    if (!gate.allowed) { showToast("error", gate.reason); return; }
     startTransition(async () => {
       try {
         const result = await callAction(easyConnectProviderAction, undefined, "cloud_account:manage")(formData);
@@ -312,8 +318,9 @@ export function ProviderEasyConnectForm({ children, className }: { children: Rea
       className={className}
       data-testid="provider-paste-connect-form"
       aria-busy={isPending}
+      data-permission="cloud_account:manage"
     >
-      {children}
+      <FormPermission.Provider value="cloud_account:manage">{children}</FormPermission.Provider>
       {isPending && (
         <p className="loading" role="status" aria-live="polite" aria-atomic="true">
           Writing key to the local vault…

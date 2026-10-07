@@ -26,6 +26,7 @@ import { openDockAbout } from "../../lib/dock-subject";
 import { previewWebHref } from "../../lib/browser-links";
 import { isConsoleLive, subscribeConsoleLive } from "../../lib/console-live";
 import { callAction } from "../../lib/call-action";
+import { GatedButton } from "../../components/gated";
 import { retryCodeTaskWithStateAction } from "../actions";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
@@ -358,15 +359,15 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
           <span className="fx-spacer" />
           <span className="fx-actions">
             {stoppable ? (
-              <button type="button" className="ag-btn fx-wide-only" title={steerTip} aria-expanded={steering}
-                      data-testid="fx-steer" onClick={() => setSteering((v) => !v)}>Steer</button>
+              <GatedButton permission="code_task:steer" type="button" className="ag-btn fx-wide-only" title={steerTip} aria-expanded={steering}
+                      data-testid="fx-steer" onClick={() => setSteering((v) => !v)}>Steer</GatedButton>
             ) : null}
             {stoppable ? (
               <span className="fx-pop-anchor">
-                <button type="button" className="ag-btn fx-wide-only" title={stopTip} data-testid="fx-stop"
+                <GatedButton permission="code_task:cancel" type="button" className="ag-btn fx-wide-only" title={stopTip} data-testid="fx-stop"
                         disabled={busy !== null} onClick={() => setConfirmStop(true)}>
                   {busy === "stop" ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}Stop
-                </button>
+                </GatedButton>
               </span>
             ) : null}
             <span className="fx-pop-anchor">
@@ -376,9 +377,9 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
               </button>
               {menu ? (
                 <span id={menuId} role="menu" className="fx-ck-menu" data-testid="fx-ck-menu">
-                  {stoppable ? <button type="button" role="menuitem" className="fx-phone-only" onClick={() => { setMenu(false); setSteering(true); }}>Steer</button> : null}
-                  {stoppable ? <button type="button" role="menuitem" className="fx-phone-only" title={stopTip} onClick={() => { setMenu(false); setConfirmStop(true); }}>Stop</button> : null}
-                  {c.retryable ? <button type="button" role="menuitem" data-testid="fx-menu-retry" title={retryTip(c)} onClick={() => void doRetry()}>Retry</button> : null}
+                  {stoppable ? <GatedButton permission="code_task:steer" type="button" role="menuitem" className="fx-phone-only" onClick={() => { setMenu(false); setSteering(true); }}>Steer</GatedButton> : null}
+                  {stoppable ? <GatedButton permission="code_task:cancel" type="button" role="menuitem" className="fx-phone-only" title={stopTip} onClick={() => { setMenu(false); setConfirmStop(true); }}>Stop</GatedButton> : null}
+                  {c.retryable ? <GatedButton permission="code_task:retry" type="button" role="menuitem" data-testid="fx-menu-retry" title={retryTip(c)} onClick={() => void doRetry()}>Retry</GatedButton> : null}
                   <button type="button" role="menuitem" data-testid="fx-menu-change" onClick={() => { setMenu(false); setChangeIt(true); }}>Change it</button>
                   <button type="button" role="menuitem" data-testid="fx-menu-ask" onClick={() => {
                     setMenu(false);
@@ -397,7 +398,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
             {confirmStop ? (
               <span role="alertdialog" aria-label="Stop this build?" className="fx-confirm" data-testid="fx-stop-confirm">
                 <span>Stop this build?</span>
-                <button type="button" className="ag-btn" data-tone="reject" title={stopTip} data-testid="fx-stop-yes" onClick={() => void doStop()}>Stop</button>
+                <GatedButton permission="code_task:cancel" type="button" className="ag-btn" data-tone="reject" title={stopTip} data-testid="fx-stop-yes" onClick={() => void doStop()}>Stop</GatedButton>
                 <button type="button" className="ag-link" onClick={() => setConfirmStop(false)}>Cancel</button>
               </span>
             ) : null}
@@ -442,7 +443,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
           <form className="fx-steer" onSubmit={(e) => { e.preventDefault(); void doSteer(); }} data-testid="fx-steer-box">
             <input className="input" autoFocus value={guidance} onChange={(e) => setGuidance(e.target.value)}
                    placeholder={`Tell ${currentAgent} …`} aria-label="Guidance" data-testid="fx-steer-input" />
-            <button type="submit" className="ag-btn ag-btn-primary" disabled={!guidance.trim() || busy !== null}>Send</button>
+            <GatedButton permission="code_task:steer" type="submit" className="ag-btn ag-btn-primary" disabled={!guidance.trim() || busy !== null}>Send</GatedButton>
             <ReasonChips value={steerChips} onChange={setSteerChips} testId="fx-steer-why" />
           </form>
         ) : null}

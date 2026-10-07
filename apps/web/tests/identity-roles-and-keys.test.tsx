@@ -65,7 +65,7 @@ function perms(list: readonly Permission[]): MePermissionsResponse {
 function me(name: string, roles: string[]): MeResponse {
   return { principal_id: "usr_x", kind: "user", display_name: name, email: "x@acme.dev", org: F.ORG, status: "active", access_roles: roles,
     sign_in: { password: true, totp: true, passkeys: 1, recovery_codes_remaining: 10, sso_links: [] }, mfa_required: true, mfa_at: null,
-    session_id: "ses_1", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [] };
+    session_id: "ses_1", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [], avatar_seed: null };
 }
 
 async function settle(n = 4) {
@@ -125,7 +125,7 @@ describe("the role editor", () => {
     await click(q('[data-perm="workflow:delete"]'));
     expect(q('[data-perm="workflow:delete"]')!.getAttribute("data-change")).toBe("add");
     expect(q('[data-testid="unsaved"]')!.textContent).toContain("v3 → v4");
-    expect(q('[data-testid="diff"]')!.textContent).toContain("workflow:delete");
+    expect(q('[data-testid="diff"]')!.textContent).toContain(PERMISSION_META["workflow:delete"].title);
     await wait(300);
     await settle();
     expect(calls.some((c) => c.method === "POST" && c.path.endsWith("/preview"))).toBe(true);
@@ -173,7 +173,7 @@ describe("the role editor", () => {
     await mount(<RoleEditor role={releaseCaptain()} versions={[]} />, ROLE_PERMISSIONS.viewer);
     const cell = q('[data-perm="code_task:create"]')!;
     expect(cell.getAttribute("aria-disabled")).toBe("true");
-    expect(cell.getAttribute("title")).toMatch(/Needs access_role:manage/);
+    expect(cell.getAttribute("title")).toMatch(/Needs “Manage access roles”/);
     await click(cell);
     expect(q('[data-testid="unsaved"]')).toBeNull();
     expect(q('[data-testid="save"]')!.getAttribute("aria-disabled")).toBe("true");
@@ -232,7 +232,10 @@ describe("service accounts and keys", () => {
   it("shows a new key once, will not close until stored, and leaves no part of it behind", async () => {
     signInAs("usr_param");
     const el = await mount(<ServiceAccounts initial={F.serviceAccounts(NOW)} roles={F.roles(NOW)} noExpiryAllowed={false} maxDays={365} selected="sva_ci_deployer" />);
-    expect(el.textContent).toContain("key_7f3k2q");
+    // Keys read by name; the public id is only a tooltip (FX-C: no raw ids on screen).
+    expect(el.textContent).toContain("GitHub Actions · deploy");
+    expect(el.textContent).not.toContain("key_7f3k2q");
+    expect(el.querySelector('[title="Key key_7f3k2q"]')).not.toBeNull();
     await click(q('[data-testid="new-key"]'));
     await act(async () => typeInto(q<HTMLInputElement>("#key-name")!, "Deploy bot"));
     await settle();
@@ -258,7 +261,8 @@ describe("service accounts and keys", () => {
     signInAs("usr_param");
     await mount(<ServiceAccounts initial={F.serviceAccounts(NOW)} roles={F.roles(NOW)} noExpiryAllowed={false} maxDays={365} selected="sva_ci_deployer" />);
     await click([...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Rotate")!);
-    expect(q('[data-testid="key-form"]')!.textContent).toContain("Replaces key_7f3k2q");
+    expect(q('[data-testid="key-form"]')!.textContent).toContain("Rotate “GitHub Actions · deploy”");
+    expect(q('[data-testid="key-form"]')!.textContent).toContain("Old key keeps working for");
     await click(q('[data-testid="create-key"]'));
     await settle(6);
     const post = calls.find((c) => c.method === "POST" && c.path.endsWith("/keys"));
@@ -271,7 +275,7 @@ describe("service accounts and keys", () => {
     const el = await mount(<ServiceAccounts initial={F.serviceAccounts(NOW)} roles={F.roles(NOW)} noExpiryAllowed={false} maxDays={365} selected={null} />, ROLE_PERMISSIONS.auditor);
     const btn = q('[data-testid="new-key"]')!;
     expect(btn.getAttribute("aria-disabled")).toBe("true");
-    expect(btn.getAttribute("title")).toMatch(/Needs service_account_key:manage/);
+    expect(btn.getAttribute("title")).toMatch(/Needs “Manage service account keys”/);
     expect(audit(el)).toEqual({ labels: [], prose: [], tips: [] });
   });
 

@@ -12,6 +12,7 @@
  *
  * Five quick clicks on the face make it wave and say its first phrase. Local, no model call.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useRef, useState } from "react";
 import { Copy, DotsThree, ShareNetwork } from "@phosphor-icons/react";
 
@@ -249,18 +250,18 @@ export function PassportHeader({ projectId, actor, roleKey, name, passport, onAs
                 <button type="button" role="menuitem" onClick={() => void copyCard()}
                         disabled={!passport}>Copy card JSON</button>
                 {lifecycle === "active" ? (
-                  <button type="button" role="menuitem" data-testid="ag-pause" disabled={!passport || !mayRetire || !!busy}
+                  <GatedButton permission="agent:lifecycle" type="button" role="menuitem" data-testid="ag-pause" disabled={!passport || !mayRetire || !!busy}
                           title={mayRetire ? "Auto skips it until resumed" : "Only the sponsor can retire this agent"}
-                          onClick={() => void steer("paused")}>Pause</button>
+                          onClick={() => void steer("paused")}>Pause</GatedButton>
                 ) : (
-                  <button type="button" role="menuitem" data-testid="ag-resume" disabled={!passport || !mayRetire || !!busy}
+                  <GatedButton permission="agent:lifecycle" type="button" role="menuitem" data-testid="ag-resume" disabled={!passport || !mayRetire || !!busy}
                           title={mayRetire ? undefined : "Only the sponsor can retire this agent"}
-                          onClick={() => void steer("active")}>Resume</button>
+                          onClick={() => void steer("active")}>Resume</GatedButton>
                 )}
                 {lifecycle !== "retired" ? (
-                  <button type="button" role="menuitem" data-testid="ag-retire" disabled={!passport || !mayRetire || !!busy}
+                  <GatedButton permission="agent:lifecycle" type="button" role="menuitem" data-testid="ag-retire" disabled={!passport || !mayRetire || !!busy}
                           title={mayRetire ? "Keeps its work, hides it from pickers" : "Only the sponsor can retire this agent"}
-                          onClick={() => void steer("retired")}>Retire</button>
+                          onClick={() => void steer("retired")}>Retire</GatedButton>
                 ) : null}
                 <button type="button" role="menuitem" data-tone="danger"
                         onClick={() => { setMenu(false); onDelete(); }}>Delete</button>

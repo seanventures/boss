@@ -161,7 +161,7 @@
 .idn-tag { font: 600 10.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; border-radius: 6px; padding: 2px 7px; background: color-mix(in srgb, var(--idn-sky) 16%, transparent); color: var(--idn-ink-blue); }
 .idn-tag.warn { background: var(--amber-soft); color: var(--idn-ink-warn); }
 .idn-tag.bad { background: var(--red-soft); color: var(--idn-ink-bad); }
-.idn-perm { font: 500 11.5px var(--mono); color: var(--idn-ink-perm); background: color-mix(in srgb, var(--accent) 10%, transparent); border: 1px solid color-mix(in srgb, var(--idn-sky) 25%, transparent); border-radius: 6px; padding: 2px 7px; white-space: nowrap; display: inline-block; }
+.idn-perm { font: 500 12px var(--sans); color: var(--idn-ink-perm); background: color-mix(in srgb, var(--accent) 10%, transparent); border: 1px solid color-mix(in srgb, var(--idn-sky) 25%, transparent); border-radius: 6px; padding: 2px 7px; white-space: nowrap; display: inline-block; }
 .idn-perm.sm { font-size: 10.5px; padding: 1px 6px; }
 .idn-perm.crit { color: var(--idn-ink-bad-strong); background: var(--red-soft); border-color: color-mix(in srgb, var(--red) 35%, transparent); }
 .idn-perm.off { color: var(--faint); background: none; border-style: dashed; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--red) 70%, transparent); }
@@ -603,8 +603,6 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn-pk .w3 { width: 190px; height: 190px; animation-delay: 1.2s; border-color: color-mix(in srgb, var(--idn-violet) 25%, transparent); }
 @keyframes idn-pulse { 0% { transform: scale(0.9); opacity: 1; } 100% { transform: scale(1.08); opacity: 0.25; } }
 .idn-pk .idn-core { width: 86px; height: 86px; border-radius: 50%; display: grid; place-items: center; color: var(--idn-white); background: radial-gradient(circle at 30% 25%, var(--idn-mint), var(--accent)); box-shadow: 0 20px 50px -10px color-mix(in srgb, var(--accent) 80%, transparent); }
-.idn-state { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13.5px; color: var(--muted); margin-bottom: 16px; }
-.idn-state .idn-blink { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); animation: idn-blink 1s infinite; }
 @keyframes idn-blink { 50% { opacity: 0; } }
 .idn-codes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; font: 500 14px var(--mono); padding: 14px 16px; border: 1px dashed var(--border-strong); border-radius: 12px; background: var(--idn-well); margin: 0 0 12px; list-style: none; }
 .idn-codes li { color: var(--ink-soft); }
@@ -702,3 +700,15 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn { overflow-x: clip; }
 /* A route page (Identity, My account) renders whole on the server: no "filling up" bar. */
 .bx-shell[data-route-mode] .bx-loading { display: none; }
+
+/* ── shared states (components/identity/states.tsx): a failed read and a real empty ───────── */
+.idn-state { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 22px 20px; border: 1px dashed var(--border-strong); border-radius: 14px; color: var(--muted); background: color-mix(in srgb, var(--idn-card-a) 60%, transparent); margin: 12px 0; }
+.idn-state.compact { padding: 12px 14px; gap: 10px; margin: 8px 0; }
+.idn-state.err { border-style: solid; border-color: color-mix(in srgb, var(--red) 32%, transparent); background: color-mix(in srgb, var(--red) 6%, transparent); color: var(--idn-ink-bad); }
+.idn-state-i { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: color-mix(in srgb, var(--teal) 12%, transparent); color: var(--teal); flex: none; }
+.idn-state.compact .idn-state-i { width: 30px; height: 30px; border-radius: 9px; }
+.idn-state-t { display: flex; flex-direction: column; gap: 3px; flex: 1 1 220px; min-width: 0; }
+.idn-state-t b { color: var(--ink); font-size: 14px; }
+.idn-state-t span { font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.idn-state.err .idn-state-t span { color: var(--ink-soft); }
+.idn-state-a { display: flex; gap: 8px; flex-wrap: wrap; }

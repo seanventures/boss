@@ -9,6 +9,7 @@
  * is the role's own memories, each with a way to make it forget. Nothing on this tab is
  * generated: an agent with no signed work says so and points at where to give it some.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowSquareOut, ChatCircle, CheckSquare, Gavel, Hammer, ListChecks, Play, UsersThree,
@@ -250,8 +251,8 @@ export function PassportWork({ projectId, actor, roleKey, name, presence }: {
             {memories.map((m) => (
               <li key={m.id} className="ag-mem" title={m.body}>
                 <span data-user-text>{m.body}</span>
-                <button type="button" className="ag-link" onClick={() => void forget(m)}
-                        data-testid={`ag-forget-${m.id}`}>Forget</button>
+                <GatedButton permission="memory:manage" type="button" className="ag-link" onClick={() => void forget(m)}
+                        data-testid={`ag-forget-${m.id}`}>Forget</GatedButton>
               </li>
             ))}
           </ul>

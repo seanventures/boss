@@ -5,6 +5,7 @@
  * source × its models. Engine and model are saved together in one request; the cost chip says
  * whether the job spends money.
  */
+import { GatedButton, useGate } from "../../components/gated";
 import React, { forwardRef, useEffect, useState } from "react";
 import { CaretRight } from "@phosphor-icons/react";
 
@@ -51,7 +52,7 @@ function AddKey({ onDone }: { onDone: () => void }) {
           Store in BOSS database
         </label>
       ) : null}
-      <button type="button" className="su-btn su-btn-sm su-btn-primary"
+      <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm su-btn-primary"
               disabled={busy || !key.trim() || (needs && !consent)}
               onClick={async () => {
                 setBusy(true);
@@ -66,7 +67,7 @@ function AddKey({ onDone }: { onDone: () => void }) {
                 } catch (error) {
                   toast((error as SetupFailure).message || "Key rejected", "error");
                 } finally { setBusy(false); }
-              }}>Connect</button>
+              }}>Connect</GatedButton>
     </div>
   );
 }
@@ -86,6 +87,7 @@ export function JobLine({ job }: { job: Job }) {
   const value = job.choice ? encode(job.choice.engine, job.choice.model) : "auto";
   // What Auto resolves to now, when Auto is what runs; "Auto" alone while a choice stands.
   const autoLabel = job.resolved && !job.choice ? job.resolved.label : "Auto";
+  const jobGate = useGate("setup:manage");
   const save = async (raw: string) => {
     if (raw === "add-key") { setAdding(true); return; }
     const option = job.options.find((o) => encode(o.engine, o.model) === raw);
@@ -108,7 +110,7 @@ export function JobLine({ job }: { job: Job }) {
       {none ? (
         <span className="su-faint">Connect a model first</span>
       ) : (
-        <select value={value} disabled={busy} aria-label={job.label} title={AUTO_TIP}
+        <select {...jobGate.props} value={value} disabled={(busy) || !jobGate.allowed} aria-label={job.label} title={AUTO_TIP}
                 data-testid={`su-job-select-${job.job}`} onChange={(e) => void save(e.target.value)}>
           <option value="auto">{autoLabel}</option>
           {job.choice && !job.options.some((o) => encode(o.engine, o.model) === value) ? (
@@ -133,10 +135,10 @@ export function JobLine({ job }: { job: Job }) {
       ) : !none && job.job === "decisions" ? (
         // NOTHING HERE CAN DECIDE: decisions run on Claude Code or TypeSafe Jev, and an API key
         // alone is neither. Said, with the one thing that fixes it.
-        <button type="button" className="su-btn su-btn-sm" data-testid="su-decisions-add-key"
+        <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-sm" data-testid="su-decisions-add-key"
                 title="Decisions run on Claude Code or TypeSafe Jev."
                 data-tip="Decisions run on Claude Code or TypeSafe Jev."
-                onClick={() => setAdding(true)}>Add key</button>
+                onClick={() => setAdding(true)}>Add key</GatedButton>
       ) : null}
       {adding ? <AddKey onDone={() => setAdding(false)} /> : null}
     </div>
@@ -157,8 +159,8 @@ export const JobsRow = forwardRef<HTMLElement, { mode: string; focused: boolean 
           <div className="su-line">
             <span className="su-faint">Auto</span>
             <span className="su-chip">Defaults</span>
-            <button type="button" className="su-link" data-testid="su-jobs-change"
-                    onClick={() => setOpen(true)}>Change</button>
+            <GatedButton permission="setup:manage" type="button" className="su-link" data-testid="su-jobs-change"
+                    onClick={() => setOpen(true)}>Change</GatedButton>
           </div>
         ) : (
           <div className="su-jobs">

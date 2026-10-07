@@ -25,6 +25,7 @@
 // React by name as well as its hooks: the suite renders these components with
 // renderToStaticMarkup, which compiles JSX to React.createElement and needs React in
 // scope. Same import shape as delivery-workflows-ui for the same reason.
+import { GatedButton } from "../components/gated";
 import React, { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -523,8 +524,8 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
       <div className="ld-head">
         <SectionLabel testid="agent-edit-label">Edit this agent</SectionLabel>
         {!open ? (
-          <button type="button" className="linklike" data-testid="agent-edit-open"
-                  onClick={() => setOpen(true)}> change name, mission, boundaries or manager</button>
+          <GatedButton permission="agent:update" type="button" className="linklike" data-testid="agent-edit-open"
+                  onClick={() => setOpen(true)}> change name, mission, boundaries or manager</GatedButton>
         ) : null}
       </div>
       {saved ? <p className="detail" data-testid="agent-edit-saved">{saved}</p> : null}
@@ -564,9 +565,9 @@ export function AgentEdit({ projectId, actor, detail, onChanged }: {
           </label>
           {failed ? <p className="ad-bad" data-testid="agent-edit-failed">{failed}</p> : null}
           <div className="ad-edit-actions">
-            <button type="submit" className="cap-btn" disabled={busy} data-testid="agent-edit-save">
+            <GatedButton permission="agent:update" type="submit" className="cap-btn" disabled={busy} data-testid="agent-edit-save">
               {busy ? "Saving…" : "Save"}
-            </button>
+            </GatedButton>
             <button type="button" className="linklike" disabled={busy}
                     onClick={() => { setOpen(false); setFailed(""); }}>Cancel</button>
           </div>
@@ -656,11 +657,11 @@ export function AgentDelete({ projectId, actor, detail, onDeleted, onChanged }: 
           {mappings.length ? (
             <div className="ad-danger-actions" data-testid="agent-delete-repoint">
               {mappings.map((m) => (
-                <button key={m.id} type="button" className="cap-btn" disabled={busy}
+                <GatedButton permission="workflow:publish" key={m.id} type="button" className="cap-btn" disabled={busy}
                         data-testid={`agent-delete-repoint-${m.id}`}
                         onClick={() => void repoint(m.id)}>
                   Point at the current version ({m.label})
-                </button>
+                </GatedButton>
               ))}
             </div>
           ) : null}
@@ -693,18 +694,18 @@ export function AgentDelete({ projectId, actor, detail, onDeleted, onChanged }: 
       <div className="ad-danger-actions">
         {confirming ? (
           <>
-            <button type="button" className="cap-btn" data-tone="danger" disabled={busy}
+            <GatedButton permission="agent:lifecycle" type="button" className="cap-btn" data-tone="danger" disabled={busy}
                     data-testid="agent-delete-confirm" onClick={() => void remove()}>
               {busy ? "Deleting…" : `Yes, delete ${detail.name}`}
-            </button>
+            </GatedButton>
             <button type="button" className="linklike" disabled={busy}
                     onClick={() => setConfirming(false)}>Keep it</button>
           </>
         ) : (
-          <button type="button" className="linklike" disabled={blocking.length > 0}
+          <GatedButton permission="agent:lifecycle" type="button" className="linklike" disabled={blocking.length > 0}
                   data-testid="agent-delete-open" onClick={() => setConfirming(true)}>
             Delete {detail.name}
-          </button>
+          </GatedButton>
         )}
       </div>
     </section>

@@ -4,6 +4,7 @@
  * ① Repository: where BOSS writes code. Paste a token, pick a repository from the token's own
  * list, and three real checks run — Read, Write, Pull requests — before anything says Working.
  */
+import { GatedButton, useGate } from "../../components/gated";
 import React, { forwardRef, useEffect, useRef, useState } from "react";
 import { CircleNotch, Plus } from "@phosphor-icons/react";
 
@@ -82,8 +83,10 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
     }
   };
 
+  const tokenGate = useGate("github:connect");
+  const selectGate = useGate("repository:register");
   const submit = async (value: string) => {
-    if (!value.trim()) return;
+    if (!value.trim() || !tokenGate.allowed) return;
     if (needsConsent && !consent) {
       // NEVER SILENT: the press says what it is waiting for.
       setRefusal(CONSENT_REFUSAL);
@@ -124,7 +127,7 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
   const connect = async (fullName: string) => {
-    if (!found) return;
+    if (!found || !selectGate.allowed) return;
     setPhase("connecting");
     try {
       const next = await setupWrite<SetupView>(projectId, "repo_select", {
@@ -170,20 +173,20 @@ export function TokenForm({ connectionId, onDone, makeDefault = true }: {
     <div className="su-form" data-testid="su-token-form">
       {appAccount !== null ? (
         <div className="su-line">
-          <button type="button" className="su-btn su-btn-primary" onClick={useApp} disabled={phase === "checking"}
+          <GatedButton permission="github:connect" type="button" className="su-btn su-btn-primary" onClick={useApp} disabled={phase === "checking"}
                   data-testid="su-use-app" title="No token: the App's short-lived tokens, for its repos."
                   data-tip="No token: the App's short-lived tokens, for its repos.">
             Use the GitHub App{appAccount ? ` · @${appAccount}` : ""}
-          </button>
+          </GatedButton>
           <span className="su-faint">or paste a token</span>
         </div>
       ) : null}
       <label className="su-field">
         <span className="su-sr">Token</span>
-        <input type="password" autoComplete="off" spellCheck={false} value={token}
+        <input {...tokenGate.props} type="password" autoComplete="off" spellCheck={false} value={token}
                placeholder="Paste token" aria-label="Paste token" data-testid="su-token-input"
                title="Stored in BOSS's secret store. Never shown again."
-               disabled={phase === "checking"}
+               disabled={(phase === "checking") || !tokenGate.allowed}
                onChange={(e) => onChange(e.target.value)}
                onKeyDown={(e) => { if (e.key === "Enter") void submit(token); }} />
       </label>
@@ -278,11 +281,11 @@ function RepoLine({ repo, onReplace }: { repo: RepoEntry; onReplace: () => void 
             <Out href={repo.pill.fix_url} testid="su-fix-github">Fix on GitHub</Out>
           ) : null}
           {repo.pill.action === "replace" || repo.pill.action === "fix_link" ? (
-            <button type="button" className="su-btn su-btn-sm" onClick={onReplace}
-                    data-testid="su-replace-token">Replace token</button>
+            <GatedButton permission="github:connect" type="button" className="su-btn su-btn-sm" onClick={onReplace}
+                    data-testid="su-replace-token">Replace token</GatedButton>
           ) : null}
-          <button type="button" className="su-btn su-btn-sm" onClick={test} disabled={busy}
-                  data-testid="su-repo-test">Test</button>
+          <GatedButton permission="setup:manage" type="button" className="su-btn su-btn-sm" onClick={test} disabled={busy}
+                  data-testid="su-repo-test">Test</GatedButton>
           {red ? <AskBoss row="Repository" pillLabel={repo.pill.label} tip={repo.pill.tip} /> : null}
         </div>
       ) : null}
@@ -304,12 +307,12 @@ function RepoLine({ repo, onReplace }: { repo: RepoEntry; onReplace: () => void 
       {confirming ? (
         <div className="su-confirm" role="alertdialog" data-testid="su-repo-remove-confirm">
           <strong>Remove {repo.full_name}?</strong>
-          <button type="button" className="su-btn su-btn-sm su-btn-danger"
+          <GatedButton permission="repository:manage" type="button" className="su-btn su-btn-sm su-btn-danger"
                   data-testid="su-repo-remove-yes"
                   onClick={() => { setConfirming(false);
                                    void run("repo_remove", { binding_id: repo.binding_id }, "Remove"); }}>
             Remove
-          </button>
+          </GatedButton>
           <button type="button" className="su-link" onClick={() => setConfirming(false)}>Keep</button>
         </div>
       ) : null}
@@ -390,8 +393,8 @@ export const RepositoryRow = forwardRef<HTMLElement, {
       <div className="su-line">
         <Pill pill={{ state: "not_connected", tone: "grey", label: "Not connected",
                       tip: "BOSS needs a repository to open pull requests." }} />
-        <button type="button" className="su-btn su-btn-primary" data-testid="su-connect-github"
-                onClick={() => setDrawer("connect")}>Connect GitHub</button>
+        <GatedButton permission="github:connect" type="button" className="su-btn su-btn-primary" data-testid="su-connect-github"
+                onClick={() => setDrawer("connect")}>Connect GitHub</GatedButton>
       </div>
     );
   } else {
@@ -406,12 +409,12 @@ export const RepositoryRow = forwardRef<HTMLElement, {
         ) : null}
         {connection && connection.source === "connected" ? (
           adding ? <AddRepo connectionId={connection.id} onDone={() => setAdding(false)} /> : (
-            <button type="button" className="su-link su-add" data-testid="su-add-repo"
+            <GatedButton permission="repository:register" type="button" className="su-link su-add" data-testid="su-add-repo"
                     title="BOSS builds in the default repo unless a run picks another."
                     data-tip="BOSS builds in the default repo unless a run picks another."
                     onClick={() => setAdding(true)}>
               <Plus size={12} aria-hidden="true" />Add repo
-            </button>
+            </GatedButton>
           )
         ) : null}
       </div>

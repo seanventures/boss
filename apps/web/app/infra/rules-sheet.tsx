@@ -6,6 +6,7 @@
  * pass — and the list of policies saved. The old Deployment Registry's `Save environment
  * policy`, with the gates said in plain words.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useState } from "react";
 
 import { showToast } from "../client-forms";
@@ -84,7 +85,7 @@ export function RulesSheet({ projectId, actor, onClose, canWrite = true }: { pro
           <label className="inf-field"><span>Notes</span>
             <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} data-testid="inf-rules-notes" /></label>
           <div className="inf-actions">
-            <button type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-rules-save">{busy ? "Saving…" : "Save"}</button>
+            <GatedButton permission="deployment_target:manage" type="submit" className="ag-btn ag-btn-primary" disabled={busy} data-testid="inf-rules-save">{busy ? "Saving…" : "Save"}</GatedButton>
             <ErrorLine error={error} />
           </div>
         </form>

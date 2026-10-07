@@ -6,17 +6,23 @@
  * asks a person whatever is chosen here, so offering Allow would be a lie. An unreviewed server
  * puts a Review row on top: one press records who vouched for it.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 import { Lock } from "@phosphor-icons/react";
 
 import type { Ability, KitTool, ToolPolicy } from "../../lib/kit-types";
+import type { Permission } from "../../lib/identity/permissions.gen";
 import { kitApi, mcpApi } from "../../lib/kit-api";
 import { showToast } from "../client-forms";
 import { plural, POLICY_LABEL, POLICY_TIP, riskOf, shortError, TIP } from "./kit-copy";
 
 const POLICIES: ToolPolicy[] = ["allow", "ask", "off"];
 
-export function PolicySeg({ tool, disabled, onPick }: { tool: KitTool; disabled?: boolean; onPick: (p: ToolPolicy) => void }) {
+/** `permission`: what setting this tool's policy needs — skill:manage for an ability's tools
+ *  (POST /v1/kit/{ability}/policy), mcp_server:review for an MCP server's (…/servers/{id}/policy). */
+export function PolicySeg({ tool, disabled, onPick, permission = "skill:manage" }: {
+  tool: KitTool; disabled?: boolean; onPick: (p: ToolPolicy) => void; permission?: Permission;
+}) {
   const locked = tool.floor === "ask";
   return (
     <span className="kit-seg kit-seg-sm" role="radiogroup" aria-label={`${tool.label} policy`}
@@ -29,13 +35,13 @@ export function PolicySeg({ tool, disabled, onPick }: { tool: KitTool; disabled?
         const tip = locked && p !== "off" ? TIP.locked
           : p === "ask" && tool.kind === "mcp" ? `${POLICY_TIP.ask} · ${TIP.askInCode}` : POLICY_TIP[p];
         const button = (
-          <button key={p} type="button" role="radio" aria-checked={tool.policy === p}
+          <GatedButton permission={permission} key={p} type="button" role="radio" aria-checked={tool.policy === p}
                   disabled={disabled || below} data-tip={below ? undefined : tip}
                   data-testid={`kit-policy-${tool.ref}-${p}`}
                   onClick={() => { if (tool.policy !== p) onPick(p); }}>
             {p === "ask" && locked ? <Lock size={11} aria-hidden="true" /> : null}
             {POLICY_LABEL[p]}
-          </button>
+          </GatedButton>
         );
         return below
           ? <span key={p} className="kit-seg-lock" data-tip={tip} data-testid={`kit-policy-${tool.ref}-${p}-tip`}>{button}</span>
@@ -70,16 +76,16 @@ export function ReviewRow({ server, projectId, actor, onReviewed, tools }: {
       <span className="kit-chip" data-tone="amber" data-tip={TIP.review}>Unreviewed</span>
       <span className="kit-fact" data-tip={server.name}>{server.name}</span>
       <span className="kit-confirm-wrap">
-        <button type="button" className="kit-btn kit-btn-sm" data-tip={TIP.markReviewed}
-                data-testid={`kit-review-open-${server.name}`} onClick={() => setOpen(true)}>Mark reviewed</button>
+        <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-sm" data-tip={TIP.markReviewed}
+                data-testid={`kit-review-open-${server.name}`} onClick={() => setOpen(true)}>Mark reviewed</GatedButton>
         {open ? (
           <span className="kit-pop" role="dialog" aria-label="Mark reviewed" data-testid="kit-review-pop">
             <strong data-tip={server.name}>{server.name}</strong>
             {server.url ? <span className="kit-fact" data-tip={server.url} data-testid="kit-review-url" data-user-text>{server.url}</span> : null}
             <span data-testid="kit-review-facts">{plural(tools.length, "tool")} · Highest: {riskOf(top).label}</span>
             <span className="kit-pop-actions">
-              <button type="button" className="kit-btn kit-btn-primary kit-btn-sm" disabled={busy}
-                      data-testid="kit-review-confirm" onClick={() => void review()}>Mark reviewed</button>
+              <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-primary kit-btn-sm" disabled={busy}
+                      data-testid="kit-review-confirm" onClick={() => void review()}>Mark reviewed</GatedButton>
               <button type="button" className="kit-btn kit-btn-sm" onClick={() => setOpen(false)}>Cancel</button>
             </span>
           </span>
@@ -114,7 +120,7 @@ export function ToolsSection({ ability, projectId, actor, onChanged }: {
         <div key={t.ref} className="kit-tool" data-testid={`kit-tool-${t.ref}`}>
           <span className="kit-tool-label" data-tip={t.ref.replace(/^(skill|mcp):/, "")}>{t.label}</span>
           <RiskDot tier={t.tier} />
-          <PolicySeg tool={t} disabled={busy === t.ref} onPick={(p) => void pick(t, p)} />
+          <PolicySeg tool={t} permission="skill:manage" disabled={busy === t.ref} onPick={(p) => void pick(t, p)} />
         </div>
       ))}
     </div>

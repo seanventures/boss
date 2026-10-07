@@ -2,6 +2,7 @@
 
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
 // so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+import { GatedButton, useGate } from "../gated";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import type { V2Agent } from "../../lib/v2/workforce";
@@ -50,6 +51,7 @@ export function AgentChat({
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns, busy]);
 
+  const chatGate = useGate("assistant:chat");
   const send = useCallback(async () => {
     const message = draft.trim();
     if (!message || busy) return;
@@ -163,12 +165,12 @@ export function AgentChat({
             // not a chat box.
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              void send();
+              if (chatGate.allowed) void send();
             }
           }}
           data-testid="v2-chat-input"
         />
-        <button
+        <GatedButton permission="assistant:chat"
           type="button"
           className="v2-btn"
           disabled={busy || !draft.trim()}
@@ -176,7 +178,7 @@ export function AgentChat({
           data-testid="v2-chat-send"
         >
           {busy ? "Sending…" : "Send"}
-        </button>
+        </GatedButton>
       </div>
     </aside>
   );

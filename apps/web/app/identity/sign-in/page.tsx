@@ -1,5 +1,5 @@
 import { pageAllowed } from "../../../components/identity/route-shell";
-import { serverGet } from "../../../lib/identity/server";
+import { serverGet, type ServerRead } from "../../../lib/identity/server";
 import type { Posture, Provider, SecurityPolicy } from "../../../lib/identity/types";
 import { SignInSettings } from "./sign-in-settings";
 import { loadAuthOptions } from "../../(auth)/auth-options";
@@ -15,11 +15,14 @@ export default async function SignInSettingsPage() {
     serverGet<Posture>("/v1/identity/posture"),
     loadAuthOptions(),
   ]);
+  // A refusal (403) is "you can't see this"; anything else failed and says so, never "none yet".
+  const failed = <T,>(r: ServerRead<T>) => (!r.ok && r.status !== 403 ? r : null);
   return (
     <SignInSettings
       providers={providers.ok ? providers.data.providers : []}
       policy={policy.ok ? policy.data : null}
       legacy={posture.ok ? posture.data.legacy : null}
+      failures={{ providers: providers.ok ? null : providers, policy: failed(policy), legacy: failed(posture) }}
       publicUrl={{ public_origin: options.public_origin, public_origin_source: options.public_origin_source }}
     />
   );

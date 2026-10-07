@@ -12,6 +12,7 @@
  * without seats asks who to seat first.
  */
 
+import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -188,12 +189,12 @@ function Picker({ mode, agents, presets, onPick, onClose }: {
             <span className="ag-muted">{seats.length} of 2-5</span>
             <textarea rows={2} placeholder="First question (optional)" aria-label="First question"
                       value={question} onChange={(e) => setQuestion(e.target.value)} />
-            <button type="button" className="ag-btn ag-btn-primary" disabled={!ready}
+            <GatedButton permission="meeting:convene" type="button" className="ag-btn ag-btn-primary" disabled={!ready}
                     data-testid="ag-open-room"
                     onClick={() => onPick({ kind: "room", seats, question: question.trim() || undefined,
                       preset: presets.find((p) => p.seats.join() === seats.join())?.key })}>
               Open room
-            </button>
+            </GatedButton>
           </footer>
         ) : null}
       </div>

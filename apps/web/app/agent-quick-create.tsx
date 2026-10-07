@@ -28,6 +28,8 @@ import {
 import type { StudioAgent } from "../lib/agent-studio";
 import { apiWrite } from "../lib/api-write";
 import { callAction } from "../lib/call-action";
+import { GatedButton } from "../components/gated";
+import { useCan } from "../components/identity/identity-provider";
 import { createStudioAgent, seedStudioCatalog } from "./agent-studio-actions";
 import { HelpTip } from "./help-tip";
 import type { AgentIdentity, AvatarSpec, Persona } from "../lib/agent-world-types";
@@ -203,6 +205,9 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
   const taken = !!key && existing.has(key) && key !== made;
   const profile = wantsProfile(advanced);
 
+  // The profile step after create is an UPDATE (agent:update): an Operator may create but not
+  // update, so the step is skipped rather than sent to be refused.
+  const mayUpdate = useCan("agent:update").allowed;
   const submit = async () => {
     if (!name.trim()) { setFailed("Name it first"); return; }
     if (taken) { setFailed(`“${key}” exists — pick another name`); return; }
@@ -235,7 +240,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
         setBusy(false); setFailed(result.message); return;
       }
       const persona = birthPersona({ face, callsign, tagline });
-      await updateAgent(projectId, actor, key, {
+      if (mayUpdate) await updateAgent(projectId, actor, key, {
         ...(reportsTo ? { reports_to: reportsTo } : {}), ...(team !== "yours" ? { team } : {}), persona });
       setBusy(false);
       born(key, "", name.trim(), persona);
@@ -466,10 +471,10 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
               <span />
               <div>
                 <button type="button" className="wf-btn" onClick={onClose} disabled={busy}>Cancel</button>
-                <button type="submit" className="wf-btn wf-btn-primary"
+                <GatedButton permission="agent:create" type="submit" className="wf-btn wf-btn-primary"
                         disabled={busy || !name.trim() || taken || keyInvalid || callsignTaken(callsign)} data-testid="aq-create">
                   {busy ? "Creating…" : initialName ? "Register" : "Create"}
-                </button>
+                </GatedButton>
               </div>
             </footer>
           </form>
@@ -559,11 +564,11 @@ function TemplatePicker({ projectId, actor, orphans, existing, onCreated, onBorn
       <div className="aq-row">
         <input type="search" className="aq-filter" placeholder="Find a template" aria-label="Find a template"
                value={search} onChange={(e) => setSearch(e.target.value)} />
-        <button type="button" className="wf-btn" disabled={!!working} data-testid="aq-seed"
+        <GatedButton permission="agent:create" type="button" className="wf-btn" disabled={!!working} data-testid="aq-seed"
                 title="Adds the reviewed starter agents and panels. Starts nothing, spends nothing."
                 onClick={() => void seed()}>
           {working === "seed" ? "Installing…" : "Install starter set"}
-        </button>
+        </GatedButton>
       </div>
       {seeded ? <p className="detail" role="status" data-testid="aq-seeded">{seeded}</p> : null}
       {failed ? <p className="aq-bad" role="alert">{failed}</p> : null}
@@ -572,10 +577,10 @@ function TemplatePicker({ projectId, actor, orphans, existing, onCreated, onBorn
         {shownOrphans.map((a) => (
           <li key={a.id} data-testid={`aq-orphan-${a.agent_key}`}>
             <span title={a.description || undefined}><b>{a.name}</b> <span className="wf-tag">Profile</span></span>
-            <button type="button" className="wf-btn" disabled={!!working}
+            <GatedButton permission="agent:create" type="button" className="wf-btn" disabled={!!working}
                     title="A profile with no agent yet" onClick={() => void adopt(a)}>
               {working === a.id ? "Adding…" : "Add"}
-            </button>
+            </GatedButton>
           </li>
         ))}
         {shownTemplates.map((t) => {
@@ -583,10 +588,10 @@ function TemplatePicker({ projectId, actor, orphans, existing, onCreated, onBorn
           return (
             <li key={t.id} data-testid={`aq-template-${t.id}`}>
               <span title={t.description || undefined}><b>{t.name}</b> <span className="detail">{t.category}</span></span>
-              <button type="button" className="wf-btn" disabled={!!working || (have && t.installed)}
+              <GatedButton permission="agent:publish" type="button" className="wf-btn" disabled={!!working || (have && t.installed)}
                       onClick={() => void install(t)}>
                 {have && t.installed ? "Added" : working === t.id ? "Adding…" : "Add"}
-              </button>
+              </GatedButton>
             </li>
           );
         })}
@@ -723,10 +728,10 @@ function ArchetypePicker({ projectId, actor, existing, onBorn }: {
           </div>
           <label className="aw-field">
             <span>About me
-              <button type="button" className="ag-link" disabled={!!busy} data-testid="aq-draft-about"
+              <GatedButton permission="agent:create" type="button" className="ag-link" disabled={!!busy} data-testid="aq-draft-about"
                       title="One model call in its voice. Not saved until Create." onClick={() => void draft()}>
                 {busy === "draft" ? "Drafting…" : "Draft about me"}
-              </button>
+              </GatedButton>
             </span>
             <textarea rows={2} value={about} maxLength={280} placeholder="In first person"
                       onChange={(e) => setAbout(e.target.value)} />
@@ -735,10 +740,10 @@ function ArchetypePicker({ projectId, actor, existing, onBorn }: {
           {failed ? <p className="aq-bad" role="alert">{failed}</p> : null}
           <footer className="aw-footer">
             <span />
-            <button type="button" className="wf-btn wf-btn-primary" data-testid="aq-arch-create"
+            <GatedButton permission="agent:create" type="button" className="wf-btn wf-btn-primary" data-testid="aq-arch-create"
                     disabled={!!busy || !name.trim() || taken || callsignClash || !isAgentKey(key)} onClick={() => void create()}>
               {busy === "create" ? "Creating…" : "Create agent"}
-            </button>
+            </GatedButton>
           </footer>
         </div>
       ) : null}

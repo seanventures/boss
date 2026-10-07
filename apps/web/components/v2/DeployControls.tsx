@@ -2,6 +2,7 @@
 
 // esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
 // so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+import { GatedButton } from "../gated";
 import React, { useCallback, useEffect, useState } from "react";
 
 import { consoleHref } from "../../app/console-href";
@@ -176,7 +177,7 @@ export function DeployControls({
             <span className="v2-mono v2-controls-bound" data-testid="v2-controls-target">
               <span className="v2-row-meta-dim">bound to</span> {state.host}
             </span>
-            <button
+            <GatedButton permission="deployment:create"
               type="button"
               className="v2-btn"
               disabled={busy !== null || !state.canDeploy || !!plan}
@@ -194,8 +195,8 @@ export function DeployControls({
               }
             >
               {busy === "deploy" ? "Planning…" : "Plan deployment"}
-            </button>
-            <button
+            </GatedButton>
+            <GatedButton permission="deployment_target:manage"
               type="button"
               className="v2-btn v2-btn-quiet"
               disabled={busy !== null}
@@ -204,7 +205,7 @@ export function DeployControls({
               title="Retires this target. The app stays; only the destination is removed."
             >
               {busy === "unbind" ? "Unbinding…" : "Unbind target"}
-            </button>
+            </GatedButton>
           </>
         ) : (
           // NOT a blank space. The v1 card rendered nothing here, which left an app with a
@@ -215,7 +216,7 @@ export function DeployControls({
         )}
 
         {state.canRetry ? (
-          <button
+          <GatedButton permission="deployment:create"
             type="button"
             className="v2-btn v2-btn-quiet"
             disabled={busy !== null || !!plan}
@@ -226,7 +227,7 @@ export function DeployControls({
             title="Create a new ChangeSet to review for the same commit and target"
           >
             {busy === "retry" ? "Planning…" : "Plan retry"}
-          </button>
+          </GatedButton>
         ) : null}
       </div>
 

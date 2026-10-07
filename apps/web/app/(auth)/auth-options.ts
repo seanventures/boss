@@ -2,10 +2,10 @@
 import { headers } from "next/headers";
 
 import { serverGet } from "../../lib/identity/server";
-import type { AuthOptions } from "../../lib/identity/types";
+import type { AuthOptionsWithPolicy } from "../../lib/identity/types-account";
 
-export async function loadAuthOptions(): Promise<AuthOptions> {
-  const read = await serverGet<AuthOptions>("/v1/auth/options");
+export async function loadAuthOptions(): Promise<AuthOptionsWithPolicy> {
+  const read = await serverGet<AuthOptionsWithPolicy>("/v1/auth/options");
   if (read.ok) return read.data;
   // The API cannot say: show the least — passkey and password, no providers, no email tabs.
   const host = (await headers()).get("host") ?? "";

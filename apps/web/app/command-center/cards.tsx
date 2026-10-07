@@ -28,6 +28,7 @@ import { ago, linkTo, navigate, plainClick, runPatch } from "../agents/live-util
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
 import { cleanUpOldAction } from "./actions";
+import { GatedButton } from "../../components/gated";
 import { Go } from "./hero";
 
 /** Rows a card shows before `+n more` (the copy and row budgets of the approved look). */
@@ -340,11 +341,11 @@ export function FlightCard({ view, projectId, actor, orgId, now, onRefresh, onSt
             <span>{cleaned ? "Done. It drops off on the next read." : cleanup.detail}</span>
           </div>
           {cleaned ? null : (
-            <button type="button" className="cc-btn sm" disabled={cleaning} data-testid="cc-cleanup-go"
+            <GatedButton permission="system:operate" type="button" className="cc-btn sm" disabled={cleaning} data-testid="cc-cleanup-go"
                     title="Closes these questions. A build that has not moved in over a week is stopped."
                     onClick={() => void cleanUp()}>
               {cleaning ? "Cleaning…" : "Clean up"}
-            </button>
+            </GatedButton>
           )}
         </div>
       ) : null}

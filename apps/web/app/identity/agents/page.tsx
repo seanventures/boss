@@ -1,4 +1,5 @@
 import { pageAllowed } from "../../../components/identity/route-shell";
+import { ErrorState } from "../../../components/identity/states";
 import { serverGet } from "../../../lib/identity/server";
 import type { Delegation, Passport } from "../../../lib/identity/types";
 import { AgentsScreen } from "./agents-screen";
@@ -12,10 +13,13 @@ export default async function AgentsPage() {
     serverGet<{ agents: Passport[] }>("/v1/identity/agents"),
     serverGet<{ delegations: Delegation[] }>("/v1/identity/delegations"),
   ]);
+  // A failed read is said, never drawn as "no agents".
+  if (!agents.ok) return <ErrorState what="agents" failure={agents} />;
   return (
     <AgentsScreen
-      agents={agents.ok ? agents.data.agents : []}
+      agents={agents.data.agents}
       delegations={delegations.ok ? delegations.data.delegations : null}
+      delegationsFailure={!delegations.ok && delegations.status !== 403 ? delegations : null}
     />
   );
 }

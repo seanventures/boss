@@ -9,6 +9,7 @@
  * server's own — `Add` stays disabled until one passes. A refusal is one red line of ≤ 6 words
  * with the full reason (the line, the phrase) in its tooltip; a secret is never echoed back.
  */
+import { GatedButton } from "../../components/gated";
 import { X } from "@phosphor-icons/react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
@@ -157,10 +158,10 @@ export function InstructionSheet({ projectId, actor, roleKey, input, taken, onCl
         ) : <span />}
         <span className="ld-foot-actions">
           <button type="button" className="kit-btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="kit-btn kit-btn-primary" disabled={!check || adding || !!error}
+          <GatedButton permission="agent:update" type="button" className="kit-btn kit-btn-primary" disabled={!check || adding || !!error}
                   data-testid="instruction-add" onClick={() => void add()}>
             {adding ? (replacing ? "Saving…" : "Adding…") : replacing ? "Save" : "Add"}
-          </button>
+          </GatedButton>
         </span>
       </div>
     </ModalShell>

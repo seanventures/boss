@@ -11,6 +11,7 @@ import React, { useState } from "react";
 
 import { previewWebHref } from "../../lib/browser-links";
 import { callAction } from "../../lib/call-action";
+import { GatedButton } from "../../components/gated";
 import { startQaBenchmarkAppAction } from "../actions";
 import { showToast } from "../client-forms";
 import { areaHref } from "./cockpit-util";
@@ -80,12 +81,12 @@ export function BenchmarkSheetBody({ benchmarks, builtIds, projectId, actor, own
                     ? <a className="ag-btn" href={areaHref({ area: "meetings" })} title="Watch the panel plan it" data-testid={`fx-bench-watch-${b.id}`}>Watch ↗</a>
                     : null
             ) : null}
-            <button type="button" className={built ? "ag-btn" : "ag-btn ag-btn-primary"} disabled={busy !== null}
+            <GatedButton permission="code_task:create" type="button" className={built ? "ag-btn" : "ag-btn ag-btn-primary"} disabled={busy !== null}
                     aria-busy={busy === b.id || undefined} data-testid={`fx-bench-build-${b.id}`}
                     title={built ? "A second copy. It costs a full build." : "Plan it with the panel, then build it"}
                     onClick={() => void launch(b, built)}>
               {busy === b.id ? "Starting…" : built ? "Build again" : "Build"}
-            </button>
+            </GatedButton>
             {details === b.id ? (
               <span className="fx-out-col fx-bench-details" data-testid={`fx-bench-body-${b.id}`}>
                 {b.acceptance_scenarios?.length ? <span className="fx-out-sub">Done when</span> : null}

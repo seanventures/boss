@@ -5,6 +5,7 @@
  * the one status, provenance, ⋯), then five sections with the shared green SectionLabel and an (i) tooltip —
  * Connection, Tools, Agents, Used in, Try it. No paragraphs: every write is immediate and toasted.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useEffect, useRef, useState } from "react";
 import { DotsThree, X } from "@phosphor-icons/react";
 
@@ -88,8 +89,8 @@ export function AbilityDrawer({ ability, crew, projectId, actor, focus, testing,
           {menu ? (
             <span className="kit-pop kit-menu" role="menu" data-testid="kit-drawer-menu">
               {ability.status === "off"
-                ? <button type="button" role="menuitem" onClick={() => void toggle(true)}>Turn on</button>
-                : <button type="button" role="menuitem" data-testid="kit-drawer-off" onClick={() => void toggle(false)}>Turn off</button>}
+                ? <GatedButton permission="skill:manage" type="button" role="menuitem" onClick={() => void toggle(true)}>Turn on</GatedButton>
+                : <GatedButton permission="skill:manage" type="button" role="menuitem" data-testid="kit-drawer-off" onClick={() => void toggle(false)}>Turn off</GatedButton>}
               <button type="button" role="menuitem" onClick={() => { setMenu(false); exportAbility(ability); }}>Export</button>
             </span>
           ) : null}

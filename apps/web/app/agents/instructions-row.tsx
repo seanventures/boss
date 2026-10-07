@@ -10,6 +10,7 @@
  * (a document today's check refuses is left out of the prompt) and the read-only state (no
  * agent-editor rights: rows and preview only).
  */
+import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Eye, DotsThree, FileText, Plus, X } from "@phosphor-icons/react";
 
@@ -121,10 +122,10 @@ export function InstructionsRow({ projectId, roleKey, actor, onVersion, onMakeSk
     <Pop label="+ Add" testId="instructions-add" disabled={full}
          tip={full ? INSTRUCTION_TIPS.full : undefined} trigger={<><Plus size={12} /> Add ▾</>}>
       {(close) => (<>
-        <button type="button" role="menuitem" data-tip={SHEET_TIPS.upload} data-testid="instructions-upload"
-                onClick={() => { close(); pickFile(null); }}>Upload file</button>
-        <button type="button" role="menuitem" data-tip={SHEET_TIPS.paste} data-testid="instructions-paste"
-                onClick={() => { close(); setSheet({ kind: "paste" }); }}>Paste text</button>
+        <GatedButton permission="agent:update" type="button" role="menuitem" data-tip={SHEET_TIPS.upload} data-testid="instructions-upload"
+                onClick={() => { close(); pickFile(null); }}>Upload file</GatedButton>
+        <GatedButton permission="agent:update" type="button" role="menuitem" data-tip={SHEET_TIPS.paste} data-testid="instructions-paste"
+                onClick={() => { close(); setSheet({ kind: "paste" }); }}>Paste text</GatedButton>
       </>)}
     </Pop>
   );
@@ -151,10 +152,10 @@ export function InstructionsRow({ projectId, roleKey, actor, onVersion, onMakeSk
           <span className="ld-empty" data-testid="instructions-empty">
             <span className="kit-faint">No instructions</span>
             {canEdit ? (<>
-              <button type="button" className="kit-btn kit-btn-sm" data-tip={SHEET_TIPS.upload} data-testid="instructions-empty-upload"
-                      onClick={() => pickFile(null)}>Upload file</button>
-              <button type="button" className="kit-btn kit-btn-sm" data-tip={SHEET_TIPS.paste} data-testid="instructions-empty-paste"
-                      onClick={() => setSheet({ kind: "paste" })}>Paste text</button>
+              <GatedButton permission="agent:update" type="button" className="kit-btn kit-btn-sm" data-tip={SHEET_TIPS.upload} data-testid="instructions-empty-upload"
+                      onClick={() => pickFile(null)}>Upload file</GatedButton>
+              <GatedButton permission="agent:update" type="button" className="kit-btn kit-btn-sm" data-tip={SHEET_TIPS.paste} data-testid="instructions-empty-paste"
+                      onClick={() => setSheet({ kind: "paste" })}>Paste text</GatedButton>
             </>) : null}
           </span>
         ) : null}
@@ -184,17 +185,17 @@ export function InstructionsRow({ projectId, roleKey, actor, onVersion, onMakeSk
                   <Pop label={`More for ${item.name}`} testId={`instruction-more-${item.id}`} className="ld-icon" align="right"
                        trigger={<DotsThree size={15} weight="bold" />}>
                     {(close) => (<>
-                      <button type="button" role="menuitem" onClick={() => { close(); pickFile(item); }}>Replace file</button>
-                      <button type="button" role="menuitem" onClick={() => { close(); setPreview({ item, edit: true }); }}>Edit</button>
-                      <button type="button" role="menuitemcheckbox" aria-checked={workOnly}
+                      <GatedButton permission="agent:update" type="button" role="menuitem" onClick={() => { close(); pickFile(item); }}>Replace file</GatedButton>
+                      <GatedButton permission="agent:update" type="button" role="menuitem" onClick={() => { close(); setPreview({ item, edit: true }); }}>Edit</GatedButton>
+                      <GatedButton permission="agent:update" type="button" role="menuitemcheckbox" aria-checked={workOnly}
                               data-testid={`instruction-work-only-${item.id}`}
                               onClick={() => { close(); void patch(item, { modes: workOnly ? [...MODES] : ["work"] }); }}>
                         {workOnly ? "✓ " : ""}Only for work
-                      </button>
-                      {index > 0 ? <button type="button" role="menuitem" onClick={() => { close(); void patch(item, { position: index - 1 }); }}>Move up</button> : null}
-                      {index < items.length - 1 ? <button type="button" role="menuitem" onClick={() => { close(); void patch(item, { position: index + 1 }); }}>Move down</button> : null}
-                      <button type="button" role="menuitem" data-testid={`instruction-remove-${item.id}`}
-                              onClick={() => { close(); setRemoving(item); }}>Remove</button>
+                      </GatedButton>
+                      {index > 0 ? <GatedButton permission="agent:update" type="button" role="menuitem" onClick={() => { close(); void patch(item, { position: index - 1 }); }}>Move up</GatedButton> : null}
+                      {index < items.length - 1 ? <GatedButton permission="agent:update" type="button" role="menuitem" onClick={() => { close(); void patch(item, { position: index + 1 }); }}>Move down</GatedButton> : null}
+                      <GatedButton permission="agent:update" type="button" role="menuitem" data-testid={`instruction-remove-${item.id}`}
+                              onClick={() => { close(); setRemoving(item); }}>Remove</GatedButton>
                     </>)}
                   </Pop>
                 ) : null}
@@ -223,8 +224,8 @@ export function InstructionsRow({ projectId, roleKey, actor, onVersion, onMakeSk
           <div className="kit-modal-head"><h3>Remove {removing.name}?</h3></div>
           <div className="kit-modal-foot">
             <button type="button" className="kit-btn" onClick={() => setRemoving(null)}>Cancel</button>
-            <button type="button" className="kit-btn kit-btn-danger" disabled={busy === removing.id} data-testid="instruction-remove-yes"
-                    onClick={() => void remove(removing)}>Remove</button>
+            <GatedButton permission="agent:update" type="button" className="kit-btn kit-btn-danger" disabled={busy === removing.id} data-testid="instruction-remove-yes"
+                    onClick={() => void remove(removing)}>Remove</GatedButton>
           </div>
         </ModalShell>
       ) : null}
@@ -284,12 +285,12 @@ function PreviewDrawer({ projectId, actor, roleKey, item, startEditing, canEdit,
         <div className="kit-modal-foot ld-drawer-foot">
           {editing ? (<>
             <button type="button" className="kit-btn" onClick={() => { setEditing(false); setDraft(body ?? ""); setError(null); }}>Cancel</button>
-            <button type="button" className="kit-btn kit-btn-primary" data-testid="instruction-save"
+            <GatedButton permission="agent:update" type="button" className="kit-btn kit-btn-primary" data-testid="instruction-save"
                     disabled={saving || draft === body || !draft.trim() || draft.length > LIMITS.docMaxChars}
-                    onClick={() => void save()}>{saving ? "Saving…" : "Save"}</button>
+                    onClick={() => void save()}>{saving ? "Saving…" : "Save"}</GatedButton>
           </>) : (<>
-            <button type="button" className="kit-btn kit-btn-danger" onClick={onRemove}>Remove</button>
-            <button type="button" className="kit-btn" data-testid="instruction-edit-open" onClick={() => setEditing(true)}>Edit</button>
+            <GatedButton permission="agent:update" type="button" className="kit-btn kit-btn-danger" onClick={onRemove}>Remove</GatedButton>
+            <GatedButton permission="agent:update" type="button" className="kit-btn" data-testid="instruction-edit-open" onClick={() => setEditing(true)}>Edit</GatedButton>
           </>)}
         </div>
       ) : null}

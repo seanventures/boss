@@ -10,7 +10,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ArrowsClockwise, Clock, GithubLogo, Plus, Prohibit, Robot, Warning } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../agent-avatar";
-import { IdentityError, idGet, idPost } from "../../../lib/identity/api";
+import { IdentityError, idDelete, idGet, idPost } from "../../../lib/identity/api";
+import { EmptyState } from "../../../components/identity/states";
+import { plainText } from "../../../lib/identity/plain";
 import { PERMISSION_META, type Permission } from "../../../lib/identity/permissions.gen";
 import type { CascadePreview, Connection, Delegation, Ref } from "../../../lib/identity/types";
 import { CanButton, useGuardedCall, useIdentity } from "../../../components/identity/identity-provider";
@@ -51,18 +53,22 @@ const CONNECT_ERRORS: Record<string, string> = {
   state_invalid: "The approval expired. Connect again.",
   access_denied: "GitHub approval was cancelled.",
   people_only: "Only a person can connect GitHub.",
+  not_configured: "GitHub isn't set up on this BOSS yet. Ask an Admin.",
+  github_not_configured: "GitHub isn't set up on this BOSS yet. Ask an Admin.",
 };
 
 export function connectOutcomeLine(o: ConnectOutcome | undefined): { tone: "ok" | "bad"; text: string } | null {
   if (!o) return null;
-  if (o.error) return { tone: "bad", text: CONNECT_ERRORS[o.error] ?? `GitHub did not connect (${o.error.slice(0, 40)}).` };
+  if (o.error) return { tone: "bad", text: CONNECT_ERRORS[o.error] ?? "GitHub did not connect. Try again." };
   if (o.connected) return { tone: "ok", text: o.connected.toLowerCase() === "github" ? "GitHub connected." : "Connected." };
   return null;
 }
 
-export function AgentsForMe({ delegations: initial, agents, connections, untilRevokedAllowed, openNew, connectOutcome }: {
+export function AgentsForMe({ delegations: initial, agents, connections, untilRevokedAllowed, openNew, connectOutcome, connectionsFailed = false }: {
   delegations: Delegation[]; agents: Ref[] | null; connections: Connection[]; untilRevokedAllowed: boolean; openNew: boolean;
   connectOutcome?: ConnectOutcome;
+  /** Your connections could not be read: said, never shown as "not connected". */
+  connectionsFailed?: boolean;
 }) {
   const now = useNow();
   const [delegations, setDelegations] = useState(initial);
@@ -87,7 +93,9 @@ export function AgentsForMe({ delegations: initial, agents, connections, untilRe
           </CanButton>
         </div>
         {!delegations.length ? (
-          <div className="idn-alone"><Robot size={20} aria-hidden /> <span>No agent acts for you yet</span></div>
+          <EmptyState icon={<Robot size={20} />} title="No agent acts for you yet" testId="grants-empty">
+            Let agents build, preview or sync for you, with part of your access, until a date you choose.
+          </EmptyState>
         ) : null}
         {[...live, ...past].map((d) => (
           <article key={d.id} className="idn-dg" data-status={d.status} data-testid={`grant-${d.id}`}>
@@ -103,7 +111,7 @@ export function AgentsForMe({ delegations: initial, agents, connections, untilRe
               <span className="idn-spacer" />
               {statusPill(d, now)}
               {d.status === "active" || d.status === "paused" ? (
-                <button type="button" className="idn-btn sm danger" onClick={() => setRevoking(d)} aria-label={`Revoke grant ${d.id}`}>
+                <button type="button" className="idn-btn sm danger" onClick={() => setRevoking(d)} aria-label={`Revoke ${d.label}`}>
                   <Prohibit size={14} aria-hidden /> Revoke
                 </button>
               ) : null}
@@ -118,7 +126,7 @@ export function AgentsForMe({ delegations: initial, agents, connections, untilRe
       </section>
 
       <div className="idn-colr">
-        <Connections connections={connections} outcome={connectOutcome} />
+        <Connections connections={connections} outcome={connectOutcome} failed={connectionsFailed} />
         <section className="idn-card">
           <div className="idn-card-h"><h2>What agents never get</h2></div>
           <p className="idn-dim idn-prose" data-copy="prose">Approvals, identity, secrets, production deploys and gate waivers. Whatever you grant, they stay yours.</p>
@@ -134,11 +142,24 @@ export function AgentsForMe({ delegations: initial, agents, connections, untilRe
   );
 }
 
-function Connections({ connections, outcome }: { connections: Connection[]; outcome?: ConnectOutcome }) {
+function Connections({ connections: initial, outcome, failed = false }: { connections: Connection[]; outcome?: ConnectOutcome; failed?: boolean }) {
   const guarded = useGuardedCall();
+  const [connections, setConnections] = useState(initial);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const outcomeLine = connectOutcomeLine(outcome);
   const github = connections.find((c) => c.provider.toLowerCase() === "github" && c.status !== "revoked");
+  const connect = () => guarded("Connecting GitHub stores a token for you.", () => idPost<{ redirect: string }>("/v1/identity/me/connections", { provider: "github" }))
+    .then((r) => window.location.assign(r.redirect)).catch((e) => setError(said(e)));
+  const disconnect = async (c: Connection) => {
+    setBusy(true); setError(null);
+    try {
+      await guarded("Disconnecting removes the GitHub token BOSS keeps for you.", () => idDelete(`/v1/identity/me/connections/${encodeURIComponent(c.id)}`));
+      setConnections((xs) => xs.map((x) => (x.id === c.id ? { ...x, status: "revoked" as const } : x)));
+      showToast("success", "GitHub disconnected");
+    } catch (e) { setError(said(e)); }
+    finally { setBusy(false); }
+  };
   return (
     <section className="idn-card" aria-labelledby="conn-h">
       <div className="idn-card-h"><h2 id="conn-h">Connections</h2><span className="idn-sub">Kept in the vault</span></div>
@@ -148,16 +169,26 @@ function Connections({ connections, outcome }: { connections: Connection[]; outc
           <b>GitHub</b>
           <small data-copy="data">{github ? <>{github.account} · linked <Ago iso={github.linked_at} /></> : "For “as me on GitHub” grants"}</small>
         </span>
-        {github
-          ? (github.status === "needs_reauth" ? <Pill tone="warn">reconnect</Pill> : <Pill tone="ok">connected</Pill>)
-          : (
-            <CanButton permission="connection:use_own" className="idn-btn sm" data-testid="connect-github" tip="Opens GitHub to approve"
-              onClick={() => guarded("Connecting GitHub stores a token for you.", () => idPost<{ redirect: string }>("/v1/identity/me/connections", { provider: "github" }))
-                .then((r) => window.location.assign(r.redirect)).catch((e) => setError(said(e)))}>
+        {failed ? <Pill tone="warn" tip="Your connections could not be read">unknown</Pill>
+          : github ? (
+            <span className="idn-row idn-nowrap">
+              {github.status === "needs_reauth" ? (
+                <CanButton permission="connection:use_own" className="idn-btn sm primary" data-testid="reconnect-github" tip="GitHub asked to approve BOSS again" onClick={() => void connect()}>
+                  Reconnect
+                </CanButton>
+              ) : <Pill tone="ok">connected</Pill>}
+              <button type="button" className="idn-btn sm ghost" disabled={busy} data-testid="disconnect-github" title="Removes the token BOSS keeps for you" onClick={() => void disconnect(github)}>
+                Disconnect
+              </button>
+            </span>
+          ) : (
+            <CanButton permission="connection:use_own" className="idn-btn sm" data-testid="connect-github" tip="Opens GitHub to approve" onClick={() => void connect()}>
               Connect GitHub
             </CanButton>
           )}
       </div>
+      {github?.status === "needs_reauth" ? <p className="idn-warn idn-small" data-copy="prose">GitHub needs your approval again before agents can act as you there.</p> : null}
+      {failed ? <p className="idn-dim idn-small" data-copy="prose">Your connections could not be read. Reload to try again.</p> : null}
       {outcomeLine ? <div className={outcomeLine.tone === "ok" ? "idn-ok idn-row" : "idn-bad idn-row"} role="status" data-testid="connect-outcome">{outcomeLine.text}</div> : null}
       <ErrorLine error={error} />
     </section>
@@ -279,12 +310,12 @@ function RevokeSheet({ grant, onClose, onDone }: { grant: Delegation; onClose: (
           {preview.items.map((i, n) => (
             <li key={`${i.kind}-${n}`} className="idn-cx">
               <span className="idn-i" aria-hidden>{i.kind === "runs" ? <Prohibit size={14} /> : <ArrowsClockwise size={14} />}</span>
-              <span><span>{i.label}</span><small data-copy="data">{i.detail}</small></span>
+              <span><span>{i.label}</span><small data-copy="data" title={i.detail}>{plainText(i.detail)}</small></span>
               <span className="idn-n">{i.count}</span>
             </li>
           ))}
         </ul>
-      ) : !error ? <div className="idn-state" role="status"><span className="idn-blink" aria-hidden /> Working out what stops…</div> : null}
+      ) : !error ? <div className="idn-row idn-dim" role="status"><span className="idn-blink" aria-hidden /> Working out what stops…</div> : null}
       <ErrorLine error={error} />
       <div className="idn-mf">
         <span className="idn-spacer" />

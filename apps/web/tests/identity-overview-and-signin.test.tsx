@@ -20,7 +20,7 @@ import { ConsentSheet, consentFromBody } from "../components/identity/consent-sh
 import { Overview } from "../app/identity/overview";
 import { SignIn } from "../app/(auth)/login/sign-in";
 import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
-import { ROLE_PERMISSIONS } from "../lib/identity/permissions.gen";
+import { PERMISSION_META, ROLE_PERMISSIONS } from "../lib/identity/permissions.gen";
 import * as F from "../lib/identity/stub/fixtures";
 import type { AuthOptions } from "../lib/identity/types";
 import { identityCopyAudit } from "./_helpers/identity-copy";
@@ -46,7 +46,7 @@ function perms(role: keyof typeof ROLE_PERMISSIONS): MePermissionsResponse {
 function me(name: string, roles: string[]): MeResponse {
   return { principal_id: "usr_x", kind: "user", display_name: name, email: "x@acme.dev", org: F.ORG, status: "active", access_roles: roles,
     sign_in: { password: true, totp: true, passkeys: 1, recovery_codes_remaining: 10, sso_links: [] }, mfa_required: true, mfa_at: null,
-    session_id: "ses_1", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [] };
+    session_id: "ses_1", session_expires_at: null, csrf_token: "c", epoch: 1, network_bound: false, banners: [], avatar_seed: null };
 }
 
 async function mount(node: React.ReactElement) {
@@ -91,9 +91,9 @@ describe("Identity › Overview", () => {
     );
     const invite = el.querySelector("[data-testid='overview-invite']")!;
     expect(invite.getAttribute("aria-disabled")).toBe("true");
-    expect(invite.getAttribute("title")).toBe("Needs user:invite · ask an Admin");
-    expect(el.querySelector("[data-testid='locked-people']")?.textContent).toContain("user:read");
-    expect(el.textContent).toContain("audit:read");
+    expect(invite.getAttribute("title")).toBe("Needs “Invite people” · ask an Admin");
+    expect(el.querySelector("[data-testid='locked-people']")?.textContent).toContain("View people");
+    expect(el.textContent).toContain(PERMISSION_META["audit:read"].title);
   });
 });
 
@@ -195,7 +195,7 @@ describe("the sheets and the denied page", () => {
   it("AccessDenied names the permission and who can grant it", async () => {
     const el = await mount(<AccessDenied permission="user:read" page="People" />);
     expect(el.textContent).toContain("You can't open People");
-    expect(el.textContent).toContain("user:read");
+    expect(el.textContent).toContain("View people");
     expect(el.querySelector("[data-testid='access-denied-grantors']")?.textContent).toBe("Admins: Priya");
     expect(el.querySelector("[data-testid='request-access']")).not.toBeNull();
   });

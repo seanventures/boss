@@ -14,6 +14,7 @@
  * panel never refreshed after a deploy). `Status unknown` offers `Check now`, which asks for a
  * fresh reading once (`fresh=1`). No machine: `Needs a machine` + `Add host ↗` into Infra.
  */
+import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
 
 import { hostHref } from "../../lib/infra-view";
@@ -60,10 +61,10 @@ function Stack({ s, projectId, actor, refresh }: { s: Sources; projectId: string
     <section className="obs-zone" aria-labelledby="obs-stack-head" data-testid="obs-stack">
       <ZoneHead id="obs-stack-head" label="STACK">
         {st.canDeploy && st.host ? (
-          <button type="button" className="ag-btn" data-testid="obs-stack-deploy" disabled={busy !== null} onClick={deploy}
+          <GatedButton permission="observability:manage" type="button" className="ag-btn" data-testid="obs-stack-deploy" disabled={busy !== null} onClick={deploy}
                   title="Renders the scrape config from your targets and puts the stack on its machine">
             {busy === "deploy" ? "Deploying…" : st.state === "running" ? "Redeploy" : "Deploy stack"}
-          </button>
+          </GatedButton>
         ) : null}
         {st.grafanaUrl ? (
           <a className="inf-link" href={st.grafanaUrl} target="_blank" rel="noreferrer noopener" data-testid="obs-stack-grafana">Grafana ↗</a>
@@ -80,9 +81,9 @@ function Stack({ s, projectId, actor, refresh }: { s: Sources; projectId: string
         ) : null}
         {st.checkedAt && !unknown ? <span className="inf-faint inf-num" title={lt.full(st.checkedAt)}>checked {ago(st.checkedAt, now)}</span> : null}
         {unknown ? (
-          <button type="button" className="inf-link" data-testid="obs-stack-check" disabled={busy !== null} onClick={check}>
+          <GatedButton permission="observability:manage" type="button" className="inf-link" data-testid="obs-stack-check" disabled={busy !== null} onClick={check}>
             {busy === "check" ? "Checking…" : "Check now"}
-          </button>
+          </GatedButton>
         ) : null}
         {st.needsMachine ? (
           <span className="obs-line" data-testid="obs-stack-needs-machine">
@@ -122,8 +123,8 @@ function SourcesList({ s, projectId, actor }: { s: Sources; projectId: string; a
   return (
     <section className="obs-zone" aria-labelledby="obs-sources-head" data-testid="obs-sources-list">
       <ZoneHead id="obs-sources-head" label="SOURCES" count={s.sources.length}>
-        <button type="button" className="ag-btn" data-testid="obs-check-config" disabled={busy || !s.sources.length} onClick={check}
-                title="Checks each source's settings. Doesn't call the source.">{busy ? "Checking…" : "Check config"}</button>
+        <GatedButton permission="observability:manage" type="button" className="ag-btn" data-testid="obs-check-config" disabled={busy || !s.sources.length} onClick={check}
+                title="Checks each source's settings. Doesn't call the source.">{busy ? "Checking…" : "Check config"}</GatedButton>
       </ZoneHead>
       {s.sources.length === 0 ? <Empty>No sources yet</Empty> : (
         <ul className="obs-list">

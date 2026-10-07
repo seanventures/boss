@@ -15,6 +15,7 @@ import { LedgerStrip } from "./memory-ui";
 import { apiWrite } from "../lib/api-write";
 
 import { callAction } from "../lib/call-action";
+import { GatedButton, useGate } from "../components/gated";
 // Agent World (S-runs): the agent's face, its live state, and the work it cites.
 import { CitedActs, citedIds, DockAgentHead, DockGutterFace, dockFaceKey, dockRoleKey, useDockSpeech } from "./agents/dock-agent";
 import { nameOf } from "./agents/run-face";
@@ -263,6 +264,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   actId?: string;
 }) {
   useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
+  // Pre-greyed for a viewer who may not chat (P1-18): Send, Enter and the proposals do nothing.
+  const chat = useGate("assistant:chat");
   /**
    * ONE DURABLE CONVERSATION PER ROLE.
    *
@@ -1494,7 +1497,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               </p>
               {proposed.map((a) => (
                 <div className="agent-proposal" key={a.id}>
-                  <button
+                  <GatedButton
+                    permission="assistant:chat"
                     type="button"
                     className="button agent-proposal-btn"
                     disabled={busy}
@@ -1502,7 +1506,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                     onClick={() => acceptAction(a)}
                   >
                     {busy && ranAction === a.id ? "…" : a.label}
-                  </button>
+                  </GatedButton>
                   {a.why ? <span className="detail agent-proposal-why">{a.why}</span> : null}
                 </div>
               ))}
@@ -1554,7 +1558,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             message is unchanged; Shift+Enter starts a new line. */}
         {/* ONE SURFACE. The field and its controls were a bare input with a Send button beside
             it, which reads as a form on a page rather than a place to talk. */}
-        <form className="agent-composer" onSubmit={(e) => { e.preventDefault(); send(); }}>
+        <form className="agent-composer" onSubmit={(e) => { e.preventDefault(); if (chat.allowed) send(); }}>
           {/* NOT disabled while BOSS is working. A turn here can run for two minutes, and
               locking the field means you cannot draft the follow-up, correct a typo, or even
               select what you wrote to copy it. Only SEND is held. */}
@@ -1575,7 +1579,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               el.style.height = `${Math.min(Math.max(el.scrollHeight, 64), 220)}px`;
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (chat.allowed) send(); }
             }}
             // CMD+V IS HOW A SCREENSHOT ARRIVES. Every operator already has the image on their
             // clipboard when they decide to report the bug; making them save it to disk first
@@ -1634,12 +1638,12 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             {/* NOT disabled while busy any more: pressing it queues. Still disabled with
                 nothing to send — a live-looking button that does nothing is worse than one
                 that says it is not ready. An attachment cannot be queued, so that case waits. */}
-            <button type="submit" className="agent-send"
+            <GatedButton permission="assistant:chat" type="submit" className="agent-send"
                     disabled={(!input.trim() && !files.length) || (busy && !!files.length)}
                     aria-label={busy ? "Queue message" : "Send message"}
                     data-testid="agent-send">
               {busy && files.length ? <span className="agent-send-spin" aria-hidden /> : "↑"}
-            </button>
+            </GatedButton>
           </div>
         </form>
       </section>

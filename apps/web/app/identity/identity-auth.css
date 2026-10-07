@@ -24,3 +24,6 @@
   .idn-codes { color: black; border-color: black; background: none; }
   .idn-codes li { color: black; }
 }
+/* A waiting line ("Checking your link…"): distinct from the shared .idn-state panels (states.tsx). */
+.idn-wait { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13.5px; color: var(--muted); margin-bottom: 16px; }
+.idn-wait .idn-blink { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); animation: idn-blink 1s infinite; }
