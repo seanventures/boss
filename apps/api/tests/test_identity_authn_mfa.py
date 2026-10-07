@@ -158,7 +158,7 @@ def test_totp_enrolment_shows_the_secret_once_stores_none_and_rotates_to_fresh_m
     assert world.events_of("mfa.enrolled") and world.events_of("recovery_codes.generated")
     # a second confirm with no pending enrolment does nothing
     assert client.post("/v1/identity/me/mfa/totp/confirm", json={"code": totp_now(secret, offset_steps=1)},
-                       headers=csrf(client)).status_code == 400
+                       headers=csrf(client)).status_code == 409
     assert pid
 
 

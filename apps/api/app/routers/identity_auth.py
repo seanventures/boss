@@ -429,7 +429,12 @@ def build_identity_auth_router() -> APIRouter:
                     confirm_origin=body.confirm_origin or body.origin, seat=body.seat), ip=ip, bridged=bridged,
                     headers=dict(creds.headers), peer_ip=creds.peer_ip)
                 f = facts(request, db)
-                answer = signin.finish(db, user, f, methods=["pwd"] if body.password else ["network"],
+                # The session records what this claim PROVED (IDENTITY.md §4.11): the claim's own
+                # proof (setup link, shared password, network bridge), plus the password the Owner
+                # chose. Never "network" for a claim that was not network-bridged.
+                proof = claim_module.proof_method(setup_token=body.setup_token,
+                                                  legacy_password=body.legacy_password)
+                answer = signin.finish(db, user, f, methods=[proof] + (["pwd"] if body.password else []),
                                        mfa=False, extra={"mfa_enrolment_required": True})
                 return render(answer)
         except claim_module.ClaimRefused as exc:
