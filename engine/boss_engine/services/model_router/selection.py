@@ -151,7 +151,7 @@ def select(tier: str, policy: RoutingPolicy, sources: Mapping[str, SourceState],
     else:
         queue = list(policy.targets(tier))
         if preferred is not None and preferred.engine:
-            want = tier_of(policy, preferred.engine, preferred.model)
+            want = tier_of(policy, preferred.engine, preferred.model, tier)
             if preferred.model and want is not None and rank(want) < rank(tier):
                 raised = Target(preferred.engine, _model_on(policy, preferred.engine, tier))
                 selection.notes.append(f"Floor raised your pin: {engine_label(preferred.engine)}"
