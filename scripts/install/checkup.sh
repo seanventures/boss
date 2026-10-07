@@ -263,6 +263,12 @@ claim=""
 if [ "${#DOCKER[@]}" -gt 0 ]; then
   claim=$("${DOCKER[@]}" exec -u boss boss-community-api-1 python -m boss_engine.identity.cli claim-status 2>/dev/null | tail -n 1 || echo "")
 fi
+# THE BUILD SANDBOX'S NETWORK FENCE (docs/community/SANDBOX.md). On a host without iptables owner
+# match the api starts anyway and holds every build; say so here, with the fix.
+if [ "${#DOCKER[@]}" -gt 0 ] &&
+   "${DOCKER[@]}" exec boss-community-api-1 test -f /run/boss-shim/.network-unfenced 2>/dev/null; then
+  bad "sandbox: this host cannot fence the build network, so builds are held — see docs/community/SANDBOX.md (or set BOSS_SANDBOX_NETWORK=off in .env and restart)"
+fi
 case "$claim" in
   unclaimed) warn "identity: not claimed yet — open $CONSOLE_URL/claim once to create your Owner account (boss password proves it is you; boss identity setup-link makes a one-hour link)" ;;
   claimed*) ok "identity: $claim" ;;

@@ -201,7 +201,9 @@ def test_upgrade_reuses_its_valid_backup_without_a_second_snapshot(install_pair)
     installed, old, new, env, tmp = install_pair
     prior_env = (installed / ".env").read_bytes()
 
-    result = _run("bash", REPO / "scripts/install/upgrade.sh", "--dir", installed,
+    # --no-rollback: this test reads the state the failed installer left (the rollback that
+    # otherwise puts the previous release back is test_community_boss_cli's)
+    result = _run("bash", REPO / "scripts/install/upgrade.sh", "--dir", installed, "--no-rollback",
                   cwd=REPO, env=env)
 
     assert result.returncode != 0  # fake Docker stops the fetched installer at build

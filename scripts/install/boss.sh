@@ -51,7 +51,8 @@ Commands:
                       needs a person is still skipped without a terminal. --yes asks
                       nothing and installs nothing unless --install-ollama is given.
   upgrade [--to REF]  Back up, then move to the newest release (or REF). Never jumps to
-                      main unless you installed from main or pass --to main.
+                      main unless you installed from main or pass --to main. If the new
+                      release cannot start, the previous one is put back (--no-rollback: don't).
                       Also: --dry-run, --backup-dir PATH, --web, --no-web
   update              Re-apply configuration on the installed release: rerun the installer
                       so newly exported model keys and flags take effect. Does not change
@@ -260,11 +261,14 @@ cmd_upgrade() {
     case "$1" in
       --to|--ref) args+=(--ref "${2:?--to needs a ref}"); shift 2 ;;
       --backup-dir) args+=(--backup-dir "${2:?--backup-dir needs a path}"); shift 2 ;;
-      --dry-run|--web|--no-web) args+=("$1"); shift ;;
+      --dry-run|--web|--no-web|--no-rollback) args+=("$1"); shift ;;
       *) die "unknown upgrade option: $1 (see boss help)" ;;
     esac
   done
   bash "$INSTALL_DIR/scripts/install/upgrade.sh" "${args[@]}"
+  # The host tools' own key, ready before the shared key stops (best effort: the next boss
+  # command issues it otherwise).
+  [[ -n "$(env_value BOSS_HOST_API_KEY)" ]] || issue_host_key >/dev/null 2>&1 || true
   post_deploy_prune
 }
 
