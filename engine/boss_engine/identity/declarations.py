@@ -71,6 +71,10 @@ class Permit:
     #: top-level navigation carries it): it needs X-Boss-CSRF or Sec-Fetch-Site: same-origin.
     #: Each such route also answers POST, the method its callers move to (amendment, int-b).
     writes_on_get: bool = False
+    #: When set, the GET writes ONLY when one of these query parameters has one of these values
+    #: (`check=stale|now` probes; `check=none` is a plain read): CSRF is required only then, so a
+    #: page reading the list never needs a token (F2, GET /v1/mcp/servers).
+    writes_on_get_if: tuple[tuple[str, tuple[str, ...]], ...] = ()
     #: Ids in the body/query/path that must belong to the scope's project (object_rules.Confine).
     confine: tuple[Confine, ...] = ()
     #: Where the operation's deployment target comes from; a production target also needs
@@ -127,7 +131,9 @@ def _attach(fn: F, access: Access) -> F:
 def permit(permission: str, scope: Optional[ScopeSpec] = None, *,
            readonly_post: bool = False, writes_on_get: bool = False,
            confine: tuple[Confine, ...] | list[Confine] = (),
-           production: Optional[Production] = None) -> Callable[[F], F]:
+           production: Optional[Production] = None,
+           writes_on_get_if: Optional[dict[str, tuple[str, ...] | list[str]]] = None
+           ) -> Callable[[F], F]:
     """Declare the catalogue permission an operation needs, and where to check it.
 
     `scope` may be omitted only for an org-only permission (it defaults to `Scope.org()`); a
@@ -148,9 +154,13 @@ def permit(permission: str, scope: Optional[ScopeSpec] = None, *,
         raise CatalogueError("production= takes an object_rules.Production(...)")
     if any(not isinstance(c, Confine) for c in confine):
         raise CatalogueError("confine= takes object_rules.Confine entries")
+    if writes_on_get_if and not writes_on_get:
+        raise CatalogueError("writes_on_get_if= qualifies writes_on_get=True")
     declaration = Permit(permission=key, scope=scope, readonly_post=readonly_post,
                          writes_on_get=writes_on_get, confine=tuple(confine),
-                         production=production)
+                         production=production,
+                         writes_on_get_if=tuple((k, tuple(v)) for k, v in
+                                                sorted((writes_on_get_if or {}).items())))
 
     def deco(fn: F) -> F:
         return _attach(fn, declaration)

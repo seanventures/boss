@@ -487,6 +487,19 @@ class ProjectMemberListResponse(BaseModel):
     items: list[ProjectMemberSummary]
 
 
+#: F2/H5: a SYSTEM member maps to a fixed system principal at the identity migration, so the type
+#: comes from configuration only (BOSS_WORKER_PRINCIPAL and the seeded system members), never from
+#: the API — a member write naming it would mint an Owner-equivalent principal.
+API_REFUSED_MEMBER_TYPES = frozenset({"system"})
+
+
+def _require_api_member_type(value: str) -> str:
+    value = _require_text(value, "member_type")
+    if value.strip().lower() in API_REFUSED_MEMBER_TYPES:
+        raise ValueError("member_type 'system' comes from configuration only; the API cannot set it")
+    return value
+
+
 class ProjectMemberUpsertRequest(BaseModel):
     project_id: str
     member_id: str
@@ -500,7 +513,7 @@ class ProjectMemberUpsertRequest(BaseModel):
     def validate_member_fields(self) -> "ProjectMemberUpsertRequest":
         self.member_id = _require_text(self.member_id, "member_id")
         self.display_name = _require_text(self.display_name, "display_name")
-        self.member_type = _require_text(self.member_type, "member_type")
+        self.member_type = _require_api_member_type(self.member_type)
         self.role_keys = _require_non_empty_string_list(
             self.role_keys, "role_keys"
         )
@@ -547,7 +560,7 @@ class OrgMemberUpsertRequest(BaseModel):
         self.project_id = _require_text(self.project_id, "project_id")
         self.member_id = _require_text(self.member_id, "member_id")
         self.display_name = _require_text(self.display_name, "display_name")
-        self.member_type = _require_text(self.member_type, "member_type")
+        self.member_type = _require_api_member_type(self.member_type)
         self.role_keys = _require_non_empty_string_list(
             self.role_keys, "role_keys"
         )

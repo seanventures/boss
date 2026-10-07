@@ -126,6 +126,97 @@ def check_confined(rules: Iterable[Confine], values: RequestValues, *, org_id: s
                     raise Confined(rule, object_id)
 
 
+# ---- central confinement (F2 / M9, M5): every id a request names, by its name ------------------------
+
+#: How deep the central rule looks into a JSON body for id keys (nested body ids are confined too).
+BODY_DEPTH = 8
+
+
+def _id_values(raw: Any) -> list[str]:
+    items = raw if isinstance(raw, (list, tuple)) else [raw]
+    return [str(v).strip() for v in items
+            if isinstance(v, (str, int)) and not isinstance(v, bool) and str(v).strip()]
+
+
+def _walk(node: Any, depth: int = 0):
+    """(depth, key, value) for every key of every mapping in a JSON body, at any nesting."""
+    if depth > BODY_DEPTH:
+        return
+    if isinstance(node, Mapping):
+        for key, value in node.items():
+            yield depth, str(key), value
+            if isinstance(value, (Mapping, list, tuple)):
+                yield from _walk(value, depth + 1)
+    elif isinstance(node, (list, tuple)):
+        for item in node:
+            if isinstance(item, (Mapping, list, tuple)):
+                yield from _walk(item, depth + 1)
+
+
+def named_ids(values: RequestValues, *, skip: Iterable[tuple[str, str]] = ()
+              ) -> list[tuple[Confine, str]]:
+    """Every (rule, id) the central rule confines: each path / query parameter and each body key
+    (at any depth) whose NAME is an object id (object_kinds.ID_PARAM_KINDS), except the locations
+    in `skip` (the scope's own id, already resolved). A rule here is built, not declared."""
+    from .object_kinds import kinds_for_id
+
+    skipped = set(skip)
+    out: list[tuple[Confine, str]] = []
+    for where, source in (("path", values.path_params), ("query", values.query)):
+        for name, raw in (source or {}).items():
+            kinds = kinds_for_id(str(name))
+            if not kinds or (where, str(name)) in skipped:
+                continue
+            out += [(Confine(where, str(name), kinds), v) for v in _id_values(raw)]
+    for depth, name, raw in _walk(values.body):
+        kinds = kinds_for_id(name)
+        if not kinds or (depth == 0 and ("body", name) in skipped):
+            continue
+        out += [(Confine("body", name, kinds), v) for v in _id_values(raw)]
+    return out
+
+
+def check_org_ids(values: RequestValues, *, org_id: str,
+                  locations: Iterable[str] = ("path", "query", "body")) -> None:
+    """M5: an `org_id` the operation READS (its declared path / query / body parameter) must be
+    the caller's org. One org per install today; this holds before a second org can exist. An
+    org_id the operation does not take is the handler's to refuse (A36: 422 field_not_allowed)."""
+    rule = Confine("query", "org_id", ("org",))
+    wanted = set(locations)
+    found = [v for where, src in (("path", values.path_params), ("query", values.query))
+             if where in wanted
+             for k, raw in (src or {}).items() if k == "org_id" for v in _id_values(raw)]
+    if "body" in wanted and isinstance(values.body, Mapping):
+        found += _id_values(values.body.get("org_id"))
+    for value in found:
+        if value != org_id:
+            raise Confined(rule, value)
+
+
+def check_named(values: RequestValues, *, org_id: str, project_id: Optional[str],
+                skip: Iterable[tuple[str, str]] = (), db: Any = None,
+                org_locations: Iterable[str] = ("path", "query", "body")) -> None:
+    """The central rule: every named id (named_ids) belongs to `project_id` (the org, when None),
+    and every org_id the operation reads is the caller's org. Raises Confined (answered 404)."""
+    check_org_ids(values, org_id=org_id, locations=org_locations)
+    for rule, object_id in named_ids(values, skip=skip):
+        _confine_one(rule, object_id, org_id=org_id, project_id=project_id, db=db)
+
+
+def _confine_one(rule: Confine, object_id: str, *, org_id: str, project_id: Optional[str],
+                 db: Any) -> None:
+    found_any = False
+    for kind in rule.kinds:
+        found = load_object(kind, db, object_id)
+        if found is None:
+            continue
+        found_any = True
+        if found[0] == org_id and (project_id is None or found[1] == project_id):
+            return
+    if found_any:
+        raise Confined(rule, object_id)
+
+
 # ---- production ------------------------------------------------------------------------------------
 
 #: Environment names that mean production. Conservative: a name that might be production is.
