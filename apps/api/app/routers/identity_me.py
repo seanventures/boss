@@ -140,7 +140,11 @@ def need_step_up(ctx: AuthContext) -> Optional[JSONResponse]:
 
 
 def need_person_session(ctx: AuthContext) -> Optional[JSONResponse]:
-    if ctx.principal.kind != PrincipalKind.USER or ctx.session is None:
+    """The handler's own gate (shadow mode, where the guard only records). Under enforce the guard
+    refuses first, before the body is validated (declarations: people_only)."""
+    from boss_engine.identity.enforcement import is_person_session
+
+    if not is_person_session(ctx):
         return error(403, "people_only")
     return None
 

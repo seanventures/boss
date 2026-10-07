@@ -67,3 +67,38 @@ def test_the_profile_route_is_declared_people_only():
     profile = next(a for label, a in found.items() if label.endswith(" /v1/identity/me/profile"))
     assert isinstance(profile, Authenticated) and profile.people_only
     assert profile.describe() == "authenticated:self:people"
+
+
+def _ctx(kind, *, session: bool):
+    from boss_engine.identity.principal import (AuthContext, AuthMethod, Principal, PrincipalKind,
+                                                PrincipalStatus)
+
+    p = Principal("usr_x" if kind == "user" else "sva_x", PrincipalKind(kind), "org_x", PrincipalStatus.ACTIVE,
+                  "X", False, ())
+    return AuthContext(principal=p, method=AuthMethod.SESSION if session else AuthMethod.API_KEY,
+                       session=object() if session else None)
+
+
+def test_the_guard_refuses_a_non_person_before_the_body_is_read():
+    """The sweep's second finding: a service account calling POST /v1/identity/me/password got
+    422 "field required" — the body was validated before the handler's people check. The guard
+    decides people_only itself now, with the handler's code and status."""
+    from boss_engine.identity.declarations import Authenticated
+    from boss_engine.identity.enforcement import evaluate
+    from boss_engine.identity.scope import RequestValues
+
+    decl = Authenticated(self_only=True, people_only=True)
+
+    def run(ctx):
+        return evaluate(decl, authenticate=lambda: ctx, values=lambda: RequestValues({}, {}, None),
+                        org_id=lambda c: "org_x", check=lambda *a: None, resolve=lambda *a: None)
+
+    key = run(_ctx("service_account", session=False))
+    assert not key.allowed and key.status == 403 and key.error_body() == {"error": "people_only"}
+    bridged = run(_ctx("user", session=False))              # a person's principal without a session
+    assert not bridged.allowed and bridged.error_body() == {"error": "people_only"}
+    assert run(_ctx("user", session=True)).allowed
+    plain = evaluate(Authenticated(self_only=True), authenticate=lambda: _ctx("service_account", session=False),
+                     values=lambda: RequestValues({}, {}, None), org_id=lambda c: "org_x",
+                     check=lambda *a: None, resolve=lambda *a: None)
+    assert plain.allowed
