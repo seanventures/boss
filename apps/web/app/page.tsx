@@ -145,7 +145,6 @@ import { fetchSetupSummary, landingArea } from "../lib/setup-server";
 import { KitHome } from "./skills/kit-home";
 import { MemoryHome } from "./memory-ui";
 import { fetchPipelineData } from "../lib/pipeline-profiles";
-import { PipelineView } from "./pipeline-ui";
 import { fetchSandboxFeed } from "../lib/sandboxes";
 import { SandboxesHome } from "./sandboxes-ui";
 import { AreaLink } from "./area-link";
@@ -805,7 +804,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchPreviews(activeProjectId, needs("code_tasks")),
       fetchQaBenchmarkApps(activeProjectId, needs("code_tasks")),
       fetchSandboxFeed(needs("sandboxes")),
-      fetchPipelineData(activeProjectId, needs("pipeline")),
+      fetchPipelineData(activeProjectId, false),
       fetchDashboard(activeProjectId, needs("dashboard", "ops")),
       fetchPolicyEvals(activeProjectId, 25, needs("ops")),
       // Already self-gating: returns null unless the URL carries a run to trace.
@@ -813,7 +812,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchLatestEval(activeProjectId, needs("ops")),
       fetchSkillInvocations(activeProjectId, 15, needs("ops")),
       fetchAckState(activeProjectId, 25, false, needs("comms")),
-      fetchWipStatus(activeProjectId, 5, needs("code_tasks", "pipeline")),
+      fetchWipStatus(activeProjectId, 5, needs("code_tasks", "ops")),
       fetchChaosRuns(activeProjectId, 15, needs("ops")),
       fetchWorkflowFeed(activeProjectId, needs("ops")),
       // The Agents area reads it: Profile on an agent, Panels, and orphan definitions offered
@@ -1368,6 +1367,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <CanaryCard projectId={activeProjectId} run={canaryRun} />
           <EvalHarnessCard projectId={activeProjectId} actor={activeActorId} run={latestEval} />
+          <FactoryScaleCard wip={wipStatus} />
           <WorkflowHealth
             jobStatusCounts={opsQueue.jobStatusCounts}
             jobKindCounts={opsQueue.jobKindCounts}
@@ -3082,20 +3082,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
         ) : null}
 
-        {shows("pipeline") ? (
-        <section className="panel-stack" data-area="pipeline" aria-label="Coding pipeline">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Coding Pipeline · VAG</span>
-              <h2>Verification-Amplified Generation — cheap models write, frontier models verify. Tune cost vs. rigor per tier and compare run costs.</h2>
-            </div>
-          </div>
-          <PipelineView data={pipelineData} />
-          <div className="stack-grid" style={{ marginTop: 14 }}>
-            <FactoryScaleCard wip={wipStatus} />
-          </div>
-        </section>
-        ) : null}
+        {/* The Coding Pipeline page folded into Setup › Model routing (its profiles are the
+            floor presets); `?area=pipeline` redirects there (legacy-areas.ts). Its Factory scale
+            card lives under Operations. */}
 
         {shows("sandboxes") ? (
         <section className="panel-stack" data-area="sandboxes" aria-label="Sandboxes">

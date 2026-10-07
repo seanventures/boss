@@ -1710,6 +1710,9 @@ def _execute_step(
                     produces=list(binding.get("produces") or []) or None,
                     skills=skills or None,
                     mcp=mcp or None,
+                    # Where "Why this model" finds the route (model router): the run and the step.
+                    route_ref={"workflow_run_id": str(context.get("run_id") or ""),
+                               "step_id": str(step.get("id") or "")},
                 )
         except (agent_steps.AgentStepError, step_agents.StepAgentError) as error:
             raise CapabilityExecutionError(str(error)) from error

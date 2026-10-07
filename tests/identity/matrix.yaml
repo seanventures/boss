@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1369 operations.
+# 1372 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -948,6 +948,7 @@
 "GET /v1/model-gateway/usage": ["permit model_provider:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/model-route-decisions": ["permit model_provider:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/model-route-decisions/simulate": ["permit model_provider:manage @ project(body=project_id)", "OA"]
+"GET /v1/model-routes": ["permit model_provider:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/multi-cloud/catalog": ["permit infra:read @ org", "OAPVU"]
 "GET /v1/multi-cloud/provider-conformance": ["permit infra:read @ org", "OAPVU"]
 "GET /v1/multi-cloud/providers/{provider_key}": ["permit infra:read @ org", "OAPVU"]
@@ -1208,6 +1209,8 @@
 "POST /v1/setup/repository/token": ["permit github:connect @ project(body=project_id)", "OA"]
 "DELETE /v1/setup/repository/{binding_id}": ["permit repository:manage @ project(query=project_id)", "OA"]
 "POST /v1/setup/repository/{binding_id}/default": ["permit repository:manage @ project(query=project_id)", "OA"]
+"PUT /v1/setup/routing": ["permit setup:manage @ project(body=project_id)", "OA"]
+"POST /v1/setup/routing/catalogue": ["permit model_provider:manage @ project(body=project_id)", "OA"]
 "GET /v1/setup/status": ["permit setup:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/setup/try": ["permit workflow_run:start @ project(body=project_id)", "OAP"]
 "POST /v1/shepherd/autopilot": ["permit autopilot:operate @ project(body=project_id)", "OAP"]

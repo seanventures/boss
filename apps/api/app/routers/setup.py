@@ -17,7 +17,7 @@ from boss_engine.db import begin
 
 from ..schemas_setup import (
     BudgetBody, ChecksBody, JobBody, ModelConnectBody, RepositoryAppBody, RepositorySelectBody,
-    RepositoryTokenBody, SetupView, SourceModelBody, TryBody, dump,
+    RepositoryTokenBody, RoutingBody, SetupView, SourceModelBody, TryBody, dump,
 )
 
 
@@ -27,6 +27,7 @@ def build_setup_router(
     get_settings: Callable[[], Any],
     require_actor: Callable[..., None],
     principal: Callable[[], Optional[str]],
+    require_reader: Optional[Callable[..., None]] = None,
 ) -> APIRouter:
     from boss_engine.services import setup_actions, setup_view
 
@@ -245,6 +246,62 @@ def build_setup_router(
             except setup_actions.SetupActionError as error:
                 fail(error)
         return fresh_view(body.project_id)
+
+    @router.put("/v1/setup/routing", response_model=SetupView, response_model_by_alias=True)
+    @permit(P.SETUP_MANAGE, scope=Scope.project(body="project_id"))
+    def put_routing(body: RoutingBody) -> dict[str, Any]:
+        """Model routing (docs/product/MODEL_ROUTER.md): merge a change into the project's
+        policy. A stale edit (another save since `version`) is refused with 409; a policy the
+        router cannot route on is refused with 422 naming the field."""
+        from boss_engine.services.model_router import store as router_store
+        from boss_engine.services.model_router.policy import PolicyError
+
+        actor = actor_for(body.actor)
+        with begin(engine) as connection:
+            require_actor(connection, body.project_id, actor, "providerops_manage")
+            try:
+                router_store.save_policy(connection, body.project_id, body.policy, actor=actor,
+                                         settings=get_settings(),
+                                         expected_version=body.version)
+            except router_store.PolicyConflict as error:
+                raise HTTPException(status_code=409, detail={
+                    "headline": "Changed elsewhere", "message": str(error),
+                    "version": error.current}) from error
+            except (PolicyError, ValueError) as error:
+                raise HTTPException(status_code=422, detail={
+                    "headline": "Not saved", "message": str(error)}) from error
+        return fresh_view(body.project_id)
+
+    @router.post("/v1/setup/routing/catalogue", response_model=SetupView,
+                 response_model_by_alias=True)
+    @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
+    def post_routing_catalogue(body: ChecksBody) -> dict[str, Any]:
+        """Refresh OpenRouter's model list and prices with the project's stored key."""
+        from boss_engine.services import openrouter_catalog
+
+        actor = actor_for(body.actor)
+        with begin(engine) as connection:
+            require_actor(connection, body.project_id, actor, "entitlement_manage")
+            openrouter_catalog.refresh(connection, get_settings(), body.project_id)
+        from boss_engine.services.model_router import store as router_store
+
+        router_store.invalidate(body.project_id)
+        return fresh_view(body.project_id)
+
+    @router.get("/v1/model-routes")
+    @permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
+    def get_model_routes(project_id: str, unit_id: str) -> dict[str, Any]:
+        """Why this model: every route the router chose for one run, thread or meeting."""
+        from boss_engine.services.model_router.store import routes_for
+
+        with begin(engine) as connection:
+            if require_reader is not None:
+                require_reader(connection, project_id)
+            else:
+                require_actor(connection, project_id, actor_for(None), "entitlement_manage")
+            rows = [r for r in routes_for(connection, unit_id) if r.get("project_id") in
+                    (None, project_id)]
+        return {"unit_id": unit_id, "routes": rows}
 
     @router.put("/v1/setup/budget", response_model=SetupView, response_model_by_alias=True)
     @permit(P.BUDGET_MANAGE, scope=Scope.project(body="project_id"))

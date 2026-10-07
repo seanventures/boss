@@ -218,6 +218,17 @@ def price_for_model(model: str, provider: str = "", endpoint: str = "") -> tuple
     for key in keys:
         if key in table:
             return (*table[key], True)
+    # OPENROUTER PUBLISHES ITS PRICES (openrouter_catalog): a listed model's cost is known,
+    # not the DEFAULT_PRICE guess. In-process cache only — never a fetch on this path.
+    if provider.strip().lower() == "openrouter" or "/" in model:
+        try:
+            from .openrouter_catalog import price as _openrouter_price
+
+            listed = _openrouter_price(model)
+        except Exception:  # noqa: BLE001
+            listed = None
+        if listed is not None:
+            return (listed[0], listed[1], True)
     return (*DEFAULT_PRICE, False)
 
 

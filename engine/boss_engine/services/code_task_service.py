@@ -1642,6 +1642,12 @@ def retry_code_task(
                           # instead of replaying the pipeline from the top.
                           **({"prior_failing_gates": _prior_failing_gates(fctx_prev, state)}
                              if _prior_failing_gates(fctx_prev, state) else {}),
+                          # THE ROUTER'S EVIDENCE FOLLOWS THE LINEAGE (model_router.escalation):
+                          # tests that failed and gates that blocked in the parent count toward
+                          # the child's escalation, so a repair round can move up a tier.
+                          **({"route_escalations": (state.get("routing") or {}).get("signals")}
+                             if isinstance((state.get("routing") or {}).get("signals"), dict)
+                             and (state.get("routing") or {}).get("signals") else {}),
                           # Carry the parent's error so the child can tell a PLATFORM death
                           # (spend cap, timeout) from a code verdict. The former must resume
                           # onto the checkpointed branch, not re-author what already exists.

@@ -2228,8 +2228,17 @@ def brief_of(run: Mapping[str, Any]) -> dict[str, Any]:
     built_on = (f"micro-VM {sandbox}".strip() if substrate == "microvm" else
                 "API host" if substrate in (None, "", "local", "local_subprocess", "host") else
                 str(substrate))
-    build_engine = ev.get("build_engine") or ev.get("engine")
-    review_engine = ev.get("review_engine")
+    # WHAT RAN, NOT WHAT WAS CONFIGURED. `build_engine` is the run's base lane; the model router
+    # can route a stage elsewhere (OpenRouter near a subscription's limit, an escalation), and
+    # `stage_engines` / `stage_models` record where each stage actually ran.
+    stage_engines = ev.get("stage_engines") if isinstance(ev.get("stage_engines"), dict) else {}
+    stage_models = ev.get("stage_models") if isinstance(ev.get("stage_models"), dict) else {}
+    build_stage = "implement" if "implement" in stage_engines else "solo"
+    build_engine = (stage_engines.get(build_stage) or ev.get("engine")
+                    or ev.get("build_engine"))
+    review_engine = stage_engines.get("review_code") or ev.get("review_engine")
+    build_model = stage_models.get(build_stage) or ev.get("model") or usage.get("model")
+    review_model = stage_models.get("review_code") or ev.get("review_model")
     bench = fctx.get("qa_benchmark") if isinstance(fctx.get("qa_benchmark"), dict) else {}
     deferred = fctx.get("deferred_findings") or ev.get("deferred_findings") or []
     return {
@@ -2241,10 +2250,11 @@ def brief_of(run: Mapping[str, Any]) -> dict[str, Any]:
         "workflow": ({"name": str(wf["name"]), "version": wf.get("version"),
                       "default": wf.get("source") == "default"} if wf.get("name") else None),
         "engine": build_engine or None,
-        "model": ev.get("model") or usage.get("model") or None,
+        "model": build_model or None,
         "review_engine": review_engine or None,
-        "review_model": ev.get("review_model") or None,
-        "cross_model": bool(review_engine and build_engine and review_engine != build_engine),
+        "review_model": review_model or None,
+        "cross_model": bool(review_engine and build_engine
+                            and (review_engine, review_model) != (build_engine, build_model)),
         "turns": ev.get("turns"),
         "built_on": built_on,
         "profile": ev.get("profile") or None,
@@ -2546,11 +2556,28 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
                         viewer),
         "now": _now_line(connection, acts) if live else None,
         "outputs": _outputs(connection, run, facts, st, row["stations"], comments, decision, now),
+        # WHY THIS MODEL (docs/product/MODEL_ROUTER.md): the router's decision per stage.
+        "routes": _routes(connection, run_id),
     }
     for key in ("finalize_ctx", "spec", "state"):
         out["run"].pop(key, None)
     out["etag"] = _etag({k: v for k, v in out.items() if k != "etag"})
     return out
+
+
+def _routes(connection: Any, run_id: str) -> list[dict[str, Any]]:
+    """Each stage's route, newest per stage last — compact, for "Why this model"."""
+    try:
+        from .model_router.store import routes_for
+
+        with connection.begin_nested():
+            rows = routes_for(connection, run_id)
+    except Exception:  # noqa: BLE001 — a store without the router's tables has none
+        return []
+    keep = ("id", "step", "ref", "mode", "tier", "classified_tier", "classifier", "confidence",
+            "engine", "model", "reason", "why", "escalation", "moved_by_headroom",
+            "budget_lite", "fallback", "created_at", "label", "step_label", "tier_label")
+    return [{k: r.get(k) for k in keep} for r in rows]
 
 
 # ── GET /v1/factory/apps (§4.6) ─────────────────────────────────────────────────────────────

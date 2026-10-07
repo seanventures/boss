@@ -54,6 +54,8 @@ export function readParams(search: string): SetupParams {
   const step = params.get("step");
   if (!focus && step) focus = step === "github" ? "repository" : step === "model" ? "models" : null;
   if (focus === ("model" as RowKey)) focus = "models";
+  // Model routing is the row "Who does what" became; both names land on it.
+  if (focus === ("routing" as RowKey)) focus = "jobs";
   const add = params.get("add");
   const source = params.get("source");
   return {

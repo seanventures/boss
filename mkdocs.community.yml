@@ -82,6 +82,7 @@ nav:
       - Control surfaces: CONTROL_SURFACES.md
       - Identity administration: IDENTITY_ADMIN.md
       - Terminal capability matrix: TERMINAL_CAPABILITY_MATRIX.md
+      - Release notes (v1.0-rc5): RELEASE_NOTES_v1.0-rc5.md
   - Community:
       - Feedback: FEEDBACK_LOOP.md
       - Publishing the docs: publishing.md

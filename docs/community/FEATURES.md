@@ -1,6 +1,6 @@
 # Features
 
-Everything in BOSS Community as of `v1.0-rc4`, grouped by area. Cloud and Enterprise capabilities are marked so the open-core boundary is explicit; the full v1 scope is tracked in [V1_FEATURE_LOCK.md](https://github.com/seanventures/boss/blob/main/docs/product/V1_FEATURE_LOCK.md).
+Everything in BOSS Community as of `v1.0-rc5`, grouped by area. Cloud and Enterprise capabilities are marked so the open-core boundary is explicit; the full v1 scope is tracked in [V1_FEATURE_LOCK.md](https://github.com/seanventures/boss/blob/main/docs/product/V1_FEATURE_LOCK.md).
 
 **Legend:** ✅ Stable · ◐ Preview: works today, still being hardened · ○ Planned · ✦ Cloud / Enterprise only
 
@@ -12,13 +12,32 @@ Everything in BOSS Community as of `v1.0-rc4`, grouped by area. Cloud and Enterp
 | Job leases, heartbeat, fencing | ✅ |
 | Deadletters and remediations | ✅ First-class remediations (`retry` / `requeue` / `escalate` / `hold`) on `/v1/deadletters/*` and Mission Control. Retry never silently drops. |
 | Event / audit feed | ✅ |
-| Global activity log | ◐ Searchable, sortable Mission Control area (status, kind, actor, stuck banner). |
+| Global activity log | ◐ The Activity log: a query bar, facets, a histogram, a live tail, a drawer per line, and export. Credentials are masked whichever field they were written into. |
 | Decision inbox (approve / reject / escalate) | ✅ Hold `reason` and `default_action` on the card; GET `/v1/decisions/{id}`. |
 | Receipts with unique dedupe keys | ✅ |
 | Budget quote → reserve → consume / release | ✅ |
 | Artifacts and evidence packets | ✅ |
 | Single org / workspace / project model | ✅ |
 | Local auth / API keys | ✅ |
+| Govern: every limit in one place | ◐ Each limit's real value, what enforces it, and what it stopped; Spend by agent and by model; envelopes; a month-cap preview counted as the governor counts it. |
+| Capacity-aware builds | ◐ Builds are admitted against free memory and queue instead of thrashing; workloads run in an envelope so the control plane keeps its memory. |
+| Process ownership and reaping | ✅ Every process a build starts is owned, and Stop stops it. A reaper clears stale previews, orphans, temp dirs, images and disk on a clock. |
+| System doctor | ◐ Shepherd and Metatron watch the machine, explain pressure in words, and offer choices. Work waiting on a person is never stopped. |
+
+## Console
+
+| Area | Status |
+|---|---|
+| Command Center | ◐ One read: your team, what needs you, what is in flight, templates, apps built, and 14 weeks of activity. |
+| New project | ◐ One screen for a new app, or a feature added to an existing app that builds onto that app's branch. |
+| Research and Panels | ◐ Opened from a workflow step: the research, the panel's votes in words, and the PRD by section. |
+| Factory and Apps | ◐ The Floor, a build's cockpit (the Line, Story, Outputs, Logs), and one table of apps with their crew, PR, deploy and spend. Stop answers at once. |
+| Infra | ◐ Fleet, Deploys and Previews, and Cloud. Host deploys go through plan → approve → apply. |
+| Observability | ◐ Pulse, per-app drawers, Models, System, and Sources. |
+| Activity log and Govern | ◐ See Control plane. |
+| Agent Studio and Organization | ◐ Agents with a Passport and Loadout (skills, MCP, instructions); Organization as Teams, Flow and Lines. |
+| Setup | ◐ Repo and models, Model routing, and the next step for a new install. |
+| Skills & MCP (Kit) | ◐ The Library and connections; a skill that calls an MCP server never carries the server's reach. |
 
 ## Interfaces
 
@@ -40,6 +59,7 @@ Every interface goes through the same HTTP API, so server-side policy and audit 
 | Feature | Status |
 |---|---|
 | Bring-your-own API keys (SecretRefs) | ✅ |
+| Model router | ◐ Setup › Model routing. **Fixed** (the default) keeps today's behavior: the model you chose. **Smart** picks by tier with per-step floors, spends subscription headroom first and then OpenRouter, escalates on failure, and never strands a step when one source is down. Every step shows Why this model. |
 | SecretRef consumption (factory / OpenAI / GitHub / Plane) | ◐ Fail-closed: a bound, usable ref wins; env is a last resort only when no ref is bound. Unresolvable bound refs never fall back. |
 | Official QA /reports v1.1 | ◐ Honesty helper, inspect gate, and Mission Control scorecard island. Missing UI/UX stays `not_scored`; scores are never invented. Live official POSTs may still be in flight. |
 | Local / OpenAI-compatible base URLs | ✅ |
@@ -74,7 +94,7 @@ Community installs and runs without Plane, an ops token, or a private registry. 
 | PR / review packets (with GitHub) | ✅ |
 | Browser / automated test evidence | ✅ |
 | Deployment target metadata and recorded history | ✅ |
-| SSH workload planning and deployment | ◐ Paused in Community until its governed effect and recovery path is complete. SSH installation and console tunnels remain available. |
+| Governed host deployment | ◐ Infra › Deploys plans a deploy to a verified SSH host as a ChangeSet; a person approves it, BOSS applies it, writes a receipt, and rolls back if the health check fails. Direct, unapproved host writes, cloud-account (registry) deploy runs, and auto-deploy stay paused in Community. |
 | Agent host shell and host-backed preview sandboxes | ◐ Paused in Community until host changes have approved, budgeted, receipted execution. Simulated preview records remain available. |
 | Managed elastic worker fleets | ✦ Cloud (planned) |
 
@@ -129,6 +149,13 @@ Endpoints: one-shot `POST /v1/metatron/query`, plus `/v1/metatron/session|goals|
 
 !!! note
     The captain stays in preview until a validated apply has been proven in live operation on a release tag.
+
+## Improve BOSS
+
+| Feature | Status |
+|---|---|
+| Run scorecards, experiments and ratings | ◐ Behind one opt-in switch in Govern › Sharing, off by default. You see the exact payload before anything is sent. |
+| Daily anonymous heartbeat | ◐ At most one a day. `BOSS_TELEMETRY=off` or `DO_NOT_TRACK=1` turns it off. There is no default collector: nothing is sent until you set a collector URL. |
 
 ## Open-core boundary
 

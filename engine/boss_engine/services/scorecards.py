@@ -779,11 +779,57 @@ def record_scorecard(connection, unit_kind: str, unit_id: str, *, source: str = 
         ON CONFLICT (unit_kind, unit_id) DO UPDATE SET {updates}, computed_at = now(),
           late_outcomes_at = CASE WHEN :late THEN now() ELSE run_scorecards.late_outcomes_at END
     """), params)
+    card["routing"] = stamp_routing(connection, kind, str(unit_id))
     if card["experiment_id"]:
         from .experiments import after_scorecard
 
         after_scorecard(connection, card["experiment_id"])
     return card
+
+
+def routing_summary(routes: list[dict[str, Any]]) -> dict[str, Any]:
+    """What the model router did for one unit (docs/product/MODEL_ROUTER.md, "(e) Learning"):
+    the mode, the tier mix, escalations, work moved off a subscription and the classifier."""
+    if not routes:
+        return {}
+    tiers: dict[str, int] = {}
+    classifiers: dict[str, int] = {}
+    for r in routes:
+        tiers[str(r.get("tier") or "?")] = tiers.get(str(r.get("tier") or "?"), 0) + 1
+        if r.get("classifier"):
+            classifiers[str(r["classifier"])] = classifiers.get(str(r["classifier"]), 0) + 1
+    primary = next((r for r in routes if r.get("step") in ("implement", "solo")), None) \
+        or max(routes, key=lambda r: tiers.get(str(r.get("tier")), 0))
+    return {
+        "mode": routes[-1].get("mode"),
+        "tier": primary.get("tier"),
+        "tiers": tiers,
+        "routes": len(routes),
+        "escalations": sum(1 for r in routes if r.get("escalation")),
+        "moved_by_headroom": sum(1 for r in routes if r.get("moved_by_headroom")),
+        "classifier": max(classifiers, key=classifiers.get) if classifiers else None,
+    }
+
+
+def stamp_routing(connection, kind: str, unit_id: str) -> dict[str, Any]:
+    """Copy the unit's routes onto its scorecard (route_mode, route_tier, routing). Best
+    effort, in a savepoint: a store without the router's tables scores exactly as before."""
+    try:
+        with connection.begin_nested():
+            rows = connection.execute(text(
+                "SELECT step, tier, mode, classifier, escalation, moved_by_headroom "
+                "FROM model_routes WHERE unit_id = :u ORDER BY created_at"),
+                {"u": unit_id}).mappings().all()
+            summary = routing_summary([dict(r) for r in rows])
+            if summary:
+                connection.execute(text(
+                    "UPDATE run_scorecards SET route_mode = :m, route_tier = :t, "
+                    "routing = CAST(:r AS JSONB) WHERE unit_kind = :k AND unit_id = :u"),
+                    {"m": summary["mode"], "t": summary["tier"], "r": json.dumps(summary),
+                     "k": kind, "u": unit_id})
+            return summary
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 # ------------------------------------------------------------------------------------------
@@ -989,7 +1035,8 @@ def maintain(connection) -> dict[str, Any]:
 # The Observability › Scorecards view
 # ------------------------------------------------------------------------------------------
 
-GROUPS = {"role": "role_key", "workflow": "workflow_key", "harness": "harness", "model": "model"}
+GROUPS = {"role": "role_key", "workflow": "workflow_key", "harness": "harness", "model": "model",
+          "routing": "route_mode", "tier": "route_tier"}
 WINDOWS = {"7d": 7, "30d": 30, "90d": 90}
 
 

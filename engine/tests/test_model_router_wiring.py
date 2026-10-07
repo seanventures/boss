@@ -1,0 +1,68 @@
+"""Every boundary reaches its model through the router (docs/product/MODEL_ROUTER.md).
+
+A guard, read from the source: the governed pipeline routes stages only through the router's
+StageRouter (no second copy of route_for_step / materialize_route), and every call site that
+knows what its work is names its purpose — so a Smart route can pick its tier and "Why this
+model" has a record. A new call site that forgets is caught here.
+"""
+from __future__ import annotations
+
+import inspect
+
+from boss_engine.services import (
+    agent_loop, discovery_service, governed_code_task_service, intent_router, meeting_service,
+    skill_executors,
+)
+
+
+def test_the_build_pipeline_routes_only_through_the_router():
+    source = inspect.getsource(governed_code_task_service)
+    assert "StageRouter(" in source
+    for legacy in ("materialize_route(", "route_for_step(", "apply_budget_pressure("):
+        assert legacy not in source, f"{legacy} called outside model_router.stages"
+
+
+def test_every_escalation_is_a_signal_on_the_ledger():
+    source = inspect.getsource(governed_code_task_service)
+    assert 'stage_router.signal("implement", "tests_failed")' in source
+    assert "signal=signal" in source           # no_output / final_attempt at the boundary
+    assert "settings.code_agent_strong_engine if escalate" not in source
+
+
+def test_call_sites_that_know_their_work_name_it():
+    """The purpose rides a context (`model_routing.routing_purpose`), so the adapter's
+    signature — and every test double of it — is unchanged."""
+    for module in (agent_loop, meeting_service):
+        assert "routing_purpose(" in inspect.getsource(module), module.__name__
+    skills = inspect.getsource(skill_executors)
+    assert skills.count("with _routed(context,") == 4
+    assert "purpose=purpose" in inspect.getsource(
+        intent_router.IntentRouter._use_project_chat_model)
+    assert "_research_model(" in inspect.getsource(discovery_service)
+
+
+def test_the_brief_says_where_the_build_actually_ran():
+    """A Smart route moved implement to OpenRouter; the brief must not say Claude Code."""
+    from boss_engine.services import factory_view as fv
+
+    run = {"spec": {}, "finalize_ctx": {}, "usage": {}, "state": {
+        "build_engine": "claude_code", "review_engine": "claude_code", "engine": "openrouter",
+        "model": "qwen/qwen3-coder",
+        "stage_engines": {"implement": "openrouter", "review_code": "claude_code"},
+        "stage_models": {"implement": "qwen/qwen3-coder", "review_code": "opus"}}}
+    b = fv.brief_of(run)
+    assert (b["engine"], b["model"]) == ("openrouter", "qwen/qwen3-coder")
+    assert (b["review_engine"], b["review_model"]) == ("claude_code", "opus")
+    assert b["cross_model"] is True
+
+
+def test_the_routing_closures_are_not_shadowed_later_in_the_pipeline():
+    """A later `def _guarded` in the same function silently replaced the router's helper and
+    every stage after the review panel failed with 'cannot unpack non-iterable function'."""
+    import ast
+
+    body = inspect.getsource(governed_code_task_service._run_governed_code_task)
+    names = [n.name for n in ast.walk(ast.parse(body.replace("\n    ", "\n", 0)))
+             if isinstance(n, ast.FunctionDef)]
+    for helper in ("_routed_agent", "_route", "_route_escalated", "_route_names", "_take"):
+        assert names.count(helper) == 1, helper

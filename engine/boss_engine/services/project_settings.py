@@ -169,6 +169,13 @@ KNOBS: dict[str, dict[str, Any]] = {
     # WHO ANSWERS THE MULTIPLE-CHOICE QUESTIONS — a workflow's typed_decision step. "typesafe"
     # needs the project's own Jev key (Setup -> Model); without one, Claude decides. Every
     # attempt is reserved, leased and receipted before the call (BOSS-451).
+    "model_routing_mode": {
+        "attr": "model_routing_mode",
+        "label": "Model routing",
+        "help": "Fixed routes as configured per job; Smart picks a tier per step from the task "
+                "and a source with headroom (docs/product/MODEL_ROUTER.md).",
+        "kind": "choice", "choices": ("fixed", "smart"),
+    },
     "decision_backend": {
         "attr": "decision_backend",
         "label": "Decision model",
@@ -496,7 +503,18 @@ def set_one(connection, project_id: str, key: str, value: Any, actor: str = "ope
         {"p": project_id, "k": key, "v": json.dumps(clean), "by": actor},
     )
     _record_change(connection, project_id, key, before, clean, actor)
+    _routing_changed(project_id)
     return clean
+
+
+def _routing_changed(project_id: str) -> None:
+    """A knob the model router reads changed: drop its cached snapshot (model_router.store)."""
+    try:
+        from .model_router.store import invalidate
+
+        invalidate(project_id)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def clear_one(connection, project_id: str, key: str, actor: str = "operator") -> None:
@@ -508,6 +526,7 @@ def clear_one(connection, project_id: str, key: str, actor: str = "operator") ->
     ).scalar()
     if before is not None:
         _record_change(connection, project_id, key, before, None, actor)
+    _routing_changed(project_id)
 
 
 def version_of(connection, project_id: str, key: str) -> tuple[str, Optional[str]]:

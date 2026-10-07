@@ -9,7 +9,7 @@
  * server decides every pill. While setup is unfinished the board runs as a stepper —
  * 1 Repository, 2 Model, 3 Try it — and after the first pull request it is a board.
  *
- * Deep links: `?area=setup&focus=repository|models|jobs|budget|try`, `&add=<provider>` opens Add a
+ * Deep links: `?area=setup&focus=repository|models|jobs|routing|budget|try` (routing = jobs), `&add=<provider>` opens Add a
  * model on that provider, `&source=<id>` opens that model's menu, legacy `step=github|model` maps
  * to focus. Rows whose last check is over a day old are re-checked in the background on open.
  */
@@ -23,12 +23,12 @@ import {
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BudgetRow } from "./budget-row";
 import { CapacityRow } from "./capacity-row";
-import { JobsRow } from "./jobs-row";
 import { ModelsRow } from "./models-row";
 import { BoardContext, toast } from "./parts";
 import { Dot, localView } from "./pill";
 import { GitHubAccessRow } from "./github-access-row";
 import { RepositoryRow } from "./repository-row";
+import { RoutingRow } from "./routing-row";
 import { TryRow } from "./try-row";
 import { PublicUrlRow } from "./public-url-row";
 import { SharingAsk } from "../improve/sharing-ask";
@@ -81,12 +81,31 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
   }, []);
+  // AND STAYS THERE while the rows above it finish loading (Capacity reads its sources after
+  // the first paint): a deep link landed on Model routing, then was pushed off screen. Until
+  // the reader scrolls, types or touches, a row that moves is followed for a few seconds.
+  const landedOn = useRef<string | null>(null);
   useEffect(() => {
-    if (!view || !params.focus) return;
+    if (!view || !params.focus || landedOn.current === params.focus) return;
     const el = refs.current[params.focus];
-    if (el && typeof el.scrollIntoView === "function") {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
+    if (!el || typeof el.scrollIntoView !== "function") return;
+    landedOn.current = params.focus;
+    const reduce = typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    let followed = true;
+    const stop = () => { followed = false; };
+    const events = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+    events.forEach((e) => window.addEventListener(e, stop, { once: true, passive: true }));
+    const timers = [400, 900, 1600, 2600, 4000].map((ms) => window.setTimeout(() => {
+      if (!followed) return;
+      const top = el.getBoundingClientRect().top;
+      if (Math.abs(top - 80) > 24) el.scrollIntoView({ behavior: "auto", block: "start" });
+    }, ms));
+    return () => {
+      timers.forEach((t) => window.clearTimeout(t));
+      events.forEach((e) => window.removeEventListener(e, stop));
+    };
   }, [params.focus, view]);
 
   // STALE ROWS ARE RE-CHECKED IN THE BACKGROUND, once per open, so a token that expired or was
@@ -210,7 +229,8 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
                    add={params.add} source={params.source}
                    onAddHandled={() => setParams((p) => ({ ...p, add: null }))} />
         <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
-        <JobsRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} />
+        {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
+        <RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} />
         <BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} />
         <TryRow ref={ref("try")} mode={rowMode(view, "try")} step={stepNumber(view, "try")}
                 focused={focus === "try"} />
