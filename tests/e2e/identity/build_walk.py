@@ -324,9 +324,9 @@ class Walk:
                 expect="409 {error: consent_required…}", actual=[(s, u[-50:], short(b, 200)) for s, u, b in seen])
         offers = [b.inner_text() for b in page.locator("[data-testid=consent-durations] button").all()]
         j.note(f"consent offers: {offers}")
-        sheet = K.body_text(page, 5000)
+        sheet = page.locator("[data-testid=consent-sheet]").first.inner_text(timeout=10000)
         j.check("the consent sheet names the repository the grant covers", REPO in sheet or "fxd-build-app" in sheet,
-                expect=REPO, actual=sheet[:600], known=None)
+                expect=REPO, actual=sheet[:600])
         n_before = len(seen)
         self.consent_click(page)
         after = seen[n_before:]
@@ -335,7 +335,7 @@ class Walk:
         if lacking is not None:
             # D28: on a multi-person install a grant naming repos needs the PERSON's own GitHub access.
             self.shot(page, "consent-refused-github-access")
-            sheet = K.body_text(page, 5000)
+            sheet = page.locator("[data-testid=consent-sheet]").first.inner_text(timeout=10000)
             j.check("a consent refused for lack of GitHub access says so (and how to fix it) in the sheet",
                     "GitHub" in sheet.split("For 30 days", 1)[-1] and "didn't work" not in sheet,
                     expect="an explanation: connect your GitHub / you lack push on fxd-org/fxd-build-app",
