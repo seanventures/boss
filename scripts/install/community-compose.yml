@@ -197,7 +197,6 @@ services:
       # with the database: without it, stored TOTP secrets and connections cannot be decrypted.
       BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
       BOSS_IDENTITY_SERVER_KEY: ${BOSS_IDENTITY_SERVER_KEY:-}
-      BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-}
       BOSS_AUTHZ_MODE: ${BOSS_AUTHZ_MODE:-shadow}
       BOSS_AUTHZ_ROUTER_MODES: ${BOSS_AUTHZ_ROUTER_MODES:-}
       BOSS_AUTHZ_COVERAGE: ${BOSS_AUTHZ_COVERAGE:-}
@@ -349,7 +348,7 @@ services:
       # with the database: without it, stored TOTP secrets and connections cannot be decrypted.
       BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
       BOSS_IDENTITY_SERVER_KEY: ${BOSS_IDENTITY_SERVER_KEY:-}
-      BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-}
+      BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
       BOSS_AUTHZ_MODE: ${BOSS_AUTHZ_MODE:-shadow}
       BOSS_AUTHZ_ROUTER_MODES: ${BOSS_AUTHZ_ROUTER_MODES:-}
       BOSS_AUTHZ_COVERAGE: ${BOSS_AUTHZ_COVERAGE:-}
