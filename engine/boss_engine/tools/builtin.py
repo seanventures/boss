@@ -2005,6 +2005,13 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         ok, why = _is_single_write(statement, whole_table=bool(args.get("whole_table")))
         if not ok:
             return {"ok": False, "error": f"rejected: {why}"}
+        guarded = _writes_access_tables(statement)
+        if guarded:
+            # Raw SQL is host:exec (an Admin holds it); rewriting a role binding, a seat or a
+            # legacy member row is Owner-level and must carry §6.11's limits and an audit event.
+            return {"ok": False, "error": (
+                f"rejected: {guarded} holds who may do what. Change access through the identity "
+                "API (role bindings, groups, seats), which checks grant limits and audits it.")}
         # THE SAME GUARD THE OFFER PATH HAS. `propose_action` refuses to put a fabricated value
         # behind a button; write_db would execute one. So the check that stopped a bad BUTTON
         # did not stop a bad WRITE, and the row BOSS tried to insert carried
@@ -2598,7 +2605,10 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             ["decision_id", "action", "note"],
         ),
         kind="write",
-        reversibility="irreversible", permission="decision:approve")
+        reversibility="irreversible", permission="decision:approve",
+        # the same operation, the same permission as over HTTP (/v1/decisions/{id}/{action})
+        permission_by_arg=("action", (("delegate", "decision:delegate"),
+                                      ("execute", "decision:execute"))))
     def decide(ctx, *, project_id, actor, args):
         action = args["action"]
         if action not in _DECISION_ACTIONS:
@@ -2611,14 +2621,21 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         decision_id = args["decision_id"]
         dec_mod = services_module("decisions")
         svc = dec_mod.DecisionService(ctx.settings)
+        from ..identity.approvals import ApprovalPending, ApprovalRefused
+
         try:
             with ctx.begin() as c:
                 if _decision_in_project(c, decision_id, project_id) is None:
                     return {"ok": False, "error": f"no decision {decision_id}"}
-                row = svc.transition(
-                    c, decision_id, action=action, actor=who, note=note,
-                    delegate_to=args.get("delegate_to"),
-                )
+                try:
+                    row = svc.transition(
+                        c, decision_id, action=action, actor=who, note=note,
+                        delegate_to=args.get("delegate_to"),
+                    )
+                except ApprovalPending as pending:     # recorded: this transaction commits it
+                    return {"ok": True, "action": action, "actor": who, **pending.body()}
+        except ApprovalRefused as refused:
+            return {"ok": False, "status": refused.code, **refused.body()}
         except Exception as exc:  # surface engine errors as data, never a stack trace
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         return {"ok": True, "action": action, "actor": who, "decision": _json_safe(dict(row))}
@@ -7024,6 +7041,18 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
 #: project-pinned chat until the database enforces project scope.
 _WORKFLOW_ONLY_TOOLS = frozenset({"create_discovery", "request_meeting"})
 _DISCUSS_UNSCOPED_WRITE_TOOLS = frozenset({"write_db"})
+
+#: Tables raw SQL may never write: every identity table (bindings, roles, seats, credentials, the
+#: audit log) and the legacy grant tables the identity migration reads.
+_ACCESS_TABLE = __import__("re").compile(
+    r"(?<![a-z0-9_])(identity_[a-z0-9_]+|project_members|org_members|break_glass_grants|"
+    r"api_credentials)(?![a-z0-9_])")
+
+
+def _writes_access_tables(statement: str) -> str | None:
+    """The first access table a raw SQL statement names, or None."""
+    found = _ACCESS_TABLE.search((statement or "").lower().replace('"', ""))
+    return found.group(1) if found else None
 
 
 def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:

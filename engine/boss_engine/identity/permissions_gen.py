@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "d20655423828c38a"
+CATALOGUE_FINGERPRINT = "9966fa420cdde42e"
 
 
 class Permission(StrEnum):
@@ -209,7 +209,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "user:revoke_sessions": PermissionMeta(key="user:revoke_sessions", title="Sign a person out everywhere", description="Sign a person out of every device.", category="Identity and access", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "group:read": PermissionMeta(key="group:read", title="View groups", description="List groups and their members.", category="Identity and access", roles=('owner', 'admin', 'auditor'), scope='org', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "group:manage": PermissionMeta(key="group:manage", title="Manage groups", description="Create, rename and delete groups.", category="Identity and access", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
-    "group:manage_members": PermissionMeta(key="group:manage_members", title="Manage group members", description="Add and remove group members (manual groups only; IdP groups are read-only).", category="Identity and access", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "group:manage_members": PermissionMeta(key="group:manage_members", title="Manage group members", description="Add and remove group members (manual groups only; IdP groups are read-only).", category="Identity and access", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "access_role:read": PermissionMeta(key="access_role:read", title="View access roles", description="See access roles and their permissions.", category="Identity and access", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='org', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "access_role:manage": PermissionMeta(key="access_role:manage", title="Manage access roles", description="Create, edit, clone and delete custom access roles. Never more than you hold.", category="Identity and access", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "role_binding:read": PermissionMeta(key="role_binding:read", title="View role bindings", description="See who holds which access role, where.", category="Identity and access", roles=('owner', 'admin', 'auditor'), scope='org', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
