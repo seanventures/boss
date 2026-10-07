@@ -5,6 +5,7 @@
  * agents acting for you, your keys, and Sign out. Plus the console-wide identity banners the API
  * owns (network bridge, legacy password countdown, owner recovered, MFA enrolment required).
  */
+import { primaryRoleLabel } from "../../lib/identity/role-label";
 import React from "react";
 import { Key, Robot, ShieldCheck, ShieldWarning, SignOut, Devices, UserCircle } from "@phosphor-icons/react";
 
@@ -12,11 +13,6 @@ import { idPost } from "../../lib/identity/api";
 import { useIdentity } from "./identity-provider";
 import { Face } from "./kit";
 
-function roleWord(roles: string[]): string {
-  const order = ["owner", "admin", "operator", "auditor", "viewer"];
-  const top = order.find((r) => roles.includes(r)) ?? roles[0];
-  return top ? top.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) : "No role";
-}
 
 function hueOf(id: string): number {
   let h = 0;
@@ -38,7 +34,7 @@ export function AccountMenu() {
     <details className="idn-me" data-testid="account-menu">
       <summary aria-label={`My account: ${me.display_name}`}>
         <Face name={me.display_name} tone={hueOf(me.principal_id)} size={26} />
-        <span><b>{first}</b><span className="idn-me-role"> · {roleWord(me.access_roles)}</span></span>
+        <span><b>{first}</b><span className="idn-me-role"> · {primaryRoleLabel(me.access_roles)}</span></span>
         {mfa
           ? <ShieldCheck size={15} className="idn-ok" aria-label="MFA on" />
           : <ShieldWarning size={15} className="idn-warn" aria-label="No second factor" />}
