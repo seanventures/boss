@@ -120,16 +120,25 @@ def require_production(request: Optional[Request], project_id: str, environment:
     """THE handler-side production check (the declaration-side one is `production=` on @permit,
     which the guard evaluates the same way). An operation whose target environment is production
     (object_rules.is_production_environment), or `always`, also needs deployment:production at
-    the TARGET's project — pass the target's project, not the caller's.
+    the TARGET's project — pass the target's project, not the caller's."""
+    from boss_engine.identity.object_rules import is_production_environment
+
+    if not always and not is_production_environment(environment):
+        return
+    require_permission(request, P.DEPLOYMENT_PRODUCTION, project_id, label="production")
+
+
+def require_permission(request: Optional[Request], permission: str, project_id: Optional[str], *,
+                       label: str = "handler") -> None:
+    """THE handler-side check of a SECOND catalogue permission an operation needs beyond its
+    route's declaration (the production rule, a job kind's own permission), at `project_id` (or
+    org scope when None), through the same PDP the guard uses.
 
     Refuses whenever THIS request is enforced (its per-route mode, as the guard decided it — not
     the global BOSS_AUTHZ_MODE alone); in shadow it records the would-deny; off does nothing.
     `request` may be None in a helper that has none: the guard's context variables carry the same."""
     from boss_engine.identity.enforcement import LEDGER, AuthzMode, Outcome
-    from boss_engine.identity.object_rules import is_production_environment
 
-    if not always and not is_production_environment(environment):
-        return
     from .. import identity_guard
 
     mode = (getattr(request.state, "identity_mode", None) if request is not None else None) \
@@ -151,14 +160,15 @@ def require_production(request: Optional[Request], project_id: str, environment:
         if mode == AuthzMode.ENFORCE.value:
             raise HTTPException(status_code=401, detail={"error": "unauthenticated"})
         return
-    decision = authz.check(ctx, P.DEPLOYMENT_PRODUCTION,
-                           ResolvedScope.in_project(ctx.principal.org_id, project_id))
+    org = ctx.principal.org_id
+    scope = ResolvedScope.in_project(org, project_id) if project_id else ResolvedScope.org_level(org)
+    decision = authz.check(ctx, permission, scope)
     if decision.allowed:
         return
     path = request.scope.get("path", "") if request is not None else "handler"
-    LEDGER.record(router_key="production", method="CHECK", path_template=path,
-                  outcome=Outcome(False, decision.reason, P.DEPLOYMENT_PRODUCTION,
-                                  "handler:require_production", ctx.principal.kind.value,
+    LEDGER.record(router_key=label, method="CHECK", path_template=path,
+                  outcome=Outcome(False, decision.reason, permission,
+                                  f"handler:{label}", ctx.principal.kind.value,
                                   decision=decision),
                   mode=AuthzMode(mode))
     if mode == AuthzMode.ENFORCE.value:

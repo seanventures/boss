@@ -11951,6 +11951,7 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: open_bodies.Discove
             raise HTTPException(status_code=400, detail="outcome_index out of range")
         directive, title = build_promote_directive(run, idx)
         project_id = run["project_id"]
+        _require_job_kind_permission("meeting.step", project_id)
         # IDEMPOTENT BY IDENTITY. Promoting the SAME outcome of the SAME discovery is the same
         # request, however many times the button is pressed. This passed make_id("mtg") — a
         # fresh random id — so the dedupe check could never match and two presses produced two
@@ -21910,6 +21911,24 @@ def _job_effect_permission(kind: str) -> Optional[str]:
     return None
 
 
+def _require_job_kind_permission(kind: str, project_id: str) -> None:
+    """Under identity, a job's EFFECT is authorized by its kind's catalogue permission
+    (boss_engine.identity.job_permissions), at the job's project, beyond the route's
+    work_item:manage. A kind BOSS does not know is refused: no unmapped effect by default."""
+    from boss_engine.identity.job_permissions import permission_for
+
+    from .routers.identity_access import require_permission
+
+    permission = permission_for(kind)
+    if permission is None:
+        if identity_guard.identity_enforced():
+            raise HTTPException(status_code=422, detail={
+                "error": "unknown_job_kind",
+                "message": "BOSS has no worker for this kind of job, so it cannot be queued."})
+        return
+    require_permission(None, permission, project_id, label="job_kind")
+
+
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)
 @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"),
         confine=(Confine.body("task_id", "task"), Confine.body("work_item_id", "work_item"),
@@ -21918,11 +21937,14 @@ def _job_effect_permission(kind: str) -> Optional[str]:
                  Confine.body("allocation_id", "resource_allocation")))
 def create_job(payload: JobCreateRequest) -> JobSummary:
     with begin(engine) as connection:
-        actor = current_api_principal.get() or "ceo"
+        # Under enforce the actor is the verified principal (the actor rule); a hard-coded "ceo"
+        # was refused as actor_mismatch for everyone, so no identity caller could queue a job.
+        actor = identity_guard.request_actor() or current_api_principal.get() or "ceo"
         require_project_actor(connection, payload.project_id, actor, "workflow_execute")
         effect_permission = _job_effect_permission(payload.kind)
         if effect_permission:
             require_project_actor(connection, payload.project_id, actor, effect_permission)
+        _require_job_kind_permission(payload.kind, payload.project_id)
         job_payload = {
             **payload.payload,
             **(
