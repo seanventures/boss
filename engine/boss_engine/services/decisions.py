@@ -342,8 +342,17 @@ class DecisionService:
         # the caller states it is policy — anything else still needs a member with
         # decision_resolve. The row records SYSTEM_ACTOR either way, so an auditor can always
         # separate the approvals a person made from the ones a setting made.
+        identity_ctx = None if system_policy else _identity_decides(connection, row)
         if system_policy and action == "approve" and actor == SYSTEM_ACTOR:
             pass
+        elif identity_ctx is not None:
+            # IDENTITY §6.13: the route's/tool's declaration already checked the permission; the
+            # seat, the human session and the two-person rule are checked at the approve itself,
+            # below — after the buttons/run checks, so a refusal there is never half-applied.
+            if action == "delegate":
+                from ..identity import approvals as _approvals
+
+                _approvals.require_delegate_target(connection, identity_ctx, delegate_to)
         else:
             self.members.require_decision_actor(
                 connection,
@@ -437,6 +446,11 @@ class DecisionService:
                     f"Decision deadline has passed and the safe default "
                     f"({safe_default}) was applied."
                 )
+
+        if action == "approve" and identity_ctx is not None:
+            from ..identity import approvals as _approvals
+
+            _approvals.require_approval(connection, identity_ctx, row)
 
         if action == "approve":
             # AN APPROVAL OF WHAT THE APPROVER SAW. A gated step's decision carries a preview of
@@ -2134,3 +2148,20 @@ def extend_run_of_prd(connection: Connection, row: dict[str, Any],
         if match:
             return match.group(1)
     return None
+
+
+def _identity_decides(connection: Connection, row: dict) -> Any:
+    """The verified caller when identity decides this approval (enforced, org claimed), else None
+    — then today's member rules decide (shadow, off, before the claim, BOSS's own work)."""
+    from ..identity import approvals, claim
+
+    ctx = approvals.deciding_context()
+    if ctx is None:
+        return None
+    try:
+        if not claim.is_claimed(connection, ctx.principal.org_id):
+            return None
+    except Exception:  # noqa: BLE001 — an install without the identity tables: today's rules
+        return None
+    return ctx
+

@@ -108,6 +108,10 @@ class ProviderBody(_Body):
     enforce_sso: bool = False
     groups_claim: Optional[str] = Field(default=None, max_length=100)
     group_mappings: dict[str, str] = Field(default_factory=dict)
+    client_auth: str = Field(default="client_secret", pattern="^(client_secret|private_key_jwt)$")
+    client_private_key: Optional[str] = Field(default=None, max_length=8000)   # write-only PEM
+    client_key_kid: Optional[str] = Field(default=None, max_length=200)
+    client_assertion_issuer: Optional[str] = Field(default=None, max_length=200)
 
 
 class ProviderPatch(_Body):
@@ -126,6 +130,10 @@ class ProviderPatch(_Body):
     groups_claim: Optional[str] = None
     group_mappings: Optional[dict[str, str]] = None
     status: Optional[str] = Field(default=None, pattern="^(active|disabled)$")
+    client_auth: Optional[str] = Field(default=None, pattern="^(client_secret|private_key_jwt)$")
+    client_private_key: Optional[str] = Field(default=None, max_length=8000)
+    client_key_kid: Optional[str] = Field(default=None, max_length=200)
+    client_assertion_issuer: Optional[str] = Field(default=None, max_length=200)
 
 
 class ScimKeyBody(_Body):
@@ -149,7 +157,9 @@ def _public_provider(p: sso_oidc.Provider) -> dict[str, Any]:
             "allowed_algs": list(p.allowed_algs), "saml_sp_entity_id": p.saml_sp_entity_id,
             "saml_certificate_count": len(p.saml_certificates), "domains": list(p.domains),
             "jit_mode": p.jit_mode, "trust_idp_mfa": p.trust_idp_mfa, "enforce_sso": p.enforce_sso,
-            "groups_claim": p.groups_claim, "status": p.status}
+            "groups_claim": p.groups_claim, "status": p.status,
+            "client_auth": p.client_auth, "has_client_key": bool(p.client_key_vault_item_id),
+            "client_key_kid": p.client_key_kid, "client_assertion_issuer": p.client_assertion_issuer}
 
 
 def _validate_algs(algs: list[str]) -> list[str]:
@@ -180,6 +190,15 @@ def _resolve_issuer(body: ProviderBody) -> Optional[str]:
 def _store_secret(db: Any, org_id: str, provider_id: str, secret: str) -> str:
     return vault.store(org_id=org_id, owner_principal_id=None, kind=vault.VaultItemKind.OIDC_CLIENT_SECRET,
                        provider=provider_id, secret=secret, db=db)
+
+
+def _client_key(db: Any, org_id: str, provider_id: str, pem: Optional[str],
+                kid: Optional[str]) -> tuple[str, str]:
+    """§4.8 private_key_jwt: vault the uploaded private key (validated) or a newly generated P-256
+    one; answer (vault item id, kid). The key never leaves the vault; GET …/jwks shows its public half."""
+    pem = (pem or "").strip() or sso_oidc.generate_client_key()
+    sso_oidc.client_key_alg(pem)                       # ValueError for a key BOSS will not sign with
+    return _store_secret(db, org_id, provider_id, pem), (kid or sso_oidc.client_key_thumbprint(pem))
 
 
 def _write_mappings(db: Any, provider_id: str, mappings: dict[str, str], org_id: str) -> None:
@@ -321,6 +340,66 @@ def build_identity_sso_router() -> APIRouter:
         except AuthnError as exc:
             return refusal(exc)
 
+    @router.get("/v1/identity/providers/{provider_id}")
+    @permit(P.IDENTITY_PROVIDER_READ)
+    def get_provider(provider_id: str, request: Request):
+        """One provider: everything an admin may see, its group mappings and its SCIM keys (ids,
+        names, status, dates — never a secret or a secret reference). 404 for another org's."""
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                provider = _own_provider(db, ctx, provider_id)
+                if provider is None:
+                    return error(404, "not_found")
+                mappings = db.execute(text(
+                    "SELECT m.external_group, m.group_id, g.name AS group_name FROM "
+                    "identity_provider_group_mappings m LEFT JOIN identity_groups g ON g.id = m.group_id "
+                    "WHERE m.provider_id = :p ORDER BY m.external_group"), {"p": provider_id}).mappings().all()
+                keys = db.execute(text(
+                    "SELECT id, name, created_at, expires_at, last_used_at, revoked_at, grace_until "
+                    "FROM identity_api_credentials WHERE principal_id = :s AND kind = 'scim' "
+                    "ORDER BY created_at DESC"), {"s": scim_principal_id(provider_id)}).mappings().all()
+
+                def _iso(v):
+                    return v.isoformat() if v else None
+
+                def _status(k):
+                    from datetime import datetime, timezone
+
+                    now = datetime.now(timezone.utc)
+                    if k["revoked_at"]:
+                        return "revoked"
+                    if k["grace_until"]:
+                        return "grace"
+                    if k["expires_at"] and k["expires_at"] <= now:
+                        return "expired"
+                    return "active"
+
+                return JSONResponse({
+                    **_public_provider(provider),
+                    "group_mappings": [dict(m) for m in mappings],
+                    "scim_keys": [{"id": k["id"], "name": k["name"], "status": _status(k),
+                                   "created_at": _iso(k["created_at"]), "expires_at": _iso(k["expires_at"]),
+                                   "last_used_at": _iso(k["last_used_at"])} for k in keys]})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.get("/v1/identity/providers/{provider_id}/jwks")
+    @permit(P.IDENTITY_PROVIDER_READ)
+    def provider_client_jwks(provider_id: str, request: Request):
+        """private_key_jwt: the PUBLIC key BOSS signs its client assertions with, to register at
+        the IdP. Never the private key."""
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                provider = _own_provider(db, ctx, provider_id)
+                if provider is None or not provider.client_key_vault_item_id:
+                    return error(404, "not_found")
+                pem = sso_oidc._vaulted(db, provider, provider.client_key_vault_item_id)  # noqa: SLF001
+                return JSONResponse({"keys": [sso_oidc.public_jwk(pem, provider.client_key_kid)]})
+        except AuthnError as exc:
+            return refusal(exc)
+
     @router.post("/v1/identity/providers")
     @permit(P.IDENTITY_PROVIDER_MANAGE)
     def create_provider(body: ProviderBody, request: Request):
@@ -360,6 +439,13 @@ def build_identity_sso_router() -> APIRouter:
                      "gc": body.groups_claim, "by": ctx.principal.id})
                 try:
                     _write_mappings(db, pid, body.group_mappings, org)
+                    if body.protocol == "oidc" and body.client_auth == "private_key_jwt":
+                        item, kid = _client_key(db, org, pid, body.client_private_key, body.client_key_kid)
+                        db.execute(text(
+                            "UPDATE identity_providers SET client_auth = 'private_key_jwt', "
+                            "client_key_vault_item_id = :k, client_key_kid = :kid, client_assertion_issuer = :iss "
+                            "WHERE id = :id"), {"k": item, "kid": kid, "iss": body.client_assertion_issuer,
+                                                "id": pid})
                 except ValueError as exc:
                     raise _Rollback(error(422, "invalid_provider", detail=str(exc))) from None
                 emit(db, org_id=org, event_type="sso.provider.created", outcome=Outcome.SUCCESS, ctx=ctx,
@@ -406,6 +492,22 @@ def build_identity_sso_router() -> APIRouter:
                 if fields.get("client_secret"):
                     changes["client_secret_vault_item_id"] = _store_secret(
                         db, provider.org_id, provider.id, fields["client_secret"])
+                if provider.protocol == "oidc" and (fields.get("client_auth") == "private_key_jwt" or (
+                        provider.client_auth == "private_key_jwt" and fields.get("client_private_key"))):
+                    try:
+                        item, kid = _client_key(db, provider.org_id, provider.id,
+                                                fields.get("client_private_key"),
+                                                fields.get("client_key_kid") or (
+                                                    None if fields.get("client_private_key") else provider.client_key_kid))
+                    except ValueError as exc:
+                        return error(422, "invalid_provider", detail=str(exc))
+                    if fields.get("client_private_key") or not provider.client_key_vault_item_id:
+                        changes["client_key_vault_item_id"], changes["client_key_kid"] = item, kid
+                    changes["client_auth"] = "private_key_jwt"
+                elif fields.get("client_auth") == "client_secret":
+                    changes["client_auth"] = "client_secret"
+                if "client_assertion_issuer" in fields:
+                    changes["client_assertion_issuer"] = fields["client_assertion_issuer"]
                 for key, value in changes.items():   # keys come from the fixed lists above only
                     db.execute(text(f"UPDATE identity_providers SET {key} = :v, updated_at = now() WHERE id = :id"),
                                {"v": value, "id": provider_id})
@@ -415,7 +517,8 @@ def build_identity_sso_router() -> APIRouter:
                     except ValueError as exc:
                         raise _Rollback(error(422, "invalid_provider", detail=str(exc))) from None
                 sso_oidc.clear_caches()
-                changed = sorted("client_secret" if k == "client_secret_vault_item_id" else k for k in changes)
+                changed = sorted({"client_secret_vault_item_id": "client_secret",
+                                  "client_key_vault_item_id": "client_key"}.get(k, k) for k in changes)
                 emit(db, org_id=provider.org_id, event_type="sso.provider.updated", outcome=Outcome.SUCCESS,
                      ctx=ctx, target_type="identity_provider", target_id=provider_id,
                      details={"changed": changed})

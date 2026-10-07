@@ -1513,9 +1513,10 @@ def pr_trailers(connection: Connection, code_task_run_id: str) -> str:
         made = trailers(connection, code_task_run_id)
     except Exception as error:  # noqa: BLE001 — a footer is never worth a failed PR
         log.warning("agent acts: no trailers for %s: %s", code_task_run_id, error)
-        return ""
+        made = None
+    identity = identity_trailers(connection, code_task_run_id)
     if not made or not made.get("agents"):
-        return ""
+        return "\n\n" + identity if identity else ""
     count = len(made["agents"])
     accountable = made.get("accountable") or BOSS
     lines = ["", "", f"Made by {count} agent{'s' if count != 1 else ''} · "
@@ -1533,7 +1534,37 @@ def pr_trailers(connection: Connection, code_task_run_id: str) -> str:
         base = os.environ.get("BOSS_CONSOLE_URL", "").rstrip("/")
         lines.append(f"BOSS-Run: {base}/workflows?wfr={made['workflow_run_id']}" if base
                      else f"BOSS-Run: {made['workflow_run_id']}")
+    if identity:
+        lines.append(identity)
     return "\n".join(lines)
+
+
+def identity_trailers(connection: Connection, code_task_run_id: str) -> str:
+    """IDENTITY.md §7.9: who a build's commits and PR were made FOR, and under which grant —
+    `On-behalf-of: Alice <alice@acme.com>` and `Boss-Lineage: dlg_…/run_…` — from the authority
+    the build was STARTED under (runs.original_build_authority), plus a link to the grant's
+    lineage when the console's URL is known. "" for BOSS's own work. Never raises."""
+    try:
+        from ..identity import github_app, runs
+
+        authority = runs.original_build_authority(connection, code_task_run_id)
+        if authority is None or authority.system or not authority.principal_id.startswith("usr_"):
+            return ""
+        person = connection.execute(text(
+            "SELECT p.display_name, u.email FROM identity_principals p LEFT JOIN identity_users u "
+            "ON u.principal_id = p.id WHERE p.id = :p"), {"p": authority.principal_id}).mappings().first()
+        if person is None:
+            return ""
+        out = github_app.commit_trailers(person_name=person["display_name"] or authority.principal_id,
+                                         person_email=person["email"], grant_id=authority.grant_id,
+                                         run_id=code_task_run_id)
+        base = os.environ.get("BOSS_CONSOLE_URL", "").rstrip("/")
+        if base and authority.grant_id:
+            out += f"\nBOSS-Lineage-Link: {base}/identity/agents/delegations/{authority.grant_id}"
+        return out
+    except Exception as error:  # noqa: BLE001 — a footer is never worth a failed PR
+        log.warning("agent acts: no identity trailers for %s: %s", code_task_run_id, type(error).__name__)
+        return ""
 
 
 # ── 5. panel seats ───────────────────────────────────────────────────────────────────────────

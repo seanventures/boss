@@ -561,6 +561,26 @@ def forget_claimed_actor_notes() -> None:
         _claims_noted.clear()
 
 
+def actor_labels(org_id: str, actors: Any, *, db: Any) -> dict[str, str]:
+    """History rendering in bulk: {stored actor -> "Param (was: ceo)" | "Param"} for every actor
+    that maps to a principal (by its id, or a legacy member id it took over). One query."""
+    wanted = sorted({str(a) for a in actors if a})
+    if not wanted:
+        return {}
+    rows = db.execute(_sql(
+        "SELECT m.legacy_ref AS actor, p.display_name FROM identity_legacy_mappings m JOIN "
+        "identity_principals p ON p.id = m.principal_id WHERE m.org_id = :o AND m.legacy_kind = "
+        "'member_id' AND m.legacy_ref = ANY(:a) UNION ALL SELECT p.id, p.display_name FROM "
+        "identity_principals p WHERE p.org_id = :o AND p.id = ANY(:a)"),
+        {"o": org_id, "a": wanted}).all()
+    out: dict[str, str] = {}
+    for actor, name in rows:
+        if actor in out:
+            continue
+        out[actor] = name if actor.startswith(("usr_", "sva_", "agt_", "sys_")) else f"{name} (was: {actor})"
+    return out
+
+
 def resolve_actor(org_id: str, actor: Optional[str], *, db: Any) -> Optional[dict[str, Any]]:
     """History rendering (§12 "History"): a stored actor string -> the principal it maps to now,
     e.g. "ceo" -> {"principal_id": "usr_…", "display_name": "Param", "was": "ceo"}."""

@@ -361,6 +361,78 @@ def remove_binding(db: Any, ctx: AuthContext, binding_id: str, *,
     authz.bump_epoch(org, db=db, reason="role_binding.removed")
 
 
+def reassign_role(db: Any, ctx: AuthContext, from_role_id: str, to_role_id: str, *,
+                  delete: bool = False) -> dict:
+    """§6.10 "Reassign 4 people to… and delete": move EVERY binding of a role (people and groups,
+    every scope) to another role, each move under the full §6.11 rules (the caller covers both
+    roles at that scope, nobody moves their own, Owner needs owner:assign, the target role must
+    bind at that scope), then optionally delete the emptied role.
+
+    Every rule is checked BEFORE anything is written (a refusal changes nothing), then the moves
+    are written and the epoch moves once — the PDP is never asked mid-way through its own change."""
+    from . import roles as roles_service
+
+    org = ctx.principal.org_id
+    source = roles_service._role_row(db, org, from_role_id)          # noqa: SLF001 — same service
+    target = roles_service._role_row(db, org, to_role_id)            # noqa: SLF001
+    if source is None or source["system"] or target is None or target["system"]:
+        raise AccessError(404, "not_found")
+    if from_role_id == to_role_id:
+        raise AccessError(422, "same_role", "Pick a different role to move them to.")
+    if delete:
+        roles_service._editable(db, org, from_role_id)              # noqa: SLF001 — 409 for a built-in
+        require_ceiling(ctx, permissions_of(db, from_role_id), roles_service.org_scope(ctx), db=db)
+    rows = list_bindings(db, org, role_id=from_role_id)
+    plan = []
+    for b in rows:                                                  # 1. every check, no writes
+        if b["scope_type"] not in target["bindable_scopes"]:
+            raise AccessError(422, "scope_not_bindable",
+                              f"{target['key']} binds at {', '.join(target['bindable_scopes'])} only.",
+                              {"binding_id": b["id"]})
+        _grant_rules(db, ctx, {"id": from_role_id, "key": source["key"]}, b["scope_type"], b["scope_id"],
+                     b["subject_type"], b["subject_id"], granting=False)
+        _grant_rules(db, ctx, dict(target), b["scope_type"], b["scope_id"], b["subject_type"],
+                     b["subject_id"])
+        already = db.execute(text(
+            "SELECT id FROM identity_role_bindings WHERE subject_type = :st AND subject_id = :s AND "
+            "role_id = :r AND scope_type = :t AND scope_id = :i"),
+            {"st": b["subject_type"], "s": b["subject_id"], "r": to_role_id, "t": b["scope_type"],
+             "i": b["scope_id"]}).scalar()
+        plan.append((b, already))
+    moved: list[str] = []
+    for b, already in plan:                                         # 2. the writes
+        new_id_ = already
+        if already is None:
+            new_id_ = new_id("rbd")
+            db.execute(text(
+                "INSERT INTO identity_role_bindings (id, org_id, subject_type, subject_id, role_id, "
+                "scope_type, scope_id, granted_by, expires_at, reason) VALUES "
+                "(:id, :o, :st, :s, :r, :t, :i, :by, :e, :why)"),
+                {"id": new_id_, "o": org, "st": b["subject_type"], "s": b["subject_id"], "r": to_role_id,
+                 "t": b["scope_type"], "i": b["scope_id"], "by": ctx.principal.id, "e": b["expires_at"],
+                 "why": f"reassigned from {source['key']}"})
+            audit_event(ctx, "owner.added" if to_role_id == OWNER_ROLE_ID else "role_binding.added", db=db,
+                        target_type=b["subject_type"], target_id=b["subject_id"], scope=b["scope"],
+                        details={"role": target["key"], "binding_id": new_id_, "reassigned_from": source["key"]})
+        db.execute(text("DELETE FROM identity_role_bindings WHERE id = :id AND org_id = :o"),
+                   {"id": b["id"], "o": org})
+        audit_event(ctx, "owner.removed" if from_role_id == OWNER_ROLE_ID else "role_binding.removed", db=db,
+                    target_type=b["subject_type"], target_id=b["subject_id"], scope=b["scope"],
+                    details={"role": source["key"], "binding_id": b["id"], "reassigned_to": target["key"]})
+        moved.append(new_id_)
+    if from_role_id == OWNER_ROLE_ID:
+        lock_owners(db, org)
+        assert_owner_remains(db, org)
+    deleted = False
+    if delete:
+        db.execute(text("DELETE FROM identity_access_roles WHERE id = :r"), {"r": from_role_id})
+        audit_event(ctx, "access_role.deleted", db=db, target_type="access_role", target_id=from_role_id,
+                    details={"key": source["key"]})
+        deleted = True
+    authz.bump_epoch(org, db=db, reason="access_role.reassigned")
+    return {"moved": len(moved), "bindings": [get_binding(db, org, b) for b in moved], "deleted": deleted}
+
+
 def grantors(db: Any, org_id: str, permission: str, *, project_id: Optional[str] = None,
              limit: int = 10) -> list[dict]:
     """Who could grant `permission` (at the project, or org-wide): active people who hold

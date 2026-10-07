@@ -439,6 +439,31 @@ REFRESHERS: dict[str, Callable[[str], tuple[str, Optional[str], int]]] = {}
 #: provider -> revoke(access_token, refresh_token|None). Called on disconnect and person deletion.
 REVOKERS: dict[str, Callable[[str, Optional[str]], None]] = {}
 
+#: The providers BOSS ships a refresher and revoker for, and the module whose
+#: `install_provider_hooks()` registers them. Looked up on first use (P1-14): every process that
+#: opens the vault — API, worker, egress — has them, not only one that remembered a boot hook.
+#: Without this, a GitHub user token was never refreshed and a disconnect "confirmed" a revocation
+#: that never reached GitHub, then shredded the only copy of the token.
+BUILTIN_PROVIDER_HOOKS = {"github": "boss_engine.identity.github_app"}
+
+
+def _install_builtin_hooks(provider: str) -> None:
+    module = BUILTIN_PROVIDER_HOOKS.get(provider)
+    if module and (provider not in REFRESHERS or provider not in REVOKERS):
+        import importlib
+
+        importlib.import_module(module).install_provider_hooks()
+
+
+def refresher_for(provider: Optional[str]) -> Optional[Callable[[str], tuple[str, Optional[str], int]]]:
+    _install_builtin_hooks(provider or "")
+    return REFRESHERS.get(provider or "")
+
+
+def revoker_for(provider: Optional[str]) -> Optional[Callable[[str, Optional[str]], None]]:
+    _install_builtin_hooks(provider or "")
+    return REVOKERS.get(provider or "")
+
 REFRESH_LEEWAY = timedelta(minutes=5)
 
 
@@ -494,7 +519,7 @@ def _refresh_locked(db: Any, item_id: str) -> dict[str, Any]:
         exp = row.get("access_expires_at")
         if exp is None or exp - _now() > REFRESH_LEEWAY:
             return row                               # someone else refreshed while we waited
-        refresher = REFRESHERS.get(row.get("provider") or "")
+        refresher = refresher_for(row.get("provider"))
         if row.get("refresh_enc") is None or refresher is None:
             return row
         refresh_token = _open(own, row, "refresh")
@@ -733,7 +758,7 @@ def revoke(item_id: str, *, ctx: AuthContext, reason: str, db: Any) -> None:
 
 def _revoke_at_provider(db: Any, row: Mapping[str, Any]) -> bool:
     """True when the provider confirmed (or there is nothing to revoke there)."""
-    revoker = REVOKERS.get(row.get("provider") or "")
+    revoker = revoker_for(row.get("provider"))
     if revoker is None or row["kind"] != VaultItemKind.OAUTH_USER.value:
         return True
     try:

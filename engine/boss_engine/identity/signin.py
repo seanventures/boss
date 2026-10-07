@@ -162,7 +162,9 @@ def finish(db: Any, user: users.UserRow, facts: RequestFacts, *, methods: list[s
          session_ref=issued.session_id, details={"methods": sorted(set(methods)), "mfa": mfa})
     if not familiar:
         emit(db, org_id=user.org_id, event_type="auth.new_device", outcome=Outcome.INFO, ctx=ctx,
-             session_ref=issued.session_id)
+             session_ref=issued.session_id, details={"methods": sorted(set(methods))})
+        if user.last_login_at is not None:       # a first-ever sign-in is not news to anyone
+            notify_new_device(user, facts, methods)
     max_age = int((issued.absolute_expires_at - now).total_seconds())
     cookies = [sessions.set_cookie_header(SESSION_COOKIE, issued.token, max_age=max_age),
                sessions.set_cookie_header(DEVICE_COOKIE, device, max_age=DEVICE_MAX_AGE),
@@ -181,6 +183,27 @@ def finish(db: Any, user: users.UserRow, facts: RequestFacts, *, methods: list[s
     if extra:
         body.update(extra)
     return Answer(200, body, cookies=cookies)
+
+
+def notify_new_device(user: users.UserRow, facts: RequestFacts, methods: list[str]) -> None:
+    """Tell a person about a sign-in from a device BOSS has not seen for them (every sign-in method
+    passes through `finish`). With SMTP: an email, off the request path. Without: the
+    `auth.new_device` event, which /v1/identity/me shows as a notice."""
+    from .authn_support import smtp_configured
+
+    if not smtp_configured():
+        return
+    from . import email_signin
+
+    how = ", ".join(sorted(set(methods))) or "sign-in"
+    where = facts.ip or "an unknown address"
+    browser = (facts.user_agent or "an unknown browser")[:160]
+    email_signin.DELIVER(
+        user.email, "New sign-in to BOSS",
+        f"Someone signed in to your BOSS account from a new device: {how}, from {where}, "
+        f"using {browser}, at {utcnow().strftime('%Y-%m-%d %H:%M UTC')}.\n\nIf this was you, there is "
+        "nothing to do. If not, sign out everywhere (My account > Sessions) and change your "
+        "password and second factor now.")
 
 
 # ---- H1: enrolment-only sessions and the first-factor grant -------------------------------------------

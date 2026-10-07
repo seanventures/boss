@@ -79,7 +79,11 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "vault.connection.revoked", "vault.decrypt_failed", "vault.master_key_rotated",
     # authorization
     "authz.denied", "authz.shadow_deny", "authz.allowed_critical", "authz.mode_changed",
-    "access.requested",
+    "access.requested", "access.request_granted", "access.request_declined",
+    # approvals and seats (§6.13)
+    "decision.approval_recorded", "approval_seat.changed",
+    # notices (who was told what; never the content)
+    "notice.mfa_reset", "notice.grant_expiring",
     # policy and system
     "policy.changed", "bootstrap.claimed", "owner.recovered_by_host", "legacy.password_used",
     "legacy.api_key_used", "legacy.network_used", "legacy.claimed_actor_ignored",
@@ -362,6 +366,11 @@ def prepare(event: SecurityEvent) -> SecurityEvent:
     return SecurityEvent(**fields)
 
 
+def clock() -> datetime:
+    """When an event is written (one seam: tests that need old rows move it, not the rows)."""
+    return datetime.now(timezone.utc)
+
+
 def record(event: SecurityEvent, *, db: Any) -> RecordedEvent:
     """Append one event in the caller's transaction (per-org advisory lock for seq). Refuses an
     event type not in EVENT_TYPES and any `details` key matching the redaction pattern.
@@ -380,7 +389,7 @@ def record(event: SecurityEvent, *, db: Any) -> RecordedEvent:
         "ORDER BY seq DESC LIMIT 1"), {"o": clean.org_id}).first()
     seq = int(last[0]) + 1 if last else 1
     prev_hash = bytes(last[1]) if last else GENESIS_HASH
-    ts = datetime.now(timezone.utc)
+    ts = clock()
     row = event_row(clean, seq=seq, ts=ts)
     row["details"] = clean.details
     alg = ALG_HMAC if key else ALG_SHA256
@@ -390,6 +399,20 @@ def record(event: SecurityEvent, *, db: Any) -> RecordedEvent:
                   chain=None if row.get("chain") is None else json.dumps(row["chain"]),
                   details=json.dumps(row["details"], ensure_ascii=False),
                   prev_hash=prev_hash, hash=digest, hash_alg=alg)
+    if clean.event_type == "audit.checkpoint":
+        # N3: a checkpoint licenses a prune, so it is written ONLY through the SECURITY DEFINER
+        # function, which checks it extends the chain and names a range old enough to prune (the
+        # table refuses a checkpoint INSERT from any other role).
+        row_json = {k: (v.isoformat() if isinstance(v, datetime) else v)
+                    for k, v in params.items() if k not in ("prev_hash", "hash", "chain", "details")}
+        row_json["chain"] = row.get("chain")
+        row_json["details"] = row["details"]
+        row_json["hash_alg"] = alg
+        inserted = db.execute(_sql(
+            "SELECT identity_audit_checkpoint(CAST(:row AS JSONB), :prev, :hash)"),
+            {"row": json.dumps(row_json, ensure_ascii=False, default=str), "prev": prev_hash,
+             "hash": digest}).first()
+        return RecordedEvent(id=int(inserted[0]), seq=seq, hash=digest)
     inserted = db.execute(_sql(
         "INSERT INTO identity_security_events (" + ", ".join(_INSERT_COLUMNS) + ", hash_alg) VALUES ("
         + ", ".join(f"CAST(:{c} AS JSONB)" if c in ("chain", "details")

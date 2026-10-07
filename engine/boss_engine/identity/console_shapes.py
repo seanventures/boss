@@ -175,6 +175,8 @@ _CHECK = {  # my check key -> (S4 id, label, fix label, href)
     # F3/H2: without a bound public origin BOSS sends no emailed links and offers no passkeys/SSO
     "public_origin": ("origin", "Public URL", "Set BOSS_PUBLIC_URL", "/identity/sign-in#public-url"),
     "github": ("github", "GitHub for builds", "Connect GitHub", "/?area=setup&focus=repository"),
+    # §4.2: the optional HIBP breach check is on but could not reach HIBP
+    "breach_check": ("breach", "Breach check", "Open the security policy", "/identity/sign-in#policy"),
 }
 _LEGACY_LABEL = {
     "shared_password": ("legacy_password", "Shared console password"),

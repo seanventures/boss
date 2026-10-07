@@ -289,6 +289,10 @@ async def enforce_access(conn: HTTPConnection) -> None:
             except Exception:  # noqa: BLE001 — the engine's tool layer is optional here
                 pass
     if outcome.allowed:
+        if ctx is not None:
+            from boss_engine.identity import lineage as _lineage
+
+            _lineage.mark_enforced(mode == AuthzMode.ENFORCE and not isinstance(access, Public))
         if mode == AuthzMode.ENFORCE and not isinstance(access, Public):
             IDENTITY_ENFORCED.set(True)
             conn.state.identity_enforced = True

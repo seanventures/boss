@@ -330,11 +330,25 @@ def preview(db: Any, org_id: str, role_id: str, permissions: Iterable[str]) -> d
          WHERE b.role_id = :r AND b.org_id = :o"""), {"r": role_id, "o": org_id}).mappings().all()
     principals = sorted({a["principal_id"] for a in affected if a["principal_id"]})
     agents = db.execute(text(
-        "SELECT DISTINCT g.id FROM identity_delegation_grants g "
+        "SELECT DISTINCT g.id, g.agent_ids FROM identity_delegation_grants g "
         "WHERE g.org_id = :o AND g.status = 'active' AND g.user_principal_id = ANY(:p)"),
         {"o": org_id, "p": principals}).all() if principals else []
-    return {"added": sorted(new - old), "removed": sorted(old - new),
-            "critical_added": sorted(k for k in new - old if PERMISSION_META[k].critical),
+    kinds = dict(db.execute(text("SELECT id, kind FROM identity_principals WHERE id = ANY(:p)"),
+                            {"p": principals}).all()) if principals else {}
+    groups = {a["subject_id"] for a in affected if a["subject_type"] == "group"}
+    from .console_pages import pages_for
+
+    added, removed = new - old, old - new
+    return {"added": sorted(added), "removed": sorted(removed),
+            "critical_added": sorted(k for k in added if PERMISSION_META[k].critical),
+            # §6.10: the pages whose opening permission this change grants or takes away
+            "pages": {"gained": [p for p in pages_for(added) if p not in pages_for(new - added)],
+                      "lost": [p for p in pages_for(removed) if p not in pages_for(new)]},
+            "counts": {"people": sum(1 for k in kinds.values() if k == "user"),
+                       "groups": len(groups),
+                       "service_accounts": sum(1 for k in kinds.values() if k == "service_account"),
+                       "agents": len({a for r in agents for a in (r[1] or ())}),
+                       "grants": len(agents)},
             "affected_principals": principals,
             "via": [{"principal_id": a["principal_id"], "group": a["group_name"],
                      "scope": "org" if a["scope_type"] == "org" else f"project:{a['scope_id']}"}

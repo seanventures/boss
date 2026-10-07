@@ -54,7 +54,30 @@ def database_url() -> Optional[str]:
     name = url.rsplit("/", 1)[-1].split("?")[0]
     if "test" not in name:
         raise RuntimeError(f"refusing to use database {name!r}: not named like a test database")
-    return url
+    return _unconfined(url)
+
+
+def _unconfined(url: str) -> str:
+    """N5: the audit log's SECURITY DEFINER functions pin `search_path = public, pg_temp` (so no
+    caller can hijack them), so they only work on tables in `public`. A DATABASE_URL confined to
+    a private schema (`?options=-csearch_path=...`, as the API suite's conftest makes it) cannot
+    run them. Such a URL gets a sibling test database of its own, created on first use, where the
+    schema lives in `public` as in production."""
+    from sqlalchemy.engine import make_url
+
+    parsed = make_url(url)
+    options = str(parsed.query.get("options") or "")
+    if "search_path" not in options:
+        return url
+    target = f"{parsed.database}_s5pub"
+    admin = create_engine(parsed.set(database="postgres", query={}), isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as conn:
+            if not conn.execute(text("SELECT 1 FROM pg_database WHERE datname = :d"), {"d": target}).first():
+                conn.execute(text(f'CREATE DATABASE "{target}"'))
+    finally:
+        admin.dispose()
+    return parsed.set(database=target, query={}).render_as_string(hide_password=False)
 
 
 @pytest.fixture(scope="session")
@@ -329,3 +352,22 @@ def events(db: Any, event_type: Optional[str] = None) -> list[dict[str, Any]]:
         q += " AND event_type = :t"
         params["t"] = event_type
     return [dict(r) for r in db.execute(text(q + " ORDER BY seq"), params).mappings().all()]
+
+
+class written_days_ago:
+    """Events recorded inside this block carry a timestamp `days` in the past (the audit log's
+    prune floor keeps anything younger than 30 days). The chain hashes the timestamp the row
+    really has, so the chain still verifies — this moves the writer's clock, not the rows."""
+
+    def __init__(self, days: int) -> None:
+        self.days = days
+
+    def __enter__(self):
+        shift = timedelta(days=self.days)
+        self._saved = audit.clock
+        audit.clock = lambda: datetime.now(timezone.utc) - shift
+        return self
+
+    def __exit__(self, *exc):
+        audit.clock = self._saved
+        return False

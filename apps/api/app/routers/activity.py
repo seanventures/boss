@@ -186,9 +186,32 @@ def list_activity(
                 cursor=_clean(cursor), after=_clean(after),
                 total=total if total is not None else True,
                 summary=summary or False, **filters.values)
+            _label_actors(connection, project_id, payload.get("items") or [])
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _json({**payload, "project_id": project_id}, etag)
+
+
+def _label_actors(connection: Any, project_id: str, items: list) -> None:
+    """§12 History: each row's stored actor ("ceo") gains `actor_label` naming who it is now
+    ("Param (was: ceo)"), from the identity migration's mappings. Rows are otherwise untouched."""
+    try:
+        from sqlalchemy import text
+
+        from boss_engine.identity import legacy
+
+        org = connection.execute(text("SELECT w.org_id FROM projects p JOIN workspaces w ON "
+                                      "w.id = p.workspace_id WHERE p.id = :p"), {"p": project_id}).scalar()
+        if not org:
+            return
+        with connection.begin_nested():
+            labels = legacy.actor_labels(org, [i.get("actor") for i in items if isinstance(i, dict)],
+                                         db=connection)
+    except Exception:  # noqa: BLE001 — an install without the identity tables: plain actors
+        return
+    for item in items:
+        if isinstance(item, dict) and item.get("actor") in labels:
+            item["actor_label"] = labels[item["actor"]]
 
 
 @router.get("/v1/activity/histogram")
@@ -282,6 +305,8 @@ def activity_row(row_id: str, project_id: Optional[str] = Query(default=None)) -
             found = service.row(connection, project_id, row_id)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if found is not None:
+            _label_actors(connection, project_id, [found])
     if found is None:
         raise HTTPException(status_code=404, detail="This line is gone.")
     return {"project_id": project_id, **found}
