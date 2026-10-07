@@ -55,7 +55,7 @@ export function AnomalyScanCard({ projectId, actor }: { projectId: string; actor
         Scan for retry storms and spend spikes. Detected anomalies open an incident Decision and can
         trip auto-lite-mode (lower budget intensity).
       </p>
-      <ActionForm permission="reliability:respond" action={scanAnomaliesAction}>
+      <ActionForm permission="system:operate" action={scanAnomaliesAction}>
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="actor" value={actor} />
         <SubmitButton className="button secondary" type="submit">Scan for anomalies</SubmitButton>

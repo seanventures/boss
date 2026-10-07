@@ -29,27 +29,27 @@ export const LOCKED_HEADER = "x-boss-locked";
 
 /**
  * The console's GET proxies that read one upstream route: `/api/<name>` (or `/api/<name>?view=v`)
- * → the /v1 route it forwards to. /api/improve's views come from its own table (IMPROVE_READS).
+ * → the /v1 route it forwards to (written after "/v1/", like READ_ROUTES). /api/improve's views come from its own table (IMPROVE_READS).
  * A proxy not listed is sent as before; the API answers it.
  */
 export const API_READS: Readonly<Record<string, string>> = {
-  "/api/deployment-targets": "/v1/deployment-targets",
-  "/api/deployment-hosts": "/v1/deployment-hosts",
-  "/api/model-routes": "/v1/model-routes",
-  "/api/run-acts?view=chain": "/v1/workflow-runs/{}/chain",
-  "/api/run-acts?view=act": "/v1/acts/{}",
-  "/api/code-tasks": "/v1/code-tasks",
-  "/api/coordination": "/v1/coordination",
-  "/api/activity": "/v1/activity",
-  "/api/activity/histogram": "/v1/activity/histogram",
-  "/api/activity/facets": "/v1/activity/facets",
-  "/api/activity/kinds": "/v1/activity/kinds",
-  "/api/activity/context": "/v1/activity/context",
-  "/api/email-config": "/v1/email/config",
-  "/api/kit": "/v1/kit",
-  "/api/mcp": "/v1/mcp/servers",
-  "/api/mcp?view=catalogue": "/v1/mcp/catalogue",
-  "/api/mcp?view=grants": "/v1/role-mcp-servers",
+  "/api/deployment-targets": "deployment-targets",
+  "/api/deployment-hosts": "deployment-hosts",
+  "/api/model-routes": "model-routes",
+  "/api/run-acts?view=chain": "workflow-runs/{}/chain",
+  "/api/run-acts?view=act": "acts/{}",
+  "/api/code-tasks": "code-tasks",
+  "/api/coordination": "coordination",
+  "/api/activity": "activity",
+  "/api/activity/histogram": "activity/histogram",
+  "/api/activity/facets": "activity/facets",
+  "/api/activity/kinds": "activity/kinds",
+  "/api/activity/context": "activity/context",
+  "/api/email-config": "email/config",
+  "/api/kit": "kit",
+  "/api/mcp": "mcp/servers",
+  "/api/mcp?view=catalogue": "mcp/catalogue",
+  "/api/mcp?view=grants": "role-mcp-servers",
 };
 
 const BY_SEGMENTS = READ_ROUTES.map(([pattern, permission]) => {
@@ -60,6 +60,8 @@ const BY_SEGMENTS = READ_ROUTES.map(([pattern, permission]) => {
 /** The permission GET `/v1/…` checks (a `{}` matches one segment; the most literal pattern wins). */
 export function permissionForV1(path: string): Permission | null {
   const segs = path.split("?")[0].split("/").filter(Boolean);
+  if (segs[0] !== "v1") return null;
+  segs.shift();
   for (const r of BY_SEGMENTS) {
     if (r.segs.length === segs.length && r.segs.every((s, i) => s === "{}" || s === segs[i])) return r.permission;
   }
@@ -78,7 +80,8 @@ export function upstreamOf(url: URL): string | null {
     const target = read.path(url.searchParams).split("?")[0];
     return target.endsWith(WRITING_GET_TWIN_SUFFIX) ? target.slice(0, -WRITING_GET_TWIN_SUFFIX.length) : target;
   }
-  return (view ? API_READS[`${path}?view=${view}`] : undefined) ?? API_READS[path] ?? null;
+  const upstream = (view ? API_READS[`${path}?view=${view}`] : undefined) ?? API_READS[path];
+  return upstream ? `/v1/${upstream}` : null;
 }
 
 /** The permission a same-origin GET needs, or null when it is not one the gate knows. */

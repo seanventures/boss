@@ -48,8 +48,8 @@ describe("1. the gate's table is the API's", () => {
     expect(readFileSync(join(WEB, "lib/identity/read-routes.gen.ts"), "utf8")).toBe(readRoutesSource(MATRIX));
     expect(READ_ROUTES.length).toBeGreaterThan(400);
   });
-  it.each(Object.entries(API_READS))("%s reaches %s, a route the matrix declares", (_proxy, upstream) => {
-    expect(MATRIX_GET.has(upstream), upstream).toBe(true);
+  it.each(Object.entries(API_READS))("%s reaches /v1/%s, a route the matrix declares", (_proxy, upstream) => {
+    expect(MATRIX_GET.has(`/v1/${upstream}`), upstream).toBe(true);
   });
   it.each(Object.keys(IMPROVE_READS))("/api/improve?view=%s maps to a declared route", (view) => {
     expect(permissionForRead(`/api/improve?view=${view}&project_id=p&id=x`), view).not.toBeNull();
@@ -74,7 +74,7 @@ describe("2. each read the role walk caught maps to the permission the API check
   it("a literal route beats a parameter one (/v1/decisions/inbox is not /v1/decisions/{id})", () => {
     for (const [pattern, permission] of READ_ROUTES) {
       if (pattern.includes("{}")) continue;
-      expect(permissionForV1(pattern), pattern).toBe(permission);
+      expect(permissionForV1(`/v1/${pattern}`), pattern).toBe(permission);
     }
   });
   it("an unknown path or a page is not judged", () => {
