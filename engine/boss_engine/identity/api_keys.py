@@ -243,10 +243,15 @@ def create(db: Any, *, creator: AuthContext, owner: Any, kind: str, name: str,
         if beyond_owner:
             raise KeyRefused("scopes_exceed_owner", 403, {"permissions": beyond_owner})
         if owner.id != creator.principal.id:
-            creator_held = held_permissions(db, creator.principal)
-            missing = sorted(owner_held - creator_held)
-            if missing:
-                raise KeyRefused("owner_exceeds_creator", 403, {"permissions": missing})
+            # Per scope, with the creator's own narrowing (its key scopes, its run token): holding
+            # a permission in project A does not cover an owner holding it org-wide (A25, §6.11).
+            from .bindings import uncovered
+
+            missing_at = uncovered(db, creator, owner.id)
+            if missing_at:
+                missing = sorted({p for perms in missing_at.values() for p in perms})
+                raise KeyRefused("owner_exceeds_creator", 403,
+                                 {"permissions": missing[:50], "scopes": sorted(missing_at)})
     key = mint_api_key(kind)
     kid = ids.new_id("key")
     expires_at = _expiry(db, owner.org_id, kind=kind, days=expires_in_days)

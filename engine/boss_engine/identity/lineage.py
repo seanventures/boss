@@ -212,9 +212,11 @@ class PrincipalRequired(RuntimeError):
 
 
 def _enforced() -> bool:
-    import os
+    """One mode source: the same pydantic settings the API's guard reads (BOSS_AUTHZ_MODE from
+    the environment OR the .env file), never os.environ alone — the two used to disagree."""
+    from ..config import get_settings
 
-    return (os.environ.get("BOSS_AUTHZ_MODE") or "shadow").strip().lower() == "enforce"
+    return (get_settings().authz_mode or "enforce").strip().lower() == "enforce"
 
 
 _warned_unattributed: set[str] = set()

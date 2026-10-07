@@ -32,6 +32,30 @@ FORBIDDEN_ATTRIBUTES = frozenset({"roles", "entitlements", "x509certificates", "
 MAX_COUNT = 200
 
 
+def _guard_owner_reach(db: Any, org: str, *, removals: Iterable[tuple[str, str]] = (),
+                       disabling: Optional[str] = None) -> None:
+    """H4: SCIM may not remove the last Owner's reach — by dropping a member from an Owner
+    group or by deactivating the last Owner. The same check (and lock) as every other path
+    (bindings.guard_membership_removals / assert_owner_remains); the deferred trigger is the
+    backstop. Answered as a SCIM 409 mutability error, never a 500 at commit."""
+    from .bindings import assert_owner_remains, guard_membership_removals, lock_owners, owner_ids
+    from .roles import AccessError
+
+    try:
+        guard_membership_removals(db, org, list(removals))
+        if disabling is not None and disabling in owner_ids(db, org):
+            lock_owners(db, org)
+            assert_owner_remains(db, org, without_principal=disabling)
+    except AccessError:
+        raise ScimError(409, "This would leave the organisation without an Owner. Add another Owner first.",
+                        "mutability") from None
+
+
+def _members_of(db: Any, group_id: str) -> list[str]:
+    return [r[0] for r in db.execute(text("SELECT principal_id FROM identity_group_members WHERE group_id = :g"),
+                                     {"g": group_id})]
+
+
 class ScimError(Exception):
     def __init__(self, status: int, detail: str, scim_type: Optional[str] = None):
         super().__init__(detail)
@@ -157,6 +181,7 @@ def _set_active(db: Any, ctx: AuthContext, user: Optional[users.UserRow], active
     if not active:
         if user.status == "disabled":
             return
+        _guard_owner_reach(db, org, disabling=user.principal_id)
         users.set_status(db, user.principal_id, "disabled", by=ctx.principal.id, reason="scim active=false")
         ended = sessions.revoke_all(db, user.principal_id, by=ctx.principal.id, reason="disabled by SCIM")
         db.execute(text("UPDATE identity_api_credentials SET suspended_at = now() WHERE principal_id = :p "
@@ -376,6 +401,7 @@ def replace_group(db: Any, ctx: AuthContext, group_id: str, payload: dict[str, A
                    {"n": str(payload["displayName"])[:200], "id": group_id})
     if "members" in payload:
         wanted = _member_ids(db, org, payload.get("members"))
+        _guard_owner_reach(db, org, removals=[(group_id, p) for p in _members_of(db, group_id) if p not in wanted])
         db.execute(text("DELETE FROM identity_group_members WHERE group_id = :g AND NOT (principal_id = ANY(:keep))"),
                    {"g": group_id, "keep": wanted})
         _add_members(db, group_id, wanted, ctx.principal.id)
@@ -404,10 +430,13 @@ def patch_group(db: Any, ctx: AuthContext, group_id: str, payload: dict[str, Any
             if "[" in path:   # members[value eq "usr_x"]
                 inner = path[path.index("[") + 1:path.rindex("]")]
                 _attr, member = _parse_eq_filter(inner, {"value"})
+                _guard_owner_reach(db, org, removals=[(group_id, member)])
                 db.execute(text("DELETE FROM identity_group_members WHERE group_id = :g AND principal_id = :p"),
                            {"g": group_id, "p": member})
             else:
                 removed = _member_ids(db, org, value) if value else None
+                _guard_owner_reach(db, org, removals=[(group_id, p) for p in (
+                    _members_of(db, group_id) if removed is None else removed)])
                 if removed is None:
                     db.execute(text("DELETE FROM identity_group_members WHERE group_id = :g"), {"g": group_id})
                 else:
@@ -432,6 +461,7 @@ def delete_group(db: Any, ctx: AuthContext, group_id: str) -> None:
     org = ctx.principal.org_id
     if _group(db, org, group_id) is None:
         raise ScimError(404, "not found")
+    _guard_owner_reach(db, org, removals=[(group_id, p) for p in _members_of(db, group_id)])
     db.execute(text("DELETE FROM identity_group_members WHERE group_id = :g"), {"g": group_id})
     db.execute(text("DELETE FROM identity_role_bindings WHERE subject_type = 'group' AND subject_id = :g"),
                {"g": group_id})

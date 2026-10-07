@@ -5,6 +5,7 @@ A40, A51, A55 (egress), A56, A58, A60, R8, J8, J9, J10 and the cascade ≤5 s te
 """
 from __future__ import annotations
 
+from boss_engine.config import get_settings
 import base64
 import hashlib
 import json
@@ -461,7 +462,7 @@ def test_r8_a_job_carries_its_principal_and_fails_closed_without_one(monkeypatch
         assert lineage.stamp_job({})["_identity"]["chain"] == ["agt_forge#run_ct:1"]
     # No context (a system thread): never the payload's claim, never unattributed — BOSS's own work.
     assert lineage.stamp_job({"_identity": {"on_behalf_of": "usr_root"}})["_identity"]["on_behalf_of"] == "sys_worker"
-    monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
+    monkeypatch.setattr(get_settings(), "authz_mode", "enforce")
     assert lineage.stamp_job({"x": 1})["_identity"]["system"] is True
     with pytest.raises(lineage.PrincipalRequired):
         lineage.acting_for_job({"payload": {}})

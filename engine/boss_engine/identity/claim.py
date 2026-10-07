@@ -50,10 +50,9 @@ def is_claimed(db: Any, org_id: Optional[str] = None) -> bool:
     org = org_id or default_org_id(db)
     if not org:
         return False
-    if users.active_owner_ids(db, org):
-        return True
-    return db.execute(text("SELECT 1 FROM identity_security_events WHERE org_id = :o AND "
-                           "event_type = 'bootstrap.claimed' LIMIT 1"), {"o": org}).first() is not None
+    from .migration import claimed_at   # one definition of "claimed"
+
+    return claimed_at(db, org) is not None
 
 
 def _legacy_password() -> str:

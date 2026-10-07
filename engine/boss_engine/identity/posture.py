@@ -80,6 +80,27 @@ def _scalar(db: Any, statement: str, params: dict[str, Any]) -> int:
         return 0
 
 
+def enforcement_check(settings: Any = None) -> dict[str, Any]:
+    """Is every route enforced? Critical when the global mode or any per-router override is not
+    `enforce` (shadow evaluates and records but REFUSES NOTHING; off does not even evaluate)."""
+    from .enforcement import parse_router_modes
+
+    if settings is None:
+        from ..config import get_settings
+        settings = get_settings()
+    mode = (getattr(settings, "authz_mode", "") or "enforce").strip().lower()
+    overrides = {k: v.value for k, v in parse_router_modes(
+        getattr(settings, "authz_router_modes", "") or "").items() if v.value != "enforce"}
+    weak = mode != "enforce" or bool(overrides)
+    summary = (f"Access control is {mode.upper()}" if mode != "enforce" else "Access control is enforced")
+    if overrides:
+        summary += "; not enforced for " + ", ".join(f"{k} ({v})" for k, v in sorted(overrides.items()))
+    return {**_check("enforcement", "critical" if weak else "ok", summary, len(overrides) + (mode != "enforce"),
+                     "Set BOSS_AUTHZ_MODE=enforce and clear BOSS_AUTHZ_ROUTER_MODES once the shadow "
+                     "report is empty (Identity › Posture › Shadow report)."),
+            "mode": mode, "router_modes": overrides}
+
+
 def posture(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dict[str, Any]:
     from . import audit, migration
 
@@ -177,6 +198,10 @@ def posture(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dict[str
         status, text = "ok", f"The audit chain verified at {_iso(verified['at'])}"
     checks.append({**_check("audit_chain", status, text, 0, "Verify it in Identity › Audit."),
                    "verified_at": _iso(verified["at"]) if verified else None})
+
+    # 7. enforcement (H2): anything but enforce, globally or for any router, is red — shadow
+    #    refuses nothing and is an upgrade-time setting only.
+    checks.append(enforcement_check())
 
     claimed = migration.claimed_at(db, org_id)
     return {"org_id": org_id, "generated_at": now.isoformat(), "claimed_at": _iso(claimed),

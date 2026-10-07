@@ -178,7 +178,8 @@ def system_permissions(principal_id: str, *, db: Any = None) -> frozenset[str]:
 # ---- what a principal holds through bindings ------------------------------------------------------
 
 _HELD_SQL = text("""
-SELECT b.id AS binding_id, b.scope_type, b.scope_id, r.key AS role_key, r.system AS role_system,
+SELECT b.id AS binding_id, b.scope_type, b.scope_id, b.expires_at, r.key AS role_key,
+       r.system AS role_system,
        g.name AS group_name, g.source AS group_source, rp.permission_key
   FROM identity_role_bindings b
   JOIN identity_access_roles r ON r.id = b.role_id AND (r.org_id IS NULL OR r.org_id = :org)
@@ -198,6 +199,9 @@ SELECT b.id AS binding_id, b.scope_type, b.scope_id, r.key AS role_key, r.system
 class _Held:
     permissions: frozenset[str]
     why: dict[str, tuple[Why, ...]]
+    #: the earliest expires_at among the bindings that made this set: from then on the set is
+    #: stale (a binding lapsed with no write, so no epoch bump) and the cache refetches (M4)
+    valid_until: Optional[datetime] = None
 
 
 class _HeldCache:
@@ -235,12 +239,18 @@ def _held(conn: Any, org_id: str, principal_id: str, scope: ResolvedScope, epoch
     project = scope.project_id if scope.kind == ScopeKind.PROJECT else None
     key = (org_id, principal_id, project, epoch)
     hit = HELD_CACHE.get(key)
-    if hit is not None:
+    if hit is not None and (hit.valid_until is None or hit.valid_until > _now()):
         return hit
     why: dict[str, list[Why]] = {}
     rows = conn.execute(_HELD_SQL, {"org": org_id, "pid": principal_id,
                                     "project": project or ""}).mappings().all()
+    valid_until: Optional[datetime] = None
     for r in rows:
+        exp = r["expires_at"]
+        if exp is not None:
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            valid_until = exp if valid_until is None else min(valid_until, exp)
         meta = PERMISSION_META.get(r["permission_key"])
         if meta is None or meta.system_only or r["role_system"]:
             continue  # a person never holds a system permission through a binding
@@ -250,9 +260,27 @@ def _held(conn: Any, org_id: str, principal_id: str, scope: ResolvedScope, epoch
         why.setdefault(meta.key, []).append(Why(
             role_key=r["role_key"], binding_id=r["binding_id"], binding_scope=label,
             via_group=r["group_name"], group_source=r["group_source"]))
-    held = _Held(frozenset(why), {k: tuple(v) for k, v in why.items()})
+    held = _Held(frozenset(why), {k: tuple(v) for k, v in why.items()}, valid_until)
     HELD_CACHE.put(key, held)
     return held
+
+
+def permanent_permissions(org_id: str, principal_id: str, scope: ResolvedScope, *,
+                          db: Any) -> frozenset[str]:
+    """What the principal holds at `scope` through bindings that never expire (no cache: used
+    only by the grant rules, to tell a raise in durability from a no-op)."""
+    project = scope.project_id if scope.kind == ScopeKind.PROJECT else None
+    rows = db.execute(_HELD_SQL, {"org": org_id, "pid": principal_id,
+                                  "project": project or ""}).mappings().all()
+    out: set[str] = set()
+    for r in rows:
+        meta = PERMISSION_META.get(r["permission_key"])
+        if r["expires_at"] is not None or meta is None or meta.system_only or r["role_system"]:
+            continue
+        if r["scope_type"] == "project" and meta.org_only:
+            continue
+        out.add(meta.key)
+    return frozenset(out)
 
 
 # ---- liveness ------------------------------------------------------------------------------------

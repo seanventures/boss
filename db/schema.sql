@@ -7533,24 +7533,64 @@ DO $$ BEGIN
 END $$;
 
 -- Last-Owner protection (§6.12): deferred to commit, so two concurrent demotions cannot both land.
--- Fires only when a change REMOVES Owner reach (an owner binding deleted or retargeted, or an active
--- owner leaving `active`), so it never blocks an install that has not claimed its first Owner yet.
+-- Fires only when a change REMOVES Owner reach from a real person: an owner binding deleted or
+-- retargeted, an active owner leaving `active`, or a member leaving a group that carries Owner (SCIM,
+-- OIDC group sync, a person's deletion, any path). So it never blocks an install that has not
+-- claimed its first Owner yet (no person holds Owner then). It takes the SAME advisory lock as the
+-- application (bindings.lock_owners: hashtext('identity_owner:' || org)), so two transactions that each
+-- remove one of two Owners serialise and the second sees the first's commit. Only a PERMANENT Owner
+-- binding counts as an Owner remaining: one with expires_at lapses with nothing to refuse it.
+-- Kept in step with boss_engine.identity.bindings.active_owners (one definition).
 CREATE OR REPLACE FUNCTION identity_assert_an_owner_remains() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
   v_org TEXT;
 BEGIN
   IF TG_TABLE_NAME = 'identity_role_bindings' THEN
-    IF OLD.role_id <> 'arl_owner' THEN RETURN NULL; END IF;
+    IF OLD.role_id <> 'arl_owner' OR OLD.scope_type <> 'org' THEN RETURN NULL; END IF;
     IF TG_OP = 'UPDATE' AND NEW.role_id = 'arl_owner' AND NEW.subject_id = OLD.subject_id
        AND NEW.scope_type = OLD.scope_type AND NEW.expires_at IS NOT DISTINCT FROM OLD.expires_at THEN
       RETURN NULL;
     END IF;
     v_org := OLD.org_id;
+    -- the reach removed was a real person's (directly, or through a group with a person in it)
+    IF NOT EXISTS (
+      SELECT 1 FROM identity_principals p
+       WHERE p.kind = 'user' AND NOT p.network_bound
+         AND ((OLD.subject_type = 'principal' AND p.id = OLD.subject_id)
+           OR (OLD.subject_type = 'group' AND p.id IN (SELECT m.principal_id FROM identity_group_members m
+                                                       WHERE m.group_id = OLD.subject_id)))
+    ) AND NOT EXISTS (SELECT 1 FROM identity_security_events e
+                      WHERE e.org_id = v_org AND e.event_type = 'bootstrap.claimed') THEN
+      RETURN NULL;
+    END IF;
+  ELSIF TG_TABLE_NAME = 'identity_group_members' THEN
+    SELECT b.org_id INTO v_org FROM identity_role_bindings b
+     WHERE b.subject_type = 'group' AND b.subject_id = OLD.group_id AND b.role_id = 'arl_owner'
+       AND b.scope_type = 'org' LIMIT 1;
+    IF v_org IS NULL THEN RETURN NULL; END IF;
+    IF TG_OP = 'UPDATE' AND NEW.group_id = OLD.group_id AND NEW.principal_id = OLD.principal_id THEN
+      RETURN NULL;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM identity_principals p WHERE p.id = OLD.principal_id
+                   AND p.kind = 'user' AND p.status = 'active' AND NOT p.network_bound) THEN
+      RETURN NULL;
+    END IF;
   ELSE
     IF OLD.status <> 'active' OR NEW.status = 'active' THEN RETURN NULL; END IF;
     v_org := OLD.org_id;
+    -- only a person who held Owner reach leaving `active` can leave the org ownerless
+    IF NOT EXISTS (
+      SELECT 1 FROM identity_role_bindings b
+       WHERE b.org_id = v_org AND b.role_id = 'arl_owner' AND b.scope_type = 'org'
+         AND ((b.subject_type = 'principal' AND b.subject_id = OLD.id)
+           OR (b.subject_type = 'group' AND b.subject_id IN (SELECT m.group_id FROM identity_group_members m
+                                                             WHERE m.principal_id = OLD.id)))
+    ) THEN
+      RETURN NULL;
+    END IF;
   END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('identity_owner:' || v_org));
   IF NOT EXISTS (
     SELECT 1 FROM identity_role_bindings b
     JOIN identity_principals p
@@ -7558,11 +7598,8 @@ BEGIN
       OR (b.subject_type = 'group' AND p.id IN (SELECT m.principal_id FROM identity_group_members m
                                                 WHERE m.group_id = b.subject_id))
     WHERE b.org_id = v_org AND b.role_id = 'arl_owner' AND b.scope_type = 'org'
-      AND (b.expires_at IS NULL OR b.expires_at > now())
+      AND b.expires_at IS NULL
       AND p.kind = 'user' AND p.status = 'active' AND NOT p.network_bound
-  ) AND EXISTS (
-    -- an org that never had a real Owner (pre-claim) is not protected yet
-    SELECT 1 FROM identity_security_events e WHERE e.org_id = v_org AND e.event_type = 'bootstrap.claimed'
   ) THEN
     RAISE EXCEPTION 'identity_last_owner: org % would have no active Owner', v_org USING ERRCODE = 'P0001';
   END IF;
@@ -7579,6 +7616,12 @@ DO $$ BEGIN
                  AND tgrelid = 'identity_principals'::regclass) THEN
     CREATE CONSTRAINT TRIGGER identity_last_owner_principals AFTER UPDATE OF status
       ON identity_principals DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION identity_assert_an_owner_remains();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_last_owner_group_members'
+                 AND tgrelid = 'identity_group_members'::regclass) THEN
+    CREATE CONSTRAINT TRIGGER identity_last_owner_group_members AFTER UPDATE OR DELETE
+      ON identity_group_members DEFERRABLE INITIALLY DEFERRED
       FOR EACH ROW EXECUTE FUNCTION identity_assert_an_owner_remains();
   END IF;
 END $$;

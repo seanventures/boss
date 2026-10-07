@@ -421,8 +421,10 @@ class Settings(BaseSettings):
     )
     require_api_auth: bool = Field(default=False, alias="BOSS_REQUIRE_API_AUTH")
     # BOSS IDENTITY ENFORCEMENT (docs/product/IDENTITY.md §6.6, IDENTITY_BUILD.md §2.4).
-    # off | shadow | enforce. Shadow evaluates every route and records what it WOULD deny.
-    authz_mode: str = Field(default="shadow", alias="BOSS_AUTHZ_MODE")
+    # off | shadow | enforce. ENFORCE BY DEFAULT: a deny is refused. Shadow (evaluate, record the
+    # would-deny, refuse nothing) is an explicit, upgrade-time setting only, and identity posture
+    # shows it red for as long as it is on.
+    authz_mode: str = Field(default="enforce", alias="BOSS_AUTHZ_MODE")
     # Per-router override during the rollout: "setup=enforce,github=shadow".
     authz_router_modes: str = Field(default="", alias="BOSS_AUTHZ_ROUTER_MODES")
     # warn | fail. An undeclared route at boot refuses to start (fail, the default since every

@@ -1,6 +1,10 @@
 import os
 
 os.environ["BOSS_EDITION"] = "community"
+# The product ships BOSS_AUTHZ_MODE=enforce (H2). This suite's pre-identity tests drive the API
+# with the legacy keys and claimed actors, so they run the guard in shadow, EXPLICITLY, as an
+# upgrading install would; every identity test enforces per request (IdentityWorld.acting_as).
+os.environ.setdefault("BOSS_AUTHZ_MODE", "shadow")
 
 # CONFINE THIS RUN BEFORE ANYTHING READS DATABASE_URL.
 #

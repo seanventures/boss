@@ -10,6 +10,7 @@ Identity-only throwaway database (BOSS_IDENTITY_TEST_DATABASE_URL), as the other
 """
 from __future__ import annotations
 
+from boss_engine.config import get_settings
 import ast
 import json
 from pathlib import Path
@@ -77,7 +78,7 @@ def test_stamp_job_row_never_keeps_a_payload_identity_and_never_leaves_a_job_una
                     "on_behalf_system": False}
     assert payload["_identity"]["on_behalf_of"] == "usr_alice"
     for mode in ("shadow", "enforce"):
-        monkeypatch.setenv("BOSS_AUTHZ_MODE", mode)
+        monkeypatch.setattr(get_settings(), "authz_mode", mode)
         # Outside any request or run (a system thread, a webhook): BOSS's own work, said so.
         payload, cols = lineage.stamp_job_row({"_identity": {"on_behalf_of": "usr_root", "grant_id": "dlg_x"}})
         assert cols == {"on_behalf_of": "sys_worker", "grant_id": None, "chain": "[]", "on_behalf_system": True}
@@ -87,7 +88,7 @@ def test_stamp_job_row_never_keeps_a_payload_identity_and_never_leaves_a_job_una
 def test_under_enforce_a_background_enqueue_is_system_and_a_request_enqueue_carries_the_person(monkeypatch):
     from boss_engine.identity.principal import AuthContext, AuthMethod, Principal, PrincipalKind, PrincipalStatus
 
-    monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
+    monkeypatch.setattr(get_settings(), "authz_mode", "enforce")
     _, background = lineage.stamp_job_row({"tick": 1})
     assert background["on_behalf_of"] == "sys_worker" and background["on_behalf_system"] is True
     alice = AuthContext(Principal("usr_alice", PrincipalKind.USER, "org_boss", PrincipalStatus.ACTIVE, "A"),

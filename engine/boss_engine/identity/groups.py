@@ -14,10 +14,11 @@ from typing import Any, Optional
 from sqlalchemy import text
 
 from . import authz
-from .bindings import OWNER_ROLE_ID, assert_owner_remains, lock_owners
+from .bindings import (OWNER_ROLE_ID, assert_owner_remains, guard_membership_removals, lock_owners,
+                       refuse_self_raise)
 from .ids import new_id
 from .principal import AuthContext
-from .roles import AccessError, audit_event, permissions_of, require_ceiling, scope_of
+from .roles import AccessError, audit_event, permissions_of, require, require_ceiling, scope_of
 
 GROUP_KEY = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
 
@@ -65,9 +66,24 @@ def _binding_ceilings(db: Any, ctx: AuthContext, group_id: str) -> list[dict]:
                            "WHERE org_id = :o AND subject_type = 'group' AND subject_id = :g"),
                       {"o": org, "g": group_id}).mappings().all()
     for b in rows:
+        if b["role_id"] == OWNER_ROLE_ID:
+            require(ctx, "owner:assign", scope_of(org, "org", org), db=db)          # A31
         require_ceiling(ctx, permissions_of(db, b["role_id"]), scope_of(org, b["scope_type"], b["scope_id"]),
                         db=db)
     return [dict(b) for b in rows]
+
+
+def membership_ceilings(db: Any, ctx: AuthContext, group_ids: Any, *, for_self: bool = False) -> None:
+    """Putting anyone into these groups grants what their bindings carry: the caller must hold it
+    all (A34), and the groups must be this org's MANUAL groups. Every path that adds a member
+    runs this: add_member, and an invitation at create AND at accept (C1)."""
+    org = ctx.principal.org_id
+    for gid in sorted(set(group_ids or ())):
+        _manual(_row(db, org, gid))
+        for b in _binding_ceilings(db, ctx, gid):
+            if for_self:
+                refuse_self_raise(db, ctx, permissions_of(db, b["role_id"]),
+                                  scope_of(org, b["scope_type"], b["scope_id"]))
 
 
 def create_group(db: Any, ctx: AuthContext, *, key: str, name: str, description: str = "") -> dict:
@@ -129,7 +145,7 @@ def add_member(db: Any, ctx: AuthContext, group_id: str, principal_id: str) -> d
         raise AccessError(404, "not_found")
     if kind == "system":
         raise AccessError(422, "system_principal")
-    _binding_ceilings(db, ctx, group_id)                                            # A34
+    membership_ceilings(db, ctx, [group_id], for_self=principal_id == ctx.principal.id)  # A34, A33
     inserted = db.execute(text(
         "INSERT INTO identity_group_members (group_id, principal_id, source, added_by) "
         "VALUES (:g, :p, 'manual', :b) ON CONFLICT DO NOTHING"),
@@ -149,10 +165,8 @@ def remove_member(db: Any, ctx: AuthContext, group_id: str, principal_id: str) -
                               "AND principal_id = :p"), {"g": group_id, "p": principal_id}).first()
     if present is None:
         raise AccessError(404, "not_found")
-    bindings = _binding_ceilings(db, ctx, group_id)
-    if any(b["role_id"] == OWNER_ROLE_ID for b in bindings):
-        lock_owners(db, org)
-        assert_owner_remains(db, org, without_member=(group_id, principal_id))
+    _binding_ceilings(db, ctx, group_id)
+    guard_membership_removals(db, org, [(group_id, principal_id)])
     db.execute(text("DELETE FROM identity_group_members WHERE group_id = :g AND principal_id = :p"),
                {"g": group_id, "p": principal_id})
     audit_event(ctx, "group.member_removed", db=db, target_type="principal", target_id=principal_id,
