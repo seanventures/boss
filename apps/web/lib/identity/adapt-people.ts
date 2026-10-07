@@ -194,7 +194,8 @@ export function adaptGroup(raw: unknown, ctx: { bindings?: Binding[]; names?: Na
     const id = str(m.id ?? m.principal_id);
     const known = ctx.names?.get(id);
     return { id, name: str(m.name ?? m.display_name, known?.name ?? id), email: str(m.email, known?.email ?? ""),
-      hue: num(m.hue, known?.hue ?? hueOf(id)), source: groupSource(m.source) };
+      // A membership without its own source has the group's (a SCIM group's members are SCIM's).
+      hue: num(m.hue, known?.hue ?? hueOf(id)), source: m.source == null ? source : groupSource(m.source) };
   });
   return {
     id: str(r.id), name: str(r.name), description: str(r.description), source,

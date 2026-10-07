@@ -71,7 +71,7 @@ describe("the directory, joined from the real API", () => {
 
   it("gives each group its members (named) and the roles bound to it", () => {
     const g = dir.groups[0];
-    expect(g.members).toEqual([{ id: "usr_ana", name: "Ana", email: "ana@acme.dev", hue: expect.any(Number) }]);
+    expect(g.members).toEqual([{ id: "usr_ana", name: "Ana", email: "ana@acme.dev", hue: expect.any(Number), source: "scim" }]);
     expect(g.member_count).toBe(1);
     expect(g.bindings.map((b) => b.id)).toEqual(["rb_2"]);
     expect(g.provider).toBe("SCIM");
