@@ -198,9 +198,11 @@ def build_me_response(db: Any, ctx: AuthContext) -> MeResponse:
     if required and not f.any_second_factor:
         banners.append(MeBanner(kind="mfa_enrolment_required",
                                 message="Your access needs a second factor. Add a passkey or an authenticator app."))
-    if p.network_bound:
-        banners.append(MeBanner(kind="network_bridge",
-                                message="Anyone who can reach this BOSS acts as the operator. Claim it to finish setup."))
+    # The legacy countdowns, the network bridge, low recovery codes and an Owner recovered from
+    # the host shell: posture owns every other console-wide banner (one source, IDENTITY.md §12).
+    from boss_engine.identity import posture
+
+    banners.extend(MeBanner(**b) for b in posture.banners(ctx, db=db))
     s = ctx.session
     return MeResponse(
         principal_id=p.id, kind=p.kind.value, display_name=p.display_name,

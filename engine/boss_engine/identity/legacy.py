@@ -204,9 +204,38 @@ _events_today: set[tuple[str, str, str, date]] = set()
 _usage_lock = threading.Lock()
 
 
+#: (org, legacy kind, principal) -> that bridge's end, as _resolve last saw it (Sunset header).
+_sunsets: dict[tuple[str, str, str], Optional[datetime]] = {}
+
+
 def invalidate_cache() -> None:
     with _cache_lock:
         _cache.clear()
+        _sunsets.clear()
+
+
+def note_sunset(org_id: str, kind: str, principal_id: str, until: Optional[datetime]) -> None:
+    with _cache_lock:
+        _sunsets[(org_id, kind, principal_id)] = until
+
+
+def deprecation_headers(ctx: Any) -> list[tuple[bytes, bytes]]:
+    """The response headers for a request on a legacy bridge: `Deprecation: true` and, when its
+    cutoff is known, `Sunset: <HTTP date>`. Nothing for a real credential, or for the worker's
+    and SCIM's machine keys, which have no people cutoff."""
+    kind = getattr(ctx, "legacy", None)
+    principal = getattr(ctx, "principal", None)
+    if not kind or principal is None or principal.id in (LEGACY_WORKER_PRINCIPAL,
+                                                         SCIM_LEGACY_PRINCIPAL):
+        return []
+    out = [(b"deprecation", b"true")]
+    with _cache_lock:
+        until = _sunsets.get((principal.org_id, str(kind), principal.id))
+    if until is not None:
+        from email.utils import format_datetime
+
+        out.append((b"sunset", format_datetime(until.astimezone(timezone.utc), usegmt=True).encode()))
+    return out
 
 
 def bridge(creds: RequestCredentials, *, db: Any = None, now: Optional[datetime] = None,
@@ -348,6 +377,7 @@ def _resolve(path: LegacyPath, *, db: Any, now: datetime, settings: Any) -> Opti
                          org_id)
     with _cache_lock:
         _cache[key] = (time.monotonic() + _CACHE_TTL, resolved)
+        _sunsets[(org_id, path.kind.value, principal.id)] = retire_after
     return resolved
 
 
@@ -460,8 +490,12 @@ def step_up_exempt(ctx: AuthContext) -> bool:
     """S2: a request on a legacy bridge cannot step up (no session, no MFA), and the bridges
     exist to behave exactly as today, where nothing asked for step-up (D25, D27, §12 M2). So a
     step-up-flagged permission the bridged principal holds is not refused for lack of step-up.
-    Real sessions, PATs and run tokens never get this."""
-    return bool(ctx.legacy) and ctx.session is None and ctx.run_token is None
+    Real sessions, PATs and run tokens never get this; the one session that does is the shared
+    console password's (it has no factor to step up with, and stays the Operator it was)."""
+    if not ctx.legacy or ctx.run_token is not None:
+        return False
+    return ctx.session is None or (ctx.principal.id == LEGACY_SHARED_PRINCIPAL
+                                   and ctx.legacy == LegacyKind.SHARED_PASSWORD.value)
 
 
 def is_bridge_principal(principal_id: str) -> bool:

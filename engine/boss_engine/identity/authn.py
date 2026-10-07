@@ -303,8 +303,14 @@ def _from_session(creds: RequestCredentials, db: Any, token: str, ip: Optional[s
         if enrolment_only(db, principal.id, row.mfa_at):
             raise AuthnError(ENROLMENT_REQUIRED, 403)
     sessions.touch(db, row, org_id=principal.org_id)
+    from .legacy import LEGACY_SHARED_PRINCIPAL
+
+    # The shared console password's session (signin.shared_password_login) is still a legacy
+    # bridge: it carries the bridge's mark, so banners show its countdown and step-up treats it
+    # as the bridges are treated (it has no factor to step up with).
+    bridged = "shared_password" if principal.id == LEGACY_SHARED_PRINCIPAL else None
     return AuthContext(principal=principal, method=AuthMethod.SESSION, session=row.ref(), ip=ip,
-                       user_agent=ua, request_id=creds.request_id)
+                       user_agent=ua, request_id=creds.request_id, legacy=bridged)
 
 
 def _from_run_token(creds: RequestCredentials, db: Any, token: str, ip: Optional[str],
