@@ -46,6 +46,11 @@ def test_a_sign_in_from_a_new_device_is_emailed_but_not_the_first_or_a_familiar_
     assert _subjects(world, "nd@example.test").count("New sign-in to BOSS") == 1
 
 
+#: Sign-ins that are not a PERSON's: the shared console password (fx-a) signs in the legacy bridge
+#: principal, which has no devices of its own to be told about; it ends at the legacy cutoff.
+BRIDGE_SIGN_INS = frozenset({"engine/boss_engine/identity/signin.py:shared_password_login"})
+
+
 def test_every_sign_in_method_issues_its_session_in_one_place():
     """The class: the new-device notice lives in signin.finish, so every method that signs a person
     IN must issue its session there. The only other callers of sessions.issue ROTATE a session the
@@ -65,7 +70,7 @@ def test_every_sign_in_method_issues_its_session_in_one_place():
                         where = f"{path.relative_to(ROOT)}:{fn.name}"
                         callers.append(where)
                         replaces = next((k for k in node.keywords if k.arg == "replaces"), None)
-                        if where.endswith(":finish"):
+                        if where.endswith(":finish") or where in BRIDGE_SIGN_INS:
                             continue
                         if replaces is None or ast.unparse(replaces.value) == "None":
                             rotations_without_replaces.append(where)
