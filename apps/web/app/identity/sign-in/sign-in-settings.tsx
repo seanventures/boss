@@ -11,17 +11,21 @@
  */
 import React, { useState } from "react";
 import {
-  AppleLogo, CheckCircle, EnvelopeSimple, GithubLogo, GoogleLogo, Key, Plugs, ShieldCheck, Warning, WindowsLogo, WifiHigh,
-  Globe,
+  AppleLogo, ArrowsClockwise, LockSimple, CheckCircle, EnvelopeSimple, GithubLogo, GoogleLogo, Key, PencilSimple, Plugs, Plus, ShieldCheck, Trash, Warning,
+  WindowsLogo, WifiHigh, Globe,
 } from "@phosphor-icons/react";
 
 import { CanButton, useCan, useGuardedCall } from "../../../components/identity/identity-provider";
-import { Pill, daysUntil, shortDate, useNow } from "../../../components/identity/kit";
+import { ErrorLine, Perm, Pill, Sheet, daysUntil, shortDate, useNow } from "../../../components/identity/kit";
+import { EmptyState, ErrorState, type ReadFailure } from "../../../components/identity/states";
 import { GITHUB_ACCESS_AUTOMATIC, REQUIRE_SIGN_IN, policyChanges, providerView } from "../../../lib/identity/adapt-admin";
-import { IdentityError, idPatch, idPost, idPut } from "../../../lib/identity/api";
+import { IdentityError, idDelete, idPatch, idPost, idPut } from "../../../lib/identity/api";
 import type { AuthOptions, Posture, Provider, SecurityPolicy } from "../../../lib/identity/types";
 import { PUBLIC_URL_HOWTO } from "../../../lib/identity/public-url";
 import { showToast } from "../../client-forms";
+import { providerRefusal, testFailureWords } from "./provider-form";
+import { ProviderSheet } from "./provider-sheet";
+import { ProviderSync } from "./provider-sync";
 
 const PRESET_ICON: Partial<Record<Provider["preset"], React.ReactNode>> = {
   google: <GoogleLogo size={18} weight="bold" aria-hidden />, github: <GithubLogo size={18} weight="fill" aria-hidden />,
@@ -29,11 +33,16 @@ const PRESET_ICON: Partial<Record<Provider["preset"], React.ReactNode>> = {
 };
 const ROLES = ["owner", "admin", "operator", "viewer", "auditor"] as const;
 const PROTOCOL_LABEL: Record<Provider["protocol"], string> = { oidc: "OIDC", saml: "SAML", oauth2: "OAuth" };
+const PROTOCOL_TIP: Record<Provider["protocol"], string> = { oidc: "OpenID Connect", saml: "SAML 2.0", oauth2: "GitHub sign-in (OAuth)" };
 
 /** The API's own sentence for a policy refusal (409 policy_refused, 422 invalid_policy). */
 function refusalText(e: unknown, fallback: string): string {
   if (!(e instanceof IdentityError)) return fallback;
   return e.detail && (e.code === "policy_refused" || e.code === "invalid_policy") ? e.detail : e.message;
+}
+
+function NeedsLine({ p }: { p: "security_policy:read" | "user:read" }) {
+  return <div className="idn-row idn-dim"><LockSimple size={14} aria-hidden /> Needs <Perm p={p} sm /></div>;
 }
 
 function Toggle({ on, label, onChange, disabled, reason, testId }: {
@@ -66,9 +75,40 @@ function Choice<T extends string | number>({ label, value, options, onChange, di
   );
 }
 
-function ProviderCard({ initial }: { initial: Provider }) {
-  const [p, setP] = useState(() => providerView(initial));
+/** Remove a provider: it stops showing on sign-in for good and its sync tokens are revoked. */
+function RemoveProvider({ p, onDone, onClose }: { p: Provider; onDone: (p: Provider) => void; onClose: () => void }) {
+  const guarded = useGuardedCall();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <Sheet title={`Remove ${p.name}?`} icon={<Trash size={18} aria-hidden />} onClose={onClose} testId="remove-provider">
+      <p className="idn-lede2" data-copy="prose">Nobody can sign in with it after this, and its directory-sync tokens stop working. People keep their BOSS accounts; their links stay for the audit trail.</p>
+      <ErrorLine error={error} />
+      <div className="idn-mf">
+        <span className="idn-spacer" />
+        <button type="button" className="idn-btn ghost" onClick={onClose}>Cancel</button>
+        <button type="button" className="idn-btn danger" disabled={busy} data-testid="remove-provider-confirm" onClick={async () => {
+          setBusy(true);
+          try {
+            await guarded(`Removing ${p.name} changes how people sign in.`, () => idDelete(`/v1/identity/providers/${encodeURIComponent(p.id)}`));
+            showToast("success", "Provider removed");
+            onDone({ ...p, status: "disabled" });
+            onClose();
+          } catch (e) {
+            if (!(e instanceof IdentityError && e.code === "step_up_cancelled")) setError(e instanceof IdentityError ? e.message : "Not removed");
+            setBusy(false);
+          }
+        }}><Trash size={14} aria-hidden /> {busy ? "Removing…" : "Remove"}</button>
+      </div>
+    </Sheet>
+  );
+}
+
+function ProviderCard({ initial, origin, onChange }: { initial: Provider; origin: string | null | undefined; onChange: (p: Provider) => void }) {
+  const [p, setPState] = useState(() => providerView(initial));
+  const setP = (next: Provider) => { setPState(next); onChange(next); };
   const [testing, setTesting] = useState(false);
+  const [sheet, setSheet] = useState<"edit" | "sync" | "remove" | null>(null);
   const can = useCan("identity_provider:manage");
   const guarded = useGuardedCall();
   const patch = async (change: Partial<Provider>) => {
@@ -79,7 +119,9 @@ function ProviderCard({ initial }: { initial: Provider }) {
       showToast("success", "Provider saved");
     } catch (e) {
       setP(before);
-      showToast("error", refusalText(e, "Not saved"));
+      if (!(e instanceof IdentityError && e.code === "step_up_cancelled")) {
+        showToast("error", e instanceof IdentityError ? providerRefusal(e.code, e.detail) || refusalText(e, "Not saved") : "Not saved");
+      }
     }
   };
   return (
@@ -87,30 +129,33 @@ function ProviderCard({ initial }: { initial: Provider }) {
       <div className="idn-card-h">
         <span className="idn-ico">{PRESET_ICON[p.preset] ?? <Key size={16} aria-hidden />}</span>
         <h3 id={`prov-${p.id}`}>{p.name}</h3>
-        <span className="idn-tag">{PROTOCOL_LABEL[p.protocol]}</span>
-        <Pill tone={p.status === "active" ? "ok" : "mute"}>{p.status}</Pill>
+        <span className="idn-tag" title={PROTOCOL_TIP[p.protocol]}>{PROTOCOL_LABEL[p.protocol]}</span>
+        <Pill tone={p.status === "active" ? "ok" : "mute"} tip={p.status === "active" ? "Shown on the sign-in page" : "Hidden from the sign-in page"}>{p.status === "active" ? "on" : "off"}</Pill>
         <span className="idn-spacer" />
-        <CanButton permission="identity_provider:manage" className="idn-btn sm" disabled={testing} tip="Runs discovery, JWKS and the redirect check"
+        <CanButton permission="identity_provider:manage" className="idn-btn sm" disabled={testing} tip="Checks BOSS can reach it and read its keys"
           onClick={async () => {
             setTesting(true);
             try {
               const r = await idPost<{ ok: boolean; error?: string }>(`/v1/identity/providers/${encodeURIComponent(p.id)}/test`, {});
-              showToast(r.ok ? "success" : "error", r.ok ? "Test passed" : r.error ? `Test failed · ${r.error}` : "Test failed");
+              showToast(r.ok ? "success" : "error", r.ok ? "Test passed" : testFailureWords(r.error));
             } catch (e) {
               showToast("error", e instanceof IdentityError ? e.message : "Test failed");
             } finally { setTesting(false); }
           }}>
-          <Plugs size={14} aria-hidden /> {testing ? "Testing…" : "Test sign-in"}
+          <Plugs size={14} aria-hidden /> {testing ? "Testing…" : "Test"}
+        </CanButton>
+        <CanButton permission="identity_provider:manage" className="idn-btn sm" tip="Name, client, domains and options" onClick={() => setSheet("edit")} data-testid={`provider-edit-${p.id}`}>
+          <PencilSimple size={14} aria-hidden /> Edit
         </CanButton>
       </div>
       <dl className="idn-kv">
         {p.issuer ? <><dt>Issuer</dt><dd><code className="idn-mono" data-copy="data">{p.issuer}</code></dd></> : null}
         <dt>Keys</dt>
-        <dd>{p.protocol === "oauth2" ? <span className="idn-dim">no id_token (OAuth)</span>
+        <dd>{p.protocol === "oauth2" ? <span className="idn-dim">GitHub account, checked at each sign-in</span>
           : p.protocol === "saml" ? <span className="idn-dim">{p.saml_certificate_count} signing certificate{p.saml_certificate_count === 1 ? "" : "s"}</span>
           : <span className="idn-dim">checked by Test sign-in</span>}</dd>
         <dt>Domains</dt><dd>{p.domains.length ? p.domains.map((d) => <span key={d} className="idn-chip">{d}</span>) : <span className="idn-dim">any</span>}</dd>
-        {p.groups_claim ? <><dt>Groups</dt><dd><code className="idn-mono">{p.groups_claim}</code> claim</dd></> : null}
+        {p.groups_claim ? <><dt>Groups</dt><dd>read from “{p.groups_claim}”</dd></> : null}
       </dl>
       <div className="idn-acts2 idn-prov-opts">
         <Toggle on={p.jit_mode === "domain"} label="Create people on first sign-in" disabled={!can.allowed} reason={can.reason}
@@ -118,17 +163,39 @@ function ProviderCard({ initial }: { initial: Provider }) {
         <Toggle on={p.trust_idp_mfa} label="Trust its MFA" disabled={!can.allowed} reason={can.reason} onChange={(v) => patch({ trust_idp_mfa: v })} />
         <Toggle on={p.enforce_sso} label="Require it for domains" disabled={!can.allowed || !p.domains.length}
           reason={!can.allowed ? can.reason : "Add a domain first"} onChange={(v) => patch({ enforce_sso: v })} />
+        <Toggle on={p.status === "active"} label="On sign-in page" disabled={!can.allowed} reason={can.reason} testId={`provider-status-${p.id}`}
+          onChange={(v) => patch({ status: v ? "active" : "disabled" })} />
       </div>
+      <div className="idn-row idn-prov-foot">
+        <CanButton permission="identity_provider:manage" className="idn-btn sm ghost" tip={p.protocol === "oauth2" ? "Directory sync tokens" : "Group mappings and directory sync"}
+          onClick={() => setSheet("sync")} data-testid={`provider-sync-${p.id}`}>
+          <ArrowsClockwise size={14} aria-hidden /> {p.protocol === "oauth2" ? "Sync" : "Groups and sync"}
+        </CanButton>
+        <span className="idn-spacer" />
+        <CanButton permission="identity_provider:manage" className="idn-btn sm ghost" tip="Stops sign-in with it for good" onClick={() => setSheet("remove")} data-testid={`provider-remove-${p.id}`}>
+          <Trash size={14} aria-hidden /> Remove
+        </CanButton>
+      </div>
+      {sheet === "edit" ? <ProviderSheet initial={p} origin={origin} onSaved={(n) => setP(n)} onClose={() => setSheet(null)} /> : null}
+      {sheet === "sync" ? <ProviderSync provider={p} origin={origin} onClose={() => setSheet(null)} /> : null}
+      {sheet === "remove" ? <RemoveProvider p={p} onDone={setP} onClose={() => setSheet(null)} /> : null}
     </article>
   );
 }
 
-export function SignInSettings({ providers, policy: initialPolicy, legacy, publicUrl }: {
+export function SignInSettings({ providers, policy: initialPolicy, legacy, publicUrl, failures = {} }: {
   providers: Provider[]; policy: SecurityPolicy | null; legacy: Posture["legacy"] | null;
+  /** Reads that FAILED (not merely refused): shown as an error, never as an empty list. */
+  failures?: { providers?: ReadFailure | null; policy?: ReadFailure | null; legacy?: ReadFailure | null };
   /** GET /v1/auth/options public_origin / public_origin_source (H2); the posture's "origin" fix links here. */
   publicUrl?: Pick<AuthOptions, "public_origin" | "public_origin_source">;
 }) {
   const now = useNow();
+  const [list, setList] = useState<Provider[]>(() => providers.map(providerView));
+  const [adding, setAdding] = useState(false);
+  const origin = publicUrl?.public_origin ?? null;
+  const shown = [...list].sort((a, b) => Number(b.status === "active") - Number(a.status === "active"));
+  const onCount = list.filter((p) => p.status === "active").length;
   const [saved, setSaved] = useState(initialPolicy);
   const [policy, setPolicy] = useState(initialPolicy);
   const [saving, setSaving] = useState(false);
@@ -163,12 +230,30 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy, publi
       <section aria-labelledby="idn-prov-h">
         <div className="idn-sec-h">
           <h1 id="idn-prov-h" className="idn-h1">Sign-in & SSO</h1>
-          <span className="idn-sub" title="Each shows as a button on the sign-in page">{providers.length} providers · on sign-in</span>
+          {!failures.providers ? <span className="idn-sub" title="Each one on shows as a button on the sign-in page">{onCount} on the sign-in page</span> : null}
+          <span className="idn-spacer" />
+          {!failures.providers && list.length ? (
+            <CanButton permission="identity_provider:manage" className="idn-btn primary" onClick={() => setAdding(true)} tip="Google, Microsoft, Okta, SAML and more" data-testid="provider-add">
+              <Plus size={15} weight="bold" aria-hidden /> Add provider
+            </CanButton>
+          ) : null}
         </div>
-        <div className="idn-prov-grid">
-          {providers.map((p) => <ProviderCard key={p.id} initial={p} />)}
-          {!providers.length ? <div className="idn-card idn-dim" data-copy="prose">No providers yet: people sign in with a passkey or password.</div> : null}
-        </div>
+        {failures.providers ? <ErrorState what="sign-in providers" failure={failures.providers} testId="providers-error" /> : list.length ? (
+          <div className="idn-prov-grid">
+            {shown.map((p) => <ProviderCard key={p.id} initial={p} origin={origin}
+              onChange={(n) => setList((l) => l.map((x) => (x.id === n.id ? n : x)))} />)}
+          </div>
+        ) : (
+          <EmptyState icon={<Key size={20} />} title="No single sign-on yet" testId="providers-empty"
+            action={(
+              <CanButton permission="identity_provider:manage" className="idn-btn primary" onClick={() => setAdding(true)} tip="Google, Microsoft, Okta, SAML and more" data-testid="provider-add">
+                <Plus size={15} weight="bold" aria-hidden /> Add provider
+              </CanButton>
+            )}>
+            People sign in with a passkey or password. Add your company's identity provider so they can use their work account.
+          </EmptyState>
+        )}
+        {adding ? <ProviderSheet origin={origin} onSaved={(n) => setList((l) => [...l.filter((x) => x.id !== n.id), n])} onClose={() => setAdding(false)} /> : null}
       </section>
 
       <section className="idn-card" id="policy" aria-labelledby="idn-policy-h">
@@ -240,7 +325,7 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy, publi
               </div>
             </div>
           </div>
-        ) : <div className="idn-row idn-dim">Policy needs <code className="idn-perm">security_policy:read</code></div>}
+        ) : failures.policy ? <ErrorState compact what="the security policy" failure={failures.policy} /> : <NeedsLine p="security_policy:read" />}
       </section>
 
       <section className="idn-card" id="public-url" aria-labelledby="idn-url-h">
@@ -276,7 +361,7 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy, publi
 
       <section className="idn-card" id="legacy" aria-labelledby="idn-legacy-h">
         <div className="idn-card-h"><h2 id="idn-legacy-h">Legacy paths</h2><span className="idn-sub">retire each one</span></div>
-        {legacy === null ? <div className="idn-row idn-dim">Needs <code className="idn-perm">user:read</code></div>
+        {legacy === null ? (failures.legacy ? <ErrorState compact what="the legacy paths" failure={failures.legacy} /> : <NeedsLine p="user:read" />)
           : legacy.length ? legacy.map((l) => {
             const days = daysUntil(l.until, now);
             return (

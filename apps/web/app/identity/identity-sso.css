@@ -1,1 +1,31 @@
 /* Identity › Sign-in: providers, group mapping and SCIM keys (idn- classes, tokens only). */
+
+/* the provider card's footer row: Groups and sync · Remove */
+.idn-prov-foot { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+
+/* add: pick a kind */
+.idn-sso-kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.idn-sso-kind { display: flex; align-items: center; justify-content: center; min-height: 52px; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--idn-well); color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; transition: border-color 120ms, background 120ms; }
+.idn-sso-kind:hover, .idn-sso-kind:focus-visible { border-color: color-mix(in srgb, var(--teal) 70%, transparent); background: color-mix(in srgb, var(--teal) 8%, transparent); outline: none; }
+
+/* the form */
+.idn-sheet .idn-sso-form .idn-field + .idn-field { margin-top: 0; }
+.idn-sso-checks { display: flex; flex-direction: column; gap: 8px; }
+.idn-sso-urls { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.idn-copyrow { padding: 8px 8px 8px 12px; }
+.idn-copyrow code { font-size: 12px; }
+
+/* groups and sync */
+.idn-sso-maps { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.idn-sso-map { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 8px; align-items: center; color: var(--faint); }
+.idn-sso-newkey { margin-top: 12px; flex-wrap: wrap; }
+.idn-sso-newkey .idn-input { flex: 1 1 140px; width: auto; }
+.idn-sheet section + section { margin-top: 8px; }
+.idn-sheet h3 { display: flex; align-items: center; gap: 8px; }
+
+@media (max-width: 560px) {
+  .idn-sso-form { grid-template-columns: minmax(0, 1fr); }
+  .idn-sso-map { grid-template-columns: minmax(0, 1fr) auto; }
+  .idn-sso-map > span { display: none; }
+  .idn-sso-map select { grid-column: 1 / 2; }
+}

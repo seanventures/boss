@@ -14,13 +14,14 @@
  * cell it names. Built-in roles are read-only: clone one to change it. The API re-checks it all.
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowCounterClockwise, CaretDown, CaretRight, ClockCounterClockwise, CopySimple, Key, LockSimple, MagnifyingGlass, ShieldCheck, Warning } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, CaretDown, CaretRight, ClockCounterClockwise, CopySimple, Key, LockSimple, MagnifyingGlass, ShieldCheck, Trash, Warning } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../../agent-avatar";
 import { CanButton, useCan, useGuardedCall, useIdentity } from "../../../../components/identity/identity-provider";
 import { ErrorLine, Face, Perm, Sheet, shortDate } from "../../../../components/identity/kit";
 import { showToast } from "../../../client-forms";
-import { IdentityError, idGet, idPatch, idPost } from "../../../../lib/identity/api";
+import { IdentityError, idDelete, idGet, idPatch, idPost } from "../../../../lib/identity/api";
+import { permissionName } from "../../../../lib/identity/words";
 import { PERMISSION_META, isPermission, type Permission } from "../../../../lib/identity/permissions.gen";
 import { adaptRole, adaptRolePreview } from "../../../../lib/identity/adapt-people";
 import type { AccessRole, RolePreview, RoleVersion } from "../../../../lib/identity/types";
@@ -34,7 +35,7 @@ type Cell = { on: boolean; change: "add" | "remove" | null; locked: boolean; err
 function Toggle({ p, cell, readOnly, why, onFlip }: { p: Permission; cell: Cell; readOnly: boolean; why: string; onFlip: (p: Permission) => void }) {
   const meta = PERMISSION_META[p];
   const off = readOnly || cell.locked;
-  const tip = cell.error ? `You don't hold ${p}` : cell.locked ? "You don't hold this" : readOnly ? why
+  const tip = cell.error ? `You don't hold “${meta.title}”` : cell.locked ? "You don't hold this" : readOnly ? why
     : `${meta.title}${meta.critical ? " · critical" : ""}${meta.stepUp ? " · step-up at use" : ""}`;
   return (
     <button type="button" className="idn-tg" aria-pressed={cell.on} aria-disabled={off || undefined}
@@ -50,8 +51,103 @@ function Toggle({ p, cell, readOnly, why, onFlip }: { p: Permission; cell: Cell;
   );
 }
 
-export function RoleEditor({ role: initial, versions, names = {} }: {
+/** "2 direct, 1 through Builders and 3 through Release" — every group by name, with its count. */
+export function impactSplit(direct: number, viaGroups: { group: string; count: number }[]): string {
+  const parts = [`${direct} direct`, ...viaGroups.map((g) => `${g.count} through ${g.group}`)];
+  return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/** An agent's change line from the preview ("−deployment:read +x") with permission names. */
+function changeWords(change: string): string {
+  return change.split(/\s+/).filter(Boolean).map((t) => {
+    const sign = /^[+−-]/.test(t) ? t[0] : "";
+    const key = sign ? t.slice(1) : t;
+    return key.includes(":") ? `${sign}${permissionName(key)}` : t;
+  }).join(", ");
+}
+
+/** The API's added preview fields (counts, pages, routes, tools), laid over the adapted preview. */
+type PreviewCounts = { people: number; groups: number; service_accounts: number; agents: number; grants: number };
+function withExtras(base: RolePreview, raw: unknown): RolePreview & { counts: PreviewCounts | null } {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const pair = (v: unknown) => (v && typeof v === "object" ? v as { gained?: unknown; lost?: unknown } : null);
+  const pages = pair(r.pages), routes = pair(r.routes), tools = pair(r.tools);
+  const c = r.counts && typeof r.counts === "object" ? r.counts as Record<string, unknown> : null;
+  const n = (v: unknown) => (typeof v === "number" ? v : 0);
+  return {
+    ...base,
+    pages: pages && Array.isArray(pages.gained) ? { gained: pages.gained.map(String), lost: Array.isArray(pages.lost) ? pages.lost.map(String) : [] } : base.pages,
+    routes: routes && typeof routes.gained === "number" ? { gained: n(routes.gained), lost: n(routes.lost) } : base.routes,
+    tools: tools && typeof tools.gained === "number" ? { gained: n(tools.gained), lost: n(tools.lost) } : base.tools,
+    counts: c ? { people: n(c.people), groups: n(c.groups), service_accounts: n(c.service_accounts), agents: n(c.agents), grants: n(c.grants) } : null,
+  };
+}
+
+/** Delete a custom role. One that still has holders moves them to another role first. */
+function DeleteRole({ role, roles, onClose }: { role: AccessRole; roles: AccessRole[]; onClose: () => void }) {
+  const guarded = useGuardedCall();
+  const [inUse, setInUse] = useState<number>(role.holders);
+  const [to, setTo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const targets = roles.filter((r) => r.id !== role.id && !r.system && r.key !== "owner");
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (inUse > 0) {
+        await guarded(`Moving ${role.name}'s holders changes their access.`, () =>
+          idPost(`/v1/identity/access-roles/${encodeURIComponent(role.id)}/reassign`, { to_role_id: to, delete: true }));
+      } else {
+        await guarded(`Deleting ${role.name} removes it for good.`, () => idDelete(`/v1/identity/access-roles/${encodeURIComponent(role.id)}`));
+      }
+      showToast("success", "Role deleted");
+      window.location.assign("/identity/roles");
+    } catch (e) {
+      if (e instanceof IdentityError && e.code === "role_in_use") {
+        setInUse(typeof e.body.bindings === "number" ? e.body.bindings : Math.max(1, role.holders));
+      } else if (e instanceof IdentityError && e.code === "scope_not_bindable") {
+        setError("That role can't be bound everywhere this one is");
+      } else if (e instanceof IdentityError && e.code === "same_role") {
+        setError("Choose a different role");
+      } else if (!(e instanceof IdentityError && e.code === "step_up_cancelled")) {
+        setError(e instanceof IdentityError ? e.message : "Not deleted");
+      }
+      setBusy(false);
+    }
+  };
+  return (
+    <Sheet title={`Delete ${role.name}`} icon={<Trash size={18} aria-hidden />} onClose={onClose} testId="delete-role">
+      {inUse > 0 ? (
+        <>
+          <p className="idn-lede2" data-copy="prose">
+            {inUse} {inUse === 1 ? "person or group holds" : "people and groups hold"} this role. Move them to another role first; then it is deleted.
+          </p>
+          <div className="idn-field">
+            <label htmlFor="reassign-to">Move holders to</label>
+            <select id="reassign-to" className="idn-input" value={to} onChange={(e) => setTo(e.target.value)} data-autofocus data-testid="reassign-to">
+              <option value="">Choose a role</option>
+              {targets.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </div>
+        </>
+      ) : <p className="idn-lede2" data-copy="prose">Nobody holds it. Its history stays in the audit log.</p>}
+      <ErrorLine error={error} />
+      <div className="idn-mf">
+        <span className="idn-spacer" />
+        <button type="button" className="idn-btn ghost" onClick={onClose}>Cancel</button>
+        <button type="button" className="idn-btn danger" disabled={busy || (inUse > 0 && !to)} onClick={run} data-testid="delete-role-confirm">
+          <Trash size={14} aria-hidden /> {busy ? "Deleting…" : inUse > 0 ? "Move and delete" : "Delete role"}
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
+export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: {
   role: AccessRole; versions: RoleVersion[]; names?: Record<string, { name: string; hue: number }>;
+  /** Every access role, for "move holders to" when deleting this one. */
+  roles?: AccessRole[];
 }) {
   const nameMap = useMemo(() => new Map(Object.entries(names)), [names]);
   const { org, mirrored } = useIdentity();
@@ -62,10 +158,12 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
   const [draft, setDraft] = useState<Set<Permission>>(() => new Set(initial.permissions));
   const [name, setName] = useState(initial.name);
   const [description, setDescription] = useState(initial.description);
+  const [scopes, setScopes] = useState<("org" | "project")[]>(initial.bindable_scopes);
+  const [deleting, setDeleting] = useState(false);
   const [filter, setFilter] = useState("");
   const [onlyChanges, setOnlyChanges] = useState(false);
   const [open, setOpen] = useState<Set<string>>(() => new Set(MATRIX.filter((c) => OPEN_BY_DEFAULT.has(c.name)).map((c) => c.name)));
-  const [preview, setPreview] = useState<RolePreview | null>(null);
+  const [preview, setPreview] = useState<(RolePreview & { counts: PreviewCounts | null }) | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [ceiling, setCeiling] = useState<Set<Permission>>(new Set());
   const [confirming, setConfirming] = useState(false);
@@ -80,7 +178,8 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
   const base = useMemo(() => new Set(role.permissions), [role.permissions]);
   const added = useMemo(() => ROLE_PERMS.filter((p) => draft.has(p) && !base.has(p)), [draft, base]);
   const removed = useMemo(() => ROLE_PERMS.filter((p) => !draft.has(p) && base.has(p)), [draft, base]);
-  const dirty = added.length + removed.length > 0 || name !== role.name || description !== role.description;
+  const scopesDirty = [...scopes].sort().join() !== [...role.bindable_scopes].sort().join();
+  const dirty = added.length + removed.length > 0 || name !== role.name || description !== role.description || scopesDirty;
   const permsDirty = added.length + removed.length > 0;
   const criticalAdds = added.filter((p) => PERMISSION_META[p].critical);
 
@@ -89,7 +188,7 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
     if (!permsDirty) { setPreview(null); setPreviewError(null); return; }
     const t = window.setTimeout(() => {
       idPost<unknown>(`/v1/identity/access-roles/${encodeURIComponent(role.id)}/preview`, { permissions: [...draft] })
-        .then((p) => { setPreview(adaptRolePreview(p, nameMap)); setPreviewError(null); })
+        .then((p) => { setPreview(withExtras(adaptRolePreview(p, nameMap), p)); setPreviewError(null); })
         .catch((e) => setPreviewError(e instanceof IdentityError ? e.message : "No preview"));
     }, 250);
     return () => window.clearTimeout(t);
@@ -110,7 +209,7 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
   const visible = (p: Permission) => (!q || p.includes(q) || PERMISSION_META[p].title.toLowerCase().includes(q))
     && (!onlyChanges || added.includes(p) || removed.includes(p));
 
-  const people = preview?.affected.people.length ?? role.holders;
+  const people = preview?.counts?.people ?? preview?.affected.people.length ?? role.holders;
 
   const save = async () => {
     setSaving(true);
@@ -120,11 +219,13 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
         // The typed name is the console's own gate; the API's is the list of critical keys.
         () => idPatch<unknown>(`/v1/identity/access-roles/${encodeURIComponent(role.id)}`, {
           permissions: [...draft], name, description, confirm_critical: criticalAdds,
+          ...(scopesDirty ? { bindable_scopes: scopes } : {}),
         })).then((r) => ({ ...adaptRole(r), cloned_from: role.cloned_from }));
       setRole(next);
       setDraft(new Set(next.permissions));
       setName(next.name);
       setDescription(next.description);
+      setScopes(next.bindable_scopes);
       setConfirming(false);
       setTyped("");
       showToast("success", `Saved v${next.version}`);
@@ -135,7 +236,7 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
         : [];
       if (lacking.length) {
         setCeiling((c) => new Set([...c, ...lacking]));
-        setError(`You don't hold ${lacking.join(", ")}`);
+        setError(`You don't hold ${lacking.map((p) => `“${permissionName(p)}”`).join(", ")}`);
         setConfirming(false);
       } else if (e instanceof IdentityError && (e.code === "confirmation_required" || e.code === "confirm_required")) {
         setConfirming(true);
@@ -151,7 +252,7 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
     save();
   };
   const discard = () => {
-    setDraft(new Set(role.permissions)); setName(role.name); setDescription(role.description); setCeiling(new Set()); setError(null);
+    setDraft(new Set(role.permissions)); setName(role.name); setDescription(role.description); setScopes(role.bindable_scopes); setCeiling(new Set()); setError(null);
   };
   const loadVersion = async (v: RoleVersion) => {
     try {
@@ -186,6 +287,11 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
           <ClockCounterClockwise size={15} aria-hidden /> History
         </button>
         {!role.builtin ? (
+          <CanButton permission="access_role:manage" className="idn-btn" onClick={() => setDeleting(true)} tip="Delete it; its holders move to another role" data-testid="delete-role-open">
+            <Trash size={15} aria-hidden /> Delete
+          </CanButton>
+        ) : null}
+        {!role.builtin ? (
           <CanButton permission="access_role:manage" className="idn-btn primary" onClick={review} disabled={!dirty || saving}
             tip="See who it affects, then confirm it's you" data-testid="review-save">
             <Key size={15} aria-hidden /> Review and save
@@ -210,11 +316,18 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
           <div className="idn-field">
             <span className="idn-label">Can be bound at</span>
             <div className="idn-segs idn-segs-2">
-              {(["org", "project"] as const).map((s) => (
-                <button key={s} type="button" aria-pressed={role.bindable_scopes.includes(s)} aria-disabled title={s === "org" ? "Every project, now and later" : "One project at a time"}>
-                  {s === "org" ? "Org" : "Project"}
-                </button>
-              ))}
+              {(["org", "project"] as const).map((sc) => {
+                const on = scopes.includes(sc);
+                const last = on && scopes.length === 1;
+                const locked = readOnly || last;
+                return (
+                  <button key={sc} type="button" aria-pressed={on} aria-disabled={locked || undefined} data-testid={`scope-${sc}`}
+                    title={readOnly ? readOnlyWhy : last ? "A role binds somewhere" : sc === "org" ? "Every project, now and later" : "One project at a time"}
+                    onClick={() => { if (!locked) setScopes((x) => (on ? x.filter((v) => v !== sc) : [...x, sc])); }}>
+                    {sc === "org" ? "Org" : "Project"}
+                  </button>
+                );
+              })}
             </div>
           </div>
           {role.cloned_from ? (
@@ -281,7 +394,7 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
                     </div>
                     <span className="idn-cnt">{r.perms.filter((p) => draft.has(p)).length}/{r.perms.length}</span>
                     {perms.filter((p) => ceiling.has(p)).map((p) => (
-                      <span key={p} className="idn-cell-err" role="alert">You don't hold {p}</span>
+                      <span key={p} className="idn-cell-err" role="alert">You don't hold “{PERMISSION_META[p].title}”</span>
                     ))}
                   </div>
                 ))}
@@ -305,11 +418,11 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
             {permsDirty ? (
               <div className="idn-diff" data-testid="diff">
                 {added.map((p) => (
-                  <div key={p} className="idn-dl p"><b>+</b>{p}{PERMISSION_META[p].critical ? <span className="idn-tag bad">critical</span> : null}</div>
+                  <div key={p} className="idn-dl p" title={p}><b>+</b>{PERMISSION_META[p].title}{PERMISSION_META[p].critical ? <span className="idn-tag bad">critical</span> : null}</div>
                 ))}
-                {removed.map((p) => <div key={p} className="idn-dl m"><b>−</b>{p}</div>)}
+                {removed.map((p) => <div key={p} className="idn-dl m" title={p}><b>−</b>{PERMISSION_META[p].title}</div>)}
               </div>
-            ) : <span className="idn-dim">No changes yet</span>}
+            ) : scopesDirty ? <span className="idn-dim">Where it can be bound changes</span> : <span className="idn-dim">No changes yet</span>}
           </section>
 
           <section className="idn-imp" aria-labelledby="idn-impact-h" aria-live="polite" data-testid="impact">
@@ -317,9 +430,11 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
             {preview ? (
               <>
                 <div className="idn-bigt">Affects <span>{preview.affected.people.length} {preview.affected.people.length === 1 ? "person" : "people"}</span></div>
-                <div className="idn-dim idn-small">
-                  {preview.affected.direct} direct{preview.affected.via_groups.map((g) => ` · ${g.count} through the group `).join("")}
-                  {preview.affected.via_groups[0] ? <b>{preview.affected.via_groups[0].group}</b> : null}
+                <div className="idn-dim idn-small" data-testid="impact-split">
+                  {impactSplit(preview.affected.direct, preview.affected.via_groups)}
+                  {preview.counts && (preview.counts.service_accounts || preview.counts.agents)
+                    ? ` · ${preview.counts.service_accounts} service ${preview.counts.service_accounts === 1 ? "account" : "accounts"} · ${preview.counts.agents} ${preview.counts.agents === 1 ? "agent" : "agents"}`
+                    : ""}
                 </div>
                 <div className="idn-row idn-imp-people">
                   <span className="idn-stack">{preview.affected.people.map((p) => <Face key={p.id} name={p.name} tone={p.hue} size={26} />)}</span>
@@ -337,13 +452,13 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
                   <div key={a.id} className="idn-ip">
                     <AgentAvatar agent={a.id.replace(/^agt_/, "")} size={24} tip={a.name} />
                     <span>{a.name} · {a.grants} {a.grants === 1 ? "grant" : "grants"}</span>
-                    <span className={`idn-r ${a.change ? "idn-bad" : "idn-ok"}`} data-copy="data">{a.change ?? "unchanged"}</span>
+                    <span className={`idn-r ${a.change ? "idn-bad" : "idn-ok"}`} data-copy="data">{a.change ? changeWords(a.change) : "unchanged"}</span>
                   </div>
                 ))}
                 {preview.warnings.map((w) => (
                   <div key={w.permission} className="idn-note" data-copy="prose">
                     <Warning size={15} aria-hidden />
-                    <span><b className="idn-mono">{w.permission}</b> is {w.text}. {PERMISSION_META[w.permission].delegable ? "" : "Agents gain nothing from it. "}You'll type the role name, then confirm it's you.</span>
+                    <span><b title={w.permission}>{PERMISSION_META[w.permission].title}</b> is {w.text}. {PERMISSION_META[w.permission].delegable ? "" : "Agents gain nothing from it. "}You'll type the role name, then confirm it's you.</span>
                   </div>
                 ))}
               </>
@@ -372,6 +487,7 @@ export function RoleEditor({ role: initial, versions, names = {} }: {
         </div>
       </div>
 
+      {deleting ? <DeleteRole role={role} roles={roles} onClose={() => setDeleting(false)} /> : null}
       {confirming ? (
         <Sheet title="Confirm a critical change" icon={<Warning size={18} className="idn-warn" aria-hidden />} onClose={() => { setConfirming(false); setTyped(""); }} testId="critical-confirm">
           <p className="idn-lede2" data-copy="prose">These are critical. Type the role name to add them for {people} {people === 1 ? "person" : "people"}.</p>
