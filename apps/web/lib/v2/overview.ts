@@ -59,6 +59,27 @@ export function emptyOverview(projectId: string, reason: string): CompanyOvervie
   };
 }
 
+/**
+ * THE OVERVIEW IS ALWAYS WHOLE. The API's composite view leaves out a section the caller may not
+ * read (a custom role without budget:read gets no `burn`), and the Shell read
+ * `overview.burn.spent_usd` — every v2 screen "hit an error" for that role (round 3 role walk).
+ * A missing section is the empty one; it never invents a number (cap stays null, burn 0 is shown
+ * as —/0 only where the empty overview already does).
+ */
+export function overviewFrom(projectId: string, raw: unknown): CompanyOverview {
+  const empty = emptyOverview(projectId, "");
+  const d = (raw && typeof raw === "object" ? raw : {}) as Partial<CompanyOverview>;
+  return {
+    company: d.company && typeof d.company === "object" ? { ...empty.company, ...d.company } : empty.company,
+    burn: d.burn && typeof d.burn === "object" ? { ...empty.burn, ...d.burn } : empty.burn,
+    gates: typeof d.gates === "number" ? d.gates : 0,
+    projects: Array.isArray(d.projects) ? d.projects : [],
+    autonomy: d.autonomy && typeof d.autonomy === "object" ? { ...empty.autonomy, ...d.autonomy } : empty.autonomy,
+    apiReachable: true,
+    ...(d.blockedReason ? { blockedReason: d.blockedReason } : {}),
+  };
+}
+
 export async function fetchCompanyOverview(projectId: string): Promise<CompanyOverview> {
   try {
     const r = await fetch(
@@ -66,8 +87,7 @@ export async function fetchCompanyOverview(projectId: string): Promise<CompanyOv
       { headers: authHeaders({}), cache: "no-store" },
     );
     if (!r.ok) return emptyOverview(projectId, `API returned ${r.status}`);
-    const d = (await r.json()) as Omit<CompanyOverview, "apiReachable">;
-    return { ...d, apiReachable: true };
+    return overviewFrom(projectId, await r.json());
   } catch (e) {
     return emptyOverview(projectId, String((e as Error)?.message ?? e));
   }
