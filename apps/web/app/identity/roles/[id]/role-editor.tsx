@@ -19,6 +19,7 @@ import { ArrowCounterClockwise, CaretDown, CaretRight, ClockCounterClockwise, Co
 
 import { AgentAvatar } from "../../../agent-avatar";
 import { CanButton, useCan, useGuardedCall, useIdentity } from "../../../../components/identity/identity-provider";
+import { grantReach } from "../../../../lib/identity/grant-limit";
 import { Delta, ErrorLine, Face, Perm, Sheet, shortDate } from "../../../../components/identity/kit";
 import { showToast } from "../../../client-forms";
 import { IdentityError, idDelete, idGet, idPatch, idPost } from "../../../../lib/identity/api";
@@ -92,6 +93,9 @@ function DeleteRole({ role, roles, onClose }: { role: AccessRole; roles: AccessR
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const targets = roles.filter((r) => r.id !== role.id && !r.system && r.key !== "owner");
+  // Moving holders GIVES them the target role: the grant limit applies (lib/identity/grant-limit.ts).
+  const { org: heldSnap, mirrored } = useIdentity();
+  const held = mirrored ? heldSnap?.permissions ?? new Set<string>() : null;
   const run = async () => {
     setBusy(true);
     setError(null);
@@ -128,7 +132,12 @@ function DeleteRole({ role, roles, onClose }: { role: AccessRole; roles: AccessR
             <label htmlFor="reassign-to">Move holders to</label>
             <select id="reassign-to" className="idn-input" value={to} onChange={(e) => setTo(e.target.value)} data-autofocus data-testid="reassign-to">
               <option value="">Choose a role</option>
-              {targets.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              {targets.map((r) => {
+                const reach = grantReach(held, r);
+                return <option key={r.id} value={r.id} disabled={!reach.ok} title={reach.ok ? undefined : reach.reason}>
+                  {reach.ok ? r.name : `${r.name} · ${reach.reason}`}
+                </option>;
+              })}
             </select>
           </div>
         </>
