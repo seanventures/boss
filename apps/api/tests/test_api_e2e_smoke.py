@@ -309,7 +309,9 @@ def test_multi_cloud_and_provider_e2e(client):
 def test_work_trackers_and_scoring_e2e(client):
     catalog = client.get("/v1/work-trackers/catalog")
     assert catalog.status_code == 200
-    assert catalog.json()["default_provider_key"] == "plane"
+    # GitHub Issues, reusing the repo connection, is the default option (skills-mcp spec E10);
+    # Plane was the default before that spec.
+    assert catalog.json()["default_provider_key"] == "github_issues"
 
     listed = client.get("/v1/work-trackers", params={"project_id": PROJECT_ID})
     assert listed.status_code == 200
@@ -414,7 +416,9 @@ def test_edition_and_cloud_catalog_e2e(client):
 
 def test_mutating_without_actor_fails_closed(client):
     """Mutations without proper actor/project should not 500."""
-    bad = client.post("/v1/workspace/nodes", json={"name": "x"})
+    # /v1/workspace/nodes, which this used to post to, is gone (404 says nothing about failing
+    # closed). A live project-scoped write with no project and no actor must be refused, not run.
+    bad = client.post("/v1/work-trackers/connect", json={"name": "x"})
     assert bad.status_code in (401, 403, 422), bad.text
 
     bad2 = client.post(
