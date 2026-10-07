@@ -6,7 +6,7 @@ export const AUTH_LINKS = {
   setup: { path: "/claim", fragment: "t" },
   invite: { path: "/invite", fragment: "t" },
   reset: { path: "/reset", fragment: "t" },
-  recover_owner: { path: "/reset", fragment: "t" },
+  owner_recovery: { path: "/reset", fragment: "t" },
   magic_link: { path: "/signin/link", fragment: "t" },
   signup_verify: { path: "/signup/verify", fragment: "t" },
 } as const;
@@ -15,5 +15,5 @@ export type AuthLinkKind = keyof typeof AUTH_LINKS;
 
 /** Links an older build printed: forwarded to their kind's page, never a page of their own. */
 export const LEGACY_LINK_ALIASES: Record<string, { kind: AuthLinkKind; fragment: string }> = {
-  "/auth/recover": { kind: "recover_owner", fragment: "token" },
+  "/auth/recover": { kind: "owner_recovery", fragment: "token" },
 };

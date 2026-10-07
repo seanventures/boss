@@ -39,7 +39,7 @@ AUTH_LINKS: dict[str, AuthLink] = {link.kind: link for link in (
     AuthLink("reset", "/reset", "t", "Set a new password (emailed or issued by an admin)"),
     # The host's break-glass mints a password_reset challenge: /reset consumes it, then the
     # first-factor grant takes the Owner straight into enrolment.
-    AuthLink("recover_owner", "/reset", "t", "`boss identity recover-owner` on the host (15 minutes)"),
+    AuthLink("owner_recovery", "/reset", "t", "`boss identity recover-owner` on the host (15 minutes)"),
     AuthLink("magic_link", "/signin/link", "t", "Emailed one-click sign-in (10 minutes)"),
     AuthLink("signup_verify", "/signup/verify", "t", "Finish a self sign-up (10 minutes)"),
 )}
@@ -47,7 +47,7 @@ AUTH_LINKS: dict[str, AuthLink] = {link.kind: link for link in (
 #: Links already printed by an older build. Each page forwards to its kind's page with the token
 #: moved to the right fragment key; never a page of its own.
 LEGACY_ALIASES: dict[str, tuple[str, str]] = {
-    "/auth/recover": ("recover_owner", "token"),
+    "/auth/recover": ("owner_recovery", "token"),
 }
 
 
