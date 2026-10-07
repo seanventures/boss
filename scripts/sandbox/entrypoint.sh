@@ -29,7 +29,10 @@ fence_network() {
   command -v iptables >/dev/null 2>&1 || return 1
   iptables -N BOSS_SANDBOX 2>/dev/null || iptables -F BOSS_SANDBOX || return 1
   iptables -D OUTPUT -m owner --uid-owner "$UID_RANGE" -j BOSS_SANDBOX 2>/dev/null || true
-  iptables -A BOSS_SANDBOX -o lo -j ACCEPT || return 1
+  # Loopback ADDRESSES only (127/8: the API on this container, Docker's DNS, the build's own dev
+  # servers). Traffic to this container's own network address also rides `lo`, and is held to the
+  # same port rules as any other address below.
+  iptables -A BOSS_SANDBOX -o lo -d 127.0.0.0/8 -j ACCEPT || return 1
   iptables -A BOSS_SANDBOX -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || return 1
   # The container's own (non-default-route) networks: the compose network, by subnet.
   for net in $(python3 - <<'PY'
@@ -50,7 +53,7 @@ PY
   iptables -A OUTPUT -m owner --uid-owner "$UID_RANGE" -j BOSS_SANDBOX || return 1
   if command -v ip6tables >/dev/null 2>&1 && ip6tables -L >/dev/null 2>&1; then
     ip6tables -N BOSS_SANDBOX 2>/dev/null || ip6tables -F BOSS_SANDBOX
-    ip6tables -A BOSS_SANDBOX -o lo -j ACCEPT
+    ip6tables -A BOSS_SANDBOX -o lo -d ::1/128 -j ACCEPT
     ip6tables -A BOSS_SANDBOX -j REJECT
     ip6tables -A OUTPUT -m owner --uid-owner "$UID_RANGE" -j BOSS_SANDBOX
   fi
