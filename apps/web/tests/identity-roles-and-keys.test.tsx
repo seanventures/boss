@@ -125,7 +125,7 @@ describe("the role editor", () => {
     await click(q('[data-perm="workflow:delete"]'));
     expect(q('[data-perm="workflow:delete"]')!.getAttribute("data-change")).toBe("add");
     expect(q('[data-testid="unsaved"]')!.textContent).toContain("v3 → v4");
-    expect(q('[data-testid="diff"]')!.textContent).toContain("workflow:delete");
+    expect(q('[data-testid="diff"]')!.textContent).toContain(PERMISSION_META["workflow:delete"].title);
     await wait(300);
     await settle();
     expect(calls.some((c) => c.method === "POST" && c.path.endsWith("/preview"))).toBe(true);
@@ -232,7 +232,10 @@ describe("service accounts and keys", () => {
   it("shows a new key once, will not close until stored, and leaves no part of it behind", async () => {
     signInAs("usr_param");
     const el = await mount(<ServiceAccounts initial={F.serviceAccounts(NOW)} roles={F.roles(NOW)} noExpiryAllowed={false} maxDays={365} selected="sva_ci_deployer" />);
-    expect(el.textContent).toContain("key_7f3k2q");
+    // Keys read by name; the public id is only a tooltip (FX-C: no raw ids on screen).
+    expect(el.textContent).toContain("GitHub Actions · deploy");
+    expect(el.textContent).not.toContain("key_7f3k2q");
+    expect(el.querySelector('[title="Key key_7f3k2q"]')).not.toBeNull();
     await click(q('[data-testid="new-key"]'));
     await act(async () => typeInto(q<HTMLInputElement>("#key-name")!, "Deploy bot"));
     await settle();
@@ -258,7 +261,8 @@ describe("service accounts and keys", () => {
     signInAs("usr_param");
     await mount(<ServiceAccounts initial={F.serviceAccounts(NOW)} roles={F.roles(NOW)} noExpiryAllowed={false} maxDays={365} selected="sva_ci_deployer" />);
     await click([...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Rotate")!);
-    expect(q('[data-testid="key-form"]')!.textContent).toContain("Replaces key_7f3k2q");
+    expect(q('[data-testid="key-form"]')!.textContent).toContain("Rotate “GitHub Actions · deploy”");
+    expect(q('[data-testid="key-form"]')!.textContent).toContain("Old key keeps working for");
     await click(q('[data-testid="create-key"]'));
     await settle(6);
     const post = calls.find((c) => c.method === "POST" && c.path.endsWith("/keys"));

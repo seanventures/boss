@@ -91,7 +91,7 @@ export function SignUpVerify({ host }: { host: string }) {
       {state === "checking" ? (
         <>
           <h1 className="idn-center">Checking your link</h1>
-          <div className="idn-state" role="status"><span className="idn-blink" aria-hidden /> One moment…</div>
+          <div className="idn-wait" role="status"><span className="idn-blink" aria-hidden /> One moment…</div>
         </>
       ) : state === "ok" ? (
         <div className="idn-sent">

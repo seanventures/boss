@@ -188,7 +188,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
           <span className="idn-wave w1" /><span className="idn-wave w2" /><span className="idn-wave w3" />
           <span className="idn-core"><Fingerprint size={40} weight="bold" /></span>
         </div>
-        <div className="idn-state" role="status">{error ? <span className="idn-err">{error}</span> : <><span className="idn-blink" aria-hidden /> Waiting for your device…</>}</div>
+        <div className="idn-wait" role="status">{error ? <span className="idn-err">{error}</span> : <><span className="idn-blink" aria-hidden /> Waiting for your device…</>}</div>
         <div className="idn-alt">
           <button type="button" onClick={() => passkey(stage.purpose, stage.step)}><Key size={16} aria-hidden /> {error ? "Try again" : "Use a security key"} <CaretRight size={13} className="idn-chev" aria-hidden /></button>
           <button type="button" onClick={() => { setError(null); setStage(stage.step ? { kind: "mfa", step: stage.step } : { kind: "start" }); }}>

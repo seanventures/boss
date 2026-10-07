@@ -12,6 +12,7 @@
  * Then a passkey on this device (an authenticator app only where the browser has no passkeys),
  * and recovery codes, shown once. Owners must use MFA, so nothing is skippable.
  */
+import { passwordMin, type AuthOptionsWithPolicy } from "../../../lib/identity/types-account";
 import React, { useEffect, useState } from "react";
 import { Fingerprint, ShieldCheck, Warning } from "@phosphor-icons/react";
 
@@ -60,6 +61,7 @@ export function ClaimFlow({ options }: { options: AuthOptions }) {
 }
 
 function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
+  const minPw = passwordMin(options as AuthOptionsWithPolicy);
   const [stage, setStage] = useState<Stage>("form");
   const [token, setToken] = useState("");
   const [name, setName] = useState("");
@@ -83,7 +85,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
   const network = claim.path === "network_bridge";
   const fallback = !passkeys; // no WebAuthn here: password + authenticator app instead
   const proofMissing = (claim.path === "setup_token" && !token) || (claim.path === "legacy_password" && !legacy)
-    || (network && !originOk) || (fallback && password.length < 12);
+    || (network && !originOk) || (fallback && password.length < minPw);
   const ready = name.trim() && email.includes("@") && !proofMissing;
 
   /** The codes issued with the first factor; only when there were none, ask for a set. */
@@ -158,7 +160,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
           <span className="idn-wave w1" /><span className="idn-wave w2" /><span className="idn-wave w3" />
           <span className="idn-core"><Fingerprint size={40} weight="bold" /></span>
         </div>
-        <div className="idn-state" role="status">
+        <div className="idn-wait" role="status">
           {error ? <span className="idn-err">{error}</span> : <><span className="idn-blink" aria-hidden /> Waiting for your device…</>}
         </div>
         {error ? (
@@ -231,9 +233,9 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         {fallback ? (
           <div className="idn-f">
             <label htmlFor="claim-pw">Choose a password</label>
-            <input id="claim-pw" className="idn-i" type="password" autoComplete="new-password" minLength={12} value={password}
+            <input id="claim-pw" className="idn-i" type="password" autoComplete="new-password" minLength={minPw} value={password}
               onChange={(e) => setPassword(e.target.value)} aria-describedby="claim-pw-hint" />
-            <span id="claim-pw-hint" className="idn-dim idn-hint">12 characters or more</span>
+            <span id="claim-pw-hint" className="idn-dim idn-hint">{minPw} characters or more</span>
           </div>
         ) : null}
 

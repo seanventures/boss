@@ -22,6 +22,9 @@ import { PERMISSION_META, type Permission } from "../../../../../lib/identity/pe
 import type { CascadePreview, ChainHop, Delegation, DelegationDetail } from "../../../../../lib/identity/types";
 import { showToast } from "../../../../client-forms";
 import { JsonView } from "../../../json-view";
+import { EmptyState } from "../../../../../components/identity/states";
+import { plainText } from "../../../../../lib/identity/plain";
+import { permissionName } from "../../../../../lib/identity/words";
 
 const MAX_CHIPS = 11;
 const agentKey = (id: string) => id.replace(/^agt_/, "");
@@ -64,15 +67,15 @@ function HopCard({ hop, last }: { hop: ChainHop; last: boolean }) {
         {hop.kind === "person" ? <Face name={hop.name} tone={hop.hue} size={44} />
           : hop.kind === "grant" ? <span className="idn-ico idn-hop-ico" aria-hidden><LinkSimple size={18} /></span>
           : <AgentAvatar agent={agentKey(hop.id)} size={44} tip={hop.name} />}
-        <div><b>{hop.name}</b><small data-copy="data">{hop.subtitle}</small></div>
+        <div><b title={hop.name}>{plainText(hop.name) || "The grant"}</b><small data-copy="data">{plainText(hop.subtitle)}</small></div>
       </div>
-      <div className="idn-st">{hop.stage}</div>
+      <div className="idn-st" title={hop.stage}>{plainText(hop.stage)}</div>
       <div className="idn-chips">
         {shown.map((p) => <Perm key={p} p={p} sm />)}
-        {more > 0 ? <span className="idn-perm sm ghost" title={hop.effective.slice(MAX_CHIPS).join(", ")}>+{more} more</span> : null}
+        {more > 0 ? <span className="idn-perm sm ghost" title={hop.effective.slice(MAX_CHIPS).map(permissionName).join(", ")}>+{more} more</span> : null}
         {hop.dropped.map((p) => (
           <span key={p} className="idn-perm sm off" title={PERMISSION_META[p as Permission]?.delegable === false ? "Never delegable" : "Not passed on at this hop"}>
-            <span className="idn-sr">dropped </span>{p}
+            <span className="idn-sr">dropped </span>{permissionName(p)}
           </span>
         ))}
       </div>
@@ -83,9 +86,18 @@ function HopCard({ hop, last }: { hop: ChainHop; last: boolean }) {
           ))}
         </div>
       ) : null}
-      <div className="idn-rule" data-copy="data">{hop.rule}</div>
+      <div className="idn-rule" data-copy="data" title={hop.rule}>{plainText(hop.rule)}</div>
     </article>
   );
+}
+
+/** An outside call's HTTP answer, in a word (the code stays in the tooltip). */
+export function egressWords(status: number): string {
+  if (status < 300) return "allowed";
+  if (status === 401 || status === 403) return "refused";
+  if (status === 404) return "not found";
+  if (status === 429) return "rate limited";
+  return "failed";
 }
 
 function claimsOf(d: DelegationDetail): Record<string, unknown> {
@@ -129,7 +141,7 @@ function NarrowSheet({ grant, onClose, onDone }: { grant: Delegation; onClose: (
             const next = new Set(keep);
             if (next.has(p)) next.delete(p); else next.add(p);
             setKeep(next);
-          }}><span className="idn-sw" aria-hidden />{p}</button>
+          }} title={p}><span className="idn-sw" aria-hidden />{permissionName(p)}</button>
         ))}
       </div>
       <ErrorLine error={error} />
@@ -241,7 +253,7 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
         <div>
           <nav className="idn-crumb" aria-label="Breadcrumb">
             <a href="/identity/agents">Agents</a><span aria-hidden>›</span><a href="/identity/agents#delegations">Delegations</a><span aria-hidden>›</span>
-            <span className="idn-mono" aria-current="page">{d.id.toLowerCase()}</span>
+            <span aria-current="page" title={`Grant ${d.id}`}>{d.label}</span>
           </nav>
           <h1>{d.user.name} → {d.label}{d.projects[0] && !d.label.includes(d.projects[0]) ? ` on ${d.projects[0]}` : ""} {statusPill(d, now)}</h1>
         </div>
@@ -276,21 +288,21 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
         <div className="idn-ch-h">
           <div className="idn-eyebrow" id="idn-chain-h">
             <span className="idn-dot" aria-hidden />
-            <span>Live chain{d.run ? ` · ${d.run.title} · ${d.run.id}` : ""}</span>
+            <span title={d.run ? `Run ${d.run.id}` : undefined}>Live chain{d.run ? ` · ${d.run.title}` : ""}</span>
           </div>
           <span className="idn-spacer" />
-          <span className="idn-dim idn-chain-rule" data-copy="prose">effective = {d.user.name} ∩ grant ∩ every ceiling in the chain ∩ this build</span>
+          <span className="idn-dim idn-chain-rule" data-copy="prose">Agents get only what {d.user.name} holds, this grant allows, each agent's limit allows and this build needs.</span>
           <button type="button" className="idn-chip" aria-pressed={claims} onClick={() => setClaims((v) => !v)} data-testid="toggle-claims">
             {claims ? <EyeSlash size={13} aria-hidden /> : <Eye size={13} aria-hidden />} {claims ? "Hide token claims" : "Show token claims"}
           </button>
         </div>
-        {claims ? <div className="idn-claims">{tokenClaims ? <JsonView data={tokenClaims} label="Run token claims, redacted" /> : <span className="idn-dim">Reading claims…</span>}</div> : null}
-        {d.chain.length ? <Funnel hops={d.chain} /> : <div className="idn-dim idn-row" data-testid="chain-unreported">The live chain shows once an agent acts under this grant.</div>}
+        {claims ? <div className="idn-claims" data-raw-ok>{tokenClaims ? <JsonView data={tokenClaims} label="Run token claims, redacted" /> : <span className="idn-dim">Reading claims…</span>}</div> : null}
+        {d.chain.length ? <Funnel hops={d.chain} /> : <div className="idn-dim idn-row" data-testid="chain-unreported" data-copy="prose">The live chain shows once an agent acts under this grant.</div>}
         <div className="idn-nodes">
           {d.chain.map((h, i) => <HopCard key={`${h.kind}-${h.id}`} hop={h} last={i === d.chain.length - 1} />)}
         </div>
         <div className="idn-hop" aria-hidden>
-          {d.chain.map((h) => <div key={`${h.kind}-${h.id}`} data-copy="data">{h.rule}</div>)}
+          {d.chain.map((h) => <div key={`${h.kind}-${h.id}`} data-copy="data">{plainText(h.rule)}</div>)}
         </div>
       </section>
 
@@ -339,12 +351,12 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
                 <span className="idn-tm">{clock(t.at)}</span>
                 <span className="idn-row idn-tok-text">
                   <AgentAvatar agent={t.agent.toLowerCase()} size={16} tip={t.agent} />
-                  <span data-copy="data">{t.text}</span>
+                  <span data-copy="data" title={t.text}>{plainText(t.text)}</span>
                 </span>
                 <Pill tone={t.outcome === "live" ? "ok" : t.outcome === "refused" ? "bad" : "mute"}>{t.outcome}</Pill>
               </div>
             ))}
-            {!d.tokens.length ? <span className="idn-dim">No tokens minted</span> : null}
+            {!d.tokens.length ? <EmptyState compact title="No tokens yet" testId="tokens-empty">A token is made each time an agent acts under this grant.</EmptyState> : null}
           </div>
           <div className="idn-hr" />
           <div role="list" aria-label="Egress calls">
@@ -352,9 +364,10 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
               <div key={`${e.method}-${e.path}`} className="idn-eg" role="listitem">
                 <span className="idn-m">{e.method}</span>
                 <span className="idn-p" title={e.path} data-copy="data">{e.path}</span>
-                <span className={`idn-mono ${e.status < 300 ? "idn-ok" : "idn-bad"}`}>{e.status}{e.note ? ` · ${e.note}` : ""}</span>
+                <span className={e.status < 300 ? "idn-ok" : "idn-bad"} title={`HTTP ${e.status}`}>{egressWords(e.status)}{e.note ? ` · ${e.note}` : ""}</span>
               </div>
             ))}
+            {!d.egress.length ? <EmptyState compact title="No outside calls yet" testId="egress-empty">Calls the agents make to GitHub and other services appear here.</EmptyState> : null}
           </div>
           <p className="idn-fine-l" data-copy="prose"><LockSimple size={12} aria-hidden /> The GitHub installation token lives in the egress proxy. It never entered the sandbox.</p>
         </section>
@@ -364,7 +377,7 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
             <h3><CheckCircle size={20} aria-hidden /> Grant revoked</h3>
             <p className="idn-lede2" data-copy="prose">{d.user.name}'s authority left every agent in this chain. Work stopped where it was.</p>
             {revoked.items.map((it, i) => (
-              <div key={`${it.kind}-${i}`} className="idn-cx"><span className="idn-i">{CASCADE_ICON[it.kind]}</span><span>{it.label}<small data-copy="data">{it.detail}</small></span><span className="idn-n">{it.count}</span></div>
+              <div key={`${it.kind}-${i}`} className="idn-cx"><span className="idn-i">{CASCADE_ICON[it.kind]}</span><span>{it.label}<small data-copy="data" title={it.detail}>{plainText(it.detail)}</small></span><span className="idn-n">{it.count}</span></div>
             ))}
             <p className="idn-fine-l" data-copy="prose">Revoked is terminal. {d.user.name} can grant again to resume.</p>
           </section>
@@ -386,7 +399,7 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
             {preview ? preview.items.map((it, i) => (
               <div key={`${it.kind}-${i}`} className="idn-cx" data-testid={`cascade-${it.kind}`}>
                 <span className="idn-i">{CASCADE_ICON[it.kind]}</span>
-                <span>{it.label}<small data-copy="data">{it.detail}</small></span>
+                <span>{it.label}<small data-copy="data" title={it.detail}>{plainText(it.detail)}</small></span>
                 <span className="idn-n">{it.count}</span>
               </div>
             )) : <div className="idn-dim idn-row">{canRevoke.allowed ? (previewError ?? "Checking what stops…") : <><LockSimple size={14} aria-hidden /> {canRevoke.reason}</>}</div>}
@@ -403,7 +416,7 @@ export function DelegationView({ initial }: { initial: DelegationDetail }) {
               )}
               <button type="button" className="idn-btn" onClick={() => setDismissed(true)}>Cancel</button>
             </div>
-            <p className="idn-fine-l" data-copy="prose">Recorded as <code className="idn-mono">delegation.revoked</code> with the full cascade. {d.user.name} is notified.</p>
+            <p className="idn-fine-l" data-copy="prose">Recorded in the security audit log with everything it stopped. {d.user.name} is notified.</p>
           </section>
         )}
       </div>

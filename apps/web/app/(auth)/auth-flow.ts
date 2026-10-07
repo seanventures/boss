@@ -40,7 +40,7 @@ const WORDS: Record<string, string> = {
   invalid_code: "That code didn't work",
   code_invalid: "That code didn't work",
   invalid_fields: "Check the fields",
-  password_too_short: "Use at least 12 characters",
+  password_too_short: "That password is too short",
   password_too_long: "That password is too long",
   password_too_common: "That password is too common — pick another",
   reset_invalid: "This link no longer works",

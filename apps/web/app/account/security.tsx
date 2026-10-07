@@ -16,7 +16,8 @@ import { probeSsoLink, ssoLinkStartPath } from "../../lib/identity/sso-link";
 import { codesOf, type LinkedIdentity, type RecoveryCodes } from "../../lib/identity/types-auth";
 import { webauthnAvailable } from "../../lib/identity/webauthn";
 import { useGuardedCall, useIdentity } from "../../components/identity/identity-provider";
-import { Ago, ErrorLine, Pill, Sheet } from "../../components/identity/kit";
+import { Ago, ErrorLine, Face, Pill, Sheet } from "../../components/identity/kit";
+import type { MyProfile } from "../../lib/identity/types-account";
 import { showToast } from "../client-forms";
 import { registerPasskey } from "../(auth)/auth-flow";
 import { RecoveryCodesView } from "../(auth)/recovery-codes";
@@ -31,14 +32,71 @@ const FACTOR_ICON: Record<Factor["kind"], React.ReactNode> = {
   recovery: <LockSimple size={16} aria-hidden />, sso: <LinkSimple size={16} aria-hidden />,
 };
 
-export function AccountSecurity({ me, factors: initialFactors, identities: initialIdentities, host, linked = false, providers = [] }: {
+/** The avatar tone a person chose ("0".."7"), else one derived from their id. */
+export function toneOf(seed: string | null | undefined, id: string): number {
+  if (seed && /^[0-7]$/.test(seed)) return Number(seed);
+  let h = 0;
+  for (const c of String(id ?? "")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return h % 8;
+}
+
+/** Your own name and avatar colour (PATCH /v1/identity/me). Nothing else about you changes here. */
+function ProfileSheet({ profile, id, onClose, onSaved }: { profile: MyProfile; id: string; onClose: () => void; onSaved: (p: MyProfile) => void }) {
+  const [name, setName] = useState(profile.display_name);
+  const [tone, setTone] = useState(toneOf(profile.avatar_seed, id));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <Sheet title="Your name and avatar" icon={<PencilSimple size={18} aria-hidden />} onClose={onClose} testId="profile-sheet">
+      <form onSubmit={async (e) => {
+        e.preventDefault();
+        setBusy(true); setError(null);
+        try {
+          const next = await idPatch<MyProfile>("/v1/identity/me", { display_name: name.trim(), avatar_seed: String(tone) });
+          showToast("success", "Saved");
+          onSaved(next);
+        } catch (err) { setError(said(err)); setBusy(false); }
+      }}>
+        <div className="idn-field">
+          <label htmlFor="me-name">Name</label>
+          <input id="me-name" className="idn-input" value={name} maxLength={200} onChange={(e) => setName(e.target.value)} data-autofocus autoComplete="name" />
+        </div>
+        <div className="idn-field">
+          <span className="idn-label" id="me-tone-l">Avatar colour</span>
+          <div className="idn-row idn-tones" role="radiogroup" aria-labelledby="me-tone-l">
+            {[0, 1, 2, 3, 4, 5, 6, 7].map((t) => (
+              <button key={t} type="button" role="radio" aria-checked={tone === t} className="idn-tone" aria-label={`Colour ${t + 1}`}
+                data-testid={`tone-${t}`} onClick={() => setTone(t)}>
+                <Face name={name || "?"} tone={t} size={34} />
+              </button>
+            ))}
+          </div>
+        </div>
+        <ErrorLine error={error} />
+        <div className="idn-mf">
+          <span className="idn-spacer" />
+          <button type="button" className="idn-btn ghost" onClick={onClose}>Cancel</button>
+          <button type="submit" className="idn-btn primary" disabled={!name.trim() || busy} data-testid="profile-save">{busy ? "Saving…" : "Save"}</button>
+        </div>
+      </form>
+    </Sheet>
+  );
+}
+
+export function AccountSecurity({ me, factors: initialFactors, identities: initialIdentities, host, linked = false, providers = [], passwordMin = 12, profile: initialProfile = null }: {
   me: MeResponse | null; factors: Factor[]; identities: LinkedIdentity[]; host: string;
+  /** The security policy's password minimum (GET /v1/auth/options). */
+  passwordMin?: number;
+  /** Your name and avatar colour (GET /v1/identity/me/profile); null when unread. */
+  profile?: MyProfile | null;
   /** The org's sign-in providers (GET /v1/auth/options): the ones not linked yet offer "Link". */
   providers?: AuthOptions["providers"];
   /** Back from linking a single sign-on account (`/account?linked=1`). */
   linked?: boolean;
 }) {
   const { refresh } = useIdentity();
+  const [profile, setProfile] = useState<MyProfile | null>(initialProfile ?? (me ? { display_name: me.display_name, email: me.email, avatar_seed: null } : null));
+  const [editingProfile, setEditingProfile] = useState(false);
   const guarded = useGuardedCall();
   const [factors, setFactors] = useState(initialFactors);
   const [identities, setIdentities] = useState(initialIdentities);
@@ -168,7 +226,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
             setPwError(null);
             guarded("Changing your password signs you out elsewhere.", () => idPost("/v1/identity/me/password", { current: pw.current, new: pw.next }))
               .then(() => { setPw({ current: "", next: "" }); showToast("success", "Password changed"); })
-              .catch((err) => setPwError(err instanceof IdentityError && err.code === "password_too_short" ? "Use at least 12 characters" : said(err)));
+              .catch((err) => setPwError(err instanceof IdentityError && err.code === "password_too_short" ? `Use at least ${passwordMin} characters` : said(err)));
           }}>
             {me?.sign_in.password ? (
               <div className="idn-field">
@@ -178,14 +236,14 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
             ) : null}
             <div className="idn-field">
               <label htmlFor="pw-new">New password</label>
-              <input id="pw-new" className="idn-input" type="password" autoComplete="new-password" minLength={12} value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} aria-describedby="pw-new-hint" />
-              <span id="pw-new-hint" className="idn-dim idn-hint">12 characters or more</span>
+              <input id="pw-new" className="idn-input" type="password" autoComplete="new-password" minLength={passwordMin} value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} aria-describedby="pw-new-hint" />
+              <span id="pw-new-hint" className="idn-dim idn-hint">{passwordMin} characters or more</span>
             </div>
             <ErrorLine error={pwError} />
             <div className="idn-full idn-row">
               <span className="idn-dim" data-copy="prose">Every other session ends when it changes.</span>
               <span className="idn-spacer" />
-              <button type="submit" className="idn-btn" disabled={pw.next.length < 12}>Change password</button>
+              <button type="submit" className="idn-btn" disabled={pw.next.length < passwordMin}>Change password</button>
             </div>
           </form>
         </section>
@@ -215,9 +273,22 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
           <ErrorLine error={linkError} />
         </section>
         <section className="idn-card" aria-labelledby="acc-you-h">
-          <div className="idn-card-h"><h2 id="acc-you-h">Signed in as</h2></div>
+          <div className="idn-card-h">
+            <h2 id="acc-you-h">Signed in as</h2>
+            <span className="idn-spacer" />
+            {me && profile ? (
+              <button type="button" className="idn-btn sm" onClick={() => setEditingProfile(true)} title="Your name and avatar colour" data-testid="edit-profile">
+                <PencilSimple size={13} aria-hidden /> Edit
+              </button>
+            ) : null}
+          </div>
+          {me && profile ? (
+            <div className="idn-row idn-me-row">
+              <Face name={profile.display_name} tone={toneOf(profile.avatar_seed, me.principal_id)} size={44} />
+              <span><b data-copy="data">{profile.display_name}</b><small className="idn-block idn-dim" data-copy="data">{me.email ?? ""}</small></span>
+            </div>
+          ) : null}
           <dl className="idn-kv">
-            <dt>Name</dt><dd data-copy="data">{me?.display_name}</dd>
             <dt>Email</dt><dd data-copy="data">{me?.email ?? "—"}</dd>
             <dt>Org</dt><dd data-copy="data">{me?.org.name}</dd>
             <dt>Session ends</dt><dd><Ago iso={me?.session_expires_at ?? null} /></dd>
@@ -226,6 +297,10 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
         </section>
       </div>
 
+      {editingProfile && profile && me ? (
+        <ProfileSheet profile={profile} id={me.principal_id} onClose={() => setEditingProfile(false)}
+          onSaved={(p) => { setProfile(p); setEditingProfile(false); refresh(); }} />
+      ) : null}
       {sheet === "totp" ? (
         <Sheet title="Set up an authenticator" icon={<DeviceMobile size={18} aria-hidden />} onClose={() => setSheet(null)} testId="totp-sheet">
           <p className="idn-lede2" data-copy="prose">Scan the code with your app, then enter the 6 digits. The key is shown only now.</p>

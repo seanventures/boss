@@ -70,6 +70,13 @@ class RenameBody(_Body):
     name: str = Field(max_length=80)
 
 
+class ProfileBody(_Body):
+    """What a person may change about themselves: the name others see and their avatar colour
+    (one of the console's eight tones). An allowlist: anything else is a 422."""
+    display_name: Optional[str] = Field(default=None, max_length=200)
+    avatar_seed: Optional[str] = Field(default=None, pattern="^[0-7]$")
+
+
 class KeyCreateBody(_Body):
     """A new key. Accepts the console's field names (projects, networks, expires_days) and the
     spec's (project_ids, cidrs, expires_in_days). `replaces` + `overlap_hours` (0, 1, 24, 168)
@@ -271,6 +278,56 @@ def build_identity_me_router() -> APIRouter:
                     epoch=eff.epoch, scope=scope.label(), permissions=sorted(eff.permissions),
                     step_up_fresh_until=fresh_until, catalogue_fingerprint=CATALOGUE_FINGERPRINT)
             return JSONResponse(body.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    # ---- profile: your own name and avatar colour -----------------------------------------------------
+
+    def _profile(db: Any, principal_id: str) -> dict[str, Any]:
+        row = db.execute(text(
+            "SELECT p.display_name, u.email, u.avatar_seed FROM identity_principals p "
+            "JOIN identity_users u ON u.principal_id = p.id WHERE p.id = :id"), {"id": principal_id}).first()
+        return {"display_name": row.display_name, "email": row.email, "avatar_seed": row.avatar_seed} if row else {}
+
+    @router.get("/v1/identity/me/profile")
+    @authenticated(self_only=True)
+    def my_profile(request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = need_person_session(ctx)
+                if blocked:
+                    return blocked
+                return JSONResponse(_profile(db, ctx.principal.id), headers={"Cache-Control": "no-store"})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.patch("/v1/identity/me")
+    @authenticated(self_only=True)
+    def update_me(body: ProfileBody, request: Request):
+        """Rename yourself, or pick your avatar colour. Only the caller, only these two fields;
+        your email and access are an admin's (PATCH /v1/identity/users/{id})."""
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                blocked = need_person_session(ctx)
+                if blocked:
+                    return blocked
+                fields = body.model_dump(exclude_unset=True)
+                if "display_name" in fields:
+                    name = (fields["display_name"] or "").strip()[:200]
+                    if not name:
+                        return error(422, "name_required")
+                    db.execute(text("UPDATE identity_principals SET display_name = :n, updated_at = now() "
+                                    "WHERE id = :id"), {"n": name, "id": ctx.principal.id})
+                if "avatar_seed" in fields:
+                    db.execute(text("UPDATE identity_users SET avatar_seed = :s WHERE principal_id = :id"),
+                               {"s": fields["avatar_seed"], "id": ctx.principal.id})
+                if fields:
+                    emit(db, org_id=ctx.principal.org_id, event_type="user.updated", outcome=Outcome.SUCCESS,
+                         ctx=ctx, target_type="user", target_id=ctx.principal.id,
+                         details={"fields": sorted(fields), "self": True})
+                return JSONResponse(_profile(db, ctx.principal.id), headers={"Cache-Control": "no-store"})
         except AuthnError as exc:
             return refusal(exc)
 

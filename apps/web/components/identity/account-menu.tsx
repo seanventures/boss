@@ -42,7 +42,7 @@ export function AccountMenu() {
       <div className="idn-me-menu" role="menu">
         <div className="idn-me-who">
           <b>{me.display_name}</b>
-          <small>{me.email ?? me.principal_id}</small>
+          <small>{me.email ?? (me.kind === "service_account" ? "Service account" : "")}</small>
         </div>
         <a role="menuitem" href="/account"><UserCircle size={16} aria-hidden /> Security</a>
         <a role="menuitem" href="/account/sessions"><Devices size={16} aria-hidden /> Sessions</a>

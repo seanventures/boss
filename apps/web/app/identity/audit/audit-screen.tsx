@@ -20,6 +20,9 @@ import { IdentityError, idGet, idPost } from "../../../lib/identity/api";
 import type { AuditEvent, AuditOutcome, AuditPage } from "../../../lib/identity/types";
 import { showToast } from "../../client-forms";
 import { JsonView } from "../json-view";
+import { ErrorState, type ReadFailure } from "../../../components/identity/states";
+import { eventWords } from "../../../lib/identity/words";
+import { plainText } from "../../../lib/identity/plain";
 import { EMPTY_FILTERS, EVENT_GROUPS, apiQuery, inGroup, parseSearch, queryFrom, searchText, type AuditFilters, type EventGroup } from "./audit-query";
 
 type Kind = "all" | "people" | "agents" | "keys" | "system";
@@ -89,11 +92,10 @@ function Drawer({ e, onFilter }: { e: AuditEvent; onFilter: (f: Partial<AuditFil
   return (
     <aside className="idn-drawer" data-outcome={e.outcome} aria-labelledby="idn-dr-h" data-testid="audit-drawer">
       <div className="idn-dr-h">
-        <div className="idn-evc">{e.event_type} · seq {e.seq.toLocaleString("en-US")}</div>
-        <h2 id="idn-dr-h" data-copy="data">{e.headline}</h2>
+        <div className="idn-evc" title={e.event_type}>{eventWords(e.event_type)} · #{e.seq.toLocaleString("en-US")}</div>
+        <h2 id="idn-dr-h" data-copy="data">{plainText(e.headline)}</h2>
         <div className="idn-row idn-dim idn-small">
-          <span>{new Date(e.at).toISOString().replace("T", " ").slice(0, 23)} UTC</span>
-          {requestId ? <span className="idn-mono">{requestId}</span> : null}
+          <span title={requestId ? `Request ${requestId}` : undefined}>{new Date(e.at).toISOString().replace("T", " ").slice(0, 23)} UTC</span>
         </div>
       </div>
       <div className="idn-dr-b">
@@ -105,7 +107,7 @@ function Drawer({ e, onFilter }: { e: AuditEvent; onFilter: (f: Partial<AuditFil
                 <span className="idn-n">
                   {c.kind === "agent" ? <AgentAvatar agent={c.id.replace(/^agt_/, "")} size={20} tip={c.name} />
                     : <Face name={c.name} tone={e.on_behalf_of?.id === c.id ? e.on_behalf_of.hue : e.actor.hue} size={22} />}
-                  {c.name}{c.run ? <small>{c.run}</small> : null}
+                  {c.name}{c.run ? <small title={c.run}>{plainText(c.run) || "a run"}</small> : null}
                 </span>
                 {i < all.length - 1 ? <ArrowRight size={12} className="idn-dim" aria-label="then" /> : null}
               </React.Fragment>
@@ -121,13 +123,13 @@ function Drawer({ e, onFilter }: { e: AuditEvent; onFilter: (f: Partial<AuditFil
                   <span className={w.held === false ? "idn-bad" : w.held ? "idn-ok" : "idn-dim"} aria-label={w.held === false ? "refused" : w.held ? "held" : "detail"}>
                     {w.held === false ? <X size={14} aria-hidden /> : w.held ? <Check size={14} aria-hidden /> : <DotsThree size={14} aria-hidden />}
                   </span>
-                  <span data-copy="data">{w.text}</span>
+                  <span data-copy="data" title={w.text}>{plainText(w.text)}</span>
                 </div>
               ))}
             </div>
           </div>
         ) : null}
-        <div>
+        <div data-raw-ok>
           <div className="idn-label idn-lbl">Event, as stored (redacted)</div>
           <JsonView data={e.raw} label="The stored event, redacted" />
         </div>
@@ -136,21 +138,23 @@ function Drawer({ e, onFilter }: { e: AuditEvent; onFilter: (f: Partial<AuditFil
           <div className="idn-hash" data-copy="data">
             <span>prev</span><span>{shortHash(e.prev_hash)}</span>
             <span>hash</span><span>{shortHash(e.hash)}</span>
-            <span>status</span><span>links to seq {(e.seq - 1).toLocaleString("en-US")} ✓</span>
+            <span>status</span><span>links to #{(e.seq - 1).toLocaleString("en-US")} ✓</span>
           </div>
         </div>
         <div className="idn-row">
           {e.run_id ? <a className="idn-btn sm" href={`/?area=code_tasks&run=${encodeURIComponent(e.run_id)}`}>Open the run</a> : null}
           {e.grant_id ? <a className="idn-btn sm" href={`/identity/agents/delegations/${encodeURIComponent(e.grant_id)}`}>Open the grant</a> : null}
-          {e.token_jti ? <button type="button" className="idn-btn sm" onClick={() => onFilter({ q: e.token_jti! })}>Everything by {e.token_jti}</button> : null}
+          {e.token_jti ? <button type="button" className="idn-btn sm" title={`Token ${e.token_jti}`} onClick={() => onFilter({ q: e.token_jti! })}>Everything with this token</button> : null}
         </div>
       </div>
     </aside>
   );
 }
 
-export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpen = false }: {
+export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpen = false, failure = null }: {
   initial: AuditPage | null; initialFilters: AuditFilters; initialEvent: string | null; verifyOnOpen?: boolean;
+  /** Why the first read failed: said in words, never drawn as an empty log. */
+  failure?: ReadFailure | null;
 }) {
   const now = useNow();
   const [page, setPage] = useState<AuditPage | null>(initial);
@@ -293,7 +297,7 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
         {chain ? (
           <span className="idn-verified" data-ok={chain.ok} role="status" data-testid="chain-status">
             {chain.ok ? <ShieldCheck size={14} aria-hidden /> : <ShieldWarning size={14} aria-hidden />}
-            {chain.ok ? "Chain verified" : `Chain broken at seq ${chain.first_break}`} · seq <span className="idn-mono">{chain.seq.toLocaleString("en-US")}</span>
+            {chain.ok ? "Chain verified" : `Chain broken at #${chain.first_break}`} · <span title="Events in the hash chain">{chain.seq.toLocaleString("en-US")} events</span>
             {chain.verified_at ? <> · {clock(chain.verified_at).slice(0, 5)}</> : null}
           </span>
         ) : null}
@@ -311,8 +315,8 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
       <form className="idn-fb" role="search" aria-label="Filter events" onSubmit={(ev) => { ev.preventDefault(); apply(parseSearch(text, idOf)); }}>
         <label className="idn-q">
           <MagnifyingGlass size={15} aria-hidden />
-          <span className="idn-sr">Search events, people, agents, grants, jti</span>
-          <input value={text} onChange={(ev) => setText(ev.target.value)} placeholder="Search events, people, agents, grants, jti…" data-testid="audit-search" />
+          <span className="idn-sr">Search events, people, agents and grants</span>
+          <input value={text} onChange={(ev) => setText(ev.target.value)} placeholder="Search events, people, agents, grants…" data-testid="audit-search" />
           {text ? <button type="button" aria-label="Clear search" onClick={() => apply({ ...EMPTY_FILTERS })}><X size={13} aria-hidden /></button> : null}
         </label>
         {filters.actor ? (
@@ -352,13 +356,15 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
             </label>
             <label className="idn-field">
               <span className="idn-label">Grant</span>
-              <input className="idn-input" value={filters.grant} placeholder="dlg_…" onChange={(ev) => setFilters({ ...filters, grant: ev.target.value })}
+              <input className="idn-input" value={filters.grant} placeholder="From a grant's page" title="Open a grant and use its audit link" onChange={(ev) => setFilters({ ...filters, grant: ev.target.value })}
                 onBlur={() => apply(filters)} />
             </label>
           </div>
         ) : null}
       </form>
 
+      {!page && failure ? <ErrorState what="the audit log" failure={failure} /> : null}
+      {!page && !failure ? <ErrorState what="the audit log" failure={{ status: 500, code: "error" }} /> : null}
       <div className="idn-split" aria-busy={loading}>
         <div className="idn-lt">
           <div className="idn-scroll">
@@ -381,16 +387,16 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
                           if (ev.key === "ArrowUp") { ev.preventDefault(); move(e.id, -1); }
                         }}>
                         <td className="idn-tm">{clock(e.at)}</td>
-                        <td className="idn-evn" title={e.event_type}>{e.event_type}</td>
+                        <td className="idn-evn" title={e.event_type}>{eventWords(e.event_type)}</td>
                         <td><Actor e={e} /></td>
-                        <td className="idn-tgt" title={e.what} data-copy="data">{e.what}</td>
+                        <td className="idn-tgt" title={e.what} data-copy="data">{plainText(e.what)}</td>
                         <td><Pill tone={OUTCOME_TONE[e.outcome]}>{e.outcome}</Pill></td>
                         <td className="idn-ipx" data-copy="data">{e.source}</td>
                       </tr>
                     ))}
                   </React.Fragment>
                 ))}
-                {!shown.length ? <tr><td colSpan={6} className="idn-dim">{page ? "No events match" : "The audit log is unavailable"}</td></tr> : null}
+                {!shown.length && page ? <tr><td colSpan={6} className="idn-dim">{page.events.length ? "No events match" : "No security events yet"}</td></tr> : null}
               </tbody>
             </table>
             {page?.cursor ? (
@@ -400,7 +406,7 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
           </div>
         </div>
         {current ? <Drawer e={current} onFilter={(f) => apply({ ...EMPTY_FILTERS, ...f })} /> : (
-          <aside className="idn-card idn-dim idn-row" data-outcome="ok"><CaretRight size={14} aria-hidden /> Pick an event to see its chain</aside>
+          <aside className="idn-card idn-dim idn-row" data-outcome="ok"><CaretRight size={14} aria-hidden /> Pick an event to see why</aside>
         )}
       </div>
     </>
