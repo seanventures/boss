@@ -59,6 +59,7 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "role_binding.added", "role_binding.removed", "owner.added", "owner.removed",
     # keys
     "api_key.created", "api_key.rotated", "api_key.revoked", "api_key.expired",
+    "api_key.expiry_notice",
     "api_key.first_used", "api_key.used_from_new_ip", "service_account.created",
     "service_account.updated", "service_account.disabled", "service_account.orphaned",
     # SSO and SCIM

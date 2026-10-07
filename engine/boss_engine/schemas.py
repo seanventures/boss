@@ -78,6 +78,14 @@ class AuthSessionResponse(BaseModel):
     auth_method: Optional[str] = None
     oidc_enabled: bool = False
     message: str
+    # BOSS Identity (IDENTITY.md §10): who the credential is, when it has an identity context.
+    principal: Optional[dict[str, Any]] = None
+    org: Optional[str] = None
+    mfa_at: Optional[str] = None
+    csrf: Optional[str] = None
+    expires: Optional[str] = None
+    #: the projects an API key is pinned to (None: not pinned, or not a key)
+    key_projects: Optional[list[str]] = None
 
 
 class SamlLoginResponse(BaseModel):

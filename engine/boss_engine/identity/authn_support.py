@@ -141,7 +141,13 @@ def keyed_hash(label: str, value: str) -> str:
 
 
 def identifier_hash(identifier: str) -> str:
-    return keyed_hash("identifier", (identifier or "").strip().lower())
+    """A typed sign-in identifier as the security log stores it: the log's own `identifier_hmac`
+    (A79), the one form `audit.record` accepts on a failure event. A different keyed hash here
+    made every failed sign-in's event refused, so the failure (and its backoff count) rolled back
+    with a 500."""
+    from .audit import identifier_hmac
+
+    return identifier_hmac(identifier)
 
 
 # ---- request facts ------------------------------------------------------------------------------

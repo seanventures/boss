@@ -11,7 +11,10 @@ two processes never run it at once:
   * signing keys rotate when due (30 days) and retiring keys retire (signing_keys.rotate_if_due);
   * provider revocations that failed are retried, and shredded once they succeed (vault);
   * the audit chain's rows from before the keyed chain are re-keyed once (audit.rekey);
-  * expired DPoP replay rows are purged.
+  * expired DPoP replay rows are purged;
+  * hygiene.py: API key expiry events, reminders and the unused-key policy; the security log's
+    retention; the egress log's daily partitions and 30 days; permissions dropped from the
+    catalogue retired with an audit event.
 """
 from __future__ import annotations
 
@@ -45,11 +48,12 @@ def end_finished_workflow_grants(*, db: Any) -> list[str]:
     return ended
 
 
-def tick(engine: Any, *, now: Optional[datetime] = None) -> dict[str, Any]:
-    """One maintenance pass. Each step in its own transaction, so one failing never blocks the rest."""
+def tick(engine: Any, *, now: Optional[datetime] = None, force: bool = False) -> dict[str, Any]:
+    """One maintenance pass. Each step in its own transaction, so one failing never blocks the rest.
+    `force`: run the hourly and daily hygiene steps now (tests, the host CLI)."""
     from sqlalchemy import text
 
-    from . import grants, vault
+    from . import grants, hygiene, vault
 
     now = now or datetime.now(timezone.utc)
     out: dict[str, Any] = {}
@@ -64,6 +68,13 @@ def tick(engine: Any, *, now: Optional[datetime] = None) -> dict[str, Any]:
             ("provider_revocations", lambda c: vault.retry_provider_revocations(db=c)),
             ("audit_rekeyed", lambda c: _rekey(c)),
             ("dpop_purged", lambda c: c.execute(text("DELETE FROM identity_dpop_replay WHERE expires_at < now()")).rowcount),
+            ("retired_permissions", lambda c: _per_org(c, hygiene.retire_removed_permissions)),
+            ("key_hygiene", lambda c: _per_org(c, hygiene.key_hygiene, now=now)
+             if hygiene.due("key_hygiene", force=force) else "not due"),
+            ("audit_retention", lambda c: _per_org(c, hygiene.audit_retention, now=now)
+             if hygiene.due("audit_retention", force=force) else "not due"),
+            ("egress_partitions", lambda c: hygiene.egress_partitions(c, now=now)
+             if hygiene.due("egress_partitions", force=force) else "not due"),
         ]
         for name, step in steps:
             try:
@@ -73,6 +84,13 @@ def tick(engine: Any, *, now: Optional[datetime] = None) -> dict[str, Any]:
                 log.warning("identity maintenance step %s failed: %s", name, type(exc).__name__)
                 out[name] = f"failed:{type(exc).__name__}"
     return out
+
+
+def _per_org(db: Any, step: Any, **kw: Any) -> Any:
+    from . import migration
+
+    org = migration.default_org(db)
+    return step(db, org_id=org, **kw) if org else None
 
 
 def _rotate(db: Any) -> list[str]:

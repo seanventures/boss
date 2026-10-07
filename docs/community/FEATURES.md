@@ -18,11 +18,26 @@ Everything in BOSS Community as of `v1.0-rc5`, grouped by area. Cloud and Enterp
 | Budget quote → reserve → consume / release | ✅ |
 | Artifacts and evidence packets | ✅ |
 | Single org / workspace / project model | ✅ |
-| Local auth / API keys | ✅ |
+| Named accounts and API keys | ◐ See Identity below. |
 | Govern: every limit in one place | ◐ Each limit's real value, what enforces it, and what it stopped; Spend by agent and by model; envelopes; a month-cap preview counted as the governor counts it. |
 | Capacity-aware builds | ◐ Builds are admitted against free memory and queue instead of thrashing; workloads run in an envelope so the control plane keeps its memory. |
 | Process ownership and reaping | ✅ Every process a build starts is owned, and Stop stops it. A reaper clears stale previews, orphans, temp dirs, images and disk on a clock. |
 | System doctor | ◐ Shepherd and Metatron watch the machine, explain pressure in words, and offer choices. Work waiting on a person is never stopped. |
+
+## Identity
+
+| Feature | Status |
+|---|---|
+| Named accounts and the claim | ◐ Each person signs in as themselves; the first visit to `/claim` makes the first Owner. [Upgrade to named accounts](IDENTITY_UPGRADE.md). |
+| Sign-in methods | ◐ Passkeys, password with an authenticator app, recovery codes, email links and codes (SMTP). [Sign in](CONSOLE_AUTH.md). |
+| Single sign-on, social sign-in, SCIM | ◐ OIDC and SAML, GitHub/Google/Microsoft/Apple, SCIM 2.0, Require SSO for domains. [Sign-in setup](SIGN_IN_SETUP.md). |
+| Access roles, groups, project access | ◐ Five built-in roles, custom roles with an impact preview and versions, groups, effective access. [People and access](PEOPLE_AND_ACCESS.md). |
+| Service accounts and API keys | ◐ Keys shown once, scoped, expiring, with reminders and optional revocation when unused. |
+| Agents acting for a person | ◐ Passports, delegation grants, run tokens, a revocation cascade. [Agents and access](AGENTS_AND_ACCESS.md). |
+| GitHub through boss-egress | ◐ Builds hold no credential: a per-build GitHub App token, or the person's own. |
+| Build sandbox | ◐ A user per build and a fenced network. [Build sandbox](SANDBOX.md). |
+| Security audit log | ◐ Append-only, hash-chained, verifiable, exportable, 400 days. [Identity administration](IDENTITY_ADMIN.md). |
+| CSV import/export, identity webhooks, several organisations | Not yet. |
 
 ## Console
 

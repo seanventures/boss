@@ -65,9 +65,11 @@ export function IdentityBanners() {
       {banners.map((b) => (
         <div key={b.kind} className="idn-banner" data-kind={b.kind} role="status">
           <span>{b.message}</span>
-          {b.kind === "network_bridge" ? <a href="/claim">Claim this BOSS</a> : null}
+          {b.kind === "network_bridge" && !b.until ? <a href="/claim">Claim this BOSS</a> : null}
           {b.kind === "mfa_enrolment_required" ? <a href="/enrol">Add a passkey</a> : null}
-          {b.kind === "legacy_password" ? <a href="/identity/people">Invite people</a> : null}
+          {b.kind === "recovery_codes_low" ? <a href="/account">Make new codes</a> : null}
+          {b.kind === "api_key_expiring" ? <a href="/account/keys">API keys</a> : null}
+          {b.kind === "owner_recovered" ? <a href="/identity/audit">Open the audit log</a> : null}
         </div>
       ))}
     </div>

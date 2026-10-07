@@ -34,6 +34,8 @@ migrate`) maps, and to what:
   SCIM users / groups / bearer tokens     pending people with their email, `scim` groups with
                                           members and bindings, and the raw bearer tokens hashed
                                           into kind=scim credentials of sys_scim_legacy
+  OIDC / SAML providers                   console sign-in providers (identity_providers),
+                                          switched off until an Owner adds the client secret
   agent roles with an agent_id            agent principal rows (Passports are S3's)
 """
 from __future__ import annotations
@@ -451,6 +453,7 @@ class SeedReport:
     scim_users: int = 0
     scim_groups: int = 0
     scim_tokens: int = 0
+    providers: int = 0
     agents: int = 0
     notes: list[str] = field(default_factory=list)
 
@@ -578,6 +581,7 @@ def seed(db: Any, *, settings: Any = None, org_id: Optional[str] = None,
     _seed_break_glass(db, org_id, members, report, now, worker_member)
     _seed_env_keys(db, org_id, settings, members, report, now, worker_member)
     _seed_scim(db, org_id, settings, report)
+    _seed_providers(db, org_id, report)
     _seed_agents(db, org_id, report)
     if is_claimed and apply_claimed:
         _apply_claimed_state(db, org_id, settings, now, started=claimed_at(db, org_id))
@@ -881,6 +885,35 @@ def _seed_scim(db: Any, org_id: str, settings: Any, report: SeedReport) -> None:
             put_mapping(db, org_id, LegacyKind.SCIM_BEARER, key_id, SCIM_LEGACY_PRINCIPAL)
 
 
+def _seed_providers(db: Any, org_id: str, report: SeedReport) -> None:
+    """Today's OIDC and SAML providers (enterprise_identity_providers) become console sign-in
+    providers (identity_providers), once each (imported_from), SWITCHED OFF: their client secret
+    was never stored here (only a reference), so an Owner adds it under Identity › Sign-in and
+    turns the provider on. Nothing has to be re-typed (audit P0-3)."""
+    if not db.execute(_sql("SELECT to_regclass('enterprise_identity_providers') IS NOT NULL")).scalar():
+        return
+    rows = db.execute(_sql(
+        "SELECT id, provider_type, display_name, issuer, audience, entity_id, sso_url FROM "
+        "enterprise_identity_providers WHERE org_id = :o AND provider_type IN ('oidc', 'saml') "
+        "AND NOT EXISTS (SELECT 1 FROM identity_providers p WHERE p.imported_from = "
+        "enterprise_identity_providers.id) ORDER BY created_at, id"), {"o": org_id}).mappings().all()
+    for r in rows:
+        oidc = r["provider_type"] == "oidc"
+        db.execute(_sql(
+            "INSERT INTO identity_providers (id, org_id, protocol, preset, name, issuer, client_id, "
+            "scopes, saml_sso_url, status, imported_from, created_by) VALUES (:id, :o, :proto, "
+            "'generic', :name, :iss, :cid, :scopes, :sso, 'disabled', :src, 'migration')"),
+            {"id": new_id("idp"), "o": org_id, "proto": r["provider_type"],
+             "name": (r["display_name"] or r["id"])[:120],
+             "iss": r["issuer"] if oidc else (r["entity_id"] or r["issuer"]),
+             "cid": r["audience"] if oidc else None,
+             "scopes": ["openid", "email", "profile"] if oidc else [],
+             "sso": None if oidc else r["sso_url"], "src": r["id"]})
+        report.providers += 1
+        report.notes.append(f"sign-in provider {r['display_name']!r} imported switched off: add its "
+                            "client secret and turn it on in Identity › Sign-in")
+
+
 def _seed_agents(db: Any, org_id: str, report: SeedReport) -> None:
     rows = db.execute(_sql(
         "SELECT DISTINCT ON (agent_id) agent_id, display_name, lifecycle FROM roles WHERE "
@@ -1168,7 +1201,7 @@ def extend_path(org_id: str, kind: LegacyKind, until: datetime, *, db: Any, acto
 
 def reschedule_cutoffs(org_id: str, *, db: Any) -> None:
     """After `legacy_cutoff_days` changes in policy: move every live bridge's date to
-    claim + the new number of days (never past 90 days)."""
+    claim + the new number of days (never past the absolute cutoff: hard_cutoff)."""
     started = claimed_at(db, org_id)
     if started is None:
         return

@@ -68,7 +68,7 @@ commands:
   status       containers, ports and disk on the host
   model        connect an API KEY to the remote install — one command, no tunnel
   subscription connect a Claude/Codex SUBSCRIPTION token — pipe one line on stdin
-  env          print export lines for BOSS_API / BOSS_API_KEY / PROJECT
+  env          print export lines for BOSS_API / BOSS_API_KEY (the host tools' key) / PROJECT
   tunnel       forward the host's API and console to this laptop over SSH
   logs         tail a service's logs (--service api|worker|web|db)
 
@@ -167,6 +167,14 @@ TTY_OPT=()
 
 rsh()  { ssh "${SSH_OPTS[@]}" "$HOST" "$@"; }
 rshq() { ssh "${SSH_OPTS[@]}" "$HOST" "$@" 2>/dev/null; }
+
+# Shell text, run ON THE SERVER, that sets variable $1 to the host tools' key: BOSS_HOST_API_KEY
+# from the install's .env (issued there by `boss identity host-key` when it is missing), else the
+# shared BOSS_API_KEY while that still works. The key never crosses the laptop's command line.
+remote_key_sh() {
+  local get="grep '^BOSS_HOST_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-"
+  printf '%s' "$1=\$($get); [ -n \"\$$1\" ] || { bash '$DIR/scripts/install/boss.sh' --dir '$DIR' identity host-key >/dev/null 2>&1 || true; $1=\$($get); }; [ -n \"\$$1\" ] || $1=\$(grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-)"
+}
 
 # ---------------------------------------------------------------------------- preflight
 preflight() {
@@ -349,7 +357,7 @@ prune_remote() {
 wait_for_builds() {
   local limit="${BOSS_DEPLOY_WAIT_MINUTES:-30}" waited=0 state
   while :; do
-    state="$(rshq "k=\$(grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-)
+    state="$(rshq "$(remote_key_sh k)
       [ -n \"\$k\" ] && curl -s -m 10 -H \"Authorization: Bearer \$k\" 'http://127.0.0.1:$API_PORT/v1/system/deploy-readiness'" || true)"
     case "$state" in
       *'"safe_to_deploy":false'*|*'"safe_to_deploy": false'*) ;;
@@ -532,17 +540,17 @@ cmd_smoke() {
   # The key is read on the host. Copying it into this SSH command would put a generated
   # credential in the laptop's process list and in the remote shell's command string.
   local code
-  code="$(rshq "k=\$(grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-)
+  code="$(rshq "$(remote_key_sh k)
     if [ -z \"\$k\" ]; then printf '%s' NOKEY
     else curl -s -o /dev/null -w '%{http_code}' -m 25 -H \"Authorization: Bearer \$k\" 'http://127.0.0.1:$API_PORT/v1/projects'
     fi")"
   if [[ "$code" == "NOKEY" || -z "$code" ]]; then
-    warn "no BOSS_API_KEY in $DIR/.env — cannot test an authenticated route"; fails=1
+    warn "no API key in $DIR/.env — cannot test an authenticated route"; fails=1
   elif [[ "$code" == "200" ]]; then
     ok "API reaches its database (authenticated /v1/projects 200)"
   else
     warn "authenticated /v1/projects returned $code"
-    rshq "k=\$(grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-)
+    rshq "$(remote_key_sh k)
       curl -s -m 25 -H \"Authorization: Bearer \$k\" 'http://127.0.0.1:$API_PORT/v1/projects' | head -c 300" | sed 's/^/      /'
     printf "\n"
     fails=1
@@ -615,13 +623,13 @@ print(json.dumps(p))')" || die "could not build the request"
   # THE KEY GOES OVER STDIN, not in argv — an argument is visible in the host's process list.
   out="$(printf '%s' "$payload" | ssh "${SSH_OPTS[@]}" "$HOST" "
       set -e
-      K=\$(grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-)
+      $(remote_key_sh K)
       [ -n \"\$K\" ] || { echo 'NOKEY'; exit 1; }
       curl -sS -X POST 'http://127.0.0.1:$API_PORT/v1/setup/model' \
         -H \"x-boss-api-key: \$K\" -H 'Content-Type: application/json' --data-binary @-
   " 2>&1)" || true
 
-  if [[ "$out" == *NOKEY* ]]; then die "no BOSS_API_KEY in $DIR/.env on $HOST — is BOSS installed there?"; fi
+  if [[ "$out" == *NOKEY* ]]; then die "no API key in $DIR/.env on $HOST — is BOSS installed there?"; fi
   # Community records a key without a live paid model call. A provider name
   # in an error is not evidence of a successful connection.
   local result
@@ -679,7 +687,13 @@ print(json.dumps({"project_id":os.environ["PROJ"],"actor":"ceo",
   IFS= read -r -d '' remote_script <<'EOS' || true
 set -eu
 DIR="$1"; PORT="$2"; PROJ="$3"; PROV="$4"
-K=$(grep '^BOSS_API_KEY=' "$DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)
+# the host tools' key (boss identity host-key), else the shared key while it still works
+K=$(grep '^BOSS_HOST_API_KEY=' "$DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)
+if [ -z "${K:-}" ]; then
+  bash "$DIR/scripts/install/boss.sh" --dir "$DIR" identity host-key >/dev/null 2>&1 || true
+  K=$(grep '^BOSS_HOST_API_KEY=' "$DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)
+fi
+[ -n "${K:-}" ] || K=$(grep '^BOSS_API_KEY=' "$DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)
 [ -n "${K:-}" ] || { echo NOKEY; exit 1; }
 B="http://127.0.0.1:$PORT"
 STORE=$(curl -sS -X POST "$B/v1/setup/coding-agents/credential" \
@@ -697,7 +711,7 @@ EOS
        bash /tmp/boss-sub.\$\$ '$DIR' '$API_PORT' '$PROJECT_ID' '$PROVIDER'; \
        rc=\$?; rm -f /tmp/boss-sub.\$\$; exit \$rc" 2>&1)" || true
 
-  [[ "$out" == *NOKEY* ]] && die "no BOSS_API_KEY in $DIR/.env on $HOST — is BOSS installed there?"
+  [[ "$out" == *NOKEY* ]] && die "no API key in $DIR/.env on $HOST — is BOSS installed there?"
   if printf '%s' "$out" | grep -q 'secret_store_fallback_not_accepted'; then
     warn "this install has no secret store, so BOSS stopped rather than putting a live"
     say  "  credential in its database. Re-run with --accept-database-fallback to allow it."
@@ -740,8 +754,8 @@ except (ValueError, TypeError):
 cmd_env() {
   preflight
   local key
-  key="$(rshq "grep '^BOSS_API_KEY=' '$DIR/.env' 2>/dev/null | head -1 | cut -d= -f2-")"
-  [[ -n "$key" ]] || die "no BOSS_API_KEY in $DIR/.env on $HOST"
+  key="$(rshq "$(remote_key_sh k); printf '%s' \"\$k\"")"
+  [[ -n "$key" ]] || die "no API key in $DIR/.env on $HOST — is BOSS installed there?"
   # The install binds its API to VM loopback. The laptop reaches it through `tunnel`,
   # not over an unencrypted public port on the host.
   echo "export BOSS_API=http://127.0.0.1:${API_PORT}"

@@ -434,6 +434,70 @@ def test_boss_upgrade_of_a_pinned_install_needs_an_explicit_target(world) -> Non
     assert "from v1.1.0" in moved.stdout
 
 
+def test_a_failed_upgrade_puts_the_previous_release_back(world) -> None:
+    """A release that cannot start on this host (an API that refuses to boot) must never leave
+    BOSS down (audit U6): upgrade.sh puts the previous source back and starts it again."""
+    boss = _installed(world)
+    env = world["env"]
+    old = _git("rev-parse", "HEAD", cwd=world["install"])
+    upstream = world["upstream"]
+    installer = upstream / "install.sh"
+    installer.write_text(installer.read_text().replace(
+        "set -euo pipefail",
+        # moves the source (as the real installer does), then fails to start
+        "set -euo pipefail\ngit -C \"$2\" merge -q --ff-only \"$4\"\n"
+        "echo 'this release cannot start here' >&2; exit 1", 1))
+    _git("commit", "-qam", "broken", cwd=upstream)
+    _release(upstream, "1.1.0")
+
+    result = _run(boss, "upgrade", env=env, timeout=180)
+
+    assert result.returncode != 0
+    assert "Putting back the previous release" in result.stderr
+    assert "Rolled back" in result.stderr, result.stdout + result.stderr
+    assert _git("rev-parse", "HEAD", cwd=world["install"]) == old
+    assert _state(world["install"])["BOSS_RELEASE_REF"] == "v1.0.0"
+
+
+# ---- named accounts from the host shell ------------------------------------------------------
+
+def test_boss_identity_runs_the_identity_cli_as_the_boss_user(world) -> None:
+    boss = _installed(world)
+    Path(world["env"]["BOSS_TEST_DOCKER_LOG"]).write_text("")
+    result = _run(boss, "identity", "setup-link", env=world["env"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "exec -T -u boss api python -m boss_engine.identity.cli setup-link" in _docker_calls(world)
+    # the commands that print a credential are never run from here
+    for refused in ("mcp-key", "egress-key"):
+        blocked = _run(boss, "identity", refused, env=world["env"])
+        assert blocked.returncode != 0 and "prints a credential" in blocked.stderr
+
+
+def test_boss_identity_host_key_keeps_the_key_in_env_and_never_prints_it(world) -> None:
+    boss = _installed(world)
+    key = "boss_sak_" + "Q" * 43
+    real = Path(world["env"]["BOSS_TEST_BIN"]) / "docker"
+    wrapper = world["tmp"] / "docker-with-key"
+    _executable(wrapper, "#!/bin/sh\ncase \"$*\" in *identity.cli*host-key*) echo '%s' ;; esac\n"
+                         "exec '%s.real' \"$@\"\n" % (key, real))
+    real.rename(str(real) + ".real")
+    wrapper.rename(real)
+    result = _run(boss, "identity", "host-key", env=world["env"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert key not in result.stdout + result.stderr
+    env_lines = (world["install"] / ".env").read_text().splitlines()
+    assert f"BOSS_HOST_API_KEY={key}" in env_lines
+    assert oct((world["install"] / ".env").stat().st_mode & 0o777) == "0o600"
+
+
+def test_host_tools_never_put_a_key_on_a_command_line(world) -> None:
+    """The host tools send their key through stdin or the environment: argv is visible to every
+    user of the host (ps)."""
+    text = (REPO / "scripts/install/boss.sh").read_text()
+    assert '-H "Authorization: Bearer $key"' not in text
+    assert "-H @-" in text
+
+
 # ---- models and subscriptions already on this machine --------------------------------------
 
 def _codex_login(world) -> None:

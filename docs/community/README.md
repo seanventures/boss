@@ -129,7 +129,7 @@ Run `make mcp-setup`, then point Claude Code, Codex, or any MCP client at `make 
 
 </div>
 
-Prefer plain HTTP? `source boss-community.env.sh` loads `BOSS_API_URL`, `BOSS_API_KEY`, and `BOSS_PROJECT_ID` without printing the key. See [CLI](cli.md) and [calling the API remotely](remote-api.md).
+Prefer plain HTTP? Use a personal key from **My account › API keys**, or a service-account key. See [CLI](cli.md) and [calling the API remotely](remote-api.md).
 
 ## Start here
 
@@ -138,6 +138,10 @@ Prefer plain HTTP? `source boss-community.env.sh` loads `BOSS_API_URL`, `BOSS_AP
 | Go from install to software BOSS built | [Getting started](GETTING_STARTED.md) |
 | Install BOSS and run a first goal | [Quickstart](QUICKSTART.md) |
 | Serve it to my team on a domain or private IP | [Deploy](hostname.md) |
+| Invite my team and give them access | [People and access](PEOPLE_AND_ACCESS.md) |
+| Set up email, single sign-on or SCIM | [Sign-in setup](SIGN_IN_SETUP.md) |
+| Control what agents may do for people | [Agents and access](AGENTS_AND_ACCESS.md) |
+| Upgrade an install that uses the shared password | [Upgrade to named accounts](IDENTITY_UPGRADE.md) |
 | Connect a model or coding subscription | [Model connections](MODEL_CONNECTIONS.md) |
 | See what a fresh install can do | [Use cases](use-cases.md) and [walkthroughs](walkthroughs.md) |
 | Try ready-made workflows | [Example workflows](https://github.com/seanventures/boss/blob/main/examples/README.md) |
