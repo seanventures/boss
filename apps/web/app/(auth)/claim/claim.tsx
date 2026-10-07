@@ -20,6 +20,7 @@ import { idPost } from "../../../lib/identity/api";
 import type { AuthOptions } from "../../../lib/identity/types";
 import { codesOf, type RecoveryCodes } from "../../../lib/identity/types-auth";
 import { claimOrigin, claimPathFor, claimProof } from "../../../lib/identity/claim-path";
+import { passkeyBlockWords } from "../../../lib/identity/passkey-support";
 import { webauthnAvailable } from "../../../lib/identity/webauthn";
 import { AuthStage, Live, Logo, fragmentToken } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
@@ -77,19 +78,23 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
   const [error, setError] = useState<string | null>(null);
   const [mins, setMins] = useState<number | null>(null);
   const [pageOrigin, setPageOrigin] = useState<string | null>(null);
+  const [noPasskey, setNoPasskey] = useState<string | null>(null);
 
   useEffect(() => {
     setPasskeys(webauthnAvailable());
     setToken(fragmentToken());
     setPageOrigin(window.location.origin);
+    // An address no browser can hold a passkey for (an IP, plain http): the authenticator app is
+    // the way in, said in one plain line — never a prompt the browser will refuse.
+    setNoPasskey(passkeyBlockWords(options.passkey_reason, window.location));
     setMins(minutesLeft(claim.expires_at, Date.now()));
-  }, [claim.expires_at]);
+  }, [claim.expires_at, options.passkey_reason]);
 
   // A setup link in the fragment is the proof whenever the API accepts one (lib/identity/claim-path).
   const path = claimPathFor(claim, token);
   const origin = claimOrigin(claim, pageOrigin);
   const network = path === "network_bridge";
-  const fallback = !passkeys; // no WebAuthn here: password + authenticator app instead
+  const fallback = !passkeys || Boolean(noPasskey); // no passkey here: password + authenticator app instead
   const proofMissing = (path === "setup_token" && !token) || (path === "legacy_password" && !legacy)
     || (network && (!originOk || !origin)) || (fallback && password.length < minPw);
   const ready = name.trim() && email.includes("@") && !proofMissing;
@@ -243,6 +248,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
           </div>
         ) : null}
 
+        {noPasskey ? <div className="idn-note" data-copy="prose" data-testid="no-passkey-here">{noPasskey}</div> : null}
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
         <button type="submit" className="idn-big p" disabled={!ready || busy} aria-disabled={!ready || busy || undefined} data-testid="claim-submit">
           {fallback ? <ShieldCheck size={18} aria-hidden /> : <Fingerprint size={18} weight="bold" aria-hidden />}
