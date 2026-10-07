@@ -119,7 +119,7 @@ def build_identity_github_router() -> APIRouter:
                 return _back(db, github="app_failed", reason=getattr(exc, "code", "failed"))
 
     @router.get("/v1/identity/github/app/installations")
-    @permit(P.GITHUB_CONNECT, scope=Scope.org())
+    @permit(P.GITHUB_READ, scope=Scope.org())     # a read: lists the App's installations, changes nothing
     def app_installations(request: Request):
         try:
             with begin() as db:
