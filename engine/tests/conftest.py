@@ -15,6 +15,13 @@ A column added to entitlement_sources is added here and nowhere else.
 
 from __future__ import annotations
 
+import os
+
+# The product ships BOSS_AUTHZ_MODE=enforce (H2). The engine suite's pre-identity tests enqueue
+# and lease jobs with no principal, as an upgrading install does, so the suite runs shadow
+# EXPLICITLY; identity tests set the mode they test on the one settings object.
+os.environ.setdefault("BOSS_AUTHZ_MODE", "shadow")
+
 from sqlalchemy import text
 
 #: Mirrors the real entitlement_sources. SQLite types, since the stubs run in memory; JSON

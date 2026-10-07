@@ -18,6 +18,8 @@ from sqlalchemy import text
 
 from . import invitations, users
 from .audit import Outcome
+from .bindings import guard_membership_removals
+from .roles import AccessError
 from .authn_support import (
     bump_epoch,
     emit,
@@ -85,6 +87,15 @@ def sync_groups(db: Any, *, principal_id: str, provider: Provider, ident: Federa
              details={"member": principal_id, "source": "oidc"})
         changed = True
     for gid in sorted(current - wanted):
+        try:
+            # H4: the IdP dropping a group must not remove the last Owner's reach (the deferred
+            # trigger would otherwise fail the whole sign-in at commit)
+            guard_membership_removals(db, provider.org_id, [(gid, principal_id)])
+        except AccessError:
+            emit(db, org_id=provider.org_id, event_type="group.member_removed", outcome=Outcome.DENIED,
+                 actor_principal_id=f"sso:{provider.id}", target_type="group", target_id=gid,
+                 details={"member": principal_id, "source": "oidc", "reason": "last_owner"})
+            continue
         db.execute(text("DELETE FROM identity_group_members WHERE group_id = :g AND principal_id = :p "
                         "AND source = 'oidc'"), {"g": gid, "p": principal_id})
         emit(db, org_id=provider.org_id, event_type="group.member_removed", outcome=Outcome.SUCCESS,
@@ -159,8 +170,13 @@ def resolve(db: Any, provider: Provider, ident: FederatedIdentity, facts: Reques
     inv = invitations.open_for_email(db, email)
     pid: Optional[str] = None
     if inv is not None and inv.org_id == provider.org_id:
-        pid = invitations.accept(db, inv, display_name=ident.name or email, password_hash=None,
-                                 email_verified=True)
+        try:
+            pid = invitations.accept(db, inv, display_name=ident.name or email, password_hash=None,
+                                     email_verified=True)
+        except invitations.InvitationRefused:
+            # the inviter can no longer grant what the invitation names (C1): nothing was written
+            _refuse(db, provider, facts, ident, "invitation_invalid")
+            return Answer(403, dict(NOT_INVITED))
     elif provider.jit_mode == "domain" and _domain(email) in {d.lower().lstrip("@") for d in provider.domains}:
         pid = _create(db, provider, ident, self_signed_up=False)
     else:

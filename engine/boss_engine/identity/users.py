@@ -204,14 +204,10 @@ def add_binding(db: Any, *, org_id: str, subject_id: str, role_key: str, scope_t
 
 
 def active_owner_ids(db: Any, org_id: str) -> list[str]:
-    rows = db.execute(text(
-        "SELECT DISTINCT p.id FROM identity_role_bindings b JOIN identity_principals p ON "
-        "(b.subject_type = 'principal' AND p.id = b.subject_id) OR (b.subject_type = 'group' AND p.id IN "
-        "(SELECT principal_id FROM identity_group_members WHERE group_id = b.subject_id)) "
-        "WHERE b.org_id = :org AND b.role_id = 'arl_owner' AND b.scope_type = 'org' AND "
-        "(b.expires_at IS NULL OR b.expires_at > now()) AND p.kind = 'user' AND p.status = 'active' "
-        "AND NOT p.network_bound"), {"org": org_id})
-    return [r[0] for r in rows]
+    """Who is an Owner right now (bindings.owner_ids: one definition of Owner reach)."""
+    from .bindings import owner_ids
+
+    return sorted(owner_ids(db, org_id))
 
 
 def is_owner(db: Any, principal_id: str, org_id: str) -> bool:

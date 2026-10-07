@@ -112,9 +112,28 @@ MEMBER_BASELINE = frozenset(ROLE_PERMISSIONS["viewer"])
 #: fixed Owner-equivalent set, used only by legacy credentials" (§12 M0, M2). Today those
 #: credentials can do everything; until the cutoff they still can.
 LEGACY_OWNER_SET: frozenset[str] = frozenset(ROLE_PERMISSIONS["owner"])
-#: BOSS_WORKER_PRINCIPAL's key keeps today's reach plus the worker's own system set until S3's
-#: run tokens replace the shared worker key (M4).
-WORKER_LEGACY_SET: frozenset[str] = LEGACY_OWNER_SET | frozenset(ROLE_PERMISSIONS["system_worker"])
+#: BOSS_WORKER_PRINCIPAL's key (sys_legacy_system): exactly what the worker process calls on the
+#: API (apps/worker/boss_worker: the worker protocol, the scheduled ticks and the jobs it
+#: executes) and nothing else — no identity writes, no owner:assign, no reads it never makes.
+#: Pinned both ways by engine/tests/test_identity_f2_worker_set.py: every route the worker calls
+#: is covered, and nothing here is unused or an identity write. Until S3's run tokens replace the
+#: shared worker key (M4).
+WORKER_API_PERMISSIONS: frozenset[str] = frozenset({
+    "assurance:run",          # /v1/qa/benchmark-apps/tuning-sweep
+    "autopilot:operate",      # shepherd/metatron/process-manager/focused-agent ticks
+    "code_task:create",       # /v1/software-factory/proposals
+    "comms:send",             # /v1/comms/outbox/{id}/deliver
+    "deployment:create",      # /v1/software-factory/deployments
+    "github:merge",           # /v1/software-factory/merges
+    "infra:provision",        # /v1/infra/droplets
+    "infra:terminate",        # /v1/infra/resources/{id}/terminate
+    "setup:manage",           # /v1/setup/checks
+    "skill:invoke",           # /v1/skills/{id}/invoke
+    "system:operate",         # resources/sync, delivery sweep, schedule/flow/wakeup ticks
+    "system:read",            # /v1/system/health
+    "work_item:manage",       # /v1/openai/plans
+})
+WORKER_LEGACY_SET: frozenset[str] = WORKER_API_PERMISSIONS | frozenset(ROLE_PERMISSIONS["system_worker"])
 #: The network operator BEFORE the claim (§4.12): Owner-equivalent, except that "it may claim the
 #: first Owner, and it may not touch any other identity setting" — so no identity writes. The
 #: claim itself is S1's public route and needs nothing from here.
@@ -175,6 +194,20 @@ def nearest_builtin_role(permissions: Iterable[str]) -> str:
     return "owner"
 
 
+def configured_system_members(settings: Any = None) -> frozenset[str]:
+    """H5: which legacy member ids are SYSTEM members comes from configuration only — the fixed
+    ones BOSS ships (SYSTEM_MEMBER_PRINCIPALS) and BOSS_WORKER_PRINCIPAL — never from a
+    member row's member_type, which the members API used to let anyone with member_manage set
+    (and seed then mapped to an Owner-equivalent sys_legacy_* principal)."""
+    settings = _settings(settings)
+    worker = str(getattr(settings, "worker_principal", "system") or "system")
+    return frozenset(SYSTEM_MEMBER_PRINCIPALS) | {worker}
+
+
+def is_configured_system_member(member_id: str, settings: Any = None) -> bool:
+    return str(member_id) in configured_system_members(settings)
+
+
 def system_member_principal(member_id: str, *, worker_member: str = "system") -> str:
     if member_id == worker_member:
         return LEGACY_WORKER_PRINCIPAL
@@ -184,13 +217,20 @@ def system_member_principal(member_id: str, *, worker_member: str = "system") ->
 
 
 def legacy_system_set(principal_id: str) -> Optional[frozenset[str]]:
-    """The fixed permission set of a legacy system principal (None for any other id)."""
+    """The fixed permission set of a legacy system principal (None for any other id), before the
+    claim. legacy.system_permissions narrows the console key and every other sys_legacy_*
+    (metatron, coo, ...) to CONSOLE_AFTER_CLAIM_SET from the claim, and empties them at the
+    cutoff; the worker key keeps its minimal worker set (it has no identity writes to lose)."""
     if principal_id == LEGACY_WORKER_PRINCIPAL:
         return WORKER_LEGACY_SET
     if principal_id == SCIM_LEGACY_PRINCIPAL:
         return frozenset(ROLE_PERMISSIONS["system_scim"])
-    if principal_id == LEGACY_CONSOLE_PRINCIPAL or principal_id.startswith(LEGACY_SYSTEM_PREFIX):
+    if principal_id == LEGACY_CONSOLE_PRINCIPAL or principal_id in SYSTEM_MEMBER_PRINCIPALS.values():
         return LEGACY_OWNER_SET
+    if principal_id.startswith(LEGACY_SYSTEM_PREFIX):
+        # a sys_legacy_* that no configuration names (H5: one an earlier seed made from a
+        # member row typed "system" through the API) holds nothing
+        return frozenset()
     return None
 
 
@@ -330,10 +370,24 @@ def bump_epoch(db: Any, org_id: str, reason: str = "identity migration") -> None
 
 
 def claimed_at(db: Any, org_id: str) -> Optional[datetime]:
+    """THE definition of "claimed" (claim.is_claimed reads it too): when the first Owner was
+    recorded (`bootstrap.claimed`) — or, for an org that has a real Owner without that event
+    (an Owner made by an import or an earlier build), when its first Owner binding was granted.
+    An org with an Owner is never treated as unclaimed (which would hand the legacy bridges
+    their pre-claim, Owner-equivalent sets)."""
     row = db.execute(_sql(
         "SELECT ts FROM identity_security_events WHERE org_id = :o AND event_type = "
         "'bootstrap.claimed' ORDER BY seq LIMIT 1"), {"o": org_id}).first()
-    return row[0] if row else None
+    if row:
+        return row[0]
+    from .bindings import owner_ids
+
+    owners = owner_ids(db, org_id)
+    if not owners:
+        return None
+    return db.execute(_sql(
+        "SELECT min(granted_at) FROM identity_role_bindings WHERE org_id = :o AND role_id = "
+        "'arl_owner' AND scope_type = 'org'"), {"o": org_id}).scalar()
 
 
 # ---- M0: seed ------------------------------------------------------------------------------------
@@ -455,7 +509,7 @@ def seed(db: Any, *, settings: Any = None, org_id: Optional[str] = None,
     # -- members --
     members = _legacy_members(db, org_id)
     for member_id, info in members.items():
-        if info["member_type"] == "system" or member_id == worker_member:
+        if is_configured_system_member(member_id, settings):
             pid = system_member_principal(member_id, worker_member=worker_member)
             report.principals_created += ensure_principal(
                 db, pid, org_id, "system", "active", f"Legacy {info['display_name']}",
@@ -558,7 +612,7 @@ def _seed_seats(db: Any, org_id: str, members: dict[str, dict[str, Any]],
                 report: SeedReport) -> None:
     seats = _approver_seats()
     for member_id, info in members.items():
-        if info["member_type"] == "system" or not info["active"]:
+        if is_configured_system_member(member_id) or not info["active"]:
             continue
         held = seats & (info["role_keys"] | {member_id})
         target = mapping(db, org_id, LegacyKind.MEMBER_ID, member_id)
@@ -633,9 +687,7 @@ def _seed_env_keys(db: Any, org_id: str, settings: Any, members: dict[str, dict[
             continue
         digest = token_hash(token)
         present.add(digest)
-        info = members.get(member_id, {"member_type": "human"})
-        if info.get("member_type") == "system" or member_id == worker_member \
-                or member_id in SYSTEM_MEMBER_PRINCIPALS:
+        if is_configured_system_member(member_id, settings):
             pid = system_member_principal(member_id, worker_member=worker_member)
             ensure_principal(db, pid, org_id, "system", "active", f"Legacy {member_id}",
                              legacy_member_ids=[member_id])
