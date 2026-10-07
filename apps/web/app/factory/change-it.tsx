@@ -138,7 +138,7 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
     form.set("workflow_version_id", through);
     form.set("actor", actor);
     if (previewId) form.set("anchor", `/v1/previews/${previewId}/web/`);
-    const r = await callAction(submitCodeTaskFeedbackAction, undefined, "feedback:submit")(null, form);
+    const r = await callAction(submitCodeTaskFeedbackAction, undefined, "code_task:steer")(null, form);
     setBusy(false);
     if (r?.error) setError(r.error); else setProposal(r);
   };
@@ -150,7 +150,7 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
     const form = new FormData();
     form.set("thread_id", proposal.thread_id);
     form.set("actor", actor);
-    const r = await callAction(confirmCodeTaskFeedbackAction, undefined, "feedback:submit")(null, form);
+    const r = await callAction(confirmCodeTaskFeedbackAction, undefined, "code_task:steer")(null, form);
     setBusy(false);
     if (r?.error) { setError(r.error); return; }
     notifyChanged("code-tasks");

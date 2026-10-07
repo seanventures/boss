@@ -1,8 +1,9 @@
 """Identity posture (IDENTITY.md §9.1) and the console-wide banners the API owns (MeBanner).
 Owned by stream S5. Read-only: nothing here changes state.
 
-Six checks, each {key, status: ok|warn|critical, summary, count, fix}:
-  mfa_coverage, stale_api_keys, risky_delegations, legacy_credentials, orphans, audit_chain.
+Seven checks, each {key, status: ok|warn|critical, summary, count, fix}:
+  mfa_coverage, stale_api_keys, risky_delegations, legacy_credentials, orphans, audit_chain,
+  public_origin (F3/H2).
 `legacy_credentials` carries one row per legacy path with its principal, use count, last use and
 the countdown to its cutoff, so "every legacy path shows in posture with counts and a countdown".
 """
@@ -202,12 +203,35 @@ def posture(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dict[str
     # 7. enforcement (H2): anything but enforce, globally or for any router, is red — shadow
     #    refuses nothing and is an upgrade-time setting only.
     checks.append(enforcement_check())
+    # 8. a bound public origin (F3/H2): emailed links, passkeys and SSO need one
+    checks.append(public_origin_check(org_id, db=db))
 
     claimed = migration.claimed_at(db, org_id)
     return {"org_id": org_id, "generated_at": now.isoformat(), "claimed_at": _iso(claimed),
             "status": "critical" if any(c["status"] == "critical" for c in checks) else (
                 "warn" if any(c["status"] == "warn" for c in checks) else "ok"),
             "checks": checks}
+
+
+def public_origin_check(org_id: str, *, db: Any) -> dict[str, Any]:
+    """H2: the origin every emailed link, passkey and SSO redirect is bound to. Without one BOSS
+    sends no links at all (it never builds one from a request's Host), so say so plainly."""
+    from ..config import get_settings
+    from .authn_support import origin_of, public_origin
+
+    origin = public_origin(db, org_id)
+    source = "env" if origin_of(get_settings().public_url or "") else ("claim" if origin else None)
+    if origin is None:
+        return {**_check(
+            "public_origin", "critical",
+            "BOSS has no public URL, so it sends no emailed links (sign-in links, password "
+            "resets, invitations) and offers no passkeys or SSO", 1,
+            "Set BOSS_PUBLIC_URL to the address people open BOSS at (for example "
+            "https://boss.example.com) and restart, or set the public origin in Identity › Policy."),
+            "origin": None, "source": None}
+    return {**_check("public_origin", "ok", f"Links, passkeys and SSO use {origin}", 0,
+                     "Change BOSS_PUBLIC_URL if people reach BOSS at another address."),
+            "origin": origin, "source": source}
 
 
 def banners(ctx: Any, *, db: Any, now: Optional[datetime] = None) -> list[dict[str, Any]]:

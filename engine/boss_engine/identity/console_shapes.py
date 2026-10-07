@@ -172,6 +172,8 @@ _CHECK = {  # my check key -> (S4 id, label, fix label, href)
     "audit_chain": ("audit", "Audit chain", "Verify now", "/identity/audit?verify=1"),
     "enforcement": ("enforcement", "Access control", "Read the upgrade guide",
                     "/identity/sign-in#enforcement"),
+    # F3/H2: without a bound public origin BOSS sends no emailed links and offers no passkeys/SSO
+    "public_origin": ("origin", "Public URL", "Set BOSS_PUBLIC_URL", "/identity/sign-in#public-url"),
 }
 _LEGACY_LABEL = {
     "shared_password": ("legacy_password", "Shared console password"),

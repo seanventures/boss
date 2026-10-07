@@ -1,7 +1,8 @@
 """Turning a verified federated identity into a BOSS person (IDENTITY.md §4.8 "Linking", §4.15;
 D31). Stream S1. Shared by OIDC, GitHub and SAML.
 
-The ONLY key is (issuer, subject). In order:
+The ONLY key is (provider, issuer, subject) (M1: a second provider that names the same issuer can
+never sign in as the first one's people; issuers are also unique per org). In order:
   1. already linked                 -> that person, if active;
   2. purpose=link                   -> bind to the signed-in, stepped-up person who started it;
   3. an open, unclaimed invitation for the VERIFIED email -> accept it, link;
@@ -45,9 +46,21 @@ def _domain(email: Optional[str]) -> str:
     return email.rsplit("@", 1)[1].lower() if email and "@" in email else ""
 
 
-def linked_principal(db: Any, ident: FederatedIdentity) -> Optional[str]:
-    return db.execute(text("SELECT principal_id FROM identity_user_identities WHERE issuer = :i AND subject = :s"),
-                      {"i": ident.issuer, "s": ident.subject}).scalar()
+def linked_principal(db: Any, ident: FederatedIdentity, provider: Provider) -> Optional[str]:
+    """The person linked to this subject AT THIS PROVIDER (M1). A link made through another
+    provider never matches, even when that provider claims the same issuer."""
+    return db.execute(text("SELECT principal_id FROM identity_user_identities WHERE provider_id = :p "
+                           "AND issuer = :i AND subject = :s"),
+                      {"p": provider.id, "i": ident.issuer, "s": ident.subject}).scalar()
+
+
+def vouches_for(provider: Provider, ident: FederatedIdentity) -> bool:
+    """Does this provider's word on the email count (M1)? Only a VERIFIED email in a domain the
+    admin listed on the provider (its `domains`: the provider is authoritative there). A SAML
+    IdP's or a social login's say-so about any other domain proves nothing."""
+    email = (ident.email or "").strip()
+    trusted = {d.lower().lstrip("@") for d in (provider.domains or ())}
+    return bool(email and ident.email_verified and _domain(email) in trusted)
 
 
 def link(db: Any, *, principal_id: str, provider: Provider, ident: FederatedIdentity) -> str:
@@ -129,7 +142,13 @@ def resolve(db: Any, provider: Provider, ident: FederatedIdentity, facts: Reques
     Answer whose body names only a safe code."""
     if not ident.issuer or not ident.subject:
         return Answer(401, {"error": "sso_failed"})
-    existing = linked_principal(db, ident)
+    existing = linked_principal(db, ident, provider)
+    if existing is None and purpose != "link" and db.execute(text(
+            "SELECT 1 FROM identity_user_identities WHERE issuer = :i AND subject = :s AND provider_id <> :p"),
+            {"i": ident.issuer, "s": ident.subject, "p": provider.id}).first() is not None:
+        # The subject is linked through ANOTHER provider with the same issuer: never this one's.
+        _refuse(db, provider, facts, ident, "issuer_collision")
+        return Answer(403, dict(NOT_INVITED))
     if purpose == "link":
         from . import sessions
 
@@ -155,8 +174,9 @@ def resolve(db: Any, provider: Provider, ident: FederatedIdentity, facts: Reques
             user = users.by_id(db, existing)
         if user is None or user.status != "active":
             return Answer(401, {"error": "sso_failed"})
-        db.execute(text("UPDATE identity_user_identities SET last_used_at = now() WHERE issuer = :i AND subject = :s"),
-                   {"i": ident.issuer, "s": ident.subject})
+        db.execute(text("UPDATE identity_user_identities SET last_used_at = now() WHERE provider_id = :p "
+                        "AND issuer = :i AND subject = :s"),
+                   {"p": provider.id, "i": ident.issuer, "s": ident.subject})
         return _sign_in(db, provider, ident, user, facts)
     # Unknown subject: only an invitation, a JIT rule or enabled self sign-up may create someone,
     # and only for a VERIFIED email that no BOSS account holds yet.
@@ -169,7 +189,9 @@ def resolve(db: Any, provider: Provider, ident: FederatedIdentity, facts: Reques
         return Answer(403, dict(NOT_INVITED))
     inv = invitations.open_for_email(db, email)
     pid: Optional[str] = None
-    if inv is not None and inv.org_id == provider.org_id:
+    if inv is not None and inv.org_id == provider.org_id and vouches_for(provider, ident):
+        # M1: an invitation (it may name an Owner) is claimed by SSO only when this provider is
+        # authoritative for the email's domain; otherwise the person accepts it with the link.
         try:
             pid = invitations.accept(db, inv, display_name=ident.name or email, password_hash=None,
                                      email_verified=True)

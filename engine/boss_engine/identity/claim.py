@@ -178,14 +178,19 @@ def count_attempt(db: Any, ip: Optional[str]) -> Optional[int]:
 
 
 def claim(db: Any, req: ClaimRequest, *, ip: Optional[str], bridged: Optional[AuthContext],
-          headers: dict[str, str]) -> users.UserRow:
+          headers: dict[str, str], peer_ip: Optional[str] = None) -> users.UserRow:
     """Create the first Owner. Raises ClaimRefused (404 once claimed; 401 for a wrong credential).
-    Serialised by an advisory lock so two claims cannot both win."""
+    Serialised by an advisory lock so two claims cannot both win, and by a DB constraint (L4: one
+    `bootstrap.claimed` per org, identity_one_claim_per_org) should the lock ever be bypassed.
+
+    EVERY path binds the public origin (H2) unless BOSS_PUBLIC_URL is set: the origin the
+    claimant's browser addressed (its Origin header, already checked by the pre-session CSRF
+    guard; https, or http on loopback). From then on emailed links, WebAuthn and SSO use only it."""
     db.execute(text("SELECT pg_advisory_xact_lock(hashtext('boss.identity.claim'))"))
     org_id = default_org_id(db)
     if not org_id or is_claimed(db, org_id):
         raise ClaimRefused("not_found", 404)
-    path = _authorise(db, req, bridged=bridged, headers=headers)
+    path = _authorise(db, req, bridged=bridged, headers=headers, peer_ip=peer_ip)
     email = (req.email or "").strip()
     if "@" not in email or len(email) > 320:
         raise ClaimRefused("invalid_email", 422)
@@ -206,8 +211,7 @@ def claim(db: Any, req: ClaimRequest, *, ip: Optional[str], bridged: Optional[Au
                             password_hash=password_hash, status="active", created_by="bootstrap")
     users.add_binding(db, org_id=org_id, subject_id=pid, role_key="owner", granted_by=pid,
                       reason=f"first Owner (claim: {path})")
-    if path == "network":
-        _bind_public_origin(db, org_id, origin_of(req.confirm_origin or "") or "", by=pid)
+    _bind_public_origin(db, org_id, claim_origin(path, req, headers), by=pid)
     db.execute(text("UPDATE identity_auth_challenges SET consumed_at = now() WHERE kind = 'setup' "
                     "AND consumed_at IS NULL"))
     user = users.by_id(db, pid)
@@ -227,8 +231,23 @@ def claim(db: Any, req: ClaimRequest, *, ip: Optional[str], bridged: Optional[Au
     return user
 
 
+def claim_origin(path: str, req: ClaimRequest, headers: dict[str, str]) -> str:
+    """The origin a claim binds (H2). The network path's was confirmed on screen and checked
+    against the addressed host in `_authorise`; the others' is the browser's Origin header, which
+    the pre-session CSRF check already required to be this request's own origin. Only a secure
+    origin (https, or http on loopback) is ever bound: a plain-http LAN address stays unbound and
+    posture says so."""
+    from .authn_support import secure_origin_ok
+
+    if path == "network":
+        origin = origin_of(req.confirm_origin or "") or ""
+    else:
+        origin = origin_of(headers.get("origin", "")) or ""
+    return origin if secure_origin_ok(origin) else ""
+
+
 def _authorise(db: Any, req: ClaimRequest, *, bridged: Optional[AuthContext],
-               headers: dict[str, str]) -> str:
+               headers: dict[str, str], peer_ip: Optional[str] = None) -> str:
     if req.setup_token:
         ch = challenge_by_secret(db, kind="setup", secret=req.setup_token)
         if ch is None or not consume_challenge(db, ch.id_hash):
@@ -239,8 +258,13 @@ def _authorise(db: Any, req: ClaimRequest, *, bridged: Optional[AuthContext],
             raise ClaimRefused("invalid_credentials", 401)
         return "legacy_password"
     if is_network_bridged(bridged):
+        from .authn_support import is_trusted_proxy
+
         origin = origin_of(headers.get("origin", ""))
-        host = (headers.get("x-forwarded-host") or headers.get("host") or "").split(",")[0].strip()
+        # L1: X-Forwarded-Host only from a trusted proxy (BOSS_TRUSTED_PROXIES), like every other
+        # forwarded header; from anyone else the addressed host is the Host header.
+        forwarded = headers.get("x-forwarded-host") if is_trusted_proxy(peer_ip) else None
+        host = (forwarded or headers.get("host") or "").split(",")[0].strip()
         expected = origin_of(f"https://{host}") if host else None
         confirmed = origin_of(req.confirm_origin or "")
         # The origin bound is the one the browser addressed: Origin == Host, https, and confirmed
@@ -261,6 +285,11 @@ def _bind_public_origin(db: Any, org_id: str, origin: str, *, by: str) -> None:
         "jsonb_build_object('public_origin', CAST(:origin AS text)), :by) ON CONFLICT (org_id) DO UPDATE "
         "SET policy = identity_settings.policy || jsonb_build_object('public_origin', CAST(:origin AS text)), "
         "updated_by = :by, updated_at = now()"), {"o": org_id, "origin": origin, "by": by})
+    from . import policy as policy_module
+
+    with policy_module._cache_lock:   # this transaction reads it next (the claim's own session)
+        for stale in [k for k in policy_module._cache if k[0] == org_id]:
+            policy_module._cache.pop(stale, None)
 
 
 # ---- `boss identity setup-link` (host shell) -----------------------------------------------------------

@@ -232,12 +232,19 @@ def bridge(creds: RequestCredentials, *, db: Any = None, now: Optional[datetime]
     _count_use(resolved.org_id, path.kind.value, ref, resolved.principal.id, now)
     if resolved.retired:
         raise AuthnError(_RETIRED, 401)
-    if (resolved.retire_after is not None and resolved.retire_after <= now
-            and path.kind in (LegacyKind.CONSOLE_API_KEY, LegacyKind.SHARED_PASSWORD,
-                              LegacyKind.NETWORK_MODE)):
-        from . import migration
-        done = migration.retire_due(resolved.org_id, db=db, now=now)
-        if any(r.kind == path.kind.value and r.retired for r in done):
+    if resolved.retire_after is not None and resolved.retire_after <= now:
+        # Every bridge has an end (M3): the three people bridges retire through retire_due (the
+        # console key may be deferred, but never past the absolute cutoff); an env key's or an
+        # OIDC bearer's end (its own expiry, or the absolute cutoff for a person's) just refuses.
+        if path.kind in (LegacyKind.CONSOLE_API_KEY, LegacyKind.SHARED_PASSWORD,
+                         LegacyKind.NETWORK_MODE):
+            from . import migration
+            done = migration.retire_due(resolved.org_id, db=db, now=now)
+            hard = migration.hard_cutoff(db, resolved.org_id)
+            if any(r.kind == path.kind.value and r.retired for r in done) or (
+                    hard is not None and now >= hard):
+                raise AuthnError(_RETIRED, 401)
+        else:
             raise AuthnError(_RETIRED, 401)
     if not resolved.principal.active:
         raise AuthnError("account_disabled", 401)
@@ -325,7 +332,19 @@ def _resolve(path: LegacyPath, *, db: Any, now: datetime, settings: Any) -> Opti
                           status=PrincipalStatus(row["status"]), display_name=row["display_name"],
                           network_bound=bool(row["network_bound"]),
                           legacy_member_ids=tuple(row["legacy_member_ids"] or ()))
-    resolved = _Resolved(principal, credential, m["retire_after"], m["retired_at"] is not None,
+    # M3: the absolute cutoff caps every bridge a PERSON uses; a machine member's env key (the
+    # worker's, sys_*) is not a people bridge. A legacy env key's own expiry always applies.
+    retire_after = m["retire_after"]
+    people_bridge = path.kind in (LegacyKind.CONSOLE_API_KEY, LegacyKind.SHARED_PASSWORD,
+                                  LegacyKind.NETWORK_MODE) or not principal.id.startswith("sys_")
+    if people_bridge:
+        hard = migration.hard_cutoff(db, org_id)
+        if hard is not None:
+            retire_after = hard if retire_after is None else min(retire_after, hard)
+    if credential is not None and credential.expires_at is not None:
+        retire_after = (credential.expires_at if retire_after is None
+                        else min(retire_after, credential.expires_at))
+    resolved = _Resolved(principal, credential, retire_after, m["retired_at"] is not None,
                          org_id)
     with _cache_lock:
         _cache[key] = (time.monotonic() + _CACHE_TTL, resolved)

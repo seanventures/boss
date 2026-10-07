@@ -255,6 +255,16 @@ async def enforce_access(conn: HTTPConnection) -> None:
                 org_locations=_org_id_locations(route))
             if refused is not None:
                 outcome = refused
+    if not outcome.allowed and outcome.authn_code == authn.ENROLMENT_REQUIRED:
+        # H1, not a mode question: an enrolment-only session (MFA required, no factor yet) is
+        # refused everything but enrolment, sign-out and "me" in shadow too.
+        method = conn.scope.get("method") or "WS"
+        path_template = getattr(route, "path", None) or conn.scope.get("path", "")
+        LEDGER.record(router_key=router_key, method=method, path_template=path_template,
+                      outcome=outcome, mode=AuthzMode.ENFORCE)
+        if conn.scope.get("type") == "websocket":
+            raise WebSocketException(code=1008, reason=authn.ENROLMENT_REQUIRED)
+        raise AccessRefused(outcome)
     csrf = _writing_get_csrf(conn, access, ctx, creds)
     if csrf is not None:
         # Not a mode question: like the CSRF check on every cookie write, a forged GET that

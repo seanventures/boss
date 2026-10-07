@@ -292,6 +292,8 @@ def build_identity_admin_router(*, start_background: Optional[bool] = None) -> A
             with begin() as db:
                 moved = migration.extend_path(ctx.principal.org_id, _PATHS[path], until, db=db,
                                               actor_ctx=ctx)
+        except PermissionError as exc:
+            return _refuse(403, "owner_required", str(exc))
         except ValueError as exc:
             return _refuse(409, "cannot_extend", str(exc))
         return {"path": path, "retire_after": moved.isoformat()}

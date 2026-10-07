@@ -7889,4 +7889,24 @@ ALTER TABLE identity_run_credentials ADD COLUMN IF NOT EXISTS claims JSONB;
 -- AuthnContextClassRef set that counts as MFA under "trust IdP MFA" (NULL: BOSS's default list).
 ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS saml_sso_url TEXT;
 ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS trusted_authn_contexts TEXT[];
+-- F3 (authentication security fixes). H1: a session of a person whose roles need MFA and who has
+-- no second factor is ENROLMENT-ONLY; enrolling the FIRST factor needs this session-bound grant
+-- (set at the claim, an invitation acceptance, the first sign-in ever, or the first sign-in after an
+-- admin's MFA reset; 15 minutes). identity_users.first_factor_grant_until is the reset's pending grant.
+ALTER TABLE identity_sessions ADD COLUMN IF NOT EXISTS enrol_grant_until TIMESTAMPTZ;
+ALTER TABLE identity_users ADD COLUMN IF NOT EXISTS first_factor_grant_until TIMESTAMPTZ;
+-- M2: an invitation that was EMAILED proves the mailbox: accepting it verifies the address.
+ALTER TABLE identity_invitations ADD COLUMN IF NOT EXISTS emailed BOOLEAN NOT NULL DEFAULT false;
+-- M1: a federated identity is keyed by its PROVIDER plus (issuer, subject), and an issuer names one
+-- provider per org (a second provider claiming the same issuer could sign in as the first's people).
+CREATE UNIQUE INDEX IF NOT EXISTS identity_providers_issuer_per_org ON identity_providers (org_id, lower(issuer))
+  WHERE issuer IS NOT NULL AND issuer <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS identity_user_identities_provider_subject
+  ON identity_user_identities (provider_id, issuer, subject);
+-- L3: a passkey whose sign counter went backwards is flagged (and, when device-bound, refused).
+ALTER TABLE identity_webauthn_credentials ADD COLUMN IF NOT EXISTS counter_regressed_at TIMESTAMPTZ;
+-- L4: an org is claimed once. The advisory lock serialises claims; this makes a second
+-- `bootstrap.claimed` impossible even if a code path forgets the lock.
+CREATE UNIQUE INDEX IF NOT EXISTS identity_one_claim_per_org ON identity_security_events (org_id)
+  WHERE event_type = 'bootstrap.claimed';
 -- ================================ end BOSS IDENTITY ===============================================

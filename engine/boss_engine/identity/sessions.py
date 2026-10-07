@@ -43,6 +43,8 @@ class SessionRow:
     user_agent: Optional[str]
     device_id_hash: Optional[str]
     revoked_at: Optional[datetime]
+    #: H1: until when this session may enrol a person's FIRST second factor (None: never).
+    enrol_grant_until: Optional[datetime] = None
 
     def ref(self) -> SessionRef:
         return SessionRef(self.id, self.mfa_at, self.auth_methods, self.idle_expires_at,
@@ -61,18 +63,18 @@ class IssuedSession:
 
 
 _COLUMNS = ("id, principal_id, auth_methods, mfa_at, created_at, last_seen_at, idle_expires_at, "
-            "absolute_expires_at, host(ip) AS ip, user_agent, device_id_hash, revoked_at")
+            "absolute_expires_at, host(ip) AS ip, user_agent, device_id_hash, revoked_at, enrol_grant_until")
 
 
 _COLUMNS_S = ("s.id, s.principal_id, s.auth_methods, s.mfa_at, s.created_at, s.last_seen_at, "
               "s.idle_expires_at, s.absolute_expires_at, host(s.ip) AS ip, s.user_agent, "
-              "s.device_id_hash, s.revoked_at")
+              "s.device_id_hash, s.revoked_at, s.enrol_grant_until")
 
 
 def _row(r: Any) -> SessionRow:
     return SessionRow(r.id, r.principal_id, tuple(r.auth_methods or ()), r.mfa_at, r.created_at,
                       r.last_seen_at, r.idle_expires_at, r.absolute_expires_at, r.ip, r.user_agent,
-                      r.device_id_hash, r.revoked_at)
+                      r.device_id_hash, r.revoked_at, getattr(r, "enrol_grant_until", None))
 
 
 def csrf_token(session_id: str) -> str:
@@ -91,7 +93,8 @@ def _lifetimes(db: Any, org_id: str) -> tuple[timedelta, timedelta]:
 def issue(db: Any, *, principal_id: str, org_id: str, methods: Iterable[str],
           mfa_at: Optional[datetime], ip: Optional[str], user_agent: Optional[str],
           device_id_hash: Optional[str], replaces: Optional[str] = None,
-          absolute_expires_at: Optional[datetime] = None) -> IssuedSession:
+          absolute_expires_at: Optional[datetime] = None,
+          enrol_grant_until: Optional[datetime] = None) -> IssuedSession:
     """Create a session row and return its token (the only time the token exists server-side).
     `replaces` revokes that session and links it here (rotation). A rotation keeps the original
     absolute expiry: rotating never extends a session's life."""
@@ -103,11 +106,11 @@ def issue(db: Any, *, principal_id: str, org_id: str, methods: Iterable[str],
     idle_at = min(now + idle, abs_at)
     db.execute(text(
         "INSERT INTO identity_sessions (id, token_hash, principal_id, auth_methods, mfa_at, "
-        "idle_expires_at, absolute_expires_at, ip, user_agent, device_id_hash) VALUES "
-        "(:id, :th, :p, :m, :mfa, :idle, :abs, CAST(:ip AS inet), :ua, :dev)"),
+        "idle_expires_at, absolute_expires_at, ip, user_agent, device_id_hash, enrol_grant_until) VALUES "
+        "(:id, :th, :p, :m, :mfa, :idle, :abs, CAST(:ip AS inet), :ua, :dev, :grant)"),
         {"id": sid, "th": sha256_hex(token), "p": principal_id, "m": sorted(set(methods)),
          "mfa": mfa_at, "idle": idle_at, "abs": abs_at, "ip": _inet(ip),
-         "ua": (user_agent or "")[:400] or None, "dev": device_id_hash})
+         "ua": (user_agent or "")[:400] or None, "dev": device_id_hash, "grant": enrol_grant_until})
     if replaces:
         db.execute(text("UPDATE identity_sessions SET revoked_at = now(), revoked_reason = 'rotated', "
                         "replaced_by = :new WHERE id = :old AND revoked_at IS NULL"),

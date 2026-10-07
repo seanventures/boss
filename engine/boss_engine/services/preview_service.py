@@ -94,6 +94,66 @@ def _preview_public_base(
     return base
 
 
+# THE PREVIEW ORIGIN (security finding #4). A previewed app is someone else's code; served on
+# the console's origin, one path spelling the console's matcher missed (`/v1/previews/x/%77eb/`)
+# dropped the sandbox and the app read the CSRF token from /v1/identity/me. So previews no longer
+# share an origin with the console at all: apps/api/app/preview_origin.py serves ONLY the preview
+# capability paths on their own port, stripped of every cookie and credential header, and the
+# console redirects any preview path it receives to that origin (app/v1/[...path]/route.ts).
+#
+#   BOSS_PREVIEW_ORIGIN  the absolute origin a browser opens previews at, e.g.
+#                        https://previews.example.com. Loopback is fine here: it is a different
+#                        origin from a loopback console by its port. Set it behind TLS.
+#   BOSS_PREVIEW_PORT    the port the preview-only listener binds (default 3001; 0 or off = none).
+#                        With BOSS_PREVIEW_ORIGIN unset, the origin is the console's own host on
+#                        this port (console http://localhost:3000 -> previews http://localhost:3001).
+PREVIEW_ORIGIN_ENV = "BOSS_PREVIEW_ORIGIN"
+PREVIEW_PORT_ENV = "BOSS_PREVIEW_PORT"
+DEFAULT_PREVIEW_PORT = 3001
+
+
+def preview_port() -> Optional[int]:
+    """The preview-only listener's port, or None when it is switched off."""
+    raw = (os.environ.get(PREVIEW_PORT_ENV) or "").strip().lower()
+    if raw in ("0", "off", "false", "no", "none"):
+        return None
+    if not raw:
+        return DEFAULT_PREVIEW_PORT
+    try:
+        port = int(raw)
+    except ValueError:
+        return DEFAULT_PREVIEW_PORT
+    return port if 0 < port < 65536 else DEFAULT_PREVIEW_PORT
+
+
+def configured_preview_origin() -> str:
+    """BOSS_PREVIEW_ORIGIN as a bare origin (scheme://host[:port]), or "" when unset/invalid."""
+    raw = (os.environ.get(PREVIEW_ORIGIN_ENV) or "").strip()
+    if not raw:
+        return ""
+    parts = urllib.parse.urlsplit(raw)
+    if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
+        return ""
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def preview_origin_for(host_header: Optional[str], scheme: str = "http") -> str:
+    """Where a browser that reached BOSS at `host_header` opens previews: BOSS_PREVIEW_ORIGIN, or
+    the same host on BOSS_PREVIEW_PORT. "" when neither can be said (no port, no usable host)."""
+    configured = configured_preview_origin()
+    if configured:
+        return configured
+    port = preview_port()
+    if port is None:
+        return ""
+    # A Host header is `name[:port]` or `[v6][:port]`, nothing else: anything more is refused.
+    found = re.fullmatch(r"(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.\-]+)(?::\d{1,5})?", (host_header or "").strip())
+    if not found:
+        return ""
+    hostname = found.group(1)
+    return f"{'https' if scheme == 'https' else 'http'}://{hostname}:{port}"
+
+
 def operator_preview_open_url(
     preview_id: str,
     *,
@@ -108,6 +168,10 @@ def operator_preview_open_url(
     returns an absolute URL; otherwise a relative gateway path.
     """
     path = f"/v1/previews/{preview_id}/web/"
+    # The preview origin first: it is a separate origin even on loopback (another port).
+    preview_origin = configured_preview_origin() if public_base is None else ""
+    if preview_origin:
+        return f"{preview_origin}{path}"
     base = _preview_public_base(public_base, settings=settings)
     if base:
         return f"{base}{path}"
@@ -2978,10 +3042,29 @@ def _gateway_location(preview_id: str, location: str) -> str:
     any other host (an OAuth provider) is the app's business and passes unchanged.
     """
     prefix = f"/v1/previews/{preview_id}/web"
-    if location.startswith("/") and not location.startswith("//"):
+    # READ IT AS THE BROWSER WILL (the "preview gateway open redirect"). A browser strips C0
+    # controls and spaces, drops tabs/newlines anywhere, and reads `\` as `/`, so `\/evil.com`,
+    # `/\evil.com` and `//evil.com` are all another host. Classified as written they slipped
+    # past both branches below and left the gateway as a redirect to anywhere, or were glued
+    # under the prefix as a path. Normalise first, then classify, then emit the normal form.
+    location = re.sub(r"[\t\n\r]", "", location).strip("\x00\x01\x02\x03\x04\x05\x06\x07\x08"
+                                                        "\x0b\x0c\x0e\x0f\x10\x11\x12\x13"
+                                                        "\x14\x15\x16\x17\x18\x19\x1a\x1b"
+                                                        "\x1c\x1d\x1e\x1f ")
+    scheme_match = re.match(r"^([A-Za-z][A-Za-z0-9+.\-]*):", location)
+    if scheme_match is None or scheme_match.group(1).lower() in ("http", "https"):
+        location = location.replace("\\", "/")
+    scheme_relative = location.startswith("//")
+    if location.startswith("/") and not scheme_relative:
         return f"{prefix}{location}"
-    parsed = urllib.parse.urlsplit(location)
-    if parsed.scheme in ("http", "https") and _is_loopback_url(location):
+    # Scheme-relative is another host: judged as one (and kept scheme-relative if it passes).
+    parsed = urllib.parse.urlsplit("http:" + location if scheme_relative else location)
+    if parsed.scheme.lower() not in ("http", "https"):
+        if not parsed.scheme:
+            return location   # `login`, `../x`: resolved against the gateway URL it came from
+        # javascript:, data:, file:… never a place a preview may send the browser.
+        return f"{prefix}/"
+    if _is_loopback_url(parsed.geturl()):
         rest = parsed.path or "/"
         return f"{prefix}{rest}" + (f"?{parsed.query}" if parsed.query else "") + (
             f"#{parsed.fragment}" if parsed.fragment else "")

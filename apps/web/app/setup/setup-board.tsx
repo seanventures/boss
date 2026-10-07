@@ -29,6 +29,7 @@ import { BoardContext, toast } from "./parts";
 import { Dot, localView } from "./pill";
 import { RepositoryRow } from "./repository-row";
 import { TryRow } from "./try-row";
+import { PublicUrlRow } from "./public-url-row";
 import { SharingAsk } from "../improve/sharing-ask";
 
 function staleTargets(view: SetupView): string[] {
@@ -211,6 +212,7 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
         <BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} />
         <TryRow ref={ref("try")} mode={rowMode(view, "try")} step={stepNumber(view, "try")}
                 focused={focus === "try"} />
+        <PublicUrlRow />
         {/* The end of setup: Improve BOSS, asked once, and the heartbeat with its opt-out. */}
         <SharingAsk projectId={projectId} actor={actor ?? ""} />
       </div>

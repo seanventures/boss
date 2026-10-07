@@ -36,6 +36,8 @@ from boss_engine.identity.principal import AuthContext, AuthMethod, Principal, P
 from boss_engine.identity.scope import ResolvedScope, ScopeKind
 
 ORIGIN = "https://boss.example.test"
+#: A fixed, test-only server key: identity refuses to run without a persistent one (F3/L2).
+TEST_SERVER_KEY = "dGVzdC1vbmx5LWlkZW50aXR5LXNlcnZlci1rZXktLS0tLS0tLS0tLS0tLS0="
 HEADERS = {"Origin": ORIGIN, "Sec-Fetch-Site": "same-origin"}
 STRONG = "violet-otter-harbour-1987"
 SECRET_KEY_RE = re.compile(r"token|secret|password|code|assertion|credential", re.I)
@@ -223,7 +225,7 @@ def install(monkeypatch, world: World) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "public_url", ORIGIN)
     monkeypatch.setattr(settings, "argon2_profile", "small")
-    monkeypatch.setattr(settings, "identity_server_key", "")
+    monkeypatch.setattr(settings, "identity_server_key", TEST_SERVER_KEY)
     monkeypatch.setattr(signin, "DELAY_ENABLED", False)
     monkeypatch.setattr(email_signin, "UNIFORM_FLOOR_SECONDS", 0.05)
     monkeypatch.setattr(authn_support, "MAIL_TRANSPORT", lambda to, s, b: world.mail.append((to, s, b)))
@@ -290,7 +292,9 @@ def mark_claimed(engine) -> None:
         seq = int(db.execute(text("SELECT coalesce(max(seq),0)+1 FROM identity_security_events WHERE org_id=:o"),
                              {"o": org}).scalar())
         db.execute(text("INSERT INTO identity_security_events (org_id, seq, stream, event_type, outcome, "
-                        "prev_hash, hash) VALUES (:o, :s, 'security', 'bootstrap.claimed', 'success', :p, :h)"),
+                        "prev_hash, hash) SELECT :o, :s, 'security', 'bootstrap.claimed', 'success', :p, :h "
+                        "WHERE NOT EXISTS (SELECT 1 FROM identity_security_events WHERE org_id = :o "
+                        "AND event_type = 'bootstrap.claimed')"),
                    {"o": org, "s": seq, "p": b"\0" * 32, "h": b"\1" * 32})
 
 

@@ -5,6 +5,9 @@ os.environ["BOSS_EDITION"] = "community"
 # with the legacy keys and claimed actors, so they run the guard in shadow, EXPLICITLY, as an
 # upgrading install would; every identity test enforces per request (IdentityWorld.acting_as).
 os.environ.setdefault("BOSS_AUTHZ_MODE", "shadow")
+# Identity needs a PERSISTENT server key and refuses to run without one (F3/L2). Tests get a fixed,
+# test-only key (never a real one) unless the run names its own.
+os.environ.setdefault("BOSS_IDENTITY_SERVER_KEY", "dGVzdC1vbmx5LWlkZW50aXR5LXNlcnZlci1rZXktLS0tLS0tLS0tLS0tLS0=")
 
 # CONFINE THIS RUN BEFORE ANYTHING READS DATABASE_URL.
 #

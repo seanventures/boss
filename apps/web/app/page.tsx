@@ -2,6 +2,9 @@
 import { networkTrustedConsole } from "../lib/console-session";
 import { accessForArea } from "../lib/identity/area-access";
 import { checkWith } from "../lib/identity/check";
+import { enrolHref, needsEnrolment } from "../lib/identity/enrolment";
+import { EnrolmentGate } from "../components/identity/enrolment-gate";
+import { ORG_ONBOARD_PERMISSION } from "./org-gate-permission";
 import { snapshotFrom } from "../lib/identity/contract";
 import { loadIdentityCached } from "../lib/identity/server-cache";
 import { identityStubEnabled } from "../lib/identity/stub/enabled";
@@ -421,6 +424,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // Center); the middleware's 307 and the shell's URL sync rewrite the address bar.
   const resolvedSearchParams: Record<string, string> = Object.fromEntries(
     consoleParams(searchParamsFrom(rawSearchParams)).params);
+  // AN ENROLMENT-ONLY SESSION sees the way to enrol, not a console of refusals (H1).
+  const enrolment = await loadIdentityCached(null);
+  if (needsEnrolment(enrolment.me, enrolment.problem)) {
+    const back = new URLSearchParams(resolvedSearchParams).toString();
+    return <EnrolmentGate href={enrolHref(back ? `/?${back}` : "/")} />;
+  }
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
   const requestedArea = getParam(resolvedSearchParams?.area);
@@ -530,9 +539,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </Suspense>
       );
     }
+    // THE CARD MIRRORS THE API (POST /v1/orgs is `org:update`): a person who cannot onboard an
+    // organization is not offered the form. Unknown (identity unreadable) offers it; the API decides.
+    const gateIdentity = await loadIdentityCached(null);
+    const onboard = gateIdentity.org ? checkWith(snapshotFrom(gateIdentity.org), null, null, ORG_ONBOARD_PERMISSION) : null;
     return (
       <Suspense fallback={null}>
-        <OrgGate orgs={orgs.items} />
+        <OrgGate orgs={orgs.items} canOnboard={onboard ? { allowed: onboard.allowed, reason: onboard.reason } : undefined} />
       </Suspense>
     );
   }
@@ -1072,7 +1085,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid">
             <article className="stack-card">
               <h3>Add or update org delegate</h3>
-              <ActionForm permission="user:update" action={upsertOrgMemberAction} className="composer compact">
+              <ActionForm permission="role_binding:assign" action={upsertOrgMemberAction} className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="org_id" value={activeOrgId} />
                 <input type="hidden" name="actor" value={activeActorId} />
@@ -1190,7 +1203,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid">
             <article className="stack-card">
               <h3>Grant temporary access</h3>
-              <ActionForm permission="policy:manage" action={createBreakGlassGrantAction} className="composer compact">
+              <ActionForm permission="role_binding:assign" action={createBreakGlassGrantAction} className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="actor" value={activeActorId} />
                 <label className="field">
@@ -1283,7 +1296,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <p className="detail">{grant.reason}</p>
                       </div>
                       {grant.status === "active" ? (
-                        <ActionForm permission="policy:manage"
+                        <ActionForm permission="role_binding:assign"
                           action={revokeBreakGlassGrantAction}
                           className="composer compact"
                         >
@@ -1651,7 +1664,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       Create replay bundle
                     </SubmitButton>
                   </ActionForm>
-                  <ActionForm permission="assurance:manage" action={createComplianceEvidenceBundleAction}>
+                  <ActionForm permission="activity:export" action={createComplianceEvidenceBundleAction}>
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <SubmitButton className="button secondary" type="submit">
@@ -1951,7 +1964,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           {message.status === "dry_run" ? (
                             <p className="detail">dry-run — no provider send</p>
                           ) : null}
-                          <ActionForm permission="comms:read" action={dryRunOutboxMessageAction}>
+                          <ActionForm permission="comms:send" action={dryRunOutboxMessageAction}>
                             <input type="hidden" name="message_id" value={message.id} />
                             <input type="hidden" name="project_id" value={activeProjectId} />
                             <input type="hidden" name="actor" value={activeActorId} />
@@ -2606,7 +2619,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             ? ` ${formatDateTime(module.installedAt)}`
                             : ""}
                         </span>
-                        <ActionForm permission="agent:update" action={uninstallAgentModuleAction}>
+                        <ActionForm permission="pack:install" action={uninstallAgentModuleAction}>
                           <input type="hidden" name="module_id" value={module.moduleId} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
@@ -2619,7 +2632,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             Uninstall
                           </SubmitButton>
                         </ActionForm>
-                        <ActionForm permission="agent:update" action={rollbackAgentModuleAction}>
+                        <ActionForm permission="pack:install" action={rollbackAgentModuleAction}>
                           <input type="hidden" name="module_id" value={module.moduleId} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
@@ -2634,7 +2647,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </ActionForm>
                       </div>
                     ) : (
-                      <ActionForm permission="agent:update" action={installAgentModuleAction}>
+                      <ActionForm permission="pack:install" action={installAgentModuleAction}>
                         <input type="hidden" name="module_id" value={module.moduleId} />
                         <input type="hidden" name="project_id" value={activeProjectId} />
                         <input type="hidden" name="actor" value={activeActorId} />

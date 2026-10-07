@@ -255,9 +255,12 @@ def fake_claim(db: Any, *, name: str, email: str, via: str, now: datetime,
     principal = Principal(pid, PrincipalKind.USER, ORG, PrincipalStatus.ACTIVE, name)
     ctx = AuthContext(principal, AuthMethod.SESSION, session=session, ip="100.101.102.103",
                       user_agent="Safari", request_id="req_claim")
-    audit.record(SecurityEvent.from_context(ctx, "bootstrap.claimed", Outcome.SUCCESS,
-                                            target_type="principal", target_id=pid,
-                                            details={"via": via, "origin": origin}), db=db)
+    already = db.execute(text("SELECT 1 FROM identity_security_events WHERE org_id = :o AND "
+                              "event_type = 'bootstrap.claimed'"), {"o": ORG}).first()
+    if already is None:   # an org is claimed once (F3/L4): a second "claim" is an added Owner
+        audit.record(SecurityEvent.from_context(ctx, "bootstrap.claimed", Outcome.SUCCESS,
+                                                target_type="principal", target_id=pid,
+                                                details={"via": via, "origin": origin}), db=db)
     if origin:
         policy.put_policy(ORG, {"public_origin": origin}, db=db, actor=ctx)
     cutoff = migration.on_claimed(ORG, pid, db=db, now=now, via=via, assume_member=assume_member,

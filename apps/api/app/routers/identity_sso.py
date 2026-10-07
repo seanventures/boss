@@ -212,6 +212,9 @@ def build_identity_sso_router() -> APIRouter:
     def sso_start(provider_id: str, request: Request, purpose: str = "login"):
         with begin() as db:
             origin = facts(request, db).origin or ""
+            if not origin:
+                # H2: a redirect URI / ACS URL is only ever the BOUND public origin, never Host.
+                return error(409, "public_origin_unset")
             provider = sso_oidc.load_provider(db, provider_id)
             if provider is None:
                 return error(404, "not_found")
@@ -276,6 +279,8 @@ def build_identity_sso_router() -> APIRouter:
     def saml_metadata(request: Request, provider_id: Optional[str] = None):
         with begin() as db:
             origin = facts(request, db).origin or ""
+            if not origin:
+                return error(409, "public_origin_unset")
             provider = sso_oidc.load_provider(db, provider_id) if provider_id else None
             body = sso_saml.metadata(origin, sso_saml.sp_entity_id(provider, origin))
         return Response(body, media_type="application/samlmetadata+xml")
@@ -332,6 +337,11 @@ def build_identity_sso_router() -> APIRouter:
                     return error(422, "invalid_provider", detail="SAML needs an https SSO URL and a certificate")
                 pid = ids.new_id("idp")
                 org = ctx.principal.org_id
+                if issuer and db.execute(text(
+                        "SELECT 1 FROM identity_providers WHERE org_id = :o AND lower(issuer) = lower(:i)"),
+                        {"o": org, "i": issuer}).first() is not None:
+                    # M1: one provider per issuer, or a second one could answer for the first's people.
+                    return error(409, "issuer_in_use")
                 secret_ref = _store_secret(db, org, pid, body.client_secret) if body.client_secret else None
                 db.execute(text(
                     "INSERT INTO identity_providers (id, org_id, protocol, preset, name, issuer, client_id, "

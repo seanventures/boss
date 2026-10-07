@@ -6,6 +6,7 @@
  * API accepts it only in the browser that asked for it, once, within 10 minutes. Roles that
  * require MFA still finish with a second factor.
  */
+import { afterEnrolStep } from "../../../../lib/identity/enrolment";
 import React, { useEffect, useRef, useState } from "react";
 import { EnvelopeSimple } from "@phosphor-icons/react";
 
@@ -23,7 +24,7 @@ export function MagicLinkLanding({ host, next }: { host: string; next: string })
   const finish = (step: SignInStep) => {
     if (step.next === "mfa") { setState({ kind: "mfa", step }); return; }
     setState({ kind: "done" });
-    window.location.assign(step.next === "enrol" ? `/enrol?next=${encodeURIComponent(next)}` : next);
+    window.location.assign(step.next === "enrol" ? afterEnrolStep(step, next) : next);
   };
 
   useEffect(() => {

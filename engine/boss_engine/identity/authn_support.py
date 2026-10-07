@@ -82,10 +82,15 @@ def _master_key_bytes() -> Optional[bytes]:
     return key if len(key) >= 32 else None
 
 
+class ServerKeyMissing(RuntimeError):
+    """No persistent server key: identity refuses to run on a per-process random one (L2)."""
+
+
 def server_key() -> bytes:
-    """The HMAC key for CSRF tokens and hashed identifiers. BOSS_IDENTITY_SERVER_KEY, else
-    HKDF(master key), else a per-process random key (announced once: CSRF tokens then change on
-    restart, and rate-limit counters do not survive one)."""
+    """The HMAC key for CSRF tokens, hashed identifiers and rate-limit keys.
+    BOSS_IDENTITY_SERVER_KEY, else HKDF(the vault master key). REQUIRED (L2): with neither,
+    this raises ServerKeyMissing — it never falls back to a per-process random key, which made
+    every rate limit and lockout counter reset on a restart (and differ between API processes)."""
     global _SERVER_KEY
     with _SERVER_KEY_LOCK:
         if _SERVER_KEY is not None:
@@ -115,9 +120,10 @@ def server_key() -> bytes:
                 key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
                            info=b"boss identity server key v1").derive(master)
         if key is None:
-            key = secrets.token_bytes(32)
-            print("[identity] no BOSS_IDENTITY_SERVER_KEY or vault master key: using a per-process "
-                  "server key (CSRF tokens change on restart)", flush=True)
+            raise ServerKeyMissing(
+                "BOSS identity needs a persistent server key: set BOSS_IDENTITY_SERVER_KEY (32+ "
+                "bytes, base64) or give BOSS its vault master key (BOSS_MASTER_KEY_FILE or "
+                "BOSS_MASTER_KEY). It does not run on a per-process key.")
         _SERVER_KEY = key
         return key
 

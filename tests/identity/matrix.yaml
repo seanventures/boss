@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1357 operations.
+# 1358 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -674,6 +674,7 @@
 "POST /v1/identity/credentials/github": ["authenticated", "OAPVU"]
 "GET /v1/identity/delegations": ["permit delegation:read_all @ org", "OAU"]
 "DELETE /v1/identity/delegations/{grant_id}": ["permit delegation:revoke_any @ org", "OA"]
+"GET /v1/identity/delegations/{grant_id}": ["authenticated", "OAPVU"]
 "GET /v1/identity/delegations/{grant_id}/cascade-preview": ["authenticated", "OAPVU"]
 "GET /v1/identity/delegations/{grant_id}/claims": ["authenticated", "OAPVU"]
 "POST /v1/identity/delegations/{grant_id}/extend": ["permit delegation:grant @ org", "OAP"]

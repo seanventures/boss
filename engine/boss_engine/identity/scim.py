@@ -110,6 +110,26 @@ def _user_row(db: Any, org_id: str, user_id: str) -> Optional[users.UserRow]:
     return user
 
 
+#: Roles a SCIM key can never touch the holder of (M2): their account is BOSS's to manage.
+PROTECTED_ROLES = frozenset({"owner", "admin"})
+
+
+def _writable_user(db: Any, ctx: AuthContext, user_id: str) -> users.UserRow:
+    """The person a SCIM WRITE may change (M2): one THIS provisioning principal created, and never
+    an Owner or Admin. Anyone else — people invited in BOSS, the claimant, another provider's —
+    is refused, so a SCIM key cannot rewrite an Owner's email and reset their password."""
+    user = _user_row(db, ctx.principal.org_id, user_id)
+    if user is None:
+        raise ScimError(404, "not found")
+    created_by = db.execute(text("SELECT created_by FROM identity_principals WHERE id = :id"),
+                            {"id": user.principal_id}).scalar()
+    if created_by != ctx.principal.id:
+        raise ScimError(403, "this person was not provisioned by this SCIM connection; change them in BOSS")
+    if PROTECTED_ROLES.intersection(users.role_keys(db, user.principal_id)):
+        raise ScimError(403, "SCIM cannot change an Owner or an Admin; change them in BOSS")
+    return user
+
+
 def user_resource(user: users.UserRow, *, base: str = "") -> dict[str, Any]:
     return {
         "schemas": [USER_SCHEMA], "id": user.principal_id, "userName": user.email,
@@ -194,6 +214,11 @@ def _set_active(db: Any, ctx: AuthContext, user: Optional[users.UserRow], active
     else:
         if user.status != "disabled":
             return
+        disabled_by = db.execute(text("SELECT status_changed_by FROM identity_principals WHERE id = :id"),
+                                 {"id": user.principal_id}).scalar()
+        if disabled_by != ctx.principal.id:
+            # An admin disabled this person in BOSS: SCIM's active=true does not undo that.
+            raise ScimError(409, "this person was disabled in BOSS; an admin re-enables them there")
         new_status = "active" if user.last_login_at else "pending"
         users.set_status(db, user.principal_id, new_status, by=ctx.principal.id, reason="scim active=true")
         db.execute(text("UPDATE identity_api_credentials SET suspended_at = NULL WHERE principal_id = :p "
@@ -235,8 +260,7 @@ def _apply_user_fields(db: Any, ctx: AuthContext, user: users.UserRow, payload: 
             other = users.by_email(db, email)
             if other is not None and other.principal_id != user.principal_id:
                 raise ScimError(409, "a person with this email already exists", "uniqueness")
-            db.execute(text("UPDATE identity_users SET email = :e, email_verified_at = NULL WHERE principal_id = :id"),
-                       {"e": email, "id": user.principal_id})
+            users.change_email(db, user, email, by=ctx.principal.id)
             changed.append("email")
     if changed:
         emit(db, org_id=ctx.principal.org_id, event_type="scim.user.updated", outcome=Outcome.SUCCESS, ctx=ctx,
@@ -249,17 +273,13 @@ def _apply_user_fields(db: Any, ctx: AuthContext, user: users.UserRow, payload: 
 
 def replace_user(db: Any, ctx: AuthContext, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     _refuse_role_attributes(payload)
-    user = _user_row(db, ctx.principal.org_id, user_id)
-    if user is None:
-        raise ScimError(404, "not found")
+    user = _writable_user(db, ctx, user_id)
     _apply_user_fields(db, ctx, user, payload)
     return user_resource(users.by_id(db, user_id))
 
 
 def patch_user(db: Any, ctx: AuthContext, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    user = _user_row(db, ctx.principal.org_id, user_id)
-    if user is None:
-        raise ScimError(404, "not found")
+    user = _writable_user(db, ctx, user_id)
     fields: dict[str, Any] = {}
     for op in _operations(payload):
         kind = str(op.get("op", "")).lower()
@@ -297,9 +317,7 @@ def _operations(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 def delete_user(db: Any, ctx: AuthContext, user_id: str) -> None:
     """Deprovisioning disables (with the cascade); nothing is erased (§4.9, audit tombstones)."""
-    user = _user_row(db, ctx.principal.org_id, user_id)
-    if user is None:
-        raise ScimError(404, "not found")
+    user = _writable_user(db, ctx, user_id)
     _set_active(db, ctx, user, False)
 
 

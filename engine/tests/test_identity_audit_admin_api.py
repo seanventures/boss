@@ -259,7 +259,8 @@ def test_policy_has_s4s_shape_and_a_round_trip_changes_nothing(db, monkeypatch):
     diff = events(db, "policy.changed")[-1]["details"]["diff"]
     assert set(diff) == {"hibp_check", "org_max_depth", "legacy_cutoff_days", "signup_enabled",
                          "signup_domains"}
-    assert changed["network_mode"]["ends_at"] != current["network_mode"]["ends_at"]  # moved to 45d
+    # F3/M3: no policy moves a bridge past the absolute cutoff (claim + 30 days)
+    assert changed["network_mode"]["ends_at"] == current["network_mode"]["ends_at"]
     pinned = client.put("/v1/identity/policy",
                         json={"github_require_user_repo_access": True}).json()
     assert pinned["github_require_user_repo_access"] and not \
@@ -299,7 +300,7 @@ def test_posture_has_s4s_shape(db, monkeypatch):
     report = client.get("/v1/identity/posture").json()
     assert S4_POSTURE_KEYS <= set(report)
     assert [c["id"] for c in report["checks"]] == ["mfa", "keys", "delegations", "legacy",
-                                                   "owners", "audit", "enforcement"]
+                                                   "owners", "audit", "enforcement", "origin"]
     for check in report["checks"]:
         assert S4_CHECK_KEYS <= set(check) and check["status"] in ("ok", "warn", "bad")
         assert check["fix"] is None or set(check["fix"]) == {"label", "href"}

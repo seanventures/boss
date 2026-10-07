@@ -47,11 +47,7 @@ export async function middleware(request: NextRequest) {
       (process.env.NODE_ENV === "development" && path.startsWith("/_next/webpack-hmr"))) {
     return NextResponse.next();
   }
-  // A preview PAGE opened in a new tab is a page, not an API call: a signed-out visitor goes to
-  // the login screen and comes back, rather than reading a JSON 401.
-  const previewPage = request.method === "GET" && /^\/v1\/previews\/[^/]+\/web(\/|$)/.test(path)
-    && (request.headers.get("accept") ?? "").includes("text/html");
-  const api = (path.startsWith("/api/") || path.startsWith("/v1/")) && !previewPage;
+  const api = path.startsWith("/api/") || path.startsWith("/v1/");
   // A collector route spelled any other way than plainly (`%69ngest`, `//ingest`): the matcher
   // could not exclude it, so Next is already teeing its body here. Refused, connection closed —
   // the plain spellings (with or without a trailing slash or a query) never reach middleware and
@@ -67,12 +63,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.json({ error: "The console requires HTTPS for remote access." },
       { status: 426, headers: { "Cache-Control": "no-store" } });
   }
-  // A PREVIEW'S OWN REQUESTS (its assets, its API calls, its form posts, the feedback overlay)
-  // come from a sandboxed, opaque-origin document: no SameSite cookie, `Origin: null`. They need
-  // neither: a preview path is a capability URL, and the /v1 proxy forwards no credential to it
-  // (lib/identity/forward.ts isPreviewCapabilityPath), so there is no session to protect from a
-  // cross-site write. Only the first page load below still sends a signed-out visitor to sign in.
-  if (isPreviewCapabilityPath(path) && !previewPage) return NextResponse.next();
+  // A PREVIEW PATH, IN ANY SPELLING, is never served on this origin: the /v1 route sends it to
+  // the preview origin (lib/identity/forward.ts isPreviewCapabilityPath, which judges the
+  // normalised path) and forwards nothing. No session is needed for a redirect, and none is used.
+  if (isPreviewCapabilityPath(path)) return NextResponse.next();
   // The sign-in pages and the public sign-in API (rate-limited and CSRF-checked by the API).
   if (isPublicConsolePath(path)) return passThrough(request);
   // A NETWORK-TRUSTED INSTALL (shared-server, before and up to 30 days after its claim) has no

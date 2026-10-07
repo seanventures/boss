@@ -16,6 +16,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import IntegrityError
 
 from boss_engine.db import begin
 from boss_engine.identity import PublicReason, authenticated, public
@@ -51,7 +52,7 @@ def facts(request: Request, db: Any) -> RequestFacts:
         preauth=request.cookies.get(authn.PREAUTH_COOKIE),
         session=request.cookies.get(authn.SESSION_COOKIE),
         device=request.cookies.get(authn.DEVICE_COOKIE),
-        origin=public_origin(db) or authn.request_origin(creds))
+        origin=public_origin(db), request_origin=authn.request_origin(creds))
 
 
 def render(answer: Answer) -> JSONResponse:
@@ -103,12 +104,16 @@ def origin_guard(request: Request, db: Any) -> Optional[JSONResponse]:
 
 
 def _run(request: Request, flow) -> JSONResponse:
+    from boss_engine.identity.passwords import hashing_for
+
     try:
         with begin() as db:
             blocked = origin_guard(request, db)
             if blocked is not None:
                 return blocked
-            return render(flow(db, facts(request, db)))
+            f = facts(request, db)
+            with hashing_for(f.ip):     # L2: this address's share of the argon2 queue
+                return render(flow(db, f))
     except PasswordBusy:
         return JSONResponse(status_code=429, content={"error": "busy"}, headers={"Retry-After": "2"})
 
@@ -214,7 +219,8 @@ def build_identity_auth_router() -> APIRouter:
                 for r in db.execute(text("SELECT id, name, preset FROM identity_providers "
                                          "WHERE org_id = :o AND status = 'active' ORDER BY name"), {"o": org})]
             pol = users.get_policy(org, db=db) if org else None
-            smtp = bool(email_signin.available() and pol and (pol.email_magic_link or pol.email_code))
+            smtp = bool(email_signin.available() and pol and (pol.email_magic_link or pol.email_code)
+                        and public_origin(db))
             org_name = (db.execute(text("SELECT name FROM orgs WHERE id = :o"), {"o": org}).scalar()
                         if org else None) or "BOSS"
             origin = public_origin(db) or authn.request_origin(credentials(request)) or ""
@@ -230,8 +236,16 @@ def build_identity_auth_router() -> APIRouter:
                     "expires_at": claim_module.setup_expires_at(db) if path == "setup_token" else None,
                     "seats": claim_module.legacy_seats(db),
                 }
+            from boss_engine.config import get_settings
+
+            bound = public_origin(db)
             return JSONResponse({
                 "org_name": org_name, "host": (origin.split("://", 1)[-1] if origin else ""),
+                # H2: the bound origin links, passkeys and SSO use (None: none is bound, so BOSS
+                # sends no emailed links) and where it came from.
+                "public_origin": bound,
+                "public_origin_source": ("env" if origin_of(get_settings().public_url or "")
+                                         else "claim" if bound else None),
                 "providers": providers, "smtp": smtp, "signup": email_signin.signup_enabled(db),
                 "legacy_password": bool(claim_module.legacy_password_configured()),
                 "passkey": bool(public_origin(db)), "claim": claim_info,
@@ -376,13 +390,18 @@ def build_identity_auth_router() -> APIRouter:
                     name=body.name, email=body.email, password=body.password,
                     setup_token=body.setup_token, legacy_password=body.legacy_password,
                     confirm_origin=body.confirm_origin or body.origin, seat=body.seat), ip=ip, bridged=bridged,
-                    headers=dict(creds.headers))
+                    headers=dict(creds.headers), peer_ip=creds.peer_ip)
                 f = facts(request, db)
                 answer = signin.finish(db, user, f, methods=["pwd"] if body.password else ["network"],
                                        mfa=False, extra={"mfa_enrolment_required": True})
                 return render(answer)
         except claim_module.ClaimRefused as exc:
             return error(exc.status, exc.code)
+        except IntegrityError as exc:
+            # L4: the one-claim constraint caught a second claim the lock did not serialise.
+            if "identity_one_claim_per_org" in str(exc.orig or exc):
+                return error(404, "not_found")
+            raise
         except PasswordBusy:
             return JSONResponse(status_code=429, content={"error": "busy"}, headers={"Retry-After": "2"})
 
@@ -402,8 +421,14 @@ def build_identity_auth_router() -> APIRouter:
                     check_new_password(body.password, email=inv.email, min_length=pol.password_min_length)
                 except PasswordRejected as exc:
                     return error(422, exc.code)
+                from sqlalchemy import text as _text
+
+                # The address is verified only when the invitation was EMAILED to it (holding the
+                # token proves the mailbox); a link handed over out of band proves nothing (M2).
+                emailed = bool(db.execute(_text("SELECT emailed FROM identity_invitations WHERE id = :id"),
+                                          {"id": inv.id}).scalar())
                 pid = invitations.accept(db, inv, display_name=body.name, password_hash=hash_password(body.password),
-                                         email_verified=False)
+                                         email_verified=emailed)
                 user = users.by_id(db, pid)
                 assert user is not None
                 return render(signin.finish(db, user, facts(request, db), methods=["pwd"], mfa=False))

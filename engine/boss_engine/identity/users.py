@@ -126,6 +126,28 @@ def mark_login(db: Any, principal_id: str) -> None:
                {"id": principal_id})
 
 
+def change_email(db: Any, user: UserRow, new_email: str, *, by: str) -> bool:
+    """THE way a person's email changes (admin PATCH, SCIM). M2: the new address is UNVERIFIED
+    (no mail sign-in, reset or SSO invitation reaches it until it is proven), pending reset links
+    to the old one are voided, and the OLD address is told, so a takeover by email change is
+    visible to the person it is aimed at. Returns False when nothing changed."""
+    new_email = (new_email or "").strip()
+    if new_email.lower() == (user.email or "").lower():
+        return False
+    db.execute(text("UPDATE identity_users SET email = :e, email_verified_at = NULL WHERE principal_id = :id"),
+               {"e": new_email, "id": user.principal_id})
+    from . import recovery
+    from .authn_support import send_mail, smtp_configured
+
+    recovery.void_reset_tokens(db, user.principal_id)
+    if smtp_configured() and user.email:
+        send_mail(user.email, "Your BOSS email address was changed",
+                  "The email address on your BOSS account was just changed (by "
+                  f"{'your identity provider' if by.startswith('sys_scim_') else 'an administrator'}). "
+                  "If you did not expect this, contact an administrator now.")
+    return True
+
+
 def set_status(db: Any, principal_id: str, status: str, *, by: Optional[str],
                reason: Optional[str] = None) -> None:
     db.execute(text("UPDATE identity_principals SET status = :st, status_changed_at = now(), "

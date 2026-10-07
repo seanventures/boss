@@ -12,13 +12,15 @@
 import React, { useState } from "react";
 import {
   AppleLogo, CheckCircle, EnvelopeSimple, GithubLogo, GoogleLogo, Key, Plugs, ShieldCheck, Warning, WindowsLogo, WifiHigh,
+  Globe,
 } from "@phosphor-icons/react";
 
 import { CanButton, useCan, useGuardedCall } from "../../../components/identity/identity-provider";
 import { Pill, daysUntil, shortDate, useNow } from "../../../components/identity/kit";
 import { GITHUB_ACCESS_AUTOMATIC, REQUIRE_SIGN_IN, policyChanges, providerView } from "../../../lib/identity/adapt-admin";
 import { IdentityError, idPatch, idPost, idPut } from "../../../lib/identity/api";
-import type { Posture, Provider, SecurityPolicy } from "../../../lib/identity/types";
+import type { AuthOptions, Posture, Provider, SecurityPolicy } from "../../../lib/identity/types";
+import { PUBLIC_URL_HOWTO } from "../../../lib/identity/public-url";
 import { showToast } from "../../client-forms";
 
 const PRESET_ICON: Partial<Record<Provider["preset"], React.ReactNode>> = {
@@ -121,8 +123,10 @@ function ProviderCard({ initial }: { initial: Provider }) {
   );
 }
 
-export function SignInSettings({ providers, policy: initialPolicy, legacy }: {
+export function SignInSettings({ providers, policy: initialPolicy, legacy, publicUrl }: {
   providers: Provider[]; policy: SecurityPolicy | null; legacy: Posture["legacy"] | null;
+  /** GET /v1/auth/options public_origin / public_origin_source (H2); the posture's "origin" fix links here. */
+  publicUrl?: Pick<AuthOptions, "public_origin" | "public_origin_source">;
 }) {
   const now = useNow();
   const [saved, setSaved] = useState(initialPolicy);
@@ -237,6 +241,20 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy }: {
             </div>
           </div>
         ) : <div className="idn-row idn-dim">Policy needs <code className="idn-perm">security_policy:read</code></div>}
+      </section>
+
+      <section className="idn-card" id="public-url" aria-labelledby="idn-url-h">
+        <div className="idn-card-h">
+          <h2 id="idn-url-h"><Globe size={16} aria-hidden /> Public URL</h2>
+          {publicUrl?.public_origin ? <Pill tone="ok">bound</Pill> : publicUrl?.public_origin === null ? <Pill tone="bad">not set</Pill> : null}
+        </div>
+        <p className="idn-fine-l" data-copy="prose" data-testid="public-url-line">
+          {publicUrl?.public_origin
+            ? <>Sign-in, passkeys and emailed links use <code data-testid="public-url-value">{publicUrl.public_origin}</code>{publicUrl.public_origin_source === "env" ? " (BOSS_PUBLIC_URL)." : publicUrl.public_origin_source === "claim" ? " (bound at claim)." : "."}</>
+            : publicUrl?.public_origin === null
+            ? <>No public URL is bound, so emailed links are off. {PUBLIC_URL_HOWTO}</>
+            : "This BOSS does not report its public URL."}
+        </p>
       </section>
 
       <section className="idn-card" id="network" aria-labelledby="idn-net-h">
