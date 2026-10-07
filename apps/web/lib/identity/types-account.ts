@@ -20,3 +20,14 @@ export interface MyProfile {
   /** One of the console's eight avatar tones, "0".."7"; null until chosen. */
   avatar_seed: string | null;
 }
+
+/** The profile as the page uses it, whatever the API sent: a missing name is no name, never a crash
+ *  (the shared-password session's profile had no fields and /account "hit an error"). */
+export function asProfile(raw: unknown): MyProfile | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.display_name !== "string" || !r.display_name.trim()) return null;
+  return { display_name: r.display_name, email: typeof r.email === "string" ? r.email : null,
+    avatar_seed: typeof r.avatar_seed === "string" ? r.avatar_seed : null };
+}
+

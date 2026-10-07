@@ -26,3 +26,16 @@ def test_a_shared_principal_is_told_it_has_no_factors_of_its_own(world, method, 
         got = client.request(method, path, json=body, headers={"sec-fetch-site": "same-origin"})
     assert got.status_code == 409, got.text
     assert got.json()["error"] == "shared_account" and "own" in got.json()["message"]
+
+
+def test_a_shared_principal_reads_a_whole_profile(world):
+    """Round 3 upgrade walk: GET /v1/identity/me/profile answered {} for a principal with no
+    account row, and My account crashed on the missing name. It is always the full shape."""
+    shared = world.person("Shared console password")
+    client = TestClient(app, raise_server_exceptions=False)
+    with world.acting_as(world.ctx(shared)):
+        got = client.get("/v1/identity/me/profile")
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert set(body) == {"display_name", "email", "avatar_seed"}
+    assert body["display_name"] == "Shared console password" and body["email"] is None
