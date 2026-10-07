@@ -355,6 +355,13 @@ def is_person(actor: Optional[str], connection: Optional[Connection] = None,
         return True
     if value == CONSOLE_OPERATOR:
         return True
+    if value.startswith("usr_"):
+        # An identity principal (under enforce the actor IS the verified principal): a person is
+        # an active user principal — the legacy members table names none of them (R2 #1).
+        kind = connection.execute(
+            text("SELECT kind FROM identity_principals WHERE id = :p AND status = 'active'"),
+            {"p": value}).scalar()
+        return kind == "user"
     member = connection.execute(
         text("SELECT member_type FROM project_members WHERE project_id = :p AND member_id = :m "
              "AND COALESCE(status, 'active') = 'active'"),

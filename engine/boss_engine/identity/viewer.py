@@ -61,3 +61,23 @@ def decide(project_id: Optional[str], permission: str) -> Optional[bool]:
     scope = (ResolvedScope.in_project(org, str(project_id)) if project_id
              else ResolvedScope.org_level(org))
     return authz.check(ctx, permission, scope).allowed
+
+
+def roles_granting(project_id: str, permission: str, among: Any) -> list[str]:
+    """The roles (of `among`) through which the enforced request's principal holds `permission` at
+    `project_id` — the PDP's own binding paths (authz.effective_permissions with_why: a group
+    binding and an org binding count, an expired one does not) — plus the legacy seat it took over
+    at the claim (an approver role named `ceo` is the claimant's), only while it holds
+    `permission` at all. Dual control's approver roles under identity (R2 #1)."""
+    ctx = lineage.current_context()
+    if ctx is None:
+        return []
+    from . import authz
+
+    eff = authz.effective_permissions(ctx, ResolvedScope.in_project(ctx.principal.org_id, project_id),
+                                      with_why=True)
+    if permission not in eff.permissions:
+        return []
+    held = {w.role_key for w in eff.why.get(permission, ())}
+    held |= set(getattr(ctx.principal, "legacy_member_ids", ()) or ())
+    return sorted(held & set(among or ()))

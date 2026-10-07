@@ -130,6 +130,7 @@
   "POST /v1/identity/me/password",
   "GET /v1/identity/me/permissions",
   "GET /v1/identity/me/profile",
+  "GET /v1/identity/me/projects",
   "POST /v1/identity/me/recovery-codes",
   "DELETE /v1/identity/me/sessions",
   "GET /v1/identity/me/sessions",
