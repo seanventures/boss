@@ -124,3 +124,49 @@ def test_the_real_app_refuses_every_org_route_to_a_project_admin_or_operator(wor
             if not refusal_body_ok(got, 403, access.permission):
                 wrong.append(f"{method} {path} [{access.permission}]: {got.status_code} {got.text[:100]}")
     assert not wrong, report(wrong, f"real app, {project_role}@A on org routes")
+
+
+def _org_routes_that_take_a_project():
+    """Org-declared operations (not org-only permissions) whose handler takes `project_id`: the
+    request names a project, but the guard checks the permission org-wide."""
+    import inspect
+
+    from fastapi.routing import APIRoute
+
+    from boss_engine.identity.declarations import access_of
+    from boss_engine.identity.permissions_gen import PERMISSION_META
+    from boss_engine.identity.scope import ScopeSource
+
+    out = []
+    for route in app.router.routes:
+        access = access_of(getattr(route, "endpoint", None)) if isinstance(route, APIRoute) else None
+        if (isinstance(access, Permit) and access.scope.source == ScopeSource.ORG
+                and not PERMISSION_META[access.permission].org_only
+                and not PERMISSION_META[access.permission].system_only
+                and "project_id" in inspect.signature(route.endpoint).parameters):
+            for method in sorted(route.methods or ()):
+                out.append((method, route.path, access, "http"))
+    return out
+
+
+#: Routes that take a project_id yet are org-wide BY DESIGN ("label": "why"). Empty today: each
+#: entry is a reviewed decision that a project-bound person may not use the route for their project.
+ORG_WIDE_BY_DESIGN: dict[str, str] = {}
+ORG_ROUTES_NAMING_A_PROJECT = [o for o in _org_routes_that_take_a_project()
+                               if f"{o[0]} {o[1]}" not in ORG_WIDE_BY_DESIGN]
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "unassigned: ~40 routes take a project_id but are declared @ org (GET /v1/code-tasks, /v1/tasks, "
+    "/v1/dashboard, /v1/jobs, /v1/activity, /v1/previews, PUT /v1/projects/{project_id}/settings/"
+    "builds_at_once ...): an Operator or Admin bound to that project, holding the permission there, "
+    "is refused 403 for their own project. Fix: declare them project-scoped, or list a route in "
+    "ORG_WIDE_BY_DESIGN with its reason"))
+def test_a_project_bound_role_reaches_the_routes_that_name_its_project(mirror, world):
+    assert len(ORG_ROUTES_NAMING_A_PROJECT) > 10
+    person, _, project_held = _caller(world, "names-project", None, "admin")
+    held = project_held[world.project_a]
+    want = lambda access: 200 if access.permission in held else 403  # noqa: E731
+    with world.acting_as(world.ctx(person)):
+        wrong = sweep(mirror, world, ORG_ROUTES_NAMING_A_PROJECT, want, project=world.project_a)
+    assert not wrong, report(wrong, "admin@A on org-declared routes naming project A")
