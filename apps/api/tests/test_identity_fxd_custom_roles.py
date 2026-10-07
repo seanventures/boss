@@ -196,13 +196,25 @@ def test_a_custom_role_of_only_org_permissions_cannot_be_bound_at_a_project(worl
     assert narrowed.status_code == 422 and narrowed.json()["error"] == "org_only_role", narrowed.text
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "unassigned: bindings.add_binding trusts the stored bindable_scopes — a role row that says "
-    "'project' but holds only org-only permissions (as an import or an older version could write) "
-    "is bound at a project with 201 instead of refused (2b); the A3 rule lives only in the role editor"))
 def test_the_binding_api_itself_refuses_an_org_only_role_at_a_project(world):
     owner, finn = _owner(world), world.person("finn")
     stored = world.custom_role("imported_org_only", ORG_ONLY)   # bindable_scopes {org, project}
     res = _bind(world, owner, finn.id, stored, project=world.project_a)
     assert res.status_code == 422, res.text
     assert _bindings_of(world, finn.id) == []
+
+
+def test_the_database_refuses_an_org_only_role_bound_at_a_project(world, engine):
+    """R2 #8, the backstop: any writer (an import, a script, a future code path) that inserts a
+    project binding of a role of only org-wide permissions is refused by the database itself."""
+    import sqlalchemy
+
+    finn = world.person("finn-sql")
+    stored = world.custom_role("sql_org_only", ORG_ONLY)
+    with pytest.raises(sqlalchemy.exc.DBAPIError, match="identity_org_only_role"):
+        world.bind(finn, stored, project=world.project_a)
+    assert _bindings_of(world, finn.id) == []
+    # org-wide it binds, and a role with any project permission still binds at a project
+    world.bind(finn, stored)
+    mixed = world.custom_role("sql_mixed", ORG_ONLY + ["code_task:read"])
+    world.bind(finn, mixed, project=world.project_a)

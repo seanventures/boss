@@ -17,6 +17,7 @@ from sqlalchemy import text
 
 from . import authz
 from .ids import new_id
+from .permissions_gen import PERMISSION_META
 from .principal import AuthContext
 from .roles import AccessError, audit_event, permissions_of, require, require_ceiling, scope_of
 
@@ -283,6 +284,18 @@ def _grant_rules(db: Any, ctx: AuthContext, role: dict, scope_type: str, scope_i
         refuse_self_raise(db, ctx, perms, scope)                                    # A33 via a group
 
 
+def refuse_org_only_at_project(db: Any, role_id: str, role_key: str) -> None:
+    """Amendment A3, decided from the role's PERMISSIONS, never its stored bindable_scopes (which
+    an import or an older version could have written wrong): a role every one of whose
+    permissions is org-only does nothing at a project, so it is never bound there. The database
+    refuses the same row (identity_refuse_org_only_project_binding)."""
+    perms = permissions_of(db, role_id)
+    if perms and all(PERMISSION_META[k].org_only or PERMISSION_META[k].system_only
+                     for k in perms if k in PERMISSION_META):
+        raise AccessError(422, "org_only_role",
+                          f"{role_key} holds only org-wide permissions: it binds at org only.")
+
+
 def add_binding(db: Any, ctx: AuthContext, *, subject_type: str, subject_id: str, role_id: str,
                 scope_type: str, scope_id: Optional[str] = None,
                 expires_at: Optional[datetime] = None, reason: Optional[str] = None) -> dict:
@@ -303,6 +316,7 @@ def add_binding(db: Any, ctx: AuthContext, *, subject_type: str, subject_id: str
         if not scope_id:
             raise AccessError(422, "invalid_scope")
         _project_exists(db, org, scope_id)
+        refuse_org_only_at_project(db, role_id, role["key"])
     _subject_exists(db, org, subject_type, subject_id)
     _grant_rules(db, ctx, dict(role), scope_type, scope_id, subject_type, subject_id)
     exists = db.execute(text(
@@ -389,6 +403,8 @@ def reassign_role(db: Any, ctx: AuthContext, from_role_id: str, to_role_id: str,
             raise AccessError(422, "scope_not_bindable",
                               f"{target['key']} binds at {', '.join(target['bindable_scopes'])} only.",
                               {"binding_id": b["id"]})
+        if b["scope_type"] == "project":
+            refuse_org_only_at_project(db, to_role_id, target["key"])
         _grant_rules(db, ctx, {"id": from_role_id, "key": source["key"]}, b["scope_type"], b["scope_id"],
                      b["subject_type"], b["subject_id"], granting=False)
         _grant_rules(db, ctx, dict(target), b["scope_type"], b["scope_id"], b["subject_type"],

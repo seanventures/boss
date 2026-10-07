@@ -33,6 +33,7 @@ from apps.api.tests.identity_fxd_support import (
     sweep,
 )
 from boss_engine.identity.declarations import Permit
+from boss_engine.identity.scope import ScopeSource
 
 #: (name, org-bound role or None, project-A-bound role)
 CALLERS = [("admin@A", None, "admin"), ("operator@A", None, "operator"), ("viewer@A", None, "viewer"),
@@ -126,21 +127,20 @@ def test_the_real_app_refuses_every_org_route_to_a_project_admin_or_operator(wor
     assert not wrong, report(wrong, f"real app, {project_role}@A on org routes")
 
 
-def _org_routes_that_take_a_project():
-    """Org-declared operations (not org-only permissions) whose handler takes `project_id`: the
-    request names a project, but the guard checks the permission org-wide."""
+def _routes_that_take_a_project(source):
+    """`source`-declared operations (not org-only/system-only permissions) whose handler takes
+    `project_id`: the request names a project."""
     import inspect
 
     from fastapi.routing import APIRoute
 
     from boss_engine.identity.declarations import access_of
     from boss_engine.identity.permissions_gen import PERMISSION_META
-    from boss_engine.identity.scope import ScopeSource
 
     out = []
     for route in app.router.routes:
         access = access_of(getattr(route, "endpoint", None)) if isinstance(route, APIRoute) else None
-        if (isinstance(access, Permit) and access.scope.source == ScopeSource.ORG
+        if (isinstance(access, Permit) and access.scope.source == source
                 and not PERMISSION_META[access.permission].org_only
                 and not PERMISSION_META[access.permission].system_only
                 and "project_id" in inspect.signature(route.endpoint).parameters):
@@ -149,24 +149,67 @@ def _org_routes_that_take_a_project():
     return out
 
 
-#: Routes that take a project_id yet are org-wide BY DESIGN ("label": "why"). Empty today: each
-#: entry is a reviewed decision that a project-bound person may not use the route for their project.
-ORG_WIDE_BY_DESIGN: dict[str, str] = {}
-ORG_ROUTES_NAMING_A_PROJECT = [o for o in _org_routes_that_take_a_project()
-                               if f"{o[0]} {o[1]}" not in ORG_WIDE_BY_DESIGN]
+#: Routes that take a project_id yet are org-wide BY DESIGN ("label": "why"). Each entry is a
+#: reviewed decision that a project-bound person may not use the route for their project: what it
+#: reads or changes belongs to the whole install, and `project_id` only names a reader check.
+_TELEMETRY = ("install-wide: what this install shares with the BOSS maintainers (or collects, in "
+              "collector mode) is one stream for every project; project_id only names the reader")
+ORG_WIDE_BY_DESIGN: dict[str, str] = {
+    **{f"{m} /v1/telemetry/{p}": _TELEMETRY for m, p in (
+        ("GET", "sharing"), ("GET", "preview"), ("POST", "preview/load"), ("GET", "sends/{send_id}"),
+        ("GET", "export"), ("POST", "export/load"), ("GET", "collector"), ("GET", "collector.csv"))},
+    "PUT /v1/projects/{project_id}/settings/builds_at_once": (
+        "install-wide: builds share one machine, so how many run at once is one number for all "
+        "projects (system_health.put_builds_at_once)"),
+    "POST /v1/delivery/health/sweep": (
+        "also fails hung deployments in EVERY project (fail_hung_deployments), whatever project "
+        "it names"),
+}
+ORG_ROUTES_NAMING_A_PROJECT = _routes_that_take_a_project(ScopeSource.ORG)
+#: The routes whose project_id is optional: checked at the project named, at the org otherwise.
+PROJECT_OR_ORG_OPS = [o for o in _routes_that_take_a_project(ScopeSource.PROJECT)
+                      if o[2].scope.org_when_absent]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "unassigned: ~40 routes take a project_id but are declared @ org (GET /v1/code-tasks, /v1/tasks, "
-    "/v1/dashboard, /v1/jobs, /v1/activity, /v1/previews, PUT /v1/projects/{project_id}/settings/"
-    "builds_at_once ...): an Operator or Admin bound to that project, holding the permission there, "
-    "is refused 403 for their own project. Fix: declare them project-scoped, or list a route in "
-    "ORG_WIDE_BY_DESIGN with its reason"))
+def test_no_route_that_names_a_project_is_checked_org_wide_unless_justified():
+    """THE CLASS (R2 #6): a route that takes project_id is declared at that project
+    (Scope.project / Scope.project_or_org); an org-wide one is a reviewed ORG_WIDE_BY_DESIGN entry."""
+    labels = {f"{m} {p}" for m, p, _a, _k in ORG_ROUTES_NAMING_A_PROJECT}
+    unjustified = sorted(labels - set(ORG_WIDE_BY_DESIGN))
+    assert not unjustified, ("declared @ org but they take project_id: declare them "
+                             "Scope.project(...) or Scope.project_or_org(query=...), or justify "
+                             f"them in ORG_WIDE_BY_DESIGN: {unjustified}")
+    stale = sorted(set(ORG_WIDE_BY_DESIGN) - labels)
+    assert not stale, f"ORG_WIDE_BY_DESIGN names routes that are no longer org-wide: {stale}"
+
+
 def test_a_project_bound_role_reaches_the_routes_that_name_its_project(mirror, world):
-    assert len(ORG_ROUTES_NAMING_A_PROJECT) > 10
+    assert len(PROJECT_OR_ORG_OPS) > 25
     person, _, project_held = _caller(world, "names-project", None, "admin")
     held = project_held[world.project_a]
     want = lambda access: 200 if access.permission in held else 403  # noqa: E731
     with world.acting_as(world.ctx(person)):
-        wrong = sweep(mirror, world, ORG_ROUTES_NAMING_A_PROJECT, want, project=world.project_a)
-    assert not wrong, report(wrong, "admin@A on org-declared routes naming project A")
+        wrong = sweep(mirror, world, PROJECT_OR_ORG_OPS, want, project=world.project_a)
+    assert not wrong, report(wrong, "admin@A on routes naming project A")
+
+
+def test_naming_no_project_is_an_org_question_a_project_binding_cannot_answer(mirror, world):
+    """Without a project_id the handler reads the default project (or every project): decided at
+    the org, so a caller bound only to project A is refused, and an org Viewer is not."""
+    person, _, _ = _caller(world, "names-none", None, "admin")
+    org_viewer = world.person("ps-org-viewer-none")
+    world.bind(org_viewer, "viewer")
+    viewer_perms = role_perms("viewer")
+    wrong = []
+    for method, path, access, _ in PROJECT_OR_ORG_OPS:
+        request = identity_matrix.request_for(method, path, access, world.project_a)
+        request["params"].pop("project_id", None)
+        with world.acting_as(world.ctx(person)):
+            got = mirror.request(**request).status_code
+        if got != 403:
+            wrong.append(f"admin@A {method} {path}: {got}")
+        with world.acting_as(world.ctx(org_viewer)):
+            got = mirror.request(**request).status_code
+        if got != (200 if access.permission in viewer_perms else 403):
+            wrong.append(f"viewer@org {method} {path}: {got}")
+    assert not wrong, report(wrong, "no project named")

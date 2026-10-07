@@ -441,6 +441,41 @@ def _record_schema_apply(raw_connection, total: int, failures: list[str],
         print(f"[ensure_schema] could not record this apply: {exc}")
 
 
+#: Tables a service module defines in its own SQL (module:attribute). ensure_schema applies them
+#: at every boot, with the rest of the schema, so a READ never runs DDL (R5: a Viewer's first
+#: GET /v1/factory/flow or /v1/work-plane/board ran CREATE TABLE). The module's own lazy ensure
+#: stays only as a fallback that runs when a table is actually missing (`ensure_service_schema`).
+SERVICE_SCHEMAS: tuple[str, ...] = (
+    "boss_engine.services.factory_flow:SCHEMA_SQL",
+    "boss_engine.services.work_plane:_SCHEMA_SQL",
+)
+
+_CREATE_TABLE = re.compile(r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)", re.I)
+
+
+def _service_schema_sql() -> list[str]:
+    import importlib
+
+    out: list[str] = []
+    for ref in SERVICE_SCHEMAS:
+        module, _, attr = ref.partition(":")
+        out.append(getattr(importlib.import_module(module), attr))
+    return out
+
+
+def ensure_service_schema(connection, schema_sql: str) -> bool:
+    """Run a service module's DDL only when one of its tables is missing (False: nothing to do,
+    and nothing was executed — a read path that calls this on a booted install runs no DDL)."""
+    tables = _CREATE_TABLE.findall(schema_sql)
+    if tables and all(connection.execute(text("SELECT to_regclass(:t) IS NOT NULL"), {"t": t}).scalar()
+                      for t in tables):
+        return False
+    for statement in (chunk.strip() for chunk in schema_sql.split(";")):
+        if statement:
+            connection.exec_driver_sql(statement)
+    return True
+
+
 def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
     """Converge the database to schema.sql. Every deploy runs this; nothing else migrates.
 
@@ -474,6 +509,8 @@ def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
         seed_path = resolved.schema_path.with_name("identity_seed.sql")
         seed_sql = seed_path.read_text(encoding="utf-8") if seed_path.exists() else ""
         statements = split_statements(sql) + split_statements(seed_sql)
+        for service_sql in _service_schema_sql():
+            statements += [chunk.strip() for chunk in service_sql.split(";") if chunk.strip()]
         with raw_connection.cursor() as cursor:
             for stmt in statements:
                 try:

@@ -81,6 +81,10 @@ def _fake_record(world: World):
         for key in (event.details or {}):
             if SECRET_KEY_RE.search(key):
                 raise ValueError(f"details key {key!r} looks like a secret")
+        # The SAME per-org lock the real audit.record takes: a real writer (the identity
+        # background loop, a side transaction) appending at the same time otherwise computes the
+        # same max(seq)+1 and one of the two inserts collides (R2: test_a92_password, by order).
+        db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": audit._lock_key(event.org_id)})  # noqa: SLF001
         seq = int(db.execute(text("SELECT coalesce(max(seq), 0) + 1 FROM identity_security_events "
                                   "WHERE org_id = :o"), {"o": event.org_id}).scalar())
         row = db.execute(text(
@@ -289,6 +293,7 @@ def mark_claimed(engine) -> None:
     """Record bootstrap.claimed, as the real claim does (arms the last-Owner trigger)."""
     with engine.begin() as db:
         org = org_id(db)
+        db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": audit._lock_key(org)})  # noqa: SLF001
         seq = int(db.execute(text("SELECT coalesce(max(seq),0)+1 FROM identity_security_events WHERE org_id=:o"),
                              {"o": org}).scalar())
         db.execute(text("INSERT INTO identity_security_events (org_id, seq, stream, event_type, outcome, "

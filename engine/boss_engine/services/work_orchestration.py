@@ -305,7 +305,9 @@ class WorkOrchestrationService:
     def list_tracker_providers(
         self, connection: Connection, project_id: str
     ) -> list[dict[str, Any]]:
-        self.seed_defaults(connection, project_id)
+        # A READ (R5: every GET is read-only). The rows are seeded when the project is made
+        # (bootstrap.seed_project_defaults) and refreshed at every API boot (main.lifespan);
+        # connecting or choosing a tracker seeds first (those are writes).
         rows = connection.execute(
             text(
                 """

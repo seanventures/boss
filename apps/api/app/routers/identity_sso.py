@@ -213,7 +213,9 @@ def _write_mappings(db: Any, provider_id: str, mappings: dict[str, str], org_id:
 
 
 def scim_principal_id(provider_id: str) -> str:
-    return "sys_scim_" + provider_id.split("_", 1)[-1]
+    from boss_engine.identity.scim import provisioning_principal
+
+    return provisioning_principal(provider_id)
 
 
 def _own_provider(db: Any, ctx: Any, provider_id: str) -> Optional[sso_oidc.Provider]:

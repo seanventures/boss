@@ -188,8 +188,12 @@ def _local_client():
 def _claim_with_setup_token(capsys, origin: str):
     import re
 
+    from apps.api.app import main
+
     client = _local_client()
     client.get("/v1/auth/setup/status", headers={"Origin": origin})
+    capsys.readouterr()
+    main.announce_claim_link_once()      # the API's keeper prints the link; a GET never mints
     token = re.search(r"/claim#t=(bst_[A-Za-z0-9_\-]+)", capsys.readouterr().out).group(1)
     return client, client.post("/v1/auth/setup/claim", headers={"Origin": origin, "Sec-Fetch-Site": "same-origin"},
                                json={"name": "First Owner", "email": "first@example.test", "password": STRONG,

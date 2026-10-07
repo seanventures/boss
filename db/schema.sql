@@ -7774,6 +7774,32 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- Amendment A3 in the database (R2 #8): a role every one of whose permissions is org-only (or
+-- system-only) does nothing at a project, so no binding of it is ever written at project scope —
+-- whatever its stored bindable_scopes say (an import or an older version could have written
+-- them wrong). The engine refuses first with words (bindings.refuse_org_only_at_project); this is
+-- the backstop for every other writer.
+CREATE OR REPLACE FUNCTION identity_refuse_org_only_project_binding() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.scope_type <> 'project' THEN RETURN NEW; END IF;
+  IF EXISTS (SELECT 1 FROM identity_access_role_permissions rp WHERE rp.role_id = NEW.role_id)
+     AND NOT EXISTS (SELECT 1 FROM identity_access_role_permissions rp
+                     JOIN identity_permissions p ON p.key = rp.permission_key
+                     WHERE rp.role_id = NEW.role_id AND p.scope_kind = 'project' AND NOT p.system_only) THEN
+    RAISE EXCEPTION 'identity_org_only_role: role % holds only org-wide permissions and binds at org only',
+      NEW.role_id USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'identity_org_only_project_binding'
+                 AND tgrelid = 'identity_role_bindings'::regclass) THEN
+    CREATE TRIGGER identity_org_only_project_binding BEFORE INSERT OR UPDATE OF role_id, scope_type
+      ON identity_role_bindings FOR EACH ROW EXECUTE FUNCTION identity_refuse_org_only_project_binding();
+  END IF;
+END $$;
+
 -- Last-Owner protection (§6.12): deferred to commit, so two concurrent demotions cannot both land.
 -- Fires only when a change REMOVES Owner reach from a real person: an owner binding deleted or
 -- retargeted, an active owner leaving `active`, or a member leaving a group that carries Owner (SCIM,

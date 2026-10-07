@@ -494,7 +494,9 @@ def subject_for(acting: Any, *, db: Any) -> AuthContext:
 
 
 def agent_for_role(db: Any, project_id: Optional[str], role_key: Optional[str]) -> Optional[str]:
-    """The Passport id for an agent role (`roles.agent_id`)."""
+    """The Passport id for an agent role (`roles.agent_id`), by its role key — or by its persona
+    callsign, which is how BOSS names its own agents in code (DEFAULT_BUILDER 'forge' is the
+    shipped software_engineer; the Passport presets list callsigns too). A role key wins."""
     from sqlalchemy import text
 
     if not role_key:
@@ -504,10 +506,36 @@ def agent_for_role(db: Any, project_id: Optional[str], role_key: Optional[str]) 
     has_project = db.execute(text("SELECT 1 FROM information_schema.columns WHERE table_name = 'roles' "
                                   "AND column_name = 'project_id'")).scalar()
     if has_project:
-        return db.execute(text("SELECT agent_id FROM roles WHERE role_key = :r AND agent_id IS NOT NULL "
-                               "ORDER BY (project_id = :p) DESC LIMIT 1"), {"r": role_key, "p": project_id}).scalar()
+        found = db.execute(text("SELECT agent_id FROM roles WHERE role_key = :r AND agent_id IS NOT NULL "
+                                "ORDER BY (project_id = :p) DESC LIMIT 1"), {"r": role_key, "p": project_id}).scalar()
+        if found:
+            return found
+        return db.execute(text(
+            "SELECT agent_id FROM roles WHERE lower(spec->'persona'->>'callsign') = lower(:r) "
+            "AND agent_id IS NOT NULL ORDER BY (project_id = :p) DESC, role_key LIMIT 1"),
+            {"r": role_key, "p": project_id}).scalar()
     return db.execute(text("SELECT agent_id FROM roles WHERE role_key = :r AND agent_id IS NOT NULL LIMIT 1"),
                       {"r": role_key}).scalar()
+
+
+def _default_builder() -> str:
+    from .consent import DEFAULT_BUILDER
+
+    return DEFAULT_BUILDER
+
+
+def code_task_builder(spec: Any, finalize_ctx: Any = None) -> Optional[str]:
+    """THE builder a code task runs as — the one its consent must name and its run token is minted
+    for: the agent the task was started for (`spec.role_key`), else the agent that started it (a
+    workflow step naming an agent records it as `finalize_ctx.agent`), else None: BOSS's default
+    builder (consent.DEFAULT_BUILDER). Every caller asks this one function (R2 #3)."""
+    role = str((spec or {}).get("role_key") or "").strip().lower() if isinstance(spec, dict) else ""
+    if role:
+        return role
+    agent = (finalize_ctx or {}).get("agent") if isinstance(finalize_ctx, dict) else None
+    if isinstance(agent, dict) and str(agent.get("role_key") or "").strip():
+        return str(agent["role_key"]).strip().lower()
+    return None
 
 
 @dataclass(frozen=True)
@@ -745,7 +773,7 @@ def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner
         _no_authority("no_grant" if acting is not None else "no_principal", task_run_id=task_run_id)
         return None
     with engine.begin() as db:
-        agent_id = agent_for_role(db, project_id, role_key or "forge")
+        agent_id = agent_for_role(db, project_id, role_key or _default_builder())
         if not agent_id:
             _no_authority("builder_has_no_passport", task_run_id=task_run_id)
             return None
@@ -814,7 +842,7 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
         shim = None
         with engine.begin() as db:
             agent_id = (acting.chain[-1].split("#", 1)[0] if acting.chain
-                        else agent_for_role(db, project_id, role_key or "forge"))
+                        else agent_for_role(db, project_id, role_key or _default_builder()))
             if agent_id:
                 rid = _nested_run_id(acting, "git", secrets.token_hex(6))
                 shim = start_run(subject_for(acting, db=db),

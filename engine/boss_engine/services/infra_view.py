@@ -572,9 +572,18 @@ def _finish(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def viewer_can_write(connection: Any, settings: Any, project_id: str,
-                     viewer: Optional[str], permission: str = "providerops_manage") -> bool:
+                     viewer: Optional[str], permission: str = "providerops_manage", *,
+                     catalogue_permission: str = "deployment:create") -> bool:
     """Whether the viewer holds `permission`. No viewer (API auth off, nobody named) → True:
-    every write still binds its actor and checks the permission server-side."""
+    every write still binds its actor and checks the permission server-side.
+
+    Under enforce: the PDP's answer for `catalogue_permission` (what the page's write routes
+    declare) held by the request's verified principal (identity.viewer.may, R2 #5)."""
+    from ..identity import viewer as _viewer
+
+    decided = _viewer.may(project_id, catalogue_permission)
+    if decided is not None:
+        return decided
     if not viewer:
         return True
     try:
@@ -1077,7 +1086,8 @@ def _fleet_parts(connection: Any, settings: Any, project_id: str, partial: list[
 
 def fleet(connection: Any, settings: Any, project_id: str, *, viewer: Optional[str] = None) -> Fleet:
     partial: list[str] = []
-    can_write = viewer_can_write(connection, settings, project_id, viewer)
+    can_write = viewer_can_write(connection, settings, project_id, viewer,
+                                 catalogue_permission="host:manage")
     parts = _fleet_parts(connection, settings, project_id, partial, can_write=can_write)
     items = _guard(connection, partial, "attention",
                    lambda: attention(connection, settings, project_id), [])
@@ -2554,7 +2564,8 @@ def cloud(connection: Any, settings: Any, project_id: str, view: str, *,
     view = view if view in CLOUD_VIEWS else "accounts"
     partial: list[str] = []
     since = _now() - timedelta(days=30)
-    can_write = viewer_can_write(connection, settings, project_id, viewer)
+    can_write = viewer_can_write(connection, settings, project_id, viewer,
+                                 catalogue_permission="cloud_account:manage")
     empty: dict[str, Any] = {"rows": [], "filters": {}, "header": {}}
     if view == "accounts":
         part = _guard(connection, partial, "accounts", lambda: _cloud_accounts(
