@@ -166,7 +166,9 @@ class Binding:
 
 #: Each provider's official endpoints (https only). `*.x` matches any subdomain of x.
 PROVIDER_HOSTS: dict[str, tuple[str, ...]] = {
-    "github": ("api.github.com", "github.com", "uploads.github.com", "codeload.github.com"),
+    # api.githubcopilot.com is GitHub's own MCP server (the Library's GitHub entry).
+    "github": ("api.github.com", "github.com", "uploads.github.com", "codeload.github.com",
+               "api.githubcopilot.com"),
     "openai": ("api.openai.com",),
     "anthropic": ("api.anthropic.com",),
     "openrouter": ("openrouter.ai",),
@@ -176,8 +178,8 @@ PROVIDER_HOSTS: dict[str, tuple[str, ...]] = {
     "xai": ("api.x.ai",),
     "mistral": ("api.mistral.ai",),
     "plane": ("api.plane.so", "app.plane.so"),
-    "jira": ("*.atlassian.net", "api.atlassian.com"),
-    "linear": ("api.linear.app",),
+    "jira": ("*.atlassian.net", "api.atlassian.com", "mcp.atlassian.com"),
+    "linear": ("api.linear.app", "mcp.linear.app"),
     "azure_devops": ("dev.azure.com", "*.dev.azure.com", "*.visualstudio.com"),
     "asana": ("app.asana.com",),
     "digitalocean": ("api.digitalocean.com", "inference.do-ai.run"),
@@ -217,6 +219,12 @@ OPERATOR_BASE_URLS: dict[str, tuple[str, ...]] = {
 
 #: Operator-only: `provider=host1|host2;provider2=host` adds endpoints to a provider.
 HOSTS_VAR = "BOSS_CREDENTIAL_HOSTS"
+
+#: BOSS's OWN services the operator points it at, which carry credentials on BOSS's behalf: the
+#: microVM sandbox service receives the run's model key and git token in its submit body
+#: (sandbox_contract.build_submit_request). Any host credential may go to these, and only the
+#: operator sets them (host env).
+RELAY_URL_VARS: tuple[str, ...] = ("BOSS_SANDBOX_AGENT_URL",)
 
 _NAME_PROVIDER: dict[str, str] = {
     "OPENAI_API_KEY": "openai", "ANTHROPIC_API_KEY": "anthropic", "OPENROUTER_API_KEY": "openrouter",
@@ -283,6 +291,35 @@ def _operator_hosts(provider: str) -> tuple[str, ...]:
     return tuple(hosts)
 
 
+def _relay_endpoints() -> tuple[tuple[str, Optional[int]], ...]:
+    out = []
+    for var in RELAY_URL_VARS:
+        raw = (os.environ.get(var) or "").strip()
+        if not raw:
+            continue
+        parts = urlsplit(raw)
+        if parts.hostname:
+            try:
+                port = parts.port or (443 if parts.scheme == "https" else 80)
+            except ValueError:
+                continue
+            out.append((parts.hostname.lower().rstrip("."), port))
+    return tuple(out)
+
+
+def _is_relay(url: str) -> bool:
+    relays = _relay_endpoints()
+    if not relays:
+        return False
+    parts = urlsplit(url or "")
+    host = (parts.hostname or "").lower().rstrip(".")
+    try:
+        port = parts.port or (443 if (parts.scheme or "").lower() in ("https", "wss") else 80)
+    except ValueError:
+        return False
+    return (host, port) in relays
+
+
 def _official_and_operator_hosts(binding: Binding) -> tuple[str, ...]:
     return tuple(dict.fromkeys(binding.hosts + _operator_hosts(binding.provider)))
 
@@ -330,7 +367,7 @@ def destination_allowed(binding: Binding, url: str) -> bool:
     host = (parts.hostname or "").lower().rstrip(".")
     if not host:
         return False
-    if any(_host_matches(host, p) for p in _operator_hosts(binding.provider)):
+    if any(_host_matches(host, p) for p in _operator_hosts(binding.provider)) or _is_relay(url):
         return True
     if (parts.scheme or "").lower() not in ("https", "wss"):
         return False
@@ -426,14 +463,92 @@ def check_outbound(url: str, headers: Any = None, body: Any = None) -> None:
     if not creds:
         return
     hay = _texts(url, headers, body)
+    # One value can belong to several bindings (the same key in OPENROUTER_API_KEY and
+    # OPENAI_API_KEY, the org token also in GITHUB_TOKEN): it is refused only when NONE of them
+    # lets it go to this destination.
+    present: dict[str, bool] = {}
+    allowed: set[str] = set()
+    refused: dict[str, tuple[str, Binding]] = {}
     for label, value, binding in creds:
-        if any(value in h for h in hay) and not destination_allowed(binding, url):
-            raise CredentialMisdirected(label, binding, (urlsplit(url or "").hostname or ""))
+        if value in allowed:
+            continue
+        if value not in present:
+            present[value] = any(value in h for h in hay)
+        if not present[value]:
+            continue
+        if destination_allowed(binding, url):
+            allowed.add(value)
+            refused.pop(value, None)
+        else:
+            refused.setdefault(value, (label, binding))
+    for label, binding in refused.values():
+        raise CredentialMisdirected(label, binding, (urlsplit(url or "").hostname or ""))
+
+
+def misdirection_in(exc: Optional[BaseException]) -> Optional["CredentialMisdirected"]:
+    """The CredentialMisdirected inside an exception a library wrapped it in (the OpenAI SDK turns
+    every transport exception into a retried APIConnectionError("Connection error."), boto3 into
+    HTTPClientError), so a caller can stop retrying and show the real reason."""
+    seen = 0
+    while exc is not None and seen < 16:
+        if isinstance(exc, CredentialMisdirected):
+            return exc
+        exc = exc.__cause__ or exc.__context__
+        seen += 1
+    return None
 
 
 # ---- the outbound guard: every request BOSS sends over http.client and httpx ---------------------
 
 _GUARD_MARK = "__boss_credential_guard__"
+
+
+def _is_tls(conn: Any) -> bool:
+    """Is this connection TLS? Judged on the socket, not the class: urllib3's (and so requests'
+    and botocore's) HTTPSConnection is not an http.client.HTTPSConnection."""
+    import http.client
+    import ssl
+
+    if isinstance(conn, http.client.HTTPSConnection):
+        return True
+    sock = getattr(conn, "sock", None)
+    return isinstance(sock, ssl.SSLSocket) or (sock is not None and hasattr(sock, "getpeercert"))
+
+
+def _url_host(host: str) -> str:
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
+
+
+#: The request line of a request sent to a forward proxy names its real destination (RFC 9112
+#: absolute-form): `POST http://plane.internal/api HTTP/1.1`.
+_ABSOLUTE_FORM = re.compile(rb"^[A-Z]+ (https?://[^/\s?#]+)\S* HTTP/\d", re.IGNORECASE)
+_REQUEST_LINE = re.compile(rb"^[A-Z]+ \S+ HTTP/\d", re.IGNORECASE)
+_DEST_ATTR = "_boss_guard_destination"
+
+
+def _connection_destination(conn: Any, first: bytes) -> str:
+    """Where the bytes of this send go. A request line starts a request: its destination is the
+    absolute-form target (through a forward proxy), else the CONNECT tunnel's host, else the peer
+    this connection is connected to. Body chunks sent after it go to the same place. The Host
+    header is never trusted: it does not say where the bytes go."""
+    absolute = _ABSOLUTE_FORM.match(first)
+    if absolute:
+        dest = absolute.group(1).decode("latin-1") + "/"
+    elif _REQUEST_LINE.match(first) or not getattr(conn, _DEST_ATTR, None):
+        tunnel = getattr(conn, "_tunnel_host", None)
+        host = tunnel or getattr(conn, "host", "") or ""
+        port = (getattr(conn, "_tunnel_port", None) if tunnel else getattr(conn, "port", None))
+        # The CONNECT itself goes out before TLS (judged as http, and it carries no provider's
+        # credential); the request inside the tunnel is sent after it, over TLS.
+        scheme = "https" if _is_tls(conn) else "http"
+        dest = f"{scheme}://{_url_host(host)}" + (f":{port}" if port else "") + "/"
+    else:
+        return getattr(conn, _DEST_ATTR)
+    try:
+        setattr(conn, _DEST_ATTR, dest)
+    except Exception:  # noqa: BLE001 — a slotted connection: judged per send, still judged
+        pass
+    return dest
 
 
 def _guard_http_client() -> None:
@@ -445,27 +560,15 @@ def _guard_http_client() -> None:
     original_send = conn_cls.send
 
     def send(self, data):  # type: ignore[no-untyped-def]
-        if isinstance(data, (bytes, bytearray)) and data:
-            host = getattr(self, "_tunnel_host", None) or getattr(self, "host", "") or ""
-            explicit = _HOST_LINE.search(bytes(data[:8192]))
-            if explicit:
-                named = explicit.group(1).decode("latin-1").strip()
-                try:
-                    import ipaddress
-
-                    ipaddress.ip_address(host.strip("[]"))
-                    host = named.rsplit(":", 1)[0] if not named.startswith("[") else named
-                except ValueError:
-                    pass
-            scheme = "https" if isinstance(self, http.client.HTTPSConnection) else "http"
-            check_outbound(f"{scheme}://{host}/", None, bytes(data))
+        if isinstance(data, (bytes, bytearray, memoryview)) and len(data):
+            if getattr(self, "sock", None) is None and getattr(self, "auto_open", 0):
+                self.connect()     # as the original send would: TLS is then known from the socket
+            raw = bytes(data)
+            check_outbound(_connection_destination(self, raw[:8192]), None, raw)
         return original_send(self, data)
 
     setattr(send, _GUARD_MARK, True)
     conn_cls.send = send  # type: ignore[method-assign]
-
-
-_HOST_LINE = re.compile(rb"\r\nHost:\s*([^\r\n]+)", re.IGNORECASE)
 
 
 def _guard_httpx() -> None:
