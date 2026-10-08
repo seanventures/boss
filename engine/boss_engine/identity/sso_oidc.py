@@ -126,6 +126,7 @@ class FederatedIdentity:
     amr: tuple[str, ...] = ()
     groups: tuple[str, ...] = ()
     mfa: bool = False                 # set by the protocol layer when the IdP vouched for MFA
+    hosted_domain: Optional[str] = None   # Google's `hd`: the Workspace domain that owns this account
 
 
 @dataclass(frozen=True)
@@ -506,7 +507,9 @@ def _verify_id_token(provider: Provider, doc: dict[str, Any], id_token: Any, *, 
     return FederatedIdentity(
         issuer=str(claims["iss"]), subject=str(claims["sub"]), email=claims.get("email"),
         email_verified=verified is True or verified == "true", name=claims.get("name"),
-        amr=amr, groups=groups, mfa=bool(provider.trust_idp_mfa and MFA_AMR.intersection(amr)))
+        amr=amr, groups=groups, mfa=bool(provider.trust_idp_mfa and MFA_AMR.intersection(amr)),
+        hosted_domain=(str(claims["hd"]).lower() if provider.preset == "google" and isinstance(claims.get("hd"), str)
+                       else None))
 
 
 def _github_identity(tokens: dict[str, Any]) -> FederatedIdentity:
