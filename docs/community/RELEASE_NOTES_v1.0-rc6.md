@@ -1,7 +1,4 @@
-# BOSS Community 1.0.0-rc.6 (draft)
-
-!!! warning "Draft"
-    These notes describe a release that is not published yet. Details may change before `v1.0-rc6` is tagged.
+# BOSS Community 1.0.0-rc.6
 
 Sixth Community release candidate. It follows `v1.0-rc5`. The headline is **named accounts**: every person signs in as themselves.
 
@@ -64,10 +61,14 @@ Full details: [Upgrade to named accounts](IDENTITY_UPGRADE.md).
 - Google sign-in can claim an invitation for a Gmail address (gmail.com, googlemail.com) or for the Workspace domain Google vouches for, without listing that domain on the provider. It never creates an account by itself.
 - BOSS's own read-only repository reader keeps its Passport: people can suspend or revoke it, but not change its limits.
 - Sessions and key last-used show tailnet addresses (100.64.0.0/10 and Tailscale IPv6) again.
+- Sign-in through Google (and any identity provider) works on hosts with no IPv6 route: outbound calls try each checked address, IPv4 first.
+- The Add provider sheet shows the redirect URL before you save, with a short setup guide for Google, GitHub, Microsoft, Okta, OIDC and SAML.
+- A host credential (GitHub, cloud and model keys) is only ever sent to its own provider's servers, on every outbound path; naming one in a reference needs an org-level permission.
+- Identity notices can be closed (or acknowledged, for security notices), stay closed on every device, and fold into one card.
+- Every "New build" button opens the New project screen; planning with an agent is an option there.
 
 ## Known limits
 
-- No CSV import or export of people. SCIM is the bulk path.
 - No group auto-join, and no blocklist of single email addresses (domain lists only).
 - No SMS codes and no CAPTCHA, by design: email and authenticator codes, passkeys, and a per-source backoff instead.
 - One organisation per install, with projects inside it.
