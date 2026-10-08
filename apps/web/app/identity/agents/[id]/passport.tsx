@@ -14,7 +14,9 @@ import { AgentAvatar } from "../../../agent-avatar";
 import { CanButton, useGuardedCall, useIdentity } from "../../../../components/identity/identity-provider";
 import { Ago, ErrorLine, Face, Perm, Pill, Sheet, shortDate } from "../../../../components/identity/kit";
 import { EmptyState } from "../../../../components/identity/states";
-import { permissionName } from "../../../../lib/identity/words";
+import { neverDelegableWhy, permissionName, presetName } from "../../../../lib/identity/words";
+import { GITHUB_KEYS, appMax, levelOffered, limitBody, limitChanges, type GithubLevel } from "../../../../lib/identity/github-limit";
+import { resourceTitle } from "../../roles/catalogue";
 import { plainText } from "../../../../lib/identity/plain";
 import { PeoplePick, type PickPerson } from "../../service-accounts/people-pick";
 import { IdentityError, idPatch, idPost } from "../../../../lib/identity/api";
@@ -119,6 +121,9 @@ export function PassportScreen({ initial, grants, people = [] }: { initial: Pass
   const [sponsoring, setSponsoring] = useState(false);
   const [saving, setSaving] = useState(false);
   const [onlyOn, setOnlyOn] = useState(true);
+  // CHANGING THE LIMIT IS A MODE, not a side effect of clicking a chip: Change limit → switch
+  // abilities → read what changes → Save limit (with step-up) or Cancel.
+  const [editing, setEditing] = useState(false);
   const { org } = useIdentity();
   const guarded = useGuardedCall();
   const revoked = agent.status === "revoked";
@@ -151,6 +156,7 @@ export function PassportScreen({ initial, grants, people = [] }: { initial: Pass
         () => idPatch<Passport>(`/v1/identity/agents/${encodeURIComponent(agent.id)}/passport`, { ceiling: [...ceiling] }));
       setAgent(next);
       setCeiling(new Set(next.ceiling));
+      setEditing(false);
       showToast("success", "Access limit saved");
     } catch (e) {
       showToast("error", e instanceof IdentityError ? e.message : "Not saved");
@@ -183,31 +189,40 @@ export function PassportScreen({ initial, grants, people = [] }: { initial: Pass
         <section className="idn-mx" aria-labelledby="idn-ceiling-h">
           <div className="idn-mx-top">
             <h2 id="idn-ceiling-h" className="idn-h3" title="Nobody can delegate more than this to the agent">Access limit</h2>
-            <span className="idn-sub idn-dim">{ceiling.size} allowed{agent.ceiling_preset ? ` · from ${agent.ceiling_preset}` : ""}</span>
+            <span className="idn-sub idn-dim">{ceiling.size} allowed{agent.ceiling_preset ? ` · from ${presetName(agent.ceiling_preset)}` : ""}</span>
             <span className="idn-spacer" />
             <button type="button" className="idn-fchip" aria-pressed={onlyOn} onClick={() => setOnlyOn((v) => !v)}>Only what it has</button>
+            {!editing ? (
+              <CanButton permission="agent_passport:manage" className="idn-btn sm primary" disabled={revoked} onClick={() => setEditing(true)}
+                tip="Switch abilities on or off, then review and save" data-testid="edit-ceiling">Change limit</CanButton>
+            ) : null}
           </div>
-          <p className="idn-dim idn-small" data-copy="prose">The most anyone may let this agent do. A grant never gives it more.</p>
+          <p className="idn-dim idn-small idn-mx-lede" data-copy="prose">
+            {editing ? "Switch abilities on or off. Nothing changes until you save." : "The most anyone may let this agent do. A grant never gives it more."}
+          </p>
           <div className="idn-mx-legend">
-            <span><i className="idn-lg-on" />on</span><span><LockSimple size={11} aria-hidden /> never delegable</span><span>dashed: you don't hold it</span>
+            <span><i className="idn-lg-on" />on</span>
+            <span title="Agents never get these. A person merges, approves and changes access."><LockSimple size={11} aria-hidden /> only a person</span>
+            {editing ? <span>dashed: you don't hold it</span> : null}
           </div>
           {visible.map((g) => (
             <div key={g.category}>
               <div className="idn-mx-cat">{g.category}</div>
               {g.resources.map((r) => (
                 <div key={r.resource} className="idn-mx-row">
-                  <span className="idn-res">{r.resource.replace(/_/g, " ")}</span>
+                  <span className="idn-res" title={r.resource}>{resourceTitle(r.resource)}</span>
                   <span className="idn-acts2">
                     {r.perms.map((p) => {
                       const meta = PERMISSION_META[p];
                       const on = ceiling.has(p);
-                      const locked = !meta.delegable || !held(p) || revoked;
+                      const locked = !editing || !meta.delegable || !held(p) || revoked;
                       const change = on && !agent.ceiling.includes(p) ? "add" : !on && agent.ceiling.includes(p) ? "remove" : undefined;
                       return (
                         <button key={p} type="button" className="idn-tg" aria-pressed={on} data-locked={locked || undefined} data-change={change}
                           aria-disabled={locked || undefined} data-testid={`ceil-${p}`}
-                          title={!meta.delegable ? "Never delegable" : !held(p) ? "You don't hold this" : meta.title}
-                          aria-label={`${meta.title}${!meta.delegable ? ", never delegable" : ""}`}
+                          data-never={!meta.delegable || undefined}
+                          title={!meta.delegable ? neverDelegableWhy(p, meta.title) : !editing ? meta.title : !held(p) ? "You don't hold this, so you can't give it" : meta.title}
+                          aria-label={`${meta.title}${!meta.delegable ? `. ${neverDelegableWhy(p, meta.title)}` : ""}`}
                           onClick={() => {
                             if (locked) return;
                             const next = new Set(ceiling);
@@ -225,17 +240,19 @@ export function PassportScreen({ initial, grants, people = [] }: { initial: Pass
               ))}
             </div>
           ))}
-          {dirty ? (
-            <div className="idn-ceil-save">
+          {editing ? (
+            <div className="idn-ceil-save" data-testid="ceiling-preview">
               <div className="idn-diff">
+                <b className="idn-small">{dirty ? "What changes when you save" : "No changes yet"}</b>
                 {added.map((p) => <div key={p} className="idn-dl p"><b>+</b>{permissionName(p)}</div>)}
                 {removed.map((p) => <div key={p} className="idn-dl m"><b>−</b>{permissionName(p)}</div>)}
+                {dirty && removed.length ? <span className="idn-dim idn-small">Grants that gave it a removed ability lose it at once.</span> : null}
               </div>
               <div className="idn-save">
-                <CanButton permission="agent_passport:manage" className="idn-btn primary" onClick={save} disabled={saving} data-testid="save-ceiling">
-                  <ShieldCheck size={15} aria-hidden /> {saving ? "Saving…" : "Review and save"}
+                <CanButton permission="agent_passport:manage" className="idn-btn primary" onClick={save} disabled={saving || !dirty} data-testid="save-ceiling">
+                  <ShieldCheck size={15} aria-hidden /> {saving ? "Saving…" : "Save limit"}
                 </CanButton>
-                <button type="button" className="idn-btn" onClick={() => setCeiling(new Set(agent.ceiling))}>Discard</button>
+                <button type="button" className="idn-btn" onClick={() => { setCeiling(new Set(agent.ceiling)); setEditing(false); }} data-testid="cancel-ceiling">Cancel</button>
               </div>
             </div>
           ) : null}
@@ -255,8 +272,6 @@ export function PassportScreen({ initial, grants, people = [] }: { initial: Pass
                   </CanButton>
                 ) : null}
               </dd>
-              <dt>GitHub</dt>
-              <dd>{Object.entries(agent.external_ceiling.github ?? {}).map(([k, v]) => <span key={k} className="idn-chip">{k.replace(/_/g, " ")}: {v}</span>)}</dd>
               <dt>Starts others</dt>
               <dd>{agent.can_spawn ? (agent.allowed_children.length ? agent.allowed_children.join(", ") : "any allowed") : "no"}</dd>
               <dt>Max depth</dt><dd>{agent.max_depth}</dd>
@@ -264,6 +279,8 @@ export function PassportScreen({ initial, grants, people = [] }: { initial: Pass
               <dt>Last run</dt><dd><Ago iso={agent.last_run_at} /></dd>
             </dl>
           </section>
+
+          <GithubLimit agent={agent} onSaved={setAgent} />
 
           <section className="idn-card" aria-labelledby="idn-grants-h">
             <div className="idn-card-h"><h3 id="idn-grants-h">Grants naming {agent.name}</h3><span className="idn-sub">{agent.active_grants} active</span></div>
@@ -285,11 +302,11 @@ export function PassportScreen({ initial, grants, people = [] }: { initial: Pass
           <section className="idn-card" aria-labelledby="idn-lineage-h">
             <div className="idn-card-h"><h3 id="idn-lineage-h">Lineage</h3></div>
             <ol className="idn-lineage">
-              {agent.lineage.map((l) => (
+              {lineageLines(agent.lineage).map(({ line: l, times }) => (
                 <li key={`${l.at}-${l.event}-${l.detail}`} className="idn-mini-ev">
                   <span className="idn-dim">{shortDate(l.at)}</span>
                   <span title={l.detail}><b>{plainText(l.event.replace(/_/g, " "))}</b> <span data-copy="data">{plainText(l.detail)}</span></span>
-                  <span />
+                  <span className="idn-dim">{times > 1 ? `×${times}` : ""}</span>
                 </li>
               ))}
             </ol>
@@ -299,5 +316,108 @@ export function PassportScreen({ initial, grants, people = [] }: { initial: Pass
       {sponsoring ? <SponsorSheet agent={agent} people={people} onClose={() => setSponsoring(false)} onDone={(p) => { setAgent(p); setSponsoring(false); }} /> : null}
       {revoking ? <RevokeSheet agent={agent} onClose={() => setRevoking(false)} onDone={(p) => { setAgent(p); setRevoking(false); }} /> : null}
     </>
+  );
+}
+
+/** The same thing on the same day, said once with a count: a run's two tokens read as one
+ *  "Started a run ×2", not two identical lines. */
+export function lineageLines<L extends { at: string; event: string; detail: string }>(lines: readonly L[]): { line: L; times: number }[] {
+  const out: { line: L; times: number }[] = [];
+  for (const l of lines) {
+    const last = out[out.length - 1];
+    if (last && last.line.event === l.event && plainText(last.line.detail) === plainText(l.detail) && shortDate(last.line.at) === shortDate(l.at)) last.times += 1;
+    else out.push({ line: l, times: 1 });
+  }
+  return out;
+}
+
+/**
+ * THE AGENT'S GITHUB LIMIT, editable within the API's rules: closed keys, none/read/write, never
+ * above what the BOSS GitHub App asks GitHub for (lib/identity/github-limit.ts). Saved with
+ * PATCH …/passport {external_ceiling}, which needs Manage agent Passports and is audited.
+ */
+function GithubLimit({ agent, onSaved }: { agent: Passport; onSaved: (p: Passport) => void }) {
+  const current = agent.external_ceiling.github ?? {};
+  const levelOf = (k: string) => (current[k] ?? "none") as GithubLevel;
+  const [editing, setEditing] = useState(false);
+  const [levels, setLevels] = useState<Record<string, GithubLevel>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const guarded = useGuardedCall();
+  const draft = Object.fromEntries(GITHUB_KEYS.map(({ key }) => [key, levels[key] ?? levelOf(key)]));
+  const changes = limitChanges(current, draft);
+  const revoked = agent.status === "revoked";
+  const save = async () => {
+    setBusy(true); setError(null);
+    try {
+      const next = await guarded(`Changing ${agent.name}'s GitHub limit changes what its runs can do on GitHub.`,
+        () => idPatch<Passport>(`/v1/identity/agents/${encodeURIComponent(agent.id)}/passport`, { external_ceiling: limitBody(current, draft) }));
+      onSaved(next);
+      setEditing(false); setLevels({});
+      showToast("success", "GitHub limit saved");
+    } catch (e) {
+      if (!(e instanceof IdentityError && e.code === "step_up_cancelled")) setError(e instanceof IdentityError ? e.message : "Not saved");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="idn-card" aria-labelledby="idn-gh-h" data-testid="github-limit">
+      <div className="idn-card-h">
+        <h3 id="idn-gh-h">GitHub</h3>
+        <span className="idn-sub" title="The most any of its runs may do on GitHub">limit</span>
+        <span className="idn-spacer" />
+        {!editing ? (
+          <CanButton permission="agent_passport:manage" className="idn-btn sm" disabled={revoked} onClick={() => setEditing(true)}
+            tip="Never above what the BOSS GitHub App can get" data-testid="edit-github-limit">Change</CanButton>
+        ) : null}
+      </div>
+      <dl className="idn-kv">
+        {GITHUB_KEYS.map(({ key, label, tip }) => (
+          <React.Fragment key={key}>
+            <dt title={tip}>{label}</dt>
+            <dd>
+              {editing ? (
+                <span className="idn-segs idn-segs-sm" role="group" aria-label={label}>
+                  {(["none", "read", "write"] as const).map((lv) => {
+                    const offered = levelOffered(key, lv, levelOf(key));
+                    return (
+                      <button key={lv} type="button" aria-pressed={draft[key] === lv} disabled={!offered} aria-disabled={!offered || undefined}
+                        title={offered ? undefined : `The BOSS GitHub App can get at most ${appMax(key) === "none" ? "nothing" : appMax(key)} here`}
+                        onClick={() => setLevels((l) => ({ ...l, [key]: lv }))} data-testid={`gh-${key}-${lv}`}>
+                        {lv === "none" ? "No access" : lv === "read" ? "Read" : "Write"}
+                      </button>
+                    );
+                  })}
+                </span>
+              ) : <span className={levelOf(key) === "none" ? "idn-dim" : undefined}>{levelOf(key) === "none" ? "no access" : levelOf(key)}</span>}
+            </dd>
+          </React.Fragment>
+        ))}
+      </dl>
+      {editing ? (
+        <div className="idn-ceil-save" data-testid="github-limit-preview">
+          <div className="idn-diff">
+            <b className="idn-small">{changes.length ? "What changes when you save" : "No changes yet"}</b>
+            {changes.map((c) => <div key={c} className="idn-dl">{c}</div>)}
+          </div>
+          <ErrorLine error={error} />
+          <div className="idn-save">
+            <CanButton permission="agent_passport:manage" className="idn-btn primary sm" disabled={busy || !changes.length} onClick={save} data-testid="save-github-limit">
+              <ShieldCheck size={14} aria-hidden /> {busy ? "Saving…" : "Save limit"}
+            </CanButton>
+            <button type="button" className="idn-btn sm" onClick={() => { setEditing(false); setLevels({}); setError(null); }}>Cancel</button>
+          </div>
+        </div>
+      ) : null}
+      <div className="idn-gh-how" data-testid="github-how">
+        <b>How this agent reaches GitHub</b>
+        <p data-copy="prose">Through the BOSS GitHub App, or the GitHub account of the person it acts for. Never beyond this limit.</p>
+        <span className="idn-row">
+          <a className="idn-link" href="/?area=setup&focus=repository">Setup › GitHub access</a>
+          <a className="idn-link" href="/account/agents">My account › Agents for me</a>
+        </span>
+      </div>
+    </section>
   );
 }

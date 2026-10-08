@@ -7,8 +7,11 @@
 import { isPermission } from "./permissions.gen";
 import { eventWords, permissionName } from "./words";
 
-const ID = /\b(?:usr|agt|dlg|key|sak|pat|sva|grp|idp|acr|ses|rol|bnd|evt|inv|tok|run|arl|sev|rt)_[A-Za-z0-9_]{2,}\b/g;
-const EVENT = /\b(?:user|group|access_role|role_binding|api_key|service_account|session|delegation|passport|agent|sso|scim|policy|audit|access|mfa|passkey|login|connection|token|invitation|identity)\.[a-z_]+(?:\.[a-z_]+)?\b/g;
+// An id with its qualifiers: "rt_ab12:git:315ad114331e" is one id, not an id and ":git:315ad…".
+const ID = /\b(?:usr|agt|dlg|key|sak|pat|sva|grp|idp|acr|ses|rol|bnd|evt|inv|tok|run|arl|sev|rt)_[A-Za-z0-9_]{2,}(?::[A-Za-z0-9_.-]+)*/g;
+// A qualifier left behind by an id written without its prefix (":git:315ad114331e").
+const FRAGMENT = /(^|\s)(?::[a-z]+)+:[0-9a-f]{7,}\b/g;
+const EVENT = /\b(?:auth|egress|user|group|access_role|role_binding|api_key|service_account|session|delegation|passport|agent|sso|scim|policy|audit|access|mfa|passkey|login|connection|token|invitation|identity)\.[a-z_]+(?:\.[a-z_]+)?\b/g;
 const KEY = /\b[a-z_]+:[a-z_]+\b/g;
 
 export function plainText(text: string | null | undefined): string {
@@ -26,6 +29,7 @@ export function plainText(text: string | null | undefined): string {
     .replace(KEY, (k) => (isPermission(k) ? permissionName(k) : k))
     .replace(EVENT, (e) => eventWords(e).toLowerCase())
     .replace(ID, "")
+    .replace(FRAGMENT, "$1")
     // A bare API code (invalid_credentials) reads as words.
     .replace(/(^|[\s(·])([a-z]+(?:_[a-z]+)+)(?=$|[\s),·])/g, (_m, pre: string, code: string) => `${pre}${code.replace(/_/g, " ")}`)
     .replace(/\s*·\s*(·\s*)+/g, " · ")

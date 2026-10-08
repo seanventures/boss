@@ -47,8 +47,9 @@ function Ring({ score }: { score: number }) {
   );
 }
 
+/** Every role a person holds directly — custom ones too: leaving them out showed 6 of 7 people. */
 function roleCounts(people: Person[], roles: AccessRole[]) {
-  return roles.filter((r) => r.builtin).map((r) => {
+  return roles.filter((r) => r.builtin || people.some((p) => p.bindings.some((b) => b.role_key === r.key && !b.via_group))).map((r) => {
     const holders = people.filter((p) => p.status === "active" && p.bindings.some((b) => b.role_key === r.key && !b.via_group));
     return { role: r, holders };
   });
@@ -235,7 +236,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
             <>
               <div className="idn-card-h">
                 <h3 id="idn-roles-h">Access roles</h3>
-                <span className="idn-sub">{roles.filter((r) => r.builtin).length} built-in · {roles.filter((r) => !r.builtin).length} custom</span>
+                <span className="idn-sub" title="Counts include service accounts and agents, not only people">{roles.filter((r) => r.builtin).length} built-in · {roles.filter((r) => !r.builtin).length} custom · all holders</span>
                 <span className="idn-spacer" />
                 <a className="idn-link" href="/identity/roles">Edit <ArrowUpRight size={13} aria-hidden /></a>
               </div>
@@ -245,7 +246,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
                   <a key={r.id} className="idn-rolebar" href={`/identity/roles/${r.id}`}>
                     <RoleChip roleKey={r.key} name={r.name} />
                     <span className="idn-bar" data-role-tone={r.builtin ? r.key : "custom"}><i data-w={Math.round((r.holders / max) * 10)} /></span>
-                    <span className="idn-cnt">{r.holders}</span>
+                    <span className="idn-cnt" title={`${r.holders} holding it: people, service accounts and agents`}>{r.holders}</span>
                   </a>
                 );
               })}
@@ -314,7 +315,7 @@ export function Overview({ posture, people, roles, groups, serviceAccounts, agen
                 <h3 id="idn-agents-h">Agents</h3>
                 <span className="idn-sub">{agents.filter((a) => a.status === "suspended").length} suspended</span>
                 <span className="idn-spacer" />
-                <a className="idn-link" href="/identity/agents">Passports <ArrowUpRight size={13} aria-hidden /></a>
+                <a className="idn-link" href="/identity/agents">All agents <ArrowUpRight size={13} aria-hidden /></a>
               </div>
               <div className="idn-agents">
                 {agents.slice(0, 12).map((a) => (

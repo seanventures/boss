@@ -18,6 +18,7 @@ import {
 import { CanButton, useCan, useGuardedCall } from "../../../components/identity/identity-provider";
 import { ErrorLine, Perm, Pill, Sheet, daysUntil, shortDate, useNow } from "../../../components/identity/kit";
 import { EmptyState, ErrorState, type ReadFailure } from "../../../components/identity/states";
+import { ListHeader } from "../../../components/identity/list-header";
 import { GITHUB_ACCESS_AUTOMATIC, REQUIRE_SIGN_IN, policyChanges, providerView } from "../../../lib/identity/adapt-admin";
 import { IdentityError, idDelete, idPatch, idPost, idPut } from "../../../lib/identity/api";
 import type { AuthOptions, Posture, Provider, SecurityPolicy } from "../../../lib/identity/types";
@@ -196,6 +197,11 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy, publi
   const origin = publicUrl?.public_origin ?? null;
   const shown = [...list].sort((a, b) => Number(b.status === "active") - Number(a.status === "active"));
   const onCount = list.filter((p) => p.status === "active").length;
+  const addProvider = (
+    <CanButton permission="identity_provider:manage" className="idn-btn primary" onClick={() => setAdding(true)} tip="Google, Microsoft, Okta, SAML and more" data-testid="provider-add">
+      <Plus size={15} weight="bold" aria-hidden /> Add provider
+    </CanButton>
+  );
   const [saved, setSaved] = useState(initialPolicy);
   const [policy, setPolicy] = useState(initialPolicy);
   const [saving, setSaving] = useState(false);
@@ -228,16 +234,8 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy, publi
   return (
     <>
       <section aria-labelledby="idn-prov-h">
-        <div className="idn-sec-h">
-          <h1 id="idn-prov-h" className="idn-h1">Sign-in & SSO</h1>
-          {!failures.providers ? <span className="idn-sub" title="Each one on shows as a button on the sign-in page">{onCount} on the sign-in page</span> : null}
-          <span className="idn-spacer" />
-          {!failures.providers && list.length ? (
-            <CanButton permission="identity_provider:manage" className="idn-btn primary" onClick={() => setAdding(true)} tip="Google, Microsoft, Okta, SAML and more" data-testid="provider-add">
-              <Plus size={15} weight="bold" aria-hidden /> Add provider
-            </CanButton>
-          ) : null}
-        </div>
+        <ListHeader id="idn-prov-h" title="Sign-in & SSO" empty={!list.length || !!failures.providers} create={addProvider}
+          sub={!failures.providers && list.length ? <span title="Each one that is on shows as a button on the sign-in page">{onCount} of {list.length} on the sign-in page</span> : null} />
         {failures.providers ? <ErrorState what="sign-in providers" failure={failures.providers} testId="providers-error" /> : list.length ? (
           <div className="idn-prov-grid">
             {shown.map((p) => <ProviderCard key={p.id} initial={p} origin={origin}
@@ -245,11 +243,7 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy, publi
           </div>
         ) : (
           <EmptyState icon={<Key size={20} />} title="No single sign-on yet" testId="providers-empty"
-            action={(
-              <CanButton permission="identity_provider:manage" className="idn-btn primary" onClick={() => setAdding(true)} tip="Google, Microsoft, Okta, SAML and more" data-testid="provider-add">
-                <Plus size={15} weight="bold" aria-hidden /> Add provider
-              </CanButton>
-            )}>
+            action={addProvider}>
             People sign in with a passkey or password. Add your company's identity provider so they can use their work account.
           </EmptyState>
         )}
@@ -272,7 +266,7 @@ export function SignInSettings({ providers, policy: initialPolicy, legacy, publi
               <span className="idn-label">MFA required for</span>
               <div className="idn-acts2">
                 {ROLES.map((r) => (
-                  <Toggle key={r} on={policy.mfa_required_roles.includes(r)} label={r} disabled={locked || r === "owner" || r === "admin"}
+                  <Toggle key={r} on={policy.mfa_required_roles.includes(r)} label={r[0].toUpperCase() + r.slice(1)} disabled={locked || r === "owner" || r === "admin"}
                     reason={locked ? manage.reason : "Always required"}
                     onChange={(v) => set({ mfa_required_roles: v ? [...policy.mfa_required_roles, r] : policy.mfa_required_roles.filter((x) => x !== r) })} />
                 ))}

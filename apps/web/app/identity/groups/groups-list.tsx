@@ -8,9 +8,10 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowsClockwise, Plus, UsersThree } from "@phosphor-icons/react";
 
-import { CanButton } from "../../../components/identity/identity-provider";
+import { CanButton, useCan } from "../../../components/identity/identity-provider";
 import { Ago, Face, RoleChip } from "../../../components/identity/kit";
 import { EmptyState, ErrorState, type ReadFailure } from "../../../components/identity/states";
+import { ListHeader } from "../../../components/identity/list-header";
 import type { Group } from "../../../lib/identity/types";
 import { GroupFormSheet } from "./group-sheets";
 
@@ -31,6 +32,8 @@ export function groupsSub(groups: Group[]): string {
 export function GroupsList({ groups, failure = null }: { groups: Group[]; failure?: ReadFailure | null }) {
   const [creating, setCreating] = useState(false);
   const router = useRouter();
+  // The whole card opens the group, where its access roles are bound; the label says so.
+  const canAssign = useCan("role_binding:assign").allowed;
   const create = (
     <CanButton permission="group:manage" className="idn-btn primary" onClick={() => setCreating(true)} tip="People in a group share its access roles" data-testid="groups-create">
       <Plus size={15} weight="bold" aria-hidden /> New group
@@ -38,12 +41,7 @@ export function GroupsList({ groups, failure = null }: { groups: Group[]; failur
   );
   return (
     <>
-      <div className="idn-sec-h">
-        <h1 className="idn-h1">Groups</h1>
-        {!failure ? <span className="idn-sub">{groupsSub(groups)}</span> : null}
-        <span className="idn-spacer" />
-        {create}
-      </div>
+      <ListHeader title="Groups" sub={!failure ? groupsSub(groups) : null} empty={!groups.length && !failure} create={create} />
       {failure ? <ErrorState what="groups" failure={failure} testId="groups-error" /> : null}
       <div className="idn-glist" data-testid="groups-list">
         {groups.map((g) => (
@@ -60,6 +58,7 @@ export function GroupsList({ groups, failure = null }: { groups: Group[]; failur
             <span className="idn-row">
               {g.bindings.map((b) => <RoleChip key={b.id} roleKey={b.role_key} name={b.role_name} scope={b.scope} />)}
               {!g.bindings.length ? <span className="idn-dim">No access roles</span> : null}
+              {canAssign ? <><span className="idn-spacer" /><span className="idn-btn sm" aria-hidden data-testid={`group-manage-access-${g.id}`}>Manage access</span></> : null}
             </span>
             {g.synced_at ? <span className="idn-dim idn-small"><ArrowsClockwise size={12} aria-hidden /> synced <Ago iso={g.synced_at} /></span> : null}
           </a>

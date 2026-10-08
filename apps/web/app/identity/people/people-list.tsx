@@ -9,11 +9,12 @@ import { useConsoleRefresh } from "../../use-console-refresh";
 import React, { useMemo, useState } from "react";
 import { FileArrowUp, MagnifyingGlass, Plus, UserPlus, UsersThree } from "@phosphor-icons/react";
 
-import { CanButton } from "../../../components/identity/identity-provider";
+import { CanButton, useCan } from "../../../components/identity/identity-provider";
 import { InviteSheet } from "../../../components/identity/invite-sheet";
 import { Ago, Face, Pill } from "../../../components/identity/kit";
 import { BindingChips, SignIn } from "../../../components/identity/parts";
 import { EmptyState, ErrorState, type ReadFailure } from "../../../components/identity/states";
+import { ListHeader } from "../../../components/identity/list-header";
 import type { AccessRole, Group, Person } from "../../../lib/identity/types";
 import type { AccessRequestRow } from "../../../lib/identity/types-people";
 import { AccessRequests } from "./access-requests";
@@ -82,21 +83,22 @@ export function PeopleList({ people, roles, groups: allGroups = [], invited: inv
   // Open invitations are not people yet: the API lists them at /v1/identity/invitations.
   const invited = invitedCount ?? people.filter((p) => p.status === "pending").length;
   const filtered = JSON.stringify(f) !== JSON.stringify(NONE);
+  // Giving and taking access is the list's main job: each row says where, for whoever may do it.
+  const canAssign = useCan("role_binding:assign").allowed;
+  const invite = (
+    <CanButton permission="user:invite" className="idn-btn primary" onClick={() => setInviting(true)} tip="Invite by email, with an access role" data-testid="people-invite">
+      <Plus size={15} weight="bold" aria-hidden /> Invite people
+    </CanButton>
+  );
 
   return (
     <>
-      <div className="idn-sec-h">
-        <h1 className="idn-h1">People</h1>
-        {!failure ? <span className="idn-sub">{active} active · {invited} invited</span> : null}
-        <span className="idn-spacer" />
-        {!failure ? <ExportCsvButton people={shown} /> : null}
+      <ListHeader title="People" sub={!failure ? `${active} active · ${invited} invited` : null} empty={!people.length && !failure && !filtered} create={invite}>
+        {!failure && people.length ? <ExportCsvButton people={shown} /> : null}
         <CanButton permission="user:invite" className="idn-btn sm" onClick={() => setImporting(true)} tip="Invite many people from a CSV file" data-testid="people-import">
           <FileArrowUp size={14} aria-hidden /> Import
         </CanButton>
-        <CanButton permission="user:invite" className="idn-btn primary" onClick={() => setInviting(true)} tip="Invite by email, with an access role" data-testid="people-invite">
-          <Plus size={15} weight="bold" aria-hidden /> Invite people
-        </CanButton>
-      </div>
+      </ListHeader>
 
       <AccessRequests requests={requests} roles={roles} failure={requestsFailure} project={requestsProject} />
 
@@ -119,7 +121,7 @@ export function PeopleList({ people, roles, groups: allGroups = [], invited: inv
       {!failure ? <section className="idn-card" aria-label="People">
         <div className="idn-scroll">
           <table className="idn-t" data-testid="people-table">
-            <thead><tr><th>Person</th><th>Access</th><th>Groups</th><th>Sign-in</th><th>Last seen</th><th>Status</th></tr></thead>
+            <thead><tr><th>Person</th><th>Access</th><th>Groups</th><th>Sign-in</th><th>Last seen</th><th>Status</th>{canAssign ? <th><span className="idn-sr">Actions</span></th> : null}</tr></thead>
             <tbody>
               {shown.map((p) => (
                 <tr key={p.id} data-href={`/identity/people/${p.id}`} onClick={(e) => {
@@ -143,6 +145,12 @@ export function PeopleList({ people, roles, groups: allGroups = [], invited: inv
                   <td><SignIn s={p.sign_in} /></td>
                   <td className="idn-dim"><Ago iso={p.last_seen_at} /></td>
                   <td>{statusPill(p)}</td>
+                  {canAssign ? (
+                    <td className="idn-row-act">
+                      <a className="idn-btn sm" href={`/identity/people/${p.id}?tab=access`} title={`Add or remove ${p.display_name}'s access roles`}
+                        data-testid={`manage-access-${p.id}`} onClick={(e) => e.stopPropagation()}>Manage access</a>
+                    </td>
+                  ) : null}
                 </tr>
               ))}
             </tbody>
@@ -151,7 +159,7 @@ export function PeopleList({ people, roles, groups: allGroups = [], invited: inv
         {!shown.length && filtered ? <div className="idn-empty">No one matches · <button type="button" className="idn-link" onClick={() => setF(NONE)}>Clear filters</button></div> : null}
         {!people.length && !filtered ? (
           <EmptyState icon={<UserPlus size={20} />} title="No people yet" testId="people-empty"
-            action={<CanButton permission="user:invite" className="idn-btn primary sm" onClick={() => setInviting(true)}>Invite people</CanButton>}>
+            action={invite}>
             Invite your team by email. Each person signs in as themselves, with the access role you choose.
           </EmptyState>
         ) : null}

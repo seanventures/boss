@@ -114,7 +114,7 @@
 /* the Identity tab strip */
 .idn-tabs { display: flex; gap: 4px; margin: -4px 0 0; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
 .idn-tabs::-webkit-scrollbar { display: none; }
-.idn-tabs a { padding: 12px 14px 11px; font-size: 13.5px; color: var(--faint); font-weight: 600; border-bottom: 2px solid transparent; display: flex; gap: 7px; align-items: center; white-space: nowrap; }
+.idn-tabs a { padding: 12px 10px 11px; font-size: 13.5px; color: var(--faint); font-weight: 600; border-bottom: 2px solid transparent; display: flex; gap: 7px; align-items: center; white-space: nowrap; }
 .idn-tabs a:hover { color: var(--ink-soft); }
 .idn-tabs a[aria-current="page"] { color: var(--ink); border-color: var(--teal); }
 .idn-tabs a .idn-n { font: 500 11px var(--mono); color: var(--faint); background: var(--surface-3); border-radius: 6px; padding: 1px 6px; }
@@ -162,6 +162,8 @@
 .idn-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .idn-who b { font-weight: 600; font-size: 13.5px; display: block; }
 .idn-who small { display: block; color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A description wraps; only names and emails stay on one line (a role's description made Access roles wider than the page). */
+.idn-who small.idn-wrap { white-space: normal; }
 
 /* chips */
 .idn-role { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: color-mix(in srgb, var(--idn-rh, var(--idn-sky)) 80%, var(--ink)); background: color-mix(in srgb, var(--idn-rh, var(--idn-sky)) 14%, transparent); border: 1px solid color-mix(in srgb, var(--idn-rh, var(--idn-sky)) 35%, transparent); border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
@@ -184,6 +186,7 @@
 
 /* tables */
 .idn-scroll { overflow-x: auto; min-width: 0; }
+.idn-t td.idn-row-act { text-align: right; white-space: nowrap; width: 1%; }
 .idn-t { width: 100%; border-collapse: collapse; }
 .idn-t th { font: 500 10.5px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); text-align: left; padding: 0 10px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .idn-t td { padding: 11px 10px; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); vertical-align: middle; font-size: 13.5px; }
@@ -287,6 +290,9 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn-sa .idn-r { margin-left: auto; text-align: right; }
 .idn-agents { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px 4px; margin: 4px 0 14px; }
 .idn-agents a { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10.5px; color: var(--faint); }
+/* A name is one line, cut with an ellipsis: "Documentation Writer" ran into its neighbour (the full name is the tooltip). */
+.idn-agents a { min-width: 0; }
+.idn-agents a > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
 .idn-agents a[data-status="suspended"] span { color: var(--amber); }
 .idn-agents a[data-status="suspended"] .ag-avatar { filter: grayscale(1) brightness(0.6); }
 .idn-stats3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; font-size: 12.5px; color: var(--faint); }
@@ -355,6 +361,9 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn-ver b { font: 500 12px var(--mono); color: var(--ink-soft); }
 .idn-mx { border: 1px solid var(--border); border-radius: var(--idn-r-card); overflow: hidden; background: linear-gradient(180deg, var(--idn-card-a), var(--idn-card-b)); min-width: 0; }
 .idn-mx-top { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.idn-mx-lede { margin: 10px 16px 0; }
+.idn-gh-how { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--idn-card-a) 60%, transparent); color: var(--ink-soft); font-size: 12.5px; line-height: 1.45; }
+.idn-gh-how p { margin: 0; }
 .idn-mx-legend { display: flex; flex-wrap: wrap; gap: 12px; padding: 10px 16px 0; font-size: 12px; color: var(--faint); }
 .idn-mx-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .idn-mx-cat { font: 500 10px var(--mono); letter-spacing: 0.2em; color: var(--teal); text-transform: uppercase; padding: 14px 16px 6px; display: flex; gap: 10px; align-items: center; }
@@ -472,6 +481,7 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn-ah { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .idn-ah h1 { font: 600 24px var(--display); margin: 0; }
 .idn-verified { display: inline-flex; align-items: center; gap: 8px; border: 1px solid color-mix(in srgb, var(--green) 40%, transparent); background: color-mix(in srgb, var(--green) 8%, transparent); color: var(--idn-ink-ok); border-radius: 999px; padding: 6px 12px; font-size: 12.5px; font-weight: 600; }
+.idn-verified[data-pending] { border-color: color-mix(in srgb, var(--amber) 40%, transparent); background: var(--amber-soft); color: var(--idn-ink-warn); }
 .idn-verified[data-ok="false"] { border-color: color-mix(in srgb, var(--red) 40%, transparent); background: var(--red-soft); color: var(--idn-ink-bad); }
 .idn-fb { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px; background: var(--surface-2); }
 .idn-fb .idn-q { flex: 1; min-width: 220px; display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 13px; border: 1px solid var(--border-strong); border-radius: 10px; padding: 0 11px; background: var(--idn-well); }
@@ -703,6 +713,10 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
    is positioned against the page, not the table): contain, never scroll the page sideways. */
 .idn-scroll, .idn-lt { position: relative; }
 .idn { overflow-x: clip; }
+/* …but clipping AT the content edge cut off whatever sits flush against it: the header's New
+   group lost its focus ring and glow on the right. The clip box is 10px wider than the content
+   on each side (padding), and the margin takes it back, so nothing moves and nothing is cut. */
+.idn { padding-inline: 10px; margin-inline: -10px; }
 /* A route page (Identity, My account) renders whole on the server: no "filling up" bar. */
 .bx-shell[data-route-mode] .bx-loading { display: none; }
 

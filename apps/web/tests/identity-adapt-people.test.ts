@@ -153,7 +153,7 @@ describe("sessions, service accounts, grantors", () => {
   it("names a session's client from its User-Agent", () => {
     const s = adaptSession({ id: "ses_1", principal_id: "usr_ana", methods: ["passkey"], created_at: "2026-10-01",
       last_seen_at: "2026-10-05", ip: "10.0.0.1", user_agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/604.1", mfa_at: null });
-    expect(s).toMatchObject({ client: "Safari on iOS", device: "phone", started_at: "2026-10-01", current: false, location: null });
+    expect(s).toMatchObject({ client: "Safari on iPhone", device: "phone", started_at: "2026-10-01", current: false, location: null });
     expect(describeAgent("")).toEqual({ client: "Unknown client", device: "desktop" });
   });
 

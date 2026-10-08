@@ -99,6 +99,26 @@ def test_without_smtp_the_new_device_is_a_notice_in_the_console(world, engine):
     assert world.mail == []
 
 
+def test_a_notice_never_names_a_private_or_container_address(world, engine):
+    """Behind the console's proxy the API sees the container's address (172.18.0.8), not the
+    person's: a private address is "a new device", never an address that names our network."""
+    world.smtp = False
+    pid = make_user(engine, "nd3@example.test")
+    client = fresh_client()
+    assert sign_in(client, "nd3@example.test").status_code == 200
+    with engine.begin() as db:
+        org = db.execute(text("SELECT org_id FROM identity_principals WHERE id = :p"), {"p": pid}).scalar()
+        seq = int(db.execute(text("SELECT coalesce(max(seq), 0) + 1 FROM identity_security_events "
+                                  "WHERE org_id = :o"), {"o": org}).scalar())
+        db.execute(text("INSERT INTO identity_security_events (org_id, seq, stream, event_type, outcome, "
+                        "actor_principal_id, session_ref, ip, prev_hash, hash) VALUES (:o, :s, 'security', "
+                        "'auth.new_device', 'info', :p, 'ses_elsewhere', '172.18.0.8', :h, :h)"),
+                   {"o": org, "s": seq, "p": pid, "h": b"\0" * 32})
+    notice = [b for b in client.get("/v1/identity/me").json()["banners"] if b["kind"] == "new_device"]
+    assert notice and notice[0]["message"].startswith("New sign-in from a new device on ")
+    assert "172.18" not in notice[0]["message"]
+
+
 def _admin(engine, email: str, role: str):
     make_user(engine, email, role=role)
     client = fresh_client()

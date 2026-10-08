@@ -392,9 +392,8 @@ def infra(connection, project_id: str) -> dict[str, Any]:
 #: nothing identity-related to configure, while v1 offered SAML and SCIM forms — two consoles,
 #: two answers (console walk, 2026-10-02).
 SIGN_IN_TRUTH = (
-    "Console sign-in is the one password the installer generated. Identity providers recorded "
-    "here are kept as configuration, and SCIM can sync members into BOSS, but the console's "
-    "sign-in page does not use them yet."
+    "Everyone signs in as themselves: with a password, a passkey, or a provider added under "
+    "Identity › Sign-in & SSO, plus a second factor where their access role needs one."
 )
 
 #: Settings the artifact offers that this deployment genuinely does not have. Each is reported
