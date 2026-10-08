@@ -87,7 +87,7 @@ EVENT_TYPES: frozenset[str] = frozenset({
     # notices (who was told what; never the content)
     "notice.mfa_reset", "notice.grant_expiring",
     # policy and system
-    "policy.changed", "bootstrap.claimed", "owner.recovered_by_host", "legacy.password_used",
+    "policy.changed", "bootstrap.claimed", "owner.recovered_by_host", "banner.acknowledged", "legacy.password_used",
     "legacy.api_key_used", "legacy.network_used", "legacy.claimed_actor_ignored",
     "legacy.path_retired", "catalogue.permission_removed", "audit.exported", "audit.verified",
     "audit.checkpoint",

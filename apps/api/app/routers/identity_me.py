@@ -214,6 +214,46 @@ def _last_factor_guard(db: Any, ctx: AuthContext, removing: str) -> Optional[JSO
     return None
 
 
+def raw_banners(db: Any, ctx: AuthContext, *, user: Any = None, required: Optional[bool] = None,
+                f: Any = None) -> list[dict[str, Any]]:
+    """Every console-wide banner that applies to the caller now, before their dismissals:
+    {kind, message, until, instance} (identity/banner_policy.py gives each its id and policy)."""
+    from boss_engine.identity import posture
+    from boss_engine.identity.authn_support import smtp_configured
+    from boss_engine.identity.banner_policy import NEW_DEVICE_HOURS
+    from boss_engine.identity.where import sign_in_origin
+
+    p = ctx.principal
+    if user is None and p.kind == PrincipalKind.USER:
+        user = users.by_id(db, p.id)
+    f = f or users.factors(db, p.id)
+    if required is None:
+        required = bool(user and users.mfa_required(db, user))
+    out: list[dict[str, Any]] = []
+    if required and not f.any_second_factor:
+        out.append({"kind": "mfa_enrolment_required", "instance": None, "until": None,
+                    "message": "Your access needs a second factor. Add a passkey or an authenticator app."})
+    if user is not None and not smtp_configured():
+        # Without SMTP, a sign-in from a new device is told here (with SMTP it was emailed), for
+        # 48 hours. The event's seq is the instance: the NEXT new device shows again.
+        seen = db.execute(text(
+            "SELECT ts, ip, user_agent, seq FROM identity_security_events WHERE org_id = :o AND "
+            "event_type = 'auth.new_device' AND actor_principal_id = :p AND "
+            "ts > now() - make_interval(hours => :h) "
+            "AND (CAST(:s AS TEXT) IS NULL OR session_ref IS DISTINCT FROM :s) ORDER BY ts DESC LIMIT 1"),
+            {"o": p.org_id, "p": p.id, "h": NEW_DEVICE_HOURS,
+             "s": ctx.session.id if ctx.session else None}).mappings().first()
+        if seen:
+            out.append({"kind": "new_device", "instance": str(seen["seq"]), "until": None, "message": (
+                f"New sign-in {sign_in_origin(seen['ip'])} on "
+                f"{seen['ts'].strftime('%Y-%m-%d %H:%M UTC')}. Not you? Sign out everywhere in "
+                "Sessions and change your password.")})
+    # The legacy countdowns, the network bridge, low recovery codes and an Owner recovered from
+    # the host shell: posture owns every other console-wide banner (one source, IDENTITY.md §12).
+    out.extend(posture.banners(ctx, db=db))
+    return out
+
+
 def build_me_response(db: Any, ctx: AuthContext) -> MeResponse:
     from boss_engine.identity.sessions import csrf_token
 
@@ -225,30 +265,10 @@ def build_me_response(db: Any, ctx: AuthContext) -> MeResponse:
         "SELECT DISTINCT coalesce(pr.name, i.provider_id) FROM identity_user_identities i LEFT JOIN "
         "identity_providers pr ON pr.id = i.provider_id WHERE i.principal_id = :p"), {"p": p.id})]
     required = bool(user and users.mfa_required(db, user))
-    banners: list[MeBanner] = []
-    if required and not f.any_second_factor:
-        banners.append(MeBanner(kind="mfa_enrolment_required",
-                                message="Your access needs a second factor. Add a passkey or an authenticator app."))
-    from boss_engine.identity.authn_support import smtp_configured
-    from boss_engine.identity.where import sign_in_origin
+    from boss_engine.identity import banner_policy
 
-    if user is not None and not smtp_configured():
-        # Without SMTP, a sign-in from a new device is told here (with SMTP it was emailed).
-        seen = db.execute(text(
-            "SELECT ts, ip, user_agent FROM identity_security_events WHERE org_id = :o AND "
-            "event_type = 'auth.new_device' AND actor_principal_id = :p AND ts > now() - interval '7 days' "
-            "AND (CAST(:s AS TEXT) IS NULL OR session_ref IS DISTINCT FROM :s) ORDER BY ts DESC LIMIT 1"),
-            {"o": p.org_id, "p": p.id, "s": ctx.session.id if ctx.session else None}).mappings().first()
-        if seen:
-            banners.append(MeBanner(kind="new_device", message=(
-                f"New sign-in {sign_in_origin(seen['ip'])} on "
-                f"{seen['ts'].strftime('%Y-%m-%d %H:%M UTC')}. Not you? Sign out everywhere in "
-                "Sessions and change your password.")))
-    # The legacy countdowns, the network bridge, low recovery codes and an Owner recovered from
-    # the host shell: posture owns every other console-wide banner (one source, IDENTITY.md §12).
-    from boss_engine.identity import posture
-
-    banners.extend(MeBanner(**b) for b in posture.banners(ctx, db=db))
+    banners = [MeBanner(**b) for b in banner_policy.visible(db, p.id, raw_banners(db, ctx, user=user,
+                                                                                    required=required, f=f))]
     s = ctx.session
     return MeResponse(
         principal_id=p.id, kind=p.kind.value, display_name=p.display_name,
@@ -359,6 +379,36 @@ def build_identity_me_router() -> APIRouter:
                                   "via": sorted({"org"} if org_wide else set())
                                   + (["project"] if pid in at_project else [])})
             return JSONResponse({"projects": items}, headers={"Cache-Control": "no-store"})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    # ---- banners: close one for yourself ----------------------------------------------------------------
+
+    @router.post("/v1/identity/me/banners/{banner_id}/dismiss")
+    @authenticated(self_only=True)
+    def dismiss_banner(banner_id: str, request: Request):
+        """Close one of YOUR console banners, on every device (identity/banner_policy.py): only a
+        banner you are shown now (404 otherwise), never a persistent one (409). Acknowledging a
+        security notice ("Got it") is audited as banner.acknowledged."""
+        from boss_engine.identity import banner_policy
+
+        if not banner_policy.BANNER_ID_RE.match(banner_id):
+            return error(404, "not_found")
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                try:
+                    closed = banner_policy.dismiss(db, ctx.principal.id, banner_id, raw_banners(db, ctx))
+                except banner_policy.NotDismissible as exc:
+                    return error(exc.status, exc.code)
+                if closed["policy"] == "acknowledge":
+                    emit(db, org_id=ctx.principal.org_id, event_type="banner.acknowledged",
+                         outcome=Outcome.INFO, ctx=ctx, target_type="banner", target_id=banner_id,
+                         details={"banner": closed["kind"]})
+                hidden = closed["hidden_until"]
+                return JSONResponse({"id": banner_id, "policy": closed["policy"],
+                                     "hidden_until": hidden.isoformat() if hidden else None},
+                                    headers={"Cache-Control": "no-store"})
         except AuthnError as exc:
             return refusal(exc)
 

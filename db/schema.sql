@@ -7424,6 +7424,17 @@ CREATE TABLE IF NOT EXISTS identity_settings (
   updated_by TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- The console banners a person has closed (GET /v1/identity/me `banners`, POST
+-- /v1/identity/me/banners/{id}/dismiss; identity/banner_policy.py). banner_id is kind.instance:
+-- a new event (another new device) is a new id, so it shows again.
+CREATE TABLE IF NOT EXISTS identity_banner_dismissals (
+  principal_id TEXT NOT NULL REFERENCES identity_principals(id) ON DELETE CASCADE,
+  banner_id    TEXT NOT NULL,
+  kind         TEXT NOT NULL,
+  dismissed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  hidden_until TIMESTAMPTZ,                              -- NULL: closed while this instance lasts
+  PRIMARY KEY (principal_id, banner_id)
+);
 CREATE UNLOGGED TABLE IF NOT EXISTS identity_rate_limits (
   bucket       TEXT NOT NULL,
   key_hash     TEXT NOT NULL,                            -- HMAC(server key, lowercased identifier)

@@ -293,7 +293,9 @@ def github_check(org_id: str, *, db: Any) -> dict[str, Any]:
 
 
 def banners(ctx: Any, *, db: Any, now: Optional[datetime] = None) -> list[dict[str, Any]]:
-    """MeBanner dicts for this request's principal (S1 puts them in GET /v1/identity/me)."""
+    """Raw banners for this request's principal: {kind, message, until, instance}. S1 puts them in
+    GET /v1/identity/me through banner_policy, which gives each its id (kind.instance), policy and
+    the person's dismissals; `instance` names the event or condition, so a new one shows again."""
     from . import migration
 
     now = now or datetime.now(timezone.utc)
@@ -303,10 +305,11 @@ def banners(ctx: Any, *, db: Any, now: Optional[datetime] = None) -> list[dict[s
     if ctx.principal.id == NETWORK_OPERATOR_PRINCIPAL or ctx.legacy == LegacyKind.NETWORK_MODE:
         m = migration.mapping(db, org_id, LegacyKind.NETWORK_MODE, "BOSS_CONSOLE_AUTH=network")
         if claimed is None:
-            out.append({"kind": "network_bridge", "message": NETWORK_BANNER, "until": None})
+            out.append({"kind": "network_bridge", "message": NETWORK_BANNER, "until": None, "instance": None})
         else:
             until = m["retire_after"] if m else None
             out.append({"kind": "network_bridge", "until": until,
+                        "instance": until.date().isoformat() if until else None,
                         "message": "This network sign-in ends "
                                    + (f"on {until.date().isoformat()}" if until else "soon")
                                    + ". Sign in with your own account."})
@@ -315,27 +318,28 @@ def banners(ctx: Any, *, db: Any, now: Optional[datetime] = None) -> list[dict[s
         until = m["retire_after"] if m else None
         if until:
             # Every page, for the whole window (the upgrade promise): a visible countdown.
-            out.append({"kind": "legacy_password", "until": until,
+            out.append({"kind": "legacy_password", "until": until, "instance": until.date().isoformat(),
                         "message": _shared_countdown(until, now)})
     if ctx.legacy in (LegacyKind.CONSOLE_API_KEY, LegacyKind.ENV_API_KEY):
         m = migration.mapping(db, org_id, LegacyKind.CONSOLE_API_KEY, "BOSS_API_KEY")
         until = m["retire_after"] if m else None
         if until and until - now <= timedelta(days=COUNTDOWN_BANNER_DAYS):
-            out.append({"kind": "legacy_api_key", "until": until,
+            out.append({"kind": "legacy_api_key", "until": until, "instance": until.date().isoformat(),
                         "message": "The shared API key stops working soon. Switch to a personal "
                                    "or service-account key."})
     if ctx.principal.kind.value == "user":
-        # §5.3: a key of yours (or of a service account you own) expires within 14 days
-        row = db.execute(_sql(
-            "SELECT k.name, k.expires_at FROM identity_api_credentials k WHERE k.revoked_at IS NULL "
+        # §5.3: a key of yours (or of a service account you own) expires within 14 days. One
+        # banner per key (the soonest three): closing one leaves the next key's showing.
+        rows = db.execute(_sql(
+            "SELECT k.name, k.expires_at, k.id FROM identity_api_credentials k WHERE k.revoked_at IS NULL "
             "AND k.kind IN ('pat', 'sak') AND k.expires_at > :now AND k.expires_at <= :soon AND "
             "(k.principal_id = :p OR k.principal_id IN (SELECT principal_id FROM "
             "identity_service_accounts WHERE :p = ANY(owner_principal_ids))) ORDER BY k.expires_at "
-            "LIMIT 1"), {"p": ctx.principal.id, "now": now,
-                         "soon": now + timedelta(days=COUNTDOWN_BANNER_DAYS)}).first()
-        if row is not None:
+            "LIMIT 3"), {"p": ctx.principal.id, "now": now,
+                         "soon": now + timedelta(days=COUNTDOWN_BANNER_DAYS)}).all()
+        for row in rows:
             days = max(0, (row[1] - now).days)
-            out.append({"kind": "api_key_expiring", "until": row[1],
+            out.append({"kind": "api_key_expiring", "until": row[1], "instance": row[2],
                         "message": f"Your API key \"{row[0]}\" stops working "
                                    + ("today" if days == 0 else "tomorrow" if days == 1
                                       else f"in {days} days") + ". Make a new one."})
@@ -343,14 +347,17 @@ def banners(ctx: Any, *, db: Any, now: Optional[datetime] = None) -> list[dict[s
 
     if ctx.principal.kind.value == "user" and must_regenerate(db, ctx.principal.id):
         # §4.7: fewer than 3 recovery codes left forces new ones; every page says so until done.
+        batch = db.execute(_sql("SELECT max(created_at) FROM identity_recovery_codes WHERE principal_id = :p"),
+                           {"p": ctx.principal.id}).scalar()
         out.append({"kind": "recovery_codes_low", "until": None,
+                    "instance": str(int(batch.timestamp())) if batch else None,
                     "message": "You have fewer than 3 recovery codes left. Make new ones now."})
     recovered = db.execute(_sql(
-        "SELECT ts FROM identity_security_events WHERE org_id = :o AND event_type = "
+        "SELECT ts, seq FROM identity_security_events WHERE org_id = :o AND event_type = "
         "'owner.recovered_by_host' AND ts > :since ORDER BY seq DESC LIMIT 1"),
         {"o": org_id, "since": now - timedelta(days=OWNER_RECOVERED_BANNER_DAYS)}).first()
     if recovered and _holds_owner(db, ctx.principal.id, now):
-        out.append({"kind": "owner_recovered", "until": recovered[0] + timedelta(
+        out.append({"kind": "owner_recovered", "instance": str(recovered[1]), "until": recovered[0] + timedelta(
             days=OWNER_RECOVERED_BANNER_DAYS), "message": "An Owner account was recovered from "
                     "the host shell. Check Identity › Audit."})
     return out
@@ -364,7 +371,9 @@ def _shared_countdown(until: datetime, now: datetime) -> str:
 
 
 def _holds_owner(db: Any, principal_id: str, now: datetime) -> bool:
+    """An Owner or an Admin: the people who should look at the audit after a host-shell recovery."""
     return db.execute(_sql(
         "SELECT 1 FROM identity_role_bindings WHERE subject_type = 'principal' AND subject_id = :p "
-        "AND role_id = 'arl_owner' AND (expires_at IS NULL OR expires_at > :now)"),
+        "AND role_id IN ('arl_owner', 'arl_admin') AND scope_type = 'org' "
+        "AND (expires_at IS NULL OR expires_at > :now)"),
         {"p": principal_id, "now": now}).first() is not None

@@ -539,6 +539,15 @@ textarea.idn-input { min-height: 74px; line-height: 1.45; color: var(--ink-soft)
 .idn-banner[data-kind="network_bridge"] { border-color: color-mix(in srgb, var(--red) 40%, transparent); background: var(--red-soft); color: var(--idn-ink-bad); }
 .idn-banner a { color: var(--ink); font-weight: 700; text-decoration: underline; }
 .idn-banners { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.idn-banner-text { flex: 1 1 260px; min-width: 0; }
+.idn-banner-x, .idn-banner-ack { margin-left: auto; flex: none; border: 1px solid transparent; background: transparent; color: inherit; border-radius: 8px; cursor: pointer; font: inherit; font-weight: 600; }
+.idn-banner-x { width: 26px; height: 26px; display: grid; place-items: center; }
+.idn-banner-ack { padding: 3px 10px; border-color: color-mix(in srgb, currentColor 35%, transparent); }
+.idn-banner-x:hover, .idn-banner-ack:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.idn-banner-x:focus-visible, .idn-banner-ack:focus-visible, .idn-banner-more:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.idn-banner-stack { display: flex; flex-direction: column; gap: 6px; }
+.idn-banner-stack[data-open="false"] .idn-banner { box-shadow: 0 4px 0 -1px var(--amber-soft), 0 4px 0 0 color-mix(in srgb, var(--amber) 35%, transparent); }
+.idn-banner-more { align-self: flex-start; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; padding: 2px 6px; cursor: pointer; text-decoration: underline; }
 
 /* the top-bar account button and menu */
 .idn-me { position: relative; }

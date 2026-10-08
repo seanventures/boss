@@ -27,7 +27,14 @@ export interface MeSignInMethods {
   sso_links: string[];
 }
 
+/** How a banner closes (engine/boss_engine/identity/banner_policy.py): × hides it for you on every
+ *  device; "Got it" closes a security notice and is audited; a persistent one cannot be closed. */
+export type BannerPolicy = "dismissible" | "acknowledge" | "persistent";
+
 export interface MeBanner {
+  /** kind.instance: a new event of the same kind is a new id, so it shows again. */
+  id: string;
+  policy: BannerPolicy;
   kind: "network_bridge" | "legacy_password" | "legacy_api_key" | "owner_recovered" | "mfa_enrolment_required" | "recovery_codes_low" | "api_key_expiring" | "new_device";
   message: string;
   until: string | null;

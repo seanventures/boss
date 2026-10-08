@@ -32,9 +32,15 @@ class MeSignInMethods(_Frozen):
 
 
 class MeBanner(_Frozen):
-    """Console-wide notices the API owns: network bridge, legacy countdown, owner recovered."""
+    """Console-wide notices the API owns: network bridge, legacy countdown, owner recovered.
+
+    `id` is kind.instance (a new event is a new id); `policy` says whether × closes it
+    ("dismissible"), closes it as an audited "Got it" ("acknowledge") or is not offered
+    ("persistent"). Rules and lifetimes: identity/banner_policy.py."""
+    id: str
     kind: Literal["network_bridge", "legacy_password", "legacy_api_key", "owner_recovered",
                   "mfa_enrolment_required", "recovery_codes_low", "api_key_expiring", "new_device"]
+    policy: Literal["dismissible", "acknowledge", "persistent"]
     message: str
     until: Optional[datetime] = None
 
