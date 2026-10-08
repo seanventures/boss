@@ -24,6 +24,7 @@ import { ErrorState, type ReadFailure } from "../../../components/identity/state
 import { eventWords, REQUESTS_PATH } from "../../../lib/identity/words";
 import { formatUtcStamp } from "../../../lib/datetime";
 import { plainText } from "../../../lib/identity/plain";
+import { publicAddress, sourceWords } from "../../../lib/identity/address";
 import { EMPTY_FILTERS, EVENT_GROUPS, apiQuery, inGroup, parseSearch, queryFrom, searchText, type AuditFilters, type EventGroup } from "./audit-query";
 
 type Kind = "all" | "people" | "agents" | "keys" | "system";
@@ -295,13 +296,14 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
     <>
       <header className="idn-ah">
         <div>
-          <nav className="idn-crumb" aria-label="Breadcrumb"><a href="/identity">Identity</a><span aria-hidden>›</span><span aria-current="page">Audit</span></nav>
           <h1>Security audit log</h1>
         </div>
+        {/* Never verified is not "verified": the Overview said "not verified yet" while this badge
+            said "Chain verified", because the API answers ok: true until a first check runs. */}
         {chain ? (
-          <span className="idn-verified" data-ok={chain.ok} role="status" data-testid="chain-status">
-            {chain.ok ? <ShieldCheck size={14} aria-hidden /> : <ShieldWarning size={14} aria-hidden />}
-            {chain.ok ? "Chain verified" : `Chain broken at #${chain.first_break}`} · <span title="Events in the hash chain">{chain.seq.toLocaleString("en-US")} events</span>
+          <span className="idn-verified" data-ok={chain.ok} data-pending={(chain.ok && !chain.verified_at) || undefined} role="status" data-testid="chain-status">
+            {chain.ok && chain.verified_at ? <ShieldCheck size={14} aria-hidden /> : <ShieldWarning size={14} aria-hidden />}
+            {!chain.ok ? `Chain broken at #${chain.first_break}` : chain.verified_at ? "Chain verified" : "Not verified yet"} · <span title="Events in the hash chain">{chain.seq.toLocaleString("en-US")} events</span>
             {chain.verified_at ? <> · {clock(chain.verified_at).slice(0, 5)}</> : null}
           </span>
         ) : null}
@@ -393,9 +395,9 @@ export function AuditScreen({ initial, initialFilters, initialEvent, verifyOnOpe
                         <td className="idn-tm">{clock(e.at)}</td>
                         <td className="idn-evn" title={e.event_type}>{eventWords(e.event_type)}</td>
                         <td><Actor e={e} /></td>
-                        <td className="idn-tgt" title={e.what} data-copy="data">{plainText(e.what)}</td>
+                        <td className="idn-tgt" title={e.what} data-copy="data">{e.what === e.event_type ? "" : plainText(e.what)}</td>
                         <td><Pill tone={OUTCOME_TONE[e.outcome]}>{e.outcome}</Pill></td>
-                        <td className="idn-ipx" data-copy="data">{e.source}</td>
+                        <td className="idn-ipx" data-copy="data" title={publicAddress(e.source) ? undefined : e.source}>{sourceWords(e.source)}</td>
                       </tr>
                     ))}
                   </React.Fragment>

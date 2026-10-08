@@ -18,6 +18,7 @@
  * the API; a binding synthesised from `access_roles` (when /role-bindings is unreadable) is
  * marked `synthetic` and offers nothing to press.
  */
+import { clientOf, deviceOf } from "./adapt-session";
 import { avatarTone } from "./avatar";
 import { PERMISSIONS, PERMISSION_META, isPermission, type Permission } from "./permissions.gen";
 import type { PrincipalStatus } from "./contract";
@@ -337,15 +338,10 @@ export function adaptEffective(raw: unknown, index?: RoleIndex): EffectiveAccess
 // ---------------------------------------------------------------------------------------------
 // sessions, service accounts, grantors
 
-/** A browser name and device from a User-Agent ("Chrome on macOS"). */
+/** A browser name and device from a User-Agent: the same words My account › Sessions uses
+ *  (adapt-session.ts), so one session never reads "Chrome on Mac" there and "Chrome on macOS" here. */
 export function describeAgent(ua: string): { client: string; device: SessionRow["device"] } {
-  const u = ua || "";
-  const browser = /Edg\//.test(u) ? "Edge" : /Firefox\//.test(u) ? "Firefox" : /Chrome\//.test(u) ? "Chrome"
-    : /Safari\//.test(u) ? "Safari" : /curl|python|node|Go-http/i.test(u) ? "API client" : u ? "Browser" : "Unknown client";
-  const os = /iPhone|iPad/.test(u) ? "iOS" : /Android/.test(u) ? "Android" : /Mac OS X|Macintosh/.test(u) ? "macOS"
-    : /Windows/.test(u) ? "Windows" : /Linux/.test(u) ? "Linux" : "";
-  const device = /iPad|Tablet/.test(u) ? "tablet" : /iPhone|Android.*Mobile|Mobile/.test(u) ? "phone" : "desktop";
-  return { client: os ? `${browser} on ${os}` : browser, device };
+  return { client: clientOf(ua || ""), device: deviceOf(ua || "") };
 }
 
 /** GET /v1/identity/sessions?principal_id= → SessionRow (identity_people.py list_sessions). */

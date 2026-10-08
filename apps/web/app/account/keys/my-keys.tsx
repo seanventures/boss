@@ -16,6 +16,7 @@ import { CanButton, useGuardedCall, useIdentity } from "../../../components/iden
 import { Ago, ErrorLine, Perm, Pill, Sheet, daysUntil, useNow } from "../../../components/identity/kit";
 import { ShownOnce } from "../../identity/service-accounts/service-accounts";
 import { EmptyState } from "../../../components/identity/states";
+import { ListHeader } from "../../../components/identity/list-header";
 import { permissionName } from "../../../lib/identity/words";
 import { showToast } from "../../client-forms";
 
@@ -59,17 +60,15 @@ export function MyKeys({ keys: initial }: { keys: ApiKey[] }) {
   const [error, setError] = useState<string | null>(null);
   const guarded = useGuardedCall();
   const reload = async () => setKeys((await idGet<{ keys: ApiKey[] }>("/v1/identity/me/api-keys")).keys);
+  const newKey = (
+    <CanButton permission="api_key:manage_own" className="idn-btn primary sm" onClick={() => setCreating(true)} data-testid="new-key" tip="For the BOSS CLI or an MCP client">
+      <Plus size={14} weight="bold" aria-hidden /> New key
+    </CanButton>
+  );
 
   return (
     <section className="idn-card" aria-labelledby="keys-h">
-      <div className="idn-card-h">
-        <h2 id="keys-h">API keys</h2>
-        <span className="idn-sub">Shown once, then only its name</span>
-        <span className="idn-spacer" />
-        <CanButton permission="api_key:manage_own" className="idn-btn primary sm" onClick={() => setCreating(true)} data-testid="new-key" tip="For the boss CLI or an MCP client">
-          <Plus size={14} weight="bold" aria-hidden /> New key
-        </CanButton>
-      </div>
+      <ListHeader level={2} id="keys-h" title="API keys" sub="Shown once, then only its name" empty={!keys.length} create={newKey} />
       {keys.length ? (
         <div className="idn-scroll">
           <table className="idn-t" data-testid="my-keys">
@@ -96,8 +95,8 @@ export function MyKeys({ keys: initial }: { keys: ApiKey[] }) {
         </div>
       ) : (
         <EmptyState icon={<Key size={20} />} title="No personal keys yet" testId="keys-empty"
-          action={<CanButton permission="api_key:manage_own" className="idn-btn sm" onClick={() => setCreating(true)} tip="For the boss CLI or an MCP client">New key</CanButton>}>
-          A key lets the boss CLI or an MCP client act as you, with only the scopes you pick.
+          action={newKey}>
+          A key lets the BOSS CLI or an MCP client act as you, with only the scopes you pick.
         </EmptyState>
       )}
       <ErrorLine error={error} />

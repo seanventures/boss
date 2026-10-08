@@ -6,6 +6,7 @@
  * grant (person → agents), each opening the lineage view.
  */
 import React, { useMemo, useState } from "react";
+import { presetName } from "../../../lib/identity/words";
 import { ArrowRight, LinkSimple, LockSimple, Robot, Warning } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../../agent-avatar";
@@ -48,7 +49,7 @@ export function AgentsScreen({ agents, delegations, delegationsFailure = null }:
     <>
       <div className="idn-sec-h">
         <h1 className="idn-h1">Agents</h1>
-        <span className="idn-sub">{agents.length} Passports · {agents.filter((a) => a.status === "suspended").length} suspended</span>
+        <span className="idn-sub" title="Each agent carries a Passport: what it may be given, and who sponsors it">{agents.filter((a) => a.status !== "revoked").length} agents · {agents.filter((a) => a.status === "suspended").length} suspended</span>
         <span className="idn-spacer" />
         <div className="idn-segs" role="group" aria-label="Show">
           {FILTERS.map((f) => (
@@ -74,7 +75,9 @@ export function AgentsScreen({ agents, delegations, delegationsFailure = null }:
                 {a.sponsor
                   ? <span className="idn-row" title="Accountable person"><Face name={a.sponsor.name} tone={a.sponsor.hue} size={22} /> {a.sponsor.name}</span>
                   : <span className="idn-warn idn-row"><Warning size={13} aria-hidden /> No sponsor</span>}
-                {a.ceiling_preset ? <span className="idn-chip" title="Access limit: the most anyone may delegate to it">{a.ceiling_preset}</span> : null}
+                {/* The limit's preset, unless the title already says it ("Builder" over "builder"). */}
+                {a.ceiling_preset && presetName(a.ceiling_preset).toLowerCase() !== a.title.toLowerCase()
+                  ? <span className="idn-chip" title="Access limit: the most anyone may delegate to it">{presetName(a.ceiling_preset)} limit</span> : null}
               </span>
               <small>{a.active_grants} {a.active_grants === 1 ? "grant" : "grants"} · last run <Ago iso={a.last_run_at} /></small>
             </span>

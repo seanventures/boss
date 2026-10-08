@@ -209,11 +209,13 @@ def notify_new_device(user: users.UserRow, facts: RequestFacts, methods: list[st
     from . import email_signin
 
     how = ", ".join(sorted(set(methods))) or "sign-in"
-    where = facts.ip or "an unknown address"
+    from .where import public_address
+
+    where = f", from {public_address(facts.ip)}" if public_address(facts.ip) else ""
     browser = (facts.user_agent or "an unknown browser")[:160]
     email_signin.DELIVER(
         user.email, "New sign-in to BOSS",
-        f"Someone signed in to your BOSS account from a new device: {how}, from {where}, "
+        f"Someone signed in to your BOSS account from a new device: {how}{where}, "
         f"using {browser}, at {utcnow().strftime('%Y-%m-%d %H:%M UTC')}.\n\nIf this was you, there is "
         "nothing to do. If not, sign out everywhere (My account > Sessions) and change your "
         "password and second factor now.")

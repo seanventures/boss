@@ -91,6 +91,23 @@ def validate_external_ceiling(value: Any) -> dict[str, dict[str, str]]:
     return out
 
 
+def above_connection(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[str]:
+    """Keys a change RAISES above what the BOSS GitHub App asks GitHub for (github_setup.APP_PERMISSIONS):
+    a limit no token can ever reach is a promise BOSS cannot keep, so it is refused rather than
+    stored. Only raises are checked: a preset written before the App's set changed still loads."""
+    from .github_setup import APP_PERMISSIONS
+
+    over = []
+    old = (before or {}).get("github") or {}
+    for key, level in ((after or {}).get("github") or {}).items():
+        if key == "push_refs":
+            continue
+        raised = _LEVEL.get(level, 0) > _LEVEL.get(old.get(key, "none"), 0)
+        if raised and _LEVEL.get(level, 0) > _LEVEL.get(APP_PERMISSIONS.get(key, "none"), 0):
+            over.append(key)
+    return sorted(over)
+
+
 def _external_widening(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[str]:
     widened = []
     for provider, perms in after.items():
@@ -287,6 +304,9 @@ def set_rules(ctx: AuthContext, agent_id: str, *, db: Any, can_spawn: Optional[b
         # A ceiling change: `agent_passport:manage` (checked above, step-up via the PDP), audited
         # below with the before/after and the widened keys named.
         external_ceiling = validate_external_ceiling(external_ceiling)
+        over = above_connection(before.external_ceiling, external_ceiling)
+        if over:
+            raise PassportError("above_github_connection", 422, key=over[0])
     if sponsor_principal_id is not None:
         sponsor = _principal_status(db, sponsor_principal_id)
         if sponsor is None or sponsor[0] != "user" or sponsor[1] != "active":

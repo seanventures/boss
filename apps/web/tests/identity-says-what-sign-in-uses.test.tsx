@@ -37,7 +37,7 @@ describe("the Identity area", () => {
 
   it("says how sign-in works today before offering any provider", () => {
     expect(html).toContain('data-testid="identity-sign-in-truth"');
-    expect(html).toContain("one password the installer generated");
+    expect(html).toContain("Everyone signs in as themselves");
     expect(html.indexOf("identity-sign-in-truth")).toBeLessThan(html.indexOf("Okta"));
   });
 
@@ -52,7 +52,9 @@ describe("the Identity area", () => {
 
   it("is not subtitled as if providers decided who can sign in", () => {
     expect(communityNavCopy("enterprise").sub).not.toMatch(/Who can sign in/);
-    expect(communityNavCopy("enterprise").sub).toMatch(/installer password/);
+    // Everyone signs in as themselves now: the old "console sign-in is the installer password"
+    // line was stale and wrong (operator, 2026-10-07).
+    expect(communityNavCopy("enterprise").sub).not.toMatch(/installer password/);
   });
 });
 

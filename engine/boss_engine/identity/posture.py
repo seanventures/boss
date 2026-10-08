@@ -165,11 +165,15 @@ def posture(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dict[str
                        "auth_method = 'personal_access_token'", {})
     worst = "critical" if any(p["status"] == "critical" for p in live) else (
         "warn" if live or pats else "ok")
-    summary = ", ".join(f"{p['kind']} ({p['use_count']} uses"
+    names = {"shared_password": "shared console password", "console_api_key": "BOSS_API_KEY",
+             "network_mode": "network-trusted access", "env_api_key": "env API key",
+             "oidc_bearer": "OIDC bearer callers", "scim_bearer": "SCIM bearer token"}
+    summary = ", ".join(f"{names.get(p['kind'], p['kind'].replace('_', ' '))} ({p['use_count']} "
+                        f"use{'' if p['use_count'] == 1 else 's'}"
                         + (f", {p['days_left']} days left" if p["days_left"] is not None else "")
                         + ")" for p in live) or "none"
     if pats:
-        summary += f"; {pats} classic GitHub PATs"
+        summary += f"; {pats} classic GitHub token{'' if pats == 1 else 's'}"
     checks.append({**_check("legacy_credentials", worst, f"Legacy credentials in use: {summary}",
                             len(live) + pats, "Invite people, move keys to service accounts, "
                             "then retire the shared paths."), "paths": paths})
@@ -186,8 +190,8 @@ def posture(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dict[str
         "a.agent_id = p.id)"), {"o": org_id})
     checks.append(_check("orphans", "warn" if orphans or no_sponsor else "ok",
                          f"{orphans} service accounts without an active owner; {no_sponsor} "
-                         "agents without a sponsor", orphans + no_sponsor,
-                         "Give each an owner or sponsor, or disable it."))
+                         "agents without a Passport", orphans + no_sponsor,
+                         "Give each an owner or a Passport, or disable it."))
 
     # 6. the audit chain
     verified = audit.last_verified(org_id, db=db)

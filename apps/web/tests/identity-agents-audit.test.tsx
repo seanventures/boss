@@ -156,12 +156,18 @@ describe("agents and Passports", () => {
     const owner = as("param@example.com");
     const p = owner.get<Passport>("/v1/identity/agents/agt_forge/passport");
     const el = await mount(owner, <PassportScreen initial={p} grants={[]} />);
-    await click(el.querySelector(".idn-mx-top .idn-fchip"));
+    // Changing the limit is a mode: nothing toggles until Change limit is pressed.
+    expect(el.querySelector(".idn-tg:not([aria-disabled='true'])")).toBeNull();
+    await click(el.querySelector("[data-testid='edit-ceiling']"));
+    await click(el.querySelector(".idn-mx-top .idn-fchip")); // show everything, not only what it has
     const prod = el.querySelector("[data-testid='ceil-deployment:production']")!;
     expect(prod.getAttribute("aria-disabled")).toBe("true");
-    expect(prod.getAttribute("title")).toBe("Never delegable");
+    // Locked says WHY, in plain words, not "Never delegable".
+    expect(prod.getAttribute("title")).toBe("Agents can never deploy to production. A person does.");
+    expect(el.querySelector("[data-testid='ceiling-preview']")?.textContent).toContain("No changes yet");
+    expect(el.querySelector("[data-testid='save-ceiling']")?.getAttribute("aria-disabled") ?? el.querySelector("[data-testid='save-ceiling']")?.hasAttribute("disabled")).toBeTruthy();
     await click(el.querySelector(".idn-tg[aria-pressed='false']:not([aria-disabled='true'])"));
-    expect(el.querySelector("[data-testid='save-ceiling']")).not.toBeNull();
+    expect(el.querySelector("[data-testid='ceiling-preview']")?.textContent).toContain("What changes when you save");
   });
 });
 

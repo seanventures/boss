@@ -118,3 +118,33 @@ export const REQUESTS_PATH = "/identity/requests";
 export function eventHref(e: { id: string; event_type: string }): string {
   return e.event_type === "access.requested" ? REQUESTS_PATH : `/identity/audit?event=${encodeURIComponent(e.id)}`;
 }
+
+
+/**
+ * WHY AN AGENT CAN NEVER BE GIVEN A PERMISSION, in plain words for the Passport's locked chips.
+ * "Never delegable" said what, not why; a person deciding an agent's limit needs the why.
+ */
+const NEVER_WHY: Record<string, string> = {
+  "github:merge": "Agents can never merge. A person does.",
+  "code_task:override": "Agents can never override a build's gates. A person does.",
+  "decision:approve": "Agents can never approve. A person does.",
+  "decision:execute": "Agents can never carry out an approval. A person does.",
+  "preview:approve": "Agents can never approve a preview. A person does.",
+  "delegation:grant": "Agents can never hand access on. A person does.",
+  "owner:assign": "Only a person can make someone an Owner.",
+};
+export function neverDelegableWhy(p: string, title: string): string {
+  if (NEVER_WHY[p]) return NEVER_WHY[p];
+  const what = title ? title[0].toLowerCase() + title.slice(1) : "do this";
+  return `Agents can never ${what}. A person does.`;
+}
+
+/** An access-limit preset as a name: "operator_agent" → "Operator agent" (the API sends its key). */
+const PRESET_NAMES: Record<string, string> = { writer: "Writer and publisher" };
+export function presetName(key: string | null | undefined): string {
+  if (!key) return "";
+  if (PRESET_NAMES[key]) return PRESET_NAMES[key];
+  if (/\s|[A-Z]/.test(key)) return key; // already a name
+  const words = key.replace(/_/g, " ");
+  return words[0].toUpperCase() + words.slice(1);
+}

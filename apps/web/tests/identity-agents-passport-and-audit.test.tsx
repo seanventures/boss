@@ -91,7 +91,7 @@ function noLeaks() {
   for (const el of [host!, ...document.querySelectorAll(".idn-sheet-wrap")]) {
     expect(rawLeaks(el), "raw ids, codes or jargon on screen").toEqual([]);
     const a = identityCopyAudit(el);
-    expect([...a.labels, ...a.prose, ...a.tips], "copy budget").toEqual([]);
+    expect([...a.labels, ...a.prose, ...a.tips], "copy budget: " + JSON.stringify([...a.labels, ...a.prose, ...a.tips])).toEqual([]);
   }
 }
 const PEOPLE = [{ id: "usr_sam", name: "Sam Okafor", hue: 6 }, { id: "usr_priya", name: "Priya Raman", hue: 5 }];

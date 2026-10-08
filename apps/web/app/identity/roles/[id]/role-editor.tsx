@@ -290,9 +290,12 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
           </h1>
         </div>
         <span className="idn-spacer" />
-        <CanButton permission="access_role:manage" className="idn-btn" onClick={() => clone(role)} disabled={cloning === role.id} tip="A custom copy you can edit">
-          <CopySimple size={15} aria-hidden /> Clone
-        </CanButton>
+        {/* A built-in role's one Clone is "Clone to customise", beside who holds it. */}
+        {!role.builtin ? (
+          <CanButton permission="access_role:manage" className="idn-btn" onClick={() => clone(role)} disabled={cloning === role.id} tip="A custom copy you can edit">
+            <CopySimple size={15} aria-hidden /> Clone
+          </CanButton>
+        ) : null}
         <button type="button" className="idn-btn" onClick={() => { versionsRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); versionsRef.current?.focus(); }}>
           <ClockCounterClockwise size={15} aria-hidden /> History
         </button>
@@ -398,7 +401,7 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
                 </button>
                 {rows.map(({ r, perms }) => (
                   <div key={r.key} className="idn-mx-row" data-resource={r.key}>
-                    <div className="idn-res">{r.title}<small>{r.key}</small></div>
+                    <div className="idn-res" title={r.key}>{r.title}</div>
                     <div className="idn-acts2">
                       {perms.map((p) => <Toggle key={p} p={p} cell={cell(p)} readOnly={readOnly} why={readOnlyWhy} onFlip={flip} />)}
                     </div>
@@ -423,7 +426,8 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
         </section>
 
         <div className="idn-ed-r">
-          <section className="idn-card" aria-labelledby="idn-changes-h">
+          {/* A built-in role never changes: no "Changes v1 → v2" card promising a version it cannot have. */}
+          {!role.builtin ? <section className="idn-card" aria-labelledby="idn-changes-h">
             <div className="idn-card-h"><h2 id="idn-changes-h">Changes</h2><span className="idn-sub">v{role.version} → v{role.version + 1}</span></div>
             {permsDirty ? (
               <div className="idn-diff" data-testid="diff">
@@ -433,7 +437,7 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
                 {removed.map((p) => <div key={p} className="idn-dl m" title={p}><b>−</b>{PERMISSION_META[p].title}</div>)}
               </div>
             ) : scopesDirty ? <span className="idn-dim">Where it can be bound changes</span> : <span className="idn-dim">No changes yet</span>}
-          </section>
+          </section> : null}
 
           <section className="idn-imp" aria-labelledby="idn-impact-h" aria-live="polite" data-testid="impact">
             <span className="idn-eyebrow" id="idn-impact-h">Impact preview</span>
@@ -475,7 +479,7 @@ export function RoleEditor({ role: initial, versions, names = {}, roles = [] }: 
             ) : (
               <>
                 <div className="idn-bigt">Held by <span>{role.holders}</span></div>
-                <span className="idn-dim">{previewError ?? (permsDirty ? "Working out the impact…" : "Change a permission to preview")}</span>
+                <span className="idn-dim">{previewError ?? (permsDirty ? "Working out the impact…" : role.builtin ? "Clone it to make a version you can change" : "Change a permission to preview")}</span>
               </>
             )}
             <ErrorLine error={error} />
