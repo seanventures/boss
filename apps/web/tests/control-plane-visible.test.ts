@@ -68,3 +68,14 @@ describe("a local control plane is called out", () => {
     expect(rule).toContain("--faint");
   });
 });
+
+describe("an internal control plane is not shown", () => {
+  it("hides a compose-internal name like api:8000, which tells a person nothing", async () => {
+    const { isInternalPlane } = await import("../app/ConsoleShell");
+    expect(isInternalPlane("http://api:8000")).toBe(true);
+    expect(isInternalPlane("http://localhost:8000")).toBe(false);
+    expect(isInternalPlane("https://boss.acme.dev")).toBe(false);
+    expect(isInternalPlane("http://10.0.0.5:8000")).toBe(false);
+    expect(SHELL).toContain("!isInternalPlane(status.controlPlane)");
+  });
+});

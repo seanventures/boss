@@ -98,9 +98,21 @@ export function missing(f: ProviderForm, editing = false): string {
 }
 
 /** The POST body for a new provider. */
-export function createBody(f: ProviderForm): Record<string, unknown> {
+/**
+ * THE PROVIDER'S ID, RESERVED WHEN THE ADD SHEET OPENS. The redirect URL names it
+ * (/v1/auth/sso/{id}/callback), and Google asks for that URL before it hands out the client id and
+ * secret this form needs — so the id has to exist before Save. Same shape as the server's own
+ * (ids.new_id: idp_ + 26 base32); the create route accepts it, and a taken one is 409.
+ */
+export function reserveProviderId(random: (n: number) => Uint8Array = (n) => crypto.getRandomValues(new Uint8Array(n))): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+  return "idp_" + [...random(26)].map((b) => alphabet[b % 32]).join("");
+}
+
+export function createBody(f: ProviderForm, reservedId?: string | null): Record<string, unknown> {
   const protocol = protocolOf(f.kind);
   const body: Record<string, unknown> = {
+    ...(reservedId ? { id: reservedId } : {}),
     protocol, preset: f.kind === "saml" ? "generic" : f.kind, name: f.name.trim(),
     domains: domainList(f.domains), jit_mode: f.jit ? "domain" : "off", trust_idp_mfa: f.trust_mfa, enforce_sso: f.enforce_sso,
   };
@@ -175,7 +187,7 @@ export function testFailureWords(code: string | null | undefined): string {
 }
 
 /** Where the admin's IdP sends people back, and what it calls BOSS. Null without a public URL. */
-export function idpUrls(origin: string | null | undefined, p: { id: string | null; protocol: Provider["protocol"]; saml_sp_entity_id?: string | null }):
+export function idpUrls(origin: string | null | undefined, p: { id: string | null; protocol: Provider["protocol"]; saml_sp_entity_id?: string | null; saved?: boolean }):
   { label: string; value: string; tip: string }[] | null {
   if (!origin) return null;
   const o = origin.replace(/\/+$/, "");
@@ -183,7 +195,7 @@ export function idpUrls(origin: string | null | undefined, p: { id: string | nul
     return [
       { label: "Reply (ACS) URL", value: `${o}/saml/v2/acs`, tip: "Where your IdP posts the sign-in answer" },
       { label: "Entity ID", value: p.saml_sp_entity_id || `${o}/saml/v2/metadata`, tip: "How your IdP names BOSS (the audience)" },
-      ...(p.id ? [{ label: "Metadata", value: `${o}/saml/v2/metadata?provider_id=${encodeURIComponent(p.id)}`, tip: "Import this in your IdP instead of typing" }] : []),
+      ...(p.id && p.saved !== false ? [{ label: "Metadata", value: `${o}/saml/v2/metadata?provider_id=${encodeURIComponent(p.id)}`, tip: "Import this in your IdP instead of typing" }] : []),
     ];
   }
   if (!p.id) return null;

@@ -204,6 +204,8 @@ on("GET", "/v1/auth/options", "public", ({ s, req }) => {
     providers: bare ? [] : s.providers.map((p) => ({ id: p.id, name: p.name, preset: p.preset })),
     smtp: bare ? false : s.policy.smtp, signup: !bare && (s.policy.signup.enabled || req.cookies.boss_stub_signup === "1"),
     legacy_password: false, claim,
+    // The bound public address, like a real install with one (the Add sheet shows redirect URLs from it).
+    public_origin: bare ? null : `https://${F.HOST}`, public_origin_source: bare ? null : "claim",
     // Bare is an install reached by an IP address: a browser can't hold a passkey there.
     ...(bare ? { passkey: false, passkey_reason: "passkey_needs_domain" } : {}),
     // The shared console password, while it still signs in (as Operator), for 30 days.
@@ -914,7 +916,7 @@ function posture(s: State, now: number): Posture {
     ],
     counts: {
       people: s.people.filter((p) => p.status !== "pending").length, active: active.length, invited: s.people.filter((p) => p.status === "pending").length,
-      disabled: s.people.filter((p) => p.status === "disabled").length, agents: 34, suspended_agents: s.passports.filter((p) => p.status === "suspended").length,
+      disabled: s.people.filter((p) => p.status === "disabled").length, agents: s.passports.filter((p) => p.status !== "revoked").length, suspended_agents: s.passports.filter((p) => p.status === "suspended").length,
       groups: 4, roles_builtin: 5, roles_custom: s.roles.filter((r) => !r.builtin).length, service_accounts: s.sas.length,
       active_grants: s.delegations.filter((d) => d.status === "active").length + 5, runs_acting: 3, tokens_out: 0,
     },

@@ -14,13 +14,13 @@ import { toSessionRows } from "../../../lib/identity/adapt-session";
 import { useGuardedCall } from "../../../components/identity/identity-provider";
 import { Ago, ErrorLine, Pill } from "../../../components/identity/kit";
 import { showToast } from "../../client-forms";
+import { publicAddress } from "../../../lib/identity/address";
+import { methodWords as oneMethod } from "../../../lib/identity/words";
 
-const METHOD: Record<string, string> = { pwd: "password", totp: "TOTP", passkey: "passkey", recovery_code: "recovery code", magic_link: "email link", email_code: "email code" };
+/** How a session signed in: one vocabulary with an admin's view of the same session
+ *  (lib/identity/words.ts), so "TOTP" here and "authenticator app" there cannot both appear. */
 export function methodWords(methods: string[]): string {
-  // `sso:<provider id>` (S1): the id is not a name, so it reads "SSO" unless it is a word.
-  return methods.map((m) => (m.startsWith("sso:")
-    ? (/^[a-z]+$/i.test(m.slice(4)) ? `${m.slice(4).replace(/^\w/, (c) => c.toUpperCase())} SSO` : "SSO")
-    : METHOD[m] ?? m)).join(" + ");
+  return methods.map(oneMethod).join(" + ");
 }
 
 export function MySessions({ sessions: initial }: { sessions: SessionRow[] }) {
@@ -53,7 +53,7 @@ export function MySessions({ sessions: initial }: { sessions: SessionRow[] }) {
             <span className="idn-d">{s.device === "phone" ? <DeviceMobile size={17} aria-hidden /> : <Desktop size={17} aria-hidden />}</span>
             <span>
               <b data-copy="data">{s.client}</b> {s.current ? <Pill tone="info">this one</Pill> : null}
-              <small data-copy="data">{[s.location, s.ip].filter(Boolean).join(" · ")} · {methodWords(s.methods)} · started <Ago iso={s.started_at} /></small>
+              <small data-copy="data">{[s.location, publicAddress(s.ip), methodWords(s.methods)].filter(Boolean).join(" · ")} · started <Ago iso={s.started_at} /></small>
             </span>
             {s.current ? <span className="idn-dim">now</span> : (
               <button type="button" className="idn-btn sm" aria-label={`End ${s.client}`} onClick={() => end(() => idDelete(`/v1/identity/me/sessions/${encodeURIComponent(s.id)}`), "Session ended")}>End</button>

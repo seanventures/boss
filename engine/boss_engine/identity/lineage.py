@@ -104,7 +104,8 @@ def _detail(event_type: str, details: Mapping[str, Any], target_id: Optional[str
                  f"removed {', '.join(details.get('removed') or [])}" if details.get("removed") else ""]
         return "; ".join(p for p in parts if p) or "no change"
     if event_type.startswith("token."):
-        return f"run {target_id}" + (f" in {details['project']}" if details.get("project") else "")
+        # The label already says "Started a run"; the run's id is not words (the console links it).
+        return f"in {details['project']}" if details.get("project") else ""
     if event_type == "agent.passport.reissued":
         return f"from {details.get('from')}"
     if event_type == "delegation.created":

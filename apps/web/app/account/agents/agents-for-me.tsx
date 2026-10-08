@@ -12,6 +12,7 @@ import { ArrowsClockwise, Clock, GithubLogo, Plus, Prohibit, Robot, Warning } fr
 import { AgentAvatar } from "../../agent-avatar";
 import { IdentityError, idDelete, idGet, idPost } from "../../../lib/identity/api";
 import { EmptyState } from "../../../components/identity/states";
+import { ListHeader } from "../../../components/identity/list-header";
 import { plainText } from "../../../lib/identity/plain";
 import { PERMISSION_META, type Permission } from "../../../lib/identity/permissions.gen";
 import type { CascadePreview, Connection, Delegation, Ref } from "../../../lib/identity/types";
@@ -80,20 +81,18 @@ export function AgentsForMe({ delegations: initial, agents, connections, untilRe
   const reload = async () => setDelegations((await idGet<{ delegations: Delegation[] }>("/v1/identity/me/delegations")).delegations);
   const live = delegations.filter((d) => d.status === "active" || d.status === "paused");
   const past = delegations.filter((d) => !(d.status === "active" || d.status === "paused"));
+  const grant = (
+    <CanButton permission="delegation:grant" className="idn-btn primary sm" onClick={() => setGranting(true)} tip="Choose agents, abilities and an expiry" data-testid="new-grant">
+      <Plus size={14} weight="bold" aria-hidden /> Let an agent act for me
+    </CanButton>
+  );
 
   return (
     <div className="idn-cols">
       <section className="idn-card" aria-labelledby="afm-h">
-        <div className="idn-card-h">
-          <h2 id="afm-h">Agents acting for me</h2>
-          <span className="idn-sub">{live.length} active</span>
-          <span className="idn-spacer" />
-          <CanButton permission="delegation:grant" className="idn-btn primary sm" onClick={() => setGranting(true)} tip="Choose agents, abilities and an expiry" data-testid="new-grant">
-            <Plus size={14} weight="bold" aria-hidden /> Let an agent act for me
-          </CanButton>
-        </div>
+        <ListHeader level={2} id="afm-h" title="Agents acting for me" sub={`${live.length} active`} empty={!delegations.length} create={grant} />
         {!delegations.length ? (
-          <EmptyState icon={<Robot size={20} />} title="No agent acts for you yet" testId="grants-empty">
+          <EmptyState icon={<Robot size={20} />} title="No agent acts for you yet" testId="grants-empty" action={grant}>
             Let agents build, preview or sync for you, with part of your access, until a date you choose.
           </EmptyState>
         ) : null}

@@ -37,7 +37,22 @@ HEADLINES = {
     "audit.verified": "verified the audit chain", "audit.exported": "exported the audit log",
     "audit.checkpoint": "pruned old audit events", "token.denied": "was refused a token",
     "egress.denied": "was refused through egress",
+    "auth.mfa.succeeded": "confirmed with a second factor", "auth.mfa.failed": "entered a wrong second factor",
+    "auth.passkey.succeeded": "signed in with a passkey", "auth.passkey.failed": "had a passkey refused",
+    "auth.new_device": "signed in from a new device", "auth.locked_soft": "was locked out for a while",
+    "auth.email_code.requested": "asked for an email code", "auth.email_code.succeeded": "signed in with an email code",
+    "auth.email_code.failed": "entered a wrong email code", "auth.magic_link.requested": "asked for an email link",
+    "auth.magic_link.used": "signed in with an email link", "auth.magic_link.rejected": "had an email link refused",
+    "auth.signup.requested": "asked to sign up", "auth.signup.completed": "signed up",
+    "auth.signup.refused": "was refused sign-up", "session.created": "started a session",
+    "session.revoked": "ended a session", "token.issued": "was given a run token",
 }
+
+
+def _phrase(event_type: str) -> str:
+    """An event with no headline of its own, in words: "auth.mfa.failed" never reads "auth mfa failed"."""
+    words = event_type.split(".", 1)[1] if event_type.startswith(("auth.", "authz.")) else event_type
+    return words.replace(".", " ").replace("_", " ")
 _STANDALONE = {"auth.login.failed", "owner.recovered_by_host"}
 
 
@@ -98,7 +113,7 @@ def to_console(row: Mapping[str, Any], names: Mapping[str, tuple[str, str]]) -> 
     what = details.get("what") or " · ".join(str(x) for x in (
         row.get("permission"), row.get("scope"),
         None if row.get("permission") else row.get("target_id")) if x) or row["event_type"]
-    phrase = HEADLINES.get(row["event_type"], row["event_type"].replace(".", " ").replace("_", " "))
+    phrase = HEADLINES.get(row["event_type"]) or _phrase(row["event_type"])
     headline = phrase if row["event_type"] in _STANDALONE or not actor_id \
         else f"{actor_name} {phrase}"
     ts = row.get("ts")

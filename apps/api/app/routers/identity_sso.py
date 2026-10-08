@@ -89,6 +89,12 @@ class _Body(BaseModel):
 
 
 class ProviderBody(_Body):
+    # THE ID IS KNOWN BEFORE SAVE. The redirect URL names the provider (/v1/auth/sso/{id}/callback),
+    # and Google, Okta and friends ask for it BEFORE they hand out the client id and secret this
+    # form needs — so the operator pasted a literal "<id>" into Google. The console reserves the id
+    # when the Add sheet opens and sends it here; it has the server's own shape (idp_ + 26 base32)
+    # and a taken one is 409. State and CSRF on the callback are unchanged: the id is not a secret.
+    id: Optional[str] = Field(default=None, pattern="^idp_[a-z2-7]{26}$")
     protocol: str = Field(pattern="^(oidc|saml|oauth2)$")
     preset: str = Field(default="generic", pattern="^(google|github|microsoft|apple|okta|entra|keycloak|generic)$")
     name: str = Field(max_length=120)
@@ -416,8 +422,11 @@ def build_identity_sso_router() -> APIRouter:
                 if body.protocol == "saml" and (not (body.saml_sso_url or "").startswith("https://")
                                                 or not body.saml_certificates):
                     return error(422, "invalid_provider", detail="SAML needs an https SSO URL and a certificate")
-                pid = ids.new_id("idp")
+                pid = body.id or ids.new_id("idp")
                 org = ctx.principal.org_id
+                if body.id and db.execute(text("SELECT 1 FROM identity_providers WHERE id = :i"),
+                                          {"i": body.id}).first() is not None:
+                    return error(409, "provider_id_taken")
                 if issuer and db.execute(text(
                         "SELECT 1 FROM identity_providers WHERE org_id = :o AND lower(issuer) = lower(:i)"),
                         {"o": org, "i": issuer}).first() is not None:

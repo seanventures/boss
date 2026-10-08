@@ -10,9 +10,9 @@ import { Perm, RoleChip } from "./kit";
 
 export function signInWords(s: SignInSummary): { text: string; ok: boolean } {
   if (s.passkeys > 0) return { text: `passkey${s.passkeys > 1 ? ` ×${s.passkeys}` : ""}${s.totp ? " +1" : ""}`, ok: true };
-  if (s.totp) return { text: "TOTP", ok: true };
+  if (s.totp) return { text: "authenticator", ok: true };
   if (s.idp_mfa) return { text: s.idp_mfa, ok: true };
-  return { text: "none", ok: false };
+  return { text: "no MFA", ok: false };
 }
 
 export function SignIn({ s }: { s: SignInSummary }) {

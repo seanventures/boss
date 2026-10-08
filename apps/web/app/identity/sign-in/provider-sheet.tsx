@@ -17,9 +17,10 @@ import type { Provider } from "../../../lib/identity/types";
 import type { ProviderDetail } from "../../../lib/identity/types-sso";
 import { showToast } from "../../client-forms";
 import {
-  KINDS, createBody, emptyForm, formOf, idpUrls, missing, needsIssuer, patchBody, protocolOf, providerRefusal,
+  KINDS, createBody, emptyForm, formOf, idpUrls, missing, needsIssuer, patchBody, protocolOf, providerRefusal, reserveProviderId,
   type ProviderForm, type ProviderKind,
 } from "./provider-form";
+import { GUIDES, SIGN_IN_DOC, type Guide } from "../../../lib/identity/sso-guides";
 
 /** A value the admin copies into their IdP: label, the value, Copy. */
 export function CopyRow({ label, value, tip }: { label: string; value: string; tip?: string }) {
@@ -41,7 +42,7 @@ export function CopyRow({ label, value, tip }: { label: string; value: string; t
 }
 
 /** The URLs for the IdP, or why they cannot be shown yet. */
-export function IdpUrls({ origin, provider }: { origin: string | null | undefined; provider: { id: string | null; protocol: Provider["protocol"]; saml_sp_entity_id?: string | null } }) {
+export function IdpUrls({ origin, provider }: { origin: string | null | undefined; provider: { id: string | null; protocol: Provider["protocol"]; saml_sp_entity_id?: string | null; saved?: boolean } }) {
   const urls = idpUrls(origin, provider);
   if (!origin) {
     return <p className="idn-note" data-copy="prose">Set the public URL (below) first: your IdP sends people back to it.</p>;
@@ -78,6 +79,8 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [advanced, setAdvanced] = useState(false);
+  // Reserved now, so the redirect URL can be pasted into the IdP BEFORE its client id exists.
+  const [reserved] = useState<string | null>(() => (initial ? null : reserveProviderId()));
   const guarded = useGuardedCall();
   const set = (change: Partial<ProviderForm>) => setForm((f) => (f ? { ...f, ...change } : f));
 
@@ -126,7 +129,7 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
         onClose();
       } else {
         const out = providerView(await guarded("Adding a provider changes how people sign in.",
-          () => idPost<unknown>("/v1/identity/providers", createBody(form))));
+          () => idPost<unknown>("/v1/identity/providers", createBody(form, reserved))));
         onSaved(out);
         setAdded(out);
       }
@@ -141,6 +144,14 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
   return (
     <Sheet title={editing ? `Edit ${initial!.name}` : `Add ${kindLabel}`} icon={editing ? <PencilSimple size={18} aria-hidden /> : <Plus size={18} aria-hidden />}
       onClose={onClose} wide testId="provider-sheet">
+      {!editing ? (
+        <section className="idn-sso-first" data-testid="provider-first">
+          <b>1. Paste this into {kindLabel}</b>
+          <IdpUrls origin={origin} provider={{ id: reserved, protocol, saved: false }} />
+          <SetupGuide kind={kind} />
+        </section>
+      ) : null}
+      {!editing ? <b className="idn-sso-step">2. Its client ID and secret</b> : null}
       <div className="idn-form idn-sso-form">
         <Field id="pv-name" label="Name" tip="The button people see on the sign-in page">
           <input id="pv-name" className="idn-input" value={form.name} onChange={(e) => set({ name: e.target.value })} data-autofocus />
@@ -219,9 +230,12 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
           </>
         ) : null}
       </div>
-      <div className="idn-hr" />
-      <span className="idn-label">For your IdP</span>
-      <IdpUrls origin={origin} provider={{ id: initial?.id ?? null, protocol, saml_sp_entity_id: form.saml_sp_entity_id || null }} />
+      {/* Adding shows these FIRST (step 1, above); editing shows them here. Never both. */}
+      {editing ? <>
+        <div className="idn-hr" />
+        <span className="idn-label">For your IdP</span>
+        <IdpUrls origin={origin} provider={{ id: initial?.id ?? null, protocol, saml_sp_entity_id: form.saml_sp_entity_id || null }} />
+      </> : null}
       {initial && origin && form.client_auth === "private_key_jwt" && initial.client_auth === "private_key_jwt" ? (
         <CopyRow label="BOSS public key" value={`${origin.replace(/\/+$/, "")}/v1/identity/providers/${encodeURIComponent(initial.id)}/jwks`} tip="Register this key URL in your IdP" />
       ) : null}
@@ -236,5 +250,38 @@ export function ProviderSheet({ initial, origin, onSaved, onClose }: {
         </button>
       </div>
     </Sheet>
+  );
+}
+
+/**
+ * "HOW TO SET THIS UP" for one provider kind (lib/identity/sso-guides.ts, the same table the docs
+ * are written from). Open the first time someone adds that kind, folded after that.
+ */
+export function SetupGuide({ kind }: { kind: string }) {
+  const guide = (GUIDES as Record<string, Guide | undefined>)[kind];
+  const [open] = useState(() => {
+    try {
+      const key = `boss.sso-guide-seen.${kind}`;
+      const seen = window.localStorage.getItem(key) === "1";
+      window.localStorage.setItem(key, "1");
+      return !seen;
+    } catch { return true; }
+  });
+  if (!guide) return null;
+  return (
+    <details className="idn-sso-guide" open={open} data-testid="setup-guide">
+      <summary>How to set this up</summary>
+      <ol>
+        {guide.steps.map((st, i) => (
+          <li key={i} data-copy="prose">
+            {st.text.replace("{redirect}", "the URL above")}
+            {st.link ? <> <a className="idn-link" href={st.link.href} target="_blank" rel="noopener noreferrer">{st.link.label} ↗</a></> : null}
+          </li>
+        ))}
+      </ol>
+      <p className="idn-small" data-copy="prose"><b>Copy back:</b> {guide.copyBack.join(", ")}</p>
+      <p className="idn-small idn-dim" data-copy="prose"><b>Watch out:</b> {guide.gotcha}</p>
+      <a className="idn-link idn-small" href={`${SIGN_IN_DOC}#${guide.anchor}`} target="_blank" rel="noopener noreferrer">Full guide ↗</a>
+    </details>
   );
 }

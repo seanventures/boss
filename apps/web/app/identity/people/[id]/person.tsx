@@ -8,6 +8,7 @@
  * viewer without the permission sees them disabled with the reason, never hidden.
  */
 import { useConsoleRefresh } from "../../../use-console-refresh";
+import { publicAddress } from "../../../../lib/identity/address";
 import React, { useMemo, useState } from "react";
 import {
   ArrowsClockwise, ArrowUpRight, CaretDown, Check, Clock, Desktop, DeviceMobile, EnvelopeSimple, Fingerprint, GithubLogo,
@@ -106,7 +107,7 @@ function Header({ person, roles, emailVerified, onSheet }: { person: Person; rol
           </span>
           {p.sign_in.sso ? <span><LinkSimple size={14} aria-hidden /> {p.sign_in.sso} SSO linked</span> : null}
           {p.last_seen_at ? <span><Clock size={14} aria-hidden /> <span>Signed in <Ago iso={p.last_seen_at} />{p.last_seen_from ? `, ${p.last_seen_from}` : null}</span></span> : <span><Clock size={14} aria-hidden /> Never signed in</span>}
-          <span><User size={14} aria-hidden /> Joined {shortDate(p.joined_at)}{p.joined_by ? ` by ${p.joined_by}` : ""}</span>
+          {p.joined_at ? <span><User size={14} aria-hidden /> Joined {shortDate(p.joined_at)}{p.joined_by ? ` by ${p.joined_by}` : ""}</span> : null}
         </div>
         <div className="idn-roles">
           {p.bindings.filter((b) => !b.via_group).map((b) => <RoleChip key={b.id} roleKey={b.role_key} name={b.role_name} scope={b.scope} />)}
@@ -507,7 +508,7 @@ function Factors({ person, factors }: { person: Person; factors: Factor[] }) {
         <div key={f.id} className="idn-fac" data-testid={`factor-${f.id}`}>
           <span className="idn-d" data-kind={f.kind}>{FACTOR_ICON[f.kind]}</span>
           <span><b>{f.name}</b><small data-copy="data">{f.detail}{f.last_used_at ? <> · used <Ago iso={f.last_used_at} /></> : ""}</small></span>
-          <span className="idn-dim">{f.note ?? ""}</span>
+          <span className="idn-dim">{(f.note ?? "").replace(/\b\d{4}-\d{2}-\d{2}\b/g, (d) => shortDate(`${d}T12:00:00Z`))}</span>
         </div>
       ))}
       {!factors.length ? <div className="idn-empty">No factors</div> : null}
@@ -535,7 +536,7 @@ function Sessions({ person, sessions, full = false }: { person: Person; sessions
           <span className="idn-d">{s.device === "phone" ? <DeviceMobile size={16} aria-hidden /> : <Desktop size={16} aria-hidden />}</span>
           <span>
             <b>{s.client}</b> {s.current ? <span className="idn-pill info">this one</span> : null}
-            <small data-copy="data">{[s.location, s.methods.map(methodWords).join(" + "), full && s.ip ? s.ip : null].filter(Boolean).join(" · ")} · <Ago iso={s.started_at} /></small>
+            <small data-copy="data">{[s.location, s.methods.map(methodWords).join(" + "), full ? publicAddress(s.ip) : null].filter(Boolean).join(" · ")} · <Ago iso={s.started_at} /></small>
           </span>
           {s.current ? <span /> : (
             <CanButton permission="session:revoke" className="idn-btn sm" tip="End this session now" data-testid={`end-${s.id}`}

@@ -20,14 +20,16 @@ export function deviceOf(ua: string): SessionRow["device"] {
   return "desktop";
 }
 
+/** A browser and system from a User-Agent ("Chrome on macOS", "Safari on iOS", "BOSS CLI"): the ONE
+ *  vocabulary for a session, used by My account › Sessions and an admin's view of a person alike. */
 export function clientOf(ua: string): string {
-  if (!ua) return "Unknown browser";
-  const os = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : /Mac OS X|Macintosh/.test(ua) ? "Mac"
+  if (!ua) return "Unknown client";
+  if (/boss/i.test(ua)) return "BOSS CLI";
+  const os = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : /Mac OS X|Macintosh/.test(ua) ? "macOS"
     : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "";
   const browser = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome"
-    : /Safari\//.test(ua) ? "Safari" : /curl\//.test(ua) ? "curl" : /boss|python|node/i.test(ua) ? "BOSS CLI" : "";
-  if (browser && os) return `${browser} on ${os}`;
-  return browser || os || ua.slice(0, 40);
+    : /Safari\//.test(ua) ? "Safari" : /curl|python|node|Go-http/i.test(ua) ? "API client" : "Browser";
+  return os ? `${browser} on ${os}` : browser;
 }
 
 export function toSessionRow(raw: RawSession): SessionRow {
