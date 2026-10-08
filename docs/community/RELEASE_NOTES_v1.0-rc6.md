@@ -47,12 +47,23 @@ Full details: [Upgrade to named accounts](IDENTITY_UPGRADE.md).
 - **Access checks are enforced.** Set `BOSS_AUTHZ_MODE=shadow` to try the roles first: BOSS then logs what it would refuse and refuses nothing.
 - **`docker compose exec api` runs as root.** Add `-u boss`, or use `boss identity`.
 - **SSO providers from rc5** are copied in, switched off. Add the client secret and turn them on.
+- **Host credentials stay with their provider.** A provider key or token the install holds (in `.env`, an org-scoped secret, the org's GitHub connection) is sent only to that provider's own endpoints, plus those the operator configures. Every outbound request is checked, and a refusal names the credential and the host. If you use **GitHub Enterprise**, a **self-hosted Plane or Jira**, or an **OpenAI-compatible gateway** with a key from `.env`, set its URL on the host (`BOSS_GITHUB_API_URL`, `PLANE_BASE_URL`, `JIRA_BASE_URL`, `OPENAI_BASE_URL` …) or list it in `BOSS_CREDENTIAL_HOSTS`. An org-scoped secret can list its own hosts in `metadata.allowed_hosts`. See [Host credentials](IDENTITY_ADMIN.md#host-credentials-what-a-reference-may-name-and-where-it-may-be-sent).
+- **Naming a host credential is an org act.** Creating an `env:` reference or an org- or workspace-scoped reference needs `integration:manage` for the organisation. An `env:` reference may name only the provider credentials BOSS knows, plus what the operator lists in `BOSS_SECRET_REF_ENV_ALLOW`. It can never name BOSS's own secrets.
+- **Job sinks from before rc6 are held.** An event subscription that queues a job queues nothing until someone who holds that job kind's permission re-saves or re-enables it. See [Job sinks set up before rc6](IDENTITY_ADMIN.md#job-sinks-set-up-before-rc6).
+- **PRD auto-approve is off under enforcement.** Unless you set `BOSS_MEETING_PRD_AUTO_APPROVE`, a meeting's PRD waits for a person's approval on an enforced install, and is approved automatically only under `shadow` or `off`. Set it to `true` to keep the old behaviour.
+- **Webhook secrets** can no longer name a provider's credential (`env:BOSS_GITHUB_TOKEN`). Give each webhook a secret of its own.
 - **New command:** `boss identity` (`setup-link`, `claim-status`, `recover-owner`, `host-key`, `legacy status`, `posture`, `audit`).
 
 ## Also in this release
 
 - `boss upgrade` rolls back to the previous release when the new one cannot start (`--no-rollback` to keep it).
 - A host that cannot fence the build sandbox (rootless Docker, gVisor, some WSL2 and VPS kernels) still starts: builds are held, and `boss doctor` says how to fix it.
+
+## Also fixed in this candidate
+
+- Google sign-in can claim an invitation for a Gmail address (gmail.com, googlemail.com) or for the Workspace domain Google vouches for, without listing that domain on the provider. It never creates an account by itself.
+- BOSS's own read-only repository reader keeps its Passport: people can suspend or revoke it, but not change its limits.
+- Sessions and key last-used show tailnet addresses (100.64.0.0/10 and Tailscale IPv6) again.
 
 ## Known limits
 
@@ -65,4 +76,5 @@ Full details: [Upgrade to named accounts](IDENTITY_UPGRADE.md).
 - The build sandbox's network fence on Docker Desktop for macOS is not yet verified.
 - SAML and SCIM endpoints are served by the API: route `/saml/` and `/scim/` to it in your HTTPS proxy.
 - Installer follow-ups: `BOSS_PUBLIC_URL` means the API address to the installer but the console address to sign-in (use `--console-origin`); the installer does not yet print the claim link at the end (use `boss identity setup-link`).
+- The host-credential check does not inspect separate processes (git, the Claude and Codex command-line agents, a build's own code), streamed or compressed request bodies, or bodies over 4 MB. Those get credentials only through egress and the filtered agent environment.
 - Carried over from rc5: the paused capabilities listed in the [rc5 notes](RELEASE_NOTES_v1.0-rc5.md#known-issues).

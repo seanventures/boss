@@ -266,6 +266,20 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
                        if local else "Pins and the budget are in Setup › Model routing."),
             "href": "/?area=setup", "retry": False, "detail": text.strip(),
         }
+    # A HOST CREDENTIAL ABOUT TO GO TO ANOTHER PROVIDER'S ADDRESS (rc6 N-1, env_refs): refused
+    # before anything was sent. Its own words name the credential and the host, never the value;
+    # retrying cannot change the answer.
+    from .env_refs import misdirection_in
+
+    misdirected = misdirection_in(error) if isinstance(error, BaseException) else None
+    if misdirected is not None or ("is sent only to" in lowered and "refusing to send it" in lowered):
+        said = str(misdirected or text).strip()
+        return {
+            "kind": "credential_misdirected", "headline": said,
+            "action": ("Store a key for this endpoint on the project (Repo and models), or have "
+                       "the operator list the host in BOSS_CREDENTIAL_HOSTS."),
+            "href": setup_href(source_id), "retry": False, "detail": said,
+        }
     who = provider_name(source_id)
     #: "the Claude Code subscription", or "the model" when the source is not known.
     the_source = who if who.startswith("the ") else f"the {who}"

@@ -141,6 +141,126 @@ Under `BOSS_AUTHZ_MODE=enforce` a build's sandbox holds no GitHub credential: bo
 
 BOSS's own GitHub writes for a build (opening its pull request) use an App token for that one repository, bound to the build and revoked when it ends; outside a build such a token is revoked after 10 minutes.
 
+## Host credentials: what a reference may name, and where it may be sent
+
+A **host credential** is a credential the whole install holds rather than one project:
+
+- a provider key or token in the API's environment (`OPENAI_API_KEY`, `BOSS_GITHUB_TOKEN`, `DIGITALOCEAN_TOKEN`, `BOSS_AWS_*` …);
+- a secret reference scoped to the organisation or a workspace, which every project there can use;
+- the organisation's GitHub connection: its GitHub App tokens and its fine-grained token.
+
+A key or token a person stores for **their own project's** integration is not a host credential. It goes to the URL they chose for that integration.
+
+### Which environment variables a reference may name
+
+An `env:` reference (and a tracker's `credential_ref: env:NAME` or `secret:NAME`) may name only:
+
+- the provider credentials BOSS knows: the model keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`), the trackers' tokens (`PLANE_API_KEY`, `JIRA_API_TOKEN`, `LINEAR_API_KEY`, `AZURE_DEVOPS_PAT`, `ASANA_ACCESS_TOKEN`), GitHub's (`BOSS_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, any `*_GITHUB_TOKEN`), and the cloud ones (`DIGITALOCEAN_TOKEN`, `CLOUDFLARE_API_TOKEN`, and the `BOSS_AWS_`, `BOSS_AZURE_`, `BOSS_GCP_`, `BOSS_DIGITALOCEAN_`, `BOSS_CLOUDFLARE_`, `BOSS_OVH_`, `BOSS_SUPABASE_`, `BOSS_HETZNER_`, `BOSS_LINODE_`, `BOSS_VULTR_` and `BOSS_SSH_` families);
+- names the operator adds in **`BOSS_SECRET_REF_ENV_ALLOW`** on the API and worker: comma-separated, with `PREFIX*` for a family.
+
+```bash
+BOSS_SECRET_REF_ENV_ALLOW=ACME_SENTRY_TOKEN,ACME_INTERNAL_*
+```
+
+It can never name one of BOSS's own secrets, whatever the allowlist says: the database URL and password, the master key, BOSS's API keys, the session, CSRF and egress secrets, and the vault tokens. A `local_runner` (file) reference can never read under `/proc`, `/sys`, `/dev` or `/etc`, BOSS's identity directory, a `.env` file or the master-key file. Only the operator, on the host, can change the allowlist.
+
+**Who may name one.** These all need `integration:manage` **for the organisation** (an Owner or an org Admin): creating an `env:` reference, creating a reference scoped to the organisation or a workspace, and changing the provider or metadata of such a reference. A project Admin gets `403` and stores a secret for the project instead.
+
+### Where a host credential may be sent
+
+A host credential is sent only to its own provider, over HTTPS:
+
+| Provider | Endpoints |
+| --- | --- |
+| GitHub | `api.github.com`, `github.com`, `uploads.github.com`, `codeload.github.com`, `api.githubcopilot.com` (GitHub's MCP server) |
+| OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, xAI, Mistral | `api.openai.com`, `api.anthropic.com`, `openrouter.ai`, `api.groq.com`, `api.deepseek.com`, `api.x.ai`, `api.mistral.ai` |
+| Google (Gemini) | `generativelanguage.googleapis.com` |
+| Plane, Jira, Linear, Azure DevOps, Asana | `api.plane.so`, `app.plane.so`; `*.atlassian.net`, `api.atlassian.com`, `mcp.atlassian.com`; `api.linear.app`, `mcp.linear.app`; `dev.azure.com`, `*.visualstudio.com`; `app.asana.com` |
+| Clouds | DigitalOcean `api.digitalocean.com`, `inference.do-ai.run`; Cloudflare `api.cloudflare.com`; AWS `*.amazonaws.com`; Azure `management.azure.com`, `*.azure.com`, `*.windows.net`; GCP `*.googleapis.com`; and the API hosts of OVH, Supabase, Hetzner, Linode and Vultr |
+
+It may also go to the endpoints the **operator** configured for that provider on the host. These are taken with whatever scheme the operator gave, so a self-hosted service on plain `http` inside your network works:
+
+| Provider | Host settings that add an endpoint |
+| --- | --- |
+| GitHub | `BOSS_GITHUB_API_URL`, `BOSS_GITHUB_WEB_URL`, `BOSS_GITHUB_GIT_URL`, `GITHUB_API_URL` |
+| OpenAI-compatible | `OPENAI_BASE_URL` (or `OPENAI_API_BASE`) |
+| Anthropic, OpenRouter, Groq, DeepSeek, Gemini, xAI, Mistral | `ANTHROPIC_BASE_URL`, `OPENROUTER_BASE_URL`, `GROQ_BASE_URL`, `DEEPSEEK_BASE_URL`, `GEMINI_BASE_URL`, `XAI_BASE_URL`, `MISTRAL_BASE_URL` |
+| Plane, Jira | `PLANE_BASE_URL` (or `PLANE_API_URL`, `PLANE_PROJECT_URL`), `JIRA_BASE_URL` |
+| DigitalOcean inference | `BOSS_DO_INFERENCE_BASE_URL` |
+| Any provider | **`BOSS_CREDENTIAL_HOSTS`** |
+
+`BOSS_CREDENTIAL_HOSTS` lists extra hosts per provider, as `provider=host1|host2;provider2=host`. A `*.` prefix matches every subdomain. The provider names are the ones in the table above, in lower case (`github`, `openai`, `plane`, `jira`, `linear`, `aws` …). A variable you added in `BOSS_SECRET_REF_ENV_ALLOW` is its own provider, named after the variable in lower case.
+
+```bash
+BOSS_CREDENTIAL_HOSTS=github=ghe.example.com;linear=linear-proxy.corp.example;acme_sentry_token=sentry.corp.example
+```
+
+**An org-scoped reference** can carry its own hosts. An Owner or org Admin sets `metadata.allowed_hosts` on it, for example `{"allowed_hosts": ["llm-gateway.example.com"]}`. Those hosts must be reached over HTTPS.
+
+**BOSS's own sandbox service** (`BOSS_SANDBOX_AGENT_URL`, for microVM builds) receives a build's model key and git token in its request by design. Every host credential may go to that exact host and port.
+
+**How it is enforced.** Every request the API, worker and egress send passes one check before a byte leaves. That covers urllib, `requests`, `boto3` and anything else built on `http.client`, and `httpx` (and so the OpenAI SDK). It also covers BOSS's identity fetcher, SMTP logins and the preview websocket proxy. The check looks for any host credential in the request's URL, headers or body (including a decoded `Basic` header). It refuses the request when the destination is not one of that credential's endpoints. If the same value is set in two variables (an OpenRouter key also set as `OPENAI_API_KEY`), it may go wherever either one allows. The trackers also check by name before they build a request.
+
+A refusal sends nothing and is never retried. It names the credential and the host, never the value:
+
+```text
+The host credential OPENAI_API_KEY belongs to openai and is sent only to api.openai.com; refusing to
+send it to llm.example.net. A custom URL needs a credential stored for that integration (a project
+secret), or the operator lists the host in BOSS_CREDENTIAL_HOSTS.
+```
+
+A tracker test shows this as its connection error. A model turn shows it as the turn's reason, and the turn is not retried.
+
+**Webhooks** never sign with a provider's credential. A webhook secret that names one (`env:BOSS_GITHUB_TOKEN`) is refused. Give each webhook a secret of its own.
+
+### GitHub Enterprise
+
+Point BOSS at your GitHub Enterprise Server on the host, then restart the API, worker and egress:
+
+```bash
+BOSS_GITHUB_API_URL=https://ghe.example.com/api/v3
+BOSS_GITHUB_WEB_URL=https://ghe.example.com
+BOSS_GITHUB_GIT_URL=https://ghe.example.com
+```
+
+These make `ghe.example.com` a GitHub endpoint for every GitHub credential: the org's App tokens, the org token, `BOSS_GITHUB_TOKEN` and a connection's `*_GITHUB_TOKEN`. Suppose a project's GitHub connection has your Enterprise host as its **API base URL** and uses one of those env tokens. It needs the same host set here, or in `BOSS_CREDENTIAL_HOSTS=github=ghe.example.com`. A token pasted for that one connection needs nothing.
+
+### Self-hosted trackers
+
+| Tracker | What to set on the host |
+| --- | --- |
+| Plane (self-hosted) | `PLANE_BASE_URL=https://plane.example.com` (or `http://…` inside your network), with `PLANE_API_KEY`. |
+| Jira Server or Data Center | `JIRA_BASE_URL=https://jira.example.com`, with `JIRA_API_TOKEN`. Jira Cloud (`*.atlassian.net`) needs nothing. |
+| Any other host | `BOSS_CREDENTIAL_HOSTS=plane=plane.internal` (or `jira=…`, `linear=…`). |
+
+These settings matter only when the tracker uses the host's token: the tracker's own variable, or `credential_ref: env:…`. A token someone pastes for the tracker in the console, or a project secret, goes to the URL they gave and needs nothing on the host. A refused connection shows as **not connected**, and testing it gives the reason.
+
+**Limits.** The check does not inspect programs that BOSS starts as separate processes: git, the Claude and Codex command-line agents, and a build's own code. Those programs get credentials only through egress and the filtered agent environment (below). The check also does not inspect streamed or compressed request bodies, or bodies over 4 MB; credentials travel in headers, and the trackers' by-name check applies whatever the body. Code in BOSS that writes to a socket itself (SMTP, the identity fetcher, the preview websocket proxy) runs the same check, and a test fails on any new socket writer or HTTP library that does not.
+
+## Job sinks set up before rc6
+
+An event subscription that queues a job is a *job sink* (`sink_kind: job`). It now needs the permission of the job kind it queues when it is set up, re-pointed or re-enabled. A job sink created before rc6 was never checked, so after the upgrade **it is held**:
+
+- for each event it matches, the dispatch result marks it `held: true`, with the reason;
+- the API logs `event_dispatch.job_sink_held`;
+- no job is queued.
+
+BOSS's own default subscriptions are not held.
+
+To start one again, re-save it as someone who holds `integration:manage` and the kind's permission (for example an Admin of the project):
+
+```bash
+curl -X PATCH "$BOSS_URL/v1/event-subscriptions/<id>" \
+  -H "Authorization: Bearer <your key>" -H "Content-Type: application/json" \
+  -d '{"project_id": "<project>", "enabled": true}'
+```
+
+`GET /v1/event-subscriptions?project_id=<project>` lists the subscriptions. A sink whose kind BOSS does not know stays held. In shadow or off mode nothing is held.
+
+## PRD approval under enforcement
+
+A meeting's PRD is approved automatically only when `BOSS_MEETING_PRD_AUTO_APPROVE` says so. Left unset, it follows `BOSS_AUTHZ_MODE`: **off under `enforce`** (the default), and on under `shadow` or `off`. So on an enforced install, a drafted PRD waits for a person who may approve it before it becomes a build. An Owner who wants the panel's PRD to go straight to a build sets `BOSS_MEETING_PRD_AUTO_APPROVE=true` in `.env` and restarts the API and worker. An automatic approval is still written and resolved as `auto_approval` in the audit trail.
+
 ## Passing environment variables to a build's agent
 
 A build's agent gets a filtered environment: anything shaped like a secret (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*` …) is removed, and a fixed list of names can never pass. To let an extra, non-secret variable through (a test harness's stub URL, a feature flag the agent's tools read), name it in `BOSS_AGENT_ENV_ALLOW`, comma-separated, on the API and worker:

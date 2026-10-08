@@ -130,6 +130,13 @@ def _with_retry(call, *, tries: int = 8, base: float = 2.0, stats: Optional[dict
             time.sleep(min(1.0 + attempt, 4.0))
             continue
         except _RETRYABLE as exc:
+            # The SDK turns a refused send (a host credential bound to another provider, rc6 N-1)
+            # into a retried "Connection error.": no retry changes the answer, so say it now.
+            from .env_refs import misdirection_in
+
+            misdirected = misdirection_in(exc)
+            if misdirected is not None:
+                raise misdirected from None
             if attempt == tries - 1:
                 raise
             delay = base * (2 ** attempt) + random.uniform(0, 1)
@@ -339,6 +346,13 @@ class OpenAIAdapter:
         base = self._resolved_base_url()
         if base:
             kwargs["base_url"] = base
+        # rc6 N-1: refuse a host credential bound to another provider here, by name and host,
+        # before the SDK hides it behind retries and "Connection error." (env_refs.check_outbound).
+        from .env_refs import check_outbound
+
+        if kwargs["api_key"]:
+            check_outbound(base or "https://api.openai.com/v1",
+                           {"Authorization": f"Bearer {kwargs['api_key']}"})
         return OpenAI(**kwargs)
 
     def create_text_response(
