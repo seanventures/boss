@@ -17,6 +17,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { BuildRow as Build, Floor, FloorOutcome, PreBuild, StoppedRow } from "../../lib/factory-floor";
 import { callAction } from "../../lib/call-action";
 import { GatedButton } from "../../components/gated";
+import { NEW_BUILD_TIP, openNewProject } from "../../lib/compose-links";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { AttentionCard } from "../agents/attention-card";
 import { splitAttention } from "../agents/live-board";
@@ -260,7 +261,9 @@ export function FloorView({ projectId, actor, floor, error, loading, refresh, pa
       <div className="fx-floor" data-testid="fx-floor">
         <div className="ag-empty fx-empty" data-testid="fx-no-builds">
           <span>No builds yet</span>
-          <GatedButton permission="meeting:convene" type="button" className="ag-btn ag-btn-primary" onClick={onPlan} data-testid="fx-empty-plan">Plan it with Juno</GatedButton>
+          <GatedButton permission="workflow_run:start" type="button" className="ag-btn ag-btn-primary" onClick={openNewProject}
+                       title={NEW_BUILD_TIP} data-testid="fx-empty-new">+ New build</GatedButton>
+          <GatedButton permission="meeting:convene" type="button" className="ag-btn" onClick={onPlan} data-testid="fx-empty-plan">Plan it with Juno</GatedButton>
           <GatedButton permission="code_task:create" type="button" className="ag-btn" onClick={onDirect} data-testid="fx-empty-direct">Direct change</GatedButton>
         </div>
       </div>

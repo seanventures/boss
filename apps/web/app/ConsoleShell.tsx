@@ -18,7 +18,7 @@ import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { dockWidthFor, railForDock } from "../lib/shell-rail";
 import { ProjectStrip } from "./project-strip";
 import { PresencePill } from "./agents/presence-pill";
-import { openPlan } from "../lib/converse-doors";
+import { NEW_BUILD_TIP, openNewProject } from "../lib/compose-links";
 import { setConsoleLive } from "../lib/console-live";
 import { PAINTED_EVENT } from "../lib/area-painted";
 import { useAttention } from "../lib/agents-live";
@@ -69,6 +69,7 @@ import {
   UserCircle,
   Users,
   UsersThree,
+  Plus,
   Wallet,
   Wrench,
   X,
@@ -1286,18 +1287,18 @@ function ConsoleShellInner({
             <List size={18} aria-hidden />
           </button>
 
-          {/* START A BUILD FROM ANYWHERE (factory spec §4.1, operator decision 2026-10-04).
-              The same first press as the Factory's `+ New build`: Plan it with Juno — a PRD
-              first, then the build. The Factory's menu keeps the other doors (a workflow, a
-              direct change, a benchmark); one primary press in both places. */}
+          {/* START A BUILD FROM ANYWHERE (factory spec §4.1). The same first press as the
+              Factory's `+ New build`: the New project composer — a new app, or a feature added to
+              one (operator, 2026-10-07; it replaced the 2026-10-04 "Plan it with Juno" door).
+              "Plan it with an agent" is an option inside the composer. */}
           {/* ONE PRODUCT (walk D19): on the Factory its own header holds `+ New build`. */}
           {active !== "code_tasks" ? <GatedButton
-            permission="meeting:convene"
+            permission="workflow_run:start"
             type="button"
             className="bx-new-project"
             data-testid="topbar-new-project"
-            title="Plan it with Juno: a PRD first, then the build"
-            onClick={() => openPlan("pm", { from: "palette" })}
+            title={NEW_BUILD_TIP}
+            onClick={() => openNewProject()}
           >
             <span aria-hidden>+</span> New build
           </GatedButton> : null}
@@ -1551,6 +1552,18 @@ function ConsoleShellInner({
                   </button>
                 );
               })}
+              {/* START SOMETHING: the New project composer, like the top bar's New build. */}
+              {!query.trim() || "new build new project".includes(query.trim().toLowerCase()) ? (
+                <button type="button" className="bx-palette-item" data-testid="palette-new-build"
+                        title={NEW_BUILD_TIP}
+                        onClick={() => { setPaletteOpen(false); openNewProject(); }}>
+                  <Plus size={17} aria-hidden />
+                  <span>
+                    <span style={{ fontWeight: 600 }}>New build</span>
+                    <span style={{ display: "block", fontSize: "0.78rem", color: "var(--muted)" }}>A new app or a feature</span>
+                  </span>
+                </button>
+              ) : null}
               {/* TALKING WITH AGENTS: talk 1:1, plan a start, open a room (lib/agent-converse). */}
               {CONVERSE_COMMANDS.filter((c) => !query.trim()
                 || c.label.toLowerCase().includes(query.trim().toLowerCase())).map((c) => (
@@ -1564,7 +1577,8 @@ function ConsoleShellInner({
                   </span>
                 </button>
               ))}
-              {filtered.length === 0 && !CONVERSE_COMMANDS.some((c) => c.label.toLowerCase()
+              {filtered.length === 0 && !"new build new project".includes(query.trim().toLowerCase())
+                && !CONVERSE_COMMANDS.some((c) => c.label.toLowerCase()
                 .includes(query.trim().toLowerCase())) ? (
                 <div style={{ padding: "14px 12px", color: "var(--muted)" }}>No matching area.</div>
               ) : null}

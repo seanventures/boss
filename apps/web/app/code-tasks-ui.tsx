@@ -18,6 +18,7 @@ import { callAction } from "../lib/call-action";
 import { GatedButton } from "../components/gated";
 import { useConsoleLive } from "../lib/console-live";
 import { openPlan } from "../lib/converse-doors";
+import { NEW_BUILD_TIP, openNewProject } from "../lib/compose-links";
 import { useFactoryFloor } from "../lib/factory-floor";
 import { navigate } from "./agents/live-util";
 import { notifyChanged } from "./changed";
@@ -179,8 +180,8 @@ function NewBuildButton({ open, setOpen, onPlan, onDirect, onBenchmark, hasBench
   const pick = (fn: () => void) => () => { setOpen(false); fn(); };
   return (
     <span className="fx-split" ref={box}>
-      <GatedButton permission="meeting:convene" type="button" className="ag-btn ag-btn-primary fx-split-main" data-testid="fx-new-plan"
-              title="Plan it with Juno: a PRD first, then the build" onClick={onPlan}>+ New build</GatedButton>
+      <GatedButton permission="workflow_run:start" type="button" className="ag-btn ag-btn-primary fx-split-main" data-testid="fx-new-main"
+              title={NEW_BUILD_TIP} onClick={openNewProject}>+ New build</GatedButton>
       <button type="button" className="ag-btn ag-btn-primary fx-split-more" data-testid="fx-new-build"
               aria-haspopup="menu" aria-expanded={open} aria-label="More ways to start a build"
               onClick={() => setOpen(!open)}>
@@ -367,7 +368,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
       ) : url.view === "apps" ? (
         <div role="tabpanel" aria-label="Apps">
           <AppsTab projectId={projectId} runs={runs} previews={previews} query={query}
-                   onOpen={openBuild} onNew={plan} />
+                   onOpen={openBuild} onNew={openNewProject} />
         </div>
       ) : (
         <div role="tabpanel" aria-label="Floor">

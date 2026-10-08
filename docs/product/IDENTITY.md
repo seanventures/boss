@@ -146,7 +146,7 @@ Users can see and end their own sessions. Admins with `session:revoke` can end a
 | Forgot password, no SMTP | An admin issues a reset link (`user:update`, step-up) | The link is shown once, **to the authenticated admin**, to hand over out of band. Returning secrets from a *public* endpoint is a common flaw. This endpoint is not public. |
 | Lost MFA | One of 10 recovery codes: 12 base32 characters, argon2id-hashed (small profile), single use | Using a code notifies the user. Below 3 remaining codes, BOSS forces regeneration. |
 | Lost MFA and codes | Admin reset (`user:reset_mfa`, step-up) | Resetting an Owner requires another Owner. The user must re-enrol MFA at the next sign-in. The event is critical-audited and notifies every admin. |
-| Sole Owner locked out | Host CLI: `docker exec boss-api boss identity recover-owner --email …` | The CLI needs host shell access. It prints a 15-minute single-use link to stdout. Actor: `sys_host_cli`. Every Owner sees a banner for 7 days. |
+| Sole Owner locked out | Host CLI: `docker exec boss-api boss identity recover-owner --email …` | The CLI needs host shell access. It prints a 15-minute single-use link to stdout. Actor: `sys_host_cli`. Every Owner and Admin sees a banner for 7 days, or until they press "Got it" (audited `banner.acknowledged`). |
 
 Magic-link sign-in and email codes **are offered, only when SMTP is configured**, and built to the rules in §4.14 (D26). Both are easy to get wrong; §4.14 lists each known pitfall and the test that keeps it out. There is **no phone or SMS** method of any kind (SIM-swap risk).
 
@@ -899,7 +899,7 @@ Writes to this log are **not best-effort**. A security event is written in the s
 | Agents | `agent.passport.*`, `delegation.*`, `token.issued`, `token.exchanged`, `token.denied`, `credential.handed_out` |
 | Vault | `vault.connection.linked`/`refreshed`/`needs_reauth`/`revoked`, `vault.decrypt_failed`, `vault.master_key_rotated` |
 | Authorization | `authz.denied`, `authz.shadow_deny`, `authz.allowed_critical` |
-| Policy and system | `policy.changed` (diff), `bootstrap.claimed`, `owner.recovered_by_host`, `legacy.password_used`, `legacy.api_key_used`, `legacy.claimed_actor_ignored`, `audit.exported`, `audit.verified`, `audit.checkpoint` |
+| Policy and system | `policy.changed` (diff), `bootstrap.claimed`, `owner.recovered_by_host`, `banner.acknowledged` (a person closed a security notice with "Got it"), `legacy.password_used`, `legacy.api_key_used`, `legacy.claimed_actor_ignored`, `audit.exported`, `audit.verified`, `audit.checkpoint` |
 
 Egress requests go to a separate high-volume table, `identity_egress_log`, partitioned by day with 30-day retention. Only egress **denials** are copied into the security log.
 
@@ -1728,7 +1728,7 @@ Per BOSS practice:
 
 | # | Decision | Consequence in this spec |
 |---|---|---|
-| D25 | **After the first Owner is claimed, the old shared console password maps to Operator for 30 days, then stops working.** | §4.11, §12 M2 and M5. `usr_legacy_shared` holds Operator and signs in with no email; the countdown banner shows on every page for the whole window. An Owner may extend once, by at most 30 days (step-up, audited). |
+| D25 | **After the first Owner is claimed, the old shared console password maps to Operator for 30 days, then stops working.** | §4.11, §12 M2 and M5. `usr_legacy_shared` holds Operator and signs in with no email; the countdown banner shows on every page for the whole window (a person may close it for 24 hours at a time, never in its final 3 days; `identity/banner_policy.py`). An Owner may extend once, by at most 30 days (step-up, audited). |
 | D26 | **Magic link and email code are allowed, only when SMTP is configured, and built safely** (§4.14): emailed only, never in a response; single use; 10-minute TTL; bound to the requesting browser by a state cookie; hashed at rest; per-email and per-IP rate limits; a uniform response whether the address exists or not; never a way around MFA for Owner or Admin. **No phone/SMS.** | §4.7, §4.14, §9.7, A17, A81–A88, A92. Replaces D19's "no email OTP or magic links". |
 | D27 | **Network-trusted installs move to passkeys:** real accounts, no Tailscale-header trust, no permanent network operator. Network-trusted mode is a migration bridge only; such an install claims its first Owner through the network-bridge claim, with no env change. | §4.12, §12. |
 | D28 | **The GitHub user-repo-access guard applies only on multi-person installs** (more than one active human). | §7.9. |

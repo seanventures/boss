@@ -107,6 +107,7 @@
   "POST /v1/identity/me/api-keys",
   "POST /v1/identity/me/api-keys/{key_id}/revoke",
   "POST /v1/identity/me/api-keys/{key_id}/rotate",
+  "POST /v1/identity/me/banners/{banner_id}/dismiss",
   "GET /v1/identity/me/connections",
   "POST /v1/identity/me/connections",
   "DELETE /v1/identity/me/connections/{item_id}",

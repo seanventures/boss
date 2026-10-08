@@ -21,8 +21,9 @@ const CONTROLS: ReadonlyArray<readonly [string, string, string, string]> = [
   ["app/delivery-workflows-ui.tsx", 'data-testid="dw-advance"', "workflow_run:control", "POST /v1/delivery-workflows/runs/{run_id}/recheck"],
   ["app/delivery-workflows-ui.tsx", "data-testid={`${idPrefix}-retry`}", "workflow_run:control", "POST /v1/delivery-workflows/runs/{run_id}/retry-step"],
   ["app/delivery-workflows-ui.tsx", "data-testid={`${idPrefix}-skip`}", "workflow_run:control", "POST /v1/delivery-workflows/runs/{run_id}/skip-step"],
-  ["app/code-tasks-ui.tsx", 'data-testid="fx-new-plan"', "meeting:convene", "POST /v1/conversations"],
-  ["app/ConsoleShell.tsx", 'data-testid="topbar-new-project"', "meeting:convene", "POST /v1/conversations"],
+  // "New build" opens the New project composer, whose Start sends this (operator, 2026-10-07).
+  ["app/code-tasks-ui.tsx", 'data-testid="fx-new-main"', "workflow_run:start", "POST /v1/delivery-workflows/start"],
+  ["app/ConsoleShell.tsx", 'data-testid="topbar-new-project"', "workflow_run:start", "POST /v1/delivery-workflows/start"],
   ["app/improve/sharing-ask.tsx", 'data-testid="su-sharing-on"', "telemetry:manage", ""],
   ["app/improve/sharing-ask.tsx", 'data-testid="su-sharing-no"', "telemetry:manage", ""],
   ["app/setup/setup-board.tsx", 'data-testid="su-test-all"', "setup:manage", "POST /v1/setup/checks"],

@@ -156,7 +156,7 @@ describe("G7 · link a single sign-on account from My account", () => {
 
 describe("G12 · an enrolment-only session", () => {
   it("is recognised from the me banner or the API's refusal", () => {
-    expect(needsEnrolment({ banners: [{ kind: "mfa_enrolment_required", message: "", until: null }] })).toBe(true);
+    expect(needsEnrolment({ banners: [{ id: "mfa_enrolment_required", kind: "mfa_enrolment_required", policy: "persistent", message: "", until: null }] })).toBe(true);
     expect(needsEnrolment({ banners: [] })).toBe(false);
     expect(needsEnrolment(null, "mfa_enrolment_required")).toBe(true);
     expect(enrolHref("/identity/people")).toBe("/enrol?next=%2Fidentity%2Fpeople");
