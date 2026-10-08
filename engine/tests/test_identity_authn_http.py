@@ -141,3 +141,40 @@ def test_header_injection_and_credentials_in_urls_are_refused(net):
 def test_purpose_is_required():
     with pytest.raises(ValueError):
         http.fetch("GET", "https://idp.example.com/", purpose="")
+
+
+def test_an_unroutable_ipv6_answer_falls_back_to_the_ipv4_one(net, monkeypatch):
+    # boss-1, 2026-10-08: Google's token host answers v6 + v4; the container has no v6 route. The
+    # v6 address sorted first and was the only one tried, so every Google sign-in failed.
+    net["dns"]["oauth2.example.com"] = ["2607:f8b0:4004:c29::5f", "64.233.180.95"]
+    tried = []
+
+    def open_connection(scheme, host, ip, port, timeout):
+        tried.append(ip)
+        if ":" in ip:
+            raise OSError("Network is unreachable")
+        return FakeSocket(ok())
+
+    monkeypatch.setattr(http, "_open_connection", open_connection)
+    assert http.fetch("POST", "https://oauth2.example.com/token", data=b"x", purpose="oidc.token").status == 200
+    assert tried == ["64.233.180.95"]                      # IPv4 first: no wasted v6 attempt
+
+
+def test_every_checked_address_is_tried_before_giving_up(net, monkeypatch):
+    net["dns"]["flaky.example"] = ["93.184.216.34", "93.184.216.35"]
+    tried = []
+
+    def open_connection(scheme, host, ip, port, timeout):
+        tried.append(ip)
+        if ip.endswith(".34"):
+            raise OSError("refused")
+        return FakeSocket(ok())
+
+    monkeypatch.setattr(http, "_open_connection", open_connection)
+    assert http.fetch("GET", "https://flaky.example/", purpose="test").status == 200
+    assert tried == ["93.184.216.34", "93.184.216.35"]
+    net["dns"]["dead.example"] = ["93.184.216.36"]
+    monkeypatch.setattr(http, "_open_connection",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("down")))
+    with pytest.raises(OutboundRefused, match="connection failed"):
+        http.fetch("GET", "https://dead.example/", purpose="test")

@@ -152,7 +152,7 @@ def fetch(method: str, url: str, *, headers: Optional[Mapping[str, str]] = None,
         raise ValueError("purpose is required")
     deadline = time.monotonic() + TOTAL_TIMEOUT_SECONDS
     current = url
-    pinned: dict[str, str] = {}
+    pinned: dict[str, list[str]] = {}
     first_host: Optional[str] = None
     for _hop in range(MAX_REDIRECTS + 1):
         parts = urlsplit(current)
@@ -189,19 +189,32 @@ def fetch(method: str, url: str, *, headers: Optional[Mapping[str, str]] = None,
             if allowed_private:
                 print(f"[identity] outbound to allow-listed private host {host} ({purpose})",
                       flush=True)
-            pinned[host] = addrs[0]
-        ip = pinned[host]
+            # IPv4 first: a host whose IPv6 answer it cannot route (a container with no v6) still
+            # connects. Every candidate was checked public above; whichever connects is pinned.
+            pinned[host] = sorted(addrs, key=lambda a: (":" in a, a))
         target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
         host_header = host if parts.port is None else f"{host}:{parts.port}"
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise OutboundRefused("total timeout exceeded")
-        try:
-            sock = _open_connection(scheme, host, ip, port, min(CONNECT_TIMEOUT_SECONDS, remaining))
-        except OutboundRefused:
-            raise
-        except (OSError, ssl.SSLError) as exc:
-            raise OutboundRefused(f"connection failed ({type(exc).__name__})") from exc
+        sock = None
+        failure: Optional[BaseException] = None
+        for ip in pinned[host]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                sock = _open_connection(scheme, host, ip, port, min(CONNECT_TIMEOUT_SECONDS, remaining))
+            except OutboundRefused:
+                raise
+            except (OSError, ssl.SSLError) as exc:
+                failure = exc
+                continue
+            pinned[host] = [ip]                   # a redirect to this host reuses this address
+            break
+        if sock is None:
+            name = type(failure).__name__ if failure else "TimeoutError"
+            raise OutboundRefused(f"connection failed ({name})") from failure
         try:
             status, resp_headers, body = _http_exchange(sock, method.upper(), host_header, target,
                                                         dict(headers or {}), data, deadline)
