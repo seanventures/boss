@@ -66,12 +66,12 @@ function Row({ role, onClone, busy }: { role: AccessRole; onClone: (r: AccessRol
           </span>
           <span>
             <RoleChip roleKey={role.key} name={role.name} />
-            <small data-copy="data">{role.description}</small>
+            <small className="idn-wrap" data-copy="data">{role.description}</small>
           </span>
         </a>
       </td>
       <td className="idn-mono">{role.permissions.length} / {ROLE_PERMS.length}</td>
-      <td>{role.bindable_scopes.map((x) => (x === "org" ? "Org" : "Project")).join(" · ")}</td>
+      <td className="idn-nowrap">{role.bindable_scopes.map((x) => (x === "org" ? "Org" : "Project")).join(" · ")}</td>
       <td className="idn-mono">{role.holders}</td>
       <td>
         <span className="idn-row">

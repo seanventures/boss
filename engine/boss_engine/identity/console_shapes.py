@@ -243,7 +243,9 @@ def posture_view(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dic
         legacy.append({"kind": kind, "label": label, "until": p["retire_after"]})
     mfa = next(c for c in base["checks"] if c["key"] == "mfa_coverage")
     summary = [mfa["summary"],
-               f"{len(legacy)} legacy path{'s' if len(legacy) != 1 else ''} still in use",
+               # The same count as the Legacy paths card (its check's count), not a second tally.
+               (lambda n: f"{n} legacy path{'s' if n != 1 else ''} still in use")(
+                   next(c for c in base["checks"] if c["key"] == "legacy_credentials")["count"]),
                next(c for c in base["checks"] if c["key"] == "audit_chain")["summary"]]
     return {
         "score": score,
@@ -277,8 +279,12 @@ def counts(org_id: str, *, db: Any, now: datetime) -> dict[str, int]:
                               "accepted_at IS NULL AND revoked_at IS NULL AND expires_at > :now",
                           params),
         "disabled": sum(1 for r in accounts if r[1] == "disabled"),
-        "agents": _count(db, "SELECT count(*) FROM identity_principals WHERE org_id = :o AND "
-                             "kind = 'agent' AND status <> 'revoked'", params),
+        # The agents Identity › Agents LISTS: a Passport each, not revoked. Counting every agent
+        # principal made the tab say 35 over a page of 33 (two had no Passport yet; posture's
+        # "orphans" check names those).
+        "agents": _count(db, "SELECT count(*) FROM identity_principals p JOIN identity_agent_passports a "
+                             "ON a.agent_id = p.id WHERE p.org_id = :o AND p.kind = 'agent' AND "
+                             "p.status <> 'revoked'", params),
         "suspended_agents": _count(db, "SELECT count(*) FROM identity_principals WHERE org_id = :o "
                                        "AND kind = 'agent' AND status = 'suspended'", params),
         "groups": _count(db, "SELECT count(*) FROM identity_groups WHERE org_id = :o", params),

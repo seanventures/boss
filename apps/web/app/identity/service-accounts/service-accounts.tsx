@@ -17,6 +17,8 @@ import {
 
 import { CanButton, useGuardedCall, useIdentity } from "../../../components/identity/identity-provider";
 import { EmptyState } from "../../../components/identity/states";
+import { ListHeader } from "../../../components/identity/list-header";
+import { publicAddress } from "../../../lib/identity/address";
 import { keyCount, permissionName } from "../../../lib/identity/words";
 import { PeoplePick, type PickPerson } from "./people-pick";
 import { adaptBinding, adaptServiceAccount, roleIndex, type NameIndex } from "../../../lib/identity/adapt-people";
@@ -433,20 +435,25 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
   };
 
   const active = useMemo(() => sa?.keys.filter((k) => k.status !== "revoked") ?? [], [sa]);
+  const newKey = sa ? (
+    <CanButton permission="service_account_key:manage" className="idn-btn sm primary" disabled={sa.kind !== "service"}
+      onClick={() => setForm({ replacing: null })} data-testid="new-key" tip="Scopes never exceed what this account holds">
+      <Plus size={13} weight="bold" aria-hidden /> New key
+    </CanButton>
+  ) : null;
 
   return (
-    <div className="idn-sacols">
+    <div className={list.length ? "idn-sacols" : undefined}>
       <aside aria-labelledby="idn-sa-h">
-        <div className="idn-sec-h">
-          <h1 id="idn-sa-h" className="idn-h1">Service accounts</h1>
-          <span className="idn-spacer" />
-          <CanButton permission="service_account:manage" className="idn-btn sm primary" onClick={() => setCreating(true)} tip="An account for CI, scripts or integrations">
+        <ListHeader id="idn-sa-h" title="Service accounts" empty={!list.length} create={(
+          <CanButton permission="service_account:manage" className="idn-btn sm primary" onClick={() => setCreating(true)} tip="A new service account, for CI, scripts or integrations" data-testid="sa-create">
             <Plus size={13} weight="bold" aria-hidden /> New
           </CanButton>
-        </div>
+        )} />
         {!list.length ? (
-          <EmptyState compact icon={<Key size={18} />} title="No service accounts yet" testId="sa-empty">
-            Give CI, scripts and integrations their own scoped keys, owned by a person.
+          <EmptyState icon={<Key size={20} />} title="No service accounts yet" testId="sa-empty"
+            action={<CanButton permission="service_account:manage" className="idn-btn primary" onClick={() => setCreating(true)} tip="An account for CI, scripts or integrations" data-testid="sa-empty-create"><Plus size={13} weight="bold" aria-hidden /> New service account</CanButton>}>
+            For CI, scripts and integrations. It never signs in: a person owns it, and its keys are scoped and rotated.
           </EmptyState>
         ) : null}
         <div className="idn-sal" role="list">
@@ -506,7 +513,10 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
                   </>
                 )}</span></div>
               <div><span className="idn-label">Access role</span>
-                <span>{sa.bindings.length ? sa.bindings.map((b) => <RoleChip key={b.id} roleKey={b.role_key} name={b.role_name} scope={b.scope} />) : <span className="idn-dim">{sa.kind === "scim" ? "Directory sync only" : "none"}</span>}</span></div>
+                <span>{sa.bindings.length ? sa.bindings.map((b) => <RoleChip key={b.id} roleKey={b.role_key} name={b.role_name} scope={b.scope} />) : <span className="idn-dim">{sa.kind === "scim" ? "Directory sync only" : "none"}</span>}
+                  {sa.kind === "service" ? (
+                    <CanButton permission="service_account:manage" className="idn-btn sm" onClick={() => setEditing("all")} tip="Change the access roles this account holds" data-testid="sa-manage-access">Manage access</CanButton>
+                  ) : null}</span></div>
               <div><span className="idn-label">Effective</span>
                 <span title="Each key gets only the part its scopes allow">{sa.effective} permissions, narrowed per key</span></div>
               <div><span className="idn-label">Last used</span>
@@ -514,15 +524,8 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
             </div>
             <ErrorLine error={error} />
 
-            <div className="idn-card-h">
-              <h3>Keys</h3>
-              <span className="idn-sub" title="BOSS never shows a key again after it's created">Shown once, then only its name</span>
-              <span className="idn-spacer" />
-              <CanButton permission="service_account_key:manage" className="idn-btn sm primary" disabled={sa.kind !== "service"}
-                onClick={() => setForm({ replacing: null })} data-testid="new-key" tip="Scopes never exceed what this account holds">
-                <Plus size={13} weight="bold" aria-hidden /> New key
-              </CanButton>
-            </div>
+            <ListHeader level={3} title="Keys" sub={<span title="BOSS never shows a key again after it's created">Shown once, then only its name</span>}
+              empty={!active.length && sa.kind === "service"} create={sa.kind === "legacy" ? null : newKey} />
             {sa.kind === "legacy" ? (
               <div className="idn-note" data-copy="prose"><Warning size={15} aria-hidden /> The shared BOSS_API_KEY maps here until it is retired. Rotate it into a real key with New key on a service account.</div>
             ) : null}
@@ -536,7 +539,7 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
                         <td><span className="idn-kname" data-copy="data" title={`Key ${k.id}`}>{k.name}</span></td>
                         <td><span className="idn-scopes">{k.scopes.map((p) => <Perm key={p} p={p} sm />)}</span></td>
                         <td>{k.projects?.join(", ") ?? "all"}</td>
-                        <td className="idn-small">{k.last_used_at ? <><Ago iso={k.last_used_at} />{k.last_used_ip ? <span className="idn-mono idn-dim"> · {k.last_used_ip}</span> : null}</> : "never"}</td>
+                        <td className="idn-small">{k.last_used_at ? <><Ago iso={k.last_used_at} />{publicAddress(k.last_used_ip) ? <span className="idn-mono idn-dim"> · {publicAddress(k.last_used_ip)}</span> : null}</> : "never"}</td>
                         <td><Expires k={k} /></td>
                         <td>
                           <span className="idn-row idn-nowrap">
@@ -554,7 +557,7 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
                 </table>
               </div>
             ) : sa.kind === "service" ? (
-              <EmptyState compact icon={<Key size={16} />} title="No keys yet" testId="keys-empty">New key makes one; it is shown once.</EmptyState>
+              <EmptyState compact icon={<Key size={16} />} title="No keys yet" testId="keys-empty" action={newKey}>A key is how this account signs its calls; it is shown once.</EmptyState>
             ) : <span className="idn-dim">No keys</span>}
           </section>
 
@@ -564,12 +567,11 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
               onIssued={(i) => { setIssued({ issued: i, account: sa.name }); setForm(null); reload().catch(() => undefined); }} />
           ) : null}
         </div>
-      ) : (
-        <EmptyState icon={<Key size={22} />} title="Nothing selected" testId="sa-none"
-          action={<CanButton permission="service_account:manage" className="idn-btn primary" onClick={() => setCreating(true)} tip="An account for CI, scripts or integrations" data-testid="sa-empty-create"><Plus size={13} weight="bold" aria-hidden /> New service account</CanButton>}>
-          A service account never signs in: it has an owner and keys you scope, rotate and revoke.
+      ) : list.length ? (
+        <EmptyState icon={<Key size={22} />} title="Nothing selected" testId="sa-none">
+          Pick a service account to see its owners, access and keys.
         </EmptyState>
-      )}
+      ) : null}
 
       {issued ? <ShownOnce issued={issued.issued} account={issued.account} onClose={() => setIssued(null)} /> : null}
       {revoking && sa ? (

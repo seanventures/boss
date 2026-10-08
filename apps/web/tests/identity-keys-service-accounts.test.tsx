@@ -95,9 +95,9 @@ function choose(el: Element | null, value: string) {
 const button = (text: string) => [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === text) ?? null;
 function noLeaks() {
   for (const el of [host!, ...document.querySelectorAll(".idn-sheet-wrap")]) {
-    expect(rawLeaks(el), "raw ids, codes or jargon on screen").toEqual([]);
+    expect(rawLeaks(el), "raw ids, codes or jargon on screen: " + JSON.stringify(rawLeaks(el))).toEqual([]);
     const a = identityCopyAudit(el);
-    expect([...a.labels, ...a.prose, ...a.tips], "copy budget").toEqual([]);
+    expect([...a.labels, ...a.prose, ...a.tips], "copy budget: " + JSON.stringify([...a.labels, ...a.prose, ...a.tips])).toEqual([]);
   }
 }
 

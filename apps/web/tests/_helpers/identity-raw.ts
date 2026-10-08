@@ -20,11 +20,16 @@ const CODES = [
   "unauthenticated", "forbidden", "discovery_failed", "jwks_failed", "not_invited", "needs_reauth", "release_manager", "vp_agents",
 ];
 const CODE = new RegExp(`(^|[^\\w])(${CODES.join("|")})(?!\\w)`);
-const EVENT = /(^|[^\w.@/])((user|group|access_role|role_binding|api_key|service_account|session|delegation|passport|agent|sso|scim|policy|audit|access|mfa|passkey|login|connection|token|invitation|identity)\.[a-z_]+(\.[a-z_]+)?)(?![\w@/])/;
+const EVENT = /(^|[^\w.@/])((auth|egress|user|group|access_role|role_binding|api_key|service_account|session|delegation|passport|agent|sso|scim|policy|audit|access|mfa|passkey|login|connection|token|invitation|identity)\.[a-z_]+(\.[a-z_]+)?)(?![\w@/])/;
 const ID = /(^|[^\w/])((usr|agt|dlg|key|sak|pat|sva|grp|idp|acr|ses|rol|bnd|evt|inv|tok|run)_[A-Za-z0-9]{3,})/;
 const JARGON = /∩|∪|\bunion\b|\bjti\b|\bJWKS\b|\bceiling\b|\bid_token\b/i;
+// A private or container address shown as where someone was (172.18.0.8 is the console's own
+// container): lib/identity/address.ts shows only public ones.
+const PRIVATE_ADDRESS = /(^|[^\d.])((?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})(?![\d./])/;
+// What an id leaves behind when only its prefix is stripped: ":git:315ad114331e".
+const ID_FRAGMENT = /(^|\s):[a-z]+:[0-9a-f]{7,}\b/;
 
-export type RawLeak = { kind: "permission" | "code" | "event" | "id" | "jargon"; text: string };
+export type RawLeak = { kind: "permission" | "code" | "event" | "id" | "jargon" | "address"; text: string };
 
 function textNodes(root: Element): string[] {
   const out: string[] = [];
@@ -50,6 +55,8 @@ export function rawLeaks(root: Element): RawLeak[] {
     if ((m = EVENT.exec(t))) leaks.push({ kind: "event", text: m[2] });
     if ((m = ID.exec(t))) leaks.push({ kind: "id", text: m[2] });
     if ((m = JARGON.exec(t))) leaks.push({ kind: "jargon", text: m[0] });
+    if ((m = PRIVATE_ADDRESS.exec(t))) leaks.push({ kind: "address", text: m[2] });
+    if ((m = ID_FRAGMENT.exec(t))) leaks.push({ kind: "id", text: m[0].trim() });
   }
   const seen = new Set<string>();
   return leaks.filter((l) => { const k = `${l.kind}:${l.text}`; if (seen.has(k)) return false; seen.add(k); return true; });

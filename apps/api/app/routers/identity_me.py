@@ -230,6 +230,7 @@ def build_me_response(db: Any, ctx: AuthContext) -> MeResponse:
         banners.append(MeBanner(kind="mfa_enrolment_required",
                                 message="Your access needs a second factor. Add a passkey or an authenticator app."))
     from boss_engine.identity.authn_support import smtp_configured
+    from boss_engine.identity.where import sign_in_origin
 
     if user is not None and not smtp_configured():
         # Without SMTP, a sign-in from a new device is told here (with SMTP it was emailed).
@@ -240,7 +241,7 @@ def build_me_response(db: Any, ctx: AuthContext) -> MeResponse:
             {"o": p.org_id, "p": p.id, "s": ctx.session.id if ctx.session else None}).mappings().first()
         if seen:
             banners.append(MeBanner(kind="new_device", message=(
-                f"New sign-in from {seen['ip'] or 'an unknown address'} on "
+                f"New sign-in {sign_in_origin(seen['ip'])} on "
                 f"{seen['ts'].strftime('%Y-%m-%d %H:%M UTC')}. Not you? Sign out everywhere in "
                 "Sessions and change your password.")))
     # The legacy countdowns, the network bridge, low recovery codes and an Owner recovered from

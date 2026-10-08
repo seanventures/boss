@@ -91,6 +91,7 @@ import { allRoleLabels, primaryRoleLabel } from "../lib/identity/role-label";
 import { AccessDenied } from "../components/identity/access-denied";
 import { AccountMenu, IdentityBanners, signOut } from "../components/identity/account-menu";
 import { ConsentHost } from "../components/identity/consent-sheet";
+import { shellHeading, shownArea } from "../lib/shell-heading";
 
 export type { AreaId };
 
@@ -277,6 +278,17 @@ function planeLabel(url: string): string {
     return isLocalPlane(url) ? `local · ${host}` : host;
   } catch {
     return url;
+  }
+}
+
+/** An address only the console's own network can resolve ("api:8000", the compose service): it
+ *  names no environment a person could tell apart, so the rail shows nothing rather than it. */
+export function isInternalPlane(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return !host.includes(".") && !host.includes(":") && host !== "localhost" && !host.startsWith("[");
+  } catch {
+    return false;
   }
 }
 
@@ -609,15 +621,16 @@ function ConsoleShellInner({
         window.dispatchEvent(new PopStateEvent("popstate"));
       } catch { /* non-browser */ }
     }
-    const area = (legacy ?? new URLSearchParams(queryString)).get("area");
-    if (area && AREAS.some((a) => a.id === area)) {
-      setActive(area as AreaId);
-      return;
-    }
-    const stored = window.localStorage.getItem("boss.area");
-    if (stored && AREAS.some((a) => a.id === stored)) {
-      setActive(stored as AreaId);
-    }
+    // A route page (Identity, My account) is what its ROUTE says: a remembered area from the
+    // area page must not repaint it as Command Center (lib/shell-heading.ts).
+    const shown = shownArea({
+      routeMode, routeArea: deepLinkArea ?? null,
+      requested: (legacy ?? new URLSearchParams(queryString)).get("area"),
+      stored: window.localStorage.getItem("boss.area"),
+      known: AREAS.map((a) => a.id), fallback: active,
+    });
+    if (shown) setActive(shown as AreaId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryString]);
 
   // AN AREA OPENED FOR THE FIRST TIME IS FETCHED ONCE, WITH A REAL LOADING STATE.
@@ -968,12 +981,13 @@ function ConsoleShellInner({
   // Back/forward: restore the active area from the URL (without pushing again).
   useEffect(() => {
     const onPop = () => {
+      if (routeMode) return; // a route page's area is its route, not ?area=
       const area = new URLSearchParams(window.location.search).get("area");
       if (area && AREAS.some((a) => a.id === area)) setActive(area as AreaId);
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
+  }, [routeMode]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1019,6 +1033,7 @@ function ConsoleShellInner({
   );
 
   const activeDef = areasForEdition.find((a) => a.id === active) ?? areasForEdition[0];
+  const heading = shellHeading(areasForEdition, { routeMode, routeArea: deepLinkArea ?? null, active, title });
   const tone = budgetTone(status.budgetState);
 
   const filtered = useMemo(() => {
@@ -1248,7 +1263,7 @@ function ConsoleShellInner({
             <span className={`dot ${status.apiReachable ? "green" : "red"}`} />
             <span>{status.apiReachable ? "Control plane online" : "Control plane offline"}</span>
           </div>
-          {status.controlPlane ? (
+          {status.controlPlane && !isInternalPlane(status.controlPlane) ? (
             <div className="bx-control-host" title={status.controlPlane}
                  data-local={isLocalPlane(status.controlPlane) || undefined}
                  data-testid="control-plane-host">
@@ -1288,8 +1303,8 @@ function ConsoleShellInner({
           </GatedButton> : null}
 
           <div className="bx-topbar-title" id="boss-console-title">
-            {title?.label ?? activeDef.label}
-            <small>{title?.sub ?? activeDef.sub}</small>
+            {heading.label}
+            <small>{heading.sub}</small>
           </div>
 
           <div className="bx-topbar-spacer" />

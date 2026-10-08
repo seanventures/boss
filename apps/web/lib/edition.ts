@@ -136,14 +136,13 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
  */
 export function communityNavCopy(areaId: string): { label?: string; sub?: string; badge?: string } {
   if (areaId === "enterprise") {
-    // "Identity", not "SSO": SSO names one protocol. The subtitle says what sign-in uses TODAY:
-    // it promised "who can sign in" while the login page never consulted a provider (console
-    // walk, 2026-10-02 — lib/sign-in-truth.ts). The badge stays "SSO" because that is the
-    // thing Community is being told it INCLUDES, and it is the word somebody scanning for it
-    // would look for.
+    // "Identity", not "SSO": SSO names one protocol. The subtitle is the area's own (People,
+    // access roles, agents and sign-in): everyone signs in as themselves now, so the old line
+    // about "the installer password" was wrong. The badge stays "SSO" because that is the thing
+    // Community is being told it INCLUDES, and the word somebody scanning for it would look for.
     return {
       label: "Identity",
-      sub: "Identity providers and member sync — console sign-in is the installer password",
+      sub: "People, access roles, agents and sign-in",
       badge: "SSO",
     };
   }

@@ -30,6 +30,10 @@
 .idn-cascade[data-done="true"] h3 { color: var(--idn-ink-ok); }
 .idn-cascade .idn-fine-l { margin-top: 12px; }
 .idn-ceil-save { padding: 14px 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+/* While a limit is being changed, what changes and Save stay in view at the bottom of the window. */
+.idn-ceil-save { position: sticky; bottom: 0; z-index: 2; background: var(--surface-2); border-radius: 0 0 var(--idn-r-card) var(--idn-r-card); }
+.idn-segs-sm { gap: 4px; }
+.idn-segs-sm button { padding: 4px 9px; min-height: 28px; font-size: 12px; }
 .idn-lg-on { background: var(--teal); }
 .idn-lineage { list-style: none; margin: 0; padding: 0; }
 a.idn-dg { display: block; }

@@ -189,7 +189,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
             {passkeys.map((f) => (
               <div key={f.id} className="idn-fac">
                 <span className="idn-d" data-kind={f.kind}>{FACTOR_ICON[f.kind]}</span>
-                <span><b data-copy="data">{f.name}</b><small>Passkey · used <Ago iso={f.last_used_at} /></small></span>
+                <span><b data-copy="data">{f.name}</b><small>Passkey · {f.last_used_at ? <>used <Ago iso={f.last_used_at} /></> : "not used yet"}</small></span>
                 <span className="idn-row">
                   {f.note ? <span className="idn-dim">{f.note}</span> : null}
                   <button type="button" className="idn-btn sm ghost" aria-label={`Rename ${f.name}`} title="Rename" onClick={() => { setRename(f.name); setSheet({ rename: f }); }}><PencilSimple size={14} aria-hidden /></button>
@@ -201,7 +201,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
             ))}
             <div className="idn-fac">
               <span className="idn-d" data-kind="totp">{FACTOR_ICON.totp}</span>
-              <span><b>Authenticator app</b><small>{totp ? <>TOTP · used <Ago iso={totp.last_used_at} /></> : "Not set up"}</small></span>
+              <span><b>Authenticator app</b><small>{totp ? <>6-digit codes · {totp.last_used_at ? <>used <Ago iso={totp.last_used_at} /></> : "not used yet"}</> : "Not set up"}</small></span>
               {totp ? (
                 <button type="button" className="idn-btn sm" aria-disabled={lastFactor(totp) || undefined}
                   title={lastFactor(totp) ? "Your access role needs a second factor" : "Stop using the app"}
@@ -210,7 +210,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
             </div>
             <div className="idn-fac">
               <span className="idn-d" data-kind="recovery">{FACTOR_ICON.recovery}</span>
-              <span><b>Recovery codes</b><small>{left !== null ? `${left} of 10 left` : recovery?.detail ?? "Not made yet"}</small></span>
+              <span><b>Recovery codes</b><small>{left ? `${left} of 10 left` : left === 0 ? "None to use · make a set" : recovery?.detail ?? "None to use · make a set"}</small></span>
               <button type="button" className="idn-btn sm" data-testid="regen-codes"
                 onClick={() => act("New recovery codes replace the old ones.", async () => {
                   const r = await idPost<RecoveryCodes>("/v1/identity/me/recovery-codes", {});
@@ -236,7 +236,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
         <section className="idn-card" aria-labelledby="acc-pw-h">
           <div className="idn-card-h">
             <h2 id="acc-pw-h">Password</h2>
-            <span className="idn-sub">{me?.sign_in.password ? "Set" : "Not set"}</span>
+            <span className="idn-sub">{me?.sign_in.password ? "You have one" : "None yet"}</span>
           </div>
           <form className="idn-form" onSubmit={(e) => {
             e.preventDefault();
