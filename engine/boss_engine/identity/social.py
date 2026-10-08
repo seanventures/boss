@@ -59,8 +59,22 @@ def vouches_for(provider: Provider, ident: FederatedIdentity) -> bool:
     admin listed on the provider (its `domains`: the provider is authoritative there). A SAML
     IdP's or a social login's say-so about any other domain proves nothing."""
     email = (ident.email or "").strip()
+    if not (email and ident.email_verified):
+        return False
+    domain = _domain(email)
     trusted = {d.lower().lstrip("@") for d in (provider.domains or ())}
-    return bool(email and ident.email_verified and _domain(email) in trusted)
+    if domain in trusted:
+        return True
+    # Google is authoritative for its own consumer addresses, and for a Workspace domain when the
+    # signed token's `hd` names it. No admin has to list gmail.com by hand. This only decides
+    # whether Google may CLAIM AN INVITATION for the address; it never creates anyone (that is
+    # jit_mode on the listed domains, off by default).
+    if provider.preset == "google":
+        return domain in GOOGLE_CONSUMER_DOMAINS or (ident.hosted_domain or "") == domain
+    return False
+
+
+GOOGLE_CONSUMER_DOMAINS = frozenset({"gmail.com", "googlemail.com"})
 
 
 def link(db: Any, *, principal_id: str, provider: Provider, ident: FederatedIdentity) -> str:
