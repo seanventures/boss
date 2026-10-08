@@ -25,6 +25,7 @@ import { MySessions } from "../app/account/sessions/sessions";
 import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
 import { ROLE_PERMISSIONS, type Permission } from "../lib/identity/permissions.gen";
 import { publicAddress, sourceWords } from "../lib/identity/address";
+import { errorSentence } from "../lib/identity/api";
 import { APP_PERMISSIONS, levelOffered, limitBody, limitChanges } from "../lib/identity/github-limit";
 import { plainText } from "../lib/identity/plain";
 import { neverDelegableWhy } from "../lib/identity/words";
@@ -67,12 +68,21 @@ const q = (sel: string) => host!.querySelector(sel) as HTMLElement | null;
 async function click(el: Element | null) { expect(el).not.toBeNull(); await act(async () => { (el as HTMLElement).click(); }); await settle(); }
 
 describe("a private or container address is never where someone was", () => {
-  it("publicAddress keeps public addresses and drops private, container, tailnet and loopback ones", () => {
-    for (const ip of ["172.18.0.8", "10.0.4.12", "192.168.1.2", "127.0.0.1", "100.64.0.20", "169.254.0.1", "::1", "fd00::1", "fe80::1", "::ffff:172.18.0.8", "internal", "", null]) {
+  it("publicAddress keeps public and tailnet addresses and drops private, container and loopback ones", () => {
+    for (const ip of ["172.18.0.8", "10.0.4.12", "192.168.1.2", "127.0.0.1", "169.254.0.1", "::1", "fd00::1", "fe80::1", "::ffff:172.18.0.8", "internal", "", null]) {
       expect(publicAddress(ip), String(ip)).toBeNull();
     }
     for (const ip of ["203.0.113.9", "8.8.8.8", "172.32.0.1", "2001:4860:4860::8888"]) expect(publicAddress(ip)).toBe(ip);
     expect(publicAddress("::ffff:8.8.4.4")).toBe("8.8.4.4");
+    // A tailnet address names a real device of the person's (rc6), so it is shown.
+    for (const ip of ["100.64.0.20", "100.64.0.1", "100.127.255.254", "fd7a:115c:a1e0::1"]) expect(publicAddress(ip)).toBe(ip);
+    expect(publicAddress("::ffff:100.64.0.20")).toBe("100.64.0.20");
+    expect(sourceWords("100.64.0.20")).toBe("100.64.0.20");
+    expect(publicAddress("100.63.255.255")).toBe("100.63.255.255");
+  });
+
+  it("a refused edit of BOSS's own repo-reader Passport says so in words (rc6)", () => {
+    expect(errorSentence(409, "system_passport")).toBe("BOSS manages this agent");
     expect(sourceWords("172.18.0.8")).toBe("private");
     expect(sourceWords("internal")).toBe("BOSS itself");
     expect(sourceWords("203.0.113.9")).toBe("203.0.113.9");

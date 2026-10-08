@@ -73,6 +73,12 @@ class EmailAdapter:
         message: EmailMessage,
     ) -> None:
         if username and password:
+            # rc6 N-1: a host or org credential is never a login at an SMTP host it is not
+            # bound to (smtplib writes to the socket itself, past the http guard).
+            from .env_refs import check_outbound
+
+            check_outbound(f"smtp://{getattr(smtp, '_host', '') or self.settings.email_smtp_host}/",
+                           {"login": password})
             smtp.login(username, password)
         smtp.send_message(message)
 

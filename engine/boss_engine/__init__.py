@@ -32,4 +32,10 @@ from ._runtime_user import become_runtime_user as _become_runtime_user  # noqa: 
 
 _become_runtime_user()
 
+# rc6 N-1: a host credential is sent only to its own provider's endpoints. Every request this
+# process sends over http.client/urllib and httpx passes that check (services/env_refs.py).
+from .services.env_refs import install_outbound_guard as _install_outbound_guard  # noqa: E402
+
+_install_outbound_guard()
+
 __all__ = ["__version__"]

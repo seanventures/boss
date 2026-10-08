@@ -178,3 +178,49 @@ def test_every_checked_address_is_tried_before_giving_up(net, monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(OSError("down")))
     with pytest.raises(OutboundRefused, match="connection failed"):
         http.fetch("GET", "https://dead.example/", purpose="test")
+
+
+def test_connection_attempts_are_capped_at_two_per_address_family(net, monkeypatch):
+    # rc6 verify (LOW): 156 A records made 156 connection attempts in one fetch.
+    net["dns"]["many.example"] = ([f"93.184.{i // 250}.{i % 250 + 1}" for i in range(156)]
+                                  + [f"2606:2800:220:1::{i:x}" for i in range(1, 40)])
+    tried = []
+
+    def open_connection(scheme, host, ip, port, timeout):
+        tried.append(ip)
+        raise OSError("down")
+
+    monkeypatch.setattr(http, "_open_connection", open_connection)
+    with pytest.raises(OutboundRefused, match="connection failed"):
+        http.fetch("GET", "https://many.example/", purpose="test")
+    assert len(tried) == 4
+    assert [":" in ip for ip in tried] == [False, False, True, True]     # IPv4 first
+
+
+def test_every_answer_is_still_checked_even_past_the_cap(net):
+    # The cap limits ATTEMPTS, never the check: a private answer anywhere refuses the host.
+    net["dns"]["mixed.example"] = ["93.184.216.34", "93.184.216.35", "93.184.216.36", "10.0.0.1"]
+    with pytest.raises(OutboundRefused, match="private"):
+        http.fetch("GET", "https://mixed.example/", purpose="test")
+    assert net["connects"] == []
+
+
+@pytest.mark.parametrize("addr", [
+    "64:ff9b::a00:1",          # 10.0.0.1
+    "64:ff9b::7f00:1",         # 127.0.0.1
+    "64:ff9b::a9fe:a9fe",      # 169.254.169.254, the metadata service
+    "64:ff9b::c0a8:101",       # 192.168.1.1
+    "64:ff9b:1::a00:1",        # local-use prefix, 10.0.0.1
+    "64:ff9b:1:ffff::6440:1",  # local-use prefix, 100.64.0.1 (CGNAT)
+])
+def test_nat64_wrapping_a_private_ipv4_is_refused(net, addr):
+    assert http._is_public(addr) is False
+    net["dns"]["nat64.example"] = [addr]
+    with pytest.raises(OutboundRefused, match="private"):
+        http.fetch("GET", "https://nat64.example/", purpose="test")
+    assert net["connects"] == []
+
+
+@pytest.mark.parametrize("addr", ["64:ff9b::5db8:d822", "64:ff9b:1::808:808"])
+def test_nat64_wrapping_a_public_ipv4_is_public(addr):
+    assert http._is_public(addr) is True

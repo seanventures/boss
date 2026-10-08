@@ -249,7 +249,8 @@ def test_every_path_that_queues_a_caller_chosen_kind_authorizes_it():
         ("engine/boss_engine/services/jobs.py", "create_job"),           # the wrapper itself
         ("apps/api/app/governed_effect.py", "record_governed_effect"),   # f"governed.{code-chosen}"
         ("engine/boss_engine/services/orchestrator_next_move.py", "_advance_task"),  # a fixed map
-        ("engine/boss_engine/services/event_dispatch.py", "dispatch_event"),  # sink checked at set-up
+        # sink checked at set-up AND at dispatch (job_sink_held, asserted below)
+        ("engine/boss_engine/services/event_dispatch.py", "dispatch_event"),
     }
     flagged = set()
     for base in ("engine/boss_engine", "apps/api/app", "apps/worker"):
@@ -279,6 +280,84 @@ def test_every_path_that_queues_a_caller_chosen_kind_authorizes_it():
                     if not literal and not checks:
                         flagged.add((str(path.relative_to(ROOT)), fn.name))
     assert flagged <= safe, flagged - safe
+    # The dispatch exemption holds only while dispatch re-checks every job sink before queuing.
+    tree = ast.parse((ROOT / "engine/boss_engine/services/event_dispatch.py").read_text())
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "dispatch_event")
+    assert any(isinstance(n, ast.Call) and getattr(n.func, "id", None) == "job_sink_held"
+               for n in ast.walk(fn)), "dispatch_event must re-check job sinks (job_sink_held)"
+
+
+def _legacy_job_sink(world, kind="infra.droplet.delete", event="meeting.completed"):
+    """A job sink as one created before rc6 sits in the table: no kind_authorized_by stamp."""
+    sid = "sub_legacy_" + uuid.uuid4().hex[:10]
+    with world.engine.begin() as db:
+        db.execute(text("INSERT INTO event_subscriptions (id, project_id, event_type, sink_kind, sink_ref) "
+                        "VALUES (:i, :p, :e, 'job', :k)"), {"i": sid, "p": world.project_a, "e": event, "k": kind})
+    from boss_engine.services.event_dispatch import invalidate_subscription_cache
+
+    invalidate_subscription_cache()
+    return sid
+
+
+def _dispatch(world, ctx, event="meeting.completed"):
+    from boss_engine.services.event_dispatch import dispatch_event
+
+    with world.acting_as(ctx), world.engine.begin() as db:
+        return dispatch_event(db, event_id="evt_" + uuid.uuid4().hex[:12], project_id=world.project_a,
+                              event_type=event, actor="test", entity_type="meeting",
+                              entity_id="m1", data={})
+
+
+def _queued(world, kind):
+    return _one(world, "SELECT count(*) FROM jobs WHERE project_id = :p AND kind = :k",
+                p=world.project_a, k=kind)[0]
+
+
+def test_a_job_sink_created_before_the_check_is_held_at_dispatch(world, cast):
+    """rc6: a job sink created before C-2 was never checked; it is re-checked on its next use."""
+    sid = _legacy_job_sink(world)
+    out = _dispatch(world, world.ctx(cast["owner"]))
+    held = [o for o in out if o.get("subscription_id") == sid]
+    assert held and held[0]["held"] is True and "Re-save" in held[0]["reason"]
+    assert _queued(world, "infra.droplet.delete") == 0
+
+
+def test_a_held_job_sink_runs_again_once_someone_with_the_kinds_permission_re_saves_it(world, cast):
+    sid = _legacy_job_sink(world)
+    # Someone WITHOUT the kind's permission cannot revive it…
+    rid = world.custom_role("integ2", ("integration:manage", "project:read"))
+    erin = world.person("Erin")
+    world.bind(erin, rid, project=world.project_a)
+    with world.acting_as(world.ctx(erin)):
+        r = _client().patch(f"/v1/event-subscriptions/{sid}", headers=H,
+                            json={"project_id": world.project_a, "enabled": True, "actor": erin.id})
+    assert r.status_code == 403, r.text
+    assert _one(world, "SELECT kind_authorized_by FROM event_subscriptions WHERE id = :i", i=sid)[0] is None
+    # …the Owner (who holds it) can, and the sink then queues on the next event.
+    owner = world.ctx(cast["owner"])          # a fresh MFA session: step-up satisfied
+    with world.acting_as(owner):
+        r = _client().patch(f"/v1/event-subscriptions/{sid}", headers=H,
+                            json={"project_id": world.project_a, "enabled": True,
+                                  "actor": cast["owner"].id})
+    assert r.status_code == 200, r.text
+    assert _one(world, "SELECT kind_authorized_by FROM event_subscriptions WHERE id = :i", i=sid)[0]
+    from boss_engine.services.event_dispatch import invalidate_subscription_cache
+
+    invalidate_subscription_cache()
+    out = _dispatch(world, owner)
+    assert not any(o.get("held") for o in out if isinstance(o, dict))
+    assert _queued(world, "infra.droplet.delete") == 1
+
+
+def test_boss_own_default_job_sinks_are_not_held(world, cast):
+    from boss_engine.services.event_subscription_service import job_sink_held
+
+    sid = _legacy_job_sink(world, kind="github.triage", event="github.issue_opened")
+    with world.acting_as(world.ctx(cast["owner"])), world.engine.begin() as db:
+        sub = {"id": sid, "sink_kind": "job", "sink_ref": "github.triage", "event_type": "github.issue_opened"}
+        assert job_sink_held(db, sub) is False
+        # an unknown kind is always held, stamped or not
+        assert job_sink_held(db, {**sub, "sink_ref": "no.such.kind"}) is True
 
 
 # ---- C-3 -----------------------------------------------------------------------------------------
