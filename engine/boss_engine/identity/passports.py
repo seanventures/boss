@@ -236,6 +236,23 @@ def require(agent_id: str, *, db: Any) -> Passport:
 
 # ---- changes (people only) ---------------------------------------------------------------------------
 
+#: Passports BOSS itself defines and keeps (identity/runs.py SYSTEM_REPO_READER): a read-only
+#: authority whose ceiling, GitHub limit, spawn rules and sponsor are part of the product, so no
+#: person edits them (rc6 verify: the repo reader's Passport was editable with
+#: agent_passport:manage). A person may still suspend, resume or revoke one: stopping an agent is
+#: always theirs.
+SYSTEM_PASSPORTS: frozenset[str] = frozenset({"agt_sys_repo_reader"})
+
+SYSTEM_PASSPORT_WORDS = ("BOSS manages this agent's Passport itself: it is the read-only reader for "
+                         "work that acts for nobody, so its limits cannot be changed. You can still "
+                         "suspend or revoke it.")
+
+
+def _refuse_system(agent_id: str) -> None:
+    if agent_id in SYSTEM_PASSPORTS:
+        raise PassportError("system_passport", 409, message=SYSTEM_PASSPORT_WORDS)
+
+
 def _require_human(ctx: AuthContext, permission: str, org_id: str, db: Any) -> None:
     from . import authz
     from .scope import ResolvedScope
@@ -258,6 +275,7 @@ def set_ceiling(ctx: AuthContext, agent_id: str, permissions: frozenset[str], *,
 
     before = require(agent_id, db=db)
     _require_human(ctx, "agent_passport:manage", before.org_id, db)
+    _refuse_system(agent_id)
     if before.status == "revoked":
         raise PassportError("revoked", 409)
     perms = frozenset(permissions)
@@ -296,6 +314,7 @@ def set_rules(ctx: AuthContext, agent_id: str, *, db: Any, can_spawn: Optional[b
 
     before = require(agent_id, db=db)
     _require_human(ctx, "agent_passport:manage", before.org_id, db)
+    _refuse_system(agent_id)
     if before.status == "revoked":
         raise PassportError("revoked", 409)
     if max_depth is not None and not 0 <= max_depth <= HARD_MAX_DEPTH:
@@ -397,6 +416,7 @@ def reissue(ctx: AuthContext, old_agent_id: str, new_agent_id: str, *, db: Any) 
 
     old = require(old_agent_id, db=db)
     _require_human(ctx, "agent_passport:manage", old.org_id, db)
+    _refuse_system(old_agent_id)
     if old.status != "revoked":
         raise PassportError("not_revoked", 409)
     new = ensure_passport(org_id=old.org_id, agent_id=new_agent_id, role_key=old.role_key,

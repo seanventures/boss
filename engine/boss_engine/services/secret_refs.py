@@ -191,6 +191,15 @@ class SecretRefService:
             scope_type=normalized_scope_type,
             scope_id=normalized_scope_id,
         )
+        # rc6 N-1: an `env` reference names the HOST's credential, and an org or workspace scope
+        # hands the reference to every project there: both need integration:manage at the org.
+        if ref_kind == "env" or normalized_scope_type in ("org", "workspace"):
+            from .env_refs import require_host_credential_authority
+
+            require_host_credential_authority(
+                connection, project_id,
+                f"An env reference ({ref_key})" if ref_kind == "env"
+                else f"A reference scoped to the {normalized_scope_type}")
         normalized_secret_kind = secret_kind.strip().lower()
         if normalized_secret_kind not in self.ALLOWED_SECRET_KINDS:
             raise ValueError(
@@ -279,6 +288,15 @@ class SecretRefService:
         actor: str,
     ) -> dict[str, Any]:
         existing = self.get_secret_ref(connection, project_id, secret_ref_id)
+        # rc6 N-1: a host or org-wide reference's provider and metadata (its allowed hosts) say
+        # where its value may be sent; changing them is the org's act, not a project's.
+        if (provider is not None or metadata is not None) and (
+                existing.get("ref_kind") == "env"
+                or str(existing.get("scope_type") or "project") in ("org", "workspace")):
+            from .env_refs import require_host_credential_authority
+
+            require_host_credential_authority(connection, project_id,
+                                              f"The reference {secret_ref_id}")
         next_status = status or existing["status"]
         if existing["status"] == "revoked" and next_status != "revoked":
             raise ValueError("Revoked SecretRefs cannot be reactivated.")

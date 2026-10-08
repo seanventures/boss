@@ -12,7 +12,7 @@ from boss_engine.identity.where import public_address, sign_in_origin
 
 @pytest.mark.parametrize("ip", [
     "172.18.0.8", "172.16.0.1", "172.31.255.254", "10.0.0.5", "192.168.1.20", "127.0.0.1",
-    "100.93.58.20", "169.254.1.1", "::1", "fd7a:115c:a1e0::1", "fe80::1", "::ffff:172.18.0.8",
+    "169.254.1.1", "::1", "fd00::1", "fe80::1", "::ffff:172.18.0.8",
     "0.0.0.0", "", None, "not-an-ip", "fe80::1%eth0",
 ])
 def test_a_private_internal_or_unknown_address_is_a_new_device(ip):
@@ -23,6 +23,10 @@ def test_a_private_internal_or_unknown_address_is_a_new_device(ip):
 @pytest.mark.parametrize("ip,shown", [
     ("203.0.113.9", "203.0.113.9"), ("8.8.8.8", "8.8.8.8"), ("172.32.0.1", "172.32.0.1"),
     ("2001:4860:4860::8888", "2001:4860:4860::8888"), ("::ffff:8.8.4.4", "8.8.4.4"),
+    # A tailnet address names a real device of the person's (rc6): shown, not hidden.
+    ("100.93.58.20", "100.93.58.20"), ("100.64.0.1", "100.64.0.1"),
+    ("100.127.255.254", "100.127.255.254"), ("fd7a:115c:a1e0::1", "fd7a:115c:a1e0::1"),
+    ("::ffff:100.93.58.20", "100.93.58.20"),
 ])
 def test_a_public_address_is_named(ip, shown):
     assert public_address(ip) == shown

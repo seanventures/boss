@@ -49,6 +49,7 @@ from boss_engine.mcp.api_surface import (
     operation_alias as mcp_operation_alias,
 )
 from boss_engine.services import decision_actions, mcp_confirmation
+from boss_engine.services.env_refs import HostCredentialAuthorityRequired
 
 from .bootstrap import seed
 from .bootstrap_ports import build_ports
@@ -11462,6 +11463,10 @@ async def preview_websocket_proxy(websocket: WebSocket, preview_id: str, path: s
                if row["mode"] == "rootfs" and settings.sandbox_token else None)
     try:
         import websockets
+
+        from boss_engine.services.env_refs import check_outbound
+
+        check_outbound(target, headers)   # rc6 N-1: websockets writes past the http guard
         async with websockets.connect(target, additional_headers=headers) as upstream:
             async def client_to_upstream():
                 while True:
@@ -18067,6 +18072,8 @@ def create_secret_ref(payload: SecretRefCreateRequest) -> SecretRefSummary:
                 storage_backend=payload.storage_backend,
                 rotation_due_at=payload.rotation_due_at,
             )
+        except HostCredentialAuthorityRequired as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return secret_ref_summary_from_service(item)
@@ -18106,6 +18113,8 @@ def update_secret_ref(
                 rotation_due_at=payload.rotation_due_at,
                 actor=payload.actor,
             )
+        except HostCredentialAuthorityRequired as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
         except SecretRefNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
@@ -27355,6 +27364,8 @@ def connect_work_tracker(payload: open_bodies.WorkTrackerConnectBody) -> dict[st
                 test=bool(payload.get("test", True)),
                 api_token=payload.get("api_token"),
             )
+        except HostCredentialAuthorityRequired as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 

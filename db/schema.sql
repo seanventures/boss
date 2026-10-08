@@ -2652,6 +2652,9 @@ CREATE TABLE IF NOT EXISTS event_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_event_subscriptions_match
   ON event_subscriptions(project_id, enabled, event_type);
+-- rc6: who passed the job-kind check for a job sink (C-2). NULL on a sink created before the
+-- check existed: dispatch holds it until a person who holds the kind's permission re-saves it.
+ALTER TABLE event_subscriptions ADD COLUMN IF NOT EXISTS kind_authorized_by TEXT;
 
 CREATE TABLE IF NOT EXISTS webhook_endpoints (
   id TEXT PRIMARY KEY,

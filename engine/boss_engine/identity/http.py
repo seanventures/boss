@@ -52,6 +52,22 @@ def _resolve(host: str, port: int) -> list[str]:
     return sorted({info[4][0] for info in infos})
 
 
+#: NAT64 prefixes whose last 32 bits are the IPv4 address actually reached.
+_NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
+
+#: Connection attempts per address family. A name with 156 A records made 156 attempts in one
+#: fetch (bounded only by the total timeout); two per family is enough to ride out one dead address.
+MAX_CANDIDATES_PER_FAMILY = 2
+
+
+def _candidates(addrs: list[str]) -> list[str]:
+    """IPv4 first (a container with no IPv6 route still connects), at most
+    MAX_CANDIDATES_PER_FAMILY of each family."""
+    v4 = sorted(a for a in addrs if ":" not in a)[:MAX_CANDIDATES_PER_FAMILY]
+    v6 = sorted(a for a in addrs if ":" in a)[:MAX_CANDIDATES_PER_FAMILY]
+    return v4 + v6
+
+
 def _is_public(addr: str) -> bool:
     try:
         ip = ipaddress.ip_address(addr.split("%", 1)[0])
@@ -61,6 +77,10 @@ def _is_public(addr: str) -> bool:
         ip = ip.ipv4_mapped
     if ip.version == 6 and ip.sixtofour is not None:
         ip = ip.sixtofour
+    if ip.version == 6 and any(ip in net for net in _NAT64):
+        # NAT64 (RFC 6052 well-known 64:ff9b::/96, local-use 64:ff9b:1::/48): the gateway connects
+        # to the IPv4 in the last 32 bits, so that address is the one judged.
+        ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
     # is_global excludes loopback, RFC 1918, link-local (incl. 169.254.169.254), CGNAT
     # 100.64/10, ULA fc00::/7, ::1, unspecified and the documentation ranges.
     return bool(ip.is_global) and not ip.is_multicast
@@ -189,14 +209,23 @@ def fetch(method: str, url: str, *, headers: Optional[Mapping[str, str]] = None,
             if allowed_private:
                 print(f"[identity] outbound to allow-listed private host {host} ({purpose})",
                       flush=True)
-            # IPv4 first: a host whose IPv6 answer it cannot route (a container with no v6) still
-            # connects. Every candidate was checked public above; whichever connects is pinned.
-            pinned[host] = sorted(addrs, key=lambda a: (":" in a, a))
+            # IPv4 first, two per family: a host whose IPv6 answer it cannot route (a container with
+            # no v6) still connects. Every answer was checked public above; whichever connects is
+            # pinned.
+            pinned[host] = _candidates(addrs)
         target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
         host_header = host if parts.port is None else f"{host}:{parts.port}"
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise OutboundRefused("total timeout exceeded")
+        # rc6 N-1: a host credential goes only to its own provider (services/env_refs.py),
+        # judged before any connection is opened.
+        from ..services.env_refs import CredentialMisdirected, check_outbound
+
+        try:
+            check_outbound(current, dict(headers or {}), data)
+        except CredentialMisdirected as exc:
+            raise OutboundRefused(str(exc)) from None
         sock = None
         failure: Optional[BaseException] = None
         for ip in pinned[host]:

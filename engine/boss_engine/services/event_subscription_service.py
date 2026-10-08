@@ -200,6 +200,44 @@ def list_event_subscriptions(
     return [_row(row) for row in rows]
 
 
+def _authorizer(actor: str) -> str:
+    """Who passed the job-kind check that a job sink's stamp records: the verified principal
+    when a request carries one, else the in-process actor."""
+    from ..identity import lineage
+
+    ctx = lineage.current_context()
+    principal = getattr(getattr(ctx, "principal", None), "id", None) if ctx else None
+    return str(principal or actor or "system")
+
+
+def job_sink_held(connection: Connection, subscription: dict[str, Any]) -> bool:
+    """IS THIS JOB SINK HELD AT DISPATCH (rc6)? The job-kind check (C-2) runs when a sink is set
+    up, re-pointed or re-enabled, and stamps `kind_authorized_by`. A sink created before that
+    check existed carries no stamp, so nobody's permission ever covered the kind it queues on
+    every event: it is re-checked on its next use, here, and held (not queued) until a person
+    who holds the kind's permission saves or re-enables it. BOSS's own default sinks
+    (DEFAULT_EVENT_SUBSCRIPTIONS) are not held, and a kind BOSS does not know is always held.
+    Shadow/off: never held, as require_job_kind allows there."""
+    if subscription.get("sink_kind") != "job":
+        return False
+    from ..identity.job_permissions import _enforced, permission_for
+
+    kind = str(subscription.get("sink_ref") or "")
+    stamped = connection.execute(text(
+        "SELECT kind_authorized_by FROM event_subscriptions WHERE id = :i"),
+        {"i": subscription["id"]}).scalar()
+    if not _enforced():
+        return False
+    if stamped == "boss":
+        return False           # BOSS's own (seeded defaults, the canary): never a worker kind check
+    if permission_for(kind) is None:
+        return True
+    if stamped:
+        return False
+    return not any(d["sink_ref"] == kind and d["event_type"] == subscription.get("event_type")
+                   for d in DEFAULT_EVENT_SUBSCRIPTIONS)
+
+
 def create_event_subscription(
     connection: Connection,
     project_id: str,
@@ -226,17 +264,19 @@ def create_event_subscription(
 
         require_job_kind(sink_ref.strip(), project_id, db=connection)
     subscription_id = make_id("sub")
+    authorized_by = (_authorizer(actor) if authorize else "boss") \
+        if normalized_sink_kind == "job" else None
     try:
         row = connection.execute(
             text(
                 """
                 INSERT INTO event_subscriptions (
                     id, project_id, event_type, sink_kind, sink_ref,
-                    data_boundary, enabled, config
+                    data_boundary, enabled, config, kind_authorized_by
                 )
                 VALUES (
                     :id, :project_id, :event_type, :sink_kind, :sink_ref,
-                    :data_boundary, :enabled, CAST(:config AS JSONB)
+                    :data_boundary, :enabled, CAST(:config AS JSONB), :kind_authorized_by
                 )
                 RETURNING id, project_id, event_type, sink_kind, sink_ref,
                           data_boundary, enabled, config, created_at, updated_at
@@ -251,6 +291,7 @@ def create_event_subscription(
                 "data_boundary": normalized_boundary,
                 "enabled": bool(enabled),
                 "config": json.dumps(config or {}),
+                "kind_authorized_by": authorized_by,
             },
         ).mappings().one()
     except IntegrityError as exc:
@@ -351,6 +392,11 @@ def update_event_subscription(
         from ..identity.job_permissions import require_job_kind
 
         require_job_kind(str(row["sink_ref"]), project_id, db=connection)
+        connection.execute(text(
+            "UPDATE event_subscriptions SET kind_authorized_by = :by "
+            "WHERE id = :subscription_id AND project_id = :project_id"),
+            {"by": _authorizer(actor), "subscription_id": subscription_id,
+             "project_id": project_id})
     _invalidate(project_id)
     emit_event(
         connection,
@@ -412,17 +458,18 @@ def ensure_event_subscription(
             """
             INSERT INTO event_subscriptions (
                 id, project_id, event_type, sink_kind, sink_ref,
-                data_boundary, enabled, config
+                data_boundary, enabled, config, kind_authorized_by
             )
             VALUES (
                 :id, :project_id, :event_type, :sink_kind, :sink_ref,
-                :data_boundary, :enabled, CAST(:config AS JSONB)
+                :data_boundary, :enabled, CAST(:config AS JSONB), 'boss'
             )
             ON CONFLICT (project_id, event_type, sink_kind, sink_ref)
             DO UPDATE SET
                 data_boundary = EXCLUDED.data_boundary,
                 enabled = EXCLUDED.enabled,
                 config = EXCLUDED.config,
+                kind_authorized_by = 'boss',
                 updated_at = now()
             RETURNING id, project_id, event_type, sink_kind, sink_ref,
                       data_boundary, enabled, config, created_at, updated_at
