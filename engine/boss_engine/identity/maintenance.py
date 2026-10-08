@@ -59,10 +59,19 @@ def tick(engine: Any, *, now: Optional[datetime] = None, force: bool = False) ->
 
     now = now or datetime.now(timezone.utc)
     out: dict[str, Any] = {}
+    # PER PROCESS, before the cross-process lock: the unscoped GitHub App tokens this process
+    # minted live in its own memory, so no other process can revoke them (id-sec-final2).
+    try:
+        from .github_setup import sweep_control_plane_tokens
+
+        out["control_plane_tokens"] = sweep_control_plane_tokens()
+    except Exception as exc:  # noqa: BLE001 — logged; the next pass retries
+        log.warning("identity maintenance step control_plane_tokens failed: %s", type(exc).__name__)
+        out["control_plane_tokens"] = f"failed:{type(exc).__name__}"
     with engine.begin() as db:
         got = db.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": _LOCK_KEY}).scalar()
         if not got:
-            return {"skipped": "another process holds the maintenance lock"}
+            return {**out, "skipped": "another process holds the maintenance lock"}
         steps = [
             ("expired_grants", lambda c: grants.expire_due(db=c, now=now)),
             ("ended_workflow_grants", lambda c: end_finished_workflow_grants(db=c)),

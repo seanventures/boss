@@ -180,7 +180,7 @@ Always pass `-u boss`: the api container starts as root (to fence the build sand
 | --- | --- |
 | `setup-link` | A new link to claim this BOSS, valid once for one hour. Only while the install has no Owner. |
 | `host-key` | Issues a new key for the host tools (service account **Host tools**) and keeps it in `.env` as `BOSS_HOST_API_KEY`. The old one stops. With `boss identity` it is never printed. |
-| `recover-owner --email E` | Makes a locked-out person an active Owner again, removes their authenticator app and recovery codes, ends their sessions, and prints a single-use link valid for 15 minutes. Recorded as `owner.recovered_by_host`. |
+| `recover-owner --email E` | Makes a locked-out person an active Owner again and assumes the account was compromised: removes their authenticator app, passkeys and recovery codes, ends all their sessions, revokes all their personal API keys, and prints a single-use link valid for 15 minutes. It says what it ended, and `owner.recovered_by_host` records the counts. Under Enforce SSO this link is the Owner's break-glass, like their passkey; an Admin's reset link is refused for an SSO domain. |
 | `legacy status` | Lists every legacy credential with its principal, use count, last use and cutoff. |
 | `legacy retire --path network_mode` | Ends a legacy credential now: `network_mode`, `shared_password` or `console_api_key`. |
 | `audit verify` | Verifies the hash chain and records the result. |
@@ -193,6 +193,19 @@ Always pass `-u boss`: the api container starts as root (to fence the build sand
 | `egress-key [--revoke-others]` | Issues the egress service's key. Prints it; run it with the `docker compose … exec -u boss` form. |
 | `seed-test-accounts --org O --owner-email E --out F [--domain D] [--i-know]` | Creates (or refreshes) one person per access role (Owner, Admin, Operator, Viewer, Auditor), the custom role `developer` with a person, and the service account `seed-ci` with a key, all as the Owner E. Passwords, TOTP secrets for roles that need MFA, and the key are written only to F, created with mode 0600; nothing secret is printed. Refused when the install looks like production (no `BOSS_ENVIRONMENT=dev/test/e2e/ci/staging` and a public origin that is not localhost or `.test`/`.local`) unless `--i-know`. Running it again gives the same accounts new credentials. Delete F when you are done. `boss identity` refuses it; use the `docker compose … exec -u boss` form. |
 | `migrate` | Re-runs the mapping of legacy members, keys, grants and SCIM data. It runs by itself at startup, and running it again changes nothing that is already mapped. |
+
+### What the host tools' key can do without step-up
+
+`BOSS_HOST_API_KEY` (the **Host tools** service account) is a bearer key, and a key cannot do a step-up. It holds what the old shared `BOSS_API_KEY` could do, and that includes permissions a person must step up for, such as `org:delete`, `host:exec`, `sandbox:exec`, `secret:manage`, `kms_key:manage`, `decision:approve`, `changeset:approve`, `activity:prune` and `deployment:production`. The key uses them without step-up. This is by design: it is minted only from the host shell, kept only in `.env` (mode 0600), and stored by BOSS only as a hash.
+
+Two limits always hold:
+
+- It can never use the identity-administration permissions or `approval_rule:manage`. Those always need a person who stepped up.
+- It is never passed into an agent's environment, even if `BOSS_AGENT_ENV_ALLOW` names it. The same goes for `BOSS_MCP_API_KEY` and any other `BOSS_*API_KEY`.
+
+Treat the key like the machine's root password. If it may have leaked, run `boss identity host-key` to replace it; the old key stops at once.
+
+A personal or service-account key that is restricted to some projects keeps any org-wide permissions its owner holds. The project list narrows only the project-scoped permissions.
 
 ## Next steps
 

@@ -928,9 +928,20 @@ class Settings(BaseSettings):
     # Auto-approval still WRITES the decision and resolves it as `auto_approval`, so the audit
     # trail is identical to a human approval and the PRD is still readable on the card. Set
     # BOSS_MEETING_PRD_AUTO_APPROVE=false to put the human gate back.
-    meeting_prd_auto_approve: bool = Field(
-        default=True, alias="BOSS_MEETING_PRD_AUTO_APPROVE"
+    #
+    # UNDER IDENTITY ENFORCEMENT THE DEFAULT IS OFF (id-sec-final2): an automatic approval is a
+    # setting approving a tier-2 decision, so the tier's seat (ceo) would never apply to a PRD.
+    # Unset, it follows BOSS_AUTHZ_MODE: off under `enforce`, on otherwise. Setting it either way
+    # still wins (an Owner who wants the panel's PRD to go straight to a build says so in .env).
+    meeting_prd_auto_approve: Optional[bool] = Field(
+        default=None, alias="BOSS_MEETING_PRD_AUTO_APPROVE"
     )
+
+    @model_validator(mode="after")
+    def _prd_auto_approve_follows_enforcement(self):
+        if self.meeting_prd_auto_approve is None:
+            self.meeting_prd_auto_approve = (self.authz_mode or "").strip().lower() != "enforce"
+        return self
     # Cost/rigor dial for the governed pipeline: lean | balanced | strict (or a custom profile
     # name once the profiles API lands). Scales which steps run and which models run them.
     pipeline_profile: str = Field(default="balanced", alias="BOSS_PIPELINE_PROFILE")

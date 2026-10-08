@@ -314,6 +314,26 @@ def _tick_improve(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("improve_tick_failed", exc_info=True)
 
 
+CONTROL_PLANE_TOKEN_SWEEP_SECONDS = 60
+_last_token_sweep_monotonic = 0.0
+
+
+def _tick_control_plane_tokens() -> None:
+    """Revoke this process's unscoped GitHub App tokens that are due (id-sec-final2): the list is
+    in-process, so every process that mints one sweeps its own. Never kills the worker."""
+    global _last_token_sweep_monotonic
+    now = time.monotonic()
+    if now - _last_token_sweep_monotonic < CONTROL_PLANE_TOKEN_SWEEP_SECONDS:
+        return
+    _last_token_sweep_monotonic = now
+    try:
+        from boss_engine.identity.github_setup import sweep_control_plane_tokens
+
+        sweep_control_plane_tokens()
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("control_plane_token_sweep_failed", exc_info=True)
+
+
 def _tick_agent_processes(client: ControlPlaneClient, settings) -> None:
     global _last_agent_process_monotonic
     now = time.monotonic()
@@ -678,6 +698,7 @@ def main() -> None:
             _tick_factory_flow(client, settings)
             _tick_agent_wakeups(client, settings)
             _tick_improve(client, settings)
+            _tick_control_plane_tokens()
             if _STOPPING:
                 break
             if not ran_job:

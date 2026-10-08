@@ -160,7 +160,7 @@ Someone with a shell on the BOSS machine can recover them:
 boss identity recover-owner --email you@example.com
 ```
 
-This makes that person an active Owner, removes their authenticator app and recovery codes, ends their sessions, and prints a link that works once, for 15 minutes. It is recorded in the audit log as **BOSS host CLI**, and every Owner sees a banner about it for 7 days. Nothing in the console or the API can run it.
+This makes that person an active Owner and treats the account as compromised: it removes their authenticator app, passkeys and recovery codes, ends all their sessions, revokes all their personal API keys, and prints a link that works once, for 15 minutes. It is recorded in the audit log as **BOSS host CLI**, and every Owner sees a banner about it for 7 days. Nothing in the console or the API can run it.
 
 ## Next steps
 

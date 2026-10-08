@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import re
 import secrets
 import threading
 from dataclasses import asdict, dataclass, field
@@ -82,7 +83,7 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "authz.denied", "authz.shadow_deny", "authz.allowed_critical", "authz.mode_changed",
     "access.requested", "access.request_granted", "access.request_declined",
     # approvals and seats (§6.13)
-    "decision.approval_recorded", "approval_seat.changed",
+    "decision.approval_recorded", "decision.approval_voided", "approval_seat.changed",
     # notices (who was told what; never the content)
     "notice.mfa_reset", "notice.grant_expiring",
     # policy and system
@@ -461,27 +462,65 @@ def _iter_rows(db: Any, org_id: str, *, from_seq: int = 0, batch: int = 2000
         after = int(rows[-1]["seq"])
 
 
-def _checkpoints(db: Any, org_id: str) -> list[dict[str, Any]]:
-    rows = db.execute(_sql(
-        "SELECT seq, details FROM identity_security_events WHERE org_id = :o "
-        "AND event_type = 'audit.checkpoint' ORDER BY seq"), {"o": org_id}).mappings().all()
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+def _checkpoint_fields(seq: int, d: Any) -> Optional[dict[str, Any]]:
+    """A checkpoint's fields, validated (D3), or None when malformed: pruned_through_seq an int in
+    [1, seq), last_pruned_hash 64 hex digits, retained {int <= pruned_through: 64 hex}."""
+    if not isinstance(d, dict):
+        return None
+    upper, last, kept = d.get("pruned_through_seq"), d.get("last_pruned_hash"), d.get("retained") or {}
+    if isinstance(upper, bool) or not isinstance(upper, int) or not 1 <= upper < seq:
+        return None
+    if not isinstance(last, str) or not _HEX64.fullmatch(last) or not isinstance(kept, dict):
+        return None
+    retained: dict[int, str] = {}
+    for k, v in kept.items():
+        if not (isinstance(k, str) and k.isdigit() and 1 <= int(k) <= upper
+                and isinstance(v, str) and _HEX64.fullmatch(v)):
+            return None
+        retained[int(k)] = v
+    return {"seq": seq, "pruned_through_seq": upper, "last_pruned_hash": last, "retained": retained}
+
+
+def _checkpoints(db: Any, org_id: str, key: Optional[bytes]) -> tuple[list[dict[str, Any]], Optional[int]]:
+    """(the org's checkpoints, the seq of the first BAD one or None). A checkpoint licenses a
+    prune, so its own hash (the HMAC under a keyed chain) is verified BEFORE any field of it is
+    read, and a malformed one is a break at its seq (D3) — never an exception, never a 500."""
+    rows = db.execute(_sql(_SELECT + " WHERE org_id = :o AND event_type = 'audit.checkpoint' ORDER BY seq"),
+                      {"o": org_id}).mappings().all()
     out = []
-    for r in rows:
-        d = r["details"] if isinstance(r["details"], dict) else json.loads(r["details"] or "{}")
-        if "pruned_through_seq" in d:
-            out.append({"seq": int(r["seq"]), **d})
-    return out
+    for raw in rows:
+        row = row_from_db(raw)
+        seq = int(row["seq"])
+        alg = int(row.get("hash_alg") or ALG_SHA256)
+        try:
+            genuine = not (key is not None and alg != ALG_HMAC) and \
+                chain_hash(row["prev_hash"], row, alg=alg, key=key) == row["hash"]
+        except Exception:  # noqa: BLE001 — a row that cannot even be hashed is not genuine
+            genuine = False
+        fields = _checkpoint_fields(seq, row.get("details")) if genuine else None
+        if fields is None:
+            return out, seq
+        out.append(fields)
+    return out, None
 
 
 def verify_chain(org_id: str, *, db: Any, from_seq: Optional[int] = None) -> ChainVerification:
-    """Walk the chain and report the first break (A75). Checkpoints from pruning are honoured."""
-    checkpoints = _checkpoints(db, org_id)
-    pruned_through = max((int(c["pruned_through_seq"]) for c in checkpoints), default=0)
+    """Walk the chain and report the first break (A75). Checkpoints from pruning are honoured —
+    once their own hash is verified; a forged or malformed one is the break (D3)."""
+    key = chain_key(org_id, db=db)
+    checkpoints, bad = _checkpoints(db, org_id, key)
+    if bad is not None:
+        return ChainVerification(False, org_id, 0, bad, first_break_seq=bad,
+                                 verified_at=datetime.now(timezone.utc))
+    pruned_through = max((c["pruned_through_seq"] for c in checkpoints), default=0)
     anchor_hash: dict[int, bytes] = {}
     retained: dict[int, str] = {}
     for c in checkpoints:
-        anchor_hash[int(c["pruned_through_seq"])] = bytes.fromhex(c["last_pruned_hash"])
-        retained.update({int(k): v for k, v in (c.get("retained") or {}).items()})
+        anchor_hash[c["pruned_through_seq"]] = bytes.fromhex(c["last_pruned_hash"])
+        retained.update(c["retained"])
 
     expected_seq: Optional[int] = None
     expected_prev: Optional[bytes] = None
@@ -495,7 +534,6 @@ def verify_chain(org_id: str, *, db: Any, from_seq: Optional[int] = None) -> Cha
 
     checked = 0
     last_seq = 0
-    key = chain_key(org_id, db=db)
     for row in _iter_rows(db, org_id, from_seq=from_seq or 0):
         seq = int(row["seq"])
         last_seq = seq

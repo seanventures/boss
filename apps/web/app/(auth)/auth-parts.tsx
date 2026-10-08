@@ -179,9 +179,11 @@ export function safeNextClient(value: string | null | undefined): string {
 export function linkToken(kind: AuthLinkKind): string {
   if (typeof window === "undefined") return "";
   const key = AUTH_LINKS[kind].fragment;
+  // The FRAGMENT only: a token in the query string has already been written to an access log
+  // (the console's, the proxy's), so a `?t=` link is never honoured (id-sec-final2). BOSS never
+  // mints one; a hand-edited link fails closed and the person asks for a new one.
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-  const query = new URLSearchParams(window.location.search);
-  return hash.get(key) ?? query.get(key) ?? "";
+  return hash.get(key) ?? "";
 }
 
 /** The fragment's `t`: the magic-link page's older spelling of `linkToken("magic_link")`. */

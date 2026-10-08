@@ -36,11 +36,11 @@ describe("the pass-through forwards the person and nothing that names a principa
     expect(parseIdentityCookies(raw)[SESSION_COOKIE]).toBe("bss_abc");
   });
 
-  it("partitions cached reads by session, never by URL alone", () => {
-    const a = sessionTag(new Headers({ cookie: `${SESSION_COOKIE}=bss_owner` }));
-    const b = sessionTag(new Headers({ cookie: `${SESSION_COOKIE}=bss_viewer` }));
+  it("partitions cached reads by session, never by URL alone", async () => {
+    const a = await sessionTag(new Headers({ cookie: `${SESSION_COOKIE}=bss_owner` }));
+    const b = await sessionTag(new Headers({ cookie: `${SESSION_COOKIE}=bss_viewer` }));
     expect(a).not.toBe(b);
-    expect(sessionTag(new Headers())).toBe("anon");
+    expect(await sessionTag(new Headers())).toBe("anon");
     expect(a).not.toContain("bss_owner");
   });
 });

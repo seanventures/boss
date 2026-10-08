@@ -447,17 +447,14 @@ class DecisionService:
                     f"({safe_default}) was applied."
                 )
 
-        if action == "approve" and identity_ctx is not None:
-            from ..identity import approvals as _approvals
-
-            _approvals.require_approval(connection, identity_ctx, row)
-
         if action == "approve":
             # AN APPROVAL OF WHAT THE APPROVER SAW. A gated step's decision carries a preview of
             # what it will send and a hash of that content; the console sends back the hash it
             # showed. If the preview has moved on since (an upstream step was re-run), this
             # approval was of other content and is refused. The hash that WAS approved is
             # recorded, and the runner refuses to run the step on anything else.
+            # C-3: checked BEFORE require_approval, so a stale first-of-two approval is never
+            # recorded; each recorded approval carries the hash it approved.
             recommendation = row.get("recommendation")
             if isinstance(recommendation, str):
                 try:
@@ -473,6 +470,10 @@ class DecisionService:
                     "What this step would send changed while you were reviewing it, so this "
                     "approval was not recorded. Reload, read the updated preview, and approve "
                     "again if it is still right.")
+            if identity_ctx is not None:
+                from ..identity import approvals as _approvals
+
+                _approvals.require_approval(connection, identity_ctx, row, content_hash=current_hash)
             connection.execute(
                 text(
                     """
@@ -2148,6 +2149,29 @@ def extend_run_of_prd(connection: Connection, row: dict[str, Any],
         if match:
             return match.group(1)
     return None
+
+
+def approve_by_policy(connection: Connection, decision_id: str, *, project_id: str, actor: str,
+                      note: str) -> bool:
+    """The ONLY other writer of `decisions.status = 'approved'` besides `transition` (C-1): a
+    setting (the autonomy policy) approving a gate no person reviewed. It approves only a decision
+    whose risk tier needs NO seat and no second person — anything that does goes through
+    `transition` and `approvals.require_approval`, whoever asks. True when it approved."""
+    from ..identity import approvals as _approvals
+
+    row = connection.execute(text(
+        "SELECT risk_tier, status FROM decisions WHERE id = :id AND project_id = :p FOR UPDATE"),
+        {"id": decision_id, "p": project_id}).mappings().first()
+    if row is None or row["status"] != "pending":
+        return False
+    tier = int(row["risk_tier"] or 0)
+    if _approvals.seats_for_tier(tier) or tier in _approvals.TWO_PERSON_TIERS:
+        return False
+    done = connection.execute(text(
+        "UPDATE decisions SET status = 'approved', approved_by = :actor, approved_at = now(), "
+        "resolution_note = :note WHERE id = :id AND project_id = :p AND status = 'pending' "
+        "RETURNING id"), {"id": decision_id, "p": project_id, "actor": actor, "note": note}).first()
+    return done is not None
 
 
 def _identity_decides(connection: Connection, row: dict) -> Any:

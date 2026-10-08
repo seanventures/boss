@@ -150,8 +150,11 @@ NOT_READERS = {
         "sets a decision to delegated",
     ("engine/boss_engine/services/autonomy.py", "apply_policy"):
         "auto-approves pending decisions a policy covers (a writer)",
-    ("engine/boss_engine/services/resource_plane.py", "approve_changeset"):
-        "approves the change set's own pending decision (a writer)",
+    ("engine/boss_engine/services/resource_plane.py", "_approve_linked_decision"):
+        "a writer's guard: approves the change set's own open decision, through "
+        "decisions.transition (C-1), only while it is open",
+    ("engine/boss_engine/services/decisions.py", "approve_by_policy"):
+        "the policy approval writer (C-1): approves a pending, seat-free decision",
     ("engine/boss_engine/services/assurance.py", "schedule_due_metric_evaluations"):
         "deduplication: does not raise a second restore decision while one is pending",
     ("engine/boss_engine/services/core.py", "_create_blocking_decision_postgres"):

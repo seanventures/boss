@@ -3245,6 +3245,13 @@ class ResourcePlaneService:
         policy_result["approvals"] = approvals
         missing = [role for role in required if role not in set(approvals)]
 
+        # C-1: THE CHANGESET'S DECISION IS APPROVED ONLY THROUGH decisions.transition — the one
+        # place the seat, the human session and the two-person rule are checked
+        # (approvals.require_approval). Never a raw UPDATE here: a seatless person approving a
+        # tier-3 ChangeSet alone is exactly what that path exists to refuse. First, so a refusal
+        # changes nothing; a recorded first-of-two approval keeps this person's role approval too.
+        self._approve_linked_decision(connection, row, actor, policy_result)
+
         if missing:
             connection.execute(
                 text(
@@ -3294,21 +3301,6 @@ class ResourcePlaneService:
                 "policy_result": json.dumps(policy_result),
             },
         )
-        if row["approval_decision_id"]:
-            connection.execute(
-                text(
-                    """
-                    UPDATE decisions
-                    SET status = 'approved',
-                        approved_by = :actor,
-                        approved_at = now(),
-                        updated_at = now(),
-                        resolution_note = 'Approved through ProviderOps ChangeSet endpoint.'
-                    WHERE id = :decision_id AND status = 'pending'
-                    """
-                ),
-                {"decision_id": row["approval_decision_id"], "actor": actor},
-            )
         emit_event(
             connection,
             row["project_id"],
@@ -3323,6 +3315,32 @@ class ResourcePlaneService:
             },
         )
         return self.get_changeset(connection, row["project_id"], changeset_id)
+
+    def _approve_linked_decision(self, connection: Connection, row: dict[str, Any], actor: str,
+                                 policy_result: dict[str, Any]) -> None:
+        """Approve the ChangeSet's open approval decision through DecisionService.transition.
+        On ApprovalPending (the first of two people for a tier-3 decision) this person's
+        ChangeSet role approval is recorded too, then the pending answer propagates."""
+        decision_id = row.get("approval_decision_id")
+        if not decision_id:
+            return
+        status = connection.execute(text("SELECT status FROM decisions WHERE id = :d"),
+                                    {"d": decision_id}).scalar()
+        if status not in {"pending", "delegated"}:
+            return
+        from ..identity.approvals import ApprovalPending
+        from .decisions import DecisionService
+
+        try:
+            DecisionService(self.settings).transition(
+                connection, decision_id, action="approve", actor=actor,
+                note="Approved through the ChangeSet's approve.")
+        except ApprovalPending:
+            connection.execute(
+                text("UPDATE changesets SET policy_result = CAST(:pr AS JSONB), updated_at = now() "
+                     "WHERE id = :id"),
+                {"id": row["id"], "pr": json.dumps(policy_result)})
+            raise
 
     @staticmethod
     def _phased_skill(changeset: dict[str, Any]) -> Optional[str]:
@@ -9945,6 +9963,10 @@ class ResourcePlaneService:
             raise ProviderCredentialError(
                 "Only env SecretRef values are supported in this runtime slice."
             )
+        from .env_refs import env_name_allowed, refusal
+
+        if not env_name_allowed(ref_key):
+            raise ProviderCredentialError(refusal(ref_key))
         value = os.environ.get(ref_key)
         if not value:
             raise ProviderCredentialError(

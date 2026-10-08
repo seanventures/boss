@@ -207,11 +207,13 @@ class FakeConn:
         conn = self
         if "update decisions" in low:
             self.updates.append(dict(params or {}))
-            rows = []
+            rows = [{"id": (params or {}).get("id")}]           # RETURNING id: it was approved
         elif "from console_autonomy" in low:
             rows = [conn.policy_row] if conn.policy_row else []
         elif "insert into console_autonomy" in low:
             rows = []
+        elif "for update" in low:                              # decisions.approve_by_policy's read
+            rows = [r for r in conn.pending if r["id"] == (params or {}).get("id")]
         else:
             rows = conn.pending
         captured = [r for r in rows if r]

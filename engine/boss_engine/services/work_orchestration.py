@@ -84,7 +84,7 @@ def tracker_is_connected(provider_key: str, configuration: Any) -> bool:
         return True
     from .work_tracker_adapters import resolve_credential
 
-    return bool(resolve_credential(config))
+    return bool(resolve_credential(config, provider=provider_key))
 
 
 def with_credential(connection: Connection, project_id: str,

@@ -9,6 +9,10 @@ os.environ.setdefault("BOSS_AUTHZ_MODE", "shadow")
 # test-only key (never a real one) unless the run names its own.
 os.environ.setdefault("BOSS_IDENTITY_SERVER_KEY", "dGVzdC1vbmx5LWlkZW50aXR5LXNlcnZlci1rZXktLS0tLS0tLS0tLS0tLS0=")
 
+# The test suites name their own credential variables (BOSS_TEST_*, BOSS_E2E_*): the operator's
+# extension of the secret-reference env allowlist (services/env_refs.py), as an install would.
+os.environ.setdefault("BOSS_SECRET_REF_ENV_ALLOW", "BOSS_TEST_*,BOSS_E2E_*")
+
 # CONFINE THIS RUN BEFORE ANYTHING READS DATABASE_URL.
 #
 # The application builds its own engine when `apps.api.app.main` is imported, a few lines

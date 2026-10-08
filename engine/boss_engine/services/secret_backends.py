@@ -86,6 +86,11 @@ class EnvBackend:
     kind = "environment"
 
     def get(self, key: str) -> str:
+        from .env_refs import env_name_allowed, refusal
+
+        if not env_name_allowed(key):
+            # Never one of BOSS's own secrets, whoever bound the reference (env_refs.py).
+            raise SecretUnavailable(refusal(key))
         value = os.environ.get(key)
         if not value:
             raise SecretNotFound(f"environment variable {key} is not set")
@@ -139,6 +144,12 @@ class FileBackend:
 
     def get(self, key: str) -> str:
         path = self._resolve(key)
+        from .env_refs import file_path_allowed
+
+        if not file_path_allowed(path):
+            # Never /proc/self/environ, the identity directory or the master key (env_refs.py).
+            raise SecretUnavailable("a secret reference cannot read that file: it is one of "
+                                    "BOSS's own or the system's, never a credential to hand on")
         if not os.path.isfile(path):
             raise SecretNotFound(f"{key} does not exist")
         if os.stat(path).st_mode & 0o077:
@@ -1051,23 +1062,54 @@ def pick_default_backend(settings: Settings) -> tuple[str, list[str]]:
     return "database", passed_over
 
 
-def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings) -> str:
+def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
+                       project_id: Optional[str] = None) -> str:
     """THE place a stored reference becomes a value.
 
     One function so that "which backend, which key, is it usable" is answered once. A second
     resolver would drift from this one exactly as the preview resolver and the failure taxonomy
     did, and here the drift would be silent until a deployment used the wrong credential.
+
+    `project_id` (id-sec-final2): the project the value is used FOR. A reference of another
+    project resolves only when it is scoped to the org (or workspace) that project belongs to;
+    a project's own reference never reaches another project's integration. Callers that hold a
+    project pass it; a reference id that came from a person always does.
     """
     row = connection.execute(
-        sql("SELECT ref_kind, ref_key, storage_backend, status "
+        sql("SELECT ref_kind, ref_key, storage_backend, status, project_id, scope_type, scope_id "
             "FROM secret_refs WHERE id = :i"), {"i": secret_ref_id}).mappings().first()
     if not row:
+        raise SecretUnavailable(f"secret ref {secret_ref_id} does not exist")
+    if project_id and row["project_id"] != project_id and not _shared_with(connection, row, project_id):
         raise SecretUnavailable(f"secret ref {secret_ref_id} does not exist")
     if row["status"] not in ("active", "rotating", "rotation_due"):
         raise SecretUnavailable(
             f"secret ref {secret_ref_id} is {row['status']} and must not be used")
     backend = backend_for(row["storage_backend"] or row["ref_kind"], settings)
     return backend.get(row["ref_key"])
+
+
+def _shared_with(connection, row, project_id: str) -> bool:
+    """Is this reference scoped to the org or workspace `project_id` belongs to?"""
+    scope = str(row.get("scope_type") or "project")
+    if scope == "project":
+        return False
+    found = connection.execute(sql(
+        "SELECT p.workspace_id, w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :p"), {"p": project_id}).mappings().first()
+    if not found:
+        return False
+    return (scope == "workspace" and row["scope_id"] == found["workspace_id"]) or \
+        (scope == "org" and row["scope_id"] == found["org_id"])
+
+
+def _env_path(name: str) -> Optional[str]:
+    """A legacy binding's env var (it names a key FILE), read only when a reference may name it."""
+    from .env_refs import env_name_allowed, refusal
+
+    if not env_name_allowed(name):
+        raise SecretUnavailable(refusal(name))
+    return os.environ.get(name)
 
 
 def resolve_target_secret(connection, target: dict, name: str,
@@ -1098,16 +1140,17 @@ def resolve_target_secret(connection, target: dict, name: str,
             if name != "ssh_key":
                 continue
             if token.startswith("env:"):
-                path = os.environ.get(token[4:])
+                path = _env_path(token[4:])
                 if path:
                     return FileBackend().get(path)
                 raise SecretUnavailable(
                     f"legacy env binding {token!r} is set on the target but the variable "
                     f"is unset — refusing to fall back to a different credential")
             if token.startswith("sref_") or token.startswith("secret_"):
-                return resolve_secret_ref(connection, token, settings)
+                return resolve_secret_ref(connection, token, settings,
+                                          project_id=target.get("project_id"))
             # Otherwise treat as an env var naming a key file (historical BOSS_SSH_*_FILE).
-            path = os.environ.get(token)
+            path = _env_path(token)
             if path:
                 return FileBackend().get(path)
             raise SecretUnavailable(
@@ -1117,13 +1160,14 @@ def resolve_target_secret(connection, target: dict, name: str,
             continue
         ref_id = binding.get("secret_ref_id")
         if ref_id:
-            return resolve_secret_ref(connection, ref_id, settings)
+            return resolve_secret_ref(connection, ref_id, settings,
+                                      project_id=target.get("project_id"))
         legacy = binding.get("ref")
         if legacy:
             # A legacy ref names an ENV VAR whose value is a path (that is what the existing
             # targets mean by BOSS_SSH_HOST_PRIVATE_KEY_FILE). A binding that cannot resolve
             # must not silently become a different key.
-            path = os.environ.get(legacy)
+            path = _env_path(legacy)
             if path:
                 return FileBackend().get(path)
             raise SecretUnavailable(

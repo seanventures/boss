@@ -11,11 +11,12 @@
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
-  const [{ headers }, write, forward, { API_URL }] = await Promise.all([
+  const [{ headers }, write, forward, { API_URL }, hops] = await Promise.all([
     import("next/headers"),
     import("./lib/api-write"),
     import("./lib/identity/forward"),
     import("./lib/client"),
+    import("./lib/client-hop"),
   ]);
   write.installServerIntentResolver(async () => {
     const incoming = await headers();
@@ -29,9 +30,11 @@ export async function register(): Promise<void> {
   const csrfBySession = new Map<string, { token: string; at: number }>();
   forward.installIdentityResolver(async (writing) => {
     const incoming = await headers();
+    // The client's address through the trusted-proxy rule (B2): every server-side call carries it.
+    const clientHop = hops.clientHop(incoming.get("x-forwarded-for"), hops.proxyHops());
     // A sandboxed (opaque-origin) or cross-site non-navigation caller speaks for nobody: a
     // previewed app's script must never be given the person's session (lib/identity/forward.ts).
-    if (forward.untrustedBrowserContext(incoming)) return { cookie: "", csrf: null, origin: null };
+    if (forward.untrustedBrowserContext(incoming)) return { cookie: "", csrf: null, origin: null, clientHop };
     const stub = (await import("./lib/identity/stub/enabled")).identityStubEnabled();
     const cookie = forward.identityCookieHeader(incoming.get("cookie"), { stub });
     // A browser GET that needs a writing GET's POST twin carries no Origin: derived from its
@@ -54,6 +57,6 @@ export async function register(): Promise<void> {
         }
       }
     }
-    return { cookie, csrf: csrf ?? null, origin, consoleOrigin: forward.consoleOriginOf(incoming) };
+    return { cookie, csrf: csrf ?? null, origin, consoleOrigin: forward.consoleOriginOf(incoming), clientHop };
   });
 }

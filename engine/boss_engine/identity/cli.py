@@ -2,7 +2,8 @@
 §12). Owned by stream S5.
 
     recover-owner --email E [--origin URL]   the sole Owner is locked out: make E an active Owner,
-                                             reset their MFA, end their sessions, print a 15-minute
+                                             remove their MFA and passkeys, end their sessions,
+                                             revoke their API keys, print a 15-minute
                                              single-use link. Actor: sys_host_cli. Audited.
     migrate                                  run the M0 mapping now (it also runs by itself)
     legacy status | legacy retire --path P   the legacy bridges, their counts and countdowns
@@ -61,6 +62,9 @@ class Recovery:
     expires_at: datetime
     reactivated: bool
     owner_bound: bool
+    sessions_revoked: int = 0
+    api_keys_revoked: int = 0
+    passkeys_removed: int = 0
 
 
 def _sql(statement: str):
@@ -81,10 +85,12 @@ def _origin(db: Any, org_id: str, explicit: Optional[str]) -> str:
 
 def recover_owner(email: str, *, db: Any, origin: Optional[str] = None,
                   now: Optional[datetime] = None) -> Recovery:
-    """Host-shell break-glass (§4.7, §6.12). In ONE transaction: the person becomes an active
-    Owner, their TOTP and unused recovery codes are removed, their sessions end, a 15-minute
-    single-use link is minted (only its hash is stored), and `owner.recovered_by_host` is
-    written with actor sys_host_cli. Every Owner then sees a banner for 7 days (posture.banners)."""
+    """Host-shell break-glass (§4.7, §6.12). Recovery ASSUMES COMPROMISE (A-2): in ONE
+    transaction the person becomes an active Owner, and EVERY credential they hold is ended —
+    their TOTP, passkeys and unused recovery codes are removed, all their sessions end and all
+    their personal API keys are revoked — then a 15-minute single-use link is minted (only its
+    hash is stored), and `owner.recovered_by_host` is written with actor sys_host_cli and the
+    counts. Every Owner then sees a banner for 7 days (posture.banners)."""
     from . import audit
     from .audit import Outcome, SecurityEvent
     from .legacy import is_bridge_principal
@@ -116,6 +122,11 @@ def recover_owner(email: str, *, db: Any, origin: Optional[str] = None,
     bind(db, org_id, pid, "arl_owner", "org", org_id, granted_by=HOST_CLI_PRINCIPAL,
          reason="recovered by host shell (boss identity recover-owner)")
     db.execute(_sql("DELETE FROM identity_totp WHERE principal_id = :p"), {"p": pid})
+    # A-2: a passkey an intruder registered would still sign in (a passkey is a full MFA
+    # session), and a lost one would dead-end the recovery at an MFA step asking for it.
+    passkeys_removed = len(db.execute(_sql(
+        "DELETE FROM identity_webauthn_credentials WHERE principal_id = :p RETURNING 1"),
+        {"p": pid}).all())
     # F3/H1: the host shell is proof enough: the next sign-in may enrol a FIRST second factor
     # (a later password-only sign-in never can).
     from .signin import grant_first_factor_after_reset
@@ -123,24 +134,55 @@ def recover_owner(email: str, *, db: Any, origin: Optional[str] = None,
     grant_first_factor_after_reset(db, pid)
     db.execute(_sql("UPDATE identity_recovery_codes SET used_at = :now WHERE principal_id = :p "
                     "AND used_at IS NULL"), {"now": now, "p": pid})
-    db.execute(_sql("UPDATE identity_sessions SET revoked_at = :now, revoked_by = :by, "
-                    "revoked_reason = 'owner recovered by host' WHERE principal_id = :p AND "
-                    "revoked_at IS NULL"), {"now": now, "by": HOST_CLI_PRINCIPAL, "p": pid})
+    sessions_revoked = len(db.execute(_sql(
+        "UPDATE identity_sessions SET revoked_at = :now, revoked_by = :by, "
+        "revoked_reason = 'owner recovered by host' WHERE principal_id = :p AND "
+        "revoked_at IS NULL RETURNING id"), {"now": now, "by": HOST_CLI_PRINCIPAL, "p": pid}).all())
+    # A-2: every personal API key, through api_keys.revoke (its event and delegation cascade).
+    from . import api_keys
+    from .principal import AuthContext, AuthMethod, Principal, PrincipalKind, PrincipalStatus
+
+    actor = AuthContext(Principal(HOST_CLI_PRINCIPAL, PrincipalKind.SYSTEM, org_id,
+                                  PrincipalStatus.ACTIVE, "BOSS host CLI"), AuthMethod.SYSTEM)
+    key_ids = [r[0] for r in db.execute(_sql(
+        "SELECT id FROM identity_api_credentials WHERE principal_id = :p AND revoked_at IS NULL"),
+        {"p": pid}).all()]
+    api_keys_revoked = sum(1 for k in key_ids if api_keys.revoke(db, actor=actor, key_id=k, org_id=org_id))
     token = secrets.token_urlsafe(32)
     expires = now + RECOVERY_TTL
+    # The binding column carries the host marker (never a SHA-256, so never a browser binding):
+    # only this link is the Owner break-glass under Enforce SSO (email_signin.reset_password).
+    from .email_signin import HOST_MINTED_BINDING
+
     db.execute(_sql("INSERT INTO identity_auth_challenges (id_hash, kind, principal_id, "
-                    "expires_at) VALUES (:h, 'password_reset', :p, :exp)"),
-               {"h": token_hash(token), "p": pid, "exp": expires})
+                    "binding_hash, expires_at) VALUES (:h, 'password_reset', :p, :b, :exp)"),
+               {"h": token_hash(token), "p": pid, "b": HOST_MINTED_BINDING, "exp": expires})
     audit.record(SecurityEvent(
         org_id=org_id, event_type="owner.recovered_by_host", outcome=Outcome.SUCCESS,
         actor_principal_id=HOST_CLI_PRINCIPAL, actor_kind="system", target_type="principal",
         target_id=pid, details={"reactivated": reactivated, "owner_bound": not had_owner,
-                                "mfa_reset": True, "link_expires_at": expires.isoformat()}),
+                                "mfa_reset": True, "assumes_compromise": True,
+                                "sessions_revoked": sessions_revoked,
+                                "personal_keys_revoked": api_keys_revoked,
+                                "passkeys_removed": passkeys_removed,
+                                "link_expires_at": expires.isoformat()}),
         db=db)
     bump_epoch(db, org_id, "owner recovered by host")
     # the token travels in the fragment: never in a request line the API or a proxy logs (A88)
     link = links.url("owner_recovery", _origin(db, org_id, origin), token)
-    return Recovery(pid, link, expires, reactivated, not had_owner)
+    return Recovery(pid, link, expires, reactivated, not had_owner, sessions_revoked,
+                    api_keys_revoked, passkeys_removed)
+
+
+def recovery_summary(done: Recovery) -> str:
+    """What `recover-owner` prints: recovery assumes compromise, so it says what it ended."""
+    return (f"Recovered {done.principal_id} as an Owner. Recovery assumes the account was "
+            f"compromised, so everything that signed in as them was ended: their authenticator app, "
+            f"{done.passkeys_removed} passkey(s) and their recovery codes were removed, "
+            f"{done.sessions_revoked} session(s) ended and {done.api_keys_revoked} personal API "
+            f"key(s) were revoked (mint new keys after signing in).\n"
+            f"Open this link within 15 minutes (single use):\n\n  {done.link}\n\n"
+            f"Every Owner will see a banner about this for 7 days.")
 
 
 def claim_status(org_id: str, *, db: Any) -> str:
@@ -260,9 +302,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 return 2
             if args.cmd == "recover-owner":
                 done = recover_owner(args.email, db=db, origin=args.origin)
-                print(f"Recovered {done.principal_id} as an Owner. MFA was reset and their "
-                      f"sessions ended.\nOpen this link within 15 minutes (single use):\n\n"
-                      f"  {done.link}\n\nEvery Owner will see a banner about this for 7 days.")
+                print(recovery_summary(done))
             elif args.cmd == "rotate-master-key":
                 print(rotate_master_key(args.new_key_file, db=db))
             elif args.cmd == "egress-key":

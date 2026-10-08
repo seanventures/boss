@@ -104,6 +104,7 @@ def _canary_reactive_dispatch_exactly_once(engine, settings, project_id):
             "job",
             enabled_kind,
             actor="canary",
+            authorize=False,    # BOSS's own canary kind, never run by a worker
         )
         disabled = create_event_subscription(
             c,
@@ -113,6 +114,7 @@ def _canary_reactive_dispatch_exactly_once(engine, settings, project_id):
             disabled_kind,
             enabled=False,
             actor="canary",
+            authorize=False,
         )
         event_id = emit_event(
             c,

@@ -63,6 +63,15 @@ class TestTheCredentialsThatCausedTheIncident:
     def test_the_never_list_is_not_merely_advisory(self):
         assert not is_allowed("DATABASE_URL", extra={"DATABASE_URL"})
 
+    @pytest.mark.parametrize("name", ["BOSS_HOST_API_KEY", "BOSS_MCP_API_KEY", "BOSS_MASTER_KEY",
+                                      "BOSS_SOME_FUTURE_API_KEY"])
+    def test_boss_own_keys_never_reach_an_agent_even_when_an_operator_allows_them(self, name):
+        """id-sec-final2: the host tools' and MCP keys were withheld only by SECRET_SHAPED, so
+        BOSS_AGENT_ENV_ALLOW could pass them. They — and any BOSS_*API_KEY — are NEVER now."""
+        env = agent_environment({**PRODUCTION_LIKE, name: "boss_sak_x", EXTRA_ALLOW_VAR: name})
+        assert name not in env
+        assert not is_allowed(name, extra={name})
+
 
 class TestItStillLetsTheAgentWork:
     @pytest.mark.parametrize("name", ["PATH", "HOME", "LANG", "CLAUDE_CODE_OAUTH_TOKEN"])

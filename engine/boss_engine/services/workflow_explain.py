@@ -240,8 +240,8 @@ def explain_version(
             "approval_is_forced": forced and not by_panel,
             "approval_note": (
                 "Approved automatically when the panel's PRD is approved "
-                "(BOSS_MEETING_PRD_AUTO_APPROVE, on by default). Turn that off to have a "
-                "person sign it on the Approvals page."
+                "(BOSS_MEETING_PRD_AUTO_APPROVE; unset, it is off when identity is enforced, "
+                "so a person with the ceo seat signs it on the Approvals page)."
                 if by_panel else
                 "Forced: this step's risk tier is at or above the manual-approval floor, so it "
                 "stops for a person whatever the workflow asks for."

@@ -93,16 +93,26 @@ case "$MODE" in
     fi ;;
 esac
 
+# --- heal_ownership (begin) ---------------------------------------------------------------------
+# Heal what a root `docker compose exec api …` wrote before BOSS code dropped root on import
+# (boss_engine/_runtime_user.py): an install seeded as root failed its first build on a root-owned
+# artifact directory. This runs AS ROOT over volumes other containers write, so it NEVER follows a
+# symlink (D2): find -P never descends one and -xdev never leaves the volume; only real
+# directories and regular files are chowned (a planted link is skipped, never its target); and
+# chown -h, run by -execdir from inside each directory, never dereferences the name it is given.
+heal_ownership() {
+  find -P "$1" -xdev -mindepth 1 \( -type d -o -type f \) ! -user "$2" \
+    -execdir chown -h "$2:$2" {} + 2>/dev/null || true
+}
+# --- heal_ownership (end) -----------------------------------------------------------------------
+
 mkdir -p "$RUN_ROOT" "$SHIM_ROOT"
 chown boss:boss "$RUN_ROOT" "$SHIM_ROOT"
 chmod 0711 "$RUN_ROOT" "$SHIM_ROOT"
 for d in /var/lib/boss/identity /var/lib/boss/artifacts; do
-  if [ -d "$d" ]; then
-    chown boss:boss "$d"; chmod 0750 "$d"
-    # Heal what a root `docker compose exec api …` wrote before BOSS code dropped root on import
-    # (boss_engine/_runtime_user.py): an install seeded as root failed its first build on a
-    # root-owned artifact directory.
-    find "$d" -mindepth 1 ! -user boss -exec chown boss:boss {} + 2>/dev/null || true
+  if [ -d "$d" ] && [ ! -L "$d" ]; then
+    chown -h boss:boss "$d"; chmod 0750 "$d"
+    heal_ownership "$d" boss
   fi
 done
 chmod 0700 /var/lib/boss/identity 2>/dev/null || true

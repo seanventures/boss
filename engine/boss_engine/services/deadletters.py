@@ -851,6 +851,12 @@ class DeadletterRemediationService:
         if job["status"] not in {"deadlettered", "failed_final"}:
             raise ValueError("source job is not in a requeueable terminal state")
 
+        # C-2: re-creating a job is queuing that kind of work: the same job-kind authorization
+        # (and step-up) as POST /v1/jobs, at the job's project, as the verified caller — never
+        # `deadletter:manage` alone. A refusal raises (nothing is queued or marked).
+        from ..identity.job_permissions import require_job_kind
+
+        require_job_kind(job["kind"], job["project_id"], db=connection)
         payload = dict(job["payload"] or {})
         payload["requeue"] = {
             "source_job_id": job["id"],

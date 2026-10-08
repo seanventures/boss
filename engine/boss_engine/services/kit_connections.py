@@ -151,12 +151,14 @@ def _store_secret(connection: Connection, settings: Any, project_id: str, name: 
                       actor=actor)
 
 
-def _resolve(connection: Connection, settings: Any, ref: Optional[str]) -> str:
+def _resolve(connection: Connection, settings: Any, ref: Optional[str], project_id: str) -> str:
+    """A stored reference's value, for THIS project only (id-sec-final2: a configuration a person
+    sent could name another project's reference id)."""
     if not ref:
         return ""
     from .secret_backends import resolve_secret_ref
 
-    return resolve_secret_ref(connection, str(ref), settings) or ""
+    return resolve_secret_ref(connection, str(ref), settings, project_id=project_id) or ""
 
 
 def chat_settings(connection: Connection, settings: Any, project_id: str
@@ -167,7 +169,7 @@ def chat_settings(connection: Connection, settings: Any, project_id: str
     if not body or not body.get("provider"):
         return None
     out = {k: v for k, v in body.items() if k not in ("secret_ref_id", "last4")}
-    out["token"] = _resolve(connection, settings, body.get("secret_ref_id"))
+    out["token"] = _resolve(connection, settings, body.get("secret_ref_id"), project_id)
     return out
 
 
@@ -175,7 +177,7 @@ def search_settings(connection: Connection, settings: Any, project_id: str) -> d
     """{provider, key}: the project's web search provider, Exa without a key by default."""
     body = _config(connection, project_id, WEB_SEARCH_KEY) or {}
     return {"provider": body.get("provider") or "exa",
-            "key": _resolve(connection, settings, body.get("secret_ref_id"))}
+            "key": _resolve(connection, settings, body.get("secret_ref_id"), project_id)}
 
 
 # --------------------------------------------------------------------------- #
@@ -607,7 +609,7 @@ def _tracker_config_with_token(connection: Connection, settings: Any, project_id
     if out.get("credential") == "github_connection":
         out["api_token"] = github_token(connection, settings, project_id)
     elif out.get("secret_ref_id") and not out.get("api_token"):
-        out["api_token"] = _resolve(connection, settings, out.get("secret_ref_id"))
+        out["api_token"] = _resolve(connection, settings, out.get("secret_ref_id"), project_id)
     return out
 
 
@@ -968,7 +970,7 @@ def _connect_search(begin: Begin, settings: Any, project_id: str, provider: dict
     with begin() as connection:
         current = _config(connection, project_id, WEB_SEARCH_KEY) or {}
         kept = (current.get("provider") == key and current.get("secret_ref_id"))
-        secret = typed or (_resolve(connection, settings, current.get("secret_ref_id"))
+        secret = typed or (_resolve(connection, settings, current.get("secret_ref_id"), project_id)
                            if kept else "")
     outcome = _search_test(begin, settings, project_id, provider=key, key=secret,
                            field="api_key")

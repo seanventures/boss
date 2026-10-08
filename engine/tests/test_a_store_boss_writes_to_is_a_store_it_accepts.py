@@ -31,8 +31,8 @@ WRITABLE_KINDS = ("env", "vault", "local_vault", "local_runner", "platform_secre
 
 @pytest.mark.parametrize("kind", WRITABLE_KINDS)
 def test_a_reference_can_be_recorded_for_every_backend(kind):
-    parsed = SecretRefService.parse_credential_ref(f"{kind}:BOSS_SOME_KEY")
-    assert parsed == (kind, "BOSS_SOME_KEY")
+    parsed = SecretRefService.parse_credential_ref(f"{kind}:BOSS_TEST_SOME_KEY")
+    assert parsed == (kind, "BOSS_TEST_SOME_KEY")
 
 
 @pytest.mark.parametrize("kind", WRITABLE_KINDS)

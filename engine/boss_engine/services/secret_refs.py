@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -470,6 +471,14 @@ class SecretRefService:
             raise ValueError(
                 "env SecretRef keys must be environment variable names, never raw values."
             )
+        from .env_refs import env_name_allowed, file_path_allowed, refusal
+
+        if ref_kind == "env" and not env_name_allowed(ref_key):
+            raise ValueError(refusal(ref_key))
+        if ref_kind == "local_runner" and os.path.isabs(os.path.expanduser(ref_key)) \
+                and not file_path_allowed(ref_key):
+            raise ValueError("A secret reference cannot read that file: it is one of BOSS's own "
+                             "or the system's.")
         return ref_kind, ref_key
 
     @classmethod
