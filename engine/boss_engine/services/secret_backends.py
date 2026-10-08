@@ -847,9 +847,14 @@ class IdentityGitHubBackend:
 
         if key != "app":
             raise SecretUnavailable("identity_github references name the App: identity_github:app")
+        from .env_refs import provider_binding, register_host_credential
+
         try:
             with begin() as db:
-                return github_setup.installation_token_all(db)
+                token = github_setup.installation_token_all(db)
+            # The org's App: only ever GitHub's (rc6 N-1).
+            register_host_credential(token, provider_binding("github"), "The org's GitHub App token")
+            return token
         except github_setup.GitHubSetupError as exc:
             raise SecretUnavailable(f"the GitHub App is not usable: {exc.code}") from None
         except Exception as exc:  # noqa: BLE001 — a refusal from GitHub, a missing key
@@ -1076,8 +1081,8 @@ def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
     project pass it; a reference id that came from a person always does.
     """
     row = connection.execute(
-        sql("SELECT ref_kind, ref_key, storage_backend, status, project_id, scope_type, scope_id "
-            "FROM secret_refs WHERE id = :i"), {"i": secret_ref_id}).mappings().first()
+        sql("SELECT ref_kind, ref_key, storage_backend, status, project_id, scope_type, scope_id, "
+            "provider, metadata FROM secret_refs WHERE id = :i"), {"i": secret_ref_id}).mappings().first()
     if not row:
         raise SecretUnavailable(f"secret ref {secret_ref_id} does not exist")
     if project_id and row["project_id"] != project_id and not _shared_with(connection, row, project_id):
@@ -1086,7 +1091,30 @@ def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
         raise SecretUnavailable(
             f"secret ref {secret_ref_id} is {row['status']} and must not be used")
     backend = backend_for(row["storage_backend"] or row["ref_kind"], settings)
-    return backend.get(row["ref_key"])
+    value = backend.get(row["ref_key"])
+    _hold_to_provider(secret_ref_id, row, value)
+    return value
+
+
+def _hold_to_provider(secret_ref_id: str, row, value: Optional[str]) -> None:
+    """rc6 N-1: an org- or workspace-scoped reference is the organisation's credential, not one a
+    person stored for their own integration: from here on, wherever it is attached, it may only
+    be sent to its provider's endpoints (or the hosts an org admin listed in its metadata as
+    `allowed_hosts`). Env references are held by name already (env_refs.check_outbound)."""
+    if str(row.get("scope_type") or "project") not in ("org", "workspace"):
+        return
+    from .env_refs import provider_binding, register_host_credential
+
+    metadata = row.get("metadata") or {}
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except ValueError:
+            metadata = {}
+    hosts = metadata.get("allowed_hosts") if isinstance(metadata, dict) else None
+    binding = provider_binding(row.get("provider"),
+                               hosts if isinstance(hosts, (list, tuple)) else ())
+    register_host_credential(value, binding, f"The {row.get('scope_type')} secret {secret_ref_id}")
 
 
 def _shared_with(connection, row, project_id: str) -> bool:

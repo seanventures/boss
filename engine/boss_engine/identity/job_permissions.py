@@ -117,8 +117,11 @@ def require_job_kind(kind: str, project_id: str, *, db: Any = None) -> None:
     whose kind the CALLER chose (POST /v1/jobs) or re-creates one from a stored kind (a
     dead-letter requeue, retry or remediation) calls this, so `deadletter:manage` or
     `work_item:manage` alone never buys a critical effect. A kind BOSS does not know is refused.
-    Shadow/off: allowed (the guard records shadow would-denies). `test_job_inserts_are_authorized`
-    fails on a new path that queues a caller-chosen kind without it."""
+    Shadow/off: allowed (the guard records shadow would-denies).
+    `test_every_path_that_queues_a_caller_chosen_kind_authorizes_it` fails on a new path that
+    queues a caller-chosen kind without it. A job sink is checked when it is set up and again at
+    dispatch (event_subscription_service.job_sink_held), so one created before this check
+    existed is held until a person who holds the kind's permission re-saves it."""
     if not _enforced():
         return
     permission = permission_for(kind)

@@ -82,9 +82,13 @@ def tracker_is_connected(provider_key: str, configuration: Any) -> bool:
     # (`with_credential`), never kept in the configuration.
     if config.get("secret_ref_id") or config.get("credential") == "github_connection":
         return True
+    from .env_refs import CredentialMisdirected
     from .work_tracker_adapters import resolve_credential
 
-    return bool(resolve_credential(config, provider=provider_key))
+    try:
+        return bool(resolve_credential(config, provider=provider_key))
+    except CredentialMisdirected:
+        return False   # a host credential bound to another provider is not a usable token
 
 
 def with_credential(connection: Connection, project_id: str,
@@ -348,6 +352,24 @@ class WorkOrchestrationService:
         adapter = get_adapter(provider_key)
         self.seed_defaults(connection, project_id)
         config = dict(configuration or {})
+        # rc6 N-1: a configuration that NAMES a host credential (`env:`/`secret:`) is the org's
+        # act, and whoever names it, it is bound to its own provider's endpoints: checked here,
+        # before anything is stored or tested, and again wherever the token is resolved.
+        named = str(config.get("credential_ref") or "").strip()
+        if named.startswith(("env:", "secret:")):
+            from .env_refs import env_name_allowed, require_host_credential_authority
+
+            if not env_name_allowed(named.split(":", 1)[1]):
+                # Never one of BOSS's own: refused as unnamed (resolve_credential reads nothing).
+                raise ValueError(f"credential_ref {named!r} names nothing a tracker may use.")
+
+            require_host_credential_authority(
+                connection, project_id, f"The host credential {named.split(':', 1)[1]}")
+            from .work_tracker_adapters import resolve_credential
+
+            resolve_credential({k: v for k, v in config.items()
+                                if k not in ("api_token", "access_token", "token", "pat")},
+                               provider=provider_key)
         if api_token and str(api_token).strip():
             config["api_token"] = str(api_token).strip()
             # Prefer env-style refs when caller only passed a bare token

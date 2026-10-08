@@ -417,7 +417,11 @@ def org_github_token(item_id: str, *, db: Any) -> str:
         raise VaultForbidden("not_an_org_github_connection")
     if row["status"] != "active":
         raise VaultNeedsReauth(row["status"])
-    return _open(db, row)
+    token = _open(db, row)
+    from ..services.env_refs import provider_binding, register_host_credential
+
+    register_host_credential(token, provider_binding("github"), "The org's GitHub token")  # rc6 N-1
+    return token
 
 
 def read_secret(item_id: str, *, db: Any, kind: VaultItemKind) -> str:

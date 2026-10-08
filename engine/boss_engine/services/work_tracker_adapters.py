@@ -104,6 +104,24 @@ PROVIDER_ENV: dict[str, tuple[str, ...]] = {
 }
 
 
+def tracker_destination(provider: Optional[str], configuration: dict[str, Any]) -> str:
+    """The base URL a tracker's requests (and so its token) go to, as each adapter builds it."""
+    key = str(provider or configuration.get("provider_key") or "").strip().lower()
+    if key == "plane":
+        return str(configuration.get("api_base_url") or configuration.get("web_base_url") or "")
+    if key == "jira":
+        return str(configuration.get("base_url") or "")
+    if key == "linear":
+        return "https://api.linear.app/graphql"
+    if key == "github_issues":
+        return str(configuration.get("api_base_url") or "https://api.github.com")
+    if key == "azure_devops":
+        return "https://dev.azure.com/"
+    if key == "asana":
+        return "https://app.asana.com/api/1.0"
+    return str(configuration.get("api_base_url") or configuration.get("base_url") or "")
+
+
 def resolve_credential(
     configuration: dict[str, Any],
     *,
@@ -114,8 +132,14 @@ def resolve_credential(
 
     id-sec-final2: an `env:`/`secret:` name a configuration carries is read only when a secret
     reference may name it (env_refs.env_name_allowed: never DATABASE_URL, the master key or a
-    BOSS key — a project Admin chooses this configuration AND the URL it is sent to)."""
-    from .env_refs import env_name_allowed
+    BOSS key — a project Admin chooses this configuration AND the URL it is sent to).
+
+    rc6 N-1: and a host credential read from the environment (named, or the tracker's own
+    fallback) is handed out only for its own provider's endpoints (env_refs.assert_may_send):
+    `env:BOSS_GITHUB_TOKEN` with a Plane base URL of https://evil.example raises
+    CredentialMisdirected instead of sending the org's GitHub token there. A token the person
+    gave for this tracker (`api_token`, a project secret) goes to the URL they chose."""
+    from .env_refs import assert_may_send, env_name_allowed
 
     envmap = env if env is not None else os.environ
     # One-shot / tests
@@ -123,15 +147,21 @@ def resolve_credential(
         value = configuration.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+    destination = tracker_destination(provider, configuration)
     ref = str(configuration.get("credential_ref") or "").strip()
     for prefix in ("env:", "secret:"):
         if ref.startswith(prefix):
             name = ref[len(prefix):]
             if not env_name_allowed(name):
                 return None
-            return (envmap.get(name) or "").strip() or None
+            value = (envmap.get(name) or "").strip() or None
+            if value and destination:
+                assert_may_send(name, destination)
+            return value
     for key in PROVIDER_ENV.get(str(provider or configuration.get("provider_key") or ""), ()):
         if envmap.get(key):
+            if destination:
+                assert_may_send(key, destination)
             return envmap[key].strip()
     return None
 

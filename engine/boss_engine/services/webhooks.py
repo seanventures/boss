@@ -528,8 +528,14 @@ class WebhookService:
     @staticmethod
     def _resolve_secret(secret_ref: str) -> str:
         name = secret_ref[4:].strip() if secret_ref.startswith("env:") else ""
-        from .env_refs import env_name_allowed
+        from .env_refs import PROVIDER_HOSTS, binding_for, env_name_allowed
 
+        binding = binding_for(name) if name else None
+        if binding is not None and binding.provider in PROVIDER_HOSTS:
+            # rc6 N-1: a provider's credential is never another integration's key, not even as a
+            # signing secret for a URL a project chose.
+            raise ValueError(f"Webhook secret reference {secret_ref!r} names {binding.provider}'s "
+                             f"credential; a webhook signs with a secret of its own.")
         value = os.environ.get(name) if name and env_name_allowed(name) else None
         if not value:
             raise ValueError(f"Webhook secret reference {secret_ref!r} is unavailable.")
