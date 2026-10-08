@@ -26,6 +26,8 @@ import { appIdentity } from "../app-identity";
 import { previewWebHref } from "../../lib/browser-links";
 import { areaHref, costWord } from "./cockpit-util";
 import { formatMonthDay } from "../../lib/datetime";
+import { GatedButton } from "../../components/gated";
+import { NEW_BUILD_TIP } from "../../lib/compose-links";
 
 /** Where "＋ Add a feature" goes: New project, in add mode, with this app chosen. */
 export function addFeatureHref(appKey: string, previewId?: string | null): string {
@@ -263,7 +265,8 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
       <div className="fx-apps" data-testid="fx-apps">
         <div className="ag-empty fx-empty" data-testid="fx-no-apps">
           <span>No apps yet</span>
-          <button type="button" className="ag-btn ag-btn-primary" onClick={onNew}>+ New build</button>
+          <GatedButton permission="workflow_run:start" type="button" className="ag-btn ag-btn-primary" onClick={onNew}
+                       title={NEW_BUILD_TIP} data-testid="fx-apps-new">+ New build</GatedButton>
         </div>
       </div>
     );
