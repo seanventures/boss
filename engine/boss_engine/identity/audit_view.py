@@ -25,7 +25,7 @@ HEADLINES = {
     "auth.login.succeeded": "signed in", "auth.login.failed": "A sign-in failed",
     "auth.step_up": "confirmed it was them", "auth.logout": "signed out",
     "bootstrap.claimed": "claimed this BOSS", "owner.recovered_by_host":
-    "An Owner was recovered from the host shell", "policy.changed": "changed the security policy",
+    "An Owner was recovered from the host shell", "banner.acknowledged": "acknowledged a security notice", "policy.changed": "changed the security policy",
     "user.invited": "invited people", "role_binding.added": "granted an access role",
     "role_binding.removed": "removed an access role", "api_key.created": "created a key",
     "api_key.revoked": "revoked a key", "delegation.created": "let agents act for them",

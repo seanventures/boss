@@ -107,12 +107,14 @@ describe("New build, from anywhere", () => {
     expect(CT).toContain('data-testid="fx-new-build"');
   });
 
-  it("presses the same first door as the Factory: Plan it with Juno", () => {
-    // Operator decision (factory spec §10.1): a PRD first. The Factory's menu keeps the others.
+  it("presses the same first door as the Factory: the New project composer", () => {
+    // Operator, 2026-10-07 (superseding the 2026-10-04 "Plan it with Juno" door): New build
+    // opens the composer; planning with an agent is an option inside it.
     const btn = SHELL.slice(SHELL.indexOf('data-testid="topbar-new-project"'),
                             SHELL.indexOf('className="bx-topbar-spacer"'));
-    expect(btn).toContain('openPlan("pm"');
-    expect(CT).toContain('openPlan("pm"');
+    expect(btn).toContain("openNewProject()");
+    expect(btn).not.toContain("openPlan");
+    expect(CT).toContain("onClick={openNewProject}");
     expect(CT).toContain('new: "1"');
   });
 
