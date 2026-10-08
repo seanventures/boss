@@ -127,9 +127,9 @@ describe("the page's own states", () => {
     expect($("[data-testid=fx-unreachable] [title]")?.getAttribute("title")).toBe("connect ECONNREFUSED");
   });
 
-  it("no builds ever: Plan it with Juno, or a Direct change", async () => {
+  it("no builds ever: New build (the composer), Plan it with Juno, or a Direct change", async () => {
     await mount(view(emptyFloor()));
-    expect($("[data-testid=fx-no-builds]")?.textContent).toBe("No builds yetPlan it with JunoDirect change");
+    expect($("[data-testid=fx-no-builds]")?.textContent).toBe("No builds yet+ New buildPlan it with JunoDirect change");
   });
 
   it("Paused says so and holds every face still", async () => {

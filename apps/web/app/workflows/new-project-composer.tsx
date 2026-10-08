@@ -31,7 +31,8 @@ import { IDEAS, IdeaCover } from "../ask-boss-hero";
 import { consoleHref } from "../url-intent";
 import { apiWrite } from "../../lib/api-write";
 import { callAction } from "../../lib/call-action";
-import { useGate } from "../../components/gated";
+import { GatedButton, useGate } from "../../components/gated";
+import { openPlan } from "../../lib/converse-doors";
 import { confirmCodeTaskFeedbackAction, conveneFeaturePanelAction, submitCodeTaskFeedbackAction,
          type FeedbackActionResult } from "../actions";
 import { showToast } from "../client-forms";
@@ -1334,6 +1335,14 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           <HelpTip label="Cost" text="Starting spends model budget. It stops and asks before it deploys anything." />
         </span>
         <span className="np-spacer" />
+        {/* NOT THE DEFAULT, STILL HERE: talk it through with the planner first (a PRD, then the
+            build). Every "New build" door opens this composer; this is its agent route. */}
+        {!formOnly ? (
+          <GatedButton permission="meeting:convene" type="button" className="np-btn np-plan" data-testid="np-plan-agent"
+                       title="Talk it through first: a PRD, then the build" onClick={() => openPlan("pm", { from: "composer" })}>
+            Plan it with an agent
+          </GatedButton>
+        ) : null}
         {/* THE PAIR STAYS TOGETHER: the reason wraps above it, never between Cancel and Start. */}
         <span className="np-go">
           {blocked && !(adding && proposal?.proposal) ? (

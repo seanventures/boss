@@ -80,15 +80,18 @@ describe("the Factory's URL", () => {
     expect(document.activeElement?.getAttribute("data-testid")).toBe("fx-find");
   });
 
-  it("+ New build presses Plan it with Juno; its menu holds the other doors", async () => {
+  it("+ New build opens the New project composer, not an agent chat; its menu holds the other doors", async () => {
     window.history.replaceState(null, "", "/?area=code_tasks");
     const opened: unknown[] = [];
     const on = (e: Event) => opened.push((e as CustomEvent).detail);
     window.addEventListener("boss:converse", on);
     await mount(home());
-    await click($("[data-testid=fx-new-plan]"));
+    await click($("[data-testid=fx-new-main]"));
     window.removeEventListener("boss:converse", on);
-    expect(opened).toEqual([expect.objectContaining({ kind: "plan", roleKey: "pm" })]);
+    expect(opened).toEqual([]);
+    const url = new URLSearchParams(window.location.search);
+    expect([url.get("area"), url.get("compose")]).toEqual(["delivery_workflows", "new"]);
+    window.history.replaceState(null, "", "/?area=code_tasks");
     await click($("[data-testid=fx-new-build]"));
     const menu = $("[data-testid=fx-new-menu]");
     expect([...menu!.querySelectorAll("[role=menuitem]")].map((b) => b.textContent))

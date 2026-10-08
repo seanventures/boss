@@ -75,7 +75,7 @@ export type ConversationKind = "talk" | "plan" | "room";
 export type ConversationStatus = "open" | "summarized" | "started" | "closed";
 /** Where it was opened from, so the first turn can be about something. */
 export type ConversationContext = {
-  from: "passport" | "chip" | "run_step" | "palette" | "presence" | "roster" | "room" | "org";
+  from: "passport" | "chip" | "run_step" | "palette" | "presence" | "roster" | "room" | "org" | "composer";
   actId?: string; workflowRunId?: string; stepId?: string;
 };
 export type TurnKind = "message" | "question" | "proposal" | "summary" | "error";
