@@ -144,6 +144,12 @@ class InstallationToken:
     #: this run's PR, github_setup). Only App tokens (installation, control_plane) are revoked at GitHub.
     kind: str = "installation"
 
+    def __post_init__(self) -> None:
+        # Every GitHub credential BOSS mints or holds is GitHub's alone (rc6 N-1, env_refs).
+        from ..services.env_refs import provider_binding, register_host_credential
+
+        register_host_credential(self.token, provider_binding("github"), f"A GitHub {self.kind} token")
+
 
 def mint_installation_token(repos: list[str], permissions: Mapping[str, str], *, db: Any) -> InstallationToken:
     from .github_setup import app_config

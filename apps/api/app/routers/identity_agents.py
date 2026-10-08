@@ -91,7 +91,7 @@ def _map(exc: Exception) -> JSONResponse:
     if isinstance(exc, grants.GrantRefused):
         return _err(exc.code, exc.status, **{k: v for k, v in exc.detail.items() if k in ("permission", "permissions", "agent", "project", "repo", "max_days")})
     if isinstance(exc, passports.PassportError):
-        return _err(exc.code, exc.status, **{k: v for k, v in exc.detail.items() if k in ("permission", "key", "provider")})
+        return _err(exc.code, exc.status, **{k: v for k, v in exc.detail.items() if k in ("permission", "key", "provider", "message")})
     if isinstance(exc, vault.VaultError):
         return _err(exc.code if exc.status < 500 else "vault_error", exc.status)
     if isinstance(exc, PermissionError):

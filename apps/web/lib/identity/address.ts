@@ -4,8 +4,12 @@
  * Behind the console's proxy, or inside the compose network, the API sees the console
  * container's address (172.18.0.8) for every request — so "New sign-in from 172.18.0.8" and a
  * Sessions list of identical 172.18.x addresses named our own network, not anyone's device. A
- * private, loopback, link-local or tailnet address is never shown as where someone was; a public
- * one is. The engine has the same rule for the notices it writes (identity/where.py).
+ * private (RFC 1918, where container networks live), loopback, link-local or unique-local address
+ * is never shown as where someone was; a public one is.
+ *
+ * A TAILNET address is shown (rc6): Docker never hands out carrier-grade NAT (100.64/10) or
+ * Tailscale's IPv6 prefix (fd7a:115c:a1e0::/48), so on a tailnet install it names a real device
+ * of the person's. The engine has the same rule for the notices it writes (identity/where.py).
  */
 
 function v4(ip: string): number[] | null {
@@ -15,7 +19,8 @@ function v4(ip: string): number[] | null {
   return parts.every((n) => n <= 255) ? parts : null;
 }
 
-/** The address when it is a public one; null for a private, internal or unreadable one. */
+/** The address when it names the person's device (public, or on their tailnet); null for a
+ * container/private, loopback, link-local, internal or unreadable one. */
 export function publicAddress(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let ip = raw.trim().split("%")[0];
@@ -28,12 +33,13 @@ export function publicAddress(raw: string | null | undefined): string | null {
     if (x === 172 && y >= 16 && y <= 31) return null;
     if (x === 192 && y === 168) return null;
     if (x === 169 && y === 254) return null;
-    if (x === 100 && y >= 64 && y <= 127) return null; // carrier-grade NAT, the tailnet
-    return ip;
+    return ip; // public, or carrier-grade NAT 100.64/10: the tailnet, a real device
+
   }
   if (!/^[0-9a-f:]+$/i.test(ip) || !ip.includes(":")) return null; // a name, "internal", "console"
   const low = ip.toLowerCase();
   if (low === "::" || low === "::1") return null;
+  if (/^fd7a:115c:a1e0:/.test(low)) return ip; // Tailscale's IPv6 prefix: a real device
   if (/^f[cd]/.test(low) || /^fe[89ab]/.test(low) || /^ff/.test(low)) return null; // ULA, link-local, multicast
   return ip;
 }

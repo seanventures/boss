@@ -73,3 +73,66 @@ def test_an_operator_cannot_change_an_agents_github_limit(world):
                          json={"external_ceiling": {"github": {"contents": "write"}}}, headers=H)
     assert r.status_code == 403, r.text
     assert _limit(world, agent.id) == {}
+
+
+# ---- rc6: BOSS's own repo-reader Passport is not editable by people ---------------------------------
+
+def _repo_reader(world):
+    from boss_engine.identity import runs
+
+    with world.engine.begin() as db:
+        # One system reader per install: an earlier test's world may hold it; bring it into this one.
+        db.execute(text("UPDATE identity_principals SET org_id = :o, status = 'active' WHERE id = :a"),
+                   {"o": world.org, "a": runs.SYSTEM_REPO_READER})
+        assert runs.system_repo_reader(db, project_id=world.project_a) is not None
+    return runs.SYSTEM_REPO_READER
+
+
+def _reader_row(world, agent_id):
+    with world.engine.begin() as db:
+        row = db.execute(text("SELECT external_ceiling, version, can_spawn, max_depth FROM identity_agent_passports "
+                              "WHERE agent_id = :a"), {"a": agent_id}).mappings().first()
+        ceiling = sorted(db.execute(text("SELECT permission_key FROM identity_agent_ceilings WHERE agent_id = :a"),
+                                    {"a": agent_id}).scalars())
+    return dict(row), ceiling
+
+
+def test_the_system_repo_reader_is_a_system_passport():
+    from boss_engine.identity import passports, runs
+
+    assert runs.SYSTEM_REPO_READER in passports.SYSTEM_PASSPORTS
+
+
+@pytest.mark.parametrize("body", [
+    {"external_ceiling": {"github": {"contents": "write", "metadata": "read"}}},
+    {"external_ceiling": {"github": {"contents": "read"}}},          # even a narrowing
+    {"ceiling": ["repository:read", "github:read", "repository:write"]},
+    {"ceiling": []},
+    {"can_spawn": True},
+    {"max_depth": 2},
+])
+def test_no_person_edits_the_system_repo_readers_passport(world, body):
+    owner = world.person("rr-owner")
+    world.bind(owner, "owner")
+    reader = _repo_reader(world)
+    before = _reader_row(world, reader)
+    client = _client()
+    with world.acting_as(world.ctx(owner)):
+        for path in (f"/v1/identity/agents/{reader}/passport", f"/v1/identity/agents/{reader}"):
+            r = client.patch(path, json=body, headers=H)
+            assert r.status_code == 409, r.text
+            assert r.json()["error"] == "system_passport"
+            assert "BOSS manages this agent" in r.json()["message"]
+    assert _reader_row(world, reader) == before
+
+
+def test_a_person_can_still_stop_the_system_repo_reader(world):
+    owner = world.person("rr-owner2")
+    world.bind(owner, "owner")
+    reader = _repo_reader(world)
+    client = _client()
+    with world.acting_as(world.ctx(owner)):
+        r = client.post(f"/v1/identity/agents/{reader}/suspend", json={"reason": "pause"}, headers=H)
+        assert r.status_code == 200, r.text
+        r = client.post(f"/v1/identity/agents/{reader}/resume", json={"reason": "back"}, headers=H)
+        assert r.status_code == 200, r.text

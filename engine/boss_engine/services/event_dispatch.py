@@ -257,6 +257,24 @@ def dispatch_event(
             )
             continue
 
+        from .event_subscription_service import job_sink_held
+
+        if job_sink_held(connection, subscription):
+            # Re-checked at dispatch (rc6): a job sink no one's kind permission ever covered —
+            # set up before the check existed — queues nothing until a person re-saves it.
+            logger.warning(
+                "event_dispatch.job_sink_held",
+                extra={"project_id": project_id, "event_id": event_id,
+                       "subscription_id": subscription["id"],
+                       "sink_ref": subscription["sink_ref"]},
+            )
+            enqueued.append({"kind": "job", "held": True, "subscription_id": subscription["id"],
+                             "sink_ref": subscription["sink_ref"],
+                             "reason": "This job sink was set up before BOSS checked the "
+                                       "permission its kind needs. Re-save or re-enable it "
+                                       "(as someone who holds that permission) to start it "
+                                       "again."})
+            continue
         task_id = data.get("task_id")
         if subscription["sink_ref"] == "docs.update":
             from ..config import get_settings
