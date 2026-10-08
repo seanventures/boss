@@ -28,6 +28,10 @@ from sqlalchemy import text
 # test-only key (never a real one) unless the run names its own.
 os.environ.setdefault("BOSS_IDENTITY_SERVER_KEY", "dGVzdC1vbmx5LWlkZW50aXR5LXNlcnZlci1rZXktLS0tLS0tLS0tLS0tLS0=")
 
+# The test suites name their own credential variables (BOSS_TEST_*, BOSS_E2E_*): the operator's
+# extension of the secret-reference env allowlist (services/env_refs.py), as an install would.
+os.environ.setdefault("BOSS_SECRET_REF_ENV_ALLOW", "BOSS_TEST_*,BOSS_E2E_*")
+
 #: Mirrors the real entitlement_sources. SQLite types, since the stubs run in memory; JSON
 #: columns are TEXT because that is how SQLAlchemy round-trips them here.
 CREATE_ENTITLEMENT_SOURCES = (

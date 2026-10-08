@@ -212,6 +212,12 @@ export type ForwardedIdentity = {
    *  host and claim origin — never about the `api:8000` a server-side fetch dials (round 3, W1).
    *  The API believes it only from a trusted proxy, as it does the /v1 proxy's. */
   consoleOrigin?: string | null;
+  /** The client's address as the console's own proxies reported it (lib/client-hop.ts, the
+   *  trusted-proxy rule: BOSS_CONSOLE_PROXY_HOPS), or null when none can be believed. Sent as the
+   *  ONE X-Forwarded-For hop on every server-side call (B2): a server-side render otherwise reached
+   *  the API from the console's own private address, whoever the browser was. Undefined: not
+   *  known (a caller that does not resolve it), and whatever the caller set is left alone. */
+  clientHop?: string | null;
 };
 
 /** X-Forwarded-Host/Proto for an origin, or null when it is not one. */
@@ -274,6 +280,12 @@ export async function withForwardedIdentity(method: string, given: HeadersInit |
   const write = WRITES.has(method.toUpperCase());
   const who = await resolveForwardedIdentity(write);
   if (who?.cookie) out.set("cookie", who.cookie);
+  if (who && who.clientHop !== undefined) {
+    // THE CLIENT'S ADDRESS, NOT ANYONE'S CLAIM: never a forwarded chain from the caller, only
+    // the hop the trusted-proxy rule picked (or none).
+    for (const h of ["x-forwarded-for", "x-real-ip", "forwarded"]) out.delete(h);
+    if (who.clientHop) out.set("x-forwarded-for", who.clientHop);
+  }
   const addressed = forwardedHostHeaders(who?.consoleOrigin);
   if (addressed && !out.has("x-forwarded-host")) {
     out.set("x-forwarded-host", addressed.host);
@@ -289,16 +301,18 @@ export async function withForwardedIdentity(method: string, given: HeadersInit |
   return out;
 }
 
-/** A stable, non-reversible tag for "whose response is this", for the feed cache's key. */
-export function sessionTag(headers: Headers): string {
+/** A stable, non-reversible tag for "whose response is this", for the feed cache's key: the
+ *  SHA-256 of the session token (B3: a 32-bit hash was the only partition between two people's
+ *  in-flight reads; a collision must be infeasible, not merely unlikely). */
+export async function sessionTag(headers: Headers): Promise<string> {
   const cookie = parseIdentityCookies(headers.get("cookie"));
   const token = cookie[SESSION_COOKIE] ?? "";
   if (!token) return "anon";
-  // FNV-1a: not a security boundary, only a cache partition; the token never leaves memory.
-  let h = 0x811c9dc5;
-  for (let i = 0; i < token.length; i += 1) {
-    h ^= token.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h.toString(36);
+  return tokenTag(token);
+}
+
+/** SHA-256 hex of a credential, for keys and partitions; the credential never leaves memory. */
+export async function tokenTag(token: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }

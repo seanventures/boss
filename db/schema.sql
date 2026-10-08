@@ -7211,8 +7211,10 @@ CREATE TABLE IF NOT EXISTS identity_decision_approvals (
   principal_id TEXT NOT NULL REFERENCES identity_principals(id),
   seat_key     TEXT,
   approved_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  content_hash TEXT,                                     -- C-3: the preview hash this person approved
   PRIMARY KEY (decision_id, principal_id)
 );
+ALTER TABLE identity_decision_approvals ADD COLUMN IF NOT EXISTS content_hash TEXT;
 
 CREATE TABLE IF NOT EXISTS identity_service_accounts (
   principal_id        TEXT PRIMARY KEY REFERENCES identity_principals(id),
@@ -7627,6 +7629,26 @@ BEGIN
   END IF;
   IF v_upper IS NULL OR v_upper < 1 OR v_upper >= v_seq THEN
     RAISE EXCEPTION 'identity_audit_checkpoint: no range' USING ERRCODE = 'P0001';
+  END IF;
+  -- D3: the fields verify_chain reads, validated: last_pruned_hash is the hash of the range's last
+  -- row (which exists now: the prune comes after), and retained maps kept seqs in the range to
+  -- 64 hex digits. A malformed checkpoint is refused here and is a chain break in verify_chain.
+  IF NOT COALESCE((p_row->'details'->>'last_pruned_hash') ~ '^[0-9a-f]{64}$', false)
+     OR NOT EXISTS (SELECT 1 FROM identity_security_events WHERE org_id = v_org AND seq = v_upper
+                    AND encode(hash, 'hex') = p_row->'details'->>'last_pruned_hash') THEN
+    RAISE EXCEPTION 'identity_audit_checkpoint: last_pruned_hash must be the hash of the range''s last row'
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF COALESCE(jsonb_typeof(p_row->'details'->'retained'), 'null') NOT IN ('object', 'null') THEN
+    RAISE EXCEPTION 'identity_audit_checkpoint: retained must be an object' USING ERRCODE = 'P0001';
+  END IF;
+  IF jsonb_typeof(p_row->'details'->'retained') = 'object' AND EXISTS (
+       SELECT 1 FROM jsonb_each(p_row->'details'->'retained') e
+       WHERE CASE WHEN e.key ~ '^[0-9]{1,18}$' THEN e.key::BIGINT NOT BETWEEN 1 AND v_upper ELSE true END
+          OR CASE WHEN jsonb_typeof(e.value) = 'string' THEN (e.value #>> '{}') !~ '^[0-9a-f]{64}$'
+                  ELSE true END) THEN
+    RAISE EXCEPTION 'identity_audit_checkpoint: retained maps seqs in the range to hashes'
+      USING ERRCODE = 'P0001';
   END IF;
   IF EXISTS (SELECT 1 FROM identity_security_events WHERE org_id = v_org AND seq <= v_upper
              AND event_type NOT IN ('audit.checkpoint', 'bootstrap.claimed', 'owner.recovered_by_host')

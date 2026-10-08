@@ -150,9 +150,9 @@ CAPABILITIES: dict[str, Capability] = {
             # the panel (wfr_9c78…). The owner kept it automatic, so the label stops promising
             # a sign-off nobody gives.
             label="PRD approval (automatic)",
-            summary="The panel's PRD is approved before anything is built — automatically by "
-                    "default. Turn BOSS_MEETING_PRD_AUTO_APPROVE off to have a person sign it "
-                    "on the Approvals page instead.",
+            summary="The panel's PRD is approved before anything is built: by a person with the "
+                    "ceo seat on the Approvals page when identity is enforced, automatically "
+                    "when BOSS_MEETING_PRD_AUTO_APPROVE is on (the default without enforcement).",
             tool=None,
             risk_tier=2,
             required_inputs=(),
@@ -545,7 +545,7 @@ def prd_auto_approved(settings: Any = None) -> bool:
 
     THE runtime rule, read where the runtime reads it: meeting_service._finalize_meeting
     approves the PRD decision itself when `meeting_prd_auto_approve`
-    (BOSS_MEETING_PRD_AUTO_APPROVE, default on) is set. Everything that tells an operator
+    (BOSS_MEETING_PRD_AUTO_APPROVE; unset, on only when identity is not enforced) is set. Everything that tells an operator
     whether they will be asked — the catalogue card, the plan, /asks — reads this function.
     """
     if settings is None:

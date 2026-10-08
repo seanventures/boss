@@ -91,12 +91,32 @@ def _http_json(
         raise WorkTrackerHttpError(f"{method} {url} failed: {error}") from error
 
 
+#: Each tracker's own token variable(s): the ONLY environment a tracker with no token of its own
+#: falls back to. (It used to try every provider's, so a Plane test sent BOSS_GITHUB_TOKEN to
+#: whatever base URL the configuration named.)
+PROVIDER_ENV: dict[str, tuple[str, ...]] = {
+    "plane": ("PLANE_API_KEY",),
+    "jira": ("JIRA_API_TOKEN",),
+    "linear": ("LINEAR_API_KEY",),
+    "github_issues": ("GITHUB_TOKEN", "BOSS_GITHUB_TOKEN"),
+    "azure_devops": ("AZURE_DEVOPS_PAT",),
+    "asana": ("ASANA_ACCESS_TOKEN",),
+}
+
+
 def resolve_credential(
     configuration: dict[str, Any],
     *,
     env: Optional[dict[str, str]] = None,
+    provider: Optional[str] = None,
 ) -> Optional[str]:
-    """Resolve API token from config: explicit token, env:NAME, or secret env names."""
+    """Resolve API token from config: explicit token, env:NAME, or the provider's own env name.
+
+    id-sec-final2: an `env:`/`secret:` name a configuration carries is read only when a secret
+    reference may name it (env_refs.env_name_allowed: never DATABASE_URL, the master key or a
+    BOSS key — a project Admin chooses this configuration AND the URL it is sent to)."""
+    from .env_refs import env_name_allowed
+
     envmap = env if env is not None else os.environ
     # One-shot / tests
     for key in ("api_token", "access_token", "token", "pat"):
@@ -104,21 +124,13 @@ def resolve_credential(
         if isinstance(value, str) and value.strip():
             return value.strip()
     ref = str(configuration.get("credential_ref") or "").strip()
-    if ref.startswith("env:"):
-        return (envmap.get(ref[4:]) or "").strip() or None
-    if ref.startswith("secret:"):
-        # Convention: secret:NAME → env NAME (SecretRef write-through later)
-        return (envmap.get(ref[7:]) or "").strip() or None
-    # Common env fallbacks by provider
-    for key in (
-        "PLANE_API_KEY",
-        "JIRA_API_TOKEN",
-        "LINEAR_API_KEY",
-        "GITHUB_TOKEN",
-        "BOSS_GITHUB_TOKEN",
-        "AZURE_DEVOPS_PAT",
-        "ASANA_ACCESS_TOKEN",
-    ):
+    for prefix in ("env:", "secret:"):
+        if ref.startswith(prefix):
+            name = ref[len(prefix):]
+            if not env_name_allowed(name):
+                return None
+            return (envmap.get(name) or "").strip() or None
+    for key in PROVIDER_ENV.get(str(provider or configuration.get("provider_key") or ""), ()):
         if envmap.get(key):
             return envmap[key].strip()
     return None
@@ -207,7 +219,7 @@ class PlaneWorkTrackerAdapter:
         base = str(configuration.get("api_base_url") or configuration.get("web_base_url") or "").rstrip("/")
         workspace = str(configuration.get("workspace_slug") or "").strip("/")
         project_id = str(configuration.get("project_id") or "").strip()
-        token = resolve_credential(configuration)
+        token = resolve_credential(configuration, provider=self.provider_key)
         if not (base and workspace and project_id and token):
             return {
                 "ok": False,
@@ -236,7 +248,7 @@ class PlaneWorkTrackerAdapter:
         base = str(configuration.get("api_base_url") or configuration.get("web_base_url") or "").rstrip("/")
         workspace = str(configuration.get("workspace_slug") or "").strip("/")
         project_id = str(configuration.get("project_id") or "").strip()
-        token = resolve_credential(configuration)
+        token = resolve_credential(configuration, provider=self.provider_key)
         if not (base and workspace and project_id and token):
             return None
         url = f"{base}/api/v1/workspaces/{workspace}/projects/{project_id}/issues/"
@@ -319,7 +331,7 @@ class JiraWorkTrackerAdapter:
 
     def _auth_header(self, configuration: dict[str, Any]) -> str:
         email = str(configuration.get("email") or "").strip()
-        token = resolve_credential(configuration) or ""
+        token = resolve_credential(configuration, provider=self.provider_key) or ""
         raw = f"{email}:{token}".encode()
         return "Basic " + base64.b64encode(raw).decode()
 
@@ -339,7 +351,7 @@ class JiraWorkTrackerAdapter:
 
     def test_connection(self, configuration: dict[str, Any]) -> dict[str, Any]:
         base = str(configuration.get("base_url") or "").rstrip("/")
-        token = resolve_credential(configuration)
+        token = resolve_credential(configuration, provider=self.provider_key)
         email = str(configuration.get("email") or "").strip()
         if not (base and token and email):
             return {
@@ -374,7 +386,7 @@ class JiraWorkTrackerAdapter:
             configuration.get("project_key") or configuration.get("project_id") or ""
         ).strip()
         issue_type = str(configuration.get("issue_type") or "Task").strip() or "Task"
-        if not (base and project_key and resolve_credential(configuration)):
+        if not (base and project_key and resolve_credential(configuration, provider=self.provider_key)):
             return None
         # ADF minimal paragraph for description
         adf = {
@@ -494,7 +506,7 @@ class LinearWorkTrackerAdapter:
     def _gql(
         self, configuration: dict[str, Any], query: str, variables: Optional[dict] = None
     ) -> dict[str, Any]:
-        token = resolve_credential(configuration)
+        token = resolve_credential(configuration, provider=self.provider_key)
         if not token:
             raise WorkTrackerHttpError("Linear API key missing")
         data = _http_json(
@@ -639,7 +651,7 @@ class GitHubIssuesWorkTrackerAdapter:
         return f"https://github.com/{owner}/{repo}/issues/{num}"
 
     def test_connection(self, configuration: dict[str, Any]) -> dict[str, Any]:
-        token = resolve_credential(configuration)
+        token = resolve_credential(configuration, provider=self.provider_key)
         owner = str(configuration.get("owner") or "").strip()
         repo = str(configuration.get("repo") or "").strip()
         base = str(configuration.get("api_base_url") or "https://api.github.com").rstrip(
@@ -686,7 +698,7 @@ class GitHubIssuesWorkTrackerAdapter:
         description_html: str,
         description_text: str,
     ) -> Optional[IssueCreateResult]:
-        token = resolve_credential(configuration)
+        token = resolve_credential(configuration, provider=self.provider_key)
         owner = str(configuration.get("owner") or "").strip()
         repo = str(configuration.get("repo") or "").strip()
         base = str(configuration.get("api_base_url") or "https://api.github.com").rstrip(
@@ -771,7 +783,7 @@ class AzureDevOpsWorkTrackerAdapter:
         )
 
     def _auth(self, configuration: dict[str, Any]) -> str:
-        token = resolve_credential(configuration) or ""
+        token = resolve_credential(configuration, provider=self.provider_key) or ""
         raw = f":{token}".encode()
         return "Basic " + base64.b64encode(raw).decode()
 
@@ -795,7 +807,7 @@ class AzureDevOpsWorkTrackerAdapter:
     def test_connection(self, configuration: dict[str, Any]) -> dict[str, Any]:
         org = str(configuration.get("organization") or "").strip()
         project = str(configuration.get("project") or "").strip()
-        token = resolve_credential(configuration)
+        token = resolve_credential(configuration, provider=self.provider_key)
         if not (org and project and token):
             return {
                 "ok": False,
@@ -829,7 +841,7 @@ class AzureDevOpsWorkTrackerAdapter:
         org = str(configuration.get("organization") or "").strip()
         project = str(configuration.get("project") or "").strip()
         wit = str(configuration.get("work_item_type") or "Task").strip() or "Task"
-        if not (org and project and resolve_credential(configuration)):
+        if not (org and project and resolve_credential(configuration, provider=self.provider_key)):
             return None
         url = (
             f"https://dev.azure.com/{quote(org)}/{quote(project)}"
@@ -965,7 +977,7 @@ def update_issue(
     issue = str(issue or "").strip()
     if not issue:
         raise WorkTrackerHttpError("which issue: give its number, key or id")
-    token = resolve_credential(configuration)
+    token = resolve_credential(configuration, provider=key)
     if not token:
         raise WorkTrackerHttpError(f"{key}: no credential")
     done: dict[str, Any] = {"issue": issue, "commented": False, "state": None}

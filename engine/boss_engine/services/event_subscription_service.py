@@ -211,12 +211,20 @@ def create_event_subscription(
     enabled: bool = True,
     config: Optional[dict[str, Any]] = None,
     actor: str = "system",
+    authorize: bool = True,
 ) -> dict[str, Any]:
     normalized_event_type = validate_event_type(event_type)
     normalized_sink_kind = validate_sink_kind(sink_kind)
     normalized_boundary = normalize_data_boundary(data_boundary)
     if not sink_ref.strip():
         raise ValueError("sink_ref must not be empty.")
+    if normalized_sink_kind == "job" and authorize:
+        # C-2: a job sink queues that kind of job on every matching event, so setting one up
+        # needs the kind's own permission (and step-up) — `integration:manage` alone never
+        # buys a critical effect. `authorize=False` only for BOSS's own canary (no person).
+        from ..identity.job_permissions import require_job_kind
+
+        require_job_kind(sink_ref.strip(), project_id, db=connection)
     subscription_id = make_id("sub")
     try:
         row = connection.execute(
@@ -337,6 +345,12 @@ def update_event_subscription(
         ).mappings().first()
     if row is None:
         return None
+    if row["sink_kind"] == "job" and (sink_kind is not None or sink_ref is not None
+                                      or enabled is True):
+        # C-2: pointing (or re-enabling) a job sink is queuing that kind: its permission too.
+        from ..identity.job_permissions import require_job_kind
+
+        require_job_kind(str(row["sink_ref"]), project_id, db=connection)
     _invalidate(project_id)
     emit_event(
         connection,

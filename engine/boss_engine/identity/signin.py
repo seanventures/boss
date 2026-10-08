@@ -137,12 +137,20 @@ def who_of(user: users.UserRow) -> dict[str, Any]:
 
 def finish(db: Any, user: users.UserRow, facts: RequestFacts, *, methods: list[str],
            mfa: bool, replaces: Optional[str] = None, event: str = "auth.login.succeeded",
-           extra: Optional[dict[str, Any]] = None) -> Answer:
+           extra: Optional[dict[str, Any]] = None, sso_method: Optional[str] = None) -> Answer:
     """Issue a session (the ONLY place one is issued): a new token, the device marker, the events,
-    and the body the console needs — never the token itself."""
+    and the body the console needs — never the token itself.
+
+    Enforce SSO is checked HERE, at the one choke point every sign-in path reaches (A-1): the
+    first factor is `methods[0]` (or `sso_method`, a break-glass label the caller derived from
+    a host-only proof), so no path — a reset link, an invitation, a sign-up, a future one — can
+    hand a session to a person whose domain the IdP alone admits."""
     if not secure_origin_ok(facts.origin or facts.request_origin):
         # A20: never a session cookie for a plain-http, non-loopback origin.
         return Answer(400, {"error": "insecure_origin"})
+    refused = sso_refusal(db, user, facts, method=sso_method or (methods[0] if methods else ""))
+    if refused is not None:
+        return refused
     familiar = sessions.device_is_familiar(db, user.principal_id, facts.device)
     device = facts.device if (facts.device and len(facts.device) <= 100) else random_token("bdv_", 24)
     now = utcnow()
@@ -342,6 +350,11 @@ def may_enrol(db: Any, row: sessions.SessionRow, user: users.UserRow) -> Optiona
     return None
 
 
+#: The first-factor label of a reset link minted by the host shell (`boss identity recover-owner`).
+#: Never recorded on a session; only `sso_refusal` reads it (the Owner break-glass under Enforce SSO).
+HOST_RECOVERY = "host_recovery"
+
+
 def sso_refusal(db: Any, user: users.UserRow, facts: RequestFacts, *,
                 method: str) -> Optional[Answer]:
     """Enforce SSO (IDENTITY.md §4.8), for EVERY first factor in one place: when an active
@@ -360,7 +373,9 @@ def sso_refusal(db: Any, user: users.UserRow, facts: RequestFacts, *,
         return None
     if method.startswith("sso:") and method[4:] in enforcing:
         return None
-    if method == "passkey" and users.is_owner(db, user.principal_id, user.org_id):
+    if method in ("passkey", HOST_RECOVERY) and users.is_owner(db, user.principal_id, user.org_id):
+        # The Owner break-glass: their passkey, or a reset link minted by `boss identity
+        # recover-owner` on the host shell (proof of the machine, stronger than any IdP).
         return None
     emit(db, org_id=user.org_id, event_type="auth.login.failed", outcome=Outcome.DENIED,
          target_type="user", target_id=user.principal_id, ip=facts.ip,

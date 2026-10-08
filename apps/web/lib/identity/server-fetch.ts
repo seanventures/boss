@@ -11,6 +11,7 @@
  */
 import { identityStubEnabled, isIdentityPath } from "./stub/enabled";
 import { parseIdentityCookies, withForwardedIdentity } from "./forward";
+import { isNoReuse, noReuse } from "../feed-cache";
 
 export function installIdentityFetch(apiUrl: string): void {
   if (typeof window !== "undefined" || !apiUrl) return;
@@ -31,8 +32,13 @@ export function installIdentityFetch(apiUrl: string): void {
     if (identityStubEnabled() && isIdentityPath(path)) {
       return answerFromStub(method, url, headers, init?.body ?? null);
     }
-    if (input instanceof Request) return inner(new Request(input, { ...init, headers }));
-    return inner(url, { ...init, headers });
+    // The feed cache's no-reuse mark (a symbol on the init) is carried through explicitly:
+    // the browser's own call is never collapsed or kept (lib/feed-cache.ts, B1).
+    if (input instanceof Request) {
+      return inner(new Request(input, { ...init, headers }), isNoReuse(init) ? noReuse({}) : undefined);
+    }
+    const next: RequestInit = { ...init, headers };
+    return inner(url, isNoReuse(init) ? noReuse(next) : next);
   }) as typeof fetch;
 }
 

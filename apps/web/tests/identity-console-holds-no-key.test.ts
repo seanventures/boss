@@ -138,9 +138,11 @@ describe("the feed cache partitions by session", () => {
     }
   });
 
-  it("the tag is not the token", () => {
-    const tag = sessionTag(new Headers({ cookie: "__Host-boss_session=bss_secret_value" }));
+  it("the tag is not the token: it is the token's SHA-256", async () => {
+    const tag = await sessionTag(new Headers({ cookie: "__Host-boss_session=bss_secret_value" }));
     expect(tag).not.toContain("secret");
-    expect(sessionTag(new Headers())).toBe("anon");
+    const { createHash } = await import("node:crypto");
+    expect(tag).toBe(createHash("sha256").update("bss_secret_value").digest("hex"));
+    expect(await sessionTag(new Headers())).toBe("anon");
   });
 });

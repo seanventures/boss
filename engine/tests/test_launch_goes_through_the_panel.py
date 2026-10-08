@@ -103,9 +103,18 @@ def test_the_direct_route_remains_available_for_comparison(endpoint, monkeypatch
     assert result["run_id"] == "crun_direct"
 
 
-def test_auto_approval_is_on_by_default_and_can_be_turned_off():
-    assert Settings().meeting_prd_auto_approve is True
-    assert Settings(BOSS_MEETING_PRD_AUTO_APPROVE=False).meeting_prd_auto_approve is False
+def test_auto_approval_follows_enforcement_by_default_and_can_be_set_either_way(monkeypatch):
+    """id-sec-final2: under identity enforcement a setting approving a tier-2 PRD would bypass the
+    tier's seat, so the default there is OFF (a person with the seat signs). Elsewhere it stays on;
+    set explicitly, it wins either way."""
+    monkeypatch.delenv("BOSS_MEETING_PRD_AUTO_APPROVE", raising=False)
+    monkeypatch.delenv("BOSS_AUTHZ_MODE", raising=False)
+    assert Settings().meeting_prd_auto_approve is False                       # enforce is the default
+    assert Settings(BOSS_AUTHZ_MODE="enforce").meeting_prd_auto_approve is False
+    assert Settings(BOSS_AUTHZ_MODE="shadow").meeting_prd_auto_approve is True
+    assert Settings(BOSS_AUTHZ_MODE="off").meeting_prd_auto_approve is True
+    assert Settings(BOSS_AUTHZ_MODE="enforce", BOSS_MEETING_PRD_AUTO_APPROVE=True).meeting_prd_auto_approve is True
+    assert Settings(BOSS_AUTHZ_MODE="shadow", BOSS_MEETING_PRD_AUTO_APPROVE=False).meeting_prd_auto_approve is False
 
 
 def test_an_approved_prd_still_starts_the_build():

@@ -7,7 +7,7 @@ import { identityStubEnabled, isIdentityPath } from "../../../lib/identity/stub/
 import { answerFromStub } from "../../../lib/identity/server-fetch";
 import { collectorMachinePost, collectorPathOf } from "../../../lib/console-session";
 import { COLLECTOR_BODY_CAP, readCapped } from "../../../lib/read-capped";
-import { NO_REUSE_HEADER } from "../../../lib/feed-cache";
+import { noReuse } from "../../../lib/feed-cache";
 import { clientHop, proxyHops } from "../../../lib/client-hop";
 
 /**
@@ -173,14 +173,13 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
     // The browser's own call: never answered from the feed cache (lib/feed-cache.ts): a request
     // sent after a revocation is decided by the API, never by an answer from before it.
     const outbound = forwardHeaders(req, speaksFor(req, incoming.pathname, collector !== null));
-    outbound.set(NO_REUSE_HEADER, "1");
-    upstream = await fetch(target, {
+    upstream = await fetch(target, noReuse({
       method,
       headers: outbound,
       body: body as BodyInit | undefined,
       cache: "no-store",
       redirect: "manual",
-    });
+    }));
   } catch (error) {
     // A dead control plane must read as a control-plane failure, not as an empty feed.
     return Response.json(

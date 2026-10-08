@@ -834,3 +834,12 @@ def install_consent_handler(app) -> None:
 
     app.add_exception_handler(ApprovalRefused, approval_refused)
     app.add_exception_handler(ApprovalPending, approval_pending)
+
+    from boss_engine.identity.job_permissions import JobKindRefused
+
+    async def job_kind_refused(_request, exc: JobKindRefused):
+        # C-2: queuing or re-queuing a job of a kind the caller may not run (nothing was queued:
+        # the exception left its transaction).
+        return JSONResponse(status_code=exc.status, content=exc.body)
+
+    app.add_exception_handler(JobKindRefused, job_kind_refused)

@@ -2515,17 +2515,20 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
             return _fail(c, run_id, project_id, reason,
                          failure_class=fclass, reason_code=rcode)
     finally:
-        # Its stages end with it: a build that finished, failed or now waits on a person stops
-        # showing its agents as working (agent_acts; never raises).
-        from .agent_acts import settle_code_task
+        try:
+            if identity_run is not None:
+                # Run end, FIRST: its tokens, egress credential, "this build only" grant and GitHub
+                # installation tokens all end with it — before anything below that could raise
+                # (a teardown that fails must never leave the run's credentials alive).
+                identity_runs.finish_code_task_run(engine, identity_run[0], org_id=_identity_org(engine, project_id))
+        finally:
+            # Its stages end with it: a build that finished, failed or now waits on a person stops
+            # showing its agents as working (agent_acts; never raises).
+            from .agent_acts import settle_code_task
 
-        settle_code_task(engine, run_id)
-        # Request/worker threads are pooled — a stale run_id here would mis-attribute
-        # the next job's (or run_research's) llm_calls rows.
-        clear_llm_context()
-        if sandbox is not None:
-            sandbox.teardown()
-        if identity_run is not None:
-            # Run end: its tokens, egress credential, "this build only" grant and GitHub
-            # installation tokens all end with it.
-            identity_runs.finish_code_task_run(engine, identity_run[0], org_id=_identity_org(engine, project_id))
+            settle_code_task(engine, run_id)
+            # Request/worker threads are pooled — a stale run_id here would mis-attribute
+            # the next job's (or run_research's) llm_calls rows.
+            clear_llm_context()
+            if sandbox is not None:
+                sandbox.teardown()

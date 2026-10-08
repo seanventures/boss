@@ -318,11 +318,29 @@ def _mirror_token_into_vault(connection: Connection, service: Any, project_id: s
                              actor: str) -> None:
     """A token pasted in Setup › Repo becomes the vault's org GitHub connection, scoped to the repos
     bound to it. Under enforce that is the only way a build reaches GitHub with it: boss-egress reads it
-    from the vault, the sandbox never sees it (identity/github_setup.py)."""
+    from the vault, the sandbox never sees it (identity/github_setup.py).
+
+    D1: ONLY for a person who may change the org's GitHub connection (github:connect at the ORG).
+    Setup › Repo is a project page: a project-bound Admin's token stays this project's connection
+    and the org token is neither replaced, widened nor revoked — the event says so in words."""
     from ..identity import github_setup, vault
 
     if _is_app_connection(connection, project_id, connection_id):
         return                             # the App's own tokens: nothing to keep
+    org_of_project = connection.execute(
+        text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+             "WHERE p.id = :p"), {"p": project_id}).scalar()
+    if org_of_project and not github_setup.may_change_org_credentials(str(org_of_project), db=connection):
+        from .core import emit_event
+
+        emit_event(connection, project_id, "github.org_token_unchanged", actor, "github_connection",
+                   connection_id, {
+                       "reason": "org_scope_required",
+                       "message": ("This token was kept for this project only. The organisation's GitHub "
+                                   "token, which builds use, was not changed: that needs github:connect "
+                                   "for the whole organisation. Ask an Owner or org Admin to add this "
+                                   "repository under Identity › GitHub.")})
+        return
     try:
         ref = service.secret_refs.require_usable(
             connection, project_id=project_id,

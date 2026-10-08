@@ -13,7 +13,7 @@ never allowed by default.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from .permissions_gen import P, PERMISSION_META
 
@@ -83,3 +83,54 @@ def _check() -> None:
 
 
 _check()
+
+
+# ---- THE check, for every path that queues a job of a caller-chosen kind (C-2) -------------------
+
+class JobKindRefused(Exception):
+    """Queuing (or RE-queuing) this kind of job is refused for the caller. `status`/`body` are the
+    HTTP answer (the API maps it): 422 unknown_job_kind, 401 unauthenticated / step_up_required,
+    403 forbidden."""
+
+    def __init__(self, status: int, body: dict) -> None:
+        super().__init__(body.get("error", "job_kind_refused"))
+        self.status = status
+        self.body = body
+
+
+def _enforced() -> bool:
+    from . import lineage
+
+    enforced = lineage.request_enforced()
+    if enforced is not None:
+        return enforced
+    # No request decided this call (a background path): fail CLOSED to the configured mode.
+    from ..config import get_settings
+    from .enforcement import AuthzMode, mode_for
+
+    return mode_for("main", global_mode=get_settings().authz_mode or "enforce") == AuthzMode.ENFORCE
+
+
+def require_job_kind(kind: str, project_id: str, *, db: Any = None) -> None:
+    """THE job-kind authorization: the kind's own catalogue permission at the job's project,
+    through the PDP — step-up included — as the verified caller. Every path that queues a job
+    whose kind the CALLER chose (POST /v1/jobs) or re-creates one from a stored kind (a
+    dead-letter requeue, retry or remediation) calls this, so `deadletter:manage` or
+    `work_item:manage` alone never buys a critical effect. A kind BOSS does not know is refused.
+    Shadow/off: allowed (the guard records shadow would-denies). `test_job_inserts_are_authorized`
+    fails on a new path that queues a caller-chosen kind without it."""
+    if not _enforced():
+        return
+    permission = permission_for(kind)
+    if permission is None:
+        raise JobKindRefused(422, {"error": "unknown_job_kind",
+                                   "message": "BOSS has no worker for this kind of job, so it cannot be queued."})
+    from . import authz, lineage
+    from .scope import ResolvedScope
+
+    ctx = lineage.current_context()
+    if ctx is None:
+        raise JobKindRefused(401, {"error": "unauthenticated"})
+    decision = authz.check(ctx, permission, ResolvedScope.in_project(ctx.principal.org_id, project_id), db=db)
+    if not decision.allowed:
+        raise JobKindRefused(decision.status, decision.error_body())

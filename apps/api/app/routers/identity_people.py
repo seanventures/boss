@@ -449,7 +449,15 @@ def build_identity_people_router() -> APIRouter:
                 emit(db, org_id=ctx.principal.org_id, event_type="notice.mfa_reset", outcome=Outcome.INFO,
                      ctx=ctx, target_type="user", target_id=u.principal_id,
                      details={"admins_told": len(admins), "emailed": delivered})
-                return JSONResponse({"reset": True, "sessions_revoked": ended, "admins_notified": len(admins)})
+                answer = {"reset": True, "sessions_revoked": ended, "admins_notified": len(admins)}
+                if signin.sso_enforced_for(db, u.email):
+                    # A-1: the reset only lets them enrol a new factor after their next SSO sign-in;
+                    # no password path opens (signin.finish refuses one), and no reset link is minted.
+                    answer["sso_enforced"] = True
+                    answer["message"] = ("This person's domain signs in only through single sign-on. They "
+                                         "enrol a new second factor after their next SSO sign-in; a "
+                                         "password reset link is refused for them.")
+                return JSONResponse(answer)
         except AuthnError as exc:
             return refusal(exc)
 
@@ -486,6 +494,13 @@ def build_identity_people_router() -> APIRouter:
                 blocked = _owner_guard(db, ctx, u, removing=False, permission="user:reset_mfa")
                 if blocked:
                     return blocked
+                if signin.sso_enforced_for(db, u.email):
+                    # A-1: a password link never admits a person whose domain only the IdP admits.
+                    return JSONResponse(status_code=409, content={
+                        "error": "sso_enforced",
+                        "message": (f"{u.email.rsplit('@', 1)[-1]} signs in only through single sign-on "
+                                    "(Enforce SSO), so a password reset link would not let this person "
+                                    "in. They sign in with SSO; reset their MFA if they lost a factor.")})
                 token = recovery.issue_reset_token(db, u.principal_id)
                 emit(db, org_id=ctx.principal.org_id, event_type="password.reset_requested",
                      outcome=Outcome.INFO, ctx=ctx, target_type="user", target_id=u.principal_id,

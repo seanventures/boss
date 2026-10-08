@@ -528,7 +528,9 @@ class WebhookService:
     @staticmethod
     def _resolve_secret(secret_ref: str) -> str:
         name = secret_ref[4:].strip() if secret_ref.startswith("env:") else ""
-        value = os.environ.get(name) if name else None
+        from .env_refs import env_name_allowed
+
+        value = os.environ.get(name) if name and env_name_allowed(name) else None
         if not value:
             raise ValueError(f"Webhook secret reference {secret_ref!r} is unavailable.")
         return value

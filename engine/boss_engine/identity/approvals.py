@@ -213,9 +213,31 @@ class Approval:
     seat: Optional[str]
 
 
-def require_approval(db: Any, ctx: AuthContext, decision: dict[str, Any]) -> Approval:
+def _still_counts(db: Any, org: str, row: dict[str, Any], wanted: tuple[str, ...],
+                  content_hash: Optional[str]) -> Optional[str]:
+    """C-3: why an EARLIER approval no longer counts toward the two (None when it does): it was of
+    other content than what is approved now, or its person is no longer active or no longer holds
+    a seat for this tier. Checked when the next approval would complete the decision."""
+    if content_hash is not None and row.get("content_hash") != content_hash:
+        return "content_changed"
+    status = db.execute(text("SELECT status FROM identity_principals WHERE id = :p AND kind = 'user'"),
+                        {"p": row["principal_id"]}).scalar()
+    if status != "active":
+        return "approver_not_active"
+    if wanted and not seats_held(db, org, row["principal_id"], wanted):
+        return "approver_seat_lost"
+    return None
+
+
+def require_approval(db: Any, ctx: AuthContext, decision: dict[str, Any], *,
+                     content_hash: Optional[str] = None) -> Approval:
     """Conditions 2-4 for one approve. Returns the Approval when the decision may now be approved;
-    raises ApprovalRefused (403/409) or ApprovalPending (the first of two, recorded)."""
+    raises ApprovalRefused (403/409) or ApprovalPending (the first of two, recorded).
+
+    `content_hash` (C-3) is the hash of the preview being approved, ALREADY checked against what
+    the approver saw (decisions.transition checks it first). Each approval records it; an earlier
+    approval of other content, or by a person since suspended or un-seated, is voided and does not
+    count — so two people always approve the same content, both entitled at completion."""
     from .audit import Outcome, SecurityEvent, record
 
     org = ctx.principal.org_id
@@ -233,13 +255,27 @@ def require_approval(db: Any, ctx: AuthContext, decision: dict[str, Any]) -> App
     if tier in TWO_PERSON_TIERS and not waiver(db, org)["effective"]:
         decision_id = str(decision["id"])
         db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"identity_approval:{decision_id}"})
+        rows = [dict(r) for r in db.execute(text(
+            "SELECT principal_id, seat_key, content_hash FROM identity_decision_approvals "
+            "WHERE decision_id = :d ORDER BY approved_at"), {"d": decision_id}).mappings().all()]
+        for row in rows:
+            why = _still_counts(db, org, row, wanted, content_hash)
+            if why is None:
+                continue
+            db.execute(text("DELETE FROM identity_decision_approvals WHERE decision_id = :d AND "
+                            "principal_id = :p"), {"d": decision_id, "p": row["principal_id"]})
+            record(SecurityEvent.from_context(ctx, "decision.approval_voided", Outcome.INFO,
+                                              target_type="decision", target_id=decision_id,
+                                              details={"approver": row["principal_id"], "reason": why,
+                                                       "tier": tier}), db=db)
         before = recorded(db, decision_id)
         if any(a["principal_id"] == approver for a in before):
             raise ApprovalRefused(409, "second_approver_must_differ",
                                   "You have approved this already. A tier-3 decision needs a second person.")
         db.execute(text(
-            "INSERT INTO identity_decision_approvals (decision_id, org_id, principal_id, seat_key) "
-            "VALUES (:d, :o, :p, :s)"), {"d": decision_id, "o": org, "p": approver, "s": seat})
+            "INSERT INTO identity_decision_approvals (decision_id, org_id, principal_id, seat_key, "
+            "content_hash) VALUES (:d, :o, :p, :s, :h)"),
+            {"d": decision_id, "o": org, "p": approver, "s": seat, "h": content_hash})
         record(SecurityEvent.from_context(ctx, "decision.approval_recorded", Outcome.INFO,
                                           target_type="decision", target_id=decision_id,
                                           details={"seat": seat, "tier": tier,

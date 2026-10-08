@@ -413,3 +413,78 @@ def test_13_old_unkeyed_rows_are_rekeyed_once(db, monkeypatch, keyed):
     assert audit.rekey(org, db=db) == 3
     assert audit.verify_chain(org, db=db).ok
     assert audit.rekey(org, db=db) == 0
+
+
+# ---- D3 (id-sec-final2): a malformed checkpoint is a chain break, never a crash -------------------------
+
+def test_d3_the_app_role_cannot_write_a_checkpoint_with_malformed_fields(app_role):
+    """The re-test's repro: through identity_audit_checkpoint, as the app role, a checkpoint over the
+    bootstrap row (exempt from the age floor) naming only pruned_through_seq."""
+    import json
+
+    org = app_role.org
+    with app_role.begin() as c:
+        audit.record(SecurityEvent(org_id=org, event_type="bootstrap.claimed", outcome=Outcome.SUCCESS,
+                                   actor_principal_id="p"), db=c)
+        audit.record(_ev(1, org), db=c)
+    with app_role.begin() as c:
+        first = c.execute(text("SELECT encode(hash, 'hex') FROM identity_security_events WHERE org_id = :o "
+                               "AND seq = 1"), {"o": org}).scalar()
+    bad_details = ({"pruned_through_seq": 1},
+                   {"pruned_through_seq": 1, "last_pruned_hash": "00" * 32},              # not that row's
+                   {"pruned_through_seq": 1, "last_pruned_hash": "zz"},
+                   {"pruned_through_seq": 1, "last_pruned_hash": first, "retained": []},
+                   {"pruned_through_seq": 1, "last_pruned_hash": first, "retained": {"9": first}},
+                   {"pruned_through_seq": 1, "last_pruned_hash": first, "retained": {"x": first}},
+                   {"pruned_through_seq": 1, "last_pruned_hash": first, "retained": {"1": 7}})
+    for details in bad_details:
+        with app_role.begin() as c:
+            last = c.execute(text("SELECT seq, hash FROM identity_security_events WHERE org_id = :o "
+                                  "ORDER BY seq DESC LIMIT 1"), {"o": org}).first()
+        row = {"org_id": org, "seq": last[0] + 1, "event_type": "audit.checkpoint", "stream": "security",
+               "outcome": "info", "ts": "2026-10-07T00:00:00+00:00", "details": details}
+        with pytest.raises(DBAPIError, match="identity_audit_checkpoint"):
+            with app_role.begin() as c:
+                c.execute(text("SELECT identity_audit_checkpoint(CAST(:r AS JSONB), :p, :h)"),
+                          {"r": json.dumps(row), "p": bytes(last[1]), "h": os.urandom(32)})
+
+
+def _plant_checkpoint(db, org, details, *, genuine: bool):
+    """A checkpoint row written past every guard (as the DB owner could), with a correct HMAC or not."""
+    import json
+
+    last = db.execute(text("SELECT seq, hash FROM identity_security_events WHERE org_id = :o "
+                           "ORDER BY seq DESC LIMIT 1"), {"o": org}).first()
+    seq = last[0] + 1
+    db.execute(text("SET LOCAL session_replication_role = replica"))
+    db.execute(text("INSERT INTO identity_security_events (org_id, seq, stream, event_type, outcome, prev_hash, "
+                    "hash, details, hash_alg) VALUES (:o, :s, 'security', 'audit.checkpoint', 'info', :p, :h, "
+                    "CAST(:d AS jsonb), 2)"),
+               {"o": org, "s": seq, "p": bytes(last[1]), "h": os.urandom(32), "d": json.dumps(details)})
+    if genuine:
+        raw = db.execute(text(audit._SELECT + " WHERE org_id = :o AND seq = :s"), {"o": org, "s": seq}).mappings().first()
+        row = audit.row_from_db(raw)
+        h = audit.chain_hash(row["prev_hash"], row, alg=audit.ALG_HMAC, key=audit.chain_key(org, db=db))
+        db.execute(text("UPDATE identity_security_events SET hash = :h WHERE org_id = :o AND seq = :s"),
+                   {"h": h, "o": org, "s": seq})
+    db.execute(text("SET LOCAL session_replication_role = origin"))
+    return seq
+
+
+@pytest.mark.parametrize("details,genuine", [
+    ({"pruned_through_seq": 1}, True),                                   # the repro: no last_pruned_hash
+    ({"pruned_through_seq": 1, "last_pruned_hash": "zz"}, True),
+    ({"pruned_through_seq": "1", "last_pruned_hash": "ab" * 32}, True),
+    ({"pruned_through_seq": 1, "last_pruned_hash": "ab" * 32, "retained": {"x": 1}}, True),
+    ({"pruned_through_seq": 1, "last_pruned_hash": "ab" * 32}, False),   # well-formed, forged HMAC
+])
+def test_d3_a_malformed_or_forged_checkpoint_is_a_break_at_its_seq(db, keyed, details, genuine):
+    org = keyed
+    for i in range(3):
+        audit.record(_ev(i, org), db=db)
+    assert audit.verify_chain(org, db=db).ok
+    seq = _plant_checkpoint(db, org, details, genuine=genuine)
+    result = audit.verify_chain(org, db=db)            # never a KeyError / 500
+    assert not result.ok and result.first_break_seq == seq
+    bundle = audit.export(org, db=db, actor_principal_id="usr_owner")
+    assert bundle is not None

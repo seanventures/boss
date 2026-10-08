@@ -246,6 +246,15 @@ def reset_password(db: Any, facts: RequestFacts, *, token: str, new_password: st
     user = users.by_id(db, ch.principal_id) if ch and ch.principal_id else None
     if ch is None or user is None or user.status != "active":
         return Answer(400, {"error": "reset_invalid"})
+    # A-1: Enforce SSO before anything changes. A reset link an admin minted never lets a person
+    # whose domain the IdP alone admits in (and `finish` checks again, for every path). The one
+    # exception is the host shell's Owner recovery, the same break-glass as an Owner's passkey.
+    from .signin import HOST_RECOVERY, sso_refusal
+
+    first = HOST_RECOVERY if _minted_by_host(db, ch.id_hash) else "pwd"
+    refused = sso_refusal(db, user, facts, method=first)
+    if refused is not None:
+        return refused
     try:
         check_new_password(new_password, email=user.email, policy=get_policy(user.org_id, db=db))
     except PasswordRejected as exc:
@@ -271,12 +280,24 @@ def reset_password(db: Any, facts: RequestFacts, *, token: str, new_password: st
     if _holds_first_factor_grant(db, user):
         fresh = users.by_id(db, user.principal_id)
         assert fresh is not None
-        answer = finish(db, fresh, facts, methods=["pwd"], mfa=False)
+        answer = finish(db, fresh, facts, methods=["pwd"], mfa=False, sso_method=first)
         if answer.status == 200 and answer.body.get("next") == "enrol":
             answer.body["after"] = "password_reset"
             return answer
     # No session otherwise: the person signs in (and completes MFA) next.
     return Answer(200, {"next": "signin"})
+
+
+#: The marker `boss identity recover-owner` stores in a reset challenge's binding column (never a
+#: SHA-256, so it never matches a browser binding). Only the host shell writes it.
+HOST_MINTED_BINDING = "host_cli"
+
+
+def _minted_by_host(db: Any, id_hash: str) -> bool:
+    from sqlalchemy import text
+
+    return db.execute(text("SELECT binding_hash FROM identity_auth_challenges WHERE id_hash = :h"),
+                      {"h": id_hash}).scalar() == HOST_MINTED_BINDING
 
 
 def _holds_first_factor_grant(db: Any, user: users.UserRow) -> bool:

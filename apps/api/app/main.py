@@ -20323,6 +20323,8 @@ def approve_changeset(
                 payload.actor,
                 "providerops_manage",
             )
+        from boss_engine.identity.approvals import ApprovalPending
+
         try:
             item = resource_plane.approve_changeset(
                 connection,
@@ -20330,6 +20332,15 @@ def approve_changeset(
                 actor=payload.actor,
                 approver_roles=approver_roles,
             )
+        except ApprovalPending as pending:
+            # C-1: the ChangeSet's tier-3 decision went through decisions.transition, which
+            # recorded this person as the first of two (this transaction commits it).
+            return JSONResponse(status_code=202, content=pending.body())
+        except InvalidDecisionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            record_policy_denial(project_id, payload.actor, "changeset_approve", str(error))
+            raise HTTPException(status_code=403, detail=str(error)) from error
         except (ChangeSetNotFoundError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return ChangeSetSummary(**item)
@@ -22149,18 +22160,16 @@ def _require_job_kind_permission(kind: str, project_id: str) -> None:
     """Under identity, a job's EFFECT is authorized by its kind's catalogue permission
     (boss_engine.identity.job_permissions), at the job's project, beyond the route's
     work_item:manage. A kind BOSS does not know is refused: no unmapped effect by default."""
-    from boss_engine.identity.job_permissions import permission_for
+    from boss_engine.identity.job_permissions import permission_for, require_job_kind
 
     from .routers.identity_access import require_permission
 
+    # C-2: THE check (engine, shared with every dead-letter requeue path); under enforce it
+    # raises JobKindRefused (the app's handler answers 422/401/403).
+    require_job_kind(kind, project_id)
     permission = permission_for(kind)
-    if permission is None:
-        if identity_guard.identity_enforced():
-            raise HTTPException(status_code=422, detail={
-                "error": "unknown_job_kind",
-                "message": "BOSS has no worker for this kind of job, so it cannot be queued."})
-        return
-    require_permission(None, permission, project_id, label="job_kind")
+    if permission is not None and not identity_guard.identity_enforced():
+        require_permission(None, permission, project_id, label="job_kind")   # shadow's ledger
 
 
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)

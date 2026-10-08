@@ -41,10 +41,30 @@
  * browser sends after a revocation is decided by the API, every time.
  */
 
-/** Set by the /v1 proxy on the browser's own calls: never collapsed, never kept, stripped here. */
-export const NO_REUSE_HEADER = "x-boss-no-reuse";
+/**
+ * THE BROWSER'S OWN CALL IS MARKED ON THE RequestInit, NOT IN A HEADER (id-sec-final2 B1). A header
+ * marker never arrived: the identity wrapper (server-fetch.ts), installed OUTSIDE this cache,
+ * strips every `x-boss-*` header before the cache sees the request, so `direct` was always false
+ * and the browser's sessionless calls were TTL-kept and shared. A symbol property on the init
+ * survives the wrapper's `{ ...init, headers }` (and server-fetch.ts carries it explicitly onto a
+ * Request), and no client can send one. `Symbol.for`: Next gives route handlers and pages separate
+ * copies of this module, and both must recognise the same mark.
+ */
+export const NO_REUSE = Symbol.for("boss.feed-cache.no-reuse");
 
-import { sessionTag } from "./identity/forward";
+type Marked = { [NO_REUSE]?: true };
+
+/** Mark a fetch init as the browser's own call: never collapsed, never kept. */
+export function noReuse<T extends RequestInit>(init: T): T {
+  (init as T & Marked)[NO_REUSE] = true;
+  return init;
+}
+
+export function isNoReuse(init: RequestInit | undefined | null): boolean {
+  return Boolean(init && (init as RequestInit & Marked)[NO_REUSE]);
+}
+
+import { consoleAuthMarker, parseIdentityCookies, PREAUTH_COOKIE, sessionTag, tokenTag } from "./identity/forward";
 
 /** A response read once and kept as bytes: every caller gets its OWN fresh Response.
  *  Cloning one shared Response raced — a joiner cloning while another reader drained it got
@@ -136,14 +156,10 @@ export function installFeedCache(apiUrl: string): void {
       : input instanceof URL ? input.toString()
       : input.url;
 
-    // The browser's own call through the /v1 proxy: never collapsed or kept; the marker removed.
+    // The browser's own call through the /v1 proxy: never collapsed or kept (B1: the mark rides
+    // on the init, which the identity wrapper outside this cache keeps).
     const given = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-    const direct = given.has(NO_REUSE_HEADER);
-    if (direct) {
-      given.delete(NO_REUSE_HEADER);
-      if (input instanceof Request) input = new Request(input, { headers: given });
-      init = { ...init, headers: given };
-    }
+    const direct = isNoReuse(init);
 
     // A WRITE MAKES EVERY KEPT READ STALE. The browser's own re-read after a press (give a
     // skill, then read the agent back) comes through a proxy in this process, so it hit the
@@ -171,11 +187,21 @@ export function installFeedCache(apiUrl: string): void {
     // session now (lib/identity/server-fetch.ts), and the same URL answers differently for an
     // Owner and a Viewer — so the key is the URL AND whose session asked. A request with no
     // session shares only with other sessionless requests.
-    const asker = sessionTag(given);
-    const key = `${url}\u0000${asker}`;
+    const asker = await sessionTag(given);
+    // B2: A SESSIONLESS ANSWER IS ONE CLIENT'S, TOO. The API judges a request without a session
+    // by WHERE it comes from (the network bridge admits only a private peer; /v1/auth/options
+    // answers about the caller's address) and by its pre-auth cookie (an SSO start). So a
+    // sessionless key also names the client hop the identity wrapper forwarded and the pre-auth
+    // cookie's tag: two visitors never share one, in flight or kept.
+    const preauth = parseIdentityCookies(given.get("cookie"))[PREAUTH_COOKIE];
+    const client = asker === "anon"
+      ? `\u0000${given.get("x-forwarded-for") ?? "-"}\u0000${preauth ? await tokenTag(preauth) : "-"}`
+      : "";
+    const key = `${url}\u0000${asker}${client}`;
     // …and a person's answer is not kept once it returned (see the header): only sessionless
-    // reads use the TTL.
-    const keep = asker === "anon";
+    // reads use the TTL — and never on a network-trusted console, where every visitor is
+    // sessionless and the API's answer depends on who is asking (B2).
+    const keep = asker === "anon" && consoleAuthMarker() === null;
 
     const hit = keep ? completed.get(key) : undefined;
     if (hit && Date.now() - hit.at < ttl) return fresh(hit.stored);
@@ -201,7 +227,10 @@ export function installFeedCache(apiUrl: string): void {
         // Only successful responses are reusable. Caching a 500 for five seconds would turn a
         // blip into an outage that outlives it.
         const stored = await store(response);
-        if (response.ok && keep) {
+        // The API's own word wins: an answer it marks no-store (/v1/auth/options, the setup
+        // status) is never kept (B2).
+        const noStore = /(^|,)\s*(no-store|private)\s*(,|$)/i.test(response.headers.get("cache-control") ?? "");
+        if (response.ok && keep && !noStore) {
           completed.set(key, { at: Date.now(), stored });
           if (completed.size > 500) evict();
         }

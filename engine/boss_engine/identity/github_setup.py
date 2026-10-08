@@ -43,6 +43,33 @@ class GitHubSetupError(Exception):
         return {"error": self.code, **self.extra}
 
 
+def may_change_org_credentials(org_id: str, *, db: Any = None) -> bool:
+    """D1: the org's GitHub credentials (the org token, its repo scope, the App) are an ORG-scope
+    setting. Inside an enforced request the caller must hold `github:connect` at the ORG through
+    the PDP (step-up included) — a project-bound Admin holds it only at their project and never
+    changes, widens or revokes what every other project builds with. Outside a request (the host
+    shell, a migration) the in-process caller is trusted, as everywhere else."""
+    from . import authz, lineage
+    from .permissions_gen import P
+    from .scope import ResolvedScope
+
+    enforced = lineage.request_enforced()
+    if not enforced:
+        return True
+    ctx = lineage.current_context()
+    if ctx is None or ctx.principal.org_id != org_id:
+        return False
+    return authz.check(ctx, P.GITHUB_CONNECT, ResolvedScope.org_level(org_id), db=db).allowed
+
+
+def require_org_credentials_authority(org_id: str, *, db: Any = None) -> None:
+    if not may_change_org_credentials(org_id, db=db):
+        raise GitHubSetupError(
+            "org_scope_required", 403, permission="github:connect",
+            message="The organisation's GitHub connection is used by every project, so changing it "
+                    "needs github:connect for the whole organisation (an Owner or an org Admin).")
+
+
 def _sql(statement: str):
     from sqlalchemy import text
 
@@ -192,6 +219,7 @@ def installations(*, db: Any, org_id: str) -> list[dict[str, Any]]:
 
 
 def select_installation(*, installation_id: str, org_id: str, db: Any, by: str) -> dict[str, Any]:
+    require_org_credentials_authority(org_id, db=db)
     installation_id = str(installation_id or "").strip()
     if not installation_id.isdigit():
         raise GitHubSetupError("bad_installation", 422)
@@ -207,6 +235,7 @@ def select_installation(*, installation_id: str, org_id: str, db: Any, by: str) 
 
 
 def disconnect_app(*, org_id: str, db: Any, by: str) -> None:
+    require_org_credentials_authority(org_id, db=db)
     db.execute(_sql("DELETE FROM identity_github_app WHERE org_id = :o"), {"o": org_id})
     db.execute(_sql("UPDATE identity_vault_items SET status = 'revoked' WHERE provider IN ('github', 'github-app') "
                     "AND kind IN ('app_private_key', 'oidc_client_secret') AND status = 'active'"))
@@ -244,6 +273,7 @@ def org_token(db: Any, org_id: Optional[str] = None) -> Optional[dict[str, Any]]
 
 def store_org_token(*, token: str, repos: Iterable[str], org_id: str, db: Any, by: str,
                     migrated: bool = False, check: bool = True) -> dict[str, Any]:
+    require_org_credentials_authority(org_id, db=db)
     token = (token or "").strip()
     if not token or len(token) > 400 or any(c.isspace() for c in token):
         raise GitHubSetupError("bad_token", 422)
@@ -273,6 +303,7 @@ def store_org_token(*, token: str, repos: Iterable[str], org_id: str, db: Any, b
 
 def add_repo_to_org_token(*, repo: str, org_id: str, db: Any) -> None:
     """Setup › Repo picked another repository for the stored token: the org connection covers it too."""
+    require_org_credentials_authority(org_id, db=db)
     current = org_token(db, org_id)
     wanted = _repos([repo])
     if current is None or not wanted or wanted[0] in current["repos"]:
@@ -282,6 +313,7 @@ def add_repo_to_org_token(*, repo: str, org_id: str, db: Any) -> None:
 
 
 def remove_org_token(*, org_id: str, db: Any, by: str) -> bool:
+    require_org_credentials_authority(org_id, db=db)
     current = org_token(db, org_id)
     if current is None:
         return False

@@ -70,6 +70,9 @@ NEVER: frozenset[str] = frozenset({
     # and any host-specific "<PLATFORM>_OPS_TOKEN" is caught by SECRET_SHAPED regardless.
     "OPS_TOKEN", "X_OPS_TOKEN",
     "BOSS_API_KEYS", "BOSS_API_KEY", "BOSS_CONSOLE_API_KEY",
+    # BOSS's own bearer keys, minted from the host shell: the host tools' key holds every
+    # permission the shared key did (step-up exempt), the MCP key a project's (id-sec-final2).
+    "BOSS_HOST_API_KEY", "BOSS_MCP_API_KEY", "BOSS_MASTER_KEY", "BOSS_MASTER_KEY_FILE",
     "BOSS_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN",
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
     "S3_ACCESS_KEY", "S3_SECRET_KEY", "MINIO_ROOT_PASSWORD",
@@ -93,9 +96,16 @@ def _extra_allowed(source: Mapping[str, str]) -> set[str]:
     return {n.strip() for n in raw.split(",") if n.strip()} if raw else set()
 
 
+#: …and the CLASS: any BOSS_* key or master key a future release adds is never passed either.
+NEVER_SHAPED_PREFIX = "BOSS_"
+NEVER_SHAPED: tuple[str, ...] = ("API_KEY", "MASTER_KEY")
+
+
 def is_allowed(name: str, extra: Iterable[str] = ()) -> bool:
     upper = name.upper()
     if upper in {n.upper() for n in NEVER}:
+        return False
+    if upper.startswith(NEVER_SHAPED_PREFIX) and any(m in upper for m in NEVER_SHAPED):
         return False
     if name in ALLOW_EXACT or name in set(extra):
         return True

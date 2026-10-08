@@ -86,4 +86,56 @@ def test_the_package_drops_on_import_and_the_image_names_its_user():
 
 def test_the_entrypoint_heals_root_owned_files_in_the_service_volumes():
     ep = (ROOT / "scripts" / "sandbox" / "entrypoint.sh").read_text()
-    assert re.search(r'find "\$d" -mindepth 1 ! -user boss -exec chown boss:boss', ep)
+    assert re.search(r'heal_ownership "\$d" boss', ep)
+
+
+def _heal_function() -> str:
+    ep = (ROOT / "scripts" / "sandbox" / "entrypoint.sh").read_text()
+    return ep.split("# --- heal_ownership (begin)", 1)[1].split("# --- heal_ownership (end)", 1)[0]
+
+
+def test_the_ownership_heal_never_follows_a_symlink(tmp_path):
+    """D2 (id-sec-final2): the heal runs as root over volumes other containers write. A link planted
+    there (-> /etc/shadow, -> a directory of root's) must never have its TARGET chowned, and no
+    path is ever handed to chown without -h. Run the entrypoint's own function with a stub chown
+    that records what it was asked to do (the real one needs root)."""
+    import os
+    import shutil
+    import subprocess
+
+    if shutil.which("sh") is None or shutil.which("find") is None:
+        import pytest
+        pytest.skip("no POSIX shell")
+    vol = tmp_path / "artifacts"
+    (vol / "proj" / "sub").mkdir(parents=True)
+    (vol / "proj" / "file.txt").write_text("x")
+    outside = tmp_path / "outside"
+    (outside / "secret_dir").mkdir(parents=True)
+    (outside / "shadow").write_text("root only")
+    os.symlink(outside / "shadow", vol / "proj" / "evil")
+    os.symlink(outside / "secret_dir", vol / "proj" / "evil_dir")
+    os.symlink(outside, vol / "linked_tree")
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    log = tmp_path / "chown.log"
+    (stub / "chown").write_text(f'#!/bin/sh\nprintf "%s|%s\\n" "$PWD" "$*" >> "{log}"\n')
+    (stub / "chown").chmod(0o755)
+    script = tmp_path / "heal.sh"
+    # "nobody" owns nothing here, so every real entry is a candidate, as root's are in a volume.
+    script.write_text(_heal_function() + f'\nheal_ownership "{vol}" nobody\n')
+    subprocess.run(["sh", str(script)], check=True,
+                   env={**os.environ, "PATH": f"{stub}:/usr/bin:/bin:/usr/sbin:/sbin"})
+    calls = log.read_text().splitlines()
+    assert calls, "the heal chowned nothing"
+    named = []
+    for line in calls:
+        cwd, args = line.split("|", 1)
+        parts = args.split()
+        assert parts[0] == "-h", line                    # never dereference
+        for name in parts[2:]:
+            path = os.path.normpath(os.path.join(cwd, name))
+            assert not os.path.islink(path), f"a symlink was handed to chown: {path}"
+            assert path.startswith(str(vol.resolve())) or path.startswith(str(vol)), path
+            named.append(os.path.basename(path))
+    assert {"proj", "sub", "file.txt"} <= set(named)
+    assert not {"evil", "evil_dir", "linked_tree", "shadow", "secret_dir"} & set(named)

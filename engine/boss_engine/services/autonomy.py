@@ -332,25 +332,20 @@ def apply_policy(connection, project_id: str, *, limit: int = 25) -> dict[str, A
             continue
 
         record = verdict.as_record(policy)
-        connection.execute(
-            _sql(
-                """
-                UPDATE decisions
-                SET status = 'approved',
-                    approved_by = :actor,
-                    approved_at = now(),
-                    resolution_note = :note
-                WHERE id = :id AND project_id = :p AND status = 'pending'
-                """
-            ),
-            {
-                "id": row["id"], "p": project_id,
-                # Named so the trail never reads as a person. "approved by ceo" and "approved
-                # by the policy ceo turned on" are different facts.
-                "actor": f"autonomy:{policy.mode}",
-                "note": f"AUTO-APPROVED (no human reviewed this): {verdict.reason}",
-            },
-        )
+        # C-1: through decisions.approve_by_policy, which refuses any tier that needs a seat or
+        # a second person (those only ever go through decisions.transition).
+        from .decisions import approve_by_policy
+
+        if not approve_by_policy(
+            connection, row["id"], project_id=project_id,
+            # Named so the trail never reads as a person. "approved by ceo" and "approved
+            # by the policy ceo turned on" are different facts.
+            actor=f"autonomy:{policy.mode}",
+            note=f"AUTO-APPROVED (no human reviewed this): {verdict.reason}",
+        ):
+            declined.append({"id": row["id"], "question": str(row.get("question") or "")[:160],
+                             "reason": "needs a seat or a second person; a person approves it"})
+            continue
         approved.append({"id": row["id"], "question": str(row.get("question") or "")[:160],
                          "reason": verdict.reason, "record": record})
 
