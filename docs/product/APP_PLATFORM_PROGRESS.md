@@ -1143,6 +1143,19 @@ templates mount: the built-ins come from the image.
   `api_main.delivery_deploy_endpoint(body)` without its `request` argument (TypeError, 500) since
   00399f5f; `test_one_deploy_button_routes_by_target_kind` fakes the endpoint so it never shows.
 
+### Final gate (2026-10-09, fresh `boss_test_integ`)
+
+- API suites the integration touched (templates, security scan + review routes, links + gateway,
+  deploy guard, oidc:read, oidc key rotation, preview origin, deploy button, build actions,
+  advisory gate, day-1 routes): 145 passed, 2 failed only in the combined session and pass
+  alone (the deploy-guard suite saw another suite's template applications: its fixture now
+  clears them, 0c507e9a; `test_stop_is_instant_while_the_worker_holds_the_run`: timing).
+- Engine suites (templates incl. the compose test, security review workflow, link rules/fence,
+  previews sandbox, F1 sandbox, name-twice, security scan engine, oidc, gate labels, manifest):
+  451 passed, 55 skipped (opt-in real runs / Docker).
+- Identity coverage suites: 46 passed. S6 suites after phase 2 + oidc:read: 198 passed.
+- Web: full vitest 5908 passed (see notes).
+
 ### Decisions for the operator
 
 - `oidc:read` is Owner/Admin/Auditor only: an Operator who manages a project's clients can no
