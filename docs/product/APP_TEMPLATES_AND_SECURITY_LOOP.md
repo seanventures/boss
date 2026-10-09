@@ -133,7 +133,7 @@ SECURITY.md               # what it protects and what it does not
 
 ```yaml
 schema: boss.template/v1
-id: payments-stripe            # [a-z0-9-]{3,48}, unique per org
+id: stripe-checkout            # [a-z0-9-]{3,48}, unique per org
 name: Stripe payments
 version: 1.0.0                 # semver; an app records the version it applied
 summary: Checkout + webhooks, test mode by default
@@ -392,7 +392,10 @@ React/Vite scaffold UI), Python = FastAPI, Java = Spring Boot for login/payments
 - **Security note:** protects sign-in and session; does not add authorization beyond "signed
   in"; roles are the app's job (or F6's `roles` claim).
 
-### 3.2 `payments-stripe` — Stripe Checkout + webhooks
+### 3.2 `stripe-checkout` — Stripe Checkout + webhooks
+
+(Named `payments-stripe` and `payments-paypal` in earlier drafts; the shipped ids are
+`stripe-checkout` and `paypal-checkout`.)
 
 - **Adds:** `POST /api/checkout` (creates a Checkout Session **server-side from server-side
   prices** — the client sends ids and quantities, never amounts), `GET /checkout/success`
@@ -416,7 +419,7 @@ React/Vite scaffold UI), Python = FastAPI, Java = Spring Boot for login/payments
   Signatures in tests are generated with the SDK's test helper (Node
   `stripe.webhooks.generateTestHeaderString`; Python/Java compute HMAC-SHA256 the documented way).
 
-### 3.3 `payments-paypal` — PayPal (sandbox)
+### 3.3 `paypal-checkout` — PayPal (sandbox)
 
 - **Adds:** Orders v2: `POST /api/paypal/orders` (server creates the order from server prices),
   `POST /api/paypal/orders/:id/capture`, `POST /webhooks/paypal` (verified via PayPal's
@@ -512,12 +515,12 @@ network); Dropwizard + pac4j is a less common pairing (D2).
   passes the template's tests and `template_tests` gate — 5 templates + 1 variant × 3 stacks =
   18 trial builds in the Phase-2 CI matrix (§8).
 - **Per template unit tests** listed above, inside each template's `stacks/<stack>/tests`.
-- **Composition:** catalog-cart + payments-stripe + login-oauth applied in sequence to one Node
+- **Composition:** catalog-cart + stripe-checkout + login-oauth applied in sequence to one Node
   app: cart merge on login and checkout from cart both pass.
 - **Guardrail tests:** host deploy of an `insecure_by_design` app is refused (API test);
   applying the insecure variant onto an existing app is refused; banner present (Playwright).
 - **End-to-end proof (F3):** in Node, from the composer: new app "Shop" from `catalog-cart`, then
-  `payments-stripe` with a real Stripe **test** key, then `login-oauth` with Google. In the
+  `stripe-checkout` with a real Stripe **test** key, then `login-oauth` with Google. In the
   preview, Playwright signs in through Google (a test Google account — or GitHub, D5), adds two
   products, checks out with card `4242 4242 4242 4242`, lands on success; the order is `paid`;
   `stripe trigger`-style replay of the webhook does not double-fulfil. Separately, the Java

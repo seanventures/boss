@@ -21,7 +21,7 @@ from boss_engine.templates.manifest import (
 #: The example in §2.2, verbatim.
 SPEC_EXAMPLE = """\
 schema: boss.template/v1
-id: payments-stripe            # [a-z0-9-]{3,48}, unique per org
+id: stripe-checkout            # [a-z0-9-]{3,48}, unique per org
 name: Stripe payments
 version: 1.0.0                 # semver; an app records the version it applied
 summary: Checkout + webhooks, test mode by default
@@ -83,7 +83,7 @@ def _reasons(data) -> list[str]:
 
 def test_the_spec_example_is_valid():
     m = validate_manifest(SPEC_EXAMPLE)
-    assert m.id == "payments-stripe" and m.version == "1.0.0"
+    assert m.id == "stripe-checkout" and m.version == "1.0.0"
     assert set(m.stacks) == {"node", "python", "java"}
     assert m.stacks["java"].frameworks == ("spring-boot", "dropwizard")
     assert m.secret("STRIPE_SECRET_KEY").test_default == "none"
@@ -110,7 +110,7 @@ def test_a_prerelease_version_and_an_spdx_expression_are_valid():
 
 def test_it_loads_from_a_template_directory(tmp_path):
     (tmp_path / "boss-template.yaml").write_text(SPEC_EXAMPLE, encoding="utf-8")
-    assert load_manifest(tmp_path).id == "payments-stripe"
+    assert load_manifest(tmp_path).id == "stripe-checkout"
 
 
 def test_the_manifest_is_immutable():
