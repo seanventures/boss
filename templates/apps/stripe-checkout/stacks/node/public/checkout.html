@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Checkout</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 16px; max-width: 40rem; }
+    .banner { background: #fff4d6; border: 1px solid #e0b84a; padding: 8px 12px; border-radius: 6px; }
+    button { font: inherit; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
+    [role=alert] { color: #a40000; }
+  </style>
+</head>
+<body>
+  <!-- Reference UI for `stripe-checkout`: adapt it to the app's design. The page sends only a
+       product id and a quantity (or a cart id); the server sets every price. -->
+  <p class="banner" id="test-banner" hidden>Test mode: use card 4242 4242 4242 4242, any future date, any CVC. No real money moves.</p>
+  <h1>Starter pack</h1>
+  <button id="buy" data-product-id="starter-pack">Buy now</button>
+  <p role="alert" id="error"></p>
+  <script>
+    fetch("/api/checkout/config").then((r) => r.json()).then((c) => {
+      document.getElementById("test-banner").hidden = c.mode !== "test";
+    }).catch(() => {});
+    document.getElementById("buy").addEventListener("click", async (e) => {
+      const button = e.currentTarget;
+      button.disabled = true;
+      document.getElementById("error").textContent = "";
+      try {
+        const r = await fetch("/api/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: [{ product_id: button.dataset.productId, quantity: 1 }] }),
+        });
+        const body = await r.json();
+        if (!r.ok) throw new Error(body.error || "checkout failed");
+        window.location.assign(body.checkout_url); // Stripe-hosted Checkout
+      } catch (err) {
+        document.getElementById("error").textContent = err.message;
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
