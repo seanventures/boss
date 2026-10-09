@@ -209,6 +209,15 @@ def _repos_for(db: Any, project_id: str, input_data: Any) -> list[str]:
     owner, repo = str(data.get("owner") or "").strip(), str(data.get("repo") or "").strip()
     if owner and repo:
         return [f"{owner}/{repo}"]
+    app_key = str(data.get("app_key") or "").strip()
+    if app_key:
+        # Work on an existing app (a security review's fix, a template's build) builds in THAT
+        # app's repository: the grant names it, not every repository of the project.
+        row = db.execute(text("SELECT spec->>'owner', spec->>'repo' FROM code_task_runs WHERE project_id = :p "
+                              "AND finalize_ctx->>'app_id' = :a ORDER BY created_at DESC LIMIT 1"),
+                         {"p": project_id, "a": app_key}).first()
+        if row and row[0] and row[1]:
+            return [f"{row[0]}/{row[1]}"]
     if db.execute(text("SELECT to_regclass('github_repository_bindings') IS NOT NULL")).scalar():
         rows = db.execute(text("SELECT full_name FROM github_repository_bindings WHERE project_id = :p "
                                "AND COALESCE(status, 'active') = 'active' ORDER BY full_name"), {"p": project_id}).scalars().all()
@@ -243,7 +252,7 @@ def workflow_needs(db: Any, project_id: str, spec: Any, input_data: Any) -> tupl
             from . import runs
             if runs.agent_for_role(db, project_id, cap_captain):
                 candidates.append(cap_captain)
-        is_build = cap_key in BUILD_CAPABILITIES or step.get("kind") == "code_task"
+        is_build = cap_key in BUILD_CAPABILITIES or step.get("kind") == "code_task" or _capability_builds(cap_key)
         if is_build:
             builds = True
             if not any(candidates):
@@ -264,6 +273,27 @@ def _registry(build):
     if not _REGISTRY:
         _REGISTRY.append(build())
     return _REGISTRY[0]
+
+
+#: The tools that start a build: a capability that calls one IS a build step, whatever it is
+#: called (security_fix was not in BUILD_CAPABILITIES, so a security review's consent asked for
+#: no build authority and its fix build was refused at start: "authority refused: no_grant").
+BUILD_TOOLS = frozenset({"create_code_task", "retry_code_task"})
+
+
+def _capability_builds(cap_key: str) -> bool:
+    if not cap_key:
+        return False
+    try:
+        from ..services import workflow_capabilities
+
+        cap = workflow_capabilities.CAPABILITIES.get(cap_key)
+    except Exception:  # noqa: BLE001 — unknown here: the hardcoded set still decides
+        return False
+    if cap is None:
+        return False
+    return (getattr(cap, "tool", None) in BUILD_TOOLS
+            or "code_task_run_id" in tuple(getattr(cap, "produces", ()) or ()))
 
 
 def _capability_needs(cap_key: str) -> tuple[Optional[str], Optional[str]]:

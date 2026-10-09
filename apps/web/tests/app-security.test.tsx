@@ -21,6 +21,7 @@ import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract
 import { ROLE_PERMISSIONS } from "../lib/identity/permissions.gen";
 import { needsWords } from "../lib/identity/words";
 import { parseReport, parseReview, reportScans, stepWord, targetRows } from "../lib/security-review";
+import { CONSENT_EVENT } from "../lib/identity/consent";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -187,6 +188,44 @@ describe("App › Security", () => {
     await act(async () => $('[data-testid="sec-scan-now"]').click());
     await settle();
     expect(writes()[0]).toMatchObject({ path: "/v1/security/scans", body: { project_id: "p1", app_key: "vulnapp" } });
+  });
+
+  it("a security review that needs consent opens the consent sheet, then starts once granted", async () => {
+    const CONSENT = {
+      error: "consent_required", scope: "workflow_run", task: "Security review", task_run_id: "pending:abc",
+      agents: [{ id: "agt_sec", name: "Security reviewer", role_key: "security_reviewer" }],
+      permissions: ["code_task:create"], projects: ["p1"], github: null,
+      durations: [{ kind: "task", label: "For this run only", days: null }, { kind: "standing", label: "For 30 days", days: 30 }],
+      max_days: 90,
+    };
+    let starts = 0;
+    const inner = (globalThis.fetch as unknown as (i: RequestInfo | URL, n?: RequestInit) => Promise<Response>);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/v1/delivery-workflows/start")) {
+        calls.push({ method: "POST", path: "/v1/delivery-workflows/start", body: JSON.parse(String(init?.body)) });
+        starts += 1;
+        return starts === 1 ? json(CONSENT, 409) : json({ run_id: "wfr_2" }, 202);
+      }
+      return inner(input, init);
+    }));
+    const asked: unknown[] = [];
+    const onAsk = (e: Event) => {
+      const d = (e as CustomEvent).detail as { onDecided?: (g: string | null) => void; agents: unknown };
+      asked.push(d.agents);
+      d.onDecided?.("dlg_1");
+    };
+    window.addEventListener(CONSENT_EVENT, onAsk);
+    try {
+      await mount(<AppSecurity projectId="p1" appKey="vulnapp" />, "operator");
+      reviewBody = { ...REVIEW, status: "completed", awaiting_choice: false };
+      await act(async () => $('[data-testid="sec-review-start"]').click());
+      await settle();
+    } finally {
+      window.removeEventListener(CONSENT_EVENT, onAsk);
+    }
+    expect(asked).toEqual([[{ id: "agt_sec", name: "Security reviewer", role_key: "security_reviewer" }]]);
+    expect(starts).toBe(2);
+    expect(host!.textContent).not.toContain("consent_required");
   });
 
   it("shows the review's steps and, while it waits for a person, the checklist", async () => {

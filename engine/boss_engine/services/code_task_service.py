@@ -2167,6 +2167,34 @@ def _consent_repos(owner: Optional[str], repo: Optional[str], repo_host: Optiona
     return [f"{owner}/{repo}"]
 
 
+class AuthorityRefused(RuntimeError):
+    """The build has no authority to act (identity.runs.start_code_task_run refused it: no grant,
+    a grant that no longer covers, an agent with no Passport). A REFUSAL, never a crash: the run
+    ends `blocked` with what to do, and the worker gets an answer (not a 500 it retries)."""
+
+    def __init__(self, reason: str):
+        self.reason = str(reason or "refused")
+        super().__init__(f"authority refused: {self.reason}")
+
+
+def authority_refusal_words(reason: str) -> str:
+    """What a person reads on a build refused for want of authority, and what to do about it."""
+    r = (reason or "").lower()
+    if "no_grant" in r or "no grant" in r or r == "noauthority":
+        return ("No one's authority covers this build: it was started by BOSS itself (or a key) and no "
+                "person's grant lets its builder act. Start it again from the console as a person "
+                "(you will be asked to consent), or give the builder a standing grant under "
+                "My account ▸ Agents acting for me.")
+    if "passport" in r:
+        return ("The builder has no Passport, so it cannot act for anyone. An Owner can give it one "
+                "under Identity ▸ Agents; then start the build again.")
+    if "revoked" in r or "expired" in r or "suspended" in r or "covers" in r or "outside" in r:
+        return ("The grant this build was started under no longer covers it (revoked, expired or "
+                "narrowed). Start it again from the console; you will be asked to consent.")
+    return ("This build was refused the authority to act (" + reason[:80] + "). Start it again from the "
+            "console as a person; you will be asked to consent if a grant is needed.")
+
+
 def run_code_task(engine, settings: Settings, jobs, run_id: str,
                   *, fencing_token: Optional[str] = None) -> dict:
     """Execute one full code-task attempt. Safe to re-run after a crash.
@@ -2191,6 +2219,16 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
                 return _fail(c, run_id, run["project_id"], f"Sandbox unavailable: {exc}",
                              status="blocked", failure_class="needs_human", reason_code="sandbox_unavailable")
         return {"status": "blocked", "done": True, "reason": "sandbox_unavailable"}
+    except AuthorityRefused as exc:
+        # A refusal, said as one: the run is blocked with what to do; the worker is answered.
+        words = authority_refusal_words(exc.reason)
+        with _transaction(engine) as c:
+            run = load_code_task_run(c, run_id)
+            if run is not None and run["status"] not in ("completed", "failed", "cancelled", "blocked"):
+                _fail(c, run_id, run["project_id"], words, status="blocked", failure_class="needs_human",
+                      reason_code="no_authority")
+        return {"status": "blocked", "done": True, "reason": "no_authority", "authority": exc.reason,
+                "message": words}
     finally:
         owned_process.terminate_owner(run_id, reason="run_ended", grace=2.0)
 
@@ -2355,7 +2393,7 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                     role_key=identity_runs.code_task_builder(spec, fctx),
                     job_id=fctx.get("created_by_job_id"))
             except Exception as exc:  # noqa: BLE001 — refused authority fails the build, never widens
-                raise RuntimeError(f"authority refused: {getattr(exc, 'reason', None) or type(exc).__name__}") from exc
+                raise AuthorityRefused(getattr(exc, 'reason', None) or type(exc).__name__) from exc
             if identity_run is not None:
                 token = ""
         if hasattr(provider, "run_code_task"):

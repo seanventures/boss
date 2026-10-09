@@ -6,6 +6,7 @@
  * (lib/identity/api.ts: CSRF on every write, refusals as IdentityError).
  */
 import { IdentityError, idGet, idPost } from "./identity/api";
+import { askConsent, consentFromBody } from "./identity/consent";
 import { refusalFrom } from "../lib/start-refusal";
 
 export const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
@@ -276,14 +277,23 @@ export const securityApi = {
   /** The full loop: POST /v1/delivery-workflows/start with workflow_key=security_review. A refusal
    *  (409 with the readiness checklist, say) is flattened to its sentence (lib/start-refusal). */
   startReview: async (projectId: string, appKey: string, focus: string) => {
-    try {
-      return await idPost<{ run_id?: string; id?: string }>("/v1/delivery-workflows/start", {
-        project_id: projectId, workflow_key: "security_review",
-        input: { app_key: appKey, ...(focus.trim() ? { directive: focus.trim() } : {}) },
-      });
-    } catch (e) {
+    const start = () => idPost<{ run_id?: string; id?: string }>("/v1/delivery-workflows/start", {
+      project_id: projectId, workflow_key: "security_review",
+      input: { app_key: appKey, ...(focus.trim() ? { directive: focus.trim() } : {}) },
+    });
+    const flatten = (e: unknown): never => {
       if (e instanceof IdentityError && e.status !== 401 && e.status !== 403) throw new Error(refusalFrom(e.status, e.body).error);
       throw e;
+    };
+    try {
+      return await start();
+    } catch (e) {
+      // NEEDS YOUR CONSENT (409 consent_required, the build's contract): the consent sheet asks,
+      // and once granted the SAME start is sent again — once. Cancelling starts nothing.
+      const asked = e instanceof IdentityError && e.status === 409 ? consentFromBody(e.body) : null;
+      if (!asked) return flatten(e);
+      if (!(await askConsent(asked))) throw new Error("The security review was not started: it needs your consent to run.");
+      try { return await start(); } catch (again) { return flatten(again); }
     }
   },
   triage: (findingId: string, status: "accepted" | "false_positive", reason: string) =>
