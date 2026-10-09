@@ -1,0 +1,51 @@
+schema: boss.template/v1
+id: stripe-checkout
+name: Stripe Checkout
+version: 1.0.0
+summary: Stripe Checkout with server-side prices, signed idempotent webhooks and success-page fulfilment; test mode by default
+adds: [routes, ui, db_tables, webhook]
+stacks:
+  node:   {frameworks: [express], min_toolchain: node20}
+  python: {frameworks: [fastapi], min_toolchain: python311}
+  java:   {frameworks: [spring-boot], min_toolchain: jdk21}
+requires: []
+works_with: [catalog-cart]
+secrets:
+  - name: STRIPE_SECRET_KEY
+    purpose: Server-side Stripe API calls (create Checkout Sessions, read them back, refunds)
+    test_default: none
+    pattern: '^sk_test_[A-Za-z0-9]+$'
+    live_pattern: '^sk_live_[A-Za-z0-9]+$'
+  - name: STRIPE_PUBLISHABLE_KEY
+    purpose: Shown to the browser; identifies the Stripe account and its mode
+    test_default: none
+    pattern: '^pk_test_[A-Za-z0-9]+$'
+    live_pattern: '^pk_live_[A-Za-z0-9]+$'
+  - name: STRIPE_WEBHOOK_SECRET
+    purpose: Verifies the Stripe-Signature on POST /webhooks/stripe
+    test_default: generated
+    pattern: '^whsec_[A-Za-z0-9]+$'
+env:
+  - {name: STRIPE_MODE, default: test}
+  - {name: STRIPE_CURRENCY, default: usd}
+  - {name: PAYMENTS_REFUNDS_ENABLED, default: false}
+  - {name: APP_BASE_URL, default: ''}
+egress: [api.stripe.com]
+webhooks: [{path: /webhooks/stripe, provider: stripe}]
+routes:
+  - POST /api/checkout
+  - GET /api/checkout/config
+  - GET /checkout/success
+  - GET /checkout/cancel
+  - POST /webhooks/stripe
+  - GET /api/orders/:id
+  - POST /api/orders/:id/refund
+tests:
+  node:   {command: npm run test:template, report: junit, min_tests: 12}
+  python: {command: python3 -m pytest -q tests/template_stripe --junitxml=boss-template-junit.xml, report: junit, min_tests: 12}
+  java:   {command: mvn -q test -Dtest=Stripe*, report: junit, min_tests: 12}
+security_note: SECURITY.md
+guide: guide.md
+labels: []
+license: Apache-2.0
+min_boss: 1.0.0
