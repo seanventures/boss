@@ -8166,3 +8166,256 @@ CREATE TABLE IF NOT EXISTS subscription_accounts (
   learned_weekly_allowance_usd  NUMERIC,
   updated_at                    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- =================================================================================================
+-- APP PLATFORM (docs/product/APP_TEMPLATES_AND_SECURITY_LOOP.md). One delimited block per feature,
+-- created by stream S0 on day 1 (§8.2): each stream edits ONLY inside its own block, so no two
+-- streams touch the same lines. F1 (toolchains) and F3 (templates) define no tables.
+-- =================================================================================================
+
+-- BEGIN F2 (template system; owner: stream S2; spec §2.4, §2.7) --------------------------------
+-- A template version known to an org: a built-in (templates/apps/<id>/) or an import pinned to a
+-- commit SHA and digest (§2.5). `manifest` is the validated boss-template.yaml
+-- (engine/boss_engine/templates/manifest.py, schema boss.template/v1).
+CREATE TABLE IF NOT EXISTS app_templates (
+  id            TEXT PRIMARY KEY,
+  org_id        TEXT NOT NULL REFERENCES orgs(id),
+  template_key  TEXT NOT NULL,
+  version       TEXT NOT NULL,
+  source        TEXT NOT NULL CHECK (source IN ('builtin', 'git')),
+  git_url       TEXT,
+  commit_sha    TEXT,
+  digest        TEXT,
+  manifest      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status        TEXT NOT NULL DEFAULT 'pending_review'
+                CHECK (status IN ('active', 'pending_review', 'rejected', 'hidden')),
+  validation    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  trial         JSONB,
+  imported_by   TEXT,
+  approved_by   TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  approved_at   TIMESTAMPTZ,
+  UNIQUE (org_id, template_key, version)
+);
+
+-- One apply of a template to an app: a governed build (§2.3).
+CREATE TABLE IF NOT EXISTS app_template_applications (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT NOT NULL REFERENCES projects(id),
+  app_key           TEXT NOT NULL,
+  template_id       TEXT NOT NULL REFERENCES app_templates(id),
+  version           TEXT NOT NULL,
+  stack             TEXT NOT NULL,
+  framework         TEXT,
+  workflow_run_id   TEXT,
+  code_task_run_id  TEXT,
+  status            TEXT NOT NULL DEFAULT 'building'
+                    CHECK (status IN ('building', 'pr_open', 'applied', 'failed', 'abandoned')),
+  created_by        TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS app_template_applications_app ON app_template_applications (project_id, app_key);
+
+-- An app's secret, per environment (§2.4). The value lives in the vault (kind app_secret); this row
+-- holds presence and mode only. `live` is never handed to a build sandbox or a preview.
+CREATE TABLE IF NOT EXISTS app_secret_bindings (
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id),
+  app_key        TEXT NOT NULL,
+  env            TEXT NOT NULL CHECK (env IN ('build', 'preview', 'deploy')),
+  name           TEXT NOT NULL,
+  vault_item_id  TEXT,
+  mode           TEXT NOT NULL,
+  set_by         TEXT,
+  set_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at   TIMESTAMPTZ,
+  UNIQUE (project_id, app_key, env, name),
+  -- table-level, not inline: the column reconcile (db._safe_add_column_def) cuts a column
+  -- definition at the word GENERATED, so an inline CHECK naming 'generated' would not parse.
+  CONSTRAINT app_secret_bindings_mode CHECK (mode IN ('test', 'live', 'generated', 'stub'))
+);
+-- END F2 ------------------------------------------------------------------------------------------
+
+-- BEGIN F4 (security review; owner: stream S4; spec §4.4) -----------------------------------------
+CREATE TABLE IF NOT EXISTS security_scans (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES projects(id),
+  app_key          TEXT NOT NULL,
+  commit_sha       TEXT,
+  workflow_run_id  TEXT,
+  target           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  tools            JSONB NOT NULL DEFAULT '[]'::jsonb,  -- [{name, version, image_digest, rules_digest, exit, duration_ms}]
+  status           TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  counts           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  triggered_by     TEXT,
+  started_at       TIMESTAMPTZ,
+  ended_at         TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS security_scans_app ON security_scans (project_id, app_key);
+
+-- fingerprint = sha256(tool | rule_id | normalised location | normalised snippet) (§4.4).
+CREATE TABLE IF NOT EXISTS security_findings (
+  id                  TEXT PRIMARY KEY,
+  scan_id             TEXT NOT NULL REFERENCES security_scans(id),
+  fingerprint         TEXT NOT NULL,
+  tool                TEXT NOT NULL,
+  rule_id             TEXT NOT NULL,
+  title               TEXT NOT NULL,
+  severity            TEXT NOT NULL CHECK (severity IN ('critical', 'high', 'medium', 'low', 'info')),
+  confidence          TEXT,
+  cwe                 TEXT,
+  owasp               TEXT,
+  location            JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {file, line} | {url, method, param}
+  evidence            JSONB NOT NULL DEFAULT '{}'::jsonb   -- redacted
+                      CHECK (octet_length(evidence::text) <= 4096),
+  status              TEXT NOT NULL DEFAULT 'open'
+                      CHECK (status IN ('open', 'fixed', 'accepted', 'false_positive')),
+  triaged_by          TEXT,
+  triage_reason       TEXT,
+  first_seen_scan_id  TEXT,
+  UNIQUE (scan_id, fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS security_recommendations (
+  id               TEXT PRIMARY KEY,
+  workflow_run_id  TEXT,
+  meeting_id       TEXT,
+  title            TEXT NOT NULL,
+  fix              TEXT,
+  priority         TEXT,
+  effort           TEXT,
+  fingerprints     TEXT[] NOT NULL DEFAULT '{}',
+  selected         BOOLEAN NOT NULL DEFAULT false,
+  decided_by       TEXT
+);
+-- END F4 ------------------------------------------------------------------------------------------
+
+-- BEGIN F5 (cross-app links; owner: stream S5; spec §5.2) -----------------------------------------
+-- Same-project only in v1 (D7). The consumer gets BOSS_LINK_<ALIAS>_* at build, preview and deploy.
+CREATE TABLE IF NOT EXISTS app_links (
+  id                 TEXT PRIMARY KEY,
+  project_id         TEXT NOT NULL REFERENCES projects(id),
+  consumer_app_key   TEXT NOT NULL,
+  provider_app_key   TEXT NOT NULL,
+  alias              TEXT NOT NULL CHECK (alias ~ '^[A-Z][A-Z0-9_]{1,30}$'),
+  env                TEXT NOT NULL CHECK (env IN ('preview', 'deploy')),
+  credentials        TEXT NOT NULL DEFAULT 'none' CHECK (credentials IN ('none', 'test_users', 'client')),
+  status             TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+  created_by         TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at         TIMESTAMPTZ,
+  UNIQUE (project_id, consumer_app_key, alias, env)
+);
+-- END F5 ------------------------------------------------------------------------------------------
+
+-- BEGIN F6 (BOSS as an OIDC provider; owner: stream S6; spec §6.3) --------------------------------
+CREATE TABLE IF NOT EXISTS oidc_user_pools (
+  id               TEXT PRIMARY KEY,
+  org_id           TEXT NOT NULL REFERENCES orgs(id),
+  name             TEXT NOT NULL,
+  kind             TEXT NOT NULL CHECK (kind IN ('workforce', 'customer')),
+  signup           TEXT NOT NULL DEFAULT 'closed' CHECK (signup IN ('closed', 'invite', 'open', 'domain')),
+  signup_domains   TEXT[] NOT NULL DEFAULT '{}',
+  mfa              TEXT NOT NULL DEFAULT 'optional' CHECK (mfa IN ('off', 'optional', 'required')),
+  passkeys         BOOLEAN NOT NULL DEFAULT true,
+  password_policy  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- id IS the client_id. The secret lives in the vault; the API returns presence only (§6.5).
+-- id_token_alg: RS256 by default, EdDSA opt-in per client (D10; IDENTITY.md amendment A-D10).
+CREATE TABLE IF NOT EXISTS oidc_clients (
+  id                          TEXT PRIMARY KEY,
+  org_id                      TEXT NOT NULL REFERENCES orgs(id),
+  project_id                  TEXT REFERENCES projects(id),
+  app_key                     TEXT,
+  pool_id                     TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  name                        TEXT NOT NULL,
+  type                        TEXT NOT NULL CHECK (type IN ('confidential', 'public')),
+  redirect_uris               TEXT[] NOT NULL DEFAULT '{}',
+  post_logout_redirect_uris   TEXT[] NOT NULL DEFAULT '{}',
+  allowed_scopes              TEXT[] NOT NULL DEFAULT '{openid}',
+  token_endpoint_auth_method  TEXT NOT NULL,
+  jwks                        JSONB,
+  secret_vault_item_id        TEXT,
+  id_token_alg                TEXT NOT NULL DEFAULT 'RS256' CHECK (id_token_alg IN ('RS256', 'EdDSA')),
+  subject_type                TEXT NOT NULL DEFAULT 'pairwise' CHECK (subject_type IN ('pairwise', 'public')),
+  require_mfa                 BOOLEAN NOT NULL DEFAULT false,
+  first_party                 BOOLEAN NOT NULL DEFAULT false,
+  status                      TEXT NOT NULL DEFAULT 'active',
+  created_by                  TEXT,
+  created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  rotated_at                  TIMESTAMPTZ
+);
+
+-- Customer pools only: a separate principal kind that can never hold a BOSS permission.
+CREATE TABLE IF NOT EXISTS oidc_pool_users (
+  id               TEXT PRIMARY KEY,
+  pool_id          TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  email            TEXT NOT NULL,
+  email_verified   BOOLEAN NOT NULL DEFAULT false,
+  name             TEXT,
+  status           TEXT NOT NULL DEFAULT 'active',
+  password_hash    TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_sign_in_at  TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS oidc_pool_users_email ON oidc_pool_users (pool_id, lower(email));
+
+CREATE TABLE IF NOT EXISTS oidc_app_roles (
+  pool_id    TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  client_id  TEXT NOT NULL REFERENCES oidc_clients(id),
+  role_key   TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  PRIMARY KEY (pool_id, client_id, role_key)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_role_assignments (
+  pool_id      TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  subject_ref  TEXT NOT NULL,
+  client_id    TEXT NOT NULL REFERENCES oidc_clients(id),
+  role_key     TEXT NOT NULL,
+  PRIMARY KEY (pool_id, subject_ref, client_id, role_key)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_consents (
+  subject_ref  TEXT NOT NULL,
+  client_id    TEXT NOT NULL REFERENCES oidc_clients(id),
+  scopes       TEXT[] NOT NULL DEFAULT '{}',
+  granted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at   TIMESTAMPTZ,
+  PRIMARY KEY (subject_ref, client_id)
+);
+
+-- Codes and refresh tokens are stored hashed only; a code is single-use, 60 s.
+CREATE TABLE IF NOT EXISTS oidc_auth_codes (
+  code_hash       TEXT PRIMARY KEY,
+  client_id       TEXT NOT NULL REFERENCES oidc_clients(id),
+  subject_ref     TEXT NOT NULL,
+  redirect_uri    TEXT NOT NULL,
+  code_challenge  TEXT NOT NULL,
+  nonce           TEXT,
+  scopes          TEXT[] NOT NULL DEFAULT '{}',
+  acr             TEXT,
+  auth_time       TIMESTAMPTZ NOT NULL,
+  expires_at      TIMESTAMPTZ NOT NULL,
+  used_at         TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
+  token_hash   TEXT PRIMARY KEY,
+  family_id    TEXT NOT NULL,
+  client_id    TEXT NOT NULL REFERENCES oidc_clients(id),
+  subject_ref  TEXT NOT NULL,
+  scopes       TEXT[] NOT NULL DEFAULT '{}',
+  expires_at   TIMESTAMPTZ NOT NULL,
+  rotated_at   TIMESTAMPTZ,
+  revoked_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS oidc_refresh_tokens_family ON oidc_refresh_tokens (family_id);
+
+-- TODO(S6): oidc_pool_user_factors (TOTP / WebAuthn credentials, same shapes as identity's) and
+-- oidc_sessions (customer-pool sessions, cookie __Host-boss_app_session) are not specified column
+-- by column in §6.3; stream S6 defines them here.
+-- END F6 ------------------------------------------------------------------------------------------
