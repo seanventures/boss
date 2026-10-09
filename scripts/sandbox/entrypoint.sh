@@ -4,7 +4,11 @@
 #
 #   1. Network: processes of the sandbox uid pool (61000-61999) may reach loopback, and on the
 #      container's own networks ONLY the BOSS API (8000) and boss-egress (8090 git/API proxy,
-#      8091 the allowlisted CONNECT proxy that is the model gateway and package mirror route).
+#      8091 the allowlisted CONNECT proxy that is the model gateway and package mirror route,
+#      and the link gateway's ports BOSS_LINK_PORTS, 18100-18199: one per cross-app link, F5).
+#      App previews listen in BOSS_PREVIEW_PORTS (19000-19999), refused to the pool even on
+#      loopback: a build reaches another app's preview only through the link gateway, which
+#      checks the build's link pass.
 #      Everything else — the database, Infisical, the host, the internet — is rejected.
 #      BOSS_SANDBOX_NETWORK=enforce (default): when the rules cannot be installed (rootless
 #      Docker, gVisor, some WSL2 and VPS kernels without iptables owner match), BOSS STILL STARTS,
@@ -23,6 +27,8 @@ UID_RANGE="61000-61999"
 RUN_ROOT="${BOSS_SANDBOX_RUN_ROOT:-/var/lib/boss/sandboxes}"
 SHIM_ROOT="/run/boss-shim"
 PORTS="${BOSS_SANDBOX_ALLOWED_PORTS:-8000,8090,8091}"
+LINK_PORTS="$(echo "${BOSS_LINK_PORTS:-18100-18199}" | tr '-' ':')"
+PREVIEW_PORTS="$(echo "${BOSS_PREVIEW_PORTS:-19000-19999}" | tr '-' ':')"
 MODE="${BOSS_SANDBOX_NETWORK:-enforce}"
 
 if [ "$(id -u)" != "0" ]; then
@@ -36,6 +42,8 @@ fence_network() {
   # Loopback ADDRESSES only (127/8: the API on this container, Docker's DNS, the build's own dev
   # servers). Traffic to this container's own network address also rides `lo`, and is held to the
   # same port rules as any other address below.
+  # Previews first: no build reaches an app's preview directly, on any address (F5 §5.4).
+  iptables -A BOSS_SANDBOX -p tcp --dport "$PREVIEW_PORTS" -j REJECT || return 1
   iptables -A BOSS_SANDBOX -o lo -d 127.0.0.0/8 -j ACCEPT || return 1
   iptables -A BOSS_SANDBOX -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || return 1
   # The container's own (non-default-route) networks: the compose network, by subnet.
@@ -51,7 +59,7 @@ with open("/proc/net/route") as fh:
         print(f"{socket.inet_ntoa(struct.pack('<I', dest))}/{bin(mask).count('1')}")
 PY
   ); do
-    iptables -A BOSS_SANDBOX -d "$net" -p tcp -m multiport --dports "$PORTS" -j ACCEPT || return 1
+    iptables -A BOSS_SANDBOX -d "$net" -p tcp -m multiport --dports "$PORTS,$LINK_PORTS" -j ACCEPT || return 1
   done
   iptables -A BOSS_SANDBOX -j REJECT || return 1
   iptables -A OUTPUT -m owner --uid-owner "$UID_RANGE" -j BOSS_SANDBOX || return 1

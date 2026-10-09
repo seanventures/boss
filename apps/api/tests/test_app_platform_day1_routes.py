@@ -31,6 +31,7 @@ MODULES = {
 BUILT = {
     "apps.api.app.routes_templates": lambda path: True,      # S2: test_templates_api.py
     "apps.api.app.routes_security": lambda path: True,       # S4: test_security_scan_routes.py
+    "apps.api.app.routes_links": lambda path: True,          # S5: test_app_links.py
 }
 
 

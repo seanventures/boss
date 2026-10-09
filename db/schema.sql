@@ -8325,6 +8325,8 @@ CREATE TABLE IF NOT EXISTS security_recommendations (
 
 -- BEGIN F5 (cross-app links; owner: stream S5; spec §5.2) -----------------------------------------
 -- Same-project only in v1 (D7). The consumer gets BOSS_LINK_<ALIAS>_* at build, preview and deploy.
+-- One gateway port per active link (D8), from BOSS_LINK_PORTS. An alias is unique among a
+-- consumer's ACTIVE links only, so a revoked link's alias can be linked again.
 CREATE TABLE IF NOT EXISTS app_links (
   id                 TEXT PRIMARY KEY,
   project_id         TEXT NOT NULL REFERENCES projects(id),
@@ -8334,10 +8336,41 @@ CREATE TABLE IF NOT EXISTS app_links (
   env                TEXT NOT NULL CHECK (env IN ('preview', 'deploy')),
   credentials        TEXT NOT NULL DEFAULT 'none' CHECK (credentials IN ('none', 'test_users', 'client')),
   status             TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+  gateway_port       INTEGER,
   created_by         TEXT,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   revoked_at         TIMESTAMPTZ,
-  UNIQUE (project_id, consumer_app_key, alias, env)
+  revoked_by         TEXT,
+  last_used_at       TIMESTAMPTZ,
+  CHECK (consumer_app_key <> provider_app_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS app_links_active_alias
+  ON app_links (project_id, consumer_app_key, alias, env) WHERE status = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS app_links_active_port ON app_links (gateway_port) WHERE status = 'active';
+-- A link pass: what one consumer workload (a build run, or a preview) presents to the gateway as
+-- X-Boss-Link. Only its hash is stored. Revoked with its link, expired with its workload.
+CREATE TABLE IF NOT EXISTS app_link_passes (
+  token_hash     TEXT PRIMARY KEY,
+  link_id        TEXT NOT NULL REFERENCES app_links(id),
+  project_id     TEXT NOT NULL,
+  consumer_kind  TEXT NOT NULL CHECK (consumer_kind IN ('run', 'preview')),
+  consumer_id    TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at     TIMESTAMPTZ NOT NULL,
+  revoked_at     TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS app_link_passes_link ON app_link_passes (link_id);
+-- A provider app's generated test users (BOSS_TEST_USERS), per env: the values are in the vault
+-- (identity_vault_items, provider 'boss_test_users'); this row is presence, count and rotation.
+CREATE TABLE IF NOT EXISTS app_test_users (
+  project_id     TEXT NOT NULL,
+  app_key        TEXT NOT NULL,
+  env            TEXT NOT NULL CHECK (env IN ('preview', 'deploy')),
+  vault_item_id  TEXT NOT NULL,
+  user_count     INTEGER NOT NULL,
+  generation     INTEGER NOT NULL DEFAULT 1,
+  rotated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, app_key, env)
 );
 -- END F5 ------------------------------------------------------------------------------------------
 

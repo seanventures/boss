@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "f138655cb1d69b37"
+CATALOGUE_FINGERPRINT = "a2806f58a6734a74"
 
 
 class Permission(StrEnum):
@@ -178,6 +178,7 @@ class Permission(StrEnum):
     APP_SECRET_READ_METADATA = "app_secret:read_metadata"
     APP_SECRET_WRITE = "app_secret:write"
     APP_SECRET_LIVE = "app_secret:live"
+    APP_LINK_MANAGE = "app_link:manage"
     INTEGRATION_READ = "integration:read"
     INTEGRATION_MANAGE = "integration:manage"
     COMMS_READ = "comms:read"
@@ -376,6 +377,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "app_secret:read_metadata": PermissionMeta(key="app_secret:read_metadata", title="View an app's secret metadata", description="See an app's secrets: name, environment, mode and shape. Never the value.", category="Secrets and integrations", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "app_secret:write": PermissionMeta(key="app_secret:write", title="Set an app's test secrets", description="Set, replace and remove an app's test, generated and stub secrets; reveal its test users.", category="Secrets and integrations", roles=('owner', 'admin', 'operator'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "app_secret:live": PermissionMeta(key="app_secret:live", title="Use live keys for an app", description="Set an app's live secrets, used only by a deploy after a person's decision.", category="Secrets and integrations", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
+    "app_link:manage": PermissionMeta(key="app_link:manage", title="Link apps", description="Let one app of a project call another's preview with its test users, and revoke the link.", category="Secrets and integrations", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "integration:read": PermissionMeta(key="integration:read", title="View integrations", description="See integrations, work trackers, channels, webhooks and subscriptions.", category="Secrets and integrations", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "integration:manage": PermissionMeta(key="integration:manage", title="Manage integrations", description="Connect and change integrations, trackers, channels, webhooks and subscriptions.", category="Secrets and integrations", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "comms:read": PermissionMeta(key="comms:read", title="View comms", description="See the comms inbox, outbox and policies.", category="Secrets and integrations", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
@@ -418,7 +420,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 187
+    "owner": frozenset({  # 188
         "directory:read",
         "user:read",
         "user:invite",
@@ -581,6 +583,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "app_secret:read_metadata",
         "app_secret:write",
         "app_secret:live",
+        "app_link:manage",
         "integration:read",
         "integration:manage",
         "comms:read",
@@ -607,7 +610,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "telemetry:share",
         "telemetry:manage",
     }),
-    "admin": frozenset({  # 178
+    "admin": frozenset({  # 179
         "directory:read",
         "user:read",
         "user:invite",
@@ -762,6 +765,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "app_secret:read_metadata",
         "app_secret:write",
         "app_secret:live",
+        "app_link:manage",
         "integration:read",
         "integration:manage",
         "comms:read",
@@ -787,7 +791,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "telemetry:share",
         "telemetry:manage",
     }),
-    "operator": frozenset({  # 91
+    "operator": frozenset({  # 92
         "directory:read",
         "access_role:read",
         "api_key:manage_own",
@@ -866,6 +870,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "secret:read_metadata",
         "app_secret:read_metadata",
         "app_secret:write",
+        "app_link:manage",
         "integration:read",
         "comms:read",
         "comms:send",

@@ -91,6 +91,8 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "legacy.api_key_used", "legacy.network_used", "legacy.claimed_actor_ignored",
     "legacy.path_retired", "catalogue.permission_removed", "audit.exported", "audit.verified",
     "audit.checkpoint",
+    # cross-app links (APP_TEMPLATES_AND_SECURITY_LOOP.md §5.6, D9; stream S5 of the app platform)
+    "app_link.created", "app_link.revoked", "app_link.test_users_revealed",
 })
 
 #: hash of "no previous event" for the first row of an org's chain.

@@ -2172,11 +2172,13 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
     (sandbox_identity, IDENTITY.md §7.6) — never as the control plane's."""
     from . import owned_process
     from .sandbox_identity import bind as _sandbox_bind
+    from ..app_links.run_env import for_run as _link_env
 
     from .sandbox_identity import SandboxUnavailable
 
     try:
-        with owned_process.owner_scope("code_run", run_id, fresh=True), _sandbox_bind(run_id):
+        with owned_process.owner_scope("code_run", run_id, fresh=True), _sandbox_bind(run_id), \
+                _link_env(engine, run_id, _run_project(engine, run_id)):
             return _run_code_task(engine, settings, jobs, run_id, fencing_token=fencing_token)
     except SandboxUnavailable as exc:
         # Fail closed: a build never runs unisolated when isolation is required.
@@ -2188,6 +2190,16 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
         return {"status": "blocked", "done": True, "reason": "sandbox_unavailable"}
     finally:
         owned_process.terminate_owner(run_id, reason="run_ended", grace=2.0)
+
+
+def _run_project(engine, run_id: str) -> Optional[str]:
+    """The run's project, for its link environment (app_links.run_env); None if unreadable."""
+    try:
+        with _transaction(engine) as c:
+            run = load_code_task_run(c, run_id)
+        return (run or {}).get("project_id")
+    except Exception:  # noqa: BLE001 — the attempt reads the run itself and reports what is wrong
+        return None
 
 
 def _run_code_task(engine, settings: Settings, jobs, run_id: str,
