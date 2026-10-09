@@ -105,6 +105,32 @@ def test_github_refusing_a_permission_is_a_refusal_never_a_wider_token(env, monk
     assert sum(1 for u in hub.urls("POST") if u.endswith("/access_tokens")) == 1   # no retry without permissions
 
 
+def test_a_read_only_run_reads_a_repo_no_org_credential_covers_anonymously_and_only_reads(env, monkeypatch):
+    """A public template's import (BOSS's read-only system repo reader) of a repository the org's
+    GitHub App is not installed on: the mint is refused, and the clone goes to GitHub with NO
+    credential (what anyone may read). Never for a write, the REST API, or a run that may write
+    (the test above: a build whose token GitHub refused stays refused)."""
+    hub = install_github(monkeypatch, env)
+    github_app.install_cascade_hook()
+    g = env.grant(agents=(env.forge,), repos=("acme/public-tpl",))
+    shim = start(env, g.id, agent=env.forge, repos=("acme/public-tpl",), run="run_ct:readonly1",
+                 github_needs={"contents": "read"})
+    up = Upstream()
+    proxy = EgressProxy(env.engine, upstream=up)
+    hub.mint_status = 422                       # "not accessible to the parent installation"
+    resp = _git(proxy, shim, "GET", "/acme/public-tpl.git/info/refs", "service=git-upload-pack")
+    assert resp.status == 200
+    method, url, headers, _ = up.calls[-1]
+    assert url == "https://github.com/acme/public-tpl.git/info/refs?service=git-upload-pack"
+    assert "Authorization" not in headers and "authorization" not in {k.lower() for k in headers}
+    assert _git(proxy, shim, "POST", "/acme/public-tpl.git/git-upload-pack", body=b"0000").status == 200
+    # never a write, never another repo, never the API
+    assert _git(proxy, shim, "GET", "/acme/public-tpl.git/info/refs", "service=git-receive-pack").status == 403
+    assert _git(proxy, shim, "GET", "/acme/other.git/info/refs", "service=git-upload-pack").status == 403
+    calls = len(up.calls)
+    assert _api(proxy, shim, "GET", "/repos/acme/public-tpl").status == 403 and len(up.calls) == calls
+
+
 def test_a55_a_repo_outside_the_run_is_refused_at_egress(env, monkeypatch):
     hub, g, shim, up, proxy = _setup(env, monkeypatch)
     assert _git(proxy, shim, "GET", "/acme/infra.git/info/refs", "service=git-upload-pack").status == 403

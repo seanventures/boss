@@ -2278,7 +2278,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                                         owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
             clone_url = _access.url
             clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-                               capture_output=True, text=True, timeout=120, env=_access.environ(),
+                               capture_output=True, text=True, timeout=120, env=_access.boss_environ(),
                                # BOSS's git, writing a tree the preview's uid must be able to edit
                                **({"umask": 0} if ident is not None else {}))
         if clone.returncode != 0:
@@ -2545,7 +2545,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
                                     owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
         clone_url = _access.url
         clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-                           capture_output=True, text=True, timeout=120, env=_access.environ())
+                           capture_output=True, text=True, timeout=120, env=_access.boss_environ())
     if clone.returncode != 0:
         return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
@@ -2736,7 +2736,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             clone_url = _access.url
             clone = owned_process.run(
             ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-            capture_output=True, text=True, timeout=120, env=_access.environ(), sandboxed=False,
+            capture_output=True, text=True, timeout=120, env=_access.boss_environ(), sandboxed=False,
             **({"umask": 0} if ident is not None else {}))
         if clone.returncode != 0:
             _release_preview_sandbox(preview_id)

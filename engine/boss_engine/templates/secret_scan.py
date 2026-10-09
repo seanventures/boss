@@ -9,7 +9,7 @@ What it looks for:
   * the template's own `pattern` and `live_pattern` for each secret it declares;
   * the exact values an app's secret bindings hold (passed in by the gate; never logged).
 
-A placeholder is not a secret: `sk_test_...`, `<your key>`, `${STRIPE_SECRET_KEY}`, `changeme`
+A placeholder is not a secret (except the rules in NEVER_A_PLACEHOLDER): `sk_test_...`, `<your key>`, `${STRIPE_SECRET_KEY}`, `changeme`
 and values made of one repeated character are skipped, so a guide or an `.env.example` can say
 what goes where.
 """
@@ -22,6 +22,10 @@ from typing import Iterable, Mapping, Optional
 #: (rule, regex). Each rule is a stable name the report and the tests use.
 COMMON_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("private_key", re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY(?: BLOCK)?-----")),
+    # AWS's documented example credentials. Public, but a template carrying them is shipping
+    # something shaped like a live key that people copy into real config: always a finding,
+    # never "a placeholder" (the word EXAMPLE in them would otherwise excuse them).
+    ("aws_documented_example_key", re.compile(r"\bAKIAIOSFODNN7EXAMPLE\b|wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")),
     ("aws_access_key_id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     ("github_token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b")),
     ("github_fine_grained_pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{60,}\b")),
@@ -50,6 +54,9 @@ _PLACEHOLDER = re.compile(
     r"(?i)^(?:<[^>]*>|\$\{[^}]*\}|\$[A-Z_][A-Z0-9_]*|\{\{[^}]*\}\}|%\([^)]*\)s|"
     r".*(?:\.\.\.|xxxx|your[_\- ]|example|changeme|placeholder|replace[_\- ]?me|dummy|redacted|"
     r"not[_\- ]a[_\- ]real|fake|sample).*)$")
+
+#: Rules whose every match is a finding, whatever words the match contains.
+NEVER_A_PLACEHOLDER = frozenset({"private_key", "aws_documented_example_key"})
 
 #: Files the scan reads. Anything else (images, fonts) is skipped; the import's binary rule
 #: already refuses unknown binaries.
@@ -115,7 +122,7 @@ def scan_text(path: str, text: str, *, declared: Iterable[tuple[str, str]] = (),
         for rule, rx in rules:
             for m in rx.finditer(line):
                 value = m.group(m.lastindex) if m.lastindex else m.group(0)
-                if rule in seen or _is_placeholder(value):
+                if rule in seen or (rule not in NEVER_A_PLACEHOLDER and _is_placeholder(value)):
                     continue
                 seen.add(rule)
                 findings.append(Finding(path, lineno, rule))

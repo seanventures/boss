@@ -109,6 +109,19 @@ def _allow_local_import() -> bool:
     return (os.environ.get("BOSS_TEMPLATE_IMPORT_ALLOW_LOCAL") or "").strip().lower() in ("1", "true", "yes")
 
 
+def _github_access(owner: str, repo: str):
+    """How the import reads a github.com repository: boss-egress's GitHub path, read-only, under
+    BOSS's audited system repo reader (the org's GitHub App or token; a public repository it does
+    not cover is read anonymously there). Never the CONNECT proxy, which refuses GitHub by design.
+    Without egress (a developer's machine) it is git straight to GitHub, anonymously."""
+    from boss_engine.identity import runs as identity_runs
+
+    from . import main
+
+    return identity_runs.repo_access(main.engine, host="github", owner=owner, repo=repo,
+                                     project_id=None, token="")
+
+
 def build_templates_router() -> APIRouter:
     from boss_engine.templates import apply as apply_service
     from boss_engine.templates import secrets as secrets_service
@@ -149,18 +162,18 @@ def build_templates_router() -> APIRouter:
     def import_template(request: Request, body: ImportBody) -> JSONResponse:
         ctx = _ctx(request)
         if body.connection_id:
-            # Private repos through a GitHub connection need egress's credential path for a
-            # non-run caller; not in this release. Said plainly rather than ignored.
-            return JSONResponse({"error": "connection_import_not_supported",
-                                 "message": "import from a public https git URL; private repositories "
-                                            "through a GitHub connection are not supported yet"},
+            # A github.com URL is read through this install's GitHub connection already; naming a
+            # connection adds nothing. Said plainly rather than ignored.
+            return JSONResponse({"error": "connection_not_needed",
+                                 "message": "leave the connection out: a https://github.com/<owner>/<repo> "
+                                            "URL is read through this install's GitHub connection"},
                                 status_code=422)
         may_insecure = body.acknowledge_insecure and _holds(request, P.TEMPLATE_APPROVE, None)
         try:
             result = service.import_from_git(
                 begin, ctx.principal.org_id, actor_id=ctx.principal.id, git_url=body.git_url,
                 ref=body.ref, may_label_insecure=may_insecure, ack_insecure=body.acknowledge_insecure,
-                allow_local=_allow_local_import())
+                allow_local=_allow_local_import(), github_access=_github_access)
         except TemplateError as exc:
             return _refused(exc)
         return JSONResponse(result, status_code=201 if result["status"] == "pending_review" else 422)

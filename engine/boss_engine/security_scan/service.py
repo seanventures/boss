@@ -34,6 +34,36 @@ OWNER_KIND = "sandbox"              # a workload kind: everything spawned in it 
 MAX_REASON = 2000
 
 
+class ScanCouldNotRun(RuntimeError):
+    """Why a scan could not run, in words a person can act on: shown on the scan as its error.
+    Anything else that stops a scan is an internal failure, logged in full and shown only as a
+    plain sentence (never a traceback, an internal path or an internal URL)."""
+
+
+def _git_reason(stderr: str, src: "scope.AppSource") -> str:
+    """git's last meaningful line, with internal addresses and credentials out of it."""
+    import re
+
+    from .redact import redact_text
+
+    lines = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
+    line = next((ln for ln in reversed(lines) if ln.lower().startswith(("fatal:", "error:", "remote:"))),
+                lines[-1] if lines else "")
+    line = re.sub(r"^(fatal|error|remote):\s*", "", line, flags=re.I)
+    line = re.sub(r"(?<![\w.:/])(/[\w.@-]+){2,}/?", "", line)      # no filesystem paths
+    line = re.sub(r"https?://[^\s'\"]+", f"github.com/{src.owner}/{src.repo}", line)
+    return redact_text(line.strip())[:200]
+
+
+def _plain_failure(exc: BaseException) -> str:
+    if isinstance(exc, ScanCouldNotRun):
+        return str(exc)[:500]
+    if isinstance(exc, PermissionError):
+        return ("the scan could not write its working copy of the app; this is a BOSS problem, "
+                "not the app's: the API log has the details")
+    return "the scan stopped on an internal error; the API log has the details"
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -113,7 +143,7 @@ def checkout(engine: Any, settings: Any, src: scope.AppSource, workdir: Path) ->
         from ..services.github_connections import github_token_for
 
         if not (src.owner and src.repo):
-            raise RuntimeError("the app has no repository to scan")
+            raise ScanCouldNotRun("the app has no repository to scan")
 
         def _token() -> str:
             with engine.begin() as c:
@@ -122,17 +152,24 @@ def checkout(engine: Any, settings: Any, src: scope.AppSource, workdir: Path) ->
         with identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
                                        owner=src.owner, repo=src.repo, project_id=src.project_id,
                                        token=_token) as access:
+            # BOSS's own git (the control plane's uid): its credential rides in its own
+            # environment; the shim socket answers only the scan's sandbox uid. umask 0: the
+            # scan's uid must be able to write in what BOSS cloned (npm install, build output).
             proc = owned_process.boss_run(
                 ["git", "clone", "--depth", "200", "--branch", src.branch, access.url, str(workdir)],
-                capture_output=True, text=True, timeout=300, env=access.environ())
+                capture_output=True, text=True, timeout=300, env=access.boss_environ(), umask=0)
         if proc.returncode != 0:
-            from .redact import redact_text
-            raise RuntimeError(f"git clone of the app's branch failed: {redact_text((proc.stderr or '')[-300:])}")
+            log.warning("security scan clone of %s/%s@%s failed: %s", src.owner, src.repo, src.branch,
+                        (proc.stderr or "")[-600:])
+            raise ScanCouldNotRun(
+                f"could not fetch the app's code ({src.owner}/{src.repo}, branch {src.branch}) from "
+                f"GitHub: {_git_reason(proc.stderr or '', src) or 'git failed'}. Check that BOSS's "
+                "GitHub connection can read this repository (Setup ▸ Repo), then scan again.")
     if src.commit and (workdir / ".git").exists():
         proc = owned_process.boss_run(["git", "-C", str(workdir), "checkout", "--detach", src.commit],
                                       capture_output=True, text=True, timeout=60)
         if proc.returncode != 0:
-            raise RuntimeError(f"commit {src.commit} is not on the app's branch {src.branch}")
+            raise ScanCouldNotRun(f"commit {src.commit} is not on the app's branch {src.branch}")
     sha = ""
     if (workdir / ".git").exists():
         proc = owned_process.boss_run(["git", "-C", str(workdir), "rev-parse", "HEAD"],
@@ -214,9 +251,8 @@ def execute_scan(engine: Any, settings: Any, scan_id: str, *,
     except sandbox_identity.SandboxUnavailable as exc:
         error = f"the build sandbox is unavailable: {exc}"
     except Exception as exc:  # noqa: BLE001 — a scan that cannot run is a FAILED scan, with why
-        from .redact import redact_text
         log.exception("security scan %s failed", scan_id)
-        error = redact_text(str(exc))[:500]
+        error = _plain_failure(exc)
     status = "failed" if error or not results or all(r.status == "failed" for r in results) else "done"
     return _finish(engine, row, results, inventory, sha, status=status, error=error, sandbox=isolation)
 

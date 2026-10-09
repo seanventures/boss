@@ -82,14 +82,23 @@ _HOST_ORIGIN = {"github": "https://github.com/", "bitbucket": "https://bitbucket
 
 class GitAccess:
     """How to run git against one repo: `url` carries no credential; `env` (to MERGE into the git
-    process's environment) carries it. `repr` shows neither the credential nor the env."""
+    process's environment) carries it. `repr` shows neither the credential nor the env.
 
-    __slots__ = ("url", "env", "via")
+    TWO KINDS OF GIT, two environments. Through egress the credential is answered by the run's
+    shim socket, which only the run's SANDBOX uid can open: `environ()` is for git that runs as
+    that uid (an agent's own clone). BOSS's own git (`owned_process.boss_run`, or any spawn with
+    `sandboxed=False`) runs as the control plane's uid, which the socket never answers: it must
+    use `boss_environ()`, where the credential rides in its own process environment (the "own
+    git" helper) and never reaches the sandbox. Outside egress both are the same."""
 
-    def __init__(self, url: str, env: Optional[dict] = None, via: str = "anonymous"):
+    __slots__ = ("url", "env", "via", "own_env")
+
+    def __init__(self, url: str, env: Optional[dict] = None, via: str = "anonymous",
+                 own_env: Optional[dict] = None):
         self.url = url
         self.env = dict(env or {})
         self.via = via                     # "egress" | "token" | "anonymous"
+        self.own_env = dict(own_env) if own_env is not None else None
 
     def __repr__(self) -> str:
         return f"GitAccess(url={self.url!r}, via={self.via!r})"
@@ -99,6 +108,15 @@ class GitAccess:
 
         out = dict(os.environ if base is None else base)
         out.update(self.env)
+        out.setdefault("GIT_TERMINAL_PROMPT", "0")
+        return out
+
+    def boss_environ(self, base: Optional[dict] = None) -> dict:
+        """The environment for BOSS's OWN git (run as the control plane's uid)."""
+        import os
+
+        out = dict(os.environ if base is None else base)
+        out.update(self.env if self.own_env is None else self.own_env)
         out.setdefault("GIT_TERMINAL_PROMPT", "0")
         return out
 

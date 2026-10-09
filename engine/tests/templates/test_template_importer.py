@@ -195,8 +195,9 @@ def test_a_ref_that_could_be_an_option_or_expression_is_refused(ref):
 
 
 def test_a_failed_fetch_says_why_without_leaking(tmp_path):
-    with pytest.raises(ImportRefused, match="git fetch failed"):
+    with pytest.raises(ImportRefused, match="no repository at file://") as e:
         fetch(f"file://{tmp_path}/missing", None, allow_local=True, proxy="")
+    assert "fatal" not in e.value.reason
 
 
 def test_the_fetch_goes_through_the_egress_proxy_when_the_install_has_one(tmp_path, monkeypatch):
