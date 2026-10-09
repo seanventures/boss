@@ -504,7 +504,10 @@ Guardrails (security properties of the variant):
   `lab=true`; the app shows a red "Insecure by design — training only" banner on every page.
 - **Never deployed to a host**: the governed host deploy refuses an app whose applied templates
   carry `insecure_by_design` (a hard check in `governed_host_deploy.py`, not a UI hide). Preview
-  only, on the preview origin.
+  only, on the preview origin. The check is **per app** (operator, 2026-10-09): the project's
+  other apps deploy, but a deploy BOSS cannot attribute to a non-insecure app (a target named after
+  nothing BOSS built, an unknown build or build branch, a bare sha in the insecure app's repository,
+  or that repository once the insecure change is merged) is refused (`templates/deploy_guard.py`).
 - Its preview is not reachable from outside the BOSS host unless the operator explicitly makes
   it so (decision D4).
 - The build loop's `security_check` is told (via `input.template.labels`) that planted flaws are

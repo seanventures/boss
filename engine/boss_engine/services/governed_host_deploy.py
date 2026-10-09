@@ -274,13 +274,14 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
     Called by ResourcePlaneService.plan_deployment_run for ssh/container targets once the
     environment policy and the surface lease have passed. Returns the deployment run.
     """
-    from ..templates.deploy_guard import ACTION as _INSECURE_ACTION, deploy_refusal
+    from ..templates.deploy_guard import deploy_refusal
     from .budget import BudgetGovernor
     from .deployment_connectors import _app_port, _split_ref
 
-    refused = deploy_refusal(connection, project_id)
+    refused = deploy_refusal(connection, project_id, target=target, commit_ref=commit_ref,
+                             release_packet=release_packet)
     if refused:
-        raise GovernedHostDeployError(refused, _INSECURE_ACTION)
+        raise GovernedHostDeployError(refused, refused.action)
     host = _host_for(connection, target) or {}
     app = str(target.get("app_name") or target.get("repo") or "app")
     environment = str(target.get("environment") or "")
@@ -649,7 +650,9 @@ def _apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
         # still not ship it (templates.deploy_guard).
         from ..templates.deploy_guard import deploy_refusal
 
-        refused = deploy_refusal(c, row.get("project_id") or trow.get("project_id"))
+        refused = deploy_refusal(c, row.get("project_id") or trow.get("project_id"), target=dict(trow),
+                                 commit_ref=row.get("commit_ref"),
+                                 release_packet=row.get("release_packet") or {})
         if refused:
             return {"status": "blocked", "reason": refused}
         target = target_for_apply(c, dict(trow))

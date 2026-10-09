@@ -2365,13 +2365,14 @@ class ResourcePlaneService:
             deployment_target_id,
         )
         # Never a deploy of an app built from an insecure_by_design template, to any target kind.
-        from ..templates.deploy_guard import ACTION as _INSECURE_ACTION, deploy_refusal
+        from ..templates.deploy_guard import deploy_refusal
 
-        refused = deploy_refusal(connection, project_id)
+        refused = deploy_refusal(connection, project_id, target=target, commit_ref=commit_ref,
+                                 release_packet=release_packet)
         if refused:
             from .governed_host_deploy import GovernedHostDeployError
 
-            raise GovernedHostDeployError(refused, _INSECURE_ACTION)
+            raise GovernedHostDeployError(refused, refused.action)
         if expected_cost_usd_micros > 0 and not reservation_id:
             decision_id = create_blocking_decision(
                 connection,
