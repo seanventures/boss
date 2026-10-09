@@ -620,10 +620,40 @@ Test DB: `boss_test_integ` on boss-test-pg (drop it when done).
 | 1b | Merge S4 (feat/s4-security @ bae890a7): conflicts in the day-1 test (rewritten: MODULES + BUILT per module) and this file. S4 suites 64 passed; identity suites 46 passed | done |
 | 1c | Merge S5 (feat/s5-links @ 5caa424c): conflicts in the day-1 test (links added to BUILT) and this file; regenerated matrix/public/fixture/catalogue: no diff. S5 suites 65 passed; identity suites 46 passed | done |
 | 1d | Merge S6 (feat/s6-oidc @ 9123ee29): conflicts in the day-1 test (oidc_routes BUILT except `/users`, phase 2), audit.EVENT_TYPES (union: app_link.* + oidc.*), matrix.yaml (regenerated: 1445 operations) and this file. S6 suites (engine/tests/oidc + test_oidc_provider_flow/admin/adversarial) 164 passed; identity suites 46 passed | done |
-| 2a | Previews run as a sandbox uid, fenced | next |
-| 2b | template_tests / no_committed_secrets block the push and the PR | |
-| 2c | Dockerfile.community ships templates/ | |
-| 3 | Combined compose proof | |
+| 2a | Previews run as a sandbox uid, fenced (57386907) | done |
+| 2b | template_tests / no_committed_secrets block the push and the PR (b5f7d5fb) | done |
+| 2c | Dockerfile.community ships templates/ (634382f5) | done |
+| 3 | Combined compose proof (project `bossint`) | in progress: preview sandbox PASS, apply hello PASS, S5 links PASS; final re-run of the walk on the pushed image running |
+| 2d | Template files available to the build read-only (not only a 48 KB inline brief) | next |
+| 2e | No host deploy of an app built from an `insecure_by_design` template | |
+| 1e | Merge feat/s3-banking (555d1908) | |
 
 Identity coverage suites run after each merge: catalogue use, matrix, public routes, read-only
 GETs, system-only, route fixture freshness, day-1 routes, catalogue-is-generated.
+
+### Integration notes
+
+- **Day-1 routes test** rewritten once for all streams: `MODULES` (owner per router) + `BUILT`
+  (per module, a path predicate: S2/S4/S5 fully built; S6 built except `/users`, phase 2).
+- **Merge bug found and fixed**: S5 added a second `preview_service.preview_port()` (the app-port
+  allocator) that silently replaced the preview ORIGIN's port (BOSS_PREVIEW_PORT, 3001): the
+  three `test_previews_have_their_own_origin` failures on the merged base. Renamed
+  `app_preview_port()`; `engine/tests/test_no_module_defines_a_name_twice.py` refuses any
+  module defining a top-level name twice.
+- **2a design**: `sandbox_identity.acquire/release` (bind's lease, held across calls) per preview
+  id; tree in the uid's run dir; log at `$BOSS_PREVIEW_ROOT/<id>.log` (0600, O_NOFOLLOW);
+  discovery only accepts a port the uid listens on; fence `BOSS_PREVIEW_SELF` = uid 61000+i may
+  reach port 19000+i on loopback (preview_service gives a preview exactly that port), every other
+  preview port rejected, now on ::1 too. Proof: `tests/e2e/preview_sandbox/proof.py`.
+- **2b design**: `TEMPLATE_GATES` in `_NEVER_SHIP_PAST`, the advisory floor and
+  `UNWAIVABLE_GATES`; `template_push_hold` + `_push_held(where)` before every push site
+  (AST-enforced by `test_template_gates_block_the_pr.py`). Seen live: the template build's
+  `checkpoint:write_tests` push was held (`code_task.push_held`), the PR opened after the gates
+  passed.
+- **Affected tests after the fixes** (preview suites, gate suites, sandbox): 369 passed; the
+  failures are the base's own (13 on 9e2eca27: test_a_build_proves_its_app_runs x6 (inspect
+  the old wrapper), test_sandbox_s1_go x3, test_every_surface_agrees (build_waits.py),
+  test_previews_have_their_own_origin x3, now fixed) plus
+  test_a_previews_container_log_reaches_the_activity_log (fixture scope clash when run in one
+  session with apps/api tests; passes alone).
+- Not run here: the web vitest suites (no node_modules in this worktree).
