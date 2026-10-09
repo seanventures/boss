@@ -245,6 +245,47 @@ plus one new engine test (`engine/tests/templates/test_builtin_templates_apply.p
 | 6 | `catalog-cart` java (Spring Boot 3.5.16, 12 tests, JDK 21 via docker) | done |
 | 7 | engine test `engine/tests/templates/test_builtin_templates_apply.py`: every built-in x stack validates (also as an import), its directive assembles, a build copying the reference passes `template_tests` + `no_committed_secrets`, test mode needs no pasted secret; `BOSS_TEMPLATE_TRIALS=1` runs the REAL test commands through the real gate (node + python green locally; java via docker) | done |
 
+### Design notes and deviations (S3-login-catalog)
+
+- **One HTTP contract per template, identical tests in every stack** (login 15, catalog 12),
+  written against the manifest's routes. Each test suite builds its app from the template's own
+  modules (not `server.mjs`/`main.py`), never imports `conftest`, and uses unique file names, so
+  both templates' tests run together in one app (checked: 27 per stack) and survive adaptation.
+  A scratch composition check (node, not committed) signed in through the fake IdP with the real
+  session hook and saw the anonymous cart merge.
+- **`BOSS_OIDC_CLIENT_ID/SECRET` are named `OIDC_BOSS_CLIENT_ID/SECRET` (+ `OIDC_BOSS_ISSUER`)**:
+  S2's validator reserves the `BOSS_` prefix for BOSS's own configuration. **S6 must fill the
+  `OIDC_BOSS_*` names.**
+- **Node uses openid-client 6 (panva, OpenID-certified) + express-session, not Auth.js**: Auth.js's
+  fixed `/auth/signin` POST + its own CSRF/session model do not fit the contract's routes; the
+  operator allowed "a proven equivalent". Python: Authlib 1.8 with a small server-side session
+  middleware (Starlette's SessionMiddleware is a readable signed cookie: the PKCE verifier would
+  sit in the browser). Java: Spring Security OAuth2 Client with PKCE forced on confidential
+  clients, a one-shot authorization-request repository and lazy client registrations.
+- **Fake IdPs are our own, in each stack's tests** (Node `http`, Python `http.server` +
+  cryptography, Java `com.sun.net.httpserver` + Nimbus), not `oauth2-mock-server` /
+  `mock-oauth2-server`: one server plays OIDC (Google/BOSS) and GitHub's OAuth shape and VERIFIES
+  PKCE, client secrets, redirect_uri and one-time codes; tests can tamper the nonce.
+- Account linking is stricter than "verified email": BOTH the new identity and the existing
+  account must have the email verified (otherwise a pre-created unverified account could be
+  linked into).
+- Spring Boot **3.5.16** (Boot 4.x exists; 3.5 kept for the known Security 6 API). The java login
+  stack does not use `SESSION_SECRET` (container session ids).
+- Not built: the Playwright axe smoke on the Node catalog UI (UI is reference components only:
+  `ui/Catalog.jsx`, `ui/LoginButtons.jsx`, framework-free `account.html`/`catalog.html`).
+
+### Findings for other streams (S3-login-catalog)
+
+- **S2 trial (`trial.py`) runs the test command with no dependency install.** Node is covered (the
+  templates' `pretest:*` npm script installs), Maven fetches its own, but the Python commands
+  need `pip install -r requirements.txt` first (the sandbox image has fastapi/httpx from BOSS's
+  own requirements, not authlib). Suggest a per-stack install step in the trial (and the gate)
+  before the manifest command.
+- **The reference is inlined up to 48 KB**: the java stacks exceed it, so some files reach the
+  agent by name only until the read-only `/opt/boss/template/` mount exists (S2's deviation).
+- Java and Python test commands need network (Maven Central / PyPI) inside the sandbox unless the
+  toolchain image pre-seeds them.
+
 ### Resume (S3-login-catalog)
 
 `cd ~/src/boss-wt-s3-login-catalog && git pull`; pick the first step not `done`.
@@ -255,6 +296,12 @@ node `npm run test:login-oauth` (Node 20: `docker run node:20-bookworm-slim`); p
 `docker run python:3.11-slim-bookworm`); java `mvn -q -B test -Dtest=LoginOauthTemplateTest` (JDK 21:
 `docker run -v <copy>:/w -v <scratch>/m2:/root/.m2 -w /w maven:3.9-eclipse-temurin-21 ...`; the
 local JDK is 17).
+Engine: `PYTHONPATH=.:engine python3 -m pytest -q engine/tests/templates` (179 pass, no DB);
+add `BOSS_TEMPLATE_TRIALS=1` with a python3 on PATH that has the template requirements to run
+the real test commands through the real gate (node + python: 6/6 green; java ran via docker).
+Next: payments templates consume `checkoutLines`/`checkout_lines` (catalog-cart brief); S6 fills
+`OIDC_BOSS_*`; an independent tester walks apply -> preview for both templates once the gallery
+(S2-UI) is in.
 
 ## What's next (after S0)
 
