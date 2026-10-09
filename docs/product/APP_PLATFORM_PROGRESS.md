@@ -123,7 +123,7 @@ Worktree `~/src/boss-wt-s6-oidc`, branch `feat/s6-oidc` (from `feat/app-platform
 | # | Step | State |
 |---|---|---|
 | 1 | Protocol core (discovery, JWKS, authorize, consent, token, userinfo, revocation, end_session), client registry API, workforce pools on the console session | done |
-| 2 | Adversarial suite (the named list) | in progress |
+| 2 | Unit, admin API and adversarial suites (the named list) | done |
 | 3 | End-to-end proof: a Node app with openid-client on a local stack | todo |
 | 4 | OpenID conformance suite (Basic OP), if Docker allows | todo |
 | P2 | Customer pools, hosted pages polish, console Identity ▸ App sign-in | phase 2 |
@@ -159,6 +159,25 @@ Worktree `~/src/boss-wt-s6-oidc`, branch `feat/s6-oidc` (from `feat/app-platform
   the one signing_keys function.
 - Open question from S0 (Auditor `oidc:read`): not added; every admin GET needs `oidc:admin` or
   `oidc_client:manage` (both step-up). Revisit with the console UI in phase 2.
+
+### Tests (S6)
+
+- `engine/tests/oidc/test_oidc_rules.py` (44, no DB): S256 vector, redirect-URI rules, client
+  validation, inline-JWKS rules, page escaping and headers.
+- `apps/api/tests/test_oidc_provider_flow.py` (10): discovery, JWKS, the whole workforce flow,
+  sign-in redirect and resume, remembered consent, EdDSA client, public client, revocation.
+- `apps/api/tests/test_oidc_provider_admin.py` (11): permissions, secret once, first-party, no URL
+  fields (422), roles in tokens, consent revoke and client delete end tokens.
+- `apps/api/tests/test_oidc_provider_adversarial.py` (99): A1 code replay, A2 PKCE, A3 redirect_uri
+  tricks (16 shapes at authorize, 12 at registration), A4 mix-up, A5 refresh reuse, A6 alg/typ/
+  key-family confusion (none, HS256 with the public key, rogue key under a real kid, ES256, BOSS
+  run/actor typ, ID token as AT, AT as id_token_hint, app tokens and refresh token as BOSS bearer,
+  console cookie as AT), A7 aud/azp and private_key_jwt (8 bad assertions, jti replay), A8 nonce,
+  A9 pairwise/public subjects and client binding, A10 app cookie on a BOSS route, A11 CSRF on
+  consent (Origin, Sec-Fetch-Site, token, other session, reuse) and prompt=none, A12 leakage (logs,
+  audit details, hashed at rest, no AT in URLs), A13 client auth downgrade and lockout, A14 grant
+  loss, disabled person/client, legacy shared session, require_mfa, A15 logout open redirect, A16
+  request/request_uri/registration/response modes/duplicates.
 
 ### Resume (S6)
 
