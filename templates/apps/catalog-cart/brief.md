@@ -49,6 +49,16 @@ layer and UI rather than copying files over the top of the app's own.
   `seed/products.json`, `ui/catalog.html` (framework-free list, search, cart). Add the lines of
   `requirements.txt` to the app's requirements. Copy `tests/template_catalog_cart/` to the same
   path.
+- **java** (Spring Boot 3.5): the `cart` package (`CatalogStore` with `checkoutLines`,
+  `CatalogController` with the signed cookie and the JSON error answers, `Product`,
+  `CatalogError`, `CartUserResolver` whose default reads the signed-in principal),
+  `src/main/resources/seed/products.json` and `static/catalog.html`. Copy
+  `tests/java/com/example/catalog/CatalogCartTemplateTest.java` into the app's test sources
+  (`src/test/java/<the app's package>/`, package line adjusted; keep the file name). With
+  `login-oauth` applied (Spring Security): permit `/api/products/**` and `/api/cart/**` in its
+  `SecurityConfig` (its `/api/**` rule would otherwise make the catalog sign-in only), and
+  exclude `/api/cart/**` from Spring's CSRF check (the cart's CSRF defence is JSON-only +
+  `SameSite=Lax`, as in the other stacks).
 
 ## The tests are the proof
 

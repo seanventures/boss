@@ -1,0 +1,50 @@
+<!-- The catalog UI, framework-free (serve it as a static page or copy the markup and script
+     into the app's templates): search, Previous/Next paging and a cart with server totals.
+     Prices and totals are always the server's; cart changes are JSON requests. -->
+<section aria-labelledby="catalog-title">
+  <h2 id="catalog-title">Products</h2>
+  <label>Search <input id="q" type="search" maxlength="100"></label>
+  <ul id="products"></ul>
+  <nav aria-label="Pages">
+    <button id="prev" type="button">Previous</button> <span id="page"></span>
+    <button id="next" type="button">Next</button>
+  </nav>
+</section>
+<aside aria-labelledby="cart-title">
+  <h2 id="cart-title">Cart</h2>
+  <ul id="cart"></ul>
+  <p>Subtotal: <span id="subtotal"></span></p>
+</aside>
+<script type="module">
+  const $ = (id) => document.getElementById(id);
+  let page = 1, pages = 1;
+  const money = (c, cur) => new Intl.NumberFormat(undefined, { style: "currency", currency: cur.toUpperCase() }).format(c / 100);
+  const json = (path, init = {}) => fetch(path, { ...init, headers: { "Content-Type": "application/json" } }).then((r) => r.json());
+  function item(text, button, onClick) {
+    const li = document.createElement("li");
+    li.append(text, " ");
+    if (button) { const b = document.createElement("button"); b.type = "button"; b.textContent = button.label; b.disabled = !!button.disabled; b.setAttribute("aria-label", button.aria); b.onclick = onClick; li.append(b); }
+    return li;
+  }
+  async function renderCart(cart) {
+    cart = cart || await json("/api/cart");
+    $("cart").replaceChildren(...cart.items.map((i) => item(`${i.name} x ${i.quantity}: ${money(i.line_total_cents, cart.currency)}`,
+      { label: "Remove", aria: `Remove ${i.name}` }, async () => renderCart(await json(`/api/cart/items/${encodeURIComponent(i.product_id)}`, { method: "DELETE" })))));
+    $("subtotal").textContent = money(cart.subtotal_cents, cart.currency);
+  }
+  async function renderList() {
+    const params = new URLSearchParams({ page: String(page) });
+    if ($("q").value) params.set("q", $("q").value);
+    const data = await json(`/api/products?${params}`);
+    pages = data.pages;
+    $("products").replaceChildren(...data.items.map((p) => item(`${p.name} ${money(p.price_cents, p.currency)}`,
+      { label: p.in_stock ? "Add" : "Out of stock", disabled: !p.in_stock, aria: `Add ${p.name} to cart` },
+      async () => renderCart(await json("/api/cart/items", { method: "POST", body: JSON.stringify({ product_id: p.id, quantity: 1 }) })))));
+    $("page").textContent = `Page ${data.page} of ${data.pages}`;
+    $("prev").disabled = page <= 1; $("next").disabled = page >= pages;
+  }
+  $("q").oninput = () => { page = 1; renderList(); };
+  $("prev").onclick = () => { page -= 1; renderList(); };
+  $("next").onclick = () => { page += 1; renderList(); };
+  renderList(); renderCart();
+</script>
