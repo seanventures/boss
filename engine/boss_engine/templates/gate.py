@@ -199,7 +199,41 @@ def evaluate(*, template: Mapping[str, Any], files: Mapping[str, bytes], changed
                 ok = True
             if not ok:
                 out = (str(getattr(result, "stdout", "") or "") + str(getattr(result, "stderr", "") or ""))
-                tt["output_tail"] = out[-1500:]
+                from ..identity.redaction import redact_text
+
+                tt["output_tail"] = redact_text(out[-1500:])
     evidence["template_tests"] = tt
     return GateResult(gates={"template_tests": ok, "no_committed_secrets": not findings},
                       evidence=evidence, reports_removed=removed)
+
+
+def applied_template(connection: Any, run: Mapping[str, Any]) -> Optional[dict]:
+    """The template a build applies, from its workflow run's input (`input.template`, written by
+    POST /v1/templates/{id}/apply), with the pinned row's manifest and files. None for a build
+    that applies no template. A run whose recorded digest no longer matches the row is refused
+    (the gate then fails closed), never silently re-read."""
+    from sqlalchemy import text
+
+    fctx = run.get("finalize_ctx") or {}
+    if run.get("id"):
+        # The stored row, not the pipeline's copy: the workflow link may be written after load.
+        stored = connection.execute(text("SELECT finalize_ctx FROM code_task_runs WHERE id = :i"),
+                                    {"i": run["id"]}).scalar()
+        if isinstance(stored, dict):
+            fctx = {**fctx, **stored}
+    wf = str(fctx.get("workflow_run_id") or (fctx.get("origin") or {}).get("workflow_run_id") or "")
+    if not wf:
+        return None
+    raw = connection.execute(text("SELECT input FROM workflow_runs WHERE id = :w"), {"w": wf}).scalar()
+    tpl = (raw or {}).get("template") if isinstance(raw, dict) else None
+    if not isinstance(tpl, dict) or not tpl.get("id"):
+        return None
+    row = connection.execute(text("SELECT id, manifest, digest FROM app_templates WHERE id = :t"),
+                             {"t": tpl["id"]}).mappings().first()
+    if row is None:
+        return {**tpl, "error": "the applied template no longer exists"}
+    if tpl.get("digest") and row["digest"] != tpl["digest"]:
+        return {**tpl, "error": "the template changed since this build started (digest mismatch)"}
+    files = {r[0]: bytes(r[1]) for r in connection.execute(
+        text("SELECT path, content FROM app_template_files WHERE template_id = :t"), {"t": row["id"]}).all()}
+    return {**tpl, "manifest": row["manifest"], "files": files, "workflow_run_id": wf}
