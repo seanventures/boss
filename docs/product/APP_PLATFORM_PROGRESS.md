@@ -268,6 +268,21 @@ Found and fixed by the e2e: a token-endpoint 401 for a non-Basic client carried 
 - Tests: `apps/web/tests/identity-app-sign-in.test.tsx` (6), `oidc-proxy.test.ts` (5); all 35
   identity web test files pass; tsc clean. Not yet done: an independent tester's browser walk.
 
+### Phase 2 results (2026-10-09)
+
+- API suites after the phase-2 refactor: flow, admin, adversarial, day-1 routes, public routes,
+  engine oidc + frozen interfaces: 193 passed, 1 skipped, after two expectations changed on
+  purpose (require_mfa now steps up instead of a 403 page; a workforce pool has no pool users:
+  404). Customers 26/26, re-authentication 6/6. Web: identity (35 files) and proxy tests pass.
+- End-to-end (`tests/e2e/oidc/run.sh`, local API + console, through the console origin): the
+  workforce proof (`E2E PASS`) and the customer-pool proof (`E2E CUSTOMER PASS`: hosted sign-up,
+  TOTP enrolment, consent, MFA acr and pairwise sub verified by openid-client, userinfo, refresh,
+  prompt=login with password + next TOTP, same sub, the account page disconnects the app, the
+  app's next refresh fails).
+- Not done: the passkey ceremony in a real browser (covered by API tests with a soft
+  authenticator), the independent tester's walk of Identity ▸ App sign-in and the hosted pages,
+  conformance (below).
+
 ### Phase 2.4: conformance (S6) — not run, needs an operator decision
 
 The slot was free (2026-10-09) and the suite has prebuilt images (`docker-compose-prebuilt.yml`),

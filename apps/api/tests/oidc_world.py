@@ -254,8 +254,6 @@ def field_of(html: str, name: str) -> Optional[str]:
 def totp_from_page(html: str) -> str:
     import re
 
-    from boss_engine.identity import totp
-
     secret = re.search(r"<code>([A-Z2-7]+)</code>", html).group(1)
     return secret
 

@@ -123,7 +123,7 @@ def test_a2_a_verifier_from_another_request_does_not_redeem_this_code(w):
     REDIRECT + "x", REDIRECT + "/", REDIRECT + "/../evil", f"{APP}/callback/../../evil", f"{APP}/other",
     REDIRECT + "?next=https://evil.test", REDIRECT + "#frag", REDIRECT.replace("https", "http"),
     REDIRECT.replace("app.example.test", "APP.example.test"), REDIRECT.replace(".test/", ".test:443/"),
-    f"https://app.example.test@evil.test/callback", f"https://evil.test/?{REDIRECT}", "https://evil.test/callback",
+    "https://app.example.test@evil.test/callback", f"https://evil.test/?{REDIRECT}", "https://evil.test/callback",
     REDIRECT.replace("callback", "%63allback"), "", "javascript:alert(1)",
 ])
 def test_a3_an_unregistered_redirect_uri_gets_a_boss_page_never_a_redirect(w, uri):
@@ -639,7 +639,7 @@ def test_a14_require_mfa_refuses_a_session_without_a_second_factor(w):
     weak = w.person("weak", mfa=False, methods=("password",))
     client, _ = w.client(require_mfa=True)
     r, _ = w.authorize(client["id"], who=weak)
-    assert r.status_code == 403 and "location" not in r.headers
+    assert r.status_code == 200 and "Confirm it" in r.text and "location" not in r.headers   # step-up, no code
     r, _ = w.authorize(client["id"], who=weak, extra={"prompt": "none"})
     assert query_of(r.headers["location"])["error"] == "interaction_required"
 

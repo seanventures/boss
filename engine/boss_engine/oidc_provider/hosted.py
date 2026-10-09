@@ -11,9 +11,8 @@ a NEW session (no fixation) and continues the pending authorization request once
 from __future__ import annotations
 
 import html
-import json
 from typing import Any, Mapping, Optional
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
 from sqlalchemy import text
 
@@ -648,5 +647,3 @@ def _workforce(db: Any, org_id: str, origin: str, name: str, params: Mapping[str
     reply.cookies = [*answer.cookies, *reply.cookies]
     return reply
 
-
-_ = (json, quote)

@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 from apps.api.tests.identity_fixtures import IdentityWorld
 from apps.api.tests.oidc_world import (
-    ORIGIN, REDIRECT, STRONG_PW, SoftAuthenticator, customer_world, field_of, hosted, hosted_json, last_code,
+    ORIGIN, STRONG_PW, SoftAuthenticator, customer_world, field_of, hosted, hosted_json, last_code,
     pkce, query_of, totp_code, totp_from_page)
 from boss_engine.db import begin
 from boss_engine.oidc_provider import pools as oidc_pools
