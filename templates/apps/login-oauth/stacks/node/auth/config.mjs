@@ -57,6 +57,8 @@ export function loadConfig(env = process.env) {
       issuer: get("OIDC_BOSS_ISSUER"),
       clientId: get("OIDC_BOSS_CLIENT_ID"),
       clientSecret: get("OIDC_BOSS_CLIENT_SECRET"),
+      // BOSS takes the client secret in the Authorization header only (client_secret_basic).
+      clientAuth: "client_secret_basic",
       scope: "openid email profile",
     };
   }

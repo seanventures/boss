@@ -116,6 +116,46 @@ def put(c, *, org_id: str, project_id: str, app_key: str, name: str, env: str, m
     return out
 
 
+def bind_issued(c, *, org_id: str, project_id: str, app_key: str, name: str, env: str, value: str,
+                actor_id: Optional[str]) -> dict:
+    """A value BOSS itself issued for the app (its client id, secret and issuer at BOSS's OIDC
+    provider, F6): stored like a `generated` binding, with the given value. Never `live`, never for
+    a build (the build's tests use the template's fake provider). Not reachable from the PUT
+    route: only BOSS's own code binds an issued value."""
+    from ..identity import vault
+
+    if env not in ("preview", "deploy"):
+        raise TemplateError(422, "bad_env", "an issued value is bound for preview and deploy only")
+    if not isinstance(value, str) or not value or len(value) > MAX_VALUE or "\x00" in value:
+        raise TemplateError(422, "value_required", "an issued value is a non-empty string")
+    existing = c.execute(text(
+        "SELECT id, vault_item_id FROM app_secret_bindings WHERE project_id = :p AND app_key = :a "
+        "AND env = :e AND name = :n FOR UPDATE"),
+        {"p": project_id, "a": app_key, "e": env, "n": name}).mappings().first()
+    if existing and existing["vault_item_id"]:
+        vault.revoke(existing["vault_item_id"], ctx=None, reason="app secret replaced", db=c)
+    item_id = vault.store_app_secret(org_id=org_id, project_id=project_id, app_key=app_key, env=env,
+                                     name=name, value=value, db=c)
+    params = {"p": project_id, "a": app_key, "e": env, "n": name, "v": item_id, "by": actor_id}
+    if existing:
+        c.execute(text("UPDATE app_secret_bindings SET vault_item_id = :v, mode = 'generated', set_by = :by, "
+                       "set_at = now(), shape = 'unknown', live_decision_id = NULL WHERE id = :id"),
+                  {**params, "id": existing["id"]})
+    else:
+        c.execute(text("INSERT INTO app_secret_bindings (id, project_id, app_key, env, name, vault_item_id, "
+                       "mode, set_by, shape) VALUES (:id, :p, :a, :e, :n, :v, 'generated', :by, 'unknown')"),
+                  {**params, "id": make_id("asb")})
+    return {"name": name, "env": env, "mode": "generated", "set": True}
+
+
+def has_binding(c, *, project_id: str, app_key: str, name: str, env: str) -> bool:
+    """A binding with a stored value exists (presence only)."""
+    return bool(c.execute(text(
+        "SELECT 1 FROM app_secret_bindings WHERE project_id = :p AND app_key = :a AND env = :e "
+        "AND name = :n AND vault_item_id IS NOT NULL"),
+        {"p": project_id, "a": app_key, "e": env, "n": name}).first())
+
+
 def _live_decision(c, *, project_id: str, app_key: str, name: str, actor_id: Optional[str]) -> str:
     """The blocking decision §2.4 requires before a deploy uses a live key."""
     decision_id = make_id("dec")

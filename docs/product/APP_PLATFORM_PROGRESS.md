@@ -1183,3 +1183,81 @@ templates mount: the built-ins come from the image.
   "Talks to" (S5); S2's MCP tools; the independent tester walks (§8.3) of App ▸ Links, App ▸
   Security and App sign-in.
 
+
+## Finish (feat/app-platform-finish)
+
+Branch `feat/app-platform-finish` (worktree `~/src/boss-wt-finish`), from
+`feat/app-platform` @ f9982f7e. Items (h), (o) here; (p), (q), (r), (s) built on their own branches
+(`feat/app-platform-finish-<item>`, worktrees `boss-wt-finish-<item>`) and merged in. Test DB
+`boss_test_finish` on boss-test-pg (dropped at the end). No compose stack was used.
+
+| Item | What | Commit | State |
+|---|---|---|---|
+| (o) | The insecure-template deploy guard is per APP | 4a1407b8 | done |
+| (h) | Sign in with BOSS for a login-oauth app: client, redirect URIs, OIDC_BOSS_* app secrets, one click | H_SHA | done |
+
+### (o) The deploy guard is per app (4a1407b8)
+
+`templates/deploy_guard.deploy_refusal(connection, project_id, *, target, commit_ref, release_packet,
+source_run_id)`: the operator's decision replaces "per project". In a project that holds an
+insecure_by_design application (not abandoned), a deploy is refused when any app it can be
+attributed to is the insecure one (the target's `app_name` by key/name/run id, and by its normalised
+key even when its builds are past the 200-run app index; the release packet's `code_task_run_id`; a
+stack deploy's `run_id`; a `boss/code/<run>` branch ref), when it cannot be attributed to any app of
+the project (a target named after nothing BOSS built) or names a build/branch BOSS cannot place, and,
+in the insecure app's own repository, when its change is merged (`applied`) or the ref is one BOSS
+cannot place (a bare sha, an unknown branch). The default branch while the insecure change is
+unmerged and another app's own build branch deploy. Fails closed; each refusal carries its own
+action. Every planner and the governed host apply pass the deploy's context (source test pins it).
+Tests: `apps/api/tests/test_an_insecure_template_app_is_never_deployed.py` (20: every way of naming
+the insecure app, what BOSS cannot attribute, a shared repository before/after merge, an unknown
+repository, the host route deploying the other app past both planners).
+
+### (h) Sign in with BOSS for a login-oauth app (H_SHA)
+
+- **One click**: `POST /v1/apps/{app}/sign-in-with-boss {project_id, pool_id?}` (`oidc_client:manage`,
+  step-up, plus `app_secret:write` checked in the handler; the app named by key, name or run id).
+  `engine/boss_engine/oidc_provider/app_sign_in.py`: needs a login-oauth application on the app (409
+  in words otherwise); registers a confidential `client_secret_basic` client (scopes openid profile
+  email roles; not first-party, so the person consents) in the org's first workforce pool (an
+  Owner/Admin's click creates one if none exists; an Operator's gets 409 `no_pool` in words), and
+  binds `OIDC_BOSS_CLIENT_ID`, `OIDC_BOSS_CLIENT_SECRET`, `OIDC_BOSS_ISSUER` as app secrets
+  (`templates.secrets.bind_issued`: vault kind app_secret, mode generated) for **preview and deploy,
+  never build**. Idempotent: a second click rotates nothing; a client registered by hand is reused
+  and its secret reissued (BOSS cannot read the shown-once secret back). `GET` (project:read) shows
+  presence, client id, issuer and redirect URIs; `DELETE` removes the client (its grants end) and the
+  bindings. No response ever carries the secret.
+- **Redirect URIs** = `<base>/auth/callback/boss` for each running preview
+  (`<preview origin>/v1/previews/<id>/web`; BOSS_PREVIEW_ORIGIN, else the public URL's host on
+  BOSS_PREVIEW_PORT) and the app's deploy addresses (newest healthy deploy's public URL, its targets'
+  public_url / https domains). `preview_service.preview_link_environment` now also adds
+  `preview_app_environment`: the app's `preview` secrets (F2 §2.4, never live; only for apps with a
+  template applied), `APP_BASE_URL`, and the new preview's redirect URI; `stop_preview` removes it.
+  URIs an operator added stay. With no address yet, `http://localhost:3000/...` keeps the client
+  valid until a real one exists. OIDC client `app_key` now accepts the platform's app keys
+  (lowercase words, single-spaced).
+- **Console**: Factory › Apps › ⋯ › **Sign-in** (`apps/web/app/factory/sign-in-sheet.tsx`,
+  `sign-in-actions.ts`): state, client, issuer, "Returns to" in words, *Use Sign in with BOSS* /
+  *Refresh addresses* / *Stop using*. Needs a rebuild of the web container to be visible.
+- **Found and fixed by the proof**: the login-oauth Node stack sent the BOSS client secret in the
+  body (openid-client's default, client_secret_post), which BOSS refuses: BOSS sign-in could never
+  have worked. It now uses `ClientSecretBasic` for BOSS, and the stack's fake IdP accepts only Basic
+  for the BOSS client (mutation-checked: the old code fails the template test). Python (Authlib) and
+  Java (Spring) already use Basic.
+- **Tests**: `apps/api/tests/test_sign_in_with_boss.py` (16), ending with the proof: the login-oauth
+  Node stack (npm-installed into a scratch copy) runs with EXACTLY the environment a preview of the
+  app gets from the vault, BOSS serves on a real loopback port; GET /auth/login/boss -> BOSS authorize
+  (PKCE S256, nonce, state) -> a member's consent -> the app's callback -> code exchange with the bound
+  secret -> `/api/me` = the member, provider boss; the secret never in the app's output. Skips only
+  without Node 20+ or npm. `apps/web/tests/app-sign-in-sheet.test.tsx` (6). Node template tests 15/15.
+  Affected: identity suites 46, OIDC engine + admin + flow + oidc:read + links + previews sandbox +
+  name-twice 104 (+1 skip), templates API 45. tsc clean.
+- **Not done / known limits**: (1) a sign-in **inside a preview cannot hold a session**: the preview
+  proxy strips the browser's Cookie header and serves previews with a sandbox CSP (no
+  allow-same-origin), so the app's session cookie never reaches it; the preview redirect URI is
+  registered, but an interactive login works on a deployed or locally run app only. Fixing it is a
+  preview-isolation decision (per-app preview origins), not this item. (2) Deploys do not yet read app
+  secrets (`values_for_env(env="deploy")` has no caller in the deploy path), so a deployed app gets
+  the bindings only once that wiring exists. (3) The Node stack builds its callback URL from
+  `req.originalUrl` against APP_BASE_URL, which drops a path prefix such as a preview's; harmless
+  until (1) is solved.

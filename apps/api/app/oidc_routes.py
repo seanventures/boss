@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from boss_engine.db import begin
 from boss_engine.identity import P, PublicReason, Scope, permit, public
+from boss_engine.oidc_provider import app_sign_in
 from boss_engine.oidc_provider import clients as oidc_clients
 from boss_engine.oidc_provider import consent as oidc_consent
 from boss_engine.oidc_provider import pools as oidc_pools
@@ -519,4 +520,66 @@ def build_oidc_router() -> APIRouter:
             return {"revoked": True}
         return _admin(request, fn)
 
+    # ---- Sign in with BOSS for one app (the login-oauth template's BOSS provider) -----------------
+    # Whether the app uses it, its client id and redirect URIs: no secret, so anyone who reads the project.
+    @router.get("/v1/apps/{app_key}/sign-in-with-boss")
+    @permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
+    def app_sign_in_status(app_key: str, request: Request, project_id: str) -> JSONResponse:
+        return _app_sign_in(request, app_key, project_id, lambda db, ctx, key: app_sign_in.status(
+            db, org_id=ctx.principal.org_id, project_id=project_id, app_key=key))
+
+    @router.post("/v1/apps/{app_key}/sign-in-with-boss")
+    @permit(P.OIDC_CLIENT_MANAGE, scope=Scope.project(body="project_id"))
+    def app_sign_in_connect(app_key: str, request: Request, body: AppSignInBody) -> JSONResponse:
+        from .routers.identity_access import require_permission
+
+        # It also writes the app's secrets: the second permission, checked like a route's.
+        require_permission(request, P.APP_SECRET_WRITE, body.project_id, label="sign-in-with-boss")
+
+        def fn(db: Any, ctx: Any, key: str) -> Any:
+            return app_sign_in.connect(db, org_id=ctx.principal.org_id, project_id=body.project_id, app_key=key,
+                                       actor=ctx.principal.id, pool_id=body.pool_id,
+                                       may_create_pool=_first_party_allowed(ctx, db))
+        return _app_sign_in(request, app_key, body.project_id, fn)
+
+    @router.delete("/v1/apps/{app_key}/sign-in-with-boss")
+    @permit(P.OIDC_CLIENT_MANAGE, scope=Scope.project(query="project_id"))
+    def app_sign_in_disconnect(app_key: str, request: Request, project_id: str) -> JSONResponse:
+        from .routers.identity_access import require_permission
+
+        require_permission(request, P.APP_SECRET_WRITE, project_id, label="sign-in-with-boss")
+        return _app_sign_in(request, app_key, project_id, lambda db, ctx, key: app_sign_in.disconnect(
+            db, org_id=ctx.principal.org_id, project_id=project_id, app_key=key, actor=ctx.principal.id))
+
     return router
+
+
+class AppSignInBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project_id: str = Field(max_length=100)
+    pool_id: Optional[str] = Field(default=None, max_length=100)
+
+
+def _app_sign_in(request: Request, app_key: str, project_id: str,
+                 fn: Callable[[Any, Any, str], Any]) -> JSONResponse:
+    """An app of a project in the caller's org, named by its key, name or a run id."""
+    from sqlalchemy import text
+
+    from boss_engine.app_links.service import resolve_app_key
+
+    try:
+        ctx = _ctx(request)
+        with begin() as db:
+            in_org = db.execute(text("SELECT 1 FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                                     "WHERE p.id = :p AND w.org_id = :o"),
+                                {"p": project_id, "o": ctx.principal.org_id}).first()
+            key = resolve_app_key(db, project_id, app_key) if in_org else None
+            if key is None:
+                return JSONResponse({"error": "unknown_app", "message": "no such app in this project"},
+                                    status_code=404)
+            result = fn(db, ctx, key)
+    except app_sign_in.SignInError as exc:
+        return JSONResponse(exc.body(), status_code=exc.status)
+    except ValueError as exc:
+        return JSONResponse({"error": "invalid", "message": str(exc)}, status_code=400)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})

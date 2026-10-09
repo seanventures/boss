@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1450 operations.
+# 1453 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -175,6 +175,9 @@
 "DELETE /v1/apps/{app_key}/secrets/{name}": ["permit app_secret:write @ project(query=project_id)", "OAP"]
 "PUT /v1/apps/{app_key}/secrets/{name}": ["permit app_secret:write @ project(body=project_id)", "OAP"]
 "GET /v1/apps/{app_key}/setup-guide": ["permit project:read @ project(query=project_id)", "OAPVU"]
+"DELETE /v1/apps/{app_key}/sign-in-with-boss": ["permit oidc_client:manage @ project(query=project_id)", "OAP"]
+"GET /v1/apps/{app_key}/sign-in-with-boss": ["permit project:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/apps/{app_key}/sign-in-with-boss": ["permit oidc_client:manage @ project(body=project_id)", "OAP"]
 "GET /v1/apps/{app_key}/templates": ["permit project:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/apps/{app_key}/test-users": ["permit project:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/apps/{app_key}/test-users/reveal": ["permit app_secret:write @ project(body=project_id)", "OAP"]

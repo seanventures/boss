@@ -298,3 +298,11 @@
 .fx-bench-details { flex-basis: 100%; padding: 0 0 10px; }
 .fx-bench-name { font-weight: 650; color: var(--ink); max-width: 40%; }
 .fx-bench-tag { color: var(--muted); font-size: 0.8rem; min-width: 0; }
+
+/* App ▸ Sign-in (F6): state, client, where people return to. */
+.fx-signin-state { margin: 0; font-size: 0.9rem; }
+.fx-signin-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 0.82rem; }
+.fx-signin-facts dt { color: var(--muted); }
+.fx-signin-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.fx-signin-uris { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.fx-signin-note { margin: 0; font-size: 0.78rem; }
