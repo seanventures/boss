@@ -43,6 +43,8 @@ export function ReviewChecklist({ projectId, runId, onDone, review: given }: Rev
       .filter((fp) => !chosen.has(fp)).map((fp) => review.findings[fp]?.id).filter((id): id is string => !!id);
   }, [review, ticked]);
 
+  // A review past its choice (or not yet at it) shows the list as it stands, read-only.
+  const closed = !!review && !review.awaitingChoice && !done;
   if (!review) return err ? <p className="sec-error" role="alert">{err}</p> : <p className="sec-muted">Loading…</p>;
 
   function flip(id: string) {
@@ -74,11 +76,11 @@ export function ReviewChecklist({ projectId, runId, onDone, review: given }: Rev
         {review.recommendations.map((r) => (
           <li key={r.id} className="sec-rec" data-testid={`sec-rec-${r.id}`}>
             <label className="sec-rec-head">
-              <input type="checkbox" checked={ticked.has(r.id)} onChange={() => flip(r.id)} disabled={done}
+              <input type="checkbox" checked={ticked.has(r.id)} onChange={() => flip(r.id)} disabled={done || closed}
                      data-testid={`sec-tick-${r.id}`} aria-label={`Fix: ${r.title}`} />
               <span className="sec-prio" data-prio={r.priority} title="P0 exploitable now … P3 hygiene">{r.priority}</span>
               <span className="sec-rec-title" data-user-text>{r.title}</span>
-              {r.effort ? <span className="sec-effort" title="Effort: S small, M medium, L large">{r.effort}</span> : null}
+              {r.effort ? <span className="sec-effort" title="Effort: S small, M medium, L large">Effort {r.effort}</span> : null}
               <span className="sec-src" data-src={r.source}
                     title={r.source === "panel" ? "Recommended by the security panel" : "Derived by BOSS from a finding the panel did not cover"}>
                 {r.source === "panel" ? "Panel" : "Derived"}
@@ -102,7 +104,13 @@ export function ReviewChecklist({ projectId, runId, onDone, review: given }: Rev
           </li>
         ))}
       </ul>
-      {!done ? (
+      {closed ? (
+        <p className="sec-muted" data-testid="sec-closed">
+          {review.recommendations.some((r) => r.decidedBy)
+            ? `Chosen by ${review.recommendations.find((r) => r.decidedBy)?.decidedBy}: ${ticked.size} to fix.`
+            : `The review is not waiting for a choice; ${ticked.size} ticked.`}
+        </p>
+      ) : !done ? (
         <div className="sec-check-foot">
           {unticked.length ? (
             <input className="cap-input" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={2000}

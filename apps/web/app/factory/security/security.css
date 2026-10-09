@@ -107,6 +107,7 @@
 .sec-tools-line { font-family: var(--mono); font-size: 0.72rem; }
 
 @media (max-width: 640px) {
+  .fx-sheet.sec-sheet { max-height: none; height: 100%; }
   .sec-acts { margin-left: 0; width: 100%; }
   .sec-acts .ag-btn, .sec-check-foot .ag-btn, .sec-triage .ag-btn { min-height: 44px; flex: 1 1 auto; justify-content: center; }
   .sec-finding-row, .sec-row { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "sev title" ". where" ". meta"; row-gap: 2px; }
@@ -119,3 +120,5 @@
 .sec-sheet { position: relative; }
 .sec-close { position: absolute; top: 10px; right: 10px; }
 .sec-sheet .sec-head { padding-right: 36px; }
+.sec .cap-input { padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--ink); font: inherit; font-size: 0.84rem; color-scheme: dark; }
+.sec .cap-input::placeholder { color: var(--faint); }

@@ -26,6 +26,7 @@ import { ago, localTime, useNow } from "../../agents/live-util";
 import { SevPill, errorWords } from "./security-bits";
 
 const POLL_MS = 8000;
+const SEV_SHORT: Record<string, string> = { critical: "Crit", high: "High", medium: "Med", low: "Low", info: "Info" };
 
 export type AppSecurityProps = { projectId: string; appKey: string; appName?: string };
 
@@ -213,7 +214,7 @@ function ScanSummary({ scan, scans, onPick, now }: { scan: Scan; scans: Scan[]; 
         <div className="sec-table" role="table" aria-label="Findings by tool and severity">
           <div className="sec-tr sec-th" role="row">
             <span role="columnheader">Tool</span>
-            {SEVERITIES.map((s) => <span key={s} role="columnheader" className="sec-num" title={s}>{s[0].toUpperCase() + s.slice(1, 4)}</span>)}
+            {SEVERITIES.map((s) => <span key={s} role="columnheader" className="sec-num" title={s}>{SEV_SHORT[s]}</span>)}
             <span role="columnheader" className="sec-ver">Version</span>
           </div>
           {TOOLS.map((t) => {

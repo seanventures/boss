@@ -2,7 +2,8 @@
 
 /** App › Security over the Factory, as a sheet: Esc or the backdrop closes it. `?security=<app id>`
  *  opens it on that app, so a link (or the review's gate) lands on the checklist. */
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { AppSecurity } from "./app-security";
 
@@ -26,13 +27,19 @@ export function SecuritySheet({ projectId, appKey, appName, onClose }: {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
-  return (
+  // OVER THE WHOLE CONSOLE, not the Apps panel: a portal, because the panel is a containing
+  // block for `position: fixed` and clipped the sheet to its own height (walk, 390 px).
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  useEffect(() => { setHost(document.body); }, []);
+  if (!host) return null;
+  return createPortal(
     <div className="fx-sheet-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <section className="fx-sheet sec-sheet" role="dialog" aria-modal="true" aria-label={`Security of ${appName ?? appKey}`}
                data-testid="sec-sheet">
         <button type="button" className="ag-act-close sec-close" aria-label="Close" onClick={onClose}>×</button>
         <AppSecurity projectId={projectId} appKey={appKey} appName={appName ?? appKey} />
       </section>
-    </div>
+    </div>,
+    host,
   );
 }

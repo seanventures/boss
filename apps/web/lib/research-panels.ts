@@ -316,6 +316,8 @@ export function meetingOutcome(m: Pick<Meeting, "status" | "pull_request_url" | 
              stage: "recorded" };
   }
   if (m.status === "simulated") return { pill: "Simulated", tone: "neutral", headline: "No-spend fixture", stage: "simulated" };
+  // A security review's panel: its document is the review's recommendations, never a PRD.
+  if (m.prd_state === "not_a_prd") return { pill: "Recommended", tone: "good", headline: "Fixes recommended", stage: "recorded" };
   const b = m.build?.status;
   if (b === "running" || b === "queued") return { pill: "Building", tone: "live", headline: "Being built from the PRD", stage: "building" };
   if (b === "completed") return { pill: "Built", tone: "good", headline: "Built from the PRD", stage: "built" };
