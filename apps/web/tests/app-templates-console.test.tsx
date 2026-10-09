@@ -224,7 +224,7 @@ describe("a template's sheet", () => {
   });
 
   it("a refusal is the API's sentence, without spec references", async () => {
-    await mount(<TemplateSheet projectId="p1" card={card(STRIPE)} target={{ kind: "add", runId: "crun_1", appKey: "shop", name: "Shop" }}
+    await mount(<TemplateSheet projectId="p1" card={card(STRIPE)} target={{ kind: "add", runId: "crun_1", appKey: "shop", name: "Shop", stack: "node" }}
                                onStarted={() => {}} onClose={() => {}} />, "owner");
     applyAnswers = [[409, { error: "requires_unmet", message: "apply these templates to the app first: login-oauth (§2.3)" }]];
     await tick('[data-testid="tpl-egress-ok"]');
@@ -247,6 +247,8 @@ describe("a template's sheet", () => {
     expect(applyBlocker(base)).toBe("");
     expect(applyBlocker({ ...base, stackOff: true })).toBe("Node is off on this install.");
     expect(applyBlocker({ ...base, target: { kind: "add", runId: "r", name: "A" }, name: "" })).toBe("");
+    // Into an app whose stack is unknown, the person picks it: never the first in the list.
+    expect(applyBlocker({ ...base, target: { kind: "add", runId: "r", name: "A" }, stack: "" })).toBe("Choose the app's stack.");
   });
 });
 

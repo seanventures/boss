@@ -33,7 +33,9 @@ import { SideSheet } from "./side-sheet";
 /** Where the template goes: a new app (named here), or an app that exists. */
 export type ApplyTarget =
   | { kind: "new" }
-  | { kind: "add"; runId: string; appKey?: string | null; name: string };
+  | { kind: "add"; runId: string; appKey?: string | null; name: string;
+      /** The app's stack when its templates say it; unknown, the person picks (never a guess). */
+      stack?: string | null };
 
 /** What stops Start, said as the thing to do ("" when nothing does). */
 export function applyBlocker(o: {
@@ -41,7 +43,7 @@ export function applyBlocker(o: {
   needs: string[]; typed: Record<string, string>; stackOff: boolean;
 }): string {
   if (o.target.kind === "new" && !o.name.trim()) return "Name the new app.";
-  if (!o.stack) return "Choose a stack.";
+  if (!o.stack) return o.target.kind === "add" ? "Choose the app's stack." : "Choose a stack.";
   if (o.stackOff) return `${stackLabel(o.stack)} is off on this install.`;
   if (o.egress.length && !o.egressOk) return "Allow the hosts it talks to.";
   const missing = o.needs.filter((n) => !(o.typed[n] ?? "").trim());
@@ -85,8 +87,11 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
   const [picked, setPicked] = useState(false);
   useEffect(() => {
     if (picked) return;
+    // INTO AN APP, THE APP'S STACK: a Java template applied to a Node app because Java was first
+    // in the list (walk). Its stack when known; else none, and the person picks.
+    if (target.kind === "add") { setStack(target.stack && card.stacks.includes(target.stack) ? target.stack : ""); return; }
     setStack(card.stacks.find((s) => !installed || installed.has(s)) ?? card.stacks[0] ?? "");
-  }, [card.stacks, installed, picked]);
+  }, [card.stacks, installed, picked, target]);
 
   const secrets = detail?.secrets ?? card.secrets;
   const egress = detail?.egress ?? card.egress;

@@ -160,18 +160,6 @@ export function LinksSheet({ projectId, appKey, app, others, onClose }: LinksShe
                     <span title="Last request through this link">{l.last_used_at ? ` · used ${ago(l.last_used_at, now)}` : " · never used"}</span>
                     {l.test_users ? <span title="Generated, test-only, rotated on each new preview">{` · ${l.test_users.count} test users`}</span> : null}
                   </span>
-                  {users ? (
-                    <div className="fx-link-users-wrap" data-testid={`fx-link-users-${l.alias}`}>
-                      <table className="fx-link-users">
-                        <thead><tr><th scope="col">Login</th><th scope="col">Password</th><th scope="col">Role</th></tr></thead>
-                        <tbody>{users.map((u) => (
-                          <tr key={u.username}><td data-user-text>{u.username}</td><td><code>{u.password}</code></td><td>{u.role}</td></tr>
-                        ))}</tbody>
-                      </table>
-                      <button type="button" className="ag-link" data-testid={`fx-link-hide-${l.alias}`}
-                              onClick={() => setRevealed(({ [l.id]: _gone, ...rest }) => rest)}>Hide</button>
-                    </div>
-                  ) : null}
                   {confirm === l.id ? (
                     <span className="fx-link-confirm" role="alertdialog" aria-label={`Revoke ${l.alias}?`} data-testid={`fx-link-confirm-${l.alias}`}>
                       <span>Revoke {l.alias}? {app} loses {l.provider_app}&apos;s address within seconds.</span>
@@ -194,6 +182,18 @@ export function LinksSheet({ projectId, appKey, app, others, onClose }: LinksShe
                                  data-testid={`fx-link-revoke-${l.alias}`} onClick={() => setConfirm(l.id)}>Revoke</GatedButton>
                   ) : null}
                 </span>
+                  {users ? (
+                    <div className="fx-link-users-wrap" data-testid={`fx-link-users-${l.alias}`}>
+                      <table className="fx-link-users">
+                        <thead><tr><th scope="col">Login</th><th scope="col">Password</th><th scope="col">Role</th></tr></thead>
+                        <tbody>{users.map((u) => (
+                          <tr key={u.username}><td data-user-text>{u.username}</td><td><code>{u.password}</code></td><td>{u.role}</td></tr>
+                        ))}</tbody>
+                      </table>
+                      <button type="button" className="ag-link" data-testid={`fx-link-hide-${l.alias}`}
+                              onClick={() => setRevealed(({ [l.id]: _gone, ...rest }) => rest)}>Hide</button>
+                    </div>
+                  ) : null}
               </li>
             );
           })}

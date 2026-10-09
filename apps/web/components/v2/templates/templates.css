@@ -113,3 +113,7 @@ details.tpl-fold[open] > summary { margin-bottom: 6px; }
   .tpl-row-acts button, .tpl-copy-b { min-height: 40px; }
   .tpl-guide-copies { grid-template-columns: minmax(0, 1fr); }
 }
+.tpl-setup { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.tpl-guide-text h1, .tpl-guide-text h2, .tpl-guide-text h3 { margin: 12px 0 4px; font-size: 0.92rem; color: var(--ink); }
+.tpl-guide-text p, .tpl-guide-text li { font-size: 0.84rem; }
+.tpl-guide-text code { font: 0.76rem var(--mono); color: var(--accent-text); overflow-wrap: anywhere; }

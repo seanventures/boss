@@ -1364,7 +1364,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           ) : null
         ) : (
           <div className="np-mode" role="radiogroup" aria-label="What are you making?" data-testid="np-mode">
-            <button type="button" role="radio" aria-checked={!adding} data-testid="np-mode-new"
+            <button type="button" role="radio" aria-checked={mode === "new"} data-testid="np-mode-new"
                     onClick={() => setMode("new")}><span aria-hidden>✦</span>A new app</button>
             <button type="button" role="radio" aria-checked={adding} data-testid="np-mode-add"
                     onClick={() => setMode("add")}><span aria-hidden>＋</span>Add to an existing app</button>
@@ -1436,7 +1436,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
         <SideSheet title="Add a template" sub={app.app} onClose={() => setTplPicking(false)} testId="np-template-picker" wide>
           <TemplateGallery projectId={projectId} stack={appStack} testId="np-template-gallery"
                            onPick={(card) => { setTplPicking(false);
-                                               setTplCard({ card, target: { kind: "add", runId: baseRun, appKey: app.appKey ?? null, name: app.app } }); }} />
+                                               setTplCard({ card, target: { kind: "add", runId: baseRun, appKey: app.appKey ?? null, name: app.app, stack: appStack } }); }} />
         </SideSheet>
       ) : null}
       {tplCard ? (

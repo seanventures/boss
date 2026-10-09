@@ -137,6 +137,9 @@ describe("From a template", () => {
     expect($('[data-testid="np-mode-template"]')?.textContent).toContain("From a template");
     await click($('[data-testid="np-mode-template"]'));
     expect($('[data-testid="dw-new-project"]')?.dataset.mode).toBe("template");
+    // One job is chosen at a time: "A new app" is not lit beside it.
+    expect($('[data-testid="np-mode-new"]')?.getAttribute("aria-checked")).toBe("false");
+    expect($('[data-testid="np-mode-template"]')?.getAttribute("aria-checked")).toBe("true");
     expect($('[data-testid="np-templates"] [data-testid="tpl-card-login-oauth"]')).not.toBeNull();
     expect($('[data-testid="dw-new-start"]')).toBeNull();          // Start is the sheet's own
     await act(async () => { $('[data-testid="np-templates"]')!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", metaKey: true })); });

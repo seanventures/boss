@@ -204,7 +204,8 @@ export function refusalWords(e: unknown): string {
 
 /** Drop spec references ("(D3)", "(§2.4)") and capitalise: the person never needs the spec. */
 export function plainSentence(s: string): string {
-  const t = s.replace(/\s*\((?:D\d+|§[\d.]+[^)]*)\)/g, "").replace(/\s+/g, " ").trim();
+  const t = s.replace(/\s*\((?:D\d+|§[\d.]+[^)]*)\)/g, "")
+    .replace(/\bpending_review\b/g, "waiting for review").replace(/\s+/g, " ").trim();
   return t ? t[0].toUpperCase() + t.slice(1) : t;
 }
 

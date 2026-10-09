@@ -526,7 +526,12 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
           {stepsWord(p)} {p.steps.length ? (showSteps ? "▴" : "▾") : ""}
         </button>
       ) : null}
-      {p.error && !running ? <span className="fx-err" title={p.error}>Failed</span> : null}
+      {p.error && !running ? (
+        // A preview BOSS stopped (idle, expired) is not a failure: its reason is the tooltip.
+        p.status === "stopped" || p.status === "expired"
+          ? <span className="fx-muted" title={p.error} data-testid="fx-preview-stopped">Stopped</span>
+          : <span className="fx-err" title={p.error}>Failed</span>
+      ) : null}
       {err}
       {passed}
       {showSteps && p.steps.length ? (

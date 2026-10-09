@@ -214,7 +214,10 @@
 .fx-link-users { font-size: 0.78rem; border-collapse: collapse; }
 .fx-link-users th { padding: 2px 12px 2px 0; text-align: left; font: 600 0.66rem var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
 .fx-link-users td { padding: 3px 12px 3px 0; color: var(--ink); white-space: nowrap; border-top: 1px solid var(--border); }
-.fx-link-users code { font: 0.76rem var(--mono); }
+.fx-link-users code { font: 0.76rem var(--mono); white-space: normal; word-break: break-all; }
+.fx-link-users td:nth-child(2) { white-space: normal; min-width: 12em; }
+.fx-link { flex-wrap: wrap; }
+.fx-link > .fx-link-users-wrap { flex: 1 1 100%; }
 .fx-link-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: 0.8rem; color: var(--amber); }
 .fx-links { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .fx-link-opts { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
