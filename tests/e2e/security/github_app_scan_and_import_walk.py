@@ -110,10 +110,12 @@ class ScanImportWalk(TemplateWalk):
         subprocess.run(["docker", "cp", str(work / repo), f"{self.args.project}-fakegh-1:{dest}"], check=True,
                        capture_output=True, timeout=60)
         bare = f"/srv/fakegh/git/fxd-org/{repo}.git"
-        script = (f"set -e; cd {dest}; git init -q -b main; git -c user.name=e2e -c user.email=e2e@x.test add -A; "
-                  f"git -c user.name=e2e -c user.email=e2e@x.test commit -qm template; "
+        # docker cp keeps the host's uid on the files: tell git this checkout is ours
+        g = "git -c safe.directory=* -c user.name=e2e -c user.email=e2e@x.test"
+        script = (f"set -e; chown -R root:root {dest}; cd {dest}; {g} init -q -b main; {g} add -A; "
+                  f"{g} commit -qm template; "
                   f"if [ ! -d {bare} ]; then mkdir -p $(dirname {bare}); git init -q --bare -b main {bare}; fi; "
-                  f"git push -q -f {bare} main:main; git rev-parse HEAD")
+                  f"{g} push -q -f {bare} main:main; {g} rev-parse HEAD")
         done = self.in_container("fakegh", ["sh", "-c", script])
         sha = done.stdout.strip().splitlines()[-1] if done.returncode == 0 and done.stdout.strip() else ""
         self.j.check(f"the template is on the fake GitHub as fxd-org/{repo}", len(sha) == 40,
@@ -138,7 +140,11 @@ class ScanImportWalk(TemplateWalk):
             j.check(f"the {repo} import is pinned to the pushed commit", body.get("commit_sha") == sha,
                     expect=sha, actual=body.get("commit_sha"))
         log = (self.fake_get("/_log") or {}).get("entries") or []
-        blocked = [(e.get("egress"), e.get("path")) for e in log if e.get("blocked")]
+        # the services' traffic only: the browser (the host gateway) asks for web fonts the fake
+        # does not serve, which says nothing about BOSS
+        browser_ip = {e.get("client") for e in log if e.get("via") == "local"} | {"172.17.0.1"}
+        blocked = [(e.get("egress"), e.get("path")) for e in log
+                   if e.get("blocked") and e.get("client") not in browser_ip]
         self.state["blocked_egress"] = blocked[-5:]
         j.check("nothing reached an unfaked host", not blocked, expect="no blocked egress", actual=blocked[-3:])
         for repo in TEMPLATES:
