@@ -128,6 +128,7 @@ from datetime import timedelta, timezone  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
 from . import epoch as _epoch  # noqa: E402
+from . import request_memo  # noqa: E402
 from . import object_kinds as _object_kinds  # noqa: E402,F401 — registers every Scope.of loader
 from .permissions_gen import PERMISSION_META, ROLE_PERMISSIONS, SYSTEM_PRINCIPALS  # noqa: E402
 from .principal import AuthMethod, PrincipalKind, RunMode  # noqa: E402
@@ -298,9 +299,63 @@ def _statuses(conn: Any, org_id: str, ids: list[str]) -> dict[str, str]:
 
 
 def _project_in_org(conn: Any, org_id: str, project_id: str) -> bool:
-    return conn.execute(text(
+    key = ("project", org_id, project_id)
+    known = request_memo.get(key)
+    if request_memo.has(known):
+        return bool(known)
+    found = conn.execute(text(
         "SELECT 1 FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
         "WHERE p.id = :p AND w.org_id = :o"), {"p": project_id, "o": org_id}).first() is not None
+    if not getattr(conn, "callers_transaction", True):
+        request_memo.put(key, found)
+    return found
+
+
+def _epoch_and_status(conn: Any, org_id: str, principal_id: str) -> tuple[int, Optional[str]]:
+    """The org's epoch and the principal's live status: from this request's memo when this request
+    already read them live (authentication reads both), else from the database (and memoised)."""
+    epoch = request_memo.get(("epoch", org_id))
+    status = request_memo.get(("status", org_id, principal_id))
+    if request_memo.has(epoch) and request_memo.has(status):
+        return int(epoch), status
+    current = conn.execute(text(
+        "SELECT (SELECT epoch FROM identity_settings WHERE org_id = :o), "
+        "       (SELECT status FROM identity_principals WHERE id = :p AND org_id = :o)"),
+        {"o": org_id, "p": principal_id}).first()
+    epoch_value, status_value = int(current[0] or 0), current[1]
+    if not getattr(conn, "callers_transaction", True):
+        # Only a read on our own short connection is memoised: a caller's transaction may hold an
+        # uncommitted identity change (and bump() clears the memo anyway).
+        request_memo.put(("epoch", org_id), epoch_value)
+        request_memo.put(("status", org_id, principal_id), status_value)
+    return epoch_value, status_value
+
+
+class _LazyConnection:
+    """The caller's connection, or a pooled one checked out only when a statement actually runs:
+    a decision answered entirely from this request's memo and the epoch-keyed HELD_CACHE costs no
+    connection checkout (each one is a pre-ping round trip) and no statement."""
+
+    def __init__(self, db: Any = None) -> None:
+        self._db = db
+        self._cm: Any = None
+        self._conn: Any = db
+        self.callers_transaction = db is not None
+
+    def __enter__(self) -> "_LazyConnection":
+        return self
+
+    def execute(self, *args: Any, **kwargs: Any) -> Any:
+        if self._conn is None:
+            self._cm = _epoch.connection(None)
+            self._conn = self._cm.__enter__()
+        return self._conn.execute(*args, **kwargs)
+
+    def __exit__(self, *exc: Any) -> None:
+        if self._cm is not None:
+            self._cm.__exit__(*exc)
+            self._cm = None
+            self._conn = None
 
 
 def _step_up_window_seconds(org_id: str, conn: Any) -> int:
@@ -534,12 +589,8 @@ def check(ctx: AuthContext, permission: str, scope: ResolvedScope, *, db: Any = 
     if ctx.run_token is not None and not meta.delegable:               # agents: human-only keys
         return _finish(ctx, deny(meta.key, scope, DenyReason.NOT_DELEGABLE))
 
-    with _epoch.connection(db) as conn:
-        current = conn.execute(text(
-            "SELECT (SELECT epoch FROM identity_settings WHERE org_id = :o), "
-            "       (SELECT status FROM identity_principals WHERE id = :p AND org_id = :o)"),
-            {"o": p.org_id, "p": p.id}).first()
-        epoch, status = int(current[0] or 0), current[1]
+    with _LazyConnection(db) as conn:
+        epoch, status = _epoch_and_status(conn, p.org_id, p.id)
         if p.kind == PrincipalKind.SYSTEM:                              # 2. system fixed sets
             if status is not None and status != "active":
                 return _finish(ctx, deny(meta.key, scope, DenyReason.PRINCIPAL_INACTIVE))
