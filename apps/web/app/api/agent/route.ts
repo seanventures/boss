@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
 import { apiErrorText } from "../../../lib/api-error";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * Everything the chat dock READS, off the Server Action path.
@@ -43,7 +44,7 @@ async function upstream(path: string) {
 }
 
 export async function GET(req: Request) {
-  const params = new URL(req.url).searchParams;
+  const params = rawRequestUrl(req).searchParams;
   const view = params.get("view") ?? "";
   const project = (params.get("project_id") ?? "").trim();
   const actor = (params.get("actor") ?? "").trim();

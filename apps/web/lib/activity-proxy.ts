@@ -8,6 +8,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "./client";
 import { apiErrorText } from "./api-error";
+import { rawRequestUrl } from "./raw-request-url";
 
 /** Everything the log's reads understand. */
 export const LOG_FORWARD = [
@@ -18,7 +19,7 @@ export const LOG_FORWARD = [
 ] as const;
 
 export async function forwardLogRead(req: Request, path: string): Promise<Response> {
-  const incoming = new URL(req.url).searchParams;
+  const incoming = rawRequestUrl(req).searchParams;
   if (!incoming.get("project_id")?.trim()) {
     return NextResponse.json({ error: "missing project_id" }, { status: 400 });
   }

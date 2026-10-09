@@ -5,3 +5,8 @@
 .idn-app-signin code { font: 500 12px var(--mono); word-break: break-all; }
 .idn-sheet [data-testid="client-secret"] .idn-row { margin: 8px 0; }
 .idn-sheet [data-testid="client-secret"] .idn-label { min-width: 110px; font: 500 10px var(--mono); letter-spacing: 0.16em; color: var(--faint); text-transform: uppercase; }
+/* At phone width the tables keep the columns that identify a row (the sheet has the rest). */
+@media (max-width: 560px) {
+  .idn-app-signin .idn-narrow-hide { display: none; }
+  .idn-app-signin .idn-t td, .idn-app-signin .idn-t th { overflow-wrap: anywhere; }
+}

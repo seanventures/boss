@@ -46,7 +46,9 @@ def test_an_owner_manages_pools_and_an_operator_cannot(w, api):
         assert api.delete(f"/v1/oidc/pools/{w.pool['id']}").status_code in (200, 400)
     with w.ids.acting_as(w.ids.ctx(op)):
         assert api.post("/v1/oidc/pools", json={"name": "x"}).status_code == 403
-        assert api.get("/v1/oidc/pools").status_code == 403
+        # an Operator reads the pools a client can use (to register one), never their users
+        assert api.get("/v1/oidc/pools").status_code == 200
+        assert api.get(f"/v1/oidc/pools/{w.pool['id']}").status_code == 403
     with w.ids.acting_as(w.ids.ctx(owner, mfa=False)):
         assert api.post("/v1/oidc/pools", json={"name": "y"}).status_code in (401, 403)  # step-up
 
@@ -80,6 +82,33 @@ def test_an_operator_registers_clients_on_their_project_only(w, api):
         assert api.post("/v1/oidc/clients", json=_body(w, first_party=True)).status_code == 403
     with w.ids.acting_as(w.ids.ctx(viewer)):
         assert api.post("/v1/oidc/clients", json=_body(w)).status_code == 403
+
+
+def test_an_operator_reads_the_clients_they_manage_and_no_others(w, api):
+    """P1-6: an Operator could register a client (oidc_client:manage) but not list or open it."""
+    owner, op, viewer = w.ids.person("own"), w.ids.person("op"), w.ids.person("viewer")
+    w.ids.bind(owner, "owner")
+    w.ids.bind(op, "operator", project=w.ids.project_a)
+    w.ids.bind(viewer, "viewer", project=w.ids.project_a)
+    with w.ids.acting_as(w.ids.ctx(owner)):
+        other = api.post("/v1/oidc/clients", json=_body(w, project_id=w.ids.project_b, app_key="shop")).json()
+    with w.ids.acting_as(w.ids.ctx(op)):
+        mine = api.post("/v1/oidc/clients", json=_body(w)).json()
+        listed = api.get("/v1/oidc/clients", params={"project_id": w.ids.project_a})
+        assert listed.status_code == 200, listed.text
+        assert [c["client_id"] for c in listed.json()["clients"]] == [mine["client_id"]]
+        assert api.get("/v1/oidc/pools", params={"project_id": w.ids.project_a}).status_code == 200
+        got = api.get(f"/v1/oidc/clients/{mine['client_id']}")
+        assert got.status_code == 200 and "client_secret" not in got.json()
+        assert api.get(f"/v1/oidc/clients/{mine['client_id']}/roles").status_code == 200
+        assert api.get(f"/v1/oidc/clients/{mine['client_id']}/role-assignments").status_code == 200
+        # another project's client, and the org-wide list, stay out of reach
+        assert api.get(f"/v1/oidc/clients/{other['client_id']}").status_code in (403, 404)
+        assert api.get("/v1/oidc/clients", params={"project_id": w.ids.project_b}).status_code == 403
+        assert api.get("/v1/oidc/clients").status_code == 403
+    with w.ids.acting_as(w.ids.ctx(viewer)):
+        assert api.get("/v1/oidc/clients", params={"project_id": w.ids.project_a}).status_code == 403
+        assert api.get(f"/v1/oidc/clients/{mine['client_id']}").status_code in (403, 404)
 
 
 @pytest.mark.parametrize("extra", [{"jwks_uri": "https://evil.test/jwks"}, {"request_uris": ["https://evil.test"]},

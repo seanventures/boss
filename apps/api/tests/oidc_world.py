@@ -4,6 +4,7 @@ sessions, a workforce pool and clients, driven through the real app. Never impor
 from __future__ import annotations
 
 import base64
+import re
 import hashlib
 import secrets
 import uuid
@@ -82,6 +83,12 @@ class OidcWorld:
         with begin() as db:
             return oidc_clients.create(db, org_id=self.org, actor="usr_test", body=body)
 
+    def cookie(self, who: Person) -> str:
+        """The Cookie header of this browser signed in as `who`: their console session, plus the
+        pre-auth cookie the hosted pages bound their form tokens to (as a browser would send)."""
+        pre = self.http.cookies.get("__Host-boss_app_preauth", domain=urlsplit(ORIGIN).hostname)
+        return f"__Host-boss_session={who.cookie}" + (f"; __Host-boss_app_preauth={pre}" if pre else "")
+
     # ---- the protocol -------------------------------------------------------------------------
     def authorize(self, client_id: str, *, who: Optional[Person] = None, extra: Optional[dict[str, Any]] = None,
                   drop: tuple[str, ...] = (), challenge: Optional[str] = None, redirect_uri: str = REDIRECT,
@@ -94,7 +101,7 @@ class OidcWorld:
         for d in drop:
             params.pop(d, None)
         query = raw_query if raw_query is not None else urlencode(params)
-        headers = {"Cookie": f"__Host-boss_session={who.cookie}"} if who else {}
+        headers = {"Cookie": self.cookie(who)} if who else {}
         return self.http.get(f"/oidc/{self.org}/authorize?{query}", headers=headers, follow_redirects=False), params
 
     def consent(self, page: Any, who: Person, *, decision: str = "allow", origin: Optional[str] = ORIGIN,
@@ -177,8 +184,32 @@ def make_world(engine: Any, monkeypatch: Any) -> OidcWorld:
     with begin() as db:
         db.execute(text("DELETE FROM identity_rate_limits"))     # every test starts with no strikes
         pool = oidc_pools.create(db, org_id=ids.org, actor="usr_test", body={"name": "Staff", "kind": "workforce"})
-    http = TestClient(main.app, raise_server_exceptions=True, base_url=ORIGIN)
+    http = browser_client()
     return OidcWorld(ids, http, f"{ORIGIN}/oidc/{ids.org}", pool)
+
+
+_TOKEN_DATA = re.compile(r'data-csrf="([^"]+)"')
+_TOKEN_FIELD = re.compile(r'name="csrf" value="([^"]+)"')
+
+
+def browser_client() -> TestClient:
+    """A TestClient that, like a browser on a hosted page, remembers the page's form token."""
+    http = TestClient(main.app, raise_server_exceptions=True, base_url=ORIGIN)
+
+    def hook(response: Any) -> None:
+        if "text/html" not in response.headers.get("content-type", ""):
+            return
+        response.read()
+        page = response.text
+        found = _TOKEN_DATA.search(page)  # the passkey button's, else the step form's (never consent's)
+        if found is None and 'name="step"' in page and 'name="step" value="account"' not in page:
+            found = _TOKEN_FIELD.search(page)
+        if found is not None:
+            http.form_token = found.group(1)  # type: ignore[attr-defined]
+
+    http.form_token = ""  # type: ignore[attr-defined]
+    http.event_hooks["response"].append(hook)
+    return http
 
 
 def expire_codes() -> None:
@@ -279,10 +310,14 @@ def customer_world(engine: Any, monkeypatch: Any, **pool_over: Any) -> tuple[Oid
 
 def hosted(w: OidcWorld, step: str, form: dict[str, str], **headers: str):
     h = {**HOSTED, **headers}
+    if "csrf" not in form:
+        form = {**form, "csrf": getattr(w.http, "form_token", "")}
     return w.http.post(f"/oidc/{w.org}/hosted/{step}", content=urlencode(form), headers=h, follow_redirects=False)
 
 
 def hosted_json(w: OidcWorld, step: str, body: dict[str, Any]):
+    if "csrf" not in body:
+        body = {**body, "csrf": getattr(w.http, "form_token", "")}
     return w.http.post(f"/oidc/{w.org}/hosted/{step}", json=body,
                        headers={"Origin": ORIGIN, "Sec-Fetch-Site": "same-origin"}, follow_redirects=False)
 

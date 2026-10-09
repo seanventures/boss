@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
 import { loadPath, WRITING_GET_TWIN_SUFFIX } from "../../../lib/writing-get";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * The run surfaces' reads of signed work: a run's chain, and one piece of work in detail.
@@ -18,7 +19,7 @@ export const dynamic = "force-dynamic";
 const ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 export async function GET(req: Request) {
-  const params = new URL(req.url).searchParams;
+  const params = rawRequestUrl(req).searchParams;
   const view = params.get("view") ?? "";
   const projectId = (params.get("project_id") ?? "").trim();
   let path: string;

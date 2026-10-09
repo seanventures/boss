@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /** A thread id before the first message.
  *
@@ -19,7 +20,7 @@ import { apiWrite } from "../../../lib/api-write";
  *  a conversation with no long-horizon work, which the strip renders as nothing.
  */
 export async function GET(req: Request) {
-  const threadId = new URL(req.url).searchParams.get("thread_id")?.trim() ?? "";
+  const threadId = rawRequestUrl(req).searchParams.get("thread_id")?.trim() ?? "";
   if (!threadId) {
     return NextResponse.json({ error: "thread_id is required" }, { status: 400 });
   }

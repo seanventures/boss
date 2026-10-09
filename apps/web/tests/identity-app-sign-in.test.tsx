@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { IdentityProvider } from "../components/identity/identity-provider";
 import { NowProvider } from "../components/identity/kit";
-import { AppSignIn, lines } from "../app/identity/app-sign-in/app-sign-in";
+import { AppSignIn, appKeyOf, lines } from "../app/identity/app-sign-in/app-sign-in";
 import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
 import { ROLE_PERMISSIONS, type Permission } from "../lib/identity/permissions.gen";
 import * as F from "../lib/identity/stub/fixtures";
@@ -53,13 +53,13 @@ const ME: MeResponse = {
 };
 const perms = (list: readonly Permission[]): MePermissionsResponse => ({ epoch: 1, scope: "org", permissions: [...list], step_up_fresh_until: null, catalogue_fingerprint: "x" });
 async function settle(n = 8) { for (let i = 0; i < n; i += 1) await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); }
-async function mount() {
+async function mount(props: Partial<React.ComponentProps<typeof AppSignIn>> = {}, perms0: readonly Permission[] = ROLE_PERMISSIONS.owner) {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
   await act(async () => root!.render(
-    <IdentityProvider me={ME} org={perms(ROLE_PERMISSIONS.owner)}><NowProvider now={Date.now()}>
-      <AppSignIn projects={[{ id: "proj_bank", name: "Bank" }]} publicOrigin="https://boss.acme.dev" />
+    <IdentityProvider me={ME} org={perms(perms0)}><NowProvider now={Date.now()}>
+      <AppSignIn projects={[{ id: "proj_bank", name: "Bank" }]} publicOrigin="https://boss.acme.dev" {...props} />
     </NowProvider></IdentityProvider>));
   await settle();
 }
@@ -99,7 +99,7 @@ describe("Identity › App sign-in", () => {
     });
     await mount();
     await click(button("Register app"));
-    type(document.querySelector("#c-app"), "bank");
+    type(document.querySelector("#c-app-key"), "bank");   // the project has no apps: type the key
     type(document.querySelector("#c-name"), "Bank");
     type(document.querySelector("#c-redirect"), "https://bank.test/cb\n\n https://bank.test/cb2 ");
     await click(button("Register"));
@@ -144,6 +144,50 @@ describe("Identity › App sign-in", () => {
     type(document.querySelector('[aria-label="New role key"]'), "auditor");
     await click(button("Add role"));
     expect(calls.find((c) => c.method === "POST" && c.url.endsWith("/roles"))!.body).toEqual({ role_key: "auditor" });
+  });
+
+  it("picks the app from the project's apps, and names it as an app key", async () => {
+    routes({
+      "GET /v1/oidc/pools": { body: POOLS }, "GET /v1/oidc/clients": { body: { clients: [] } },
+      "GET /v1/factory/apps?project_id=proj_bank": { body: { apps: [{ app: "Savings Tracker" }, { app: "Savings tracker" }, { app: "Bank" }] } },
+      "POST /v1/oidc/clients": { status: 201, body: { ...CLIENT, client_secret: "x" } },
+    });
+    await mount();
+    await click(button("Register app"));
+    const picker = document.querySelector("#c-app") as HTMLSelectElement;
+    expect([...picker.options].map((o) => o.textContent)).toEqual(["Choose an app…", "Savings Tracker", "Bank", "Another app (type its key)"]);
+    expect(document.querySelector("#c-app-key")).toBeNull();          // no free text unless asked for
+    act(() => { picker.value = "savings-tracker"; picker.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect((document.querySelector("#c-name") as HTMLInputElement).value).toBe("Savings Tracker");
+    type(document.querySelector("#c-redirect"), "https://savings.test/cb");
+    await click(button("Register"));
+    expect(calls.find((c) => c.method === "POST" && c.url === "/v1/oidc/clients")!.body).toMatchObject({ app_key: "savings-tracker", name: "Savings Tracker" });
+    expect(appKeyOf("  Ünïcode — App 2! ")).toBe("unicode-app-2");
+  });
+
+  it("says what a client is and gets in plain words, and opens its sheet at the side", async () => {
+    routes({ "GET /v1/oidc/pools": { body: POOLS }, "GET /v1/oidc/clients": { body: { clients: [{ ...CLIENT, allowed_scopes: ["openid", "email", "offline_access"] }] } } });
+    await mount();
+    const row = document.querySelector('[data-testid="client-row"]')!;
+    expect(row.textContent).toContain("Server app");
+    expect(row.textContent).toContain("Who they are, Email address, Stay signed in");
+    expect(row.textContent).not.toMatch(/confidential|offline_access/);
+    expect(row.textContent).toContain("Active");
+    await click(row);
+    expect(document.querySelector(".idn-sheet-wrap.side .idn-sheet.side")).not.toBeNull();
+    const labels = [...document.querySelectorAll('[data-testid="client-sheet"] .idn-check')].map((l) => l.textContent?.trim());
+    expect(labels).toContain("Stay signed in");
+    expect(labels.join(" ")).not.toContain("offline_access");
+  });
+
+  it("an Operator refused the org-wide list reads the clients of their projects", async () => {
+    routes({
+      "GET /v1/oidc/pools?project_id=proj_bank": { body: POOLS }, "GET /v1/oidc/pools": { status: 403, body: { error: "forbidden" } },
+      "GET /v1/oidc/clients?project_id=proj_bank": { body: { clients: [CLIENT] } }, "GET /v1/oidc/clients": { status: 403, body: { error: "forbidden" } },
+    });
+    await mount({ readProjects: [{ id: "proj_bank", name: "Bank" }] }, ROLE_PERMISSIONS.operator);
+    expect(document.querySelectorAll('[data-testid="client-row"]').length).toBe(1);
+    expect(host!.textContent).not.toContain("could not be loaded");
   });
 
   it("splits return addresses one per line", () => {

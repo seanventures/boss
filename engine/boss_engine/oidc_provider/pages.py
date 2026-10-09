@@ -1,7 +1,12 @@
 """The hosted pages (§6.4): error, consent, signed out. Plain server-rendered HTML in BOSS's
 sign-in style, themed only with the app's name. Every value is escaped; the CSP allows nothing
-but this page's own inline style (by nonce) and a form post to BOSS and, for consent, to the app's
-registered redirect origin (a form's redirect is checked against form-action); no framing.
+but this page's own inline style (by nonce) and a form post to BOSS and, on every page whose form
+can end in a redirect back to the app, to that app's validated, registered redirect origin (a
+form's redirect is checked against form-action); no framing.
+
+Referrer-Policy is `same-origin`, never `no-referrer`: with `no-referrer` Chrome posts a form with
+`Origin: null`, and the CSRF check (protocol.same_origin_post) could not tell BOSS's own page from
+anyone's. `same-origin` still sends the app nothing.
 """
 from __future__ import annotations
 
@@ -34,8 +39,12 @@ border:1px solid var(--line);background:transparent;color:var(--ink);margin:0 0 
 .links{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin-top:16px;font-size:13px}a{color:var(--accent)}
 .qr{display:flex;justify-content:center;margin:0 0 12px}.qr svg{width:168px;height:168px;background:#fff;border-radius:12px;padding:8px}
 code{word-break:break-all;font-size:12px}.item{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
-.item button{flex:0 0 auto;padding:6px 10px}
+.item button{flex:0 0 auto;padding:6px 10px}.ok{color:var(--ink);font-weight:600}
+h2{font-size:15px;margin:18px 0 6px}.item span{overflow-wrap:anywhere}
 """
+
+
+REFERRER_POLICY = "same-origin"
 
 
 def _origin(uri: str) -> Optional[str]:
@@ -49,7 +58,7 @@ def headers(nonce: str, *, form_targets: Iterable[str] = (), script: bool = Fals
     return {
         "Content-Security-Policy": (f"default-src 'none'; style-src 'nonce-{nonce}'; {scripts}form-action {form_action}; "
                                     "frame-ancestors 'none'; base-uri 'none'"),
-        "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+        "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": REFERRER_POLICY,
         "Cache-Control": "no-store", "Pragma": "no-cache",
     }
 
@@ -68,23 +77,36 @@ def error_page(title: str, message: str) -> tuple[str, dict[str, str]]:
     return _page(title, body, nonce), headers(nonce)
 
 
-def signed_out_page() -> tuple[str, dict[str, str]]:
-    return error_page("Signed out", "You are signed out of the app. You can close this tab.")
+def error_page_for(brand: str, title: str, message: str) -> tuple[str, dict[str, str]]:
+    nonce = secrets.token_urlsafe(16)
+    body = f"<h1>{html.escape(title)}</h1><p>{html.escape(message)}</p>"
+    return _page(title, body, nonce, brand=brand), headers(nonce)
+
+
+def signed_out_page(brand: Optional[str] = None) -> tuple[str, dict[str, str]]:
+    """Branded as the app (or the pool) the person signed out of; BOSS only when unknown."""
+    if not brand:
+        return error_page("Signed out", "You are signed out of the app. You can close this tab.")
+    return error_page_for(brand, "Signed out", f"You are signed out of {brand}. You can close this tab.")
 
 
 def consent_page(*, app_name: str, user_label: str, scopes: list[str], action: str, interaction: str,
-                 csrf: str, redirect_uri: str) -> tuple[str, dict[str, str]]:
+                 csrf: str, redirect_uri: str, workforce: bool = True) -> tuple[str, dict[str, str]]:
+    """`workforce`: the person signed in with their BOSS account. A customer never had one, so
+    their page names only the app."""
     nonce = secrets.token_urlsafe(16)
     items = "".join(f"<li>{html.escape(SCOPE_WORDS.get(s, s))}</li>" for s in scopes)
     e = html.escape
+    who = f"Signed in to BOSS as {e(user_label)}." if workforce else f"Signed in as {e(user_label)}."
     body = (f"<h1>{e(app_name)} wants to sign you in</h1>"
-            f"<p>Signed in to BOSS as {e(user_label)}. {e(app_name)} will get:</p><ul>{items}</ul>"
+            f"<p>{who} {e(app_name)} will get:</p><ul>{items}</ul>"
             f"<form method=\"post\" action=\"{e(action)}\">"
             f"<input type=\"hidden\" name=\"interaction\" value=\"{e(interaction)}\">"
             f"<input type=\"hidden\" name=\"csrf\" value=\"{e(csrf)}\">"
             f"<div class=\"row\"><button type=\"submit\" name=\"decision\" value=\"deny\">Cancel</button>"
             f"<button class=\"primary\" type=\"submit\" name=\"decision\" value=\"allow\">Allow</button></div></form>")
-    return _page(f"Sign in to {app_name}", body, nonce), headers(nonce, form_targets=[redirect_uri])
+    return _page(f"Sign in to {app_name}", body, nonce, brand=app_name if not workforce else "BOSS"), \
+        headers(nonce, form_targets=[redirect_uri])
 
 
 # ---- the hosted sign-in pages (customer pools, workforce re-authentication) -------------------------
@@ -92,14 +114,14 @@ def consent_page(*, app_name: str, user_label: str, scopes: list[str], action: s
 PASSKEY_JS = """
 (function(){
 const root=document.querySelector('[data-passkey]');if(!root||!window.PublicKeyCredential)return;
-const base=root.dataset.base,purpose=root.dataset.purpose,interaction=root.dataset.interaction||'',pool=root.dataset.pool||'';
+const base=root.dataset.base,purpose=root.dataset.purpose,interaction=root.dataset.interaction||'',pool=root.dataset.pool||'',csrf=root.dataset.csrf||'';
 const out=document.querySelector('[data-passkey-error]');
 const d=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')+'==='.slice((s.length+3)%4)),c=>c.charCodeAt(0));
 const e=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
 async function post(step,body){const r=await fetch(base+'/hosted/'+step,{method:'POST',credentials:'same-origin',
  headers:{'content-type':'application/json'},body:JSON.stringify(body)});return [r.ok,await r.json()];}
 root.hidden=false;root.addEventListener('click',async()=>{try{
- const [ok,o]=await post('passkey-options',{purpose,interaction,pool});if(!ok)throw o.error;const pk=o.publicKey;
+ const [ok,o]=await post('passkey-options',{purpose,interaction,pool,csrf});if(!ok)throw o.error;const pk=o.publicKey;
  pk.challenge=d(pk.challenge);let cred,res;
  if(purpose==='register'){pk.user.id=d(pk.user.id);(pk.excludeCredentials||[]).forEach(c=>c.id=d(c.id));
   cred=await navigator.credentials.create({publicKey:pk});
@@ -109,7 +131,7 @@ root.hidden=false;root.addEventListener('click',async()=>{try{
   res={id:cred.id,rawId:e(cred.rawId),type:cred.type,response:{clientDataJSON:e(cred.response.clientDataJSON),
    authenticatorData:e(cred.response.authenticatorData),signature:e(cred.response.signature),
    userHandle:cred.response.userHandle?e(cred.response.userHandle):null}};}
- const [ok2,v]=await post('passkey-verify',{purpose,interaction,pool,credential:res});if(!ok2)throw v.error;
+ const [ok2,v]=await post('passkey-verify',{purpose,interaction,pool,csrf,credential:res});if(!ok2)throw v.error;
  location.assign(v.next);}catch(err){if(out)out.textContent='That passkey did not work. Try again or use your password.';}});
 })();
 """
@@ -126,15 +148,28 @@ def _input(name: str, label: str, kind: str = "text", value: str = "", auto: str
             f"value=\"{e(value)}\" autocomplete=\"{e(auto)}\" required>")
 
 
+PASSKEY_SLOT = "<!--passkey-->"
+
+
 def hosted_page(*, title: str, intro: str, action: str, step: str, hidden: dict[str, str], inputs: list[str],
                 submit: str, error: Optional[str] = None, links: Optional[list[tuple[str, str]]] = None,
                 brand: str = "BOSS", passkey: Optional[dict[str, str]] = None, extra: str = "",
+                csrf: str = "", return_to: Optional[str] = None, notice: Optional[str] = None,
                 ) -> tuple[str, dict[str, str]]:
     """One form step of the hosted sign-in: escaped values, CSP by nonce, no framing. `passkey`
-    (data attributes) adds the passkey button and its script."""
+    (data attributes) adds the passkey button and its script, where `extra` holds PASSKEY_SLOT
+    or else after the form. `csrf` is the form's signed token (required with a form or a passkey);
+    `return_to` is the interaction's validated redirect_uri, whose origin form-action then allows
+    (a sign-in step's POST answers with a redirect to the app)."""
     e = html.escape
+    if (action or passkey) and not csrf:
+        raise ValueError("a hosted form or passkey button needs its signed token")
     nonce = secrets.token_urlsafe(16)
+    if passkey:
+        passkey = {**passkey, "csrf": csrf}
     err = f"<p class=\"err\" role=\"alert\">{e(error)}</p>" if error else ""
+    if notice:
+        err += f"<p class=\"ok\" role=\"status\">{e(notice)}</p>"
     pk = ""
     if passkey:
         attrs = " ".join(f"data-{e(k)}=\"{e(v)}\"" for k, v in passkey.items())
@@ -145,11 +180,14 @@ def hosted_page(*, title: str, intro: str, action: str, step: str, hidden: dict[
         link_html = "<div class=\"links\">" + "".join(f"<a href=\"{e(h)}\">{e(t)}</a>" for t, h in links) + "</div>"
     form = ""
     if action:
-        form = (f"<form method=\"post\" action=\"{e(action)}\">{_hidden({**hidden, 'step': step})}{''.join(inputs)}"
+        form = (f"<form method=\"post\" action=\"{e(action)}\">{_hidden({**hidden, 'step': step, 'csrf': csrf})}"
+                f"{''.join(inputs)}"
                 f"<div class=\"row\"><button class=\"primary\" type=\"submit\">{e(submit)}</button></div></form>")
+    if PASSKEY_SLOT in extra:
+        extra, pk = extra.replace(PASSKEY_SLOT, pk), ""
     body = f"<h1>{e(title)}</h1><p>{e(intro)}</p>{err}{extra}{form}{pk}{link_html}"
     return _page(title, body, nonce, brand=brand, script=PASSKEY_JS if passkey else ""), \
-        headers(nonce, script=bool(passkey))
+        headers(nonce, script=bool(passkey), form_targets=[return_to] if return_to else ())
 
 
 def qr_svg(uri: str) -> str:

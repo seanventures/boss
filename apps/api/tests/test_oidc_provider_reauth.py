@@ -44,7 +44,9 @@ def _with_password(person) -> None:
 def _reauth(w, person, form, **headers):
     from urllib.parse import urlencode
 
-    h = {**HOSTED, "Cookie": f"__Host-boss_session={person.cookie}", **headers}
+    h = {**HOSTED, "Cookie": w.cookie(person), **headers}
+    if "csrf" not in form:
+        form = {**form, "csrf": w.http.form_token}
     return w.http.post(f"/oidc/{w.org}/hosted/wf-reauth", content=urlencode(form), headers=h, follow_redirects=False)
 
 
@@ -156,9 +158,12 @@ def test_r5_the_confirmation_is_csrf_checked_and_needs_a_session(w):
                    **{"Sec-Fetch-Site": "cross-site"}).status_code == 403
     from urllib.parse import urlencode
 
-    anon = w.http.post(f"/oidc/{w.org}/hosted/wf-reauth", content=urlencode({"interaction": interaction, "code": code}),
-                       headers=HOSTED, follow_redirects=False)
+    # this browser's own page token, but no console session
+    anon = w.http.post(f"/oidc/{w.org}/hosted/wf-reauth", content=urlencode(
+        {"interaction": interaction, "code": code, "csrf": w.http.form_token}), headers=HOSTED, follow_redirects=False)
     assert anon.status_code == 401 and "location" not in anon.headers
+    # the session, but another browser's (no) page token
+    assert _reauth(w, alice, {"interaction": interaction, "code": code, "csrf": "forged"}).status_code == 403
 
 
 _ = ORIGIN

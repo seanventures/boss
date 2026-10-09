@@ -8,6 +8,11 @@
  * (app roles and who holds them). Every row opens a side sheet. Reading needs a fresh second factor
  * (the admin permissions are step-up), so the lists load through the step-up guard. A client
  * secret is shown once, in the sheet that created or rotated it, and dropped when it closes.
+ *
+ * Who reads what: Owners, Admins and Auditors read every client (org-wide); an Operator reads the
+ * clients of the projects they manage (oidc_client:read there), so when the org-wide list is
+ * refused the lists are read project by project. Plain words everywhere: an app is picked from the
+ * project's apps, scopes and client types are named for people, the raw value is the tooltip.
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { Copy, Key, Plus, ShieldCheck, UsersThree } from "@phosphor-icons/react";
@@ -37,6 +42,22 @@ const TABS: { id: Tab; label: string; tip: string }[] = [
   { id: "roles", label: "Roles", tip: "App roles and who holds them" },
 ];
 const SCOPES = ["openid", "profile", "email", "roles", "offline_access"] as const;
+/** What each scope gives the app, in people's words (the raw scope is the tooltip). */
+export const SCOPE_WORDS: Record<string, string> = {
+  openid: "Who they are", profile: "Name", email: "Email address", roles: "App roles", offline_access: "Stay signed in",
+};
+export const TYPE_WORDS: Record<string, string> = { confidential: "Server app", public: "Browser app" };
+const SIGNUP_WORDS: Record<string, string> = { open: "Anyone", domain: "Email domains", invite: "Invitation only", closed: "Closed" };
+const MFA_WORDS: Record<string, string> = { optional: "Optional", required: "Required", off: "Off" };
+const STATUS_WORDS: Record<string, string> = { active: "Active", disabled: "Disabled" };
+const FACTOR_WORDS: Record<string, string> = { totp: "Authenticator app", webauthn: "Passkey", passkey: "Passkey" };
+const say = (table: Record<string, string>, v: string) => table[v] ?? v;
+
+/** An app's name as a client's app key: lowercase words joined by dashes (what the API accepts). */
+export function appKeyOf(name: string): string {
+  return name.normalize("NFKD").replace(/\p{M}+/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80).replace(/-+$/, "");
+}
+export const APP_KEY = /^[a-z0-9][a-z0-9_-]{0,79}$/;
 
 export function words(e: unknown, fallback: string): string {
   if (e instanceof IdentityError) return e.status === 403 ? "You don't hold the permission for this." : e.message;
@@ -48,7 +69,18 @@ export function lines(text: string): string[] {
   return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 }
 
-export function AppSignIn({ projects, publicOrigin }: { projects: { id: string; name: string }[]; publicOrigin: string | null }) {
+type Project = { id: string; name: string };
+
+/** Each project's list, merged (an Operator reads only where they manage clients). */
+async function perProject<T>(projects: Project[], read: (p: Project) => Promise<T[]>, key: (t: T) => string): Promise<T[]> {
+  const out = new Map<string, T>();
+  for (const list of await Promise.all(projects.map((p) => read(p).catch(() => [] as T[])))) for (const t of list) out.set(key(t), t);
+  return [...out.values()];
+}
+
+export function AppSignIn({ projects, readProjects, publicOrigin }: {
+  projects: Project[]; readProjects?: Project[]; publicOrigin: string | null;
+}) {
   const guarded = useGuardedCall();
   const { me } = useIdentity();
   const issuer = publicOrigin && me?.org?.id ? `${publicOrigin}/oidc/${me.org.id}` : null;
@@ -60,16 +92,28 @@ export function AppSignIn({ projects, publicOrigin }: { projects: { id: string; 
   const load = useCallback(async () => {
     setError(null);
     try {
+      const why = "Viewing app sign-in needs a fresh check.";
+      const scoped = readProjects ?? projects;
+      const orgWide = async <T,>(path: string, field: string, key: (t: T) => string): Promise<T[]> => {
+        try {
+          return (await guarded(why, () => idGet<Record<string, T[]>>(path)))[field] ?? [];
+        } catch (e) {
+          // Refused org-wide: read it where this person may (an Operator's projects).
+          if (!(e instanceof IdentityError && e.status === 403) || !scoped.length) throw e;
+          return perProject(scoped, async (proj) =>
+            (await guarded(why, () => idGet<Record<string, T[]>>(`${path}?project_id=${enc(proj.id)}`)))[field] ?? [], key);
+        }
+      };
       const [p, c] = await Promise.all([
-        guarded("Viewing app sign-in needs a fresh check.", () => idGet<{ pools: Pool[] }>("/v1/oidc/pools")).catch(() => ({ pools: [] as Pool[] })),
-        guarded("Viewing app sign-in needs a fresh check.", () => idGet<{ clients: Client[] }>("/v1/oidc/clients")),
+        orgWide<Pool>("/v1/oidc/pools", "pools", (x) => x.id).catch(() => [] as Pool[]),
+        orgWide<Client>("/v1/oidc/clients", "clients", (x) => x.client_id),
       ]);
-      setPools(p.pools);
-      setClients(c.clients);
+      setPools(p);
+      setClients(c);
     } catch (e) {
       setError(words(e, "App sign-in could not be loaded."));
     }
-  }, [guarded]);
+  }, [guarded, projects, readProjects]);
   useEffect(() => { void load(); }, [load]);
 
   return (
@@ -101,11 +145,11 @@ function Pools({ pools, reload }: { pools: Pool[]; reload: () => Promise<void> }
     <>
       <ListHeader level={2} title="Pools" sub="Who may sign in to an app" empty={!pools.length} create={create} />
       {pools.length ? (
-        <div className="idn-scroll"><table className="idn-t"><thead><tr><th>Name</th><th>Who</th><th>Sign-up</th><th>MFA</th><th>Passkeys</th></tr></thead>
+        <div className="idn-scroll"><table className="idn-t"><thead><tr><th>Name</th><th>Who</th><th className="idn-narrow-hide">Sign-up</th><th>Second factor</th><th className="idn-narrow-hide">Passkeys</th></tr></thead>
           <tbody>{pools.map((p) => (
             <tr key={p.id} onClick={() => setOpen(p)} className="idn-click" data-testid="pool-row">
               <td>{p.name}</td><td>{p.kind === "workforce" ? "BOSS members" : "The app's own users"}</td>
-              <td>{p.signup}</td><td>{p.mfa}</td><td>{p.passkeys ? "on" : "off"}</td>
+              <td className="idn-narrow-hide">{p.kind === "workforce" ? "BOSS members only" : say(SIGNUP_WORDS, p.signup)}</td><td>{say(MFA_WORDS, p.mfa)}</td><td className="idn-narrow-hide">{p.passkeys ? "On" : "Off"}</td>
             </tr>))}</tbody></table></div>
       ) : <EmptyState icon={<UsersThree size={22} />} title="No pools yet" action={create}>A pool says who may sign in: your BOSS members, or an app's own users.</EmptyState>}
       {open ? <PoolSheet pool={open === "new" ? null : open} onClose={() => setOpen(null)} reload={reload} /> : null}
@@ -141,7 +185,7 @@ function PoolSheet({ pool, onClose, reload }: { pool: Pool | null; onClose: () =
     } catch (e) { setError(words(e, "The pool was not deleted.")); }
   };
   return (
-    <Sheet title={pool ? pool.name : "New pool"} icon={<UsersThree size={18} aria-hidden />} onClose={onClose} testId="pool-sheet">
+    <Sheet side title={pool ? pool.name : "New pool"} icon={<UsersThree size={18} aria-hidden />} onClose={onClose} testId="pool-sheet">
       <div className="idn-field"><label htmlFor="pool-name">Name</label><input id="pool-name" className="idn-input" value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} /></div>
       {!pool ? (
         <div className="idn-field"><label htmlFor="pool-kind">Who signs in</label>
@@ -184,11 +228,13 @@ function Clients({ clients, pools, projects, issuer, reload }: {
     <>
       <ListHeader level={2} title="Clients" sub="Each app that signs in with BOSS" empty={!clients.length} create={create} />
       {clients.length ? (
-        <div className="idn-scroll"><table className="idn-t"><thead><tr><th>App</th><th>Pool</th><th>Type</th><th>Scopes</th><th>Status</th></tr></thead>
+        <div className="idn-scroll"><table className="idn-t"><thead><tr><th>App</th><th className="idn-narrow-hide">Pool</th><th className="idn-narrow-hide">Kind</th><th className="idn-narrow-hide">Gets</th><th>Status</th></tr></thead>
           <tbody>{clients.map((c) => (
             <tr key={c.client_id} onClick={() => setOpen(c)} className="idn-click" data-testid="client-row">
-              <td>{c.name} <span className="idn-hint">{c.app_key}</span></td><td>{poolName(c.pool_id)}</td><td>{c.type}</td>
-              <td>{c.allowed_scopes.join(" ")}</td><td><span className={`idn-pill ${c.status === "active" ? "ok" : "mute"}`}>{c.status}</span></td>
+              <td>{c.name} <span className="idn-hint">{c.app_key}</span></td><td className="idn-narrow-hide">{poolName(c.pool_id)}</td>
+              <td className="idn-narrow-hide" title={c.type}>{say(TYPE_WORDS, c.type)}</td>
+              <td className="idn-narrow-hide" title={c.allowed_scopes.join(" ")}>{c.allowed_scopes.map((x) => say(SCOPE_WORDS, x)).join(", ")}</td>
+              <td><span className={`idn-pill ${c.status === "active" ? "ok" : "mute"}`}>{say(STATUS_WORDS, c.status)}</span></td>
             </tr>))}</tbody></table></div>
       ) : <EmptyState icon={<Key size={22} />} title="No apps sign in with BOSS yet" action={create}>Register an app to give it a client id and secret.</EmptyState>}
       {open ? <ClientSheet client={open === "new" ? null : open} pools={pools} projects={projects} issuer={issuer} onClose={() => setOpen(null)} reload={reload} /> : null}
@@ -223,6 +269,31 @@ function ClientSheet({ client, pools, projects, issuer, onClose, reload }: {
   const [shown, setShown] = useState<Client | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // THE APP PICKER: the project's apps (the Factory's rows), each as its app key; "another app"
+  // types a key for an app BOSS did not build.
+  const [apps, setApps] = useState<{ name: string; key: string }[] | null>(null);
+  const [other, setOther] = useState(false);
+  useEffect(() => {
+    if (client || !d.project_id) return;
+    let live = true;
+    setApps(null);
+    idGet<{ apps?: { app?: string }[] }>(`/v1/factory/apps?project_id=${enc(d.project_id)}`)
+      .then((r) => {
+        const seen = new Set<string>();
+        const list = (r.apps ?? []).map((a) => ({ name: String(a.app ?? ""), key: appKeyOf(String(a.app ?? "")) }))
+          .filter((a) => APP_KEY.test(a.key) && !seen.has(a.key) && Boolean(seen.add(a.key)));
+        if (live) setApps(list);
+      })
+      .catch(() => { if (live) setApps([]); });
+    return () => { live = false; };
+  }, [client, d.project_id]);
+  const typing = other || (apps !== null && apps.length === 0);
+  const pick = (key: string) => {
+    if (key === "__other") { setOther(true); setD({ ...d, app_key: "" }); return; }
+    setOther(false);
+    const app = apps?.find((a) => a.key === key);
+    setD({ ...d, app_key: key, name: d.name || app?.name || "" });
+  };
   const toggle = (s: string) => setD({ ...d, scopes: d.scopes.includes(s) ? d.scopes.filter((x) => x !== s) : [...d.scopes, s] });
   const save = async () => {
     setBusy(true); setError(null);
@@ -254,7 +325,7 @@ function ClientSheet({ client, pools, projects, issuer, onClose, reload }: {
     } catch (e) { setError(words(e, "The app was not removed.")); }
   };
   return (
-    <Sheet title={client ? client.name : "Register an app"} icon={<Key size={18} aria-hidden />} onClose={onClose} wide testId="client-sheet" locked={Boolean(shown)}>
+    <Sheet side title={client ? client.name : "Register an app"} icon={<Key size={18} aria-hidden />} onClose={onClose} wide testId="client-sheet" locked={Boolean(shown)}>
       {shown ? (<>
         <SecretOnce client={shown} issuer={issuer} />
         <div className="idn-row"><button type="button" className="idn-btn primary" onClick={onClose}>I copied it</button></div>
@@ -263,21 +334,33 @@ function ClientSheet({ client, pools, projects, issuer, onClose, reload }: {
           <div className="idn-field"><label htmlFor="c-project">Project</label>
             <select id="c-project" className="idn-input" value={d.project_id} onChange={(e) => setD({ ...d, project_id: e.target.value })}>
               {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-          <div className="idn-field"><label htmlFor="c-app">App key</label><input id="c-app" className="idn-input" placeholder="bank" value={d.app_key} onChange={(e) => setD({ ...d, app_key: e.target.value })} /></div>
+          {apps?.length ? (
+            <div className="idn-field"><label htmlFor="c-app">App</label>
+              <select id="c-app" className="idn-input" value={other ? "__other" : d.app_key} onChange={(e) => pick(e.target.value)}>
+                <option value="">Choose an app…</option>
+                {apps.map((a) => <option key={a.key} value={a.key}>{a.name}</option>)}
+                <option value="__other">Another app (type its key)</option>
+              </select></div>
+          ) : apps === null ? <p className="idn-hint">Loading the project's apps…</p> : null}
+          {typing ? (
+            <div className="idn-field"><label htmlFor="c-app-key">App key</label>
+              <input id="c-app-key" className="idn-input" placeholder="bank" value={d.app_key} onChange={(e) => setD({ ...d, app_key: e.target.value.toLowerCase() })} />
+              <span className="idn-hint">Lowercase letters, digits and dashes{apps?.length === 0 ? ". This project has no apps yet." : "."}</span></div>
+          ) : null}
           <div className="idn-field"><label htmlFor="c-pool">Pool</label>
             <select id="c-pool" className="idn-input" value={d.pool_id} onChange={(e) => setD({ ...d, pool_id: e.target.value })}>
               {pools.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
           <div className="idn-field"><label htmlFor="c-type">Type</label>
             <select id="c-type" className="idn-input" value={d.type} onChange={(e) => setD({ ...d, type: e.target.value as Client["type"] })}>
-              <option value="confidential">Server app (has a secret)</option><option value="public">Browser app (PKCE only)</option></select></div>
+              <option value="confidential">Server app (keeps a secret)</option><option value="public">Browser or mobile app (no secret)</option></select></div>
         </>) : null}
         <div className="idn-field"><label htmlFor="c-name">Name shown to people</label><input id="c-name" className="idn-input" value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} /></div>
         <div className="idn-field"><label htmlFor="c-redirect">Return addresses, one per line (exact match)</label>
           <textarea id="c-redirect" className="idn-input" value={d.redirect} placeholder="https://app.example.com/callback" onChange={(e) => setD({ ...d, redirect: e.target.value })} /></div>
         <div className="idn-field"><label htmlFor="c-logout">After sign-out, one per line</label>
           <textarea id="c-logout" className="idn-input" value={d.logout} onChange={(e) => setD({ ...d, logout: e.target.value })} /></div>
-        <div className="idn-field"><span className="idn-label">Scopes</span><div className="idn-row">
-          {SCOPES.map((s) => <label key={s} className="idn-check"><input type="checkbox" checked={d.scopes.includes(s)} disabled={s === "openid"} onChange={() => toggle(s)} /> {s}</label>)}</div></div>
+        <div className="idn-field"><span className="idn-label">What the app gets</span><div className="idn-row">
+          {SCOPES.map((s) => <label key={s} className="idn-check" title={s}><input type="checkbox" checked={d.scopes.includes(s)} disabled={s === "openid"} onChange={() => toggle(s)} /> {SCOPE_WORDS[s]}</label>)}</div></div>
         <label className="idn-check"><input type="checkbox" checked={d.require_mfa} onChange={(e) => setD({ ...d, require_mfa: e.target.checked })} /> Require a second factor</label>
         <label className="idn-check" title="Skips the consent screen (never for staying signed in). Admins only."><input type="checkbox" checked={d.first_party} onChange={(e) => setD({ ...d, first_party: e.target.checked })} /> First-party app</label>
         <div className="idn-field"><label htmlFor="c-alg">ID token signature</label>
@@ -288,7 +371,7 @@ function ClientSheet({ client, pools, projects, issuer, onClose, reload }: {
         ) : null}
         <ErrorLine error={error} />
         <div className="idn-row">
-          <button type="button" className="idn-btn primary" disabled={busy || !d.name.trim() || !lines(d.redirect).length || (!client && !d.app_key)} onClick={save}>{client ? "Save" : "Register"}</button>
+          <button type="button" className="idn-btn primary" disabled={busy || !d.name.trim() || !lines(d.redirect).length || (!client && !APP_KEY.test(d.app_key))} onClick={save}>{client ? "Save" : "Register"}</button>
           {client?.has_secret ? <button type="button" className="idn-btn" onClick={rotate}>Rotate secret</button> : null}
           {client ? <button type="button" className="idn-btn danger" onClick={remove}>Remove</button> : null}
         </div>
@@ -320,11 +403,12 @@ function Users({ pools }: { pools: Pool[] }) {
         empty={!users?.length} create={create} />
       <ErrorLine error={error} />
       {users?.length ? (
-        <div className="idn-scroll"><table className="idn-t"><thead><tr><th>Email</th><th>Name</th><th>Factors</th><th>Status</th></tr></thead>
+        <div className="idn-scroll"><table className="idn-t"><thead><tr><th>Email</th><th className="idn-narrow-hide">Name</th><th className="idn-narrow-hide">Sign-in methods</th><th>Status</th></tr></thead>
           <tbody>{users.map((u) => (
             <tr key={u.id} onClick={() => setOpen(u)} className="idn-click" data-testid="pool-user-row">
-              <td>{u.email}{u.email_verified ? null : <span className="idn-pill warn">unconfirmed</span>}</td><td>{u.name ?? "—"}</td>
-              <td>{(u.factors ?? []).join(", ") || "password"}</td><td><span className={`idn-pill ${u.status === "active" ? "ok" : "mute"}`}>{u.status}</span></td>
+              <td>{u.email}{u.email_verified ? null : <span className="idn-pill warn">unconfirmed</span>}</td><td className="idn-narrow-hide">{u.name ?? "—"}</td>
+              <td className="idn-narrow-hide">{["Password", ...(u.factors ?? []).map((f) => FACTOR_WORDS[f] ?? f)].join(", ")}</td>
+              <td><span className={`idn-pill ${u.status === "active" ? "ok" : "mute"}`}>{say(STATUS_WORDS, u.status)}</span></td>
             </tr>))}</tbody></table></div>
       ) : users ? <EmptyState icon={<UsersThree size={22} />} title="No users yet" action={create}>They appear when they sign up, or when you invite them.</EmptyState> : null}
       {open ? <UserSheet poolId={poolId} user={open === "invite" ? null : open} onClose={() => setOpen(null)} reload={load} /> : null}
@@ -343,7 +427,7 @@ function UserSheet({ poolId, user, onClose, reload }: { poolId: string; user: Po
   };
   const base = `/v1/oidc/pools/${enc(poolId)}/users`;
   return (
-    <Sheet title={user ? user.email : "Invite a user"} icon={<UsersThree size={18} aria-hidden />} onClose={onClose} testId="pool-user-sheet">
+    <Sheet side title={user ? user.email : "Invite a user"} icon={<UsersThree size={18} aria-hidden />} onClose={onClose} testId="pool-user-sheet">
       {user ? (<>
         <p className="idn-hint">Disabling or resetting MFA signs them out of every app at once.</p>
         <div className="idn-row">

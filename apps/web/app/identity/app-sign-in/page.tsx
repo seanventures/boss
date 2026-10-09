@@ -10,8 +10,9 @@ export const dynamic = "force-dynamic";
 export default async function AppSignInPage() {
   if (!(await pageAllowed("/identity/app-sign-in"))) return null;
   const [projects, options] = await Promise.all([serverGet<{ projects: MyProject[] }>(MY_PROJECTS_PATH), loadAuthOptions()]);
-  const mine = projects.ok
-    ? projects.data.projects.filter((p) => p.permissions.includes("oidc_client:manage")).map((p) => ({ id: p.project_id, name: p.name ?? p.project_id }))
+  const where = (permission: string) => projects.ok
+    ? projects.data.projects.filter((p) => p.permissions.includes(permission)).map((p) => ({ id: p.project_id, name: p.name ?? p.project_id }))
     : [];
-  return <AppSignIn projects={mine} publicOrigin={options.public_origin ?? null} />;
+  // Register where they manage clients; read where they may see them (an Operator: their projects).
+  return <AppSignIn projects={where("oidc_client:manage")} readProjects={where("oidc_client:read")} publicOrigin={options.public_origin ?? null} />;
 }

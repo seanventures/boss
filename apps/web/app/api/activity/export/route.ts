@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../../lib/client";
 import { LOG_FORWARD } from "../../../../lib/activity-proxy";
+import { rawRequestUrl } from "../../../../lib/raw-request-url";
 
 /**
  * The current filter as a file (GET /v1/activity/export): streamed through, never buffered —
@@ -11,7 +12,7 @@ import { LOG_FORWARD } from "../../../../lib/activity-proxy";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const incoming = new URL(req.url).searchParams;
+  const incoming = rawRequestUrl(req).searchParams;
   if (!incoming.get("project_id")?.trim()) {
     return NextResponse.json({ error: "missing project_id" }, { status: 400 });
   }

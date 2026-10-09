@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { API_URL, authHeaders } from "../../../../lib/client";
 import { apiWrite } from "../../../../lib/api-write";
 import { refusalCode, refusalFrom } from "../../../../lib/start-refusal";
+import { rawRequestUrl } from "../../../../lib/raw-request-url";
 
 /**
  * Talking with agents: the console's door to `/v1/conversations/*` (lib/agent-converse.ts).
@@ -46,7 +47,7 @@ async function answer(r: Response): Promise<Response> {
 
 export async function GET(req: Request, ctx: { params: Promise<{ path?: string[] }> }) {
   const { path } = await ctx.params;
-  const url = target(path, new URL(req.url).search);
+  const url = target(path, rawRequestUrl(req).search);
   if (!url) return NextResponse.json({ error: "Not a conversation path." }, { status: 400 });
   try {
     return await answer(await fetch(url, { headers: authHeaders({}), cache: "no-store" }));

@@ -2,23 +2,33 @@
 (TOTP and passkeys), password reset and the account page; and the workforce re-authentication
 (prompt=login, max_age, require_mfa) through identity's own step-up.
 
-Every POST step is CSRF-checked (Origin = the public origin, Sec-Fetch-Site same-origin; JSON
-steps also need application/json, which a cross-site form cannot send), and binds its state to
-this browser: the pre-auth cookie for a half-done sign-in, the app session for the account page
-(plus an HMAC token), the console session for a workforce step-up. A finished sign-in always makes
-a NEW session (no fixation) and continues the pending authorization request once.
+Every POST step is CSRF-checked twice: the headers (protocol.same_origin_post: Sec-Fetch-Site
+same-origin, Origin = the public origin when the browser names one, and at least one of them
+positively), and a signed form token, HMAC(server key, the interaction (or the pool) ‖ this
+browser's pre-auth cookie), that every hosted form and passkey button carries. JSON steps also need
+application/json, which a cross-site form cannot send. State is bound to this browser: the
+pre-auth cookie for a half-done sign-in, the app session for the account page (plus its own HMAC
+token), the console session for a workforce step-up. A finished sign-in always makes a NEW session
+(no fixation) and continues the pending authorization request once.
+
+Every hosted page is rendered inside `request()`, which holds the browser's binding (minting the
+pre-auth cookie when it has none) so that no page can be drawn without its token, and every page
+of an interaction allows its validated redirect origin in CSP form-action (`_form_page`).
 """
 from __future__ import annotations
 
 import html
-from typing import Any, Mapping, Optional
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import Any, Iterator, Mapping, Optional
 from urllib.parse import urlencode
 
 from sqlalchemy import text
 
 from . import clients, consent, customers, pages, pools
 from .customers import RealmError
-from .util import audit
+from .util import INTERACTION_TTL, audit, random_token, sha256_hex
 
 WORDS = {
     "bad_credentials": "That email and password do not match.",
@@ -51,6 +61,88 @@ def _reply(status: int, page: tuple[str, dict[str, str]], cookies: Optional[list
 
 def _err(status: int, title: str, message: str) -> Any:
     return _reply(status, pages.error_page(title, message))
+
+
+# ---- the request: this browser's binding, the form token, the return origin ----------------------
+
+@dataclass
+class _Request:
+    db: Any
+    org_id: str
+    preauth: str = ""
+    cookie: Optional[str] = None        # Set-Cookie for a binding minted on this request
+
+
+_REQUEST: ContextVar[Optional[_Request]] = ContextVar("oidc_hosted_request", default=None)
+
+
+@contextmanager
+def request(db: Any, org_id: str, browser: Any) -> Iterator[_Request]:
+    """Every hosted page is drawn inside this: it holds the browser's pre-auth cookie (a new one
+    when it has none), which the page's form token is bound to."""
+    from ..identity.sessions import set_cookie_header
+
+    held = browser.app_preauth if customers.valid_preauth(browser.app_preauth) else None
+    req = _Request(db, org_id, held or random_token(customers.PREAUTH_PREFIX))
+    if held is None:
+        req.cookie = set_cookie_header(customers.APP_PREAUTH_COOKIE, req.preauth,
+                                       max_age=int(INTERACTION_TTL.total_seconds()))
+    token = _REQUEST.set(req)
+    try:
+        yield req
+    finally:
+        _REQUEST.reset(token)
+
+
+def _current() -> _Request:
+    req = _REQUEST.get()
+    if req is None:
+        raise RuntimeError("a hosted page is drawn only inside hosted.request()")
+    return req
+
+
+def _pre() -> str:
+    """The pre-auth value a new challenge binds to: the one the page's token is bound to."""
+    return _current().preauth
+
+
+def _scope(interaction: Optional[str], pool_id: Optional[str]) -> str:
+    return f"i:{interaction}" if interaction else f"p:{pool_id or ''}"
+
+
+def form_token(preauth: str, scope: str) -> str:
+    from ..identity.authn_support import keyed_hash
+
+    return keyed_hash("oidc-hosted-form", f"{scope}\x1f{sha256_hex(preauth)}")
+
+
+def form_token_ok(preauth: Optional[str], scope: str, presented: Any) -> bool:
+    if not customers.valid_preauth(preauth) or not isinstance(presented, str) or not presented:
+        return False
+    return customers.same(form_token(preauth, scope), presented)
+
+
+def return_to(db: Any, org_id: str, interaction: Optional[str]) -> Optional[str]:
+    """The interaction's redirect_uri, only while it is still one its client registered: the one
+    address a hosted form's POST may redirect the browser to."""
+    from .protocol import peek_interaction
+
+    it = peek_interaction(db, org_id, interaction) if interaction else None
+    if it is None:
+        return None
+    client = clients.load(db, org_id=org_id, client_id=it["params"].get("client_id"))
+    uri = it["params"].get("redirect_uri")
+    return uri if client is not None and uri in client["redirect_uris"] else None
+
+
+def _form_page(status: int, *, interaction: Optional[str], pool_id: Optional[str],
+               cookies: Optional[list[str]] = None, **page: Any) -> Any:
+    """THE way a hosted page with a form or a passkey button is drawn: its signed token, and
+    form-action allowing the interaction's validated redirect origin."""
+    req = _current()
+    drawn = pages.hosted_page(csrf=form_token(req.preauth, _scope(interaction, pool_id)),
+                              return_to=return_to(req.db, req.org_id, interaction), **page)
+    return _reply(status, drawn, [*([req.cookie] if req.cookie else []), *(cookies or [])])
 
 
 # ---- context ---------------------------------------------------------------------------------------
@@ -93,7 +185,7 @@ def _brand(pool: Mapping[str, Any], client: Optional[Mapping[str, Any]]) -> str:
 
 def signin_page(db: Any, *, org_id: str, pool: Mapping[str, Any], client: Optional[Mapping[str, Any]],
                 interaction: Optional[str], origin: str = "", mfa_needed: bool = False, error: Optional[str] = None,
-                email: str = "", status: int = 200) -> Any:
+                email: str = "", status: int = 200, notice: Optional[str] = None) -> Any:
     links = []
     if pool["signup"] in ("open", "domain"):
         links.append(("Create an account", _q(org_id, "signup", interaction, pool)))
@@ -102,12 +194,14 @@ def signin_page(db: Any, *, org_id: str, pool: Mapping[str, Any], client: Option
     if pool.get("passkeys"):
         passkey = {"base": f"/oidc/{org_id}", "purpose": "login", "interaction": interaction or "",
                    "pool": "" if interaction else pool["id"], "label": "Sign in with a passkey"}
-    return _reply(status, pages.hosted_page(
-        title=f"Sign in to {_brand(pool, client)}", intro="Use your email and password, or a passkey.",
+    return _form_page(
+        status, interaction=interaction, pool_id=pool["id"],
+        title=f"Sign in to {_brand(pool, client)}",
+        intro="Use your email and password, or a passkey." if passkey else "Use your email and password.",
         action=f"/oidc/{org_id}/hosted/signin", step="signin", hidden=_hidden(interaction, pool),
         inputs=[pages._input("email", "Email", "email", email, "username"),
                 pages._input("password", "Password", "password", "", "current-password")],
-        submit="Sign in", error=error, links=links, brand=_brand(pool, client), passkey=passkey))
+        submit="Sign in", error=error, links=links, brand=_brand(pool, client), passkey=passkey, notice=notice)
 
 
 def signup_page(db: Any, *, org_id: str, pool: Mapping[str, Any], client: Optional[Mapping[str, Any]],
@@ -115,22 +209,24 @@ def signup_page(db: Any, *, org_id: str, pool: Mapping[str, Any], client: Option
     if pool["signup"] not in ("open", "domain"):
         return signin_page(db, org_id=org_id, pool=pool, client=client, interaction=interaction,
                            error=_words("signup_closed"), status=403)
-    return _reply(status, pages.hosted_page(
+    return _form_page(
+        status, interaction=interaction, pool_id=pool["id"],
         title=f"Create your {_brand(pool, client)} account", intro="We will email you a code to confirm the address.",
         action=f"/oidc/{org_id}/hosted/signup", step="signup", hidden=_hidden(interaction, pool),
         inputs=[pages._input("name", "Name", "text", "", "name"), pages._input("email", "Email", "email", "", "email"),
                 pages._input("password", "Password (12 characters or more)", "password", "", "new-password")],
         submit="Create account", error=error, links=[("I have an account", _q(org_id, "signin", interaction, pool))],
-        brand=_brand(pool, client)))
+        brand=_brand(pool, client))
 
 
 def forgot_page(db: Any, *, org_id: str, pool: Mapping[str, Any], client: Optional[Mapping[str, Any]],
                 interaction: Optional[str], error: Optional[str] = None, status: int = 200) -> Any:
-    return _reply(status, pages.hosted_page(
+    return _form_page(
+        status, interaction=interaction, pool_id=pool["id"],
         title="Reset your password", intro="We will email you a code if the address has an account.",
         action=f"/oidc/{org_id}/hosted/forgot", step="forgot", hidden=_hidden(interaction, pool),
         inputs=[pages._input("email", "Email", "email", "", "username")], submit="Send code", error=error,
-        links=[("Back to sign in", _q(org_id, "signin", interaction, pool))], brand=_brand(pool, client)))
+        links=[("Back to sign in", _q(org_id, "signin", interaction, pool))], brand=_brand(pool, client))
 
 
 def _code_page(org_id: str, pool: Mapping[str, Any], client: Optional[Mapping[str, Any]], interaction: Optional[str],
@@ -139,9 +235,10 @@ def _code_page(org_id: str, pool: Mapping[str, Any], client: Optional[Mapping[st
     inputs = [pages._input("code", "Code", "text", "", "one-time-code")]
     if new_password:
         inputs.append(pages._input("password", "New password", "password", "", "new-password"))
-    return _reply(status, pages.hosted_page(
+    return _form_page(
+        status, interaction=interaction, pool_id=pool["id"], cookies=cookies,
         title=title, intro=intro, action=f"/oidc/{org_id}/hosted/{step}", step=step, hidden=_hidden(interaction, pool),
-        inputs=inputs, submit="Continue", error=error, brand=_brand(pool, client)), cookies)
+        inputs=inputs, submit="Continue", error=error, brand=_brand(pool, client))
 
 
 def _mfa_page(db: Any, org_id: str, pool: Mapping[str, Any], client: Optional[Mapping[str, Any]],
@@ -152,52 +249,61 @@ def _mfa_page(db: Any, org_id: str, pool: Mapping[str, Any], client: Optional[Ma
     if pool.get("passkeys") and customers.has_factor(db, user_id, "webauthn"):
         passkey = {"base": f"/oidc/{org_id}", "purpose": "mfa", "interaction": interaction or "",
                    "pool": "" if interaction else pool["id"], "label": "Use a passkey"}
-    return _reply(status, pages.hosted_page(
+    return _form_page(
+        status, interaction=interaction, pool_id=pool["id"], cookies=cookies,
         title="Second step", intro="Enter the code from your authenticator app." if has_totp else "Use your passkey.",
         action=f"/oidc/{org_id}/hosted/mfa" if has_totp else "", step="mfa", hidden=_hidden(interaction, pool),
         inputs=[pages._input("code", "Code", "text", "", "one-time-code")], submit="Verify", error=error,
-        brand=_brand(pool, client), passkey=passkey), cookies)
+        brand=_brand(pool, client), passkey=passkey)
 
 
 def _enrol_page(db: Any, org_id: str, pool: Mapping[str, Any], client: Optional[Mapping[str, Any]],
                 interaction: Optional[str], user: Mapping[str, Any], preauth: Optional[str], *,
                 error: Optional[str] = None, status: int = 200) -> Any:
-    secret, uri, _preauth, cookie = customers.totp_begin(db, org_id=org_id, pool=pool, user=user, preauth=preauth)
+    secret, uri, _preauth, cookie = customers.totp_begin(db, org_id=org_id, pool=pool, user=user, preauth=_pre())
     extra = (f"<div class=\"qr\">{pages.qr_svg(uri)}</div><p>Or enter this key: <code>{html.escape(secret)}</code></p>")
-    return _reply(status, pages.hosted_page(
+    return _form_page(
+        status, interaction=interaction, pool_id=pool["id"], cookies=[cookie],
         title="Set up your authenticator app", intro="Scan the code with an authenticator app, then enter the 6 digits.",
         action=f"/oidc/{org_id}/hosted/enrol-totp", step="enrol-totp", hidden=_hidden(interaction, pool),
         inputs=[pages._input("code", "Code", "text", "", "one-time-code")], submit="Confirm", error=error,
-        brand=_brand(pool, client), extra=extra), [cookie])
+        brand=_brand(pool, client), extra=extra)
 
 
 def account_page(db: Any, *, org_id: str, pool: Mapping[str, Any], sess: Any, notice: Optional[str] = None) -> Any:
+    """The signed-in pool user's own page: sign-in methods (and the ways to add one, next to
+    them), connected apps, then sign out, last."""
     e = html.escape
     user = sess.user
     token = account_csrf(sess.id)
 
-    def form(action: str, label: str, **fields: str) -> str:
+    def form(action: str, label: str, primary: bool = False, **fields: str) -> str:
         hidden = "".join(f"<input type=\"hidden\" name=\"{e(k)}\" value=\"{e(v)}\">" for k, v in
                          {"step": "account", "pool": pool["id"], "csrf": token, "action": action, **fields}.items())
-        return f"<form method=\"post\" action=\"/oidc/{e(org_id)}/hosted/account\">{hidden}<button type=\"submit\">{e(label)}</button></form>"
+        cls = " class=\"primary\"" if primary else ""
+        return (f"<form method=\"post\" action=\"/oidc/{e(org_id)}/hosted/account\">{hidden}"
+                f"<button type=\"submit\"{cls}>{e(label)}</button></form>")
 
-    fs = "".join(f"<div class=\"item\"><span>{e(f['label'] or f['kind'])}</span>{form('remove-factor', 'Remove', factor=f['id'])}</div>"
-                 for f in customers.factors(db, user["id"]))
+    words = {"totp": "Authenticator app", "webauthn": "Passkey", "passkey": "Passkey"}
+    held = customers.factors(db, user["id"])
+    fs = "".join(f"<div class=\"item\"><span>{e(f['label'] or words.get(f['kind'], f['kind']))}</span>"
+                 f"{form('remove-factor', 'Remove', factor=f['id'])}</div>" for f in held)
     apps = db.execute(text("SELECT c.id, c.name, k.scopes FROM oidc_consents k JOIN oidc_clients c ON c.id = k.client_id "
                            "WHERE k.subject_ref = :s AND k.revoked_at IS NULL AND c.pool_id = :p ORDER BY c.name"),
                       {"s": user["id"], "p": pool["id"]}).mappings().all()
     ap = "".join(f"<div class=\"item\"><span>{e(a['name'])}</span>{form('revoke', 'Disconnect', client_id=a['id'])}</div>"
                  for a in apps) or "<p>No connected apps.</p>"
-    note = f"<p class=\"err\" role=\"status\">{e(notice)}</p>" if notice else ""
-    extra = (f"{note}<h2>Sign-in methods</h2>{fs or '<p>Password only.</p>'}"
-             f"<div class=\"row\">{form('enrol-totp', 'Add authenticator app')}</div>"
-             f"<h2>Connected apps</h2>{ap}<div class=\"row\">{form('signout', 'Sign out')}</div>")
+    has_totp = any(f["kind"] == "totp" for f in held)
+    adds = "" if has_totp else form("enrol-totp", "Add authenticator app")
     passkey = None
     if pool.get("passkeys"):
         passkey = {"base": f"/oidc/{org_id}", "purpose": "register", "pool": pool["id"], "label": "Add a passkey"}
-    return _reply(200, pages.hosted_page(title=f"Your {pool['name']} account", intro=user["email"], action="",
-                                         step="account", hidden={}, inputs=[], submit="", brand=pool["name"],
-                                         extra=extra, passkey=passkey))
+    add_row = f"<div class=\"row\">{adds}{pages.PASSKEY_SLOT if passkey else ''}</div>" if adds or passkey else ""
+    extra = (f"<h2>Sign-in methods</h2>{fs or '<p>Password only.</p>'}{add_row}"
+             f"<h2>Connected apps</h2>{ap}<h2>Sign out</h2><div class=\"row\">{form('signout', 'Sign out')}</div>")
+    return _form_page(200, interaction=None, pool_id=pool["id"], title=f"Your {pool['name']} account",
+                      intro=user["email"], action="", step="account", hidden={}, inputs=[], submit="",
+                      brand=pool["name"], extra=extra, passkey=passkey, notice=notice)
 
 
 def account_csrf(session_id: str) -> str:
@@ -209,28 +315,57 @@ def account_csrf(session_id: str) -> str:
 def workforce_reauth_page(db: Any, *, org_id: str, client: Mapping[str, Any], interaction: str, principal: Any,
                           mfa_needed: bool, error: Optional[str] = None, status: int = 200,
                           cookies: Optional[list[str]] = None) -> Any:
-    inputs = [pages._input("code", "Code from your authenticator app", "text", "", "one-time-code")]
-    intro = (f"{client['name']} needs you to confirm it's you" + (" with a second factor." if mfa_needed else "."))
-    page = pages.hosted_page(
-        title=f"Confirm it's you, {principal.display_name}", intro=intro, action=f"/oidc/{org_id}/hosted/wf-reauth",
-        step="wf-reauth", hidden={"interaction": interaction}, inputs=inputs, submit="Confirm", error=error,
-        brand=client["name"], passkey={"base": f"/oidc/{org_id}", "purpose": "step_up", "interaction": interaction,
-                                       "label": "Use a passkey"},
-        links=[] if mfa_needed else [("Use my password instead", f"/oidc/{org_id}/account?{urlencode({'view': 'wf-password', 'interaction': interaction})}")])
-    return _reply(status, page, cookies)
+    """Confirm it's you, leading with a factor this member HAS: their authenticator app, else
+    their passkey, else (when nothing requires a second factor) their password. A member who
+    needs a second factor and has none is told to add one in BOSS."""
+    from ..identity import users
+
+    held = users.factors(db, principal.id)
+    row = users.by_id(db, principal.id)
+    must_mfa = mfa_needed or (row is not None and users.mfa_required(db, row))
+    title = f"Confirm it's you, {principal.display_name}"
+    because = f"{client['name']} needs you to confirm it's you" + (" with a second factor" if must_mfa else "")
+    passkey = None
+    if held.passkeys:
+        passkey = {"base": f"/oidc/{org_id}", "purpose": "step_up", "interaction": interaction,
+                   "label": "Use a passkey" if held.totp else "Use your passkey"}
+    if held.totp:
+        return _form_page(
+            status, interaction=interaction, pool_id=None, cookies=cookies, title=title,
+            intro=because + (": your authenticator app or passkey." if passkey else ": your authenticator app."),
+            action=f"/oidc/{org_id}/hosted/wf-reauth", step="wf-reauth", hidden={"interaction": interaction},
+            inputs=[pages._input("code", "Code from your authenticator app", "text", "", "one-time-code")],
+            submit="Confirm", error=error, brand=client["name"], passkey=passkey)
+    if passkey:
+        return _form_page(status, interaction=interaction, pool_id=None, cookies=cookies, title=title,
+                          intro=because + ": your passkey.", action="", step="wf-reauth", hidden={}, inputs=[],
+                          submit="", error=error, brand=client["name"], passkey=passkey)
+    if must_mfa:
+        return _reply(403, pages.error_page_for(
+            client["name"], "Add a second factor first",
+            f"{client['name']} needs a second factor, and your BOSS account has none yet. Add an authenticator app "
+            "or a passkey in BOSS (your account page), then return to the app and sign in again."), cookies)
+    return workforce_password_page(org_id, client, interaction, error=error, status=status, cookies=cookies)
 
 
-def workforce_password_page(org_id: str, client: Mapping[str, Any], interaction: str, error: Optional[str] = None) -> Any:
-    return _reply(200 if not error else 401, pages.hosted_page(
-        title="Confirm it's you", intro="Enter your BOSS password.", action=f"/oidc/{org_id}/hosted/wf-reauth",
-        step="wf-reauth", hidden={"interaction": interaction},
+def workforce_password_page(org_id: str, client: Mapping[str, Any], interaction: str, error: Optional[str] = None,
+                            status: Optional[int] = None, cookies: Optional[list[str]] = None) -> Any:
+    return _form_page(
+        status or (200 if not error else 401), interaction=interaction, pool_id=None, cookies=cookies,
+        title="Confirm it's you", intro=f"{client['name']} needs you to confirm it's you. Enter your BOSS password.",
+        action=f"/oidc/{org_id}/hosted/wf-reauth", step="wf-reauth", hidden={"interaction": interaction},
         inputs=[pages._input("password", "Password", "password", "", "current-password")], submit="Confirm",
-        error=error, brand=client["name"]))
+        error=error, brand=client["name"])
 
 
 # ---- GET /oidc/<org>/account ------------------------------------------------------------------------
 
 def view(db: Any, org_id: str, params: Mapping[str, str], browser: Any) -> Any:
+    with request(db, org_id, browser):
+        return _view(db, org_id, params, browser)
+
+
+def _view(db: Any, org_id: str, params: Mapping[str, str], browser: Any) -> Any:
     which = params.get("view") or "account"
     interaction = params.get("interaction") or None
     if which == "wf-password":
@@ -241,7 +376,18 @@ def view(db: Any, org_id: str, params: Mapping[str, str], browser: Any) -> Any:
         if client is None:
             return _err(400, "This sign-in has expired", "Go back to the app and sign in again.")
         return workforce_password_page(org_id, client, interaction or "")
-    ctx = _context(db, org_id, interaction=interaction, pool_id=params.get("pool"))
+    pool_id = params.get("pool")
+    if not interaction and not pool_id:
+        # The account page without ?pool: the pool of the session this browser holds, else the
+        # org's only customer pool; else say where the account page is opened from.
+        pool_id = customers.session_pool(db, org_id=org_id, token=browser.app_session)
+        if pool_id is None:
+            only = [p for p in pools.list_pools(db, org_id=org_id) if p["kind"] == "customer"]
+            pool_id = only[0]["id"] if len(only) == 1 else None
+        if pool_id is None:
+            return _err(404, "Open your account from the app",
+                        "Use the account link in the app you signed in to, or the link in your invitation email.")
+    ctx = _context(db, org_id, interaction=interaction, pool_id=pool_id)
     if ctx is None:
         return _err(400, "This page has expired", "Go back to the app and sign in again.")
     pool, client, _ = ctx
@@ -272,6 +418,23 @@ def step(db: Any, org_slug: str, name: str, params: Mapping[str, Any], browser: 
 
             return Reply(403, {"error": "forbidden"}, {"Cache-Control": "no-store"})
         return _err(403, "Request refused", "This form did not come from BOSS's own page.")
+    # The signed form token: bound to this interaction (or pool) and this browser's pre-auth
+    # cookie. The account page's forms carry the session-bound token `_account` checks instead.
+    if name != "account":
+        scope = _scope(str(params.get("interaction") or "") or None, str(params.get("pool") or "") or None)
+        if not form_token_ok(browser.app_preauth, scope, params.get("csrf")):
+            if is_json:
+                from .protocol import Reply
+
+                return Reply(403, {"error": "expired"}, {"Cache-Control": "no-store"})
+            return _err(403, "This page has expired",
+                        "It was open too long, or in another browser. Go back to the app and sign in again.")
+    with request(db, org_id, browser):
+        return _step(db, org_id, origin, name, params, browser)
+
+
+def _step(db: Any, org_id: str, origin: str, name: str, params: Mapping[str, Any], browser: Any) -> Any:
+    is_json = name.startswith("passkey-") or name.startswith("wf-passkey-")
     if name in ("passkey-options", "passkey-verify") and params.get("purpose") == "step_up":
         name = "wf-" + name
     if name in ("wf-reauth", "wf-passkey-options", "wf-passkey-verify"):
@@ -331,11 +494,11 @@ def _after_password(db: Any, org_id: str, pool: Mapping[str, Any], client: Optio
             need = True
     has = customers.has_factor(db, user["id"])
     if has and pool["mfa"] != "off":
-        _pre, cookie = customers.new_challenge(db, pool_id=pool["id"], user_id=user["id"], purpose="mfa",
-                                               payload={"first": first}, preauth=browser.app_preauth)
+        _p, cookie = customers.new_challenge(db, pool_id=pool["id"], user_id=user["id"], purpose="mfa",
+                                             payload={"first": first}, preauth=_pre())
         return _mfa_page(db, org_id, pool, client, interaction, user["id"], cookies=[cookie])
     if need:
-        return _enrol_page(db, org_id, pool, client, interaction, user, browser.app_preauth)
+        return _enrol_page(db, org_id, pool, client, interaction, user, _pre())
     return _signed_in(db, org_id, pool, interaction, browser, user, [first], mfa=False)
 
 
@@ -383,8 +546,8 @@ def _signup(db, org_id, origin, pool, client, interaction, params, browser):
             return _after_password(db, org_id, pool, client, interaction, browser, user, "password")
     else:
         user = None       # anti-enumeration: the same page, and no code that could ever verify
-    _pre, cookie = customers.send_code(db, pool=pool, user=user, email=email, purpose="verify_email",
-                                       preauth=browser.app_preauth, subject=f"Confirm your {pool['name']} account")
+    _p, cookie = customers.send_code(db, pool=pool, user=user, email=email, purpose="verify_email",
+                                     preauth=_pre(), subject=f"Confirm your {pool['name']} account")
     return _code_page(org_id, pool, client, interaction, step="verify-email", title="Check your email",
                       intro="Enter the 6-digit code we sent to your address.", cookies=[cookie])
 
@@ -434,11 +597,12 @@ def _enrol_totp(db, org_id, origin, pool, client, interaction, params, browser):
                                                purpose="enrol_totp") is None:
             return signin_page(db, org_id=org_id, pool=pool, client=client, interaction=interaction,
                                error=_words("too_many"), status=429)
-        return _reply(401, pages.hosted_page(
+        return _form_page(
+            401, interaction=interaction, pool_id=pool["id"],
             title="Set up your authenticator app", intro="Enter the 6 digits your app shows now.",
             action=f"/oidc/{org_id}/hosted/enrol-totp", step="enrol-totp", hidden=_hidden(interaction, pool),
             inputs=[pages._input("code", "Code", "text", "", "one-time-code")], submit="Confirm",
-            error=_words("bad_code"), brand=_brand(pool, client)))
+            error=_words("bad_code"), brand=_brand(pool, client))
     sess = customers.session_lookup(db, pool_id=pool["id"], token=browser.app_session)
     if sess is not None and sess.user["id"] == user["id"] and interaction is None:
         return account_page(db, org_id=org_id, pool=pool, sess=sess, notice="Authenticator app added.")
@@ -457,8 +621,8 @@ def _forgot(db, org_id, origin, pool, client, interaction, params, browser):
     user = customers.find_user(db, pool_id=pool["id"], email=email)
     if user is not None and user["status"] == "disabled":
         user = None
-    _pre, cookie = customers.send_code(db, pool=pool, user=user, email=email, purpose="reset",
-                                       preauth=browser.app_preauth, subject=f"Reset your {pool['name']} password")
+    _p, cookie = customers.send_code(db, pool=pool, user=user, email=email, purpose="reset",
+                                     preauth=_pre(), subject=f"Reset your {pool['name']} password")
     return _code_page(org_id, pool, client, interaction, step="reset", title="Check your email",
                       intro="If the address has an account, we sent it a code. Enter it and a new password.",
                       new_password=True, cookies=[cookie])
@@ -475,8 +639,8 @@ def _reset(db, org_id, origin, pool, client, interaction, params, browser):
     try:
         customers.set_password(db, pool=pool, user=user, password=str(params.get("password") or ""))
     except RealmError as exc:
-        _pre, cookie = customers.new_challenge(db, pool_id=pool["id"], user_id=user["id"], purpose="reset",
-                                               payload=ch["payload"], preauth=browser.app_preauth)
+        _p, cookie = customers.new_challenge(db, pool_id=pool["id"], user_id=user["id"], purpose="reset",
+                                             payload=ch["payload"], preauth=_pre())
         return _code_page(org_id, pool, client, interaction, step="reset", title="Choose another password",
                           intro="Enter the same code and a different password.", new_password=True,
                           error=_words(exc.code), status=400, cookies=[cookie])
@@ -486,7 +650,7 @@ def _reset(db, org_id, origin, pool, client, interaction, params, browser):
     audit(db, org_id=org_id, event_type="oidc.pool_user.password_reset", actor_kind="pool_user",
           target_type="oidc_pool_user", target_id=user["id"], details={"pool_id": pool["id"]})
     return signin_page(db, org_id=org_id, pool=pool, client=client, interaction=interaction,
-                       error="Password changed. Sign in with it.", email=user["email"])
+                       notice="Password changed. Sign in with it.", email=user["email"])
 
 
 def _passkey_options(db, org_id, origin, pool, client, interaction, params, browser):
@@ -505,8 +669,8 @@ def _passkey_options(db, org_id, origin, pool, client, interaction, params, brow
             return Reply(401, {"error": "unauthenticated"}, {"Cache-Control": "no-store"})
         user = sess.user
     try:
-        options, _pre, cookie = customers.passkey_options(db, pool=pool, origin=origin, purpose=purpose, user=user,
-                                                          preauth=browser.app_preauth)
+        options, _p, cookie = customers.passkey_options(db, pool=pool, origin=origin, purpose=purpose, user=user,
+                                                        preauth=_pre())
     except RealmError as exc:
         return Reply(409, {"error": exc.code}, {"Cache-Control": "no-store"})
     return Reply(200, {"publicKey": options}, {"Cache-Control": "no-store"}, [cookie])
@@ -559,7 +723,7 @@ def _account(db, org_id, origin, pool, client, interaction, params, browser):
         cookie = customers.end_session(db, browser.app_session)
         audit(db, org_id=org_id, event_type="oidc.pool_user.signed_out", actor_kind="pool_user",
               target_type="oidc_pool_user", target_id=sess.user["id"], details={"pool_id": pool["id"]})
-        body, headers = pages.signed_out_page()
+        body, headers = pages.signed_out_page(pool["name"])
         return Reply(200, body, headers, [cookie])
     if action == "revoke":
         target = clients.load(db, org_id=org_id, client_id=params.get("client_id"), any_status=True)

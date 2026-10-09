@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * Merge-gate state for MANY previews in one call.
@@ -19,7 +20,7 @@ export const dynamic = "force-dynamic";
 const MAX_IDS = 60;
 
 export async function GET(req: Request) {
-  const raw = (new URL(req.url).searchParams.get("preview_ids") ?? "").trim();
+  const raw = (rawRequestUrl(req).searchParams.get("preview_ids") ?? "").trim();
   const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
 
   if (ids.length === 0) {

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
 import { apiErrorText } from "../../../lib/api-error";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * Repo and models' reads and writes, off the Server Action path (a Server Action waits on a
@@ -58,7 +59,7 @@ async function forward(r: Response) {
 }
 
 export async function GET(req: Request) {
-  const url = new URL(req.url);
+  const url = rawRequestUrl(req);
   const projectId = (url.searchParams.get("project_id") ?? "").trim();
   const repos = url.searchParams.get("repos");
   const catalogue = url.searchParams.get("catalogue");

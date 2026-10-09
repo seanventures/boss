@@ -16,6 +16,7 @@ import { avatarSvg } from "../../../../lib/agent-avatar";
 import { svgDataUri } from "../../../../lib/svg-data-uri";
 import type { AvatarSpec } from "../../../../lib/agent-world-types";
 import { bornDate, humanise, mrz, resolveAvatar, toPassport } from "../../../../lib/agent-world";
+import { rawRequestUrl } from "../../../../lib/raw-request-url";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +38,7 @@ function faceDataUri(spec: AvatarSpec): string {
 
 export async function GET(req: Request, ctx: { params: Promise<{ role: string }> }) {
   const { role } = await ctx.params;
-  const url = new URL(req.url);
+  const url = rawRequestUrl(req);
   const projectId = url.searchParams.get("project_id")?.trim();
   const stats = url.searchParams.get("stats") === "1";
   if (!role || !projectId) return Response.json({ error: "missing role or project_id" }, { status: 400 });

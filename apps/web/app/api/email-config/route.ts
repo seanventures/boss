@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
 import { refusalFrom } from "../../../lib/start-refusal";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * How this project sends email — read and set from the console.
@@ -15,7 +16,7 @@ import { refusalFrom } from "../../../lib/start-refusal";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const project = new URL(req.url).searchParams.get("project_id")?.trim() ?? "";
+  const project = rawRequestUrl(req).searchParams.get("project_id")?.trim() ?? "";
   if (!project) return NextResponse.json({ error: "project_id is required" }, { status: 400 });
   try {
     const r = await fetch(

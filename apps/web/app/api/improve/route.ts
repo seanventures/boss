@@ -4,6 +4,7 @@ import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
 import { apiErrorText } from "../../../lib/api-error";
 import { IMPROVE_OPS as OPS, IMPROVE_READS as READS } from "../../../lib/improve-ops";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * Improve BOSS, scorecards, experiments and the person's feedback, off the Server Action path.
@@ -16,7 +17,7 @@ import { IMPROVE_OPS as OPS, IMPROVE_READS as READS } from "../../../lib/improve
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const q = new URL(req.url).searchParams;
+  const q = rawRequestUrl(req).searchParams;
   const view = READS[q.get("view") || ""];
   if (!q.get("project_id")?.trim() || !view) {
     return NextResponse.json({ error: "project_id and a view are required" }, { status: 400 });

@@ -342,9 +342,11 @@ def build_oidc_router() -> APIRouter:
         return await _run(lambda db: protocol.end_session(db, org_slug, pairs, browser))
 
     # ---- admin: pools (§6.5) -------------------------------------------------------------------
+    # Whoever may see a project's clients may see the pools a client can use (an Operator picks one
+    # when registering an app); a pool's users stay oidc:read.
     @router.get("/v1/oidc/pools")
-    @permit(P.OIDC_READ, scope=Scope.org())
-    def list_pools(request: Request) -> JSONResponse:
+    @permit(P.OIDC_CLIENT_READ, scope=Scope.project_or_org(query="project_id"))
+    def list_pools(request: Request, project_id: Optional[str] = None) -> JSONResponse:
         return _admin(request, lambda db, ctx: {"pools": [oidc_pools.public_view(p) for p in
                                                           oidc_pools.list_pools(db, org_id=ctx.principal.org_id)]})
 
@@ -415,8 +417,10 @@ def build_oidc_router() -> APIRouter:
             user_id=user_id, status=body.status, reset_mfa=bool(body.reset_mfa), name=body.name))
 
     # ---- admin: clients (Admins everywhere; app owners on their project) -------------------------
+    # Reads: everyone who manages a project's clients (an Operator) reads them there; Owners,
+    # Admins and Auditors everywhere (oidc_client:read, P1-6).
     @router.get("/v1/oidc/clients")
-    @permit(P.OIDC_READ, scope=Scope.org())
+    @permit(P.OIDC_CLIENT_READ, scope=Scope.project_or_org(query="project_id"))
     def list_clients(request: Request, project_id: Optional[str] = None) -> JSONResponse:
         return _admin(request, lambda db, ctx: {"clients": [oidc_clients.public_view(c) for c in oidc_clients.list_clients(
             db, org_id=ctx.principal.org_id, project_id=project_id)]})
@@ -437,7 +441,7 @@ def build_oidc_router() -> APIRouter:
         return _admin(request, fn, 201)
 
     @router.get("/v1/oidc/clients/{client_id}")
-    @permit(P.OIDC_READ, scope=Scope.org())
+    @permit(P.OIDC_CLIENT_READ, scope=Scope.of("oidc_client", path="client_id"))
     def get_client(client_id: str, request: Request) -> JSONResponse:
         return _admin(request, lambda db, ctx: oidc_clients.public_view(_client_of(db, ctx, client_id)))
 
@@ -476,7 +480,7 @@ def build_oidc_router() -> APIRouter:
 
     # ---- admin: a client's app roles and their assignments --------------------------------------
     @router.get("/v1/oidc/clients/{client_id}/roles")
-    @permit(P.OIDC_READ, scope=Scope.org())
+    @permit(P.OIDC_CLIENT_READ, scope=Scope.of("oidc_client", path="client_id"))
     def list_client_roles(client_id: str, request: Request) -> JSONResponse:
         return _admin(request, lambda db, ctx: {"roles": oidc_pools.list_roles(db, client=_client_of(db, ctx, client_id))})
 
@@ -488,7 +492,7 @@ def build_oidc_router() -> APIRouter:
             name=body.name or body.role_key), 201)
 
     @router.get("/v1/oidc/clients/{client_id}/role-assignments")
-    @permit(P.OIDC_READ, scope=Scope.org())
+    @permit(P.OIDC_CLIENT_READ, scope=Scope.of("oidc_client", path="client_id"))
     def list_role_assignments(client_id: str, request: Request) -> JSONResponse:
         return _admin(request, lambda db, ctx: {"assignments": oidc_pools.list_assignments(
             db, client=_client_of(db, ctx, client_id))})

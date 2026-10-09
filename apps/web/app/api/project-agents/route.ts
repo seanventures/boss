@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { writeAwareFetch } from "../../../lib/api-write";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiErrorText } from "../../../lib/api-error";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * Who is on an app.
@@ -13,7 +14,7 @@ import { apiErrorText } from "../../../lib/api-error";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const params = new URL(req.url).searchParams;
+  const params = rawRequestUrl(req).searchParams;
   const projectId = params.get("project_id")?.trim();
   const app = params.get("app")?.trim() ?? "";
   // WHO WOULD BE ASSIGNED, for something that does not exist yet. The new-project wizard needs

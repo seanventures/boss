@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { client } from "../../../../lib/client";
 import { explainRawSecret } from "../../../../lib/hardware";
+import { rawRequestUrl } from "../../../../lib/raw-request-url";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +39,7 @@ function rejectedSecretField(body: Record<string, unknown>): string | null {
 
 export async function GET(req: Request, ctx: Ctx) {
   const path = ((await ctx.params).path ?? []).join("/");
-  const url = new URL(req.url);
+  const url = rawRequestUrl(req);
   const projectId = url.searchParams.get("project_id")?.trim() ?? "";
   if (!projectId) {
     return NextResponse.json({ error: "missing project_id" }, { status: 400 });

@@ -206,6 +206,10 @@ def test_c2_a_challenge_of_one_pool_is_not_spent_in_another(cw):
     with begin() as db:
         other_pool = oidc_pools.create(db, org_id=cw.org, actor="usr_test",
                                        body={"name": "Other", "kind": "customer", "signup": "open", "mfa": "off"})
+    # the form token is bound to the interaction: posting it for another pool is refused outright
+    assert hosted(cw, "verify-email", {"pool": other_pool["id"], "code": code}).status_code == 403
+    # with the other pool's own page token, the challenge still belongs to the first pool
+    cw.http.get(f"/oidc/{cw.org}/account", params={"view": "signin", "pool": other_pool["id"]})
     r = hosted(cw, "verify-email", {"pool": other_pool["id"], "code": code})
     assert r.status_code == 401
     assert _user(cw, "cara@example.test")["status"] == "pending"
@@ -359,11 +363,14 @@ def test_c5_a_passkey_cannot_sign_in_as_someone_else_or_in_another_pool(cw):
                                               "credential": forged}).status_code == 401
     with begin() as db:
         other_pool = oidc_pools.create(db, org_id=cw.org, actor="usr_test",
-                                       body={"name": "Other", "kind": "customer", "signup": "open", "mfa": "off"})
+                                       body={"name": "Other", "kind": "customer", "signup": "open", "mfa": "off",
+                                             "passkeys": True})
+    cw.http.get(f"/oidc/{cw.org}/account", params={"view": "signin", "pool": other_pool["id"]})
     opts = hosted_json(cw, "passkey-options", {"purpose": "login", "pool": other_pool["id"]})
     assert hosted_json(cw, "passkey-verify", {"purpose": "login", "pool": other_pool["id"],
                                               "credential": auth.assert_(opts.json()["publicKey"])}).status_code == 401
     # a ceremony for another origin is refused
+    cw.http.get(f"/oidc/{cw.org}/account", params={"view": "signin", "interaction": interaction})
     opts = hosted_json(cw, "passkey-options", {"purpose": "login", "interaction": interaction})
     assert hosted_json(cw, "passkey-verify", {"purpose": "login", "interaction": interaction, "credential":
                        auth.assert_(opts.json()["publicKey"], origin="https://evil.test")}).status_code == 401
@@ -372,6 +379,10 @@ def test_c5_a_passkey_cannot_sign_in_as_someone_else_or_in_another_pool(cw):
 def test_c5_registering_a_passkey_needs_the_app_session(cw):
     _signup(cw)
     cw.http.cookies.clear()
+    # no token at all: refused before anything else
+    assert hosted_json(cw, "passkey-options", {"purpose": "register", "pool": cw.cpool["id"]}).status_code == 403
+    # this browser's own page token, but no app session
+    cw.http.get(f"/oidc/{cw.org}/account", params={"pool": cw.cpool["id"]})
     r = hosted_json(cw, "passkey-options", {"purpose": "register", "pool": cw.cpool["id"]})
     assert r.status_code == 401
 
@@ -449,6 +460,7 @@ def test_c7_password_reset_by_emailed_code_ends_old_sessions(cw):
     old = cw.http.cookies.get("__Host-boss_app_session", domain="boss.oidc.test")
     r, _, _ = _authorize(cw)
     interaction = None
+    cw.http.get(f"/oidc/{cw.org}/account", params={"view": "forgot", "pool": cw.cpool["id"]})
     forgot = hosted(cw, "forgot", {"pool": cw.cpool["id"], "email": "cara@example.test"})
     assert forgot.status_code == 200
     r = hosted(cw, "reset", {"pool": cw.cpool["id"], "code": last_code(cw.mail), "password": "new-" + STRONG_PW})

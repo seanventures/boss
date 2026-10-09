@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * The host list, as a route handler rather than a Server Action.
@@ -19,7 +20,7 @@ import { API_URL, authHeaders } from "../../../lib/client";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const projectId = new URL(req.url).searchParams.get("project_id")?.trim();
+  const projectId = rawRequestUrl(req).searchParams.get("project_id")?.trim();
   if (!projectId) {
     return NextResponse.json({ error: "missing project_id" }, { status: 400 });
   }

@@ -9,6 +9,7 @@ import { collectorMachinePost, collectorPathOf } from "../../../lib/console-sess
 import { COLLECTOR_BODY_CAP, readCapped } from "../../../lib/read-capped";
 import { noReuse } from "../../../lib/feed-cache";
 import { clientHop, proxyHops } from "../../../lib/client-hop";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * The control plane, on the console's own origin.
@@ -94,7 +95,7 @@ function forwardHeaders(req: Request, speaks: Speaks): Headers {
  * working; it just lands on the other origin.
  */
 function toPreviewOrigin(req: Request): Response {
-  const url = new URL(req.url);
+  const url = rawRequestUrl(req);
   if (req.body && !req.body.locked) req.body.cancel().catch(() => undefined);
   const forwardedProto = (req.headers.get("x-forwarded-proto") ?? "").split(",")[0].trim();
   const origin = previewOrigin(req.headers.get("host") ?? url.host, forwardedProto || url.protocol);
@@ -114,7 +115,7 @@ function toPreviewOrigin(req: Request): Response {
 const PREVIEW_REFUSAL_CSP = "sandbox; default-src 'none'";
 
 async function proxy(req: Request, path: string[]): Promise<Response> {
-  const pathname = new URL(req.url).pathname;
+  const pathname = rawRequestUrl(req).pathname;
   if (isPreviewCapabilityPath(pathname)) return toPreviewOrigin(req);
   if (identityStubEnabled() && isIdentityPath(pathname)) {
     // The identity stub (lib/identity/stub) answers in process while S1–S5 build the real routes.
@@ -135,7 +136,8 @@ async function proxy(req: Request, path: string[]): Promise<Response> {
       { status: 503 },
     );
   }
-  const incoming = new URL(req.url);
+  // Exactly as sent: NextRequest.url rewrites a loopback address in the query to localhost.
+  const incoming = rawRequestUrl(req);
   // ONE collector decision, on the normalised path (re-check 4, item 1): `/ingest/`, `share/?x`
   // and `%69ngest` are the same API route, so they get the same browser check, cap, keyless
   // forward and canonical upstream path — never the raw spelling.
@@ -241,6 +243,6 @@ export const HEAD = handler;
  * as any other method would — which a preflight does not follow, by design.
  */
 export async function OPTIONS(req: Request): Promise<Response> {
-  if (isPreviewCapabilityPath(new URL(req.url).pathname)) return toPreviewOrigin(req);
+  if (isPreviewCapabilityPath(rawRequestUrl(req).pathname)) return toPreviewOrigin(req);
   return new Response(null, { status: 405 });
 }

@@ -204,6 +204,21 @@ def session_lookup(db: Any, *, pool_id: str, token: Optional[str]) -> Optional[A
     return AppSession(r["id"], pool_id, user, tuple(r["auth_methods"] or ()), r["mfa_at"], r["created_at"])
 
 
+def session_pool(db: Any, *, org_id: str, token: Optional[str]) -> Optional[str]:
+    """The pool (of THIS org) whose live session this cookie is, if any: the account page reached
+    without ?pool finds its pool from the session itself."""
+    if not token or not token.startswith(SESSION_PREFIX) or len(token) > 100:
+        return None
+    r = db.execute(text("SELECT s.pool_id FROM oidc_sessions s JOIN oidc_user_pools p ON p.id = s.pool_id WHERE "
+                        "s.token_hash = :h AND p.org_id = :o AND s.revoked_at IS NULL"),
+                   {"h": sha256_hex(token), "o": org_id}).first()
+    return r[0] if r else None
+
+
+def valid_preauth(value: Optional[str]) -> bool:
+    return bool(value) and value.startswith(PREAUTH_PREFIX) and len(value) <= 100
+
+
 def issue_session(db: Any, *, pool_id: str, user_id: str, methods: list[str], mfa: bool,
                   replaces: Optional[str], ip: Optional[str], user_agent: Optional[str]) -> tuple[str, str]:
     """A NEW session (rotation on every sign-in and MFA: no fixation). Returns (token, Set-Cookie)."""

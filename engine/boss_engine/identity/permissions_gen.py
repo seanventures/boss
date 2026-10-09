@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "b5f44a2f433c3deb"
+CATALOGUE_FINGERPRINT = "acb4b744685df8bd"
 
 
 class Permission(StrEnum):
@@ -57,6 +57,7 @@ class Permission(StrEnum):
     OIDC_READ = "oidc:read"
     OIDC_ADMIN = "oidc:admin"
     OIDC_CLIENT_MANAGE = "oidc_client:manage"
+    OIDC_CLIENT_READ = "oidc_client:read"
     OIDC_POOL_USER_MANAGE = "oidc_pool_user:manage"
     OIDC_APP_SIGN_IN = "oidc_app:sign_in"
     ORG_READ = "org:read"
@@ -257,6 +258,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "oidc:read": PermissionMeta(key="oidc:read", title="See app sign-in", description="See the OIDC user pools, app clients, roles, pool users and consents (read only; no secret is ever shown).", category="Identity and access", roles=('owner', 'admin', 'auditor'), scope='org', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "oidc:admin": PermissionMeta(key="oidc:admin", title="Administer app sign-in", description="Create and change OIDC user pools and every app client (BOSS as an identity provider for the apps it builds).", category="Identity and access", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "oidc_client:manage": PermissionMeta(key="oidc_client:manage", title="Manage an app's sign-in client", description="Register an app as an OIDC client, change its redirect URIs, scopes and roles, and rotate its secret.", category="Identity and access", roles=('owner', 'admin', 'operator'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "oidc_client:read": PermissionMeta(key="oidc_client:read", title="See an app's sign-in client", description="See the app sign-in clients of a project (return addresses, scopes, roles; never a secret) and the pools they can use.", category="Identity and access", roles=('owner', 'admin', 'operator', 'auditor'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "oidc_pool_user:manage": PermissionMeta(key="oidc_pool_user:manage", title="Manage app sign-in users", description="Invite, disable and reset the MFA of the users of an app sign-in pool.", category="Identity and access", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "oidc_app:sign_in": PermissionMeta(key="oidc_app:sign_in", title="Sign in to apps with BOSS", description="Sign in to a project's apps through BOSS's workforce pool.", category="Identity and access", roles=('owner', 'admin', 'operator', 'viewer'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "org:read": PermissionMeta(key="org:read", title="View the org", description="See the org's name and settings.", category="Org and projects", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='org', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
@@ -422,7 +424,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 189
+    "owner": frozenset({  # 190
         "directory:read",
         "user:read",
         "user:invite",
@@ -466,6 +468,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "oidc:read",
         "oidc:admin",
         "oidc_client:manage",
+        "oidc_client:read",
         "oidc_pool_user:manage",
         "oidc_app:sign_in",
         "org:read",
@@ -613,7 +616,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "telemetry:share",
         "telemetry:manage",
     }),
-    "admin": frozenset({  # 180
+    "admin": frozenset({  # 181
         "directory:read",
         "user:read",
         "user:invite",
@@ -653,6 +656,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "oidc:read",
         "oidc:admin",
         "oidc_client:manage",
+        "oidc_client:read",
         "oidc_pool_user:manage",
         "oidc_app:sign_in",
         "org:read",
@@ -795,7 +799,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "telemetry:share",
         "telemetry:manage",
     }),
-    "operator": frozenset({  # 92
+    "operator": frozenset({  # 93
         "directory:read",
         "access_role:read",
         "api_key:manage_own",
@@ -803,6 +807,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "delegation:grant",
         "connection:use_own",
         "oidc_client:manage",
+        "oidc_client:read",
         "oidc_app:sign_in",
         "org:read",
         "project:read",
@@ -939,7 +944,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "improvement:read",
         "activity:read",
     }),
-    "auditor": frozenset({  # 61
+    "auditor": frozenset({  # 62
         "directory:read",
         "user:read",
         "group:read",
@@ -957,6 +962,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "audit:read",
         "audit:export",
         "oidc:read",
+        "oidc_client:read",
         "org:read",
         "project:read",
         "settings:read",

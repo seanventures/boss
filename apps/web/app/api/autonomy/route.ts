@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
 import { apiErrorText } from "../../../lib/api-error";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * Read and change the gate-autonomy mode.
@@ -18,7 +19,7 @@ import { apiErrorText } from "../../../lib/api-error";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const projectId = new URL(req.url).searchParams.get("project_id")?.trim();
+  const projectId = rawRequestUrl(req).searchParams.get("project_id")?.trim();
   if (!projectId) {
     return NextResponse.json({ error: "missing project_id" }, { status: 400 });
   }
