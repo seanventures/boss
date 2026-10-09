@@ -265,4 +265,7 @@ set), then `proof.py`. Only one compose stack on this Mac at a time.
 7. Merge note: S2/S4/S6 also change the catalogue counts (193 here) and `audit.EVENT_TYPES`.
 8. Pre-existing failures seen while running affected tests (fail on the base too): 17 in
    `test_a_build_proves_its_app_runs`, `test_agent_behaviour_matrix`, `test_boss_can_actually_debug`,
-   `test_sandbox_s1_go`; `test_logs_reach_the_console` does not import.
+   `test_sandbox_s1_go`; `test_ga_write_authority::test_prd_and_web_app_builds_require_target_project_execution_grant`;
+   `test_logs_reach_the_console` does not import. Affected run: 602 passed, 18 failed (all 18 fail on 8b7cc39d).
+9. Resume: `cd ~/src/boss-wt-s5-links && git pull` (branch `feat/s5-links`); test DB
+   `boss_test_s5` was dropped (recreate it on boss-test-pg to run the API suites).
