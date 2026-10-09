@@ -163,6 +163,12 @@ def test_a_workflow_started_for_an_app_builds_onto_it_and_is_its_next_build(
     assert rows[0]["builds"] == 3
     assert set(rows[0]["run_ids"]) == {APP_ROOT, APP_RUN, run["id"]}
     assert rows[0]["app"] == "Scorecard"
+    # ONE APP, ITS THREE HANDLES IN ONE ROW (tester P2, "one app under 3 keys"): its newest build,
+    # its id (App › Security) and its key (templates, secrets, Setup, links) — so no surface
+    # derives one from another, or shows a key where the name belongs.
+    from boss_engine.services.agent_assignment import app_key
+    assert rows[0]["app_id"] == "app_scorecard"
+    assert rows[0]["app_key"] == app_key("Scorecard")
 
 
 def test_a_lone_app_gets_its_second_build(client, engine, panel):

@@ -284,3 +284,23 @@ def test_the_build_and_the_preview_get_the_link_environment_and_nothing_else_doe
     assert "BOSS_TEST_USERS" in provider and not any(k.startswith("BOSS_LINK_") for k in provider)
     assert 19000 <= preview_service.app_preview_port() <= 19999
     _revoke(client, world, link["id"])
+
+
+def test_a_new_app_is_linked_under_the_title_its_start_sends(client, world, engine):
+    """The composer's "Talks to" on a NEW app (§5.5): the link is made once the start is accepted,
+    before the app's first build exists, so its build finds the link. Filed under the title's key
+    — the key that first build will have — and only when the console says it is a new app."""
+    from boss_engine.services.agent_assignment import app_key
+
+    refused = _create(client, world, app="Bank attacker v2", alias="BANKNEW")
+    assert refused.status_code == 404 and refused.json()["error"] == "unknown_app"
+    made = _create(client, world, app="Bank attacker v2", alias="BANKNEW", new_app=True)
+    assert made.status_code == 201, made.text
+    with engine.connect() as db:
+        consumer = db.execute(text("SELECT consumer_app_key FROM app_links WHERE id = :i"),
+                              {"i": made.json()["id"]}).scalar()
+    assert consumer == app_key("Bank attacker v2")
+    # It names an app of THIS project as the provider all the same (D7).
+    other = _create(client, world, app="Bank attacker v3", alias="ELSE", new_app=True,
+                    provider_app_key="Other banking")
+    assert other.status_code == 422 and other.json()["error"] == "provider_not_in_project"

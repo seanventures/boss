@@ -339,6 +339,13 @@ def test_apply_refuses_what_it_must(world, people, client, engine, tmp_path):
         assert r.json()["egress"] == ["api.pay.example.com"]
         r = client.post(f"/v1/templates/{tid2}/apply", json={**body, "accept_egress": True})
         assert r.status_code == 409 and r.json() == {**r.json(), "error": "secrets_needed", "secrets": ["PAY_KEY"]}
+        # The app's key travels with it: the console stores the typed test key under it, then
+        # applies again (App ▸ Setup and the template sheet, tester P0-5).
+        assert r.json()["app_key"]
+        nb = {"project_id": world.project_a, "new_app": {"name": "Pay Desk"}, "stack": "python", "accept_egress": True}
+        r = client.post(f"/v1/templates/{tid2}/apply", json=nb)
+        from boss_engine.services.agent_assignment import app_key
+        assert r.status_code == 409 and r.json()["app_key"] == app_key("Pay Desk")
 
 
 def test_apply_on_a_pending_template_is_refused(world, people, client, engine, tmp_path):
