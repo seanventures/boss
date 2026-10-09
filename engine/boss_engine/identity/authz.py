@@ -302,7 +302,7 @@ def note_projects_in_org(org_id: str, project_ids: list[str]) -> None:
     """Read, in ONE statement, which of `project_ids` belong to the org, into this request's memo
     — for a list that then asks the PDP about each (readable_projects), so N projects cost one
     statement, not N. Outside a request it does nothing."""
-    if request_memo.MEMO.get() is None or not project_ids:
+    if not request_memo.active() or not project_ids:
         return
     from ..db import get_engine
 
