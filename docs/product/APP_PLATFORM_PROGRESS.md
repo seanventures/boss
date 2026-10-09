@@ -1197,6 +1197,7 @@ Branch `feat/app-platform-finish` (worktree `~/src/boss-wt-finish`), from
 | (h) | Sign in with BOSS for a login-oauth app: client, redirect URIs, OIDC_BOSS_* app secrets, one click | 9b4293c2 | done |
 | (p) | The payment templates map catalog-cart's CatalogError themselves (3 stacks x stripe/paypal) | fe2dbc86 (merge e7be941a) | done |
 | (s) | Template tests on a micro-VM install: refused up front and in words (not feasible in the guest) | b443087a (merge 5550afd0) | done |
+| (r) | MCP tools for templates and security scans/reviews, declared in the tool registry | 838ec54a (merge 4296125b) | done |
 | (q) | The composer's "Talks to" | af1056b5 (merge e1f40892) | done; further composer/template UI now belongs to `fix/fx-templateui` |
 
 ### (o) The deploy guard is per app (4a1407b8)
@@ -1310,3 +1311,44 @@ block; never in the run's input), created by the first build (`run_env.for_run` 
 without that link. Tests: `apps/web/tests/composer-talks-to.test.tsx` (7),
 `apps/api/tests/test_start_requests_app_links.py` (11). Needs the web and api images rebuilt to be
 visible. Independent tester walk: to do (by the UI stream).
+
+### (r) MCP tools (838ec54a)
+
+`engine/boss_engine/tools/app_platform_tools.py`, declared like their routes: `list_templates`,
+`describe_template` (`template:read`, org; an imported template's brief/guide/security note marked
+untrusted); `template_status` (`project:read`: applied templates and their status, secret presence
+only); `apply_template` (`workflow_run:start` + `template:read` through the new
+`ToolSpec.also_requires`, which the identity gate checks at each key's own scope; the API route's
+plan -> readiness -> start -> record path, also from chat); `security_scan_status`,
+`list_security_findings`, `security_report` (JSON or Markdown), `security_review_status`
+(`project:read`). Scanning stays `run_security_scan` (`security_scan:run`); a review is
+`start_workflow(security_review)`. Import, approve, trial, delete and triage stay console/API only
+(tested absent). Ids are confined to the call's project in `object_args`. Registry: 123 tools (71
+read, 52 write); MCP.md, the landing count and IDENTITY_PERMISSIONS.md §7 updated. Tests:
+`apps/api/tests/test_app_platform_mcp_tools.py` (8, real DB, enforce, real bindings),
+`engine/tests/test_app_platform_tools_declared.py` (4), 3 `also_requires` cases in
+`test_identity_authz_tool_gate.py`.
+
+### Final gate (2026-10-09, merged head, `boss_test_finish`, one session per group)
+
+- Engine (templates incl. compose + microVM, link rules/fence, name-twice, oidc, tool declarations,
+  tool gate, registry, catalogue, previews sandbox, gate labels): 397 passed, 29 skipped.
+- API: templates 46; deploy guard + Sign in with BOSS 36; links + start requests + gateway 47; MCP
+  tools + tool object args 27; identity coverage 29; previews origin + security scan/review routes +
+  feature-onto-app 36; OIDC flow/admin/adversarial/customers/reauth/oidc:read 151 passed + 1 failed +
+  3 errors in the 22-minute session, all 4 pass when rerun (13/13: a TOTP step boundary and fixture
+  setup under load).
+- Web: tsc clean (with `@boss/api-client` resolved to this worktree's package: a node_modules
+  symlinked whole from the main checkout reads the main checkout's api-client and reports a false
+  `security_review` error); full vitest 5923 passed + 1 failed (the action-permissions table, fixed in
+  94fef360), then 5913 passed + 11 failed in a run beside the API suites: the 2 files
+  (setup-github-access, setup-model-routing) pass alone (18/18), timing under load.
+- `test_registry.py` fails 2 only when run in one session after the API suites; alone 12/12.
+
+### Resume (finish)
+
+- `cd ~/src/boss-wt-finish && git pull` (branch `feat/app-platform-finish`). Runner:
+  the session scratchpad `finish/t.sh` (pytest against `boss_test_finish`, created per session).
+- Open: preview sign-in needs per-app preview origins (cookies); deploys do not read app secrets yet;
+  the Node login stack's callback URL drops a base path; independent tester walks of App ▸ Sign-in,
+  App ▸ Links, App ▸ Security, App sign-in and the composer's Talks to (UI stream `fix/fx-templateui`).
