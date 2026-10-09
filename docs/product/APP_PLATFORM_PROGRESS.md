@@ -821,6 +821,13 @@ set), then `proof.py`. Only one compose stack on this Mac at a time.
 
 ## Stream S6: BOSS as an OIDC provider (F6)
 
+> **Integration note for S6 (open item, not changed in S6's code):** the `login-oauth` template
+> reads BOSS as a provider from `OIDC_BOSS_CLIENT_ID`, `OIDC_BOSS_CLIENT_SECRET` and
+> `OIDC_BOSS_ISSUER` (a template may not ask for `BOSS_*`: reserved). When an app registers as a
+> BOSS client, S6 must hand the app its client settings under exactly those names (the secret as
+> an app secret binding, never in the build). Also from integration: `oidc:read` now gates the
+> admin GETs (see the spec's decisions), and the maintenance tick rotates the `oidc` family.
+
 Worktree `~/src/boss-wt-s6-oidc`, branch `feat/s6-oidc` (from `feat/app-platform`
 @ 8b7cc39d). Engine: `engine/boss_engine/oidc_provider/`; routes: `apps/api/app/oidc_routes.py`.
 

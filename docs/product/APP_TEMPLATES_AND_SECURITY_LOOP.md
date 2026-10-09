@@ -958,8 +958,11 @@ no social sign-in inside customer pools in v1, no SAML IdP).
   any OIDC verification → refused; mix-up (`iss` check); code injection across clients; CSRF on
   consent; clickjacking headers; user enumeration timing on sign-in; open redirect via
   `post_logout_redirect_uri`.
-- **Conformance:** OpenID conformance suite Basic OP, Config OP, (later) RP-initiated logout —
-  all green.
+- **Conformance:** the OpenID conformance suite's APPLICABLE modules (Config OP, the code-flow
+  modules that send PKCE and a nonce, (later) RP-initiated logout) — all green. BOSS is NOT
+  Basic-OP certifiable, by design (D14): PKCE (S256) and a nonce are mandatory on every
+  authorization request, and no compatibility switch weakens either; the Basic OP modules that
+  omit them are expected to fail and are not run.
 - **End-to-end proof (F6):** create a customer pool "Bank customers" with MFA required and
   passkeys on. Apply `login-oauth` with provider **BOSS** to the fixed banking app (Node, then
   Java). In the preview, Playwright: sign up a customer, enrol TOTP and a virtual-authenticator
@@ -1100,3 +1103,11 @@ The operator accepted every recommendation:
 - **D11:** OpenID conformance runs nightly in CI when a runner has Docker.
 - **D12:** active ZAP scanning off by default; the banking demo turns it on.
 - **D13:** customer pools are in Community.
+- **D14:** no compatibility switch that weakens PKCE or the nonce. BOSS is not Basic-OP
+  certifiable by design (PKCE + nonce mandatory); a later conformance run covers only the
+  applicable modules.
+- **Integration defaults** (2026-10-09; the operator may override): `oidc:read` (org, read-only,
+  no step-up; Owner, Admin, Auditor) gates every OIDC admin list/detail GET, so the App sign-in
+  console loads without step-up; writes keep their step-up permissions. An Operator, who holds
+  `oidc_client:manage` on a project, no longer READS clients without `oidc:read` (grant it to
+  Operator if that is wanted).
