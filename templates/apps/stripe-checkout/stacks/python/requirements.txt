@@ -1,0 +1,5 @@
+fastapi>=0.115
+stripe>=12,<17
+# tests
+httpx>=0.27
+pytest>=8
