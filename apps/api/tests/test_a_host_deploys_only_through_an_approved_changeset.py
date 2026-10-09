@@ -227,6 +227,35 @@ def test_plan_records_a_changeset_a_reservation_and_a_decision_and_touches_no_ho
     assert again["deployment_run_id"] == plan["deployment_run_id"]
 
 
+def test_the_infra_deploy_button_plans_and_ships_through_the_real_path(client, engine, hosted):
+    """The Infra screen's Deploy on an app target, with nothing between the button and the host
+    faked: the route, the manual-deploy service, the planner, approval and the apply.
+
+    The button's own test faked `delivery_deploy_endpoint`, which the button called as a plain
+    function. When that handler grew a `request` parameter, every press answered 500 and that
+    test stayed green."""
+    pressed = client.post(f"/v1/infra/targets/{hosted['target_id']}/deploy",
+                          json={"project_id": HOME, "actor": "ceo", "ref": "main"})
+    assert pressed.status_code == 200, pressed.text
+    plan = pressed.json()
+    assert plan["kind"] == "delivery"
+    assert plan["ref"] == f"delivery:{plan['deployment_run_id']}"
+    assert plan["next_action"] == "approve_decision", plan
+
+    changeset, reservation, receipts, run = _governance(engine, plan)
+    assert run["deployment_target_id"] == hosted["target_id"]
+    assert run["status"] == "awaiting_approval" and run["trigger"] == "manual"
+    assert run["commit_ref"] == "main"
+    assert run["release_packet"]["source"] == "manual_deploy"
+    assert run["release_packet"]["requested_by"] == "ceo"
+    assert changeset["approval_decision_id"] == plan["decision_id"]
+    assert receipts == [] and hosted["host"].writes() == []
+
+    result, _ = _approve_and_apply(client, engine, plan)
+    assert result["status"] == "succeeded", result
+    assert any("docker run" in c for c in hosted["host"].commands)
+
+
 def test_without_approval_nothing_can_apply_it(client, engine, hosted):
     plan = _plan(client, hosted)
 
