@@ -2728,7 +2728,11 @@ def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
         attempts = [_attempt_row(r, facts, now=now, viewer=viewer) for r in group]
         for order, a in enumerate(reversed(attempts), start=1):
             a["order"] = order
+        # THE APP'S ID (the one builds stamp: finalize_ctx.app_id), so an app-level surface —
+        # App › Security — can address the app, not one of its builds.
+        app_id = str((_j(head.get("finalize_ctx"), {}) or {}).get("app_id") or "") or None
         rows.append({"key": rid, "app": app_name(head), "builders": roles, "run_id": rid,
+                     "app_id": app_id,
                      "pr_number": _pr_number(with_pr) if with_pr else None,
                      "pr_url": (with_pr or {}).get("pull_request_url"),
                      "pr_state": _pr_state(with_pr, facts),

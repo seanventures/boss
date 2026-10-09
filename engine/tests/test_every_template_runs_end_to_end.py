@@ -125,6 +125,15 @@ def _fakes(c, project_id: str) -> dict[str, FakeTool]:
                   {"i": preview_id, "r": args.get("run_id")})
         return {"status": "starting", "preview_id": preview_id}
 
+    def security_scan(pid, args):
+        # A finished scan with nothing found: the review's later steps say "not needed".
+        scan_id = new("scan")
+        c.execute(text("INSERT INTO security_scans (id, project_id, app_key, status, counts, "
+                       "started_at, ended_at) VALUES (:i, :p, :a, 'done', "
+                       "'{\"total\": 0}'::jsonb, now(), now())"),
+                  {"i": scan_id, "p": pid, "a": args.get("app_key")})
+        return {"status": "queued", "scan_id": scan_id}
+
     def deploy(pid, args):
         target_id = new("dt")
         _insert_awaited(c, pid, "deployment_targets", target_id, "active")
@@ -139,7 +148,8 @@ def _fakes(c, project_id: str) -> dict[str, FakeTool]:
     return {name: FakeTool(name, handler) for name, handler in (
         ("create_discovery", research), ("request_meeting", meeting),
         ("create_code_task", code_task), ("extend_code_task", extend),
-        ("start_preview", preview), ("deploy_app", deploy))}
+        ("start_preview", preview), ("deploy_app", deploy),
+        ("run_security_scan", security_scan))}
 
 
 def _drive(eng, c, project_id: str, run_id: str, ticks: int = 40) -> None:
@@ -183,7 +193,7 @@ def test_every_catalogue_template_runs_to_its_last_step(eng, project, monkeypatc
                                         "workflow_name": spec["workflow_name"]})})
         # ONLY WHAT START WOULD REQUIRE — the form's required fields and nothing else.
         brief = {"title": TITLE, "directive": wc.example_for(key)["directive"],
-                 "notify_channel": "mattermost:announcements"}
+                 "notify_channel": "mattermost:announcements", "app_key": "swap-board"}
         run_input = {name: brief[name] for name in spec["input_schema"]["required"]}
         run = _start(c, project, version["id"], run_input)
         _drive(eng, c, project, run["id"])

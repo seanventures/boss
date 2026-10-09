@@ -56,6 +56,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "redeploy": {"run_id": CODE_TASK},
     "register_repository": {"connection_id": "github_connection"},
     "request_meeting": {"task_id": "task"},
+    "run_security_scan": {"workflow_run_id": "workflow_run"},
     "resolve_review_comment": {"run_id": CODE_TASK},
     "retarget_app": {"target_id": "deployment_target", "host_id": "deployment_host"},
     "retry_code_task": {"run_id": CODE_TASK},

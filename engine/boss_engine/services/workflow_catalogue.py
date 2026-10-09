@@ -70,6 +70,14 @@ DEFAULT_STEP_AGENTS: dict[str, str] = {
     "plrr": "sre",
     "monitor": "sre",
     "document": "docs_writer",
+    # THE SECURITY REVIEW: the security reviewer scans, re-reviews and reports; the PM convenes
+    # the panel exactly as for any panel (the security lens chairs its seats); the engineering
+    # captain builds the fix like any build.
+    "security_scan": "security_reviewer",
+    "security_panel": "pm",
+    "security_fix": "engineering_captain",
+    "security_rereview": "security_reviewer",
+    "security_report": "security_reviewer",
 }
 
 #: WHO BUILDS IT DEPENDS ON WHAT IS BEING BUILT (§0.1 item 4: "build → Engineering Captain /
@@ -92,7 +100,7 @@ DEFAULT_CAPTAIN_FALLBACK: dict[str, str] = {
 }
 
 #: The capabilities BUILD_AGENT_BY_ENTRY re-staffs.
-_BUILD_CAPABILITIES = frozenset({"build", "retry_build"})
+_BUILD_CAPABILITIES = frozenset({"build", "retry_build", "security_fix"})
 
 
 def _step(
@@ -504,6 +512,42 @@ CATALOGUE: list[dict[str, Any]] = [
         ]),
     },
     {
+        # THE SECURITY REVIEW (APP_TEMPLATES_AND_SECURITY_LOOP.md §4.2). Real tools find; a
+        # panel chaired by the security lens recommends; a person chooses; the app's next build
+        # fixes; the same tools re-scan; the re-review passes only when every targeted finding
+        # is gone (or a person justified it) and no new high or critical appeared. "Changes
+        # asked" runs a second, last round on what is left (fix_2 .. rereview_2) — a bounded
+        # loop drawn as steps, each of which says "not needed" when round 1 passed. Hand-wired
+        # through `_chain`; the literal `after` inputs name the step each one follows.
+        "key": "security_review",
+        "name": "Security Review",
+        "description": "Scan an app with real tools, have a panel recommend fixes, choose them, "
+                       "build them, and prove them with a re-scan.",
+        "objective": (
+            "Find real security flaws in this app with real tools, fix the ones a person "
+            "chooses, and prove each fix with a re-scan. The panel's job is a short, "
+            "prioritised list of fixes tied to the findings — not a product spec."
+        ),
+        "work_class": "any",
+        "steps": _chain([
+            _step("scan", "security_scan", {"app_key": _in("app_key"), "zap_mode": _in("zap_mode")}),
+            _step("panel", "security_panel", {"app_key": _in("app_key"),
+                                              "focus": _in("directive")}),
+            _step("decide", "security_decide", approver_role="security_reviewer"),
+            _step("fix", "security_fix", {"app_key": _in("app_key"), "round": 1}),
+            _step("rescan", "security_scan", {"app_key": _in("app_key"), "after": "fix"}),
+            _step("rereview", "security_rereview", {"app_key": _in("app_key"), "after": "rescan",
+                                                    "round": 1, "final": False}),
+            _step("fix_2", "security_fix", {"app_key": _in("app_key"), "round": 2,
+                                            "after_review": "rereview"}),
+            _step("rescan_2", "security_scan", {"app_key": _in("app_key"), "after": "fix_2"}),
+            _step("rereview_2", "security_rereview", {"app_key": _in("app_key"),
+                                                      "after": "rescan_2", "round": 2,
+                                                      "final": True}),
+            _step("report", "security_report", {"app_key": _in("app_key")}),
+        ]),
+    },
+    {
         "key": "data_migration",
         "name": "Data / Migration Change",
         # THE PERSON IS AT THE RELEASE, AND THE TEXT SAYS SO. "A person reviews it before
@@ -706,6 +750,14 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
     "reference_links": {"type": "array", "items": {"type": "string", "format": "uri"},
                         "title": "Links to read first (optional)",
                         "description": "Docs, designs or tickets the builder should read."},
+    "app_key": {"type": "string", "title": "App",
+                "description": "The app to review: its id in this project (Factory › Apps). "
+                               "Its newest build's branch is scanned.",
+                "examples": ["shift-swap-board"]},
+    "zap_mode": {"type": "string", "enum": ["baseline", "api"],
+                 "title": "Running-app scan (optional)",
+                 "description": "baseline (default) watches the app passively; api also "
+                                "attacks its API, only inside the scan's own sandbox."},
     "notify_channel": {"type": "string", "title": "Who to tell",
                        "description": "Where the outcome is posted: email:someone@example.com or "
                                       "mattermost:<channel id>. Leave blank and the notify step "
@@ -790,6 +842,15 @@ BRIEFS: dict[str, dict[str, Any]] = {
                     "directive": "Make sure only a shift's own manager can approve its swap: "
                                  "check for IDOR on the approve endpoint and for CSRF on the "
                                  "approvals form."},
+    },
+    "security_review": {
+        "directive": ("What should the review focus on? (optional)",
+                      "The scan covers the whole app; say what worries you most and the panel "
+                      "weighs it."),
+        "example": {"title": "Security review: Shift swap board",
+                    "directive": "Check the approvals flow for injection and missing headers.",
+                    "app_key": "shift-swap-board"},
+        "required": ("app_key",),
     },
     "data_migration": {
         "directive": ("What data changes?",

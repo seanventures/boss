@@ -29,6 +29,7 @@ import { formatMonthDay } from "../../lib/datetime";
 import { GatedButton } from "../../components/gated";
 import { NEW_BUILD_TIP } from "../../lib/compose-links";
 import { LINKS_TIP, LinksSheet } from "./links-sheet";
+import { SecuritySheet, readSecurityParam, writeSecurityParam } from "./security/security-sheet";
 
 /** Where "＋ Add a feature" goes: New project, in add mode, with this app chosen. */
 export function addFeatureHref(appKey: string, previewId?: string | null): string {
@@ -55,6 +56,8 @@ export type AppRow = {
    *  whether it ran on a subscription only, its repo, its brief and when it last moved. */
   prNumber?: number; prUrl?: string; prState?: PrState; costUsd?: number; included?: boolean;
   repo?: string; brief?: string; at?: string;
+  /** The app's id (finalize_ctx.app_id): what app-level surfaces — App › Security — address. */
+  appId?: string;
 };
 
 const BUILT = new Set(["pr_open", "merged", "deployed", "done_no_pr"]);
@@ -130,7 +133,7 @@ export function parseApps(w: unknown): AppRow[] {
       rank: rankOf(word),
       prNumber: numOrU(o.pr_number), prUrl: opt(o.pr_url), prState: prStateOf(o.pr_state),
       costUsd: num(o.cost_usd), included: o.included === true, repo: opt(o.repo), brief: opt(o.brief),
-      at: opt(o.at),
+      at: opt(o.at), appId: opt(o.app_id),
     };
   });
 }
@@ -253,6 +256,9 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
   const [menu, setMenu] = useState<string | null>(null);
   /** App ▸ Links (F5): the app whose links sheet is open. */
   const [linksOf, setLinksOf] = useState<AppRow | null>(null);
+  /** App › Security: the app id it is open on (`?security=<app id>`, so it can be linked). */
+  const [security, setSecurity] = useState<string | null>(() => readSecurityParam());
+  const openSecurity = (appId: string | null) => { setSecurity(appId); writeSecurityParam(appId); };
   // A row menu closes on a press anywhere else, or Esc.
   useEffect(() => {
     if (!menu) return undefined;
@@ -348,6 +354,12 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
                           }}>Open its build</button>
                           <button type="button" role="menuitem" title={LINKS_TIP} data-testid={`fx-app-menu-links-${a.key}`}
                                   onClick={(e) => { e.stopPropagation(); setMenu(null); setLinksOf(a); }}>Links</button>
+                          {a.appId ? (
+                            <button type="button" role="menuitem" data-testid={`fx-app-menu-security-${a.key}`}
+                                    title="Scans, findings and security reviews of this app" onClick={(e) => {
+                              e.stopPropagation(); setMenu(null); openSecurity(a.appId ?? null);
+                            }}>Security</button>
+                          ) : null}
                         </span>
                       ) : null}
                     </span>
@@ -413,6 +425,11 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
         <LinksSheet projectId={projectId} appKey={linksOf.key} app={linksOf.app}
                     others={apps.filter((o) => o.key !== linksOf.key).map((o) => ({ key: o.key, app: o.app }))}
                     onClose={() => setLinksOf(null)} />
+      ) : null}
+      {security ? (
+        <SecuritySheet projectId={projectId} appKey={security}
+                       appName={apps.find((a) => a.appId === security)?.app}
+                       onClose={() => openSecurity(null)} />
       ) : null}
     </div>
   );

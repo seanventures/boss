@@ -104,7 +104,7 @@ passport_presets:
     agents: [vera, rook, sentry, weave, muse]
     permissions: [code_task:read, code_task:steer, repository:read, github:read, preview:read,
                   artifact:read, assurance:read, assurance:run, workflow_run:read, skill:read,
-                  skill:invoke, memory:read, spend:reserve]
+                  skill:invoke, memory:read, spend:reserve, security_scan:run]
     external_ceiling: {github: {contents: read, pull_requests: write}}
   - key: planner
     name: Planner

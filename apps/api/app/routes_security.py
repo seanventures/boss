@@ -7,7 +7,8 @@ different, in-process surface.)
 A scan is a worker job (`security.scan`): the worker leases it and asks the API to run it
 (`POST /v1/security/scans/{id}/run`, worker only), because the scanners and the sandbox helper are in
 the api image. The full loop starts through `POST /v1/delivery-workflows/start` with
-`workflow_key=security_review` (built later).
+`workflow_key=security_review`; `/v1/security/reviews*` reads its runs and records the person's
+choice of fixes (services/security_review_steps.py, security_scan/review.py).
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import text
 
 from boss_engine.identity import P, Scope, permit
 
@@ -37,6 +39,20 @@ class ScanRequestBody(BaseModel):
     tools: Optional[list[str]] = Field(default=None, max_length=3)
     zap: Optional[ZapOptions] = None
     workflow_run_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class AcceptItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    finding_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=3, max_length=2000)
+
+
+class SelectionBody(BaseModel):
+    """A person's choice at the review's decide step: the recommendations to fix, and findings
+    they will not fix, accepted with a reason."""
+    model_config = ConfigDict(extra="forbid")
+    selected: list[str] = Field(default_factory=list, max_length=100)
+    accept: list[AcceptItem] = Field(default_factory=list, max_length=200)
 
 
 class TriageBody(BaseModel):
@@ -155,6 +171,57 @@ def build_security_router() -> APIRouter:
         if format == "md":
             return PlainTextResponse(report.to_markdown(rep), media_type="text/markdown; charset=utf-8")
         return rep
+
+    # ---- the security_review workflow (S4-workflow): its runs, as App › Security draws them ----
+
+    @router.get("/v1/security/reviews")
+    @permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
+    def list_reviews(project_id: str = Query(..., max_length=128),
+                     app_key: Optional[str] = Query(default=None, max_length=128),
+                     limit: int = Query(default=20, ge=1, le=100)) -> Any:
+        from boss_engine.services import security_review_steps
+
+        engine, _ = _engine_settings()
+        with engine.begin() as conn:
+            return {"reviews": security_review_steps.list_reviews(conn, project_id, app_key, limit)}
+
+    # One review: its steps, recommendations (the checklist) and the findings they cite.
+    @router.get("/v1/security/reviews/{run_id}")
+    @permit(P.PROJECT_READ, scope=Scope.of("workflow_run", path="run_id"))
+    def get_review(run_id: str) -> Any:
+        from boss_engine.security_scan import review, service
+        from boss_engine.services import security_review_steps
+
+        engine, _ = _engine_settings()
+        with engine.begin() as conn:
+            state = security_review_steps.review_state(conn, run_id)
+            if state is None:
+                return JSONResponse({"error": "review_not_found"}, status_code=404)
+            scan_id = next((s.get("scan_id") for s in state["steps"] if s["id"] == "scan"), None)
+            findings = service.list_findings(conn, scan_id) if scan_id else []
+        state["scan_id"] = scan_id
+        state["findings"] = {f["fingerprint"]: {"id": f["id"], "title": f["title"], "severity": f["severity"],
+                                                "tool": f["tool"], "status": f["status"],
+                                                "where": review.where(f)} for f in findings}
+        return state
+
+    @router.post("/v1/security/reviews/{run_id}/selection")
+    @permit(P.SECURITY_FINDING_TRIAGE, scope=Scope.of("workflow_run", path="run_id"))
+    def record_selection(run_id: str, payload: SelectionBody) -> Any:
+        from boss_engine.security_scan import review
+
+        engine, _ = _engine_settings()
+        try:
+            with engine.begin() as conn:
+                project_id = conn.execute(text("SELECT project_id FROM workflow_runs WHERE id = :r"),
+                                          {"r": run_id}).scalar()
+                if project_id is None:
+                    return JSONResponse({"error": "review_not_found"}, status_code=404)
+                return review.record_selection(
+                    conn, project_id=str(project_id), run_id=run_id, selected=payload.selected,
+                    accept=[a.model_dump() for a in payload.accept], actor=_actor())
+        except review.ReviewRefused as exc:
+            return _refused(exc)
 
     # Worker-invoked: run one leased `security.scan` job here, where the scanners are.
     @router.post("/v1/security/scans/{scan_id}/run")
