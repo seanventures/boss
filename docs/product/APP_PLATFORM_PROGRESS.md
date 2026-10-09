@@ -123,8 +123,8 @@ Branch `feat/s4-security` (worktree `~/src/boss-wt-s4-security`), from
 | # | Step | State |
 |---|---|---|
 | 1 | `security` toolchain layer: Dockerfile.community stage, registry entry, egress `api.osv.dev` (D6) | done |
-| 2 | `engine/boss_engine/security_scan/`: parsers, fingerprints, redaction, scope, runners, service, report + unit tests | in progress |
-| 3 | `routes_security.py` (501s replaced), worker job `security.scan`, authz tests | todo |
+| 2 | `engine/boss_engine/security_scan/`: parsers, fingerprints, redaction, scope, runners, service, report + unit tests | done |
+| 3 | `routes_security.py` (501s replaced), worker job `security.scan`, authz tests | in progress |
 | 4 | End-to-end proof on a compose stack (Node/Express + SQLite app: scan, fix, re-scan) | todo |
 
 ### Notes per step
@@ -143,3 +143,26 @@ Branch `feat/s4-security` (worktree `~/src/boss-wt-s4-security`), from
    Image size (arm64 stage, measured): Java 372 MB + Semgrep venv 383 MB + ZAP 268 MB + OSV 52 MB
    + rules 5 MB ≈ 1.08 GB on the api/worker image when `security` is on; nothing when off.
    `boss toolchains enable security` works (`KNOWN_TOOLCHAINS` in boss.sh).
+
+2. The engine (`engine/boss_engine/security_scan/`). `parsers` (Semgrep SARIF, OSV JSON grouped by
+   advisory aliases, ZAP traditional-json one finding per alert × route template × param; 50 MB raw,
+   10k findings, 4 KB evidence; a shape the tool does not write is a ParseError, so the tool is
+   `failed`, never "0 findings"); `fingerprints` (code: file + enclosing function found from the
+   checkout, JS/TS, Python, Java/Kotlin; dependency: lockfile + ecosystem + package, not version;
+   DAST: method + path template + param, not host/port/ids; over the REDACTED snippet, so a rotated
+   hardcoded secret is the same finding and no hash of a secret is stored; `snippet_key` finds
+   "moved"); `redact` (identity.redaction, then string literals of secret rules, token shapes,
+   cookie values, 4 KB cap); `scope` (app = latest build of that app id in the project; ref = its
+   branch or a sha on it; ZAP target `sandbox` or `preview:<id>` of the same project AND app served on
+   loopback; anything else refused); `runners` (Semgrep offline with the vendored packs, OSV through
+   egress, the app started in the sandbox via `preview_service.how_app_runs` on a loopback port,
+   ZAP Automation Framework plan scoped to that one URL, passive unless `mode=api`; per-tool
+   timeouts `BOSS_SECURITY_TIMEOUT_<TOOL>`); `service` (request → queued scan + `security.scan` job;
+   execute in owner scope `sandbox`/`secscan_<id>` with `sandbox_identity.bind`, so every tool runs as
+   the run's uid; first_seen and a person's triage carry to later scans by fingerprint; triage needs
+   a reason, emits `security_finding.triaged`); `report` (fixed / still_open / moved / removed /
+   not_rescanned / new, `rules_differ` when tool versions or rule digests differ, Markdown export).
+   Fixtures are real output of the pinned tools over `tests/e2e/security/vulnapp` and
+   `vulnapp-fixed`. Tests: `engine/tests/test_security_scan_engine.py` (51).
+   Decision: old scans' findings are never rewritten to `fixed`; "fixed" is the report's verdict
+   between two scans (history stays as scanned; only triage changes a row).
