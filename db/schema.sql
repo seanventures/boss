@@ -8289,6 +8289,18 @@ CREATE TABLE IF NOT EXISTS security_recommendations (
   selected         BOOLEAN NOT NULL DEFAULT false,
   decided_by       TEXT
 );
+-- The security_review workflow (S4-workflow): which project and scan a recommendation answers,
+-- whether the Panel wrote it or BOSS derived it from findings the Panel left uncovered, the
+-- Panel's risk and false-positive notes, its place in the list, and when a person decided.
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS project_id TEXT;
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS scan_id TEXT;
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'panel';
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS risk_if_unfixed TEXT;
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS false_positive_reason TEXT;
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ;
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS security_recommendations_run ON security_recommendations (workflow_run_id);
 -- END F4 ------------------------------------------------------------------------------------------
 
 -- BEGIN F5 (cross-app links; owner: stream S5; spec §5.2) -----------------------------------------

@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "f138655cb1d69b37"
+CATALOGUE_FINGERPRINT = "dbf4ae3a9f6e47f6"
 
 
 class Permission(StrEnum):
@@ -1007,7 +1007,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
 
 PASSPORT_PRESETS: dict[str, PassportPreset] = {
     "builder": PassportPreset(key="builder", name="Builder", agents=('forge', 'strata', 'prism', 'helm'), permissions=('code_task:read', 'code_task:create', 'code_task:steer', 'code_task:retry', 'repository:read', 'github:read', 'github:sync', 'preview:read', 'preview:manage', 'artifact:read', 'artifact:rebuild', 'workflow:read', 'workflow_run:read', 'skill:read', 'skill:invoke', 'memory:read', 'memory:manage', 'spend:reserve', 'secret:lease', 'sandbox:read'), external_ceiling={"github": {"contents": "write", "pull_requests": "write", "push_refs": "boss/*"}}),
-    "reviewer": PassportPreset(key="reviewer", name="Reviewer", agents=('vera', 'rook', 'sentry', 'weave', 'muse'), permissions=('code_task:read', 'code_task:steer', 'repository:read', 'github:read', 'preview:read', 'artifact:read', 'assurance:read', 'assurance:run', 'workflow_run:read', 'skill:read', 'skill:invoke', 'memory:read', 'spend:reserve'), external_ceiling={"github": {"contents": "read", "pull_requests": "write"}}),
+    "reviewer": PassportPreset(key="reviewer", name="Reviewer", agents=('vera', 'rook', 'sentry', 'weave', 'muse'), permissions=('code_task:read', 'code_task:steer', 'repository:read', 'github:read', 'preview:read', 'artifact:read', 'assurance:read', 'assurance:run', 'workflow_run:read', 'skill:read', 'skill:invoke', 'memory:read', 'spend:reserve', 'security_scan:run'), external_ceiling={"github": {"contents": "read", "pull_requests": "write"}}),
     "planner": PassportPreset(key="planner", name="Planner", agents=('juno', 'atlas', 'keystone', 'rally', 'vector', 'cadence'), permissions=('code_task:read', 'code_task:create', 'meeting:read', 'meeting:convene', 'discovery:read', 'discovery:create', 'workflow:read', 'workflow:create', 'workflow_run:read', 'workflow_run:start', 'work_item:read', 'work_item:manage', 'decision:read', 'memory:read', 'memory:manage', 'spend:reserve'), external_ceiling={"github": {"contents": "read", "issues": "write"}}),
     "operator_agent": PassportPreset(key="operator_agent", name="Operator agent", agents=('harbor', 'pilot', 'bedrock', 'relay', 'beacon'), permissions=('deployment:read', 'deployment:create', 'host:read', 'infra:read', 'observability:read', 'reliability:read', 'reliability:respond', 'preview:read', 'preview:manage', 'workflow_run:read', 'workflow_run:control', 'spend:reserve', 'secret:lease'), external_ceiling={}),
     "analyst": PassportPreset(key="analyst", name="Analyst", agents=('ledger', 'meter', 'conduit', 'sweep'), permissions=('budget:read', 'model_provider:read', 'infra:read', 'observability:read', 'activity:read', 'spend:reserve'), external_ceiling={}),

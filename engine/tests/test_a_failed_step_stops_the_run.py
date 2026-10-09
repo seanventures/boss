@@ -79,6 +79,9 @@ INTERNAL = {
     # Deprecation / Sunset's whole announcement. The runner now sends it, so a send that cannot
     # happen is a failure that must stop the run like any other.
     "notify": "_notify",
+    # The security review's verdict and its report (services/security_review_steps.py).
+    "security_rereview": "_security_rereview",
+    "security_report": "_security_report",
 }
 
 #: Tool-less capabilities that commission NOTHING. They are honest no-ops that say so
@@ -243,6 +246,18 @@ def _assert_stopped(c, run_id: str, steps: dict) -> None:
     assert _run_status(c, run_id) in {"failed", "deadlettered"}
 
 
+def _security_tool_args(monkeypatch) -> None:
+    """The security review's panel and fix build their tool's arguments from the run's earlier
+    steps (a scan's findings, a person's choice); a two-step run has none, so here they are
+    given, and the TOOL's work — the thing under test — is reached."""
+    from boss_engine.services import security_review_steps
+
+    monkeypatch.setattr(security_review_steps, "prepare",
+                        lambda _c, _p, key, _ctx, inputs: {"args": {**inputs, "title": key,
+                                                                    "instructions": key,
+                                                                    "directive": key}})
+
+
 def _awaited_cases():
     for key, kind in sorted(AWAITED.items()):
         _table, _ok, bad = runner._AWAIT_TABLES[kind]
@@ -268,6 +283,7 @@ def test_awaited_work_that_fails_stops_the_run_at_that_step(eng, project, monkey
             "run_id": awaited_id})
     if key == "preview":
         monkeypatch.setattr(runner, "_running_preview", lambda *a, **k: None)
+    _security_tool_args(monkeypatch)
     # Deploy's "no preview, no deploy" guard is its own test; here the deployment is under test.
     monkeypatch.setattr(runner, "_preview_missing_for_run", lambda *a, **k: None)
     table = runner._AWAIT_TABLES[kind][0]
@@ -381,6 +397,7 @@ def _drive_tool(eng, project, monkeypatch, key, tool, inputs=None):
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([tool]))
     monkeypatch.setattr(runner, "_preview_missing_for_run", lambda *a, **k: None)
     monkeypatch.setattr(runner, "_running_preview", lambda *a, **k: None)
+    _security_tool_args(monkeypatch)
     with eng.begin() as c:
         run = _two_step(c, project, key, inputs)
         _tick_through_retries(eng, c, project, run["id"])

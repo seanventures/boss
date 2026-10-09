@@ -1811,6 +1811,304 @@
       }
     },
     {
+      "workflow_key": "security_review",
+      "name": "Security Review",
+      "description": "Scan an app with real tools, have a panel recommend fixes, choose them, build them, and prove them with a re-scan.",
+      "spec": {
+        "entry_step": "scan",
+        "steps": [
+          {
+            "id": "scan",
+            "kind": "capability",
+            "binding": {
+              "capability": "security_scan",
+              "inputs": {
+                "app_key": {
+                  "from_input": "app_key"
+                },
+                "zap_mode": {
+                  "from_input": "zap_mode"
+                }
+              }
+            },
+            "next": [
+              "panel"
+            ],
+            "captain": "security_reviewer",
+            "default_captain": "security_reviewer",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "panel",
+            "kind": "capability",
+            "binding": {
+              "capability": "security_panel",
+              "inputs": {
+                "app_key": {
+                  "from_input": "app_key"
+                },
+                "focus": {
+                  "from_input": "directive"
+                }
+              }
+            },
+            "next": [
+              "decide"
+            ],
+            "captain": "pm",
+            "default_captain": "pm",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "decide",
+            "kind": "capability",
+            "binding": {
+              "capability": "security_decide",
+              "inputs": {}
+            },
+            "next": [
+              "fix"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "security_reviewer",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "fix",
+            "kind": "capability",
+            "binding": {
+              "capability": "security_fix",
+              "inputs": {
+                "app_key": {
+                  "from_input": "app_key"
+                },
+                "round": 1
+              }
+            },
+            "next": [
+              "rescan"
+            ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "rescan",
+            "kind": "capability",
+            "binding": {
+              "capability": "security_scan",
+              "inputs": {
+                "app_key": {
+                  "from_input": "app_key"
+                },
+                "after": "fix"
+              }
+            },
+            "next": [
+              "rereview"
+            ],
+            "captain": "security_reviewer",
+            "default_captain": "security_reviewer",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "rereview",
+            "kind": "capability",
+            "binding": {
+              "capability": "security_rereview",
+              "inputs": {
+                "app_key": {
+                  "from_input": "app_key"
+                },
+                "after": "rescan",
+                "round": 1,
+                "final": false
+              }
+            },
+            "next": [
+              "fix_2"
+            ],
+            "captain": "security_reviewer",
+            "default_captain": "security_reviewer",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "fix_2",
+            "kind": "capability",
+            "binding": {
+              "capability": "security_fix",
+              "inputs": {
+                "app_key": {
+                  "from_input": "app_key"
+                },
+                "round": 2,
+                "after_review": "rereview"
+              }
+            },
+            "next": [
+              "rescan_2"
+            ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "rescan_2",
+            "kind": "capability",
+            "binding": {
+              "capability": "security_scan",
+              "inputs": {
+                "app_key": {
+                  "from_input": "app_key"
+                },
+                "after": "fix_2"
+              }
+            },
+            "next": [
+              "rereview_2"
+            ],
+            "captain": "security_reviewer",
+            "default_captain": "security_reviewer",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "rereview_2",
+            "kind": "capability",
+            "binding": {
+              "capability": "security_rereview",
+              "inputs": {
+                "app_key": {
+                  "from_input": "app_key"
+                },
+                "after": "rescan_2",
+                "round": 2,
+                "final": true
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "captain": "security_reviewer",
+            "default_captain": "security_reviewer",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "security_report",
+              "inputs": {
+                "app_key": {
+                  "from_input": "app_key"
+                }
+              }
+            },
+            "next": [],
+            "captain": "security_reviewer",
+            "default_captain": "security_reviewer",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Find real security flaws in this app with real tools, fix the ones a person chooses, and prove each fix with a re-scan. The panel's job is a short, prioritised list of fixes tied to the findings — not a product spec.",
+        "workflow_name": "Security Review",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "app_key"
+          ],
+          "properties": {
+            "app_key": {
+              "type": "string",
+              "title": "App",
+              "description": "The app to review: its id in this project (Factory › Apps). Its newest build's branch is scanned.",
+              "examples": [
+                "shift-swap-board"
+              ]
+            },
+            "zap_mode": {
+              "type": "string",
+              "enum": [
+                "baseline",
+                "api"
+              ],
+              "title": "Running-app scan (optional)",
+              "description": "baseline (default) watches the app passively; api also attacks its API, only inside the scan's own sandbox."
+            },
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What should the review focus on? (optional)",
+              "description": "The scan covers the whole app; say what worries you most and the panel weighs it.",
+              "examples": [
+                "Check the approvals flow for injection and missing headers."
+              ]
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
       "workflow_key": "data_migration",
       "name": "Data / Migration Change",
       "description": "Changes to data are the ones you cannot take back. The rollback is specified up front, and a person approves before the migration runs.",

@@ -164,6 +164,7 @@ _EXPECTED_TOOLS: set[str] = {
     "send_feedback",
     "set_job_priority",
     "start_preview",
+    "run_security_scan",
     # Authoring the PATH, as opposed to starting work on it.
     "draft_workflow",
     "draft_custom_step",
@@ -203,11 +204,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 114, (
+    assert len(reg.names()) == 115, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 64  # + my_recent_work (Agent World), + system_health (stability)
-    assert len(write) == 50  # + system_doctor_act (stability)
+    assert len(write) == 51  # + system_doctor_act (stability), + run_security_scan (F4)
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -392,6 +393,10 @@ def test_every_write_declares_what_pressing_it_costs():
 #: Writes whose effect can be undone or simply redone. These are what "fix it" legitimately
 #: means, and they stay one-shot when the operator asks for them.
 _SAFE_WRITES = [
+    # A SCAN READS THE APP AND WRITES FINDINGS. It runs the pinned scanners on the app's own code
+    # in a sandbox and against BOSS's own targets only; nothing in the app or the world changes,
+    # and running it twice records a second scan (APP_TEMPLATES_AND_SECURITY_LOOP.md §4).
+    "run_security_scan",
     # RE-ASKING GITHUB A QUESTION whose answer has changed. It updates the connection's test
     # state and nothing else; running it twice asks twice. This is what "fix it" means after
     # an operator widens a token's repository access — and BOSS telling them to go and press

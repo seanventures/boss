@@ -34,7 +34,7 @@ from .core import emit_event, now_utc
 # string literal repeated wherever the question is asked.
 from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
 from .run_decisions import open_step_decision
-from . import workflow_outcomes
+from . import security_review_steps, workflow_outcomes
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
 log = logging.getLogger(__name__)
@@ -1879,6 +1879,10 @@ def _execute_step(
                 "capability": key, "tool": None, "status": "not_applicable",
                 "note": "No PRD to approve — this build was started as a direct change.",
             }, {})
+        if key == "security_decide" and not security_review_steps.has_choices(
+                connection, project_id, context):
+            return workflow_outcomes.apply(key, security_review_steps.not_applicable(
+                key, "Nothing to choose: the scan found nothing to fix."), {})
         adopted_gate = _adopted_gate(connection, key, context)
         if adopted_gate:
             return workflow_outcomes.apply(key, {
@@ -2070,6 +2074,11 @@ def _perform_capability(
             return _notify(connection, ctx, project_id, step, context, inputs)
         # Same shape as `document`: no tool because it commissions nothing — it READS what the
         # run has already recorded and leaves a document behind.
+        # THE RE-REVIEW AND THE SECURITY REPORT (services/security_review_steps.py).
+        if key == "security_rereview":
+            return _security_rereview(connection, ctx, project_id, context, inputs)
+        if key == "security_report":
+            return _security_report(connection, ctx, project_id, context, inputs)
         if key == "report":
             # A REPORT THAT WAS NOT WRITTEN IS A STEP THAT FAILED.
             #
@@ -2324,6 +2333,18 @@ def _perform_capability(
                 f"{spec}"
             )}
 
+    # THE SECURITY REVIEW'S TOOL-BACKED STEPS (services/security_review_steps.py): the scan, the
+    # panel and the fix build their tool's arguments from what the run produced — or say why
+    # there is nothing to do (no findings, nothing chosen, round 1 already passed).
+    if key in security_review_steps.TOOL_KEYS:
+        try:
+            prepared = security_review_steps.prepare(connection, project_id, key, context, inputs)
+        except security_review_steps.StepRefused as refused:
+            raise SettledCapabilityError(str(refused)) from refused
+        if "args" not in prepared:
+            return prepared
+        inputs = prepared["args"]
+
     # WHOSE WORK THIS IS. A step may name a captain, overriding the capability's default —
     # the console already shows it as "the captain this WORKFLOW named for this step", and
     # validate_captain already refuses one the workforce does not have. Nothing read it at
@@ -2354,6 +2375,28 @@ def _perform_capability(
 
     # STARTED IS NOT FINISHED. See `_settle_started_work`.
     return _settle_started_work(capability, key, result)
+
+
+def _security_step(connection: Connection, ctx: Any, project_id: str, key: str,
+                   context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """A security review step with no tool. A refusal is SETTLED, not retried: the same two scans
+    give the same verdict, and the operator decides what happens next (Retry after another fix,
+    or stop the run)."""
+    try:
+        return security_review_steps.perform(connection, getattr(ctx, "settings", None),
+                                             project_id, key, context, inputs)
+    except security_review_steps.StepRefused as refused:
+        raise SettledCapabilityError(str(refused)) from refused
+
+
+def _security_rereview(connection: Connection, ctx: Any, project_id: str,
+                       context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    return _security_step(connection, ctx, project_id, "security_rereview", context, inputs)
+
+
+def _security_report(connection: Connection, ctx: Any, project_id: str,
+                     context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    return _security_step(connection, ctx, project_id, "security_report", context, inputs)
 
 
 #: An async tool reporting that the work is already over. Rare but real — a capability can find
@@ -2391,6 +2434,11 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     # {"run_id": <the new attempt>}}` the moment the attempt is queued; the step waits on that
     # attempt as `build` waits on the first.
     "retry_build": ("code_task", ("code_task_run_id", "run_id", "id")),
+    # THE SECURITY REVIEW: a scan is done when the worker has run every tool; the panel is a
+    # meeting; the fix is a build of the app.
+    "security_scan": ("security_scan", ("scan_id", "id")),
+    "security_panel": ("meeting", ("meeting_run_id", "run_id", "id")),
+    "security_fix": ("code_task", ("code_task_run_id", "run_id", "id")),
 }
 
 #: Envelopes a capability's tool nests its handle in, beyond the ones named after the kind and
@@ -2598,11 +2646,15 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     "stack_deployment": ("stack_deployments",
                          frozenset({"healthy"}),
                          frozenset({"failed", "rejected"})),
+    # A scan with every tool run is `done`; one whose tools all failed (or that could not run)
+    # is `failed`, with why in counts.error.
+    "security_scan": ("security_scans", frozenset({"done"}), frozenset({"failed"})),
 }
 
 #: Where a table keeps the reason its run ended, when it is not a column called `error`.
 _REASON_COLUMN: dict[str, str] = {"deployment_runs": "failure_reason",
-                                  "stack_deployments": "failure_reason"}
+                                  "stack_deployments": "failure_reason",
+                                  "security_scans": "counts->>'error'"}
 
 
 def _terminal_evidence(
@@ -2725,6 +2777,20 @@ def _terminal_evidence(
                     "approver_role": decided["approver_role"],
                 }
             return evidence
+        if kind == "security_scan":
+            # WHAT THE SCAN FOUND, so the run card reads "12 findings" and the panel, the
+            # re-scan and the re-review find the scan by its id.
+            row = connection.execute(
+                text("SELECT counts, commit_sha FROM security_scans WHERE id = :r"),
+                {"r": awaited_id},
+            ).mappings().first()
+            if not row:
+                return {}
+            counts = row["counts"] if isinstance(row["counts"], dict) else {}
+            return {"scan_id": awaited_id, "counts": counts, "commit_sha": row["commit_sha"],
+                    "note": f"{int(counts.get('total') or 0)} findings"
+                            + (f"; tools that failed: {', '.join(counts['failed_tools'])}"
+                               if counts.get("failed_tools") else "")}
         if kind == "agent_run":
             # WHAT THE AGENT ACTUALLY PRODUCED, read after the approval, not the snapshot
             # taken when it stopped. The snapshot is missing the skill that needed a person
@@ -3520,6 +3586,9 @@ def _gate_subject(
     if capability.is_gate:
         if _no_prd_to_approve(key, context):
             return None  # runs as ordinary work below and records "no PRD"
+        if key == "security_decide" and context is not None and not \
+                security_review_steps.has_choices(connection, project_id, context):
+            return None  # nothing to choose from: runs as ordinary work and records why
         if context is not None and _adopted_gate(connection, key, context):
             # Already answered. Returning None sends it down the ordinary path, where
             # execute_step records the approval it was started with.
@@ -3675,6 +3744,13 @@ def _open_gate(
     # a fact about where the email went.
     if capability_key in {"deploy", "redeploy", "monitor"}:
         recommendation_extra["environment"] = str(run_input.get("environment") or "staging")
+    if capability_key == "security_decide":
+        # Where the checklist is: App › Security draws the recommendations as the choice this
+        # approval records (approving without opening it takes the P0/P1 pre-ticks).
+        recommendation_extra["security_review"] = {
+            "run_id": run["id"], "app_key": str(run_input.get("app_key") or ""),
+            "recommendations": len(security_review_steps.review.list_recommendations(
+                connection, run["id"]))}
     decision_id = subject.get("decision_id") or open_step_decision(
         connection,
         project_id,

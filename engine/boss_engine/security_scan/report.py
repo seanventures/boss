@@ -108,8 +108,11 @@ def build_report(conn: Any, project_id: str, app_key: str, *, before: Optional[s
         if (tb.get(f["tool"]) or {}).get("status") != "done":
             out["not_rescanned"].append(_brief(f))
             continue
-        twin = next((g for g in by_key_b.get((f.get("location") or {}).get("snippet_key") or "", [])
-                     if g["fingerprint"] not in fps_a and g["fingerprint"] not in moved_targets), None)
+        # A finding with no snippet key has nothing to be matched by: "" is not a snippet, and
+        # pairing two key-less findings would report an unrelated new one as this one, moved.
+        key = (f.get("location") or {}).get("snippet_key") or ""
+        twin = next((g for g in by_key_b.get(key, []) if key
+                     and g["fingerprint"] not in fps_a and g["fingerprint"] not in moved_targets), None)
         if twin is not None:
             moved_targets.add(twin["fingerprint"])
             out["moved"].append({**_brief(f), "to": _brief(twin)})
