@@ -46,7 +46,11 @@ describe("the scan: every screen that gives a role asks grantReach", () => {
       return /\.tsx?$/.test(name) && !/\.test\./.test(name) ? [p] : [];
     });
   }
+  // Screens that give an APP's own roles (an OIDC client's roles, F6: `role_key` of the app, which
+  // carries no BOSS permission), not a BOSS role: the grant limit is about BOSS permissions.
+  const APP_ROLE_SCREENS = new Set(["app/identity/app-sign-in/app-sign-in.tsx"]);
   const givers = ["app/identity", "components/identity", "app/account"].flatMap(walk)
+    .filter((f) => !APP_ROLE_SCREENS.has(f))
     .filter((f) => /\b(to_)?role_(id|key):/.test(readFileSync(join(WEB, f), "utf8")));
 
   it("finds the pickers (invite, service accounts, groups, a person, access requests)", () => {
@@ -56,6 +60,14 @@ describe("the scan: every screen that gives a role asks grantReach", () => {
       // Delete a role → move its holders: that gives them the target role (to_role_id).
       "app/identity/roles/[id]/role-editor.tsx",
     ]));
+  });
+  it("an app-role screen sends only an app client's roles, never a BOSS role id", () => {
+    for (const f of APP_ROLE_SCREENS) {
+      const src = readFileSync(join(WEB, f), "utf8");
+      expect(src).toMatch(/\/v1\/oidc\/clients\//);
+      expect(src).not.toMatch(/\b(to_)?role_id:/);
+      expect(src).not.toMatch(/\/v1\/identity\/(roles|bindings)/);
+    }
   });
   it.each(givers)("%s mirrors the grant limit through grantReach", (file) => {
     const src = readFileSync(join(WEB, file), "utf8");
