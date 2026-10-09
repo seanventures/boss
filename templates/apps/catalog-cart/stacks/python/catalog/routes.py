@@ -6,7 +6,15 @@
     POST   /api/cart/items                    {product_id, quantity} adds to the cart
     PATCH  /api/cart/items/{product_id}       {quantity} sets it (0 removes)
     DELETE /api/cart/items/{product_id}       removes the line
-    GET    /api/cart/checkout                 the checkout contract for the caller's cart
+    GET    /api/cart/checkout                 the caller's cart priced for checkout (checkout_lines)
+
+And, in code, the payments contract (spec §3.4) that stripe-checkout and paypal-checkout call:
+
+    catalog.get_product(id)                  -> {id, name, unit_amount_cents, currency, active} | None
+    catalog.cart_line_items(cart_id, request) -> [{product_id, name, unit_amount_cents, currency, quantity}]
+                                                | None when `cart_id` is not the requester's cart
+
+so the Catalog that create_catalog returns IS the payment template's `catalog`.
 
 An anonymous cart is found by a signed `cart` cookie; a signed-in user's (get_user_id) by user,
 and the anonymous cart merges into it on the first request after sign-in.
@@ -73,6 +81,31 @@ def _int_param(raw: Optional[str], default: int) -> Optional[int]:
 class Catalog:
     router: APIRouter
     store: CatalogStore
+    #: the routes' own owner check: (request, cookie ops) -> the caller's cart or None
+    resolve: Callable[..., Optional[dict]]
+
+    # ---- the payments contract (spec §3.4) ---------------------------------------------------
+    def get_product(self, product_id: Any) -> Optional[dict]:
+        p = self.store.products.get(str(product_id))
+        if p is None:
+            return None
+        return {"id": p["id"], "name": p["name"], "unit_amount_cents": p["price_cents"],
+                "currency": self.store.currency, "active": bool(p["active"])}
+
+    def cart_line_items(self, cart_id: Any, request: Request) -> Optional[list[dict]]:
+        """The lines of cart `cart_id`, priced now, ONLY when it is the requester's own cart,
+        found from the request exactly as the routes find it (signed cookie, or the signed-in
+        user's cart); None for any other id, so a guessed or leaked cart id buys nothing. [] for
+        an empty cart. A cart that cannot be sold now (a withdrawn product, a quantity above
+        stock) raises CatalogError (409 + code), as GET /api/cart/checkout answers."""
+        cart = self.resolve(request, [])  # cookie ops dropped: a stale cookie opens nothing
+        if cart is None or not isinstance(cart_id, str) or cart["id"] != cart_id:
+            return None
+        if not cart["items"]:
+            return []
+        priced = self.store.checkout_lines(cart["id"])
+        return [{"product_id": l["product_id"], "name": l["name"], "unit_amount_cents": l["unit_amount_cents"],
+                 "currency": priced["currency"], "quantity": l["quantity"]} for l in priced["lines"]]
 
 
 def create_catalog(config: CatalogConfig, *, store: Optional[CatalogStore] = None,
@@ -201,4 +234,4 @@ def create_catalog(config: CatalogConfig, *, store: Optional[CatalogStore] = Non
             return 200, store.checkout_lines(c["id"] if c else None)
         return await handle(request, run)
 
-    return Catalog(router=router, store=store)
+    return Catalog(router=router, store=store, resolve=resolve)

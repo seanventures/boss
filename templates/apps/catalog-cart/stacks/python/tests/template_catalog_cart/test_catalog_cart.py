@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 BASE_URL = "https://app.example.test"  # as in conftest.py: https, so cookies must be Secure
@@ -180,3 +182,72 @@ def test_cart_changes_need_json_and_the_cookie_flags(app):
     cookie = next(c for c in b.set_cookies if c.startswith("cart="))
     for flag in ("HttpOnly", "Secure", "SameSite=lax"):
         assert flag.lower() in cookie.lower(), cookie
+
+
+# ---- the payments contract (spec §3.4): what stripe-checkout / paypal-checkout call ----------------
+
+PAYMENT_LINE_KEYS = ["currency", "name", "product_id", "quantity", "unit_amount_cents"]
+
+
+def _with_contract_probe(app):
+    """How a payment template calls the contract: from its own route, with the shopper's request."""
+    from catalog import CatalogError
+
+    @app.get("/test/cart-line-items/{cart_id}")
+    def probe(cart_id: str, request: Request):
+        try:
+            return {"lines": app.state.catalog.cart_line_items(cart_id, request)}
+        except CatalogError as exc:
+            return JSONResponse({"error": exc.code}, status_code=exc.status)
+
+    return app
+
+
+def test_cart_line_items_gives_the_requesters_own_cart_in_the_payments_shape(app, store):
+    _with_contract_probe(app)
+    b = Browser(app)
+    b.add("p01", 2)
+    b.add("p02", 1)
+    cart_id = b.get("/api/cart").json()["id"]
+    store.set_price("p01", 2499)
+    res = b.get(f"/test/cart-line-items/{cart_id}")
+    assert res.status_code == 200
+    assert res.json()["lines"] == [
+        {"product_id": "p01", "name": "Canvas tote bag", "unit_amount_cents": 2499, "currency": "usd", "quantity": 2},
+        {"product_id": "p02", "name": "Ceramic mug", "unit_amount_cents": 1450, "currency": "usd", "quantity": 1},
+    ]
+    assert all(sorted(line) == PAYMENT_LINE_KEYS for line in res.json()["lines"])
+    b.request("DELETE", "/api/cart/items/p01")
+    b.request("DELETE", "/api/cart/items/p02")
+    assert b.get(f"/test/cart-line-items/{cart_id}").json()["lines"] == [], "an empty cart is []"
+    catalog = app.state.catalog
+    assert catalog.get_product("p02") == {"id": "p02", "name": "Ceramic mug", "unit_amount_cents": 1450,
+                                          "currency": "usd", "active": True}
+    assert catalog.get_product("p19")["active"] is False
+    assert catalog.get_product("nope") is None
+
+
+def test_cart_line_items_is_none_for_a_cart_the_requester_does_not_own(app, store):
+    _with_contract_probe(app)
+    a = Browser(app)
+    a.add("p01", 1)
+    a_cart = a.get("/api/cart").json()["id"]
+    other = Browser(app)
+    other.add("p02", 1)
+    assert other.get(f"/test/cart-line-items/{a_cart}").json()["lines"] is None, "another session's cart"
+    assert Browser(app).get(f"/test/cart-line-items/{a_cart}").json()["lines"] is None, "no cookie at all"
+    forger = Browser(app)
+    forger.client.cookies.set("cart", f"{a_cart}.forged-signature")
+    assert forger.get(f"/test/cart-line-items/{a_cart}").json()["lines"] is None, "a forged cookie"
+    assert a.get("/test/cart-line-items/no-such-cart").json()["lines"] is None
+
+    u = Browser(app, user="user-7")
+    u.add("p05", 1)
+    u_cart = u.get("/api/cart").json()["id"]
+    assert Browser(app, user="user-8").get(f"/test/cart-line-items/{u_cart}").json()["lines"] is None
+    assert Browser(app).get(f"/test/cart-line-items/{u_cart}").json()["lines"] is None, "signed out"
+    assert len(u.get(f"/test/cart-line-items/{u_cart}").json()["lines"]) == 1, "the user's own cart"
+
+    store.set_active("p01", False)
+    refused = a.get(f"/test/cart-line-items/{a_cart}")
+    assert refused.status_code == 409 and refused.json()["error"] == "product_unavailable"

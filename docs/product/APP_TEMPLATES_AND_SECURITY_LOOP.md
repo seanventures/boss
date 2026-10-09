@@ -441,8 +441,19 @@ React/Vite scaffold UI), Python = FastAPI, Java = Spring Boot for login/payments
   `login-oauth` is present), `POST/PATCH/DELETE /api/cart/items`, server-computed totals in
   integer cents; UI: list with search and pagination, detail, cart drawer, on the scaffold's
   design tokens.
-- **Provides** the `checkout` contract (`cart_id` → line items with server prices) consumed by
-  Stripe and PayPal.
+- **Provides** the payments contract consumed by `stripe-checkout` and `paypal-checkout`, under
+  exactly these names: Node `catalog.getProduct(id)` and `catalog.cartLineItems(cartId, req)`;
+  Python `catalog.get_product(id)` and `catalog.cart_line_items(cart_id, request)` (`catalog` is
+  what `createCatalog` / `create_catalog` returns); Java `CheckoutCatalog.product(id)` and
+  `CheckoutCatalog.cartLines(cartId, request)` (records mirroring `com.example.payments.Catalog`).
+  Cart lines are `[{product_id, name, unit_amount_cents, currency, quantity}]`, every price read
+  from the product at that moment; `[]` for an empty cart; null / `None` / `Optional.empty()`
+  unless `cartId` is the requester's own cart, resolved from the request exactly as the cart
+  routes resolve it (signed cookie, or the signed-in user's cart). An unsellable cart raises
+  `CatalogError` (409 + code), which the wiring maps to the payment template's checkout input
+  error. `GET /api/cart/checkout` (`checkoutLines` / `checkout_lines`) stays as the HTTP view of
+  the same pricing. `engine/tests/templates/test_catalog_and_payments_compose.py` lays both
+  templates into one app per stack and checks this.
 - **Tests (≥10):** search, pagination bounds, inactive products hidden, quantity bounds, stock
   limit, totals integer-exact, cart isolation between sessions, merge on login, price change
   reflected at checkout, accessibility smoke (Playwright axe on the list page, Node UI).

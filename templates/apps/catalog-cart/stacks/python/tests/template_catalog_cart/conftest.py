@@ -31,4 +31,5 @@ def app(store):
                              get_user_id=lambda request: request.headers.get("x-test-user"))
     app = FastAPI()
     app.include_router(catalog.router)
+    app.state.catalog = catalog
     return app

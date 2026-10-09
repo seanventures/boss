@@ -5,7 +5,12 @@
 //   POST   /api/cart/items                    {product_id, quantity} adds to the cart
 //   PATCH  /api/cart/items/:product_id        {quantity} sets it (0 removes)
 //   DELETE /api/cart/items/:product_id        removes the line
-//   GET    /api/cart/checkout                 the checkout contract for the caller's cart
+//   GET    /api/cart/checkout                 the caller's cart priced for checkout (checkoutLines)
+// And, in code, the payments contract (spec §3.4) that stripe-checkout and paypal-checkout call:
+//   catalog.getProduct(id)             -> {id, name, unit_amount_cents, currency, active} | null
+//   catalog.cartLineItems(cartId, req) -> [{product_id, name, unit_amount_cents, currency, quantity}]
+//                                         | null when `cartId` is not the requester's cart
+// so the object createCatalog returns IS the payment template's `catalog`.
 // An anonymous cart is found by a signed `cart` cookie; a signed-in user's (getUserId) by user,
 // and the anonymous cart merges into it on the first request after sign-in.
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -57,7 +62,7 @@ export function createCatalog(config, { store = new CatalogStore({ currency: con
       let cart = null;
       if (anonId) {
         cart = store.mergeInto(userId, anonId); // the first request after signing in
-        res.clearCookie(COOKIE, cookieOptions);
+        if (res) res.clearCookie(COOKIE, cookieOptions); // (none from cartLineItems: a stale cookie opens nothing)
       }
       return cart || store.cartForUser(userId, { create });
     }
@@ -135,7 +140,26 @@ export function createCatalog(config, { store = new CatalogStore({ currency: con
     return next(err);
   });
 
-  return { router, store, resolveCart };
+  // ---- the payments contract (spec §3.4) -------------------------------------------------------
+  function getProduct(id) {
+    const p = store.products.get(String(id));
+    return p ? { id: p.id, name: p.name, unit_amount_cents: p.price_cents, currency: store.currency, active: Boolean(p.active) } : null;
+  }
+
+  // The lines of cart `cartId`, priced now, ONLY when it is the requester's own cart, found from
+  // the request exactly as the routes find it (signed cookie, or the signed-in user's cart);
+  // null for any other id, so a guessed or leaked cart id buys nothing. [] for an empty cart.
+  // A cart that cannot be sold now (a withdrawn product, a quantity above stock) throws the
+  // store's CatalogError (409 + code), as GET /api/cart/checkout answers.
+  function cartLineItems(cartId, req) {
+    const cart = resolveCart(req, null);
+    if (!cart || typeof cartId !== "string" || cart.id !== cartId) return null;
+    if (cart.items.size === 0) return [];
+    const { currency, lines } = store.checkoutLines(cart.id);
+    return lines.map((l) => ({ product_id: l.product_id, name: l.name, unit_amount_cents: l.unit_amount_cents, currency, quantity: l.quantity }));
+  }
+
+  return { router, store, resolveCart, getProduct, cartLineItems };
 }
 
 export function loadCatalogConfig(env = process.env) {

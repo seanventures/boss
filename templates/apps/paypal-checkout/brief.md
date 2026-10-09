@@ -34,7 +34,12 @@ refund route that dispatch on `provider`.
 `POST /api/paypal/orders` takes the cart's `cart_id` and prices from the cart's checkout contract
 (`cart_id → [{product_id, name, unit_amount_cents, currency, quantity}]`, server prices, for the
 requesting session's cart only). Show the PayPal buttons in the cart drawer. Without it, keep the
-static catalog and one product's buttons.
+static catalog and one product's buttons. catalog-cart provides it under exactly the names
+`payments/catalog` calls: node `createCatalog(...)` returns `getProduct` / `cartLineItems(cartId,
+req)`, python `create_catalog(...)` returns `get_product` / `cart_line_items(cart_id, request)`,
+java `CheckoutCatalog.product` / `cartLines(cartId, request)`; turn its `CatalogError` into
+`CheckoutInputError` / `CheckoutInputException` in the wiring so an unsellable cart is a 400, not
+a 500.
 
 ## Per stack
 

@@ -26,7 +26,8 @@
 
 ## What it does not do
 
-- No payment: that is `payments-stripe` / `payments-paypal`, which take the checkout contract.
+- No payment: that is `stripe-checkout` / `paypal-checkout`, which take the payments contract
+  (`cartLineItems` / `cart_line_items` / `CheckoutCatalog.cartLines`; only the requester's own cart).
 - No stock reservation: stock is checked when adding and at checkout, not held. Two buyers can
   both reach checkout for the last item; the payment template must decrement stock in the same
   transaction that marks the order paid.

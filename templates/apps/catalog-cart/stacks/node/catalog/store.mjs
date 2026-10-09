@@ -153,8 +153,9 @@ export class CatalogStore {
     return { id: cart ? cart.id : null, currency: this.currency, items, item_count: count, subtotal_cents: subtotal };
   }
 
-  // THE CHECKOUT CONTRACT (payments-stripe, payments-paypal): a cart id in, the lines to charge
-  // out, every price read from the product now. Refuses an empty cart, a product no longer on
+  // The cart priced for checkout (GET /api/cart/checkout; routes.mjs's cartLineItems, the
+  // payments contract, is built on it): a cart id in, the lines to charge out, every price read
+  // from the product now. Refuses an empty cart, a product no longer on
   // sale and a quantity above stock, so a payment template never charges for what cannot ship.
   checkoutLines(cartId) {
     const cart = this.cart(cartId);

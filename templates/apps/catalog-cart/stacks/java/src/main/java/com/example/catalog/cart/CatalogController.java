@@ -40,8 +40,9 @@ import org.springframework.web.bind.annotation.RestController;
  *   POST   /api/cart/items                    {product_id, quantity} adds to the cart
  *   PATCH  /api/cart/items/{product_id}       {quantity} sets it (0 removes)
  *   DELETE /api/cart/items/{product_id}       removes the line
- *   GET    /api/cart/checkout                 the checkout contract for the caller's cart
+ *   GET    /api/cart/checkout                 the caller's cart priced for checkout (checkoutLines)
  * </pre>
+ * The payments contract (spec §3.4) is {@link CheckoutCatalog}, built on {@link #callersCart}.
  * An anonymous cart is found by a signed {@code cart} cookie; a signed-in user's
  * ({@link CartUserResolver}) by user, and the anonymous cart merges into it on the first request
  * after sign-in.
@@ -106,7 +107,7 @@ public class CatalogController {
             CatalogStore.Cart cart = null;
             if (anonId != null) {
                 cart = store.mergeInto(userId, anonId); // the first request after signing in
-                cookie(res, "", Duration.ZERO);
+                if (res != null) cookie(res, "", Duration.ZERO); // none from callersCart: a stale cookie opens nothing
             }
             return cart != null ? cart : store.cartForUser(userId, create);
         }
@@ -117,6 +118,11 @@ public class CatalogController {
             cookie(res, cart.id + "." + sign(cart.id), Duration.ofDays(30));
         }
         return cart;
+    }
+
+    /** The request's own cart, found as every route finds it (never creates one); null if none. */
+    CatalogStore.Cart callersCart(HttpServletRequest req) {
+        return resolve(req, null, false);
     }
 
     private static Integer wholeNumber(String raw, int fallback) {

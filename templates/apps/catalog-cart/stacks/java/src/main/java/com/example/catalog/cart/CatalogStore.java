@@ -192,10 +192,31 @@ public class CatalogStore {
         return out;
     }
 
+    /** The payments contract's lines ({@link CheckoutCatalog#cartLines}): the cart priced now, in
+     *  the payments shape; an empty list for an empty cart; refuses what checkoutLines refuses. */
+    public synchronized List<CheckoutCatalog.Line> cartLines(String cartId) {
+        Cart cart = cart(cartId);
+        if (cart == null || cart.items.isEmpty()) return List.of();
+        List<CheckoutCatalog.Line> out = new ArrayList<>();
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> lines = (List<Map<String, Object>>) checkoutLines(cartId).get("lines");
+        for (Map<String, Object> l : lines) {
+            out.add(new CheckoutCatalog.Line((String) l.get("product_id"), (String) l.get("name"),
+                    ((Number) l.get("unit_amount_cents")).longValue(), currency, ((Number) l.get("quantity")).longValue()));
+        }
+        return List.copyOf(out);
+    }
+
+    /** Any product by id, active or not (null when unknown). */
+    public synchronized Product product(String id) {
+        return products.get(id);
+    }
+
     /**
-     * THE CHECKOUT CONTRACT (payments-stripe, payments-paypal): a cart id in, the lines to charge
-     * out, every price read from the product now. Refuses an empty cart, a product no longer on
-     * sale and a quantity above stock, so a payment template never charges for what cannot ship.
+     * The cart priced for checkout (GET /api/cart/checkout; {@link #cartLines}, the payments
+     * contract, is built on it): a cart id in, the lines to charge out, every price read from the
+     * product now. Refuses an empty cart, a product no longer on sale and a quantity above stock,
+     * so a payment template never charges for what cannot ship.
      */
     public synchronized Map<String, Object> checkoutLines(String cartId) {
         Cart cart = cart(cartId);

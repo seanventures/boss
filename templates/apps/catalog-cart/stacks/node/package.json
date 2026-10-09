@@ -2,7 +2,6 @@
   "name": "boss-template-catalog-cart",
   "private": true,
   "version": "1.0.0",
-  "type": "module",
   "description": "Reference implementation of the catalog-cart template (Express). Merge the dependency and the two test:catalog-cart scripts into the app's package.json.",
   "engines": { "node": ">=20" },
   "scripts": {

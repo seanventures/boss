@@ -20,6 +20,10 @@ it then show it as unavailable and checkout refuses it.
 
 - **Login** (`login-oauth`): a visitor's cart follows them when they sign in (it merges into
   their account's cart) and is then the same on every device.
-- **Payments** (`payments-stripe`, `payments-paypal`): checkout takes the cart through the
-  checkout contract (`GET /api/cart/checkout`, or `checkoutLines(cartId)` in code), which reads
-  every price from the catalog at that moment.
+- **Payments** (`stripe-checkout`, `paypal-checkout`): checkout takes the cart through the
+  payments contract, `cartLineItems(cartId, req)` (Node), `cart_line_items(cart_id, request)`
+  (Python) or `CheckoutCatalog.cartLines(cartId, request)` (Java). It answers
+  `[{product_id, name, unit_amount_cents, currency, quantity}]` with every price read from the
+  catalog at that moment, and only for the shopper's own cart: another visitor's cart id buys
+  nothing. A withdrawn or out-of-stock item stops the checkout before any payment is created.
+  `GET {{preview_url}}/api/cart/checkout` shows the same cart priced for checkout.

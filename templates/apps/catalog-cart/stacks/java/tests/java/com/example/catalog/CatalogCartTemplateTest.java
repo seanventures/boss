@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.catalog.cart.CartUserResolver;
+import com.example.catalog.cart.CatalogError;
 import com.example.catalog.cart.CatalogStore;
+import com.example.catalog.cart.CheckoutCatalog;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -28,6 +30,10 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RestController;
 
 /**
  * The catalog-cart template's own tests, against its HTTP routes (not internals). The signed-in
@@ -49,7 +55,37 @@ class CatalogCartTemplateTest {
         CartUserResolver headerUser() {
             return req -> req.getHeader("X-Test-User");
         }
+
+        @Bean
+        ContractProbe contractProbe(CheckoutCatalog checkout) {
+            return new ContractProbe(checkout);
+        }
     }
+
+    /** How a payment template calls the contract: from its own route, with the shopper's request. */
+    @RestController
+    static class ContractProbe {
+        final CheckoutCatalog checkout;
+
+        ContractProbe(CheckoutCatalog checkout) {
+            this.checkout = checkout;
+        }
+
+        @GetMapping("/test/cart-lines/{cartId}")
+        ResponseEntity<Map<String, Object>> lines(@PathVariable String cartId, jakarta.servlet.http.HttpServletRequest req) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            try {
+                out.put("lines", checkout.cartLines(cartId, req).orElse(null));
+                return ResponseEntity.ok(out);
+            } catch (CatalogError e) {
+                out.put("error", e.code);
+                return ResponseEntity.status(e.status).body(out);
+            }
+        }
+    }
+
+    @Autowired
+    CheckoutCatalog checkout;
 
     @LocalServerPort
     int port;
@@ -285,5 +321,58 @@ class CatalogCartTemplateTest {
         assertTrue(cookie.contains("httponly"), cookie);
         assertTrue(cookie.contains("secure"), cookie);
         assertTrue(cookie.contains("samesite=lax"), cookie);
+    }
+
+    // ---- the payments contract (spec §3.4): what stripe-checkout / paypal-checkout call ------------
+
+    @Test
+    void cartLinesGivesTheRequestersOwnCartInThePaymentsShapePricedNow() throws Exception {
+        Browser b = new Browser();
+        b.add("p01", 2);
+        b.add("p02", 1);
+        store.setPrice("p01", 2499);
+        Res r = b.get("/test/cart-lines/" + b.cartId());
+        assertEquals(200, r.status());
+        assertEquals(List.of("p01:Canvas tote bag:2499:usd:2", "p02:Ceramic mug:1450:usd:1"),
+                lines(r.body().path("lines"), "productId", "name", "unitAmountCents", "currency", "quantity"));
+        for (JsonNode l : r.body().path("lines")) {
+            Set<String> keys = new HashSet<>();
+            l.fieldNames().forEachRemaining(keys::add);
+            assertEquals(Set.of("productId", "name", "unitAmountCents", "currency", "quantity"), keys);
+        }
+        b.request("DELETE", "/api/cart/items/p01", null, null);
+        b.request("DELETE", "/api/cart/items/p02", null, null);
+        assertEquals(0, b.get("/test/cart-lines/" + b.cartId()).body().path("lines").size(), "an empty cart is []");
+        assertTrue(b.get("/test/cart-lines/" + b.cartId()).body().path("lines").isArray());
+        assertEquals(new CheckoutCatalog.Product("p02", "Ceramic mug", 1450, "usd", true), checkout.product("p02").orElseThrow());
+        assertFalse(checkout.product("p19").orElseThrow().active());
+        assertTrue(checkout.product("nope").isEmpty());
+    }
+
+    @Test
+    void cartLinesIsEmptyForACartTheRequesterDoesNotOwnAndRefusesWhatCannotBeSold() throws Exception {
+        Browser a = new Browser();
+        a.add("p01", 1);
+        String aCart = a.cartId();
+        Browser other = new Browser();
+        other.add("p02", 1);
+        assertTrue(other.get("/test/cart-lines/" + aCart).body().path("lines").isNull(), "another session's cart");
+        assertTrue(new Browser().get("/test/cart-lines/" + aCart).body().path("lines").isNull(), "no cookie at all");
+        Browser forger = new Browser();
+        forger.jar.put("cart", aCart + ".forged-signature");
+        assertTrue(forger.get("/test/cart-lines/" + aCart).body().path("lines").isNull(), "a forged cookie");
+        assertTrue(a.get("/test/cart-lines/no-such-cart").body().path("lines").isNull());
+
+        Browser u = new Browser("user-7");
+        u.add("p05", 1);
+        String uCart = u.get("/api/cart").body().path("id").asText();
+        assertTrue(new Browser("user-8").get("/test/cart-lines/" + uCart).body().path("lines").isNull(), "another user's cart");
+        assertTrue(new Browser().get("/test/cart-lines/" + uCart).body().path("lines").isNull(), "signed out");
+        assertEquals(1, u.get("/test/cart-lines/" + uCart).body().path("lines").size(), "the user's own cart");
+
+        store.setActive("p01", false);
+        Res refused = a.get("/test/cart-lines/" + aCart);
+        assertEquals(409, refused.status());
+        assertEquals("product_unavailable", refused.body().path("error").asText());
     }
 }
