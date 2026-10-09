@@ -229,6 +229,31 @@ ports 53750/58750/55850/58751/58780/58781, `dc.sh` = compose -p bosss2 with the 
 apps/api/tests/test_app_platform_day1_routes.py` with `DATABASE_URL` at boss-test-pg (a private
 database, e.g. `boss_test_s2`, created and dropped by the runner). All 156 + the day-1 suite pass.
 
+## S3-login-catalog: the login-oauth and catalog-cart templates (F3 §3.1, §3.4)
+
+Branch `feat/s3-login-catalog` (worktree `~/src/boss-wt-s3-login-catalog`), from
+`feat/s2-templates`. Files only in `templates/apps/login-oauth/` and `templates/apps/catalog-cart/`,
+plus one new engine test (`engine/tests/templates/test_builtin_templates_apply.py`).
+
+| # | Step | State |
+|---|---|---|
+| 1 | `login-oauth` node (Express + openid-client 6, express-session, fake IdP, 15 tests) | done |
+| 2 | `login-oauth` python (FastAPI + Authlib 1.8, server-side session middleware, fake IdP, 15 tests) | done |
+| 3 | `login-oauth` java (Spring Boot + Spring Security OAuth2 client, fake IdP) | next |
+| 4 | `catalog-cart` node | todo |
+| 5 | `catalog-cart` python | todo |
+| 6 | `catalog-cart` java (if time allows) | todo |
+| 7 | engine test: every built-in manifest validates and applies (apply assembly) | todo |
+
+### Resume (S3-login-catalog)
+
+`cd ~/src/boss-wt-s3-login-catalog && git pull`; pick the first step not `done`.
+Run a stack's tests in a scratch COPY of `stacks/<stack>/` (never in the template dir: a
+`node_modules`/`__pycache__` there breaks the tree validator's limits):
+node `npm run test:login-oauth` (Node 20: `docker run node:20-bookworm-slim`); python
+`pip install -r requirements.txt && python3 -m pytest -q tests/template_login_oauth` (3.11:
+`docker run python:3.11-slim-bookworm`).
+
 ## What's next (after S0)
 
 S0 is complete. Per §8.2 the next streams start in parallel against these interfaces: S2 (F2

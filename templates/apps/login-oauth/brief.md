@@ -44,7 +44,8 @@ of the app's own.
   `tests/template_login_oauth/` (the tests and the fake provider) to the same path.
 - **python** (FastAPI): the `auth/` package (`config.py`, `users.py`, `routes.py` with
   `create_auth(config)` returning the router, the session middleware settings and the
-  `require_user` / `require_role` dependencies) and `main.py` (how to mount it). Add the lines of
+  `require_user` / `require_role` dependencies), `auth/sessions.py` (server-side sessions), `main.py`
+  (how to mount it) and `ui/account.html` (framework-free login buttons). Add the lines of
   `requirements.txt` to the app's requirements. Copy `tests/template_login_oauth/` (the tests,
   `conftest.py` and the fake provider) to the same path.
 
