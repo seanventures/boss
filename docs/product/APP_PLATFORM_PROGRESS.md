@@ -229,8 +229,8 @@ Branch `feat/s4-workflow` (worktree `~/src/boss-wt-s4ui`), from `feat/s4-securit
 |---|---|---|
 | 1 | `security_review` catalogue workflow + six capabilities + runner wiring + verdict rules + tests | done |
 | 2 | `/v1/security/reviews*` API; App › Security, checklist, before/after report (console) + vitest | done |
-| 3 | Browser walk against a local dev server, screenshots in `docs/product/app-platform/` | in progress |
-| 4 | Compose e2e: vulnerable app scan → panel → choice → fix → re-scan → re-review | not started |
+| 3 | Browser walk against a local dev server + local API, screenshots in `docs/product/app-platform/s4wf-*` | done |
+| 4 | Compose e2e: vulnerable app scan → panel → choice → fix → re-scan → re-review | not run (no free compose slot: `bossint` was up) |
 
 ### Notes per step
 
@@ -277,3 +277,52 @@ Branch `feat/s4-workflow` (worktree `~/src/boss-wt-s4ui`), from `feat/s4-securit
    (`/v1/decisions/{id}/approve`). Tests: `apps/web/tests/app-security.test.tsx` (10, incl. viewer
    vs operator gating). Not built: the `vulns.yaml` detection score and F5 tester results in the
    report (need F3's insecure template and F5); a cockpit link from the fix build to the report.
+
+3. The walk (2026-10-09). Local API (`uvicorn apps.api.app.main:app`, `BOSS_CONSOLE_AUTH=network`,
+   own database) + `next dev` with `BOSS_API_URL`/`BOSS_CONSOLE_AUTH=network`, opened at
+   `http://[::1]:<port>` (localhost and 127.0.0.1 carried other stacks' session cookies, which turn
+   the network bridge off). Data: `boss-dogfood`, app `vuln-shop`; the scans are the REAL recorded
+   tool output of `tests/e2e/security/vulnapp` / `vulnapp-fixed` through the real parsers and
+   storage (`service.execute_scan` with the tool seam), and both reviews ran through the REAL
+   runner — only the panel (a model) and the build were fakes landing finished rows. Result:
+   review A passed in round 1 (5/5 targeted fixed, 0 new; round 2 "not needed"); review B waited
+   at Choose, the checklist recorded the person's ticks through the API, the re-scan and
+   re-review passed, the report showed d1a1af2 → cab0549, 20 → 5, Markdown export through the
+   console proxy. Walk findings fixed in 3c76e432 (portal sheet, phone height, decided checklist
+   read-only, a security panel is not a PRD, input styling). Screens: `s4wf-01..06` desktop
+   (summary + checklist, ticks, review passed, report), `s4wf-07..09` at 390 px (forced via a
+   390 px backdrop: the Chrome window cannot go below 614 px; the ≤640 px rules are active and
+   nothing overflows), `s4wf-10` the checklist in the Meetings view.
+   Seen, not fixed: approving the gate from the checklist answered 403 "usr_network_operator is
+   not an active member" — the unclaimed install's network bridge cannot approve decisions; a
+   signed-in member can (the API test proves the selection route per role; approval is the
+   existing `/v1/decisions/{id}/approve`). The meeting hero's stage strip still reads
+   "PRD · Build" for a security panel.
+
+4. Not run. The loop as built needs, on a compose stack: `BOSS_TOOLCHAINS=security` (the S4 proof
+   image), a model for the panel (or "Skip and proceed" on the panel: the checklist then holds
+   only derived recommendations) and for the fix build (the governed code task), and the app
+   registered as a build (scan_proof does it as a LOCAL workspace). With no model the honest
+   proof is: start `security_review` → scan (real tools) → skip the panel → choose → the fix
+   build cannot run without a model. The workflow wiring itself is proven by
+   `test_security_review_workflow.py` (real runner) and the walk above (real recorded scans).
+
+### Resume notes (S4-workflow)
+
+- `cd ~/src/boss-wt-s4ui && git pull` (branch `feat/s4-workflow`); land by PR
+  onto `feat/app-platform` after `feat/s4-security`.
+- Next: (a) the compose e2e when a slot is free — extend `tests/e2e/security/scan_proof.py` with a
+  `--review` mode that starts `security_review` through `POST /v1/delivery-workflows/start`,
+  needs a connected model for the panel and the fix; (b) an independent tester walks App ›
+  Security, the checklist (Meetings and App), the decision and the report on a claimed install;
+  (c) the `vulns.yaml` detection score and F5 tester results in the report (after F3/F5);
+  (d) a link from the fix build's cockpit to its review's report; (e) the meeting hero stage
+  strip for security panels.
+- Decisions taken here: reviewer preset holds `security_scan:run`; the panel is convened by `pm`
+  and chaired (seated first) by the security lens; two bounded rounds drawn as steps; "removed
+  with its code" counts as gone for the verdict, "moved" does not.
+- Re-run: `PYTHONPATH=.:engine pytest engine/tests/test_security_review_workflow.py
+  engine/tests/test_every_template_runs_end_to_end.py`; API (test DB)
+  `apps/api/tests/test_security_review_routes.py`; web `cd apps/web && vitest run
+  tests/app-security.test.tsx`. Test DB: `boss-test-pg` localhost:55432, user boss, a private
+  database (this stream used `boss_test_s4wf`, dropped).
