@@ -48,8 +48,10 @@ Without it, keep the static catalog and a single "Buy now" button.
   requirements. Copy `tests/template_stripe/` as is.
 - **java (Spring Boot)**: the `com.example.payments` package (config, store, catalog, controller)
   and `pom.xml` dependencies (`com.stripe:stripe-java`). Move the package under the app's base
-  package if needed; copy `src/test/java/.../StripeCheckout*Test.java` and keep the class names
-  (the gate runs `-Dtest=Stripe*`).
+  package if needed. The reference keeps its tests under `tests/template_stripe/` (its `pom.xml`
+  points `testSourceDirectory` there); in the app put `StripeCheckoutTest.java`,
+  `StripeCheckoutAppTest.java` and `FakeStripeApi.java` under `src/test/java/` in the same package
+  as the controller, keeping the file and class names (the gate runs `-Dtest=Stripe*`).
 
 The template's tests use an in-process fake of the Stripe API and compute webhook signatures
 with a signing secret generated in the test: they never reach the network. Keep them as they are;

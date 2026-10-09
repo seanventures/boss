@@ -245,7 +245,7 @@ operator prefers the spec's names; nothing else refers to them.
 | stripe-checkout: manifest, brief, guide (Emergent/Lovable compared), SECURITY | done |
 | stripe-checkout node (Express, stripe 23) | done: 16 tests |
 | stripe-checkout python (FastAPI, stripe 16, SQLite) | done: 26 tests |
-| stripe-checkout java (Spring Boot 3.4, stripe-java 34) | next |
+| stripe-checkout java (Spring Boot 3.4, stripe-java 34) | done: 18 tests (16 MockMvc + 2 Spring boot-up) |
 | paypal-checkout node / python / java | not started |
 
 ### Resume (S3-payments)
