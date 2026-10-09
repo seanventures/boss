@@ -96,7 +96,8 @@ details.tpl-fold[open] > summary { margin-bottom: 6px; }
 .tpl-tree { margin: 0; padding: 0; list-style: none; font: 0.74rem/1.6 var(--mono); color: var(--ink-soft); max-height: 220px; overflow: auto; }
 
 /* ── Composer ───────────────────────────────────────────────────────────────────────────── */
-.np-tpl { padding: 4px 0 8px; }
+.np-body.np-tpl { display: block; padding: 16px 24px 20px; }
+.tpl-stack-label { color: var(--faint); font-size: 0.76rem; margin-right: 2px; }
 .np-tpl-chip[aria-disabled="true"] { opacity: 0.6; cursor: not-allowed; }
 .np-talks { display: flex; flex-direction: column; gap: 8px; }
 .np-talks-opts { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }

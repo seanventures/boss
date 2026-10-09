@@ -91,7 +91,6 @@ function stubApi() {
     if (url.pathname === "/v1/templates") return json(TEMPLATES);
     if (url.pathname.startsWith("/v1/templates/")) return json({ ...TEMPLATES.templates[0], manifest: {}, validation: { ok: true }, files: [], versions: [] });
     if (url.pathname.startsWith("/v1/apps/") && url.pathname.endsWith("/templates")) return json({ templates: [{ id: "t", template_key: "x", stack: "node", status: "applied" }] });
-    if (url.pathname === "/api/setup") return json({ toolchains: [] });
     if (url.pathname === "/api/project-agents") return json({ default_roles: ["pm"] });
     if (url.pathname === "/api/agent") return json({ items: [] });
     const view = url.searchParams.get("view");

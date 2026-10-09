@@ -147,7 +147,12 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
       const b = e instanceof IdentityError ? e.body : {};
       const detail = (b.detail && typeof b.detail === "object" ? b.detail : {}) as Record<string, unknown>;
       const readiness = asReadiness(b.readiness ?? detail.readiness);
-      if (readiness) { setRefusal(readiness); setError(String(detail.message ?? b.message ?? "This project is not ready for it yet.")); return; }
+      // The checklist says what is missing, with "Start anyway"; the footer says to look at it.
+      if (readiness) {
+        setRefusal(readiness);
+        window.setTimeout(() => document.querySelector("[data-testid=tpl-readiness]")?.scrollIntoView({ block: "nearest" }), 0);
+        return;
+      }
       if (code === "stack_mismatch" && Array.isArray(b.app_stacks)) {
         const fit = (b.app_stacks as string[]).find((s) => card.stacks.includes(s));
         if (fit) { setStack(fit); setPicked(true); }
@@ -196,6 +201,7 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
           </label>
         ) : <span className="tpl-row-name" data-user-text>{target.name}</span>}
         <span className="tpl-chips" role="radiogroup" aria-label="Stack">
+          <span className="tpl-stack-label" aria-hidden>Stack</span>
           {card.stacks.map((s) => {
             const off = !!installed && !installed.has(s);
             return (
@@ -278,7 +284,9 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
       </label>
 
       {refusal ? (
-        <ReadinessPanel readiness={refusal} accepted={startAnyway} projectId={projectId} onAccept={setStartAnyway} />
+        <div data-testid="tpl-readiness">
+          <ReadinessPanel readiness={refusal} accepted={startAnyway} projectId={projectId} onAccept={setStartAnyway} />
+        </div>
       ) : null}
       {error ? <p className="tpl-err" role="alert" data-testid="tpl-error" data-user-text>{error}</p> : null}
     </SideSheet>

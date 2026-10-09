@@ -261,12 +261,11 @@ export async function resolveAppKey(projectId: string, handle: string): Promise<
   }
 }
 
-/** Toolchains this install has (GET /api/setup's `toolchains`), or null when it cannot say. */
-export async function installedStacks(projectId: string): Promise<Set<string> | null> {
+/** Toolchains this install has (GET /v1/templates' `toolchains`), or null when it cannot say —
+ *  then nothing is greyed, and the API still refuses a stack it cannot build. */
+export async function installedStacks(): Promise<Set<string> | null> {
   try {
-    const r = await fetch(`/api/setup?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" });
-    if (!r.ok) return null;
-    const list = arr(obj(await r.json()).toolchains);
+    const list = arr(obj(await idGet("/v1/templates?status=active")).toolchains);
     if (!list.length) return null;
     return new Set(list.filter((t) => obj(t).installed === true).map((t) => str(obj(t).name)));
   } catch {

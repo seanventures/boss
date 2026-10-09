@@ -264,7 +264,7 @@ describe("the preview says where it runs, how far it got, and what a press reall
 
   it("a build with no PR cannot run a preview, and says why", async () => {
     const board = withPreview(null);
-    stubFetch({ ...board, state: { ...(board.state as W), state: "done_no_pr", word: "Done · no PR" } });
+    stubFetch({ ...board, state: { ...((board as W).state as W), state: "done_no_pr", word: "Done · no PR" } });
     await mount(view());
     await open("preview");
     const run = $('[data-testid="fx-preview-run"]') as HTMLButtonElement;

@@ -32,7 +32,7 @@ export function useInstalledStacks(projectId: string): Set<string> | null {
   const [installed, setInstalled] = useState<Set<string> | null>(null);
   useEffect(() => {
     let alive = true;
-    void installedStacks(projectId).then((s) => { if (alive) setInstalled(s); });
+    void installedStacks().then((s) => { if (alive) setInstalled(s); });
     return () => { alive = false; };
   }, [projectId]);
   return installed;

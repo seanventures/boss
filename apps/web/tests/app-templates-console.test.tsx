@@ -66,10 +66,10 @@ beforeEach(() => {
     const method = (init?.method ?? "GET").toUpperCase();
     const path = url.replace(/^https?:\/\/[^/]+/, "");
     calls.push({ method, path, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    if (path.startsWith("/api/setup")) return json({ toolchains });
     if (path.startsWith("/v1/identity/me/delegations")) return json({ id: "grant_1" }, 201);
     if (path === "/v1/templates?status=hidden" || path === "/v1/templates?status=rejected") return json({ templates: [] });
-    if (path === "/v1/templates") return json({ templates: [STRIPE, BANK, PENDING] });
+    if (path === "/v1/templates") return json({ templates: [STRIPE, BANK, PENDING], toolchains });
+    if (path === "/v1/templates?status=active") return json({ templates: [STRIPE, BANK], toolchains });
     if (path === "/v1/templates/import") return json({ error: "invalid", report: { ok: false, reasons: ["insecure_by_design needs template:approve and the acknowledgement (D3)", "LICENSE is missing"] } }, 422);
     if (path.startsWith("/v1/templates/tpl_stripe/apply")) {
       const [status, body] = applyAnswers.shift() ?? [500, { error: "x" }];
@@ -128,7 +128,7 @@ async function type(sel: string, value: string) {
 }
 async function tick(sel: string) { await act(async () => ($(sel) as HTMLInputElement).click()); await settle(); }
 
-const card = (raw: typeof STRIPE): TemplateCard => parseCard(raw);
+const card = (raw: unknown): TemplateCard => parseCard(raw);
 
 describe("the gallery", () => {
   it("shows approved templates only, with stacks, labels and the trial", async () => {

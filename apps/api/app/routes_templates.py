@@ -142,7 +142,13 @@ def build_templates_router() -> APIRouter:
         ctx = _ctx(request)
         with begin() as db:
             items = service.list_templates(db, ctx.principal.org_id, stack=stack, status=status, label=label)
-        return {"templates": items}
+        # The toolchains this install has, so the gallery can grey a stack it cannot build (and
+        # say how to turn it on) without a second, broader permission (setup:read) (§2.8).
+        from boss_engine.services import toolchains
+
+        return {"templates": items,
+                "toolchains": [{"name": t["name"], "installed": bool(t["installed"]), "enable": t.get("enable")}
+                               for t in toolchains.setup_summary()]}
 
     @router.post("/v1/templates/import")
     @permit(P.TEMPLATE_IMPORT, scope=Scope.org())
@@ -251,11 +257,15 @@ def build_templates_router() -> APIRouter:
             return _refused(exc)
         # THE SAME START PATH as the composer's "Add to an existing app": every gate, review and
         # the PR are the workflow's; the template only adds two gates (§2.9 S2.1).
-        from . import main
+        from . import identity_guard, main
         from .request_bodies import WorkflowStartBody
 
+        # THE PERSON STARTS IT: the start path checks its actor against the signed-in principal,
+        # and an unnamed actor fell back to "executive_console", refused 403 actor_mismatch for
+        # every console apply under enforce (walk, tester P0-5).
         started = main.start_delivery_workflow(WorkflowStartBody(
-            project_id=body.project_id, workflow_key=plan["workflow_key"], input=plan["run_input"],
+            project_id=body.project_id, actor=identity_guard.request_actor(),
+            workflow_key=plan["workflow_key"], input=plan["run_input"],
             dedupe_key=body.dedupe_key or f"template:{plan['application_id']}",
             start_anyway=body.start_anyway))
         run = started.get("run") or {}
