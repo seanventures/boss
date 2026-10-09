@@ -1,0 +1,63 @@
+schema: boss.template/v1
+id: login-oauth
+name: Login with Google, GitHub or BOSS
+version: 1.0.0
+summary: Sign-in with Google and GitHub (and BOSS over OIDC), server-side sessions, sign-out, roles and a protected route
+adds: [routes, ui, db_tables, sessions, middleware]
+stacks:
+  node:   {frameworks: [express], min_toolchain: node20}
+requires: []
+works_with: [catalog-cart]
+secrets:
+  - name: GOOGLE_CLIENT_ID
+    purpose: The Google OAuth client's id (Google Cloud console, OAuth client of type Web application)
+    test_default: stub
+    pattern: '^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$'
+  - name: GOOGLE_CLIENT_SECRET
+    purpose: The Google OAuth client's secret
+    test_default: stub
+    pattern: '^GOCSPX-[A-Za-z0-9_-]{20,}$'
+  - name: GITHUB_CLIENT_ID
+    purpose: The GitHub OAuth app's client id
+    test_default: stub
+  - name: GITHUB_CLIENT_SECRET
+    purpose: The GitHub OAuth app's client secret
+    test_default: stub
+  - name: SESSION_SECRET
+    purpose: Signs the session cookie; BOSS generates a random one per app and environment
+    test_default: generated
+  - name: OIDC_BOSS_CLIENT_ID
+    purpose: The app's client id at BOSS's OIDC provider ("Sign in with BOSS"); filled by BOSS when the app is registered
+    test_default: stub
+  - name: OIDC_BOSS_CLIENT_SECRET
+    purpose: The app's client secret at BOSS's OIDC provider
+    test_default: stub
+env:
+  - {name: APP_BASE_URL, default: 'http://localhost:3000'}
+  - {name: AUTH_ADMIN_EMAILS, default: ''}
+  - {name: GOOGLE_ISSUER, default: 'https://accounts.google.com'}
+  - {name: GITHUB_URL, default: 'https://github.com'}
+  - {name: GITHUB_API_URL, default: 'https://api.github.com'}
+  - {name: OIDC_BOSS_ISSUER, default: ''}
+egress:
+  - accounts.google.com
+  - oauth2.googleapis.com
+  - openidconnect.googleapis.com
+  - www.googleapis.com
+  - github.com
+  - api.github.com
+webhooks: []
+routes:
+  - GET /auth/providers
+  - GET /auth/login/:provider
+  - GET /auth/callback/:provider
+  - POST /auth/logout
+  - GET /api/me
+  - GET /api/admin
+tests:
+  node:   {command: npm run test:login-oauth, report: junit, min_tests: 8}
+security_note: SECURITY.md
+guide: guide.md
+labels: []
+license: Apache-2.0
+min_boss: 1.0.0
