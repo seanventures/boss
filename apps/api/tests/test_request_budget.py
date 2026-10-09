@@ -147,3 +147,39 @@ def test_an_identity_change_inside_a_request_clears_the_memo(engine):
 def test_outside_a_request_nothing_is_memoised():
     request_memo.put(("epoch", "org_y"), 3)
     assert not request_memo.has(request_memo.get(("epoch", "org_y")))
+
+
+def test_a_websocket_never_gets_a_memo():
+    """A socket lives for hours and re-checks as it goes: its checks always read live."""
+    import asyncio
+
+    from boss_engine.identity.request_memo import RequestMemoMiddleware
+
+    seen = {}
+
+    async def app(scope, receive, send):
+        seen[scope["type"]] = request_memo.MEMO.get()
+
+    mw = RequestMemoMiddleware(app)
+    asyncio.run(mw({"type": "websocket"}, None, None))
+    asyncio.run(mw({"type": "http"}, None, None))
+    assert seen["websocket"] is None
+    assert seen["http"] == {}
+
+
+def test_a_memoised_fact_expires_inside_a_long_request(monkeypatch):
+    """A streamed response is one request that can live for minutes: a check it repeats must read
+    live again once the memo's facts are older than MAX_AGE_SECONDS."""
+    import time as _time
+
+    token = request_memo.start()
+    try:
+        now = [1000.0]
+        monkeypatch.setattr(_time, "monotonic", lambda: now[0])
+        request_memo.put(("epoch", "org_z"), 9)
+        assert request_memo.get(("epoch", "org_z")) == 9
+        now[0] += request_memo.MAX_AGE_SECONDS + 0.1
+        assert not request_memo.has(request_memo.get(("epoch", "org_z")))
+    finally:
+        request_memo.reset(token)
+
