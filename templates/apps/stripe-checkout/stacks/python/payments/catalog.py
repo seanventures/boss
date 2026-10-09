@@ -8,6 +8,12 @@ The checkout contract (shared with the `catalog-cart` template, spec §3.4):
                                         | None when there is no such cart (for this session)
 When `catalog-cart` is applied, back these with its `products` table and its cart's checkout
 function (same shapes). Without it, the app sells DEFAULT_PRODUCTS with a single buy button.
+
+A cart that cannot be sold now (a product gone, the cart empty, stock): catalog-cart's provider
+raises its `CatalogError` (a 4xx status + a code). price_line_items turns that into a
+CheckoutInputError (the checkout route's 400, before any order or payment-provider call), so a
+shop combining both templates never answers a 500 for it and needs no glue for it. It is matched by
+its class name and shape, not imported: this template works without catalog-cart.
 """
 from __future__ import annotations
 
@@ -23,6 +29,25 @@ MAX_LINES = 50
 
 class CheckoutInputError(ValueError):
     pass
+
+
+def _is_catalog_refusal(exc: BaseException) -> bool:
+    """catalog-cart's CatalogError (or a subclass), refusing the request with a 4xx and a code."""
+    code, status = getattr(exc, "code", None), getattr(exc, "status", None)
+    return (any(c.__name__ == "CatalogError" for c in type(exc).__mro__)
+            and isinstance(code, str) and bool(code)
+            and isinstance(status, int) and not isinstance(status, bool) and 400 <= status <= 499)
+
+
+def _from_catalog(call):
+    """Call the catalog; its refusal of the cart is the client's input error, anything else stays
+    an error of the app (a 500 that must be fixed, not hidden)."""
+    try:
+        return call()
+    except Exception as exc:
+        if _is_catalog_refusal(exc):
+            raise CheckoutInputError(exc.code) from exc
+        raise
 
 
 class StaticCatalog:
@@ -45,7 +70,7 @@ def price_line_items(catalog: Any, body: Any, request: Any = None) -> dict:
     """Server-priced line items for the client's request: {lines, currency, amount_cents}."""
     body = body if isinstance(body, dict) else {}
     if body.get("cart_id") is not None:
-        cart = catalog.cart_line_items(str(body["cart_id"]), request)
+        cart = _from_catalog(lambda: catalog.cart_line_items(str(body["cart_id"]), request))
         if cart is None:
             raise CheckoutInputError("no such cart")
         lines = [{"product_id": str(l["product_id"]), "name": str(l["name"]),
@@ -60,7 +85,7 @@ def price_line_items(catalog: Any, body: Any, request: Any = None) -> dict:
         lines = []
         for item in items:
             item = item if isinstance(item, dict) else {}
-            product = catalog.get_product(item.get("product_id"))
+            product = _from_catalog(lambda: catalog.get_product(item.get("product_id")))
             if not product or not product.get("active"):
                 raise CheckoutInputError("unknown product")
             # Only the id and quantity are read from the client; a price or amount is ignored.
