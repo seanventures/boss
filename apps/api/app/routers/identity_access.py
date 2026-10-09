@@ -346,6 +346,7 @@ def readable_projects(request: Request, project_ids: list[str]) -> Optional[set[
     except Exception:  # noqa: BLE001
         return None
     org = ctx.principal.org_id
+    authz.note_projects_in_org(org, project_ids)    # one statement for the list, not one per project
     return {pid for pid in dict.fromkeys(project_ids)
             if P.PROJECT_READ in authz.effective_permissions(
                 ctx, ResolvedScope.in_project(org, pid)).permissions}

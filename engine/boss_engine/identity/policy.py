@@ -127,9 +127,17 @@ def get_policy(org_id: str, *, db: Any) -> IdentityPolicy:
         from ..db import begin
         with begin() as conn:
             return get_policy(org_id, db=conn)
-    epoch_row = db.execute(_sql("SELECT epoch FROM identity_settings WHERE org_id = :o"),
-                           {"o": org_id}).first()
-    epoch = int(epoch_row[0]) if epoch_row else -1
+    from . import request_memo
+
+    known = request_memo.get(("epoch", org_id))
+    if request_memo.has(known):
+        # This request already read the epoch live (authentication), and nothing in it has
+        # changed identity since (epoch.bump clears the memo).
+        epoch = int(known)
+    else:
+        epoch_row = db.execute(_sql("SELECT epoch FROM identity_settings WHERE org_id = :o"),
+                               {"o": org_id}).first()
+        epoch = int(epoch_row[0]) if epoch_row else -1
     key = (org_id, epoch)
     with _cache_lock:
         cached = _cache.get(key)
