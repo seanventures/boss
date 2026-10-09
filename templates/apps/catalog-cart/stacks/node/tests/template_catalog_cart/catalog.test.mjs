@@ -13,6 +13,7 @@ import { createCatalog } from "../../catalog/routes.mjs";
 let server;
 let origin;
 let store;
+let catalog;
 
 beforeEach(async () => {
   if (server) {
@@ -21,10 +22,19 @@ beforeEach(async () => {
   }
   store = new CatalogStore({ products: loadSeed() });
   const app = express();
-  app.use(createCatalog(
+  catalog = createCatalog(
     { cartSecret: "fake-cart-secret-for-the-template-tests-only", secureCookies: true, currency: "usd" },
     { store, getUserId: (req) => req.get("x-test-user") || null },
-  ).router);
+  );
+  app.use(catalog.router);
+  // How a payment template calls the contract: from its own route, with the shopper's request.
+  app.get("/test/cart-line-items/:cartId", async (req, res) => {
+    try {
+      return res.json({ lines: await catalog.cartLineItems(req.params.cartId, req) });
+    } catch (err) {
+      return res.status(err.status || 500).json({ error: err.code || "unexpected" });
+    }
+  });
   server = app.listen(0, "127.0.0.1");
   await new Promise((r) => server.once("listening", r));
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -222,4 +232,55 @@ test("cart changes need JSON (CSRF) and the cart cookie is HttpOnly, Secure, Sam
   assert.match(cookie, /;\s*HttpOnly/i);
   assert.match(cookie, /;\s*Secure/i);
   assert.match(cookie, /;\s*SameSite=Lax/i);
+});
+
+// ---- the payments contract (spec §3.4): what stripe-checkout / paypal-checkout call ----------------
+
+const PAYMENT_LINE_KEYS = ["currency", "name", "product_id", "quantity", "unit_amount_cents"];
+
+test("cartLineItems gives the requester's own cart in the payments line shape, priced now", async () => {
+  const b = new Browser();
+  await b.add("p01", 2);
+  await b.add("p02", 1);
+  const cartId = (await b.get("/api/cart")).body.id;
+  store.setPrice("p01", 2499);
+  const { status, body } = await b.get(`/test/cart-line-items/${cartId}`);
+  assert.equal(status, 200);
+  assert.deepEqual(body.lines, [
+    { product_id: "p01", name: "Canvas tote bag", unit_amount_cents: 2499, currency: "usd", quantity: 2 },
+    { product_id: "p02", name: "Ceramic mug", unit_amount_cents: 1450, currency: "usd", quantity: 1 },
+  ]);
+  assert.ok(body.lines.every((l) => JSON.stringify(Object.keys(l).sort()) === JSON.stringify(PAYMENT_LINE_KEYS)));
+  await b.request("DELETE", "/api/cart/items/p01");
+  await b.request("DELETE", "/api/cart/items/p02");
+  assert.deepEqual((await b.get(`/test/cart-line-items/${cartId}`)).body.lines, [], "an empty cart is []");
+  assert.deepEqual(catalog.getProduct("p02"), { id: "p02", name: "Ceramic mug", unit_amount_cents: 1450, currency: "usd", active: true });
+  assert.equal(catalog.getProduct("p19").active, false);
+  assert.equal(catalog.getProduct("nope"), null);
+});
+
+test("cartLineItems answers null for a cart the requester does not own, and refuses what cannot be sold", async () => {
+  const a = new Browser();
+  await a.add("p01", 1);
+  const aCart = (await a.get("/api/cart")).body.id;
+  const other = new Browser();
+  await other.add("p02", 1);
+  assert.equal((await other.get(`/test/cart-line-items/${aCart}`)).body.lines, null, "another session's cart");
+  assert.equal((await new Browser().get(`/test/cart-line-items/${aCart}`)).body.lines, null, "no cookie at all");
+  const forger = new Browser();
+  forger.jar.set("cart", `${aCart}.forged-signature`);
+  assert.equal((await forger.get(`/test/cart-line-items/${aCart}`)).body.lines, null, "a forged cookie");
+  assert.equal((await a.get("/test/cart-line-items/no-such-cart")).body.lines, null);
+
+  const u = new Browser("user-7");
+  await u.add("p05", 1);
+  const uCart = (await u.get("/api/cart")).body.id;
+  assert.equal((await new Browser("user-8").get(`/test/cart-line-items/${uCart}`)).body.lines, null, "another user's cart");
+  assert.equal((await new Browser().get(`/test/cart-line-items/${uCart}`)).body.lines, null, "signed out");
+  assert.equal((await u.get(`/test/cart-line-items/${uCart}`)).body.lines.length, 1, "the user's own cart");
+
+  store.setActive("p01", false);
+  const refused = await a.get(`/test/cart-line-items/${aCart}`);
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.error, "product_unavailable");
 });

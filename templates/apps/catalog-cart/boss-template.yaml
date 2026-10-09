@@ -9,7 +9,7 @@ stacks:
   python: {frameworks: [fastapi], min_toolchain: python311}
   java:   {frameworks: [spring-boot], min_toolchain: jdk21}
 requires: []
-works_with: [login-oauth, payments-stripe, payments-paypal]
+works_with: [login-oauth, stripe-checkout, paypal-checkout]
 secrets:
   - name: CART_SECRET
     purpose: Signs the anonymous cart cookie; BOSS generates a random one per app and environment

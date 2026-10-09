@@ -34,6 +34,11 @@ If the app has the `catalog-cart` template, `POST /api/checkout` takes its `cart
 the lines from the cart's checkout contract (`cart_id → [{product_id, name, unit_amount_cents,
 currency, quantity}]`, server prices, for the requesting session's cart only). Replace the
 reference's static catalog with that contract and add a "Checkout" button to the cart drawer.
+catalog-cart provides it under exactly the names `payments/catalog` calls: node `createCatalog(...)`
+returns `getProduct` / `cartLineItems(cartId, req)`, python `create_catalog(...)` returns
+`get_product` / `cart_line_items(cart_id, request)`, java `CheckoutCatalog.product` /
+`cartLines(cartId, request)`; turn its `CatalogError` into `CheckoutInputError` /
+`CheckoutInputException` in the wiring so an unsellable cart is a 400, not a 500.
 Without it, keep the static catalog and a single "Buy now" button.
 
 ## Per stack
