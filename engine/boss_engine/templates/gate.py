@@ -292,3 +292,53 @@ def applied_template(connection: Any, run: Mapping[str, Any]) -> Optional[dict]:
     files = {r[0]: bytes(r[1]) for r in connection.execute(
         text("SELECT path, content FROM app_template_files WHERE template_id = :t"), {"t": row["id"]}).all()}
     return {**tpl, "manifest": row["manifest"], "files": files, "workflow_run_id": wf}
+
+
+# ---- the hold, as an outcome: a build a template gate stopped is BLOCKED -------------------------
+
+#: The two gates an applied template adds. Mechanical and unwaivable: a build that failed one
+#: never completes, never opens a PR and is never "Done · no PR".
+TEMPLATE_GATES = ("template_tests", "no_committed_secrets")
+
+_WHY = {
+    "template_tests": "the template's tests did not pass",
+    "no_committed_secrets": "the change holds something that looks like a committed secret",
+}
+_NEXT = {
+    "template_tests": ("Open the build's Checks to read the template test output, then retry the "
+                       "build with a note on what to fix, or apply the template again."),
+    "no_committed_secrets": ("Open the build's Checks to see which file and line looked like a secret, "
+                             "remove it (secrets come from the app's Secrets, never the code), then "
+                             "retry the build."),
+}
+
+
+def hold_outcome(failing: Any) -> Optional[dict]:
+    """{gates, reason, next_step, error} for a build whose failing gates include a template gate,
+    else None. `error` is the one line a blocked build shows: why, then what to do."""
+    gates = [g for g in TEMPLATE_GATES if g in set(failing or ())]
+    if not gates:
+        return None
+    reason = "; ".join(_WHY[g] for g in gates)
+    next_step = _NEXT[gates[0]]
+    return {"gates": gates, "reason": reason[:1].upper() + reason[1:], "next_step": next_step,
+            "error": f"Blocked: {reason}. {next_step}"}
+
+
+def held_run(connection: Any, run_id: str) -> Optional[dict]:
+    """`hold_outcome` for a code task run, from its recorded quality gate (and the gates the
+    pipeline wrote on the run). None when no template gate failed, or the run applies none."""
+    from sqlalchemy import text
+
+    row = connection.execute(text(
+        "SELECT q.gates_failed, r.finalize_ctx->'failing_gates' AS fctx_failing "
+        "FROM code_task_runs r LEFT JOIN quality_gates q ON q.code_task_run_id = r.id "
+        "WHERE r.id = :i ORDER BY q.created_at DESC NULLS LAST LIMIT 1"),
+        {"i": run_id}).mappings().first()
+    if row is None:
+        return None
+    failing: set = set()
+    for value in (row["gates_failed"], row["fctx_failing"]):
+        if isinstance(value, list):
+            failing |= {str(g) for g in value}
+    return hold_outcome(failing)

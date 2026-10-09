@@ -247,36 +247,76 @@ def build_templates_router() -> APIRouter:
 
     # Apply = a governed build. The route checks workflow_run:start at the project; the handler
     # also requires template:read (§2.6).
+    #
+    # A REFUSED APPLY WRITES NOTHING. Everything that can be refused is asked first, writing
+    # nothing (plan with write=False); then the test-default secret bindings, the start (with its
+    # consent and readiness checks) and the application row go in ONE transaction, so a 409 from
+    # the start rolls the bindings back with it. The one thing kept across a refusal is an
+    # insecure template's lab project (templates.lab): the consent a person gives names it, and
+    # the retry must land in the same one.
     @router.post("/v1/templates/{template_id}/apply")
     @permit(P.WORKFLOW_RUN_START, scope=Scope.project(body="project_id"))
     def apply_template(request: Request, template_id: str, body: ApplyBody) -> Any:
+        from boss_engine.config import get_settings
+        from boss_engine.templates import lab as lab_service
+
         from .routers.identity_access import require_permission
 
         ctx = _ctx(request)
         require_permission(request, P.TEMPLATE_READ, None, label="templates.apply")
+        org_id = ctx.principal.org_id
+        target_project = body.project_id
+        lab: Optional[dict] = None
         try:
             with begin() as db:
-                _project_in_org(db, body.project_id, ctx.principal.org_id)
-                plan = apply_service.plan(db, org_id=ctx.principal.org_id, project_id=body.project_id,
-                                          template_ref=template_id, body=body.model_dump(),
-                                          actor_id=ctx.principal.id)
+                _project_in_org(db, body.project_id, org_id)
+                if lab_service.lab_of(db, body.project_id):
+                    raise TemplateError(409, "lab_project",
+                                        "this is a lab project for an insecure template; apply "
+                                        "templates to apps in your own projects")
+                preflight = apply_service.plan(db, org_id=org_id, project_id=body.project_id,
+                                               template_ref=template_id, body=body.model_dump(),
+                                               actor_id=ctx.principal.id, write=False)
+            if preflight["manifest"].insecure_by_design:
+                with begin() as db:
+                    lab = lab_service.ensure_lab(
+                        db, get_settings(), source_project_id=body.project_id,
+                        app_key=preflight["app"]["app_key"], app_name=preflight["app"]["app_name"],
+                        template_key=preflight["manifest"].id, actor_id=ctx.principal.id)
+                target_project = lab["project_id"]
         except TemplateError as exc:
             return _refused(exc)
-        # THE SAME START PATH as the composer's "Add to an existing app": every gate, review and
-        # the PR are the workflow's; the template only adds two gates (§2.9 S2.1).
         from . import main
         from .request_bodies import WorkflowStartBody
 
-        started = main.start_delivery_workflow(WorkflowStartBody(
-            project_id=body.project_id, workflow_key=plan["workflow_key"], input=plan["run_input"],
-            dedupe_key=body.dedupe_key or f"template:{plan['application_id']}",
-            start_anyway=body.start_anyway))
-        run = started.get("run") or {}
-        with begin() as db:
-            out = apply_service.record(db, plan, project_id=body.project_id,
-                                       workflow_run_id=run.get("id"), actor_id=ctx.principal.id)
+        try:
+            with begin() as db:
+                plan = apply_service.plan(db, org_id=org_id, project_id=target_project,
+                                          template_ref=template_id, body=body.model_dump(),
+                                          actor_id=ctx.principal.id)
+                # THE SAME START PATH as the composer's "Add to an existing app": every gate,
+                # review and the PR are the workflow's; the template only adds two gates.
+                # The SIGNED-IN person starts it: their actor, as the guard bound it to this
+                # request (an unnamed actor fell back to "executive_console" and was refused as
+                # actor_mismatch on every real apply under enforce).
+                from . import identity_guard
+
+                started = main.start_delivery_workflow(WorkflowStartBody(
+                    project_id=target_project, actor=identity_guard.request_actor() or None,
+                    workflow_key=plan["workflow_key"], input=plan["run_input"],
+                    dedupe_key=body.dedupe_key or f"template:{plan['application_id']}",
+                    start_anyway=body.start_anyway), connection_in=db)
+                run = started.get("run") or {}
+                out = apply_service.record(db, plan, project_id=target_project,
+                                           workflow_run_id=run.get("id"), actor_id=ctx.principal.id)
+        except TemplateError as exc:
+            return _refused(exc)
         return JSONResponse({**out, "template": plan["run_input"]["template"],
-                             "app_key": plan["app"]["app_key"],
+                             "app_key": plan["app"]["app_key"], "project_id": target_project,
+                             **({"lab": {"project_id": lab["project_id"], "name": lab["name"],
+                                         "why": "an insecure-by-design template is applied only in "
+                                                "its own lab project, never beside real apps"}}
+                                if lab else {}),
                              **({"extends": started["extends"]} if started.get("extends") else {})},
                             status_code=201)
 
@@ -343,12 +383,19 @@ def build_templates_router() -> APIRouter:
     @permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
     def app_setup_guide(request: Request, app_key: str, project_id: str) -> dict:
         ctx = _ctx(request)
+        from boss_engine.services.preview_service import public_preview_url
+
         with begin() as db:
             _project_in_org(db, project_id, ctx.principal.org_id)
+            preview_id = apply_service.preview_for(db, project_id, app_key)
+            # The address the person's browser and the provider's callback REACH: the preview
+            # origin for the host this request came in on, never the app's port inside BOSS.
+            preview_url = public_preview_url(
+                preview_id, request.headers.get("host"),
+                "https" if request.url.scheme == "https" else "http") if preview_id else None
             guides = apply_service.setup_guide(
                 db, project_id=project_id, app_key=app_key,
-                public_url=os.environ.get("BOSS_PUBLIC_URL", ""),
-                preview_url=apply_service.preview_url_for(db, project_id, app_key))
+                public_url=os.environ.get("BOSS_PUBLIC_URL", ""), preview_url=preview_url)
         return {"app_key": app_key, "guides": guides}
 
     return router

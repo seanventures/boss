@@ -97,7 +97,8 @@ def put(c, *, org_id: str, project_id: str, app_key: str, name: str, env: str, m
                                          env=env, name=name, value=value, db=c)
     decision_id = None
     if mode == "live":
-        decision_id = _live_decision(c, project_id=project_id, app_key=app_key, name=name, actor_id=actor_id)
+        decision_id = _live_decision(c, project_id=project_id, app_key=app_key, name=name, actor_id=actor_id,
+                                     shape=verdict)
     params = {"p": project_id, "a": app_key, "e": env, "n": name, "v": item_id, "m": mode,
               "by": actor_id, "s": verdict, "d": decision_id}
     if existing:
@@ -116,17 +117,83 @@ def put(c, *, org_id: str, project_id: str, app_key: str, name: str, env: str, m
     return out
 
 
-def _live_decision(c, *, project_id: str, app_key: str, name: str, actor_id: Optional[str]) -> str:
-    """The blocking decision §2.4 requires before a deploy uses a live key."""
+_SHAPE_WORDS = {"matches_live_pattern": "matches the template's live-key pattern",
+                "matches_test_pattern": "matches the template's test-key pattern",
+                "unknown": "the template declares no pattern to check it against"}
+
+
+def app_display_name(c, project_id: str, app_key: str) -> str:
+    """The name a person knows the app by (the Factory's), not its key."""
+    from ..services.agent_assignment import app_key as key_of
+    from ..services.factory_view import app_name
+
+    rows = c.execute(text(
+        "SELECT id, title, spec, finalize_ctx FROM code_task_runs WHERE project_id = :p "
+        "ORDER BY created_at DESC LIMIT 500"), {"p": project_id}).mappings().all()
+    for r in rows:
+        try:
+            name = app_name(dict(r))
+        except Exception:  # noqa: BLE001
+            continue
+        if name and key_of(name) == app_key:
+            return name
+    return app_key
+
+
+def _person(c, actor_id: Optional[str]) -> str:
+    if not actor_id:
+        return "BOSS"
+    try:
+        with c.begin_nested():
+            found = c.execute(text("SELECT display_name FROM identity_principals WHERE id = :i"),
+                              {"i": actor_id}).scalar()
+    except Exception:  # noqa: BLE001 — a name is a nicety; the id still says who
+        found = None
+    return str(found or actor_id)
+
+
+def _live_decision(c, *, project_id: str, app_key: str, name: str, actor_id: Optional[str],
+                   shape: str = "unknown") -> str:
+    """The blocking decision a person answers before a deploy uses a live key. ONE per app and
+    secret while it is open: setting the key again refreshes its evidence, never a second card."""
+    from datetime import datetime, timezone
+
+    display = app_display_name(c, project_id, app_key)
+    who = _person(c, actor_id)
+    at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    evidence = [{"label": "App", "value": display},
+                {"label": "Secret", "value": name},
+                {"label": "Used by", "value": "deploys only (builds and previews keep the test value)"},
+                {"label": "Set by", "value": who},
+                {"label": "Set at", "value": at},
+                {"label": "Key check", "value": _SHAPE_WORDS.get(shape, _SHAPE_WORDS["unknown"])}]
+    recommendation = {
+        "kind": "app_secret_live", "app_key": app_key, "app_name": display, "name": name,
+        "requested_by": actor_id, "permission": "app_secret:live",
+        "reason": "a live key moves real money or reaches real users, so a person approves it before "
+                  "any deploy uses it",
+        "evidence": evidence,
+        "summary": f"{who} set a live {name} for {display}. Approve to let deploys of {display} use it; "
+                   "reject to keep deploys on the test value.",
+    }
+    existing = c.execute(text(
+        "SELECT id, recommendation FROM decisions WHERE project_id = :p AND status = 'pending' "
+        "AND recommendation->>'kind' = 'app_secret_live' AND recommendation->>'app_key' = :a "
+        "AND recommendation->>'name' = :n ORDER BY created_at DESC LIMIT 1 FOR UPDATE"),
+        {"p": project_id, "a": app_key, "n": name}).mappings().first()
+    question = f"Use the live {name} when {display} is deployed?"
+    if existing is not None:
+        prior = existing["recommendation"] if isinstance(existing["recommendation"], dict) else {}
+        recommendation["times_set"] = int(prior.get("times_set") or 1) + 1
+        c.execute(text("UPDATE decisions SET question = :q, recommendation = CAST(:r AS JSONB), "
+                       "updated_at = now() WHERE id = :id"),
+                  {"q": question, "r": json.dumps(recommendation), "id": existing["id"]})
+        return str(existing["id"])
     decision_id = make_id("dec")
     c.execute(text(
         "INSERT INTO decisions (id, project_id, question, recommendation, options, risk_tier, status) "
         "VALUES (:id, :p, :q, CAST(:r AS JSONB), CAST(:o AS JSONB), 3, 'pending')"),
-        {"id": decision_id, "p": project_id,
-         "q": f"Use the live {name} for {app_key} when it is deployed?",
-         "r": json.dumps({"kind": "app_secret_live", "app_key": app_key, "name": name,
-                          "requested_by": actor_id, "permission": "app_secret:live",
-                          "why": "live keys move real money or reach real users (§2.4)"}),
+        {"id": decision_id, "p": project_id, "q": question, "r": json.dumps(recommendation),
          "o": json.dumps([{"action": "approve", "label": "Use the live key for deploys"},
                           {"action": "reject", "label": "Keep test mode"}])})
     return decision_id
@@ -206,9 +273,10 @@ def values_for_env(c, *, org_id: str, project_id: str, app_key: str, env: str) -
 
 
 def ensure_test_defaults(c, *, org_id: str, project_id: str, app_key: str, manifest: TemplateManifest,
-                         actor_id: Optional[str]) -> list[str]:
+                         actor_id: Optional[str], dry_run: bool = False) -> list[str]:
     """At apply: a secret with test_default generated/stub gets its build and preview bindings
-    when none exists. Returns the names that still need an operator's test value."""
+    when none exists. Returns the names that still need an operator's test value. `dry_run`
+    answers the same question and writes nothing."""
     needs: list[str] = []
     for spec in manifest.secrets:
         for env in ("build", "preview"):
@@ -218,6 +286,8 @@ def ensure_test_defaults(c, *, org_id: str, project_id: str, app_key: str, manif
             if have:
                 continue
             if spec.test_default in ("generated", "stub"):
+                if dry_run:
+                    continue
                 put(c, org_id=org_id, project_id=project_id, app_key=app_key, name=spec.name, env=env,
                     mode=spec.test_default, value=None, actor_id=actor_id, spec=spec, may_live=False)
             elif env == "build" and spec.name not in needs:

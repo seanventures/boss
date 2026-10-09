@@ -309,7 +309,7 @@ def approve(c, org_id: str, template_id: str, *, actor_id: Optional[str]) -> dic
         raise TemplateError(401, "unauthenticated", "approving needs a signed-in person")
     if row["imported_by"] and row["imported_by"] == actor_id:
         raise TemplateError(403, "seat_separation",
-                            "the person who imported a template cannot approve it (D3)")
+                            "the person who imported a template cannot approve it; another Owner or Admin approves it")
     if not (row["validation"] or {}).get("ok"):
         raise TemplateError(409, "invalid", "this import did not pass validation")
     c.execute(text("UPDATE app_templates SET status = 'active', approved_by = :a, approved_at = now() "
