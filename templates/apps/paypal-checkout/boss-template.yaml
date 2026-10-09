@@ -6,6 +6,7 @@ summary: PayPal Orders v2 with server-side prices, one-time capture, PayPal-veri
 adds: [routes, ui, db_tables, webhook]
 stacks:
   node:   {frameworks: [express], min_toolchain: node20}
+  python: {frameworks: [fastapi], min_toolchain: python311}
 requires: []
 works_with: [catalog-cart, stripe-checkout]
 # PayPal sandbox and live credentials have no distinguishing shape, so no `pattern` is declared
@@ -40,6 +41,7 @@ routes:
   - POST /api/orders/:id/refund
 tests:
   node:   {command: npm run test:template, report: junit, min_tests: 12}
+  python: {command: python3 -m pytest -q tests/template_paypal --junitxml=boss-template-junit.xml, report: junit, min_tests: 12}
 security_note: SECURITY.md
 guide: guide.md
 labels: []

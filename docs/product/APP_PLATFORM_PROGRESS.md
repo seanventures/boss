@@ -248,8 +248,8 @@ operator prefers the spec's names; nothing else refers to them.
 | stripe-checkout java (Spring Boot 3.4, stripe-java 34) | done: 18 tests (16 MockMvc + 2 Spring boot-up) |
 | paypal-checkout: manifest, brief, guide, SECURITY | done |
 | paypal-checkout node (Express, fetch client, no SDK) | done: 18 tests |
-| paypal-checkout python (FastAPI, httpx) | next |
-| paypal-checkout java | optional (if time allows) |
+| paypal-checkout python (FastAPI, httpx, SQLite) | done: 25 tests |
+| paypal-checkout java (Spring Boot) | next (optional per the brief) |
 
 ### Resume (S3-payments)
 
