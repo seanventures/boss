@@ -9443,15 +9443,23 @@ def delivery_deploy_endpoint(payload: ManualDeployBody, request: Request):
             ref = ((spec_row or {}).get("spec") or {}).get("base_branch") or "main"
         ref = ref or "main"
 
-        planned = ResourcePlaneService(settings).plan_deployment_run(
-            connection,
-            project_id=target["project_id"], deployment_target_id=target_id,
-            commit_ref=ref,
-            release_packet={"source": "manual_deploy", "repo": target["repo"],
-                            "requested_by": actor,
-                            **({"code_task_run_id": source_run} if source_run else {})},
-            expected_cost_usd_micros=expected_cost,
-            reservation_id=reservation_id, actor=actor)
+        from .services.governed_host_deploy import GovernedHostDeployError
+
+        try:
+            planned = ResourcePlaneService(settings).plan_deployment_run(
+                connection,
+                project_id=target["project_id"], deployment_target_id=target_id,
+                commit_ref=ref,
+                release_packet={"source": "manual_deploy", "repo": target["repo"],
+                                "requested_by": actor,
+                                **({"code_task_run_id": source_run} if source_run else {})},
+                expected_cost_usd_micros=expected_cost,
+                reservation_id=reservation_id, actor=actor)
+        except GovernedHostDeployError as refused:
+            # A plan BOSS refuses before recording anything (an insecure-by-design template's
+            # app, a budget refusal): said in words, never a 500.
+            raise HTTPException(status_code=409,
+                                detail=f"{refused.headline} {refused.action}") from refused
         run_id = planned.get("deployment_run_id") or planned.get("id")
         connection.execute(text("UPDATE deployment_runs SET trigger='manual' WHERE id=:i"),
                            {"i": run_id})
