@@ -80,12 +80,13 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
     return () => { alive = false; };
   }, [card.id]);
 
-  // The first stack this install can build, once the toolchains are known.
+  // The first stack this install can build — chosen again when the toolchains arrive, until the
+  // person picks one themselves.
+  const [picked, setPicked] = useState(false);
   useEffect(() => {
-    if (stack) return;
-    const pick = card.stacks.find((s) => !installed || installed.has(s)) ?? card.stacks[0] ?? "";
-    setStack(pick);
-  }, [card.stacks, installed, stack]);
+    if (picked) return;
+    setStack(card.stacks.find((s) => !installed || installed.has(s)) ?? card.stacks[0] ?? "");
+  }, [card.stacks, installed, picked]);
 
   const secrets = detail?.secrets ?? card.secrets;
   const egress = detail?.egress ?? card.egress;
@@ -149,7 +150,7 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
       if (readiness) { setRefusal(readiness); setError(String(detail.message ?? b.message ?? "This project is not ready for it yet.")); return; }
       if (code === "stack_mismatch" && Array.isArray(b.app_stacks)) {
         const fit = (b.app_stacks as string[]).find((s) => card.stacks.includes(s));
-        if (fit) setStack(fit);
+        if (fit) { setStack(fit); setPicked(true); }
         setError(fit ? `${refusalWords(e)}. ${stackLabel(fit)} is chosen now: press Start again.` : refusalWords(e));
         return;
       }
@@ -200,7 +201,7 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
             return (
               <button key={s} type="button" role="radio" className="tpl-chip" aria-checked={stack === s}
                       aria-disabled={off || undefined} data-off={off || undefined} title={stackTip(s, installed)}
-                      data-testid={`tpl-stack-${s}`} onClick={() => { if (!off) setStack(s); }}>
+                      data-testid={`tpl-stack-${s}`} onClick={() => { if (!off) { setStack(s); setPicked(true); } }}>
                 {stackLabel(s)}{off ? " · off" : ""}
               </button>
             );

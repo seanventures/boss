@@ -966,7 +966,7 @@ async function postBounded(
  * Writes through the `apply` action that already exists — the same one the Workflows area
  * uses — so there is one way a mapping gets created, not two that can disagree.
  */
-function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
+export function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
   const [items, setItems] = useState<Array<{
     id: string; name: string; workflow_key: string; is_catalogue?: boolean }>>([]);
   const [current, setCurrent] = useState("");
