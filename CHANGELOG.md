@@ -2,9 +2,22 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
-## [Unreleased] — v1.0-rc6
+## [v1.0-rc6.1]
 
-Draft notes: [docs/community/RELEASE_NOTES_v1.0-rc6.md](docs/community/RELEASE_NOTES_v1.0-rc6.md).
+Hotfix on v1.0-rc6. Notes: [docs/community/RELEASE_NOTES_v1.0-rc6.1.md](docs/community/RELEASE_NOTES_v1.0-rc6.1.md).
+
+### Fixed
+
+- **The console is fast again.** A page asks only for the feeds it shows (Factory 38 → 17 API calls, Overview 34 → 12), each signed-in request spends 2 identity statements instead of 4, and the Factory and Command Center send smaller payloads (283 → 134 KB, 1.16 MB → 642 KB). The console reuses an answer for up to 5 s only after the same page load proved the session live at the same identity epoch; revocation still takes effect on the next request.
+- **The Infra Deploy button** returned a server error on every app target. Registering and bootstrapping a deployment target from setup had the same fault.
+
+### Changed
+
+- The engine's Python package version is `1.0.0rc6.post1` (PEP 440 has no `1.0.0-rc.6.1`); everything else is `1.0.0-rc.6.1`.
+
+## [v1.0-rc6]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc6.md](docs/community/RELEASE_NOTES_v1.0-rc6.md).
 
 ### Added
 
