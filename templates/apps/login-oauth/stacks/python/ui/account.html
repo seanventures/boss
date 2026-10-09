@@ -1,0 +1,29 @@
+<!-- Login buttons and the signed-in header, framework-free (serve it as a static page or copy
+     the markup and script into the app's templates). Sign-in is a full-page navigation; sign-out
+     is a POST carrying the CSRF token from /api/me. -->
+<div id="account" aria-live="polite"></div>
+<script type="module">
+  const root = document.getElementById("account");
+  const me = await fetch("/api/me", { credentials: "same-origin" });
+  if (me.ok) {
+    const user = await me.json();
+    const name = document.createElement("span");
+    name.textContent = user.name || user.email;
+    const out = document.createElement("button");
+    out.type = "button";
+    out.textContent = "Sign out";
+    out.onclick = async () => {
+      await fetch("/auth/logout", { method: "POST", headers: { "X-CSRF-Token": user.csrf_token } });
+      location.assign("/");
+    };
+    root.append(name, " ", out);
+  } else {
+    const { providers } = await (await fetch("/auth/providers")).json();
+    for (const p of providers) {
+      const a = document.createElement("a");
+      a.href = `${p.login_url}?return_to=${encodeURIComponent(location.pathname)}`;
+      a.textContent = `Sign in with ${p.name}`;
+      root.append(a, " ");
+    }
+  }
+</script>

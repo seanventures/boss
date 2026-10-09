@@ -1,0 +1,5 @@
+# catalog-cart (Python / FastAPI). Merge into the app's requirements.
+fastapi>=0.110,<1
+httpx>=0.27,<1
+# the template's tests
+pytest>=8
