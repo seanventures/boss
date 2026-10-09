@@ -37,6 +37,11 @@ def connection(db: Any = None, *, write: bool = False) -> Iterator[Any]:
 
 
 def read(org_id: str, *, db: Any = None) -> int:
+    from . import request_memo
+
+    known = request_memo.get(("epoch", org_id))
+    if request_memo.has(known):
+        return int(known)
     with connection(db) as conn:
         value = conn.execute(text("SELECT epoch FROM identity_settings WHERE org_id = :o"),
                              {"o": org_id}).scalar()
@@ -47,6 +52,9 @@ def bump(org_id: str, *, db: Any, reason: str) -> int:
     """Increment the org's epoch in the caller's transaction and NOTIFY it (delivered at commit)."""
     if db is None:
         raise ValueError("bump_epoch runs in the caller's transaction: pass db=")
+    from . import request_memo
+
+    request_memo.clear()    # nothing this request read before the change is reused after it
     epoch = db.execute(text(
         "INSERT INTO identity_settings (org_id, epoch, updated_at) VALUES (:o, 1, now()) "
         "ON CONFLICT (org_id) DO UPDATE SET epoch = identity_settings.epoch + 1, updated_at = now() "
