@@ -343,7 +343,7 @@ def build_oidc_router() -> APIRouter:
 
     # ---- admin: pools (§6.5) -------------------------------------------------------------------
     @router.get("/v1/oidc/pools")
-    @permit(P.OIDC_ADMIN, scope=Scope.org())
+    @permit(P.OIDC_READ, scope=Scope.org())
     def list_pools(request: Request) -> JSONResponse:
         return _admin(request, lambda db, ctx: {"pools": [oidc_pools.public_view(p) for p in
                                                           oidc_pools.list_pools(db, org_id=ctx.principal.org_id)]})
@@ -355,7 +355,7 @@ def build_oidc_router() -> APIRouter:
             db, org_id=ctx.principal.org_id, actor=ctx.principal.id, body=body.model_dump(exclude_none=True))), 201)
 
     @router.get("/v1/oidc/pools/{pool_id}")
-    @permit(P.OIDC_ADMIN, scope=Scope.org())
+    @permit(P.OIDC_READ, scope=Scope.org())
     def get_pool(pool_id: str, request: Request) -> JSONResponse:
         def fn(db: Any, ctx: Any) -> Any:
             p = oidc_pools.load(db, org_id=ctx.principal.org_id, pool_id=pool_id)
@@ -387,7 +387,7 @@ def build_oidc_router() -> APIRouter:
         return pool
 
     @router.get("/v1/oidc/pools/{pool_id}/users")
-    @permit(P.OIDC_POOL_USER_MANAGE, scope=Scope.org())
+    @permit(P.OIDC_READ, scope=Scope.org())
     def list_pool_users(pool_id: str, request: Request) -> JSONResponse:
         return _admin(request, lambda db, ctx: {"users": oidc_customers.list_users(
             db, pool_id=_customer_pool(db, ctx, pool_id)["id"])})
@@ -416,7 +416,7 @@ def build_oidc_router() -> APIRouter:
 
     # ---- admin: clients (Admins everywhere; app owners on their project) -------------------------
     @router.get("/v1/oidc/clients")
-    @permit(P.OIDC_CLIENT_MANAGE, scope=Scope.project_or_org(query="project_id"))
+    @permit(P.OIDC_READ, scope=Scope.org())
     def list_clients(request: Request, project_id: Optional[str] = None) -> JSONResponse:
         return _admin(request, lambda db, ctx: {"clients": [oidc_clients.public_view(c) for c in oidc_clients.list_clients(
             db, org_id=ctx.principal.org_id, project_id=project_id)]})
@@ -437,7 +437,7 @@ def build_oidc_router() -> APIRouter:
         return _admin(request, fn, 201)
 
     @router.get("/v1/oidc/clients/{client_id}")
-    @permit(P.OIDC_CLIENT_MANAGE, scope=Scope.of("oidc_client", path="client_id"))
+    @permit(P.OIDC_READ, scope=Scope.org())
     def get_client(client_id: str, request: Request) -> JSONResponse:
         return _admin(request, lambda db, ctx: oidc_clients.public_view(_client_of(db, ctx, client_id)))
 
@@ -476,7 +476,7 @@ def build_oidc_router() -> APIRouter:
 
     # ---- admin: a client's app roles and their assignments --------------------------------------
     @router.get("/v1/oidc/clients/{client_id}/roles")
-    @permit(P.OIDC_CLIENT_MANAGE, scope=Scope.of("oidc_client", path="client_id"))
+    @permit(P.OIDC_READ, scope=Scope.org())
     def list_client_roles(client_id: str, request: Request) -> JSONResponse:
         return _admin(request, lambda db, ctx: {"roles": oidc_pools.list_roles(db, client=_client_of(db, ctx, client_id))})
 
@@ -488,7 +488,7 @@ def build_oidc_router() -> APIRouter:
             name=body.name or body.role_key), 201)
 
     @router.get("/v1/oidc/clients/{client_id}/role-assignments")
-    @permit(P.OIDC_CLIENT_MANAGE, scope=Scope.of("oidc_client", path="client_id"))
+    @permit(P.OIDC_READ, scope=Scope.org())
     def list_role_assignments(client_id: str, request: Request) -> JSONResponse:
         return _admin(request, lambda db, ctx: {"assignments": oidc_pools.list_assignments(
             db, client=_client_of(db, ctx, client_id))})
@@ -504,7 +504,7 @@ def build_oidc_router() -> APIRouter:
 
     # ---- admin: consents -----------------------------------------------------------------------
     @router.get("/v1/oidc/consents")
-    @permit(P.OIDC_ADMIN, scope=Scope.org())
+    @permit(P.OIDC_READ, scope=Scope.org())
     def list_consents(request: Request, client_id: Optional[str] = None) -> JSONResponse:
         return _admin(request, lambda db, ctx: {"consents": oidc_consent.list_consents(
             db, org_id=ctx.principal.org_id, client_id=client_id)})

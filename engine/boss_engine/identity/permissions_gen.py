@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "7a7615251815dbd5"
+CATALOGUE_FINGERPRINT = "b5f44a2f433c3deb"
 
 
 class Permission(StrEnum):
@@ -54,6 +54,7 @@ class Permission(StrEnum):
     AUDIT_READ = "audit:read"
     AUDIT_EXPORT = "audit:export"
     SCIM_PROVISION = "scim:provision"
+    OIDC_READ = "oidc:read"
     OIDC_ADMIN = "oidc:admin"
     OIDC_CLIENT_MANAGE = "oidc_client:manage"
     OIDC_POOL_USER_MANAGE = "oidc_pool_user:manage"
@@ -253,6 +254,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "audit:read": PermissionMeta(key="audit:read", title="View the security audit log", description="Read the security audit log.", category="Identity and access", roles=('owner', 'admin', 'auditor'), scope='org', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "audit:export": PermissionMeta(key="audit:export", title="Export and verify the security audit log", description="Export the security audit log and verify its hash chain.", category="Identity and access", roles=('owner', 'admin', 'auditor'), scope='org', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "scim:provision": PermissionMeta(key="scim:provision", title="Provision over SCIM", description="Provision users and groups over SCIM 2.0.", category="Identity and access", roles=('system_scim',), scope='org', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
+    "oidc:read": PermissionMeta(key="oidc:read", title="See app sign-in", description="See the OIDC user pools, app clients, roles, pool users and consents (read only; no secret is ever shown).", category="Identity and access", roles=('owner', 'admin', 'auditor'), scope='org', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "oidc:admin": PermissionMeta(key="oidc:admin", title="Administer app sign-in", description="Create and change OIDC user pools and every app client (BOSS as an identity provider for the apps it builds).", category="Identity and access", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "oidc_client:manage": PermissionMeta(key="oidc_client:manage", title="Manage an app's sign-in client", description="Register an app as an OIDC client, change its redirect URIs, scopes and roles, and rotate its secret.", category="Identity and access", roles=('owner', 'admin', 'operator'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "oidc_pool_user:manage": PermissionMeta(key="oidc_pool_user:manage", title="Manage app sign-in users", description="Invite, disable and reset the MFA of the users of an app sign-in pool.", category="Identity and access", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
@@ -420,7 +422,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 188
+    "owner": frozenset({  # 189
         "directory:read",
         "user:read",
         "user:invite",
@@ -461,6 +463,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "security_policy:manage",
         "audit:read",
         "audit:export",
+        "oidc:read",
         "oidc:admin",
         "oidc_client:manage",
         "oidc_pool_user:manage",
@@ -610,7 +613,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "telemetry:share",
         "telemetry:manage",
     }),
-    "admin": frozenset({  # 179
+    "admin": frozenset({  # 180
         "directory:read",
         "user:read",
         "user:invite",
@@ -647,6 +650,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "security_policy:read",
         "audit:read",
         "audit:export",
+        "oidc:read",
         "oidc:admin",
         "oidc_client:manage",
         "oidc_pool_user:manage",
@@ -935,7 +939,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "improvement:read",
         "activity:read",
     }),
-    "auditor": frozenset({  # 60
+    "auditor": frozenset({  # 61
         "directory:read",
         "user:read",
         "group:read",
@@ -952,6 +956,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "security_policy:read",
         "audit:read",
         "audit:export",
+        "oidc:read",
         "org:read",
         "project:read",
         "settings:read",

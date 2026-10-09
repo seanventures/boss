@@ -389,6 +389,12 @@ categories:
         roles: [system_scim]
         scope: org
         flags: [system_only]
+      - key: oidc:read
+        title: "See app sign-in"
+        description: "See the OIDC user pools, app clients, roles, pool users and consents (read only; no secret is ever shown)."
+        roles: [owner, admin, auditor]
+        scope: org
+        flags: []
       - key: oidc:admin
         title: "Administer app sign-in"
         description: "Create and change OIDC user pools and every app client (BOSS as an identity provider for the apps it builds)."
