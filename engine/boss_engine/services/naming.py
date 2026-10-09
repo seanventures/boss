@@ -14,6 +14,7 @@ working title. This reads that, strips the wrappers BOSS adds ("Web app -", "Bui
 2"), lifts run-kind prefixes into a label, and returns a name short enough to read at a glance
 with the descriptor kept separately.
 """
+import functools
 import re
 import unicodedata
 
@@ -95,6 +96,19 @@ def _cut_at_word(name: str, limit: int) -> str:
 
 def project_name(text: str) -> tuple[str, str, str]:
     """(name, blurb, label). The name is what a person would call it out loud."""
+    text = str(text or "")
+    # Memoised only for title-sized text, so the cache never holds whole briefs.
+    return _project_name_cached(text) if len(text) <= 2000 else _project_name(text)
+
+
+@functools.lru_cache(maxsize=4096)
+def _project_name_cached(text: str) -> tuple[str, str, str]:
+    return _project_name(text)
+
+
+def _project_name(text: str) -> tuple[str, str, str]:
+    # Pure and immutable (a tuple of str), so memoised: /v1/factory/apps names every build of
+    # every app several times per answer (~500 calls, a third of its time on the seeded stack).
     t = _norm(text)
     t = re.sub(r"\s*·\s*retry\s*\d+\s*$", "", t, flags=re.I)
     label = ""

@@ -110,10 +110,18 @@ class StackState:
     stopped: bool = False
     # The seeded people (harness/identity.py): a 0600 file in the run dir, empty until claimed.
     accounts_file: str = ""
+    # The vault's master key (base64, 32 bytes), as an install's master.key file holds it. Identity
+    # refuses to claim or seed people without one (vault.MasterKeyMissing); a stack recorded before
+    # this field has none and is given one when it is next started.
+    master_key: str = ""
 
     def __post_init__(self) -> None:
         if not self.run_id:
             self.run_id = f"e2e-{Path(self.run_dir).name}"
+        if not self.master_key:
+            import base64
+
+            self.master_key = base64.b64encode(secrets.token_bytes(32)).decode()
 
     @property
     def database_url(self) -> str:
@@ -208,6 +216,7 @@ def service_env(state: StackState, *, extra: Optional[dict[str, str]] = None) ->
         "BOSS_EDITION": state.edition,
         # TRANSPORT AUTH ON, WITH REAL KEY→PRINCIPAL MAPPING. The whole point. See target.py.
         "BOSS_REQUIRE_API_AUTH": "true",
+        "BOSS_MASTER_KEY": state.master_key,
         "BOSS_API_KEY": state.owner_key,
         "BOSS_API_KEYS": f"{state.owner_key},{state.worker_key}",
         "BOSS_API_KEY_PRINCIPALS": f"{state.owner_key}:ceo,{state.worker_key}:system",

@@ -30,10 +30,14 @@ describe("signInAgainHref", () => {
 
 describe("the console page", () => {
   const src = readFileSync(join(process.cwd(), "app/page.tsx"), "utf8");
-  it("decides sign-in before it fetches the org list or renders the picker", () => {
+  it("decides sign-in before it uses the org list or renders the picker", () => {
+    // The org list is ASKED FOR alongside /me (console latency, 2026-10-09: one round trip fewer
+    // before the first feed) — a dead session's org read is a 401 nobody looks at. What must come
+    // first is the decision: nothing from the org list is read, and no picker is drawn, before it.
     const gate = src.indexOf("signInAgainHref(enrolment.problem");
     expect(gate).toBeGreaterThan(0);
-    expect(gate).toBeLessThan(src.indexOf("await fetchOrgs()"));
+    expect(src.indexOf("const orgsP = fetchOrgs();")).toBeGreaterThan(0);
+    expect(gate).toBeLessThan(src.indexOf("await orgsP"));
     expect(gate).toBeLessThan(src.indexOf("<OrgGate"));
   });
   it("in every console mode: no network-mode exemption from the 401", () => {
