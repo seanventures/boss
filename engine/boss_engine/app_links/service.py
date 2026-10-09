@@ -472,6 +472,9 @@ def workload_environment(db: Any, *, project_id: str, run_id: Optional[str], env
     a provider. Empty when the run is not an app of the project or nothing links it."""
     if not run_id:
         return {}
+    if db.execute(text("SELECT 1 FROM app_links WHERE project_id = :p AND status = 'active' LIMIT 1"),
+                  {"p": project_id}).first() is None:
+        return {}                     # the common case: nothing linked in this project, no lookups
     by_run, _ = app_index(db, project_id)
     key = by_run.get(run_id)
     if not key:

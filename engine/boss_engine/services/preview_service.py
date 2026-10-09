@@ -320,6 +320,50 @@ def _free_port() -> int:
     return port
 
 
+def preview_port() -> int:
+    """A free port for a PREVIEW, from BOSS_PREVIEW_PORTS (default 19000-19999). Previews live in
+    their own range so the sandbox fence can refuse it to every build (a build reaches another
+    app's preview only through the link gateway, F5 §5.4) and the link gateway can refuse
+    anything outside it as an upstream. Falls back to any free port only if the range is full."""
+    import random
+
+    from ..app_links.service import preview_ports
+
+    pool = preview_ports()
+    span = pool.high - pool.low + 1
+    start = random.randrange(span)
+    for i in range(span):
+        port = pool.low + (start + i) % span
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind(("0.0.0.0", port))
+            except OSError:
+                continue
+        return port
+    logger.warning("BOSS_PREVIEW_PORTS is full; this preview takes an ephemeral port")
+    return _free_port()
+
+
+def preview_link_environment(engine, *, project_id: str, run_id: Optional[str], preview_id: str,
+                             expires_at, rotate: bool) -> dict[str, str]:
+    """What cross-app links add to a preview (F5 §5.3): as a consumer, BOSS_LINK_<ALIAS>_* and
+    this preview's link pass; as a provider, BOSS_TEST_USERS (rotated on a NEW preview). Never
+    fails the preview: a link that cannot be resolved is logged by name and left out."""
+    try:
+        from ..app_links import service as _links
+
+        with begin(engine) as c:
+            env = _links.workload_environment(c, project_id=project_id, run_id=run_id, env="preview",
+                                              consumer_kind="preview", consumer_id=preview_id,
+                                              expires_at=expires_at, rotate=rotate)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("preview %s starts without its link environment (%s)", preview_id, type(exc).__name__)
+        return {}
+    if env:
+        logger.info("preview %s gets %s", preview_id, ", ".join(sorted(env)))
+    return env
+
+
 def _low_priority(command: list[str]) -> list[str]:
     """Run a preview build at LOW CPU/IO priority.
 
@@ -1639,7 +1683,7 @@ def _is_model_or_credential(name: str) -> bool:
     return upper.startswith(_MODEL_CREDENTIAL_PREFIXES) or any(m in upper for m in SECRET_SHAPED)
 
 
-def app_environment(workdir: Path, port: int) -> dict[str, str]:
+def app_environment(workdir: Path, port: int, extra: Optional[dict[str, str]] = None) -> dict[str, str]:
     """The environment an app BOSS starts (preview or serve proof) runs with.
 
     Agent-written code, so the agent's rules: agent_environment withholds DATABASE_URL, deploy
@@ -1671,12 +1715,16 @@ def app_environment(workdir: Path, port: int) -> dict[str, str]:
         "npm_config_update_notifier": "false"})
     env = {k: v for k, v in env.items() if not _is_model_or_credential(k)}
     env.update({"PORT": str(port), "HOST": "0.0.0.0", "HOME": str(workdir)})
+    # Cross-app links (F5): values BOSS computed for THIS launch (preview_link_environment),
+    # added after the filter like PORT, never inherited.
+    env.update(extra or {})
     return env
 
 
 def launch_app(workdir: Path, command: list[str], log_path: str, *,
                owner: Optional["owned_process.Owner"] = None,
-               expires_at=None) -> tuple[subprocess.Popen, int]:
+               expires_at=None, port: Optional[int] = None,
+               extra_env: Optional[dict[str, str]] = None) -> tuple[subprocess.Popen, int]:
     """Start ONE app the way a preview does: PORT/HOST injected, output to log_path, low
     priority, its own process group. Returns (process, the PORT it was given).
 
@@ -1684,8 +1732,8 @@ def launch_app(workdir: Path, command: list[str], log_path: str, *,
     call it, so "it served when the build checked" and "it serves in preview" are the same
     claim about the same invocation, not two launchers that can drift apart.
     """
-    port_hint = _free_port()
-    env = app_environment(workdir, port_hint)
+    port_hint = port or _free_port()
+    env = app_environment(workdir, port_hint, extra_env)
     logf = open(log_path, "w")
     try:
         # OWNED (owned_process): the serve proof belongs to the build that runs it (the
@@ -2168,10 +2216,13 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             "target, or a Python entrypoint/tests)"
         )
 
+    _expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     proc, port_hint = launch_app(
         workdir, command, log_path,
         owner=owned_process.Owner("preview", preview_id, project_id),
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes))
+        expires_at=_expires, port=preview_port(),
+        extra_env=preview_link_environment(engine, project_id=project_id, run_id=run_id,
+                                           preview_id=preview_id, expires_at=_expires, rotate=True))
 
     # Web builds do `npm install` + `vite build` before the static server binds — well past the
     # default 20s window — so give discovery generous headroom (it returns as soon as the port
@@ -2563,7 +2614,11 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         # first start (app_environment) instead of the worker's own.
         proc, port_hint = launch_app(
             workdir, command, log_path,
-            owner=owned_process.Owner("preview", preview_id, row.get("project_id")))
+            owner=owned_process.Owner("preview", preview_id, row.get("project_id")),
+            port=preview_port(),
+            extra_env=preview_link_environment(engine, project_id=project_id, run_id=row.get("run_id"),
+                                               preview_id=preview_id, expires_at=row.get("expires_at"),
+                                               rotate=False))
         port = _discover_working_port(log_path, port_hint, timeout=preview_start_timeout(workdir),
                                       health_path=preview_health_path(workdir))
         if port is None:
@@ -3221,6 +3276,14 @@ def stop_preview(engine, preview_id: str, settings: Optional[Settings] = None) -
             raise ValueError("preview not found")
         _teardown(dict(row), settings)
         c.execute(text("UPDATE app_previews SET status='stopped' WHERE id=:id"), {"id": preview_id})
+    # Its link passes die with it (the gateway also refuses a stopped preview on every request).
+    try:
+        from ..app_links import service as _links
+
+        with begin(engine) as c:
+            _links.revoke_passes_of(c, "preview", preview_id)
+    except Exception:  # noqa: BLE001 — a schema without links has no passes to revoke
+        pass
     return {"id": preview_id, "status": "stopped"}
 
 

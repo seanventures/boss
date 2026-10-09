@@ -28,6 +28,7 @@ import { areaHref, costWord } from "./cockpit-util";
 import { formatMonthDay } from "../../lib/datetime";
 import { GatedButton } from "../../components/gated";
 import { NEW_BUILD_TIP } from "../../lib/compose-links";
+import { LINKS_TIP, LinksSheet } from "./links-sheet";
 
 /** Where "＋ Add a feature" goes: New project, in add mode, with this app chosen. */
 export function addFeatureHref(appKey: string, previewId?: string | null): string {
@@ -250,6 +251,8 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
   const [open, setOpen] = useState<string | null>(null);
   /** The app whose row menu is open. */
   const [menu, setMenu] = useState<string | null>(null);
+  /** App ▸ Links (F5): the app whose links sheet is open. */
+  const [linksOf, setLinksOf] = useState<AppRow | null>(null);
   // A row menu closes on a press anywhere else, or Esc.
   useEffect(() => {
     if (!menu) return undefined;
@@ -343,6 +346,8 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
                             e.stopPropagation(); setMenu(null);
                             onOpen(opens, (e.currentTarget as HTMLElement).closest("li"));
                           }}>Open its build</button>
+                          <button type="button" role="menuitem" title={LINKS_TIP} data-testid={`fx-app-menu-links-${a.key}`}
+                                  onClick={(e) => { e.stopPropagation(); setMenu(null); setLinksOf(a); }}>Links</button>
                         </span>
                       ) : null}
                     </span>
@@ -404,6 +409,11 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
           );
         })}
       </ul>
+      {linksOf ? (
+        <LinksSheet projectId={projectId} appKey={linksOf.key} app={linksOf.app}
+                    others={apps.filter((o) => o.key !== linksOf.key).map((o) => ({ key: o.key, app: o.app }))}
+                    onClose={() => setLinksOf(null)} />
+      ) : null}
     </div>
   );
 }

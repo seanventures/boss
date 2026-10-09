@@ -132,6 +132,13 @@ def agent_environment(
         if is_allowed(key, extra):
             kept[key] = value
 
+    # A BUILD's cross-app links (app_links.run_env, F5 §5.3): BOSS_LINK_<ALIAS>_* computed for
+    # THIS run when it started, added after the filter on purpose (they are values BOSS minted
+    # for this build, test-only and scoped to one link), and only inside that build's owner scope.
+    from ..app_links import run_env as _link_env
+
+    kept.update(_link_env.current())
+
     withheld = sorted(set(source) - set(kept))
     if withheld:
         # Names only. Logging a withheld value would defeat the entire point of withholding it.

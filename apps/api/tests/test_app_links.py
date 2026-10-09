@@ -248,3 +248,39 @@ def test_a_pass_dies_with_its_workload(world, engine):
         prev = {"consumer_kind": "preview", "consumer_id": "prev_gone", "project_id": world.project_a}
         assert links.consumer_live(db, prev) is False
         assert row  # the pass rows themselves are covered by the revocation test
+
+
+def test_the_build_and_the_preview_get_the_link_environment_and_nothing_else_does(client, world, engine):
+    """At build: every process of THAT build (agent_environment, after its credential filter);
+    at preview: the launched app (app_environment). Another build, or no build, gets nothing."""
+    from pathlib import Path
+
+    from boss_engine.app_links import run_env
+    from boss_engine.services import owned_process, preview_service
+    from boss_engine.services.agent_env import agent_environment
+
+    link = _create(client, world, alias="WIRED").json()
+    with engine.begin() as db:
+        db.execute(text("UPDATE code_task_runs SET status = 'running' WHERE id = :i"), {"i": world.attacker})
+    with owned_process.owner_scope("code_run", world.attacker, fresh=True), \
+            run_env.for_run(engine, world.attacker, world.project_a) as env:
+        inside = agent_environment({"PATH": "/bin"})
+    with owned_process.owner_scope("code_run", world.third, fresh=True):
+        other = agent_environment({"PATH": "/bin"})
+    assert inside["BOSS_LINK_WIRED_URL"] == link["url"] and inside["BOSS_LINK_WIRED_TOKEN"] == env["BOSS_LINK_WIRED_TOKEN"]
+    assert not any(k.startswith("BOSS_LINK_") for k in other)
+    assert not any(k.startswith("BOSS_LINK_") for k in agent_environment({"PATH": "/bin"}))
+    with engine.begin() as db:                         # the build ended: its pass is revoked
+        assert links.resolve_pass(db, env["BOSS_LINK_WIRED_TOKEN"]) is None
+        db.execute(text("UPDATE code_task_runs SET status = 'completed' WHERE id = :i"), {"i": world.attacker})
+    extra = preview_service.preview_link_environment(
+        engine, project_id=world.project_a, run_id=world.attacker, preview_id="prev_wired",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5), rotate=True)
+    app_env = preview_service.app_environment(Path("/tmp"), 19001, extra)
+    assert app_env["BOSS_LINK_WIRED_URL"] == link["url"] and app_env["PORT"] == "19001"
+    provider = preview_service.preview_link_environment(
+        engine, project_id=world.project_a, run_id=world.bank, preview_id="prev_bank",
+        expires_at=None, rotate=True)
+    assert "BOSS_TEST_USERS" in provider and not any(k.startswith("BOSS_LINK_") for k in provider)
+    assert 19000 <= preview_service.preview_port() <= 19999
+    _revoke(client, world, link["id"])
