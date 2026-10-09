@@ -71,11 +71,18 @@ def test_each_payments_manifest_validates_with_test_mode_rules(template_id):
     assert m.egress, "a payments app talks to its provider"
     for spec in m.tests.values():
         assert spec.min_tests >= 6, "F3 §3.2/3.3: at least 6-8 tests per stack"
-    # Every secret that takes a pasted value has a test pattern; none is pre-filled with a live key.
     for s in m.secrets:
-        assert s.test_default in ("none", "generated")
-        if s.test_default == "none":
+        assert s.test_default in ("none", "generated")  # never a stub standing in for a provider
+    if template_id == "stripe-checkout":
+        # Every pasted Stripe value has a test pattern, so a live key is refused for build/preview.
+        for s in m.secrets:
             assert s.pattern, f"{s.name}: a pasted test value must have a pattern"
+        assert m.egress == ("api.stripe.com",)
+    else:
+        # PayPal credentials have no test/live shape: the guard is the sandbox host and PAYPAL_ENV.
+        env = {e.name: e.default for e in m.env}
+        assert env["PAYPAL_ENV"] == "sandbox" and env["APP_ENV"] != "production"
+        assert m.egress == ("api-m.sandbox.paypal.com",), "the live host needs the live-keys decision"
 
 
 def _rand(n: int = 24) -> str:
@@ -170,14 +177,18 @@ def test_the_reference_copied_into_an_app_passes_both_gates(template_id, stack, 
 
 
 @pytest.mark.parametrize("template_id,stack", CASES)
-def test_a_committed_test_key_in_the_app_fails_the_secret_gate(template_id, stack, tmp_path):
+def test_a_committed_secret_in_the_app_fails_the_secret_gate(template_id, stack, tmp_path):
+    """Stripe keys are caught by shape (the manifest's pattern); PayPal's, which have no shape, by
+    the bound value the gate is given."""
     tpl, files = _template(template_id, stack)
+    if template_id == "stripe-checkout":
+        name, leaked, bound = "STRIPE_SECRET_KEY", SHAPES["STRIPE_SECRET_KEY"][0], {}
+    else:
+        name, leaked = "PAYPAL_CLIENT_SECRET", "E" + secrets.token_urlsafe(40)
+        bound = {name: leaked}
     changed = dict(_stack_as_app(template_id, stack))
-    leaked = SHAPES["STRIPE_SECRET_KEY"][0] if template_id == "stripe-checkout" else None
-    if leaked is None:
-        pytest.skip("the PayPal secrets have no fixed shape; the bound-value scan covers them")
-    changed[".env"] = f"STRIPE_SECRET_KEY={leaked}\n".encode()
-    r = evaluate(template=tpl, files=files, changed=changed, cwd=tmp_path,
+    changed[".env"] = f"{name}={leaked}\n".encode()
+    r = evaluate(template=tpl, files=files, changed=changed, cwd=tmp_path, bound_values=bound,
                  run_command=lambda c, w: _Result())
     assert r.gates["no_committed_secrets"] is False
     assert leaked not in repr(r.evidence)

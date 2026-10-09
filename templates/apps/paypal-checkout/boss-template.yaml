@@ -1,0 +1,47 @@
+schema: boss.template/v1
+id: paypal-checkout
+name: PayPal Checkout
+version: 1.0.0
+summary: PayPal Orders v2 with server-side prices, one-time capture, PayPal-verified idempotent webhooks; sandbox only by default
+adds: [routes, ui, db_tables, webhook]
+stacks:
+  node:   {frameworks: [express], min_toolchain: node20}
+requires: []
+works_with: [catalog-cart, stripe-checkout]
+# PayPal sandbox and live credentials have no distinguishing shape, so no `pattern` is declared
+# (a loose pattern would also make the secret scan flag ordinary identifiers). The guard is the
+# host: the app calls the live API only with PAYPAL_ENV=live AND APP_ENV=production.
+secrets:
+  - name: PAYPAL_CLIENT_ID
+    purpose: The sandbox REST app's client id (also given to the browser's JS SDK; it is public)
+    test_default: none
+  - name: PAYPAL_CLIENT_SECRET
+    purpose: The sandbox REST app's secret, for the OAuth token (server only)
+    test_default: none
+  - name: PAYPAL_WEBHOOK_ID
+    purpose: The id of the webhook registered for this app; PayPal's signature check is bound to it
+    test_default: generated   # until the real id is set, every webhook is refused (returns still work)
+env:
+  - {name: PAYPAL_ENV, default: sandbox}
+  - {name: PAYPAL_CURRENCY, default: usd}
+  - {name: PAYMENTS_REFUNDS_ENABLED, default: false}
+  - {name: APP_BASE_URL, default: ''}
+  - {name: APP_ENV, default: development}
+egress: [api-m.sandbox.paypal.com]
+webhooks: [{path: /webhooks/paypal, provider: paypal}]
+routes:
+  - POST /api/paypal/orders
+  - POST /api/paypal/orders/:id/capture
+  - GET /api/paypal/config
+  - GET /paypal/return
+  - GET /paypal/cancel
+  - POST /webhooks/paypal
+  - GET /api/orders/:id
+  - POST /api/orders/:id/refund
+tests:
+  node:   {command: npm run test:template, report: junit, min_tests: 12}
+security_note: SECURITY.md
+guide: guide.md
+labels: []
+license: Apache-2.0
+min_boss: 1.0.0
