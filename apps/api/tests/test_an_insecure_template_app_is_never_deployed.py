@@ -40,6 +40,8 @@ def _apply(c, *, labels: list[str], status: str = "pr_open", key: str = "banking
 @pytest.fixture()
 def world(engine):
     seed(engine, HOME, samples=False)
+    with engine.begin() as c:      # start from a project with no template applied (other suites apply some)
+        c.execute(text("DELETE FROM app_template_applications WHERE project_id = :p"), {"p": HOME})
     yield engine
     with engine.begin() as c:
         c.execute(text("DELETE FROM app_template_applications WHERE project_id = :p"), {"p": HOME})
