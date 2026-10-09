@@ -7383,7 +7383,7 @@ CREATE TABLE IF NOT EXISTS identity_vault_items (
   org_id             TEXT NOT NULL REFERENCES orgs(id),
   owner_principal_id TEXT,                               -- NULL = org-level (GitHub App key)
   kind               TEXT NOT NULL CHECK (kind IN ('oauth_user','app_private_key','provider_credential',
-                       'oidc_client_secret','totp_secret','signing_key','legacy_pat')),
+                       'oidc_client_secret','totp_secret','signing_key','legacy_pat','app_secret')),
   provider           TEXT,
   provider_subject   TEXT,
   connection_name    TEXT,
@@ -7405,6 +7405,23 @@ CREATE INDEX IF NOT EXISTS identity_vault_items_owner ON identity_vault_items (o
 -- Revoked here but not yet at the provider (it was unreachable): kept, unusable, until a retry
 -- succeeds; only then is the ciphertext shredded.
 ALTER TABLE identity_vault_items ADD COLUMN IF NOT EXISTS provider_revoke_pending BOOLEAN NOT NULL DEFAULT false;
+-- AMENDMENT (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.4, stream S2): kind `app_secret`, an app's
+-- secret per environment (app_secret_bindings in the F2 block). Widened in place on an install
+-- whose table predates it; the AAD binds such an item to (org, project, app, env, name) through
+-- its `provider` column (identity/vault.py app_secret_provider).
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'identity_vault_items_kind_check'
+      AND pg_get_constraintdef(oid) NOT LIKE '%app_secret%'
+  ) THEN
+    ALTER TABLE identity_vault_items DROP CONSTRAINT identity_vault_items_kind_check;
+    ALTER TABLE identity_vault_items
+      ADD CONSTRAINT identity_vault_items_kind_check
+      CHECK (kind IN ('oauth_user','app_private_key','provider_credential','oidc_client_secret',
+                      'totp_secret','signing_key','legacy_pat','app_secret'));
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS identity_signing_keys (        -- JWKS for run and actor tokens; two published at a time
   kid                   TEXT PRIMARY KEY,
@@ -8235,6 +8252,21 @@ CREATE TABLE IF NOT EXISTS app_secret_bindings (
   -- definition at the word GENERATED, so an inline CHECK naming 'generated' would not parse.
   CONSTRAINT app_secret_bindings_mode CHECK (mode IN ('test', 'live', 'generated', 'stub'))
 );
+-- S2: the files of a template version (built-in or imported), so the API, the worker and the
+-- build gate read the SAME pinned content without a shared volume. Imported content is
+-- untrusted: it is read as data (the brief enveloped, the tests run only inside a build).
+CREATE TABLE IF NOT EXISTS app_template_files (
+  template_id  TEXT NOT NULL REFERENCES app_templates(id) ON DELETE CASCADE,
+  path         TEXT NOT NULL,
+  content      BYTEA NOT NULL,
+  PRIMARY KEY (template_id, path)
+);
+-- S2: a live binding is usable for deploy only once a person holding app_secret:live approved
+-- this decision (§2.4).
+ALTER TABLE app_secret_bindings ADD COLUMN IF NOT EXISTS live_decision_id TEXT;
+-- S2: the shape verdict computed when the value was written (matches_test_pattern |
+-- matches_live_pattern | unknown), so reading presence never decrypts.
+ALTER TABLE app_secret_bindings ADD COLUMN IF NOT EXISTS shape TEXT;
 -- END F2 ------------------------------------------------------------------------------------------
 
 -- BEGIN F4 (security review; owner: stream S4; spec §4.4) -----------------------------------------

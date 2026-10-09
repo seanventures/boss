@@ -718,6 +718,55 @@ _IAC_QA_GUIDANCE = (
 )
 
 
+def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dict,
+                    tests_passed: bool, use_microvm: bool) -> Optional[dict]:
+    """THE TEMPLATE HOOK (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.3, stream S2; the one function this
+    file holds for F2, coordinated with S1's toolchain code).
+
+    A build started by POST /v1/templates/{id}/apply carries `input.template` on its workflow
+    run. For such a build this ADDS two mechanical gates to the ones every build runs (it never
+    replaces one, S2.1): `template_tests` (the template's own test command for the stack, run in
+    this sandbox, at least `min_tests` passing in its JUnit report, and its test files in the
+    diff) and `no_committed_secrets` (the secret scan over the diff, including the values the
+    app's build bindings hold). Returns {"gates": {...}, "evidence": {...}} or None for a build
+    that applies no template. Fails CLOSED: any error reading the template is a failed gate."""
+    from ..templates import gate as template_gate
+
+    try:
+        with _transaction(engine) as c:
+            applied = template_gate.applied_template(c, run)
+    except Exception as exc:  # noqa: BLE001 — never let a lookup error pass the gate
+        return {"gates": {"template_tests": False, "no_committed_secrets": False},
+                "evidence": {"template_error": f"{type(exc).__name__}: {exc}"[:300]}}
+    if applied is None:
+        return None
+    if applied.get("error"):
+        return {"gates": {"template_tests": False, "no_committed_secrets": False},
+                "evidence": {"template": {k: applied.get(k) for k in ("id", "key", "version", "digest")},
+                             "template_error": applied["error"]}}
+    bound: dict = {}
+    try:
+        from ..templates.secrets import values_for_env
+
+        with _transaction(engine) as c:
+            org = c.execute(sql("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                                "WHERE p.id = :p"), {"p": run.get("project_id")}).scalar()
+            if org and applied.get("app_key"):
+                bound, _withheld = values_for_env(c, org_id=org, project_id=run["project_id"],
+                                                  app_key=applied["app_key"], env="build")
+    except Exception:  # noqa: BLE001 — the scan still runs on every common format
+        bound = {}
+
+    def _run(command: str, where) -> object:
+        return sandbox.run(command, cwd=str(where))
+
+    result = template_gate.evaluate(
+        template=applied, files=applied.get("files") or {}, changed=changed_files,
+        cwd=None if use_microvm else Path(cwd), run_command=None if use_microvm else _run,
+        bound_values=bound, tests_passed=bool(tests_passed))
+    return {"gates": result.gates, "evidence": result.evidence}
+
+
 def _ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     """Identical task-context preamble for EVERY pipeline stage — byte-identical on
     purpose. The model API's prompt cache is keyed on the request prefix, so stages
@@ -4115,6 +4164,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         elif tests_passed:
             app_serves_record = _check_app_serves(changed_files)
             gates["app_serves"] = bool(app_serves_record.get("ok"))
+        # F2: an applied template's two gates, ADDED to the above (stream S2, §2.3).
+        _template_record = _template_gates(
+            engine, run, sandbox, root=root,
+            cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
+            else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(changed_files)),
+            changed_files=changed_files, tests_passed=bool(tests_passed), use_microvm=use_microvm)
+        if _template_record:
+            gates.update(_template_record["gates"])
 
         if _weakened and _retirement_allowed:
             with _transaction(engine) as c:
@@ -4196,6 +4253,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             **({"weakened_existing_tests": _weakened[:20]} if _weakened else {}),
             # What BOSS started, and whether it answered — the receipt for the app_serves gate.
             "app_serves": app_serves_record,
+            # F2: the applied template's gates' receipt (which template, its tests, the scan).
+            **({"template": _template_record["evidence"]} if _template_record else {}),
             "steps_run": steps_run,
             "cost_usd_micros": cost,
             "stage_costs": {
