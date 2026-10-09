@@ -343,6 +343,66 @@ def public_finding(row: dict[str, Any]) -> dict[str, Any]:
                                     "first_seen_scan_id")}
 
 
+_STATIC_EXT = {".css", ".js", ".mjs", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp",
+               ".woff", ".woff2", ".ttf", ".eot", ".txt", ".xml"}
+
+
+def route_class(path: str) -> str:
+    """What kind of route a DAST finding is on: `static` (an asset), `api` (JSON) or `page`. A
+    header missing on every page is ONE problem, not one per page."""
+    from pathlib import PurePosixPath
+
+    p = (path or "/").split("?", 1)[0].lower()
+    if PurePosixPath(p).suffix in _STATIC_EXT or p.startswith(("/static/", "/assets/", "/_next/")):
+        return "static"
+    if p.startswith(("/api/", "/v1/", "/v2/", "/graphql")) or p.endswith(".json") or p in ("/api", "/graphql"):
+        return "api"
+    return "page"
+
+
+def group_key(f: dict[str, Any]) -> str:
+    """Findings that are the SAME problem: one rule, on one route class (DAST) or one file /
+    lockfile (code, dependencies). A finding of its own is a group of one."""
+    import hashlib
+
+    loc = f.get("location") or {}
+    if f.get("tool") == "zap":
+        where = "zap:" + route_class(str(loc.get("path") or ""))
+    else:
+        where = str(loc.get("file") or loc.get("lockfile") or "")
+        if not where:
+            where = "fp:" + str(f.get("fingerprint") or f.get("id"))
+    raw = "\x1f".join((str(f.get("tool")), str(f.get("rule_id")), where))
+    return "grp_" + hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def group_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The findings as the problems they are: one row per group, its findings' ids and where."""
+    rank = {s: i for i, s in enumerate(SEVERITIES)}
+    groups: dict[str, dict[str, Any]] = {}
+    for f in findings:
+        key = f.get("group_key") or group_key(f)
+        g = groups.get(key)
+        loc = f.get("location") or {}
+        where = (f"{loc.get('method') or 'GET'} {loc.get('path')}" if f.get("tool") == "zap"
+                 else str(loc.get("file") or loc.get("lockfile") or ""))
+        if g is None:
+            g = groups[key] = {
+                "group_key": key, "tool": f.get("tool"), "rule_id": f.get("rule_id"), "title": f.get("title"),
+                "severity": f.get("severity"), "cwe": f.get("cwe"),
+                "route_class": route_class(str(loc.get("path") or "")) if f.get("tool") == "zap" else None,
+                "count": 0, "finding_ids": [], "where": [], "statuses": {}}
+        g["count"] += 1
+        g["finding_ids"].append(f.get("id"))
+        if where and where not in g["where"] and len(g["where"]) < 50:
+            g["where"].append(where)
+        st = str(f.get("status") or "open")
+        g["statuses"][st] = g["statuses"].get(st, 0) + 1
+        if rank.get(f.get("severity"), 9) < rank.get(g["severity"], 9):
+            g["severity"] = f.get("severity")
+    return sorted(groups.values(), key=lambda g: (rank.get(g["severity"], 9), str(g["tool"]), str(g["title"])))
+
+
 def list_findings(conn: Any, scan_id: str, *, tool: Optional[str] = None, severity: Optional[str] = None,
                   status: Optional[str] = None) -> list[dict[str, Any]]:
     rows = conn.execute(text(
@@ -351,8 +411,10 @@ def list_findings(conn: Any, scan_id: str, *, tool: Optional[str] = None, severi
         "AND (CAST(:st AS TEXT) IS NULL OR status = :st)"),
         {"s": scan_id, "t": tool, "sev": severity, "st": status}).mappings().all()
     rank = {s: i for i, s in enumerate(SEVERITIES)}
-    return sorted((public_finding(dict(r)) for r in rows),
-                  key=lambda f: (rank.get(f["severity"], 9), f["tool"], f["title"]))
+    out = [public_finding(dict(r)) for r in rows]
+    for f in out:
+        f["group_key"] = group_key(f)
+    return sorted(out, key=lambda f: (rank.get(f["severity"], 9), f["tool"], f["title"]))
 
 
 # ---- triage ------------------------------------------------------------------------------------
@@ -364,25 +426,60 @@ class TriageRefused(ValueError):
         self.status = status
 
 
-def triage(conn: Any, finding_id: str, *, status: str, reason: str, actor: str) -> dict[str, Any]:
-    """accepted | false_positive, with a reason and an actor; an event records it. Never a delete."""
+MIN_REASON = 8
+
+
+def check_reason(reason: Any, status: str) -> str:
+    """THE rule for a triage's reason, wherever a triage comes from (the finding's buttons, the
+    review's choice): words a later reader can judge, not a blank, a dot or a word."""
+    text_ = " ".join(str(reason or "").split())
+    what = "a false positive" if status == "false_positive" else "accepted"
+    if not text_:
+        raise TriageRefused("reason_required", f"Say why this finding is {what}: the reason is kept with "
+                                               "the finding and shown to everyone who reads it.")
+    if len(text_) < MIN_REASON or not any(ch.isalpha() for ch in text_):
+        raise TriageRefused("reason_too_short", f"Say why this finding is {what} in a few words "
+                                                f"(at least {MIN_REASON} characters).")
+    return text_[:MAX_REASON]
+
+
+def triage(conn: Any, finding_id: str, *, status: str, reason: str, actor: str,
+           whole_group: bool = False) -> dict[str, Any]:
+    """accepted | false_positive, with a reason and an actor; an event records it. Never a delete.
+    `whole_group`: every OPEN finding of the same scan in the same group (one rule on one route
+    class: the header missing on every page) is triaged with it, each with its own event."""
     if status not in TRIAGE_STATUSES:
         raise TriageRefused("invalid_status", "status is accepted or false_positive")
-    reason = " ".join(str(reason or "").split())
-    if len(reason) < 3:
-        raise TriageRefused("reason_required", "a triage needs a reason")
+    reason = check_reason(reason, status)
     row = conn.execute(text(
         "SELECT f.*, s.project_id FROM security_findings f JOIN security_scans s ON s.id = f.scan_id "
         "WHERE f.id = :i"), {"i": finding_id}).mappings().first()
     if row is None:
         raise TriageRefused("finding_not_found", "no such finding", status=404)
+    out = _triage_one(conn, row, status=status, reason=reason, actor=actor)
+    if whole_group:
+        key = group_key(public_finding(dict(row)))
+        others = conn.execute(text(
+            "SELECT f.*, s.project_id FROM security_findings f JOIN security_scans s ON s.id = f.scan_id "
+            "WHERE f.scan_id = :s AND f.id <> :i AND f.status = 'open' AND f.tool = :t AND f.rule_id = :r"),
+            {"s": row["scan_id"], "i": finding_id, "t": row["tool"], "r": row["rule_id"]}).mappings().all()
+        same = [o for o in others if group_key(public_finding(dict(o))) == key]
+        for o in same:
+            _triage_one(conn, o, status=status, reason=reason, actor=actor)
+        out["group_key"] = key
+        out["group_triaged"] = 1 + len(same)
+    return out
+
+
+def _triage_one(conn: Any, row: Any, *, status: str, reason: str, actor: str) -> dict[str, Any]:
+    finding_id = row["id"]
     before = row["status"]
     conn.execute(text("UPDATE security_findings SET status = :st, triaged_by = :by, triage_reason = :r "
                       "WHERE id = :i"),
-                 {"st": status, "by": actor, "r": reason[:MAX_REASON], "i": finding_id})
+                 {"st": status, "by": actor, "r": reason, "i": finding_id})
     emit_event(conn, row["project_id"], "security_finding.triaged", actor, "security_finding", finding_id,
                {"scan_id": row["scan_id"], "fingerprint": row["fingerprint"], "from": before,
-                "to": status, "reason": reason[:MAX_REASON]})
+                "to": status, "reason": reason})
     out = dict(row)
-    out.update({"status": status, "triaged_by": actor, "triage_reason": reason[:MAX_REASON]})
+    out.update({"status": status, "triaged_by": actor, "triage_reason": reason})
     return public_finding(out)

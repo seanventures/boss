@@ -44,7 +44,8 @@ class ScanRequestBody(BaseModel):
 class AcceptItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
     finding_id: str = Field(min_length=1, max_length=128)
-    reason: str = Field(min_length=3, max_length=2000)
+    #: checked by security_scan.service.check_reason (one rule, said in words), not here
+    reason: str = Field(default="", max_length=2000)
 
 
 class SelectionBody(BaseModel):
@@ -63,7 +64,10 @@ class SelectionBody(BaseModel):
 class TriageBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["accepted", "false_positive"]
-    reason: str = Field(min_length=3, max_length=2000)
+    #: checked by security_scan.service.check_reason (one rule, said in words), not here
+    reason: str = Field(default="", max_length=2000)
+    #: also every open finding of the same scan in its group (one rule, one route class)
+    whole_group: bool = False
 
 
 def _engine_settings():
@@ -143,7 +147,9 @@ def build_security_router() -> APIRouter:
             if scan is None:
                 return JSONResponse({"error": "scan_not_found"}, status_code=404)
             findings = service.list_findings(conn, scan_id, tool=tool, severity=severity, status=status)
-        return {"scan_id": scan_id, "status": scan["status"], "findings": findings}
+        # `groups`: the same problem once (a header missing on every page is one row, with where)
+        return {"scan_id": scan_id, "status": scan["status"], "findings": findings,
+                "groups": service.group_findings(findings)}
 
     @router.post("/v1/security/findings/{finding_id}/triage")
     @permit(P.SECURITY_FINDING_TRIAGE, scope=Scope.of("security_finding", path="finding_id"))
@@ -154,7 +160,7 @@ def build_security_router() -> APIRouter:
         try:
             with engine.begin() as conn:
                 return service.triage(conn, finding_id, status=payload.status, reason=payload.reason,
-                                      actor=_actor())
+                                      actor=_actor(), whole_group=payload.whole_group)
         except service.TriageRefused as exc:
             return _refused(exc)
 
