@@ -242,11 +242,11 @@ def authenticate(creds: RequestCredentials, *, db: Any = None) -> Optional[AuthC
         from ..db import begin
 
         with begin() as conn:
-            return _authenticate(creds, conn)
+            return _authenticate(creds, conn, memo=True)
     return _authenticate(creds, db)
 
 
-def _authenticate(creds: RequestCredentials, db: Any) -> Optional[AuthContext]:
+def _authenticate(creds: RequestCredentials, db: Any, *, memo: bool = False) -> Optional[AuthContext]:
     cookie = creds.cookies.get(SESSION_COOKIE)
     bearer = creds.bearer
     if cookie and bearer:
@@ -254,7 +254,7 @@ def _authenticate(creds: RequestCredentials, db: Any) -> Optional[AuthContext]:
     ip = client_ip_of(creds)
     ua = (creds.headers.get("user-agent") or "")[:400] or None
     if cookie:
-        return _from_session(creds, db, cookie, ip, ua)
+        return _from_session(creds, db, cookie, ip, ua, memo=memo)
     if bearer:
         parsed = parse_api_key(bearer)
         if parsed is not None:
@@ -291,17 +291,26 @@ def _enrolment_routes() -> frozenset:
 
 
 def _from_session(creds: RequestCredentials, db: Any, token: str, ip: Optional[str],
-                  ua: Optional[str]) -> AuthContext:
-    from . import sessions, users
+                  ua: Optional[str], *, memo: bool = False) -> AuthContext:
+    from . import sessions
     from .authn_support import public_origin
     from .principal import AuthMethod
 
-    row = sessions.lookup(db, token)
-    if row is None:
+    # ONE statement for the session, its principal (live status) and the org's epoch; the PDP
+    # reuses the status and the epoch for the rest of this request (request_memo).
+    found = sessions.lookup_with_principal(db, token)
+    if found is None:
         raise AuthnError("unauthenticated")
-    principal = users.load_principal(db, row.principal_id)
-    if principal is None or not principal.active:
+    row, principal, epoch = found
+    if not principal.active:
         raise AuthnError("unauthenticated")
+    if memo:
+        # Read on authentication's own fresh transaction (never a caller's, which might hold an
+        # uncommitted identity change): the rest of this request may reuse it.
+        from . import request_memo
+
+        request_memo.put(("status", principal.org_id, principal.id), principal.status.value)
+        request_memo.put(("epoch", principal.org_id), epoch)
     if creds.method.upper() in _UNSAFE_METHODS:
         expected = public_origin(db, principal.org_id) or request_origin(creds)
         check_csrf(creds, session_id=row.id, public_origin=expected or "")

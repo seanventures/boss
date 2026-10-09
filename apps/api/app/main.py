@@ -29786,13 +29786,17 @@ def agents_org_board_handoffs(project_id: str, days: int = 7, source: str = "",
 
 
 def _etagged(request: Request, response: Response, body: dict):
+    """The body, ETag'd. `body` is ALREADY jsonable_encoder'd by every caller, so it is sent as it
+    is: returning the dict made FastAPI encode it a second time — ~20 ms of the 472 KB
+    /v1/factory/apps answer on the seeded stack (console-latency fix, 2026-10-09)."""
     etag = str(body.get("etag") or "")
     if etag and request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers={"ETag": etag})
+    headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
     if etag:
-        response.headers["ETag"] = etag
-    response.headers["Cache-Control"] = "no-cache"
-    return body
+        headers["ETag"] = etag
+    headers["Cache-Control"] = "no-cache"
+    return JSONResponse(content=body, headers=headers)
 
 
 @app.get("/v1/factory/floor")
@@ -30459,6 +30463,17 @@ from .routers.identity_access import build_identity_access_router  # noqa: E402 
 app.include_router(build_identity_access_router(engine))
 # One request id per request (outermost, pure ASGI): on every security event and echoed back.
 app.add_middleware(RequestIdMiddleware)
+# What each request cost (SQL statements, their time, the identity guard's share): outermost, so it
+# sees everything; emitted as Server-Timing under BOSS_SERVER_TIMING, read by the budget tests.
+from .request_metrics import RequestMetricsMiddleware  # noqa: E402
+
+app.add_middleware(RequestMetricsMiddleware)
+# Identity facts read once per request (session, principal status, epoch, project's org), not once
+# per check: boss_engine/identity/request_memo.py. Outermost, so the transport step, the guard and
+# the handler all share the request's one memo.
+from boss_engine.identity.request_memo import RequestMemoMiddleware  # noqa: E402
+
+app.add_middleware(RequestMemoMiddleware)
 from .routers.identity_access import declare_framework_routes  # noqa: E402  (identity S2)
 
 declare_framework_routes(app)

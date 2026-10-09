@@ -190,3 +190,40 @@ export async function fetchQaBenchmarkApps(projectId?: string, active = true): P
     return [];
   }
 }
+
+/** The finalize_ctx keys the Factory's own render reads from a list row: the app's identity and
+ *  lineage (app-grouping.ts identityTokens, app-identity.ts), the attempt number and benchmark
+ *  (apps-tab.tsx, the benchmark sheet). Everything else in a row's finalize_ctx is the build's
+ *  working record, which the Cockpit reads from its own endpoint. */
+const FACTORY_CTX_KEYS = ["attempt", "app_id", "qa_benchmark", "root_run_id", "deferred_from_run",
+                          "parent_run_id", "origin"] as const;
+const FACTORY_SPEC_KEYS = ["owner", "repo", "base_branch"] as const;
+
+/**
+ * A list row cut to what CodeTasksHome reads before its own fetches answer (console-latency fix,
+ * 2026-10-09). The server render handed the Factory up to 200 FULL rows — each one's state
+ * (stations, logs), usage and whole finalize_ctx — and React serialised all of it into the page:
+ * 590 KB of HTML on boss-1, every load, for a header count, the last spec's owner/repo, the
+ * benchmark ids already built and the Apps tab's fallback grouping. The Floor, the Apps tab and
+ * the Cockpit read their own endpoints. tests/factory-ships-slim-rows.test.ts pins the fields.
+ */
+export function slimRunForFactory(run: CodeTaskRun): CodeTaskRun {
+  const spec = (run.spec ?? {}) as Record<string, unknown>;
+  const ctx = (run.finalize_ctx ?? {}) as Record<string, unknown>;
+  const pick = (from: Record<string, unknown>, keys: readonly string[]) =>
+    Object.fromEntries(keys.filter((k) => from[k] !== undefined).map((k) => [k, from[k]]));
+  return {
+    id: run.id,
+    project_id: run.project_id,
+    status: run.status,
+    phase: run.phase,
+    title: run.title,
+    created_at: run.created_at,
+    updated_at: run.updated_at,
+    pull_request_url: run.pull_request_url,
+    pull_request_number: run.pull_request_number,
+    spec: pick(spec, FACTORY_SPEC_KEYS),
+    finalize_ctx: pick(ctx, FACTORY_CTX_KEYS),
+    state: {},
+  } as CodeTaskRun;
+}

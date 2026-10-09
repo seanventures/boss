@@ -183,8 +183,19 @@ scripts/e2e.sh web                    # add the console to that stack
 scripts/e2e.sh workflows --only fast_fix --only weekly-newsletter
 scripts/e2e.sh console --only skills --only /v2/factory --headed
 scripts/e2e.sh status                 # URLs of the running stack
+scripts/e2e.sh perf --seed            # the performance walk (below)
 scripts/e2e.sh down
 ```
+
+**`perf`** (`harness/perf.py`) seeds realistic volume (`--seed`: 35 apps / 156 builds, 80
+decisions, 40 workflow runs, 3000 events), restarts the API with a per-request log
+(`BOSS_METRICS_LOG`) and `Server-Timing`, signs in as the Owner, then measures each API GET the
+Factory leans on (p50/p95, statements, identity's share) and each page's render — time to first
+and last byte, size, how many API requests ONE render made and how many were duplicates. Page
+loads are 6 s apart by default (`--gap`), past the feed cache's reuse window: a cold load. It
+fails when a page or endpoint breaks `PAGE_BUDGETS` / `API_P95_MS` (`--no-budget` only reports).
+`--root <checkout>` (with `--restart-api --restart-web`) measures another version on the same
+data; `--legacy` signs in the rc5 way (console password + API key).
 
 `BOSS_E2E_RUN_TIMEOUT` (seconds, default 900) bounds each run. `scripts/e2e.sh down --all` stops
 every stack ever recorded here, and everything each one started.
