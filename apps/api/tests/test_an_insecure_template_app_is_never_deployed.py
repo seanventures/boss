@@ -3,12 +3,15 @@
 is refused (API test)").
 
 templates.deploy_guard.deploy_refusal is the one check; every deploy planner calls it before it
-records anything, and the governed host apply calls it again. Per project, fail closed.
+records anything, and the governed host apply calls it again. Per APP (operator decision,
+2026-10-09): the app the target names is refused, the project's other apps deploy; a lab project
+(templates.lab) deploys nothing; a caller that cannot name the app is refused. Fail closed.
 """
 from __future__ import annotations
 
 import inspect
 import json
+import re
 import uuid
 
 import pytest
@@ -26,14 +29,15 @@ def _org(c) -> str:
                           "WHERE p.id = :p"), {"p": HOME}).scalar()
 
 
-def _apply(c, *, labels: list[str], status: str = "pr_open", key: str = "banking-insecure") -> str:
+def _apply(c, *, labels: list[str], status: str = "pr_open", key: str = "banking-insecure",
+           app: str = "bank_lab") -> str:
     tid = f"tpl_{uuid.uuid4().hex[:10]}"
     c.execute(text("INSERT INTO app_templates (id, org_id, template_key, version, source, manifest, status) "
                    "VALUES (:i, :o, :k, '1.0.0', 'builtin', CAST(:m AS JSONB), 'active')"),
               {"i": tid, "o": _org(c), "k": f"{key}-{tid[-4:]}", "m": json.dumps({"id": key, "labels": labels})})
     c.execute(text("INSERT INTO app_template_applications (id, project_id, app_key, template_id, version, "
-                   "stack, status) VALUES (:i, :p, 'bank_lab', :t, '1.0.0', 'java', :s)"),
-              {"i": f"tapp_{uuid.uuid4().hex[:10]}", "p": HOME, "t": tid, "s": status})
+                   "stack, status) VALUES (:i, :p, :app, :t, '1.0.0', 'java', :s)"),
+              {"i": f"tapp_{uuid.uuid4().hex[:10]}", "p": HOME, "t": tid, "s": status, "app": app})
     return tid
 
 
@@ -61,6 +65,27 @@ def test_the_rule(world):
         refused = deploy_guard.deploy_refusal(c, HOME)
         assert refused and "insecure by design" in refused and "never deploys it to a host" in refused
         assert deploy_guard.deploy_refusal(c, "another-project") is None
+        # PER APP: the insecure app's own target is refused (by its name or its repository's),
+        # another app of the same project deploys
+        assert "never deploys" in deploy_guard.deploy_refusal(c, HOME, {"app_name": "Bank Lab", "repo": "o/x"})
+        assert "never deploys" in deploy_guard.deploy_refusal(c, HOME, {"app_name": "web", "repo": "o/bank_lab"})
+        assert deploy_guard.deploy_refusal(c, HOME, {"app_name": "invoice", "repo": "o/invoice"}) is None
+
+
+def test_a_lab_project_deploys_nothing_whatever_the_target_is_called(world):
+    import json as _json
+
+    with world.begin() as c:
+        c.execute(text("INSERT INTO project_settings (project_id, key, value) VALUES (:p, 'template_lab', "
+                       "CAST(:v AS JSONB)) ON CONFLICT (project_id, key) DO UPDATE SET value = EXCLUDED.value"),
+                  {"p": HOME, "v": _json.dumps({"insecure_by_design": True, "app_name": "Training bank",
+                                                "template_key": "banking-starter-insecure"})})
+        try:
+            refused = deploy_guard.deploy_refusal(c, HOME, {"app_name": "anything-else", "repo": "o/r"})
+            assert refused and "lab project" in refused and "Training bank" in refused
+        finally:
+            c.execute(text("DELETE FROM project_settings WHERE project_id = :p AND key = 'template_lab'"),
+                      {"p": HOME})
 
 
 def test_unknown_is_refused():
@@ -80,7 +105,9 @@ def test_unknown_is_refused():
 def test_a_host_deploy_is_refused_in_words(client, world, monkeypatch, path, body):
     monkeypatch.setattr(api_main.settings, "boss_edition", "community")
     with world.begin() as c:
-        _apply(c, labels=["insecure_by_design"])
+        app = c.execute(text("SELECT app_name FROM deployment_targets WHERE id = :t"),
+                        {"t": "t_live" if "delivery" in path else "t_stack"}).scalar()
+        _apply(c, labels=["insecure_by_design"], app=app)
         before = c.execute(text("SELECT count(*) FROM deployment_runs WHERE project_id = :p"), {"p": HOME}).scalar()
     r = client.post(path, json=body)
     assert r.status_code in (409, 422), r.text
@@ -94,7 +121,7 @@ def test_the_registry_planner_refuses_it_too(world):
     from boss_engine.services.resource_plane import ResourcePlaneService
 
     with world.begin() as c:
-        _apply(c, labels=["insecure_by_design"])
+        _apply(c, labels=["insecure_by_design"], app="billing")
     with world.begin() as c, pytest.raises(ValueError, match="insecure by design"):  # GovernedHostDeployError
         ResourcePlaneService(api_main.settings).plan_deployment_run(
             c, project_id=HOME, deployment_target_id="t_cloud", commit_ref="main", release_packet={},
@@ -111,5 +138,7 @@ def test_every_deploy_planner_and_the_host_apply_ask_first():
                             (stack_deploy.plan_stack_deploy, "resolve_commit(")):
         src = inspect.getsource(fn)
         assert "deploy_refusal(" in src and src.index("deploy_refusal(") < src.index(first_write), fn.__qualname__
+        # PER APP: every planner names the target it deploys
+        assert re.search(r"deploy_refusal\(connection, project_id, target\)", src), fn.__qualname__
     apply_src = inspect.getsource(governed_host_deploy._apply_on_host)  # noqa: SLF001
     assert apply_src.index("deploy_refusal(") < apply_src.index("conn.apply(")

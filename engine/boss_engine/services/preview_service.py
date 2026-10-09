@@ -258,6 +258,22 @@ def preview_origin_for(host_header: Optional[str], scheme: str = "http") -> str:
     return f"{'https' if scheme == 'https' else 'http'}://{hostname}:{port}"
 
 
+def public_preview_url(preview_id: str, host_header: Optional[str] = None, scheme: str = "http",
+                       *, settings: Optional[Settings] = None) -> str:
+    """The ABSOLUTE address a person's browser (or a provider calling back) reaches this
+    preview at — the preview origin, else BOSS_PREVIEW_PUBLIC_BASE — or "" when BOSS cannot
+    say one. Never `app_previews.url`: that is the app's port inside the API container
+    (http://127.0.0.1:19769), reachable from nowhere a browser or a webhook runs."""
+    from urllib.parse import quote
+
+    path = f"/v1/previews/{quote(str(preview_id), safe='')}/web"
+    origin = preview_origin_for(host_header, scheme)
+    if origin:
+        return origin + path
+    base = _preview_public_base(None, settings=settings)
+    return base + path if base else ""
+
+
 def operator_preview_open_url(
     preview_id: str,
     *,

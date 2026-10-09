@@ -2367,7 +2367,7 @@ class ResourcePlaneService:
         # Never a deploy of an app built from an insecure_by_design template, to any target kind.
         from ..templates.deploy_guard import ACTION as _INSECURE_ACTION, deploy_refusal
 
-        refused = deploy_refusal(connection, project_id)
+        refused = deploy_refusal(connection, project_id, target)
         if refused:
             from .governed_host_deploy import GovernedHostDeployError
 

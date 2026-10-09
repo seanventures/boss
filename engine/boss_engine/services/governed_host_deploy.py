@@ -278,7 +278,7 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
     from .budget import BudgetGovernor
     from .deployment_connectors import _app_port, _split_ref
 
-    refused = deploy_refusal(connection, project_id)
+    refused = deploy_refusal(connection, project_id, target)
     if refused:
         raise GovernedHostDeployError(refused, _INSECURE_ACTION)
     host = _host_for(connection, target) or {}
@@ -649,7 +649,7 @@ def _apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
         # still not ship it (templates.deploy_guard).
         from ..templates.deploy_guard import deploy_refusal
 
-        refused = deploy_refusal(c, row.get("project_id") or trow.get("project_id"))
+        refused = deploy_refusal(c, row.get("project_id") or trow.get("project_id"), dict(trow))
         if refused:
             return {"status": "blocked", "reason": refused}
         target = target_for_apply(c, dict(trow))

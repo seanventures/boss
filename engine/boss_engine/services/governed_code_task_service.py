@@ -4916,12 +4916,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     ctx = {**fctx, "pending_diff": pending, "failing_gates": failing,
                            "quality_gate_id": qg_id, "pr_summary": r2.get("summary", "")[:600],
                            **({"sandbox_task_id": guest_vm_ids[-1]} if guest_vm_ids else {})}
+                    # A TEMPLATE GATE CANNOT BE WAIVED (factory_view.UNWAIVABLE_GATES), so a build
+                    # it stopped is not waiting on anybody's waiver: blocked and done, saying why
+                    # and what to do. Parked at awaiting_gate_override, the workflow above it
+                    # waited for a waiver nobody could give.
+                    from ..templates.gate import hold_outcome as _tpl_hold_outcome
+
+                    _held = _tpl_hold_outcome(failing)
+                    if _held is not None:
+                        ctx["template_hold"] = _held
                     c.execute(sql(
-                        "UPDATE code_task_runs SET status='blocked', phase='awaiting_gate_override', "
+                        "UPDATE code_task_runs SET status='blocked', phase=:ph, "
                         "error=:e, finalize_ctx=CAST(:fc AS JSONB), updated_at=now() WHERE id=:id"),
-                        {"e": _blocked_error, "fc": json.dumps(ctx), "id": run_id})
+                        {"e": _held["error"] if _held else _blocked_error,
+                         "ph": "done" if _held else "awaiting_gate_override",
+                         "fc": json.dumps(ctx), "id": run_id})
                 _rescue_pr(_blocked_reason)
-                return {"status": "blocked", "done": True, "awaiting_gate_override": True,
+                return {"status": "blocked", "done": True, "awaiting_gate_override": _held is None,
                         "quality_gate_id": qg_id, "failing_gates": failing}
 
         # GATE PASSED — open the PR via the existing software-factory path.
@@ -4931,9 +4942,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             with _transaction(engine) as c:
                 _release(budget, c, project_id, reservation_id, "template gates did not pass",
                          run_id=run_id)
+                from ..templates.gate import hold_outcome as _tpl_hold_outcome
+
+                _held = _tpl_hold_outcome([g for g in TEMPLATE_GATES
+                                           if (_tpl_gates or {}).get(g) is not True])
                 c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='done', error=:e, "
                               "updated_at=now() WHERE id=:id"),
-                          {"e": template_push_hold(_tpl_applies, _tpl_gates), "id": run_id})
+                          {"e": (_held or {}).get("error") or template_push_hold(_tpl_applies, _tpl_gates),
+                           "id": run_id})
             return {"status": "blocked", "done": True, "failing_gates": [
                 g for g in TEMPLATE_GATES if (_tpl_gates or {}).get(g) is not True]}
         _finish_vms(success=True)

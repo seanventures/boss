@@ -1045,7 +1045,7 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                                    "Restore the target, or deploy to an active one.")
         from ..templates.deploy_guard import ACTION as _INSECURE_ACTION, deploy_refusal
 
-        refused = deploy_refusal(connection, project_id)
+        refused = deploy_refusal(connection, project_id, target)
         if refused:
             raise StackDeployError(refused, _INSECURE_ACTION, status_code=409)
         host = get_host(connection, str(target.get("host_id") or "")) if target.get("host_id") \

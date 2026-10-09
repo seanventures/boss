@@ -2607,6 +2607,17 @@ def _build_waits_on_a_person(connection: Any, run_id: str) -> bool:
         return False
     if not row:
         return False
+    if str(row["phase"] or "") == "awaiting_gate_override":
+        # A failed TEMPLATE gate cannot be waived: nobody can answer that wait, so the build is
+        # blocked, not waiting (templates.gate.held_run), and the step above it fails with why.
+        from ..templates.gate import held_run
+
+        try:
+            with connection.begin_nested():
+                if held_run(connection, run_id) is not None:
+                    return False
+        except Exception:  # noqa: BLE001
+            pass
     return (str(row["phase"] or "") in ("awaiting_plan_approval", "awaiting_gate_override")
             or str(row["reason"] or "") == "budget_denied")
 
