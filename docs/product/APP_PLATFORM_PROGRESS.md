@@ -1051,26 +1051,59 @@ routes stop answering 501.
 
 ## Integration (feat/app-platform)
 
-Integrator merges S2, S4, S5, S6 in that order, then three must-fixes (preview sandbox uid,
-template gates block the PR, `COPY templates` in the image), then one combined compose proof.
-Test DB: `boss_test_integ` on boss-test-pg (drop it when done).
+The integrator merged every stream branch into `feat/app-platform`, made the must-fixes as
+classes with tests, and proved the result on one compose stack. Test DB: `boss_test_integ` on
+boss-test-pg (dropped at the end). Every step was committed and pushed as it finished.
 
-| # | Step | State |
-|---|---|---|
-| 1a | Merge S2 (feat/s2-templates @ 54f32a91): clean. engine/tests/templates + test_templates_api 156 passed; identity suites 46 passed | done |
-| 1b | Merge S4 (feat/s4-security @ bae890a7): conflicts in the day-1 test (rewritten: MODULES + BUILT per module) and this file. S4 suites 64 passed; identity suites 46 passed | done |
-| 1c | Merge S5 (feat/s5-links @ 5caa424c): conflicts in the day-1 test (links added to BUILT) and this file; regenerated matrix/public/fixture/catalogue: no diff. S5 suites 65 passed; identity suites 46 passed | done |
-| 1d | Merge S6 (feat/s6-oidc @ 9123ee29): conflicts in the day-1 test (oidc_routes BUILT except `/users`, phase 2), audit.EVENT_TYPES (union: app_link.* + oidc.*), matrix.yaml (regenerated: 1445 operations) and this file. S6 suites (engine/tests/oidc + test_oidc_provider_flow/admin/adversarial) 164 passed; identity suites 46 passed | done |
-| 2a | Previews run as a sandbox uid, fenced (57386907) | done |
-| 2b | template_tests / no_committed_secrets block the push and the PR (b5f7d5fb) | done |
-| 2c | Dockerfile.community ships templates/ (634382f5) | done |
-| 3 | Combined compose proof (project `bossint`) | in progress: preview sandbox PASS, apply hello PASS, S5 links PASS; final re-run of the walk on the pushed image running |
-| 2d | Template files available to the build read-only (not only a 48 KB inline brief) | next |
-| 2e | No host deploy of an app built from an `insecure_by_design` template | |
-| 1e | Merge feat/s3-banking (555d1908) | |
+| # | Step | Commit | State |
+|---|---|---|---|
+| 1a | Merge S2 templates (54f32a91): clean. templates suites 156 passed, identity suites 46 | cd5fa17b | done |
+| 1b | Merge S4 security (bae890a7): day-1 test rewritten (MODULES + BUILT). S4 suites 64 | 2c09632f | done |
+| 1c | Merge S5 links (5caa424c). S5 suites 65 | e7a4480b | done |
+| 1d | Merge S6 OIDC phase 1 (9123ee29): audit.EVENT_TYPES union, matrix regenerated. S6 suites 164 | 96b9f84f | done |
+| 2a | Previews run as their own sandbox uid, fenced, own port only | 57386907 | done |
+| 2b | template_tests / no_committed_secrets BLOCK: nothing pushed, no PR | b5f7d5fb | done |
+| 2c | Dockerfile.community ships templates/ | 634382f5 | done |
+| 2d | A template larger than the brief reaches the build whole, read-only (BOSS_TEMPLATE_DIR) | c0efc7cb | done |
+| 2e | No host deploy of an app built from an insecure_by_design template | 54471528 | done |
+| 2g | Dependencies installed before template tests (gate + trial); re-apply with tests already on the branch passes; the trial runs as its uid | 8f94cdca | done |
+| 1e | Merge S3 banking (555d1908), login-catalog (88ab92c0), payments (b9870e74): doc conflicts only; the payments strict xfail removed (2d fixed it) | bf7aafcd, f95569a2, 2e3a4b1e, a6fb141b | done |
+| 2j | catalog-cart provides the payments contract exactly (cartLineItems / cart_line_items / cartLines); compose test per stack | 39da0001 (branch fix/catalog-payments-contract) | done |
+| 2k | Spec names the shipped ids stripe-checkout / paypal-checkout | 84a32001 | done |
+| 1f | Merge S4-workflow (e81de02b): apps-tab.tsx union (Links + Security), generated files regenerated | f4651228 | done |
+| 2s | "Fix selected" is one server action (approval checked first, saved + approved in one commit) | 5ee506d5 | done |
+| 1g | Merge S6 phase 2 (5b28fd4b): every OIDC route built (day-1 test: all BUILT) | 06cb1838 | done |
+| 2m | `oidc:read` (org, no step-up; Owner/Admin/Auditor) for every OIDC admin GET | f83bee52 | done |
+| 2n | The maintenance tick rotates the apps' `oidc` keys | 5e0ef3fb | done |
+| 2h | S6 note: the login template reads OIDC_BOSS_CLIENT_ID / _SECRET / _ISSUER (in S6's section) | a0ca2797 | open for S6 |
+| 3 | Combined compose proof (project `bossint`, image from 634382f5 + the port fixes) | — | PASS (below) |
 
-Identity coverage suites run after each merge: catalogue use, matrix, public routes, read-only
-GETs, system-only, route fixture freshness, day-1 routes, catalogue-is-generated.
+### The combined proof (compose project `bossint`, 2026-10-08/09)
+
+Stack: `scratchpad/integ/e2e/` (`mkenv.py` 0600 env, ports 53760/58760/55860/58761/58790/58791;
+`dc.sh` = compose -p bossint with community-compose + build-override; `setup.py up|down`). NO
+templates mount: the built-ins come from the image.
+- **Image**: `builtin_dir()` = `/app/templates/apps`, `hello` loads valid; sandbox
+  `{mode: required, helper: true, network_fenced: true, isolating: true}`.
+- **Apply hello** (`tests/e2e/templates/apply_hello_walk.py`): PASS. The app's first build, then
+  `POST /v1/templates/hello/apply` → governed build: `template_tests` 2/2 from JUnit,
+  `no_committed_secrets` 0 findings, PR on the fake GitHub with the template's tests and no
+  JUnit report. The template build's `checkpoint:write_tests` push was HELD
+  (`code_task.push_held`); the PR opened after the gates passed. A second `--resume` apply of
+  the same template then failed `template_tests` ("tests not in the change") and pushed NOTHING
+  (the hold, live); that gate case is fixed since (2g: tests already on the branch count).
+- **Preview sandbox** (`tests/e2e/preview_sandbox/proof.py`): PASS, twice in a row. An evil
+  preview ran as uid 61390 on its own port 19390: master.key, server.key, the identity dir,
+  /proc/<api>/environ, /proc/1/environ, /proc/<api>/mem, another preview's directory and the
+  sandboxes root → PermissionError; the DB, another preview's port on loopback and on the api
+  address → ConnectionRefused; its own port and egress open; BOSS still reached it; teardown left
+  no process and no directory. A REAL preview of the applied build through
+  `POST /v1/code-tasks/{run}/preview` ran as uid 61801 on port 19801 (the other live preview
+  61750/19750); as 61801: master.key and /proc/1/environ "Permission denied", the other preview
+  refused, its own port open.
+- **S5 links** (`tests/e2e/links/proof.py --keep`): PASS (B signs in to A through the link; every
+  way around the gateway refused; revocation cuts B off in 0.09 s).
+- The stack was taken down with `down -v`. Only one stack ran at a time.
 
 ### Integration notes
 
@@ -1097,4 +1130,43 @@ GETs, system-only, route fixture freshness, day-1 routes, catalogue-is-generated
   test_previews_have_their_own_origin x3, now fixed) plus
   test_a_previews_container_log_reaches_the_activity_log (fixture scope clash when run in one
   session with apps/api tests; passes alone).
-- Not run here: the web vitest suites (no node_modules in this worktree).
+- Web: the full vitest suite after every merge (node_modules symlinked from the main checkout,
+  not committed): 5908 passed; the App sign-in screen needed the grant-limit scan to tell app
+  roles from BOSS roles (2d885469). `deploy-drawer-polls-only-while-live` fails only in the full
+  run (timing), passes alone.
+- **Other findings fixed on the way**: the template trial ran the template's code as the API's uid
+  (owner kind not in WORKLOAD_KINDS; owned_process now wraps whenever a sandbox identity is
+  bound); `POST /v1/delivery/deploy` answered a GovernedHostDeployError (budget refusal, the
+  insecure guard) with a 500 (now 409 in words); the insecure banking built-in failed the
+  import-parity test without the approver's acknowledgement its label requires.
+- **Found, NOT fixed (pre-existing on main)**: the Infra Deploy button for an app target calls
+  `api_main.delivery_deploy_endpoint(body)` without its `request` argument (TypeError, 500) since
+  00399f5f; `test_one_deploy_button_routes_by_target_kind` fakes the endpoint so it never shows.
+
+### Decisions for the operator
+
+- `oidc:read` is Owner/Admin/Auditor only: an Operator who manages a project's clients can no
+  longer LIST or READ them (grant `oidc:read` to Operator if wanted).
+- The insecure-template deploy guard is per PROJECT (a target names its app freely): any
+  application of an insecure_by_design template (not abandoned) blocks every host deploy of that
+  project.
+- Payments wiring: an unsellable cart raises catalog-cart's CatalogError; the app's glue must map
+  it to the payment template's CheckoutInputError (else a 500 from the payment route, no payment
+  made). Alternative: the payment adapters map catalog errors themselves.
+- The template reference is a directory of the run (`$BOSS_TEMPLATE_DIR`), not the spec's
+  `/opt/boss/template/` mount (no per-run mount namespace in the sandbox).
+
+### Resume (integration)
+
+- `cd ~/src/boss-wt-appplat && git pull` (branch `feat/app-platform`).
+- Tests: create `boss_test_integ` on boss-test-pg; the runners are in the session scratchpad
+  `integ/` (`t.sh` = pytest against it, `id.sh` = identity suites, `final.sh` = every suite the
+  integration touched). Regenerate after a route or catalogue change: `PYTHONPATH=engine python3
+  -m boss_engine.identity.codegen`, `PYTHONPATH=.:engine python3 -m apps.api.tests.identity_matrix`,
+  `python3 apps/api/tests/test_identity_authz_public_routes.py`, `python3
+  scripts/dump-identity-api-routes.py`, `cd apps/web && node scripts/read-routes.mjs`.
+- Open items: S6 to emit OIDC_BOSS_* for the login template (2h); the Infra Deploy button bug
+  above; the template tests in microVM mode (the gate fails closed there); the composer's
+  "Talks to" (S5); S2's MCP tools; the independent tester walks (§8.3) of App ▸ Links, App ▸
+  Security and App sign-in.
+
