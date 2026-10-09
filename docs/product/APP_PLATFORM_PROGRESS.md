@@ -110,8 +110,8 @@ Branch `feat/s2-templates` (worktree `~/src/boss-wt-s2-templates`), from
 | 2 | Vault kind `app_secret` (`identity/vault.py`) + the kind CHECK widened in the identity block (in place, `DO $$` like the skill_definitions widenings); F2 block: `app_template_files`, `app_secret_bindings.live_decision_id`, `.shape` | done |
 | 3 | `apply.py` (apply = a governed build through `start_delivery_workflow`), `trial.py`, the `_template_gates` hook in `governed_code_task_service.py`, the real handlers | done |
 | 4 | Unit suites `engine/tests/templates/` (validator, adversarial importer, gates, scan, apply assembly) | done |
-| 5 | API suite `apps/api/tests/test_templates_api.py`; `test_app_platform_day1_routes.py` narrowed (S2 built) | in progress |
-| 6 | E2E proof on a compose stack: apply hello to a scaffolded app via the API, `template_tests` passes, PR on the fake GitHub | to do |
+| 5 | API suite `apps/api/tests/test_templates_api.py`; `test_app_platform_day1_routes.py` narrowed (S2 built) | done |
+| 6 | E2E proof on a compose stack: apply hello to a scaffolded app via the API, `template_tests` passes, PR on the fake GitHub | done (green) |
 
 ### Design notes (S2)
 
@@ -180,6 +180,54 @@ Branch `feat/s2-templates` (worktree `~/src/boss-wt-s2-templates`), from
 - `apps/api/tests/test_templates_api.py` — every route per role, seat separation, malicious
   import, insecure label, built-in delete, trial, apply refusals and success, prompt injection,
   secrets round trip / patterns / live + decision / no value in responses or logs.
+
+### E2E proof (S2, 2026-10-08): green
+
+`tests/e2e/templates/apply_hello_walk.py` on a compose stack (project `bosss2`, enforce, every
+outside service faked: `build-override.yml` + an override mounting `templates/` at
+`/opt/boss-templates` with `BOSS_TEMPLATES_DIR=/opt/boss-templates/apps`, because the image does
+not COPY `templates/` yet). The walk reuses build_walk's first half (GitHub App connect, repo,
+Fast fix + consent → the app `e2e_feature`, Python, built and PR'd), then as the Owner:
+`GET /v1/templates` lists hello; `POST /v1/templates/hello/apply {extends_run_id, stack: python,
+start_anyway: [deployment_target]}` → 201; the build onto the app's branch records quality gate
+`pass` with `template_tests` (pytest, 2/2 from `boss-template-junit.xml`, digest pinned) and
+`no_committed_secrets` (0 findings) among 13 passed gates; the app's PR (#1, its branch) now
+carries `hello.py` + `tests/template_hello/test_hello.py` and no JUnit report; the app's
+templates show hello `pr_open`. Earlier runs also showed the gate failing CLOSED when the
+template's test file was missing from the diff. `--resume` applies to an app an earlier walk
+built. The stack was taken down with `down -v`.
+
+Commands (scratch files in the session scratchpad `s2e2e/`: `mkenv.py` writes a 0600 env with
+ports 53750/58750/55850/58751/58780/58781, `dc.sh` = compose -p bosss2 with the three files,
+`setup.py up|down` = up + bootstrap seed + claim + seed-test-accounts):
+`./dc.sh build api worker egress web && python3 setup.py up`, then
+`cd tests && python3 -m e2e.templates.apply_hello_walk --stack-dir <s2e2e> --project bosss2
+--console http://localhost:53750 --api http://127.0.0.1:58750 --fake http://127.0.0.1:58781
+--shots <s2e2e>/shots`, then `python3 setup.py down`.
+
+### Findings for other streams / follow-ups (S2)
+
+- **S1 (image)**: `Dockerfile.community` needs `COPY templates ./templates` (built-ins).
+- **Pipeline policy (not S2's)**: a build whose gate fails (e.g. `template_tests`,
+  `tests_strong_enough`) still ended `completed` with quality gate `fail` and pushed to the app's
+  PR — the same treatment every gate gets at this tier, so S2.1 holds, but the operator may want
+  a failed gate to hold the PR.
+- **Spec stage**: the scripted spec in the e2e replaced the directive, so the QA stage never saw
+  the template; the e2e has the implementer copy the template's test file. A real model's spec
+  carries the brief; the reference mount at `/opt/boss/template/` (sandbox code) would make this
+  robust.
+- Not built here: app secrets into the build/preview/deploy environment (the reader is
+  `templates.secrets.values_for_env`; the wiring is preview/deploy/sandbox code), MCP tools
+  (`list_templates`, `describe_template`, `apply_template`), private-repo import via a GitHub
+  connection (422 for now), template tests in microVM mode.
+- Known failure on the base (unchanged): `test_a_streaming_write_is_excluded_rather_than_buffered`.
+
+### Resume (S2)
+
+`cd ~/src/boss-wt-s2-templates && git pull` (branch `feat/s2-templates`). Tests:
+`PYTHONPATH=.:engine python3 -m pytest engine/tests/templates apps/api/tests/test_templates_api.py
+apps/api/tests/test_app_platform_day1_routes.py` with `DATABASE_URL` at boss-test-pg (a private
+database, e.g. `boss_test_s2`, created and dropped by the runner). All 156 + the day-1 suite pass.
 
 ## What's next (after S0)
 

@@ -56,6 +56,9 @@ class ApplyBody(_Body):
     workflow_key: Optional[str] = Field(default=None, max_length=120)
     accept_egress: Optional[Any] = None
     dedupe_key: Optional[str] = Field(default=None, max_length=200)
+    #: readiness keys the person was shown missing and chose to start without (the composer's
+    #: "Start anyway"; passed through to the start path unchanged)
+    start_anyway: Optional[list[str]] = Field(default=None, max_length=20)
 
 
 class SecretBody(_Body):
@@ -253,7 +256,8 @@ def build_templates_router() -> APIRouter:
 
         started = main.start_delivery_workflow(WorkflowStartBody(
             project_id=body.project_id, workflow_key=plan["workflow_key"], input=plan["run_input"],
-            dedupe_key=body.dedupe_key or f"template:{plan['application_id']}"))
+            dedupe_key=body.dedupe_key or f"template:{plan['application_id']}",
+            start_anyway=body.start_anyway))
         run = started.get("run") or {}
         with begin() as db:
             out = apply_service.record(db, plan, project_id=body.project_id,

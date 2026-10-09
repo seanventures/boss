@@ -39,7 +39,8 @@ from e2e.identity import kit as K  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HELLO = REPO_ROOT / "templates" / "apps" / "hello" / "stacks" / "python"
-MARK = 'Apply the template "Hello endpoint"'
+#: in the title ("<app>: add Hello endpoint") and the directive, so in every stage's prompt
+MARK = "Hello endpoint"
 UNIT = ("import unittest\n\nimport hello\n\n\nclass HelloGreetingTest(unittest.TestCase):\n"
         "    def test_default_greeting(self):\n        self.assertEqual(hello.greeting(), 'hello from BOSS')\n\n\n"
         "if __name__ == '__main__':\n    unittest.main()\n")
@@ -51,12 +52,20 @@ def scripted_rules() -> list[dict[str, Any]]:
     hello = (HELLO / "hello.py").read_text()
     tests = (HELLO / "tests" / "template_hello" / "test_hello.py").read_text()
     t_files = {"tests/template_hello/test_hello.py": tests, "test_e2e_hello.py": UNIT}
+    spec = ("Summary: add the Hello endpoint (template hello 1.0.0) to this app. Added: hello.py (GET /hello, "
+            "greeting()), tests/template_hello/test_hello.py (the template's own tests, copied unchanged), "
+            "test_e2e_hello.py (unittest of greeting()). Acceptance: the template's tests pass with "
+            "python3 -m pytest -q tests/template_hello.")
     return [
+        {"id": "s2.spec", "when": ["Turn the task above into a clear, testable specification", MARK],
+         "reply": spec},
         {"id": "s2.solo", "when": ["one agent does both", MARK], "files": {"hello.py": hello, **t_files},
          "reply": "Added GET /hello (hello.py) and the template's tests; they pass."},
         {"id": "s2.write-tests", "when": ["author tests", MARK], "files": t_files,
          "reply": "Copied the template's tests and wrote test_e2e_hello.py."},
-        {"id": "s2.implement", "when": ["QA has ALREADY written the tests", MARK], "files": {"hello.py": hello},
+        # the template's test file again, identical: whichever stage the tier gives the copy to, it lands
+        {"id": "s2.implement", "when": ["QA has ALREADY written the tests", MARK],
+         "files": {"hello.py": hello, "tests/template_hello/test_hello.py": tests},
          "reply": "Implemented hello.py from the reference; the suite passes."},
         {"id": "s2.mutation", "when": ["Mutation testing is a standard QA practice", "hello.py"],
          "files": {"hello.py": hello.replace('or "hello from BOSS"', 'or "goodbye"')},
@@ -105,11 +114,19 @@ class TemplateWalk(BW.Walk):
         j.check("the gallery lists the hello built-in", listed["status"] == 200 and "hello" in cards,
                 expect="200 with hello", actual=(listed["status"], sorted(cards)))
         self.post_rules()
-        prs_before = len([p for p in self.fake_get("/_world").get("prs") or [] if p.get("repo") == BW.REPO])
         r = I.api_in_page(page, "POST", "/v1/templates/hello/apply",
                           {"project_id": project, "extends_run_id": app_run, "stack": "python",
                            "note": "e2e: add the hello endpoint"})
         body = r.get("body") or {}
+        missing = (((body.get("detail") or {}) if isinstance(body.get("detail"), dict) else {}).get("readiness") or {}).get("missing") or []
+        if r["status"] == 409 and missing:
+            # the composer's "Start anyway": the person saw what is missing (no deploy host) and starts
+            keys = [m.get("key") for m in missing if m.get("key")]
+            j.note(f"readiness: starting anyway without {keys}")
+            r = I.api_in_page(page, "POST", "/v1/templates/hello/apply",
+                              {"project_id": project, "extends_run_id": app_run, "stack": "python",
+                               "note": "e2e: add the hello endpoint", "start_anyway": keys})
+            body = r.get("body") or {}
         j.check("POST /v1/templates/hello/apply starts a governed build (201)", r["status"] == 201,
                 expect="201 {workflow_run_id, application_id}", actual=(r["status"], K.short(body, 400)))
         if r["status"] != 201:
@@ -148,12 +165,14 @@ class TemplateWalk(BW.Walk):
         j.check("the gate counted ≥ 2 passing template tests from a JUnit report", int(tt.get("passed") or 0) >= 2,
                 expect="passed >= 2", actual={k: tt.get(k) for k in ("command", "passed", "tests", "reports", "error")})
         j.check("the template build finished (completed)", final.startswith("completed"), expect="completed", actual=final)
+        # Building onto an app continues ITS branch, so the app's open PR is the one that carries
+        # the change (a new PR only when the app had none).
+        url = self.psql("SELECT coalesce(pull_request_url,'') FROM code_task_runs WHERE id = :'c'", c=crun)
         prs = [p for p in self.fake_get("/_world").get("prs") or [] if p.get("repo") == BW.REPO]
-        new = prs[prs_before:] if len(prs) > prs_before else []
-        pr = new[-1] if new else None
+        pr = next((p for p in prs if url.endswith(f"/pull/{p.get('number')}")), None)
         self.state["template_pr"] = pr and {k: pr.get(k) for k in ("number", "head", "base", "title", "state")}
-        j.check("a PR for the template build was opened on the fake GitHub", bool(pr), expect="a new PR",
-                actual=self.state["template_pr"])
+        j.check("the template build's PR is on the fake GitHub (the app's branch)", bool(pr),
+                expect="the PR the build reports", actual=(url, self.state["template_pr"]))
         if pr:
             files = self.in_container("fakegh", ["git", "--git-dir", f"/srv/fakegh/git/{BW.REPO}.git", "diff",
                                                  "--name-only", f"main...{pr['head']}"]).stdout.split()
@@ -174,6 +193,16 @@ class TemplateWalk(BW.Walk):
         j = self.j
         ctx, page = self.page()
         try:
+            if self.args.resume:
+                # the app already built by an earlier walk on this stack: apply to it
+                app_run = self.psql("SELECT id FROM code_task_runs WHERE status = 'completed' "
+                                    "AND finalize_ctx->>'workflow_run_id' IS NOT NULL AND title NOT ILIKE '%Hello endpoint%' "
+                                    "ORDER BY created_at ASC LIMIT 1")
+                j.check("an app built by an earlier walk exists", bool(app_run), expect="a completed build",
+                        actual=app_run, fatal=True)
+                with j.tolerate("apply hello"):
+                    self.apply_hello(page, app_run)
+                return
             self.preflight(page)
             with j.tolerate("connect the GitHub App from Setup"):
                 self.connect_app(page)
@@ -208,6 +237,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--build-timeout", type=int, default=900)
     ap.add_argument("--guard-wait", type=int, default=960)
     ap.add_argument("--headed", action="store_true")
+    ap.add_argument("--resume", action="store_true", help="apply to the app an earlier walk built on this stack")
     args = ap.parse_args(argv)
     from playwright.sync_api import sync_playwright
 
