@@ -38,6 +38,8 @@ DEFAULT_ALLOW = (
     # services.gradle.org, so a project's ./gradlew cannot fetch a distribution; BOSS runs the
     # image's pinned Gradle instead.
     "repo.maven.apache.org", "repo1.maven.org", "plugins.gradle.org", "plugins-artifacts.gradle.org",
+    # The security review's dependency audit (OSV-Scanner, online by default: decision D6).
+    "api.osv.dev",
 )
 #: Never through the tunnel, whatever the allowlist says.
 NEVER = ("github.com", "*.github.com", "*.githubusercontent.com", "api.github.com")

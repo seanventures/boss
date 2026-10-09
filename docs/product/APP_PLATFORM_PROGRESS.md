@@ -246,6 +246,110 @@ routes stop answering 501.
   `docker exec boss-test-pg printenv POSTGRES_PASSWORD` (never print it). Create a private database
   (S0 used `boss_test_s0`) and drop it afterwards.
 
+## Stream S4: security scan engine and API (F4, §4; UI and workflow wiring later)
+
+Branch `feat/s4-security` (worktree `~/src/boss-wt-s4-security`), from
+`feat/app-platform` @ 8b7cc39d.
+
+| # | Step | State |
+|---|---|---|
+| 1 | `security` toolchain layer: Dockerfile.community stage, registry entry, egress `api.osv.dev` (D6) | done |
+| 2 | `engine/boss_engine/security_scan/`: parsers, fingerprints, redaction, scope, runners, service, report + unit tests | done |
+| 3 | `routes_security.py` (501s replaced), worker job `security.scan`, authz tests | done |
+| 4 | End-to-end proof on a compose stack (Node/Express + SQLite app: scan, fix, re-scan) | done |
+
+### Notes per step
+
+1. The layer. `BOSS_TOOLCHAINS=security` selects `toolchains-security`, built FROM `toolchains-java`
+   (ZAP needs a JRE; spec §4.2), so the manifest carries `java` and `security`. Pinned:
+   Semgrep 1.180.0 + every dependency from a hashed lock
+   (`engine/boss_engine/security_scan/semgrep-requirements.lock`, `pip --require-hashes
+   --only-binary=:all:`) in its own venv; OSV-Scanner 2.6.0 and ZAP 2.17.0 (Linux tarball) checked
+   against the release SHA-256s. Rule packs: semgrep-rules @ 9bbf021d, directories javascript,
+   typescript, python, java, generic/secrets (891 rule files), selected by `rulepack.py` and
+   verified by a CONTENT digest (`sha256:1ebc108c…`), not the archive's hash (GitHub re-gzips).
+   No rule is fetched at scan time. The rules are **not committed** to this repo: they are under the
+   Semgrep Rules License v1.0 — fetched at image build on the operator's host. Open question for
+   the operator: is that use within the license for BOSS Community? (Flagged, not decided here.)
+   Image size (arm64 stage, measured): Java 372 MB + Semgrep venv 383 MB + ZAP 268 MB + OSV 52 MB
+   + rules 5 MB ≈ 1.08 GB on the api/worker image when `security` is on; nothing when off.
+   `boss toolchains enable security` works (`KNOWN_TOOLCHAINS` in boss.sh).
+
+2. The engine (`engine/boss_engine/security_scan/`). `parsers` (Semgrep SARIF, OSV JSON grouped by
+   advisory aliases, ZAP traditional-json one finding per alert × route template × param; 50 MB raw,
+   10k findings, 4 KB evidence; a shape the tool does not write is a ParseError, so the tool is
+   `failed`, never "0 findings"); `fingerprints` (code: file + enclosing function found from the
+   checkout, JS/TS, Python, Java/Kotlin; dependency: lockfile + ecosystem + package, not version;
+   DAST: method + path template + param, not host/port/ids; over the REDACTED snippet, so a rotated
+   hardcoded secret is the same finding and no hash of a secret is stored; `snippet_key` finds
+   "moved"); `redact` (identity.redaction, then string literals of secret rules, token shapes,
+   cookie values, 4 KB cap); `scope` (app = latest build of that app id in the project; ref = its
+   branch or a sha on it; ZAP target `sandbox` or `preview:<id>` of the same project AND app served on
+   loopback; anything else refused); `runners` (Semgrep offline with the vendored packs, OSV through
+   egress, the app started in the sandbox via `preview_service.how_app_runs` on a loopback port,
+   ZAP Automation Framework plan scoped to that one URL, passive unless `mode=api`; per-tool
+   timeouts `BOSS_SECURITY_TIMEOUT_<TOOL>`); `service` (request → queued scan + `security.scan` job;
+   execute in owner scope `sandbox`/`secscan_<id>` with `sandbox_identity.bind`, so every tool runs as
+   the run's uid; first_seen and a person's triage carry to later scans by fingerprint; triage needs
+   a reason, emits `security_finding.triaged`); `report` (fixed / still_open / moved / removed /
+   not_rescanned / new, `rules_differ` when tool versions or rule digests differ, Markdown export).
+   Fixtures are real output of the pinned tools over `tests/e2e/security/vulnapp` and
+   `vulnapp-fixed`. Tests: `engine/tests/test_security_scan_engine.py` (51).
+   Decision: old scans' findings are never rewritten to `fixed`; "fixed" is the report's verdict
+   between two scans (history stays as scanned; only triage changes a row).
+
+3. API and job. The six §4.3 routes answer for real (`apps/api/app/routes_security.py`); bodies are
+   `extra=forbid` (a smuggled `url` is a 422). `POST /v1/security/scans` → 202 `{scan_id}` and a
+   `security.scan` job (`job_permissions`: `security_scan:run`), stamped with the requester's
+   authority; the worker leases it and calls `POST /v1/security/scans/{id}/run` (worker:lease,
+   `require_worker_principal`), which runs the scan in the API (where the scanners and the sandbox
+   helper are). Worker: one capability, one branch, one client method. Tests:
+   `apps/api/tests/test_security_scan_routes.py` (13: roles O/A/P run and triage, V/Auditor read
+   only; another project's person gets 404s; worker-only run; scope refusals against the DB —
+   free URLs incl. the metadata address, another project's preview, another app's, a remote or
+   stopped preview, a branch ref, an unknown tool, scanners not installed; scan → fix → re-scan
+   report from real tool output; triage reason/event/carry-over; failed tool = not_rescanned;
+   rules-digest difference flagged). `test_app_platform_day1_routes.py` no longer lists S4.
+   Regenerated `tests/identity/matrix.yaml`, `apps/web/tests/fixtures/identity-api-routes.json`.
+   Identity suites (catalogue use, matrix, public, read-only, system-only, job kinds) + worker: green.
+   Observation for S0/identity: there is no `security_finding:read` / `security_scan:read`, so the
+   PDP's no-existence-oracle rule answers a DENIED triage with 404 even to a viewer who can read the
+   finding through `project:read`. Harmless (the viewer still cannot triage), but the console must
+   not read a 404 there as "gone".
+
+4. The proof (`python3 tests/e2e/security/scan_proof.py`; ~15 min cold, mostly the image build).
+   Own compose project and image tag `bosss4` (refuses to start when another e2e stack is up),
+   `BOSS_TOOLCHAINS=security`, db + api + worker + egress with the real egress (internet for npm and
+   api.osv.dev), `down -v` always. The app (`tests/e2e/security/vulnapp`: Express + sql.js SQLite,
+   SQLi in `findUser`, hardcoded JWT key in `issueToken`, lodash 4.17.20, no security headers) is
+   registered as a build's LOCAL workspace (a build with no PR; `checkout` copies it, as previews
+   do) — the GitHub clone path (`identity.runs.repo_access`) is the production one but is not
+   driven here (it needs a connected GitHub App). Everything after that is the product: POST
+   /v1/security/scans as the owner key → worker leases `security.scan` → API runs the tools as a
+   sandbox uid. Result 2026-10-08, all PASS:
+   - before (d1a1af20): Semgrep 3 (SQLi high, hardcoded JWT medium, csurf low; 18 s), OSV 3 lodash
+     advisories (GHSA-35jh high; 0.6 s, through egress), ZAP baseline 14 (CSP, anti-clickjacking,
+     nosniff, X-Powered-By, …; 12 s, app started in the sandbox on loopback);
+   - after the fix (cab05493): Semgrep 1, OSV 0, ZAP 4; the planted findings are gone; all 5
+     remaining findings keep their fingerprints (one moved lines);
+   - report: 15 fixed, 5 still open, 0 new, 0 moved/removed; Markdown export;
+   - scans recorded `sandbox: {isolated: true, uid: 61610 / 61095, network_fenced: true}`; egress
+     refused nothing.
+   Image: api with `security` 1.82 GB vs 1.21 GB default (docker content size, compressed);
+   ≈ +1.08 GB on disk uncompressed (stage measure in step 1).
+
+### Resume notes (S4)
+
+- Not built here (later streams): the `security_review` workflow template, the Panel /
+  recommendations (`security_recommendations` table is untouched), MCP tools, the UI, F5 links
+  (a preview on another host is refused with `preview_not_reachable`), the vulns.yaml detection
+  score. ZAP `mode=api` is wired (openapi + activeScan jobs, off by default per D12) but only
+  unit-tested; the banking Java demo will be its first real run.
+- Open: the Semgrep Rules License question (step 1); whether the reviewer Passport preset gets
+  `security_scan:run` (S0 left it to S4: not granted — the workflow stream should decide with the
+  template); `security_finding:read` absence (step 3 note).
+- Re-run: unit `PYTHONPATH=.:engine pytest engine/tests/test_security_scan_engine.py`; API (needs
+  a test DB) `apps/api/tests/test_security_scan_routes.py`; e2e `tests/e2e/security/scan_proof.py`.
 ## Integration (feat/app-platform)
 
 Integrator merges S2, S4, S5, S6 in that order, then three must-fixes (preview sandbox uid,

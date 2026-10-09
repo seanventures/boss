@@ -371,6 +371,8 @@ def capabilities() -> list[str]:
         # ChangeSet through the SSH connector under this job's lease.
         "deployment.host_apply",
         "docs.update",
+        # A security scan (F4): the API runs the scanners in the build sandbox under this lease.
+        "security.scan",
         "agent.resume",
         "software_factory.propose_pr",
         "github.pull_request.merge",
@@ -835,6 +837,10 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         # A long one by design: a real debugging session reads the code, the database and the
         # host, and forms more than one hypothesis. The API endpoint owns the timeout.
         return client.run_investigation({"investigation_id": job.payload["investigation_id"]})
+    if job.kind == "security.scan":
+        # The scanners and the sandbox helper are in the api image: the API runs the scan. A
+        # scan whose tools failed is a recorded result (status failed, with why), not a retry.
+        return client.run_security_scan({"scan_id": job.payload["scan_id"]})
     if job.kind == "docs.update":
         result = client.run_docs_update(
             {

@@ -48,6 +48,7 @@ JOB_KIND_PERMISSIONS: dict[str, str] = {
     "discovery.run": P.DISCOVERY_CREATE,
     "code.task": P.CODE_TASK_CREATE,
     "investigation.run": P.HOST_EXEC,
+    "security.scan": P.SECURITY_SCAN_RUN,           # F4: scanners in the sandbox, own app only
     # repositories and GitHub
     "docs.update": P.GITHUB_MANAGE,
     "software_factory.propose_pr": P.CODE_TASK_CREATE,   # opens a PR from a build's boss/* branch

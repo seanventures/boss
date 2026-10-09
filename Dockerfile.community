@@ -64,6 +64,59 @@ RUN set -eu; \
     printf '{"java": {"jdk": "Temurin %s", "maven": "%s", "gradle": "%s"}}\n' \
       "$JDK_VERSION" "$MAVEN_VERSION" "$GRADLE_VERSION" > /opt/toolchains/manifest.json
 
+# SECURITY SCANNERS (APP_TEMPLATES_AND_SECURITY_LOOP.md §4.5): Semgrep, OSV-Scanner and OWASP ZAP,
+# on top of the Java stage (ZAP needs its JRE), so BOSS_TOOLCHAINS=security carries Java too.
+# Semgrep and its dependencies from a hashed lock (pip --require-hashes) into their own venv; the
+# rule packs from a pinned semgrep-rules commit, selected and digest-checked by CONTENT
+# (rulepack.py), so a scan never fetches a rule; OSV-Scanner and ZAP from their GitHub releases,
+# each checked against its published SHA-256 before it is used.
+FROM toolchains-java AS toolchains-security
+ARG TARGETARCH
+ARG SEMGREP_VERSION=1.180.0
+ARG SEMGREP_RULES_COMMIT=9bbf021d0acffa3095fcffd17b2bc7787eb4796d
+ARG SEMGREP_RULES_DIGEST=sha256:1ebc108cfc6fe7e0167c7910ade9a8c1fe4484e23ecaec451218c16e9935130e
+ARG OSV_SCANNER_VERSION=2.6.0
+ARG OSV_SCANNER_SHA256_AMD64=ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
+ARG OSV_SCANNER_SHA256_ARM64=2c71403eb443d05891c4f268c3ad771cf4f16e5443463fd7851ef8f454d3c7e4
+ARG ZAP_VERSION=2.17.0
+ARG ZAP_SHA256=efe799aaa3627db683b43f00c9c210aea0b75c00cc8f0a0f0434d12bb3ddde5a
+COPY engine/boss_engine/security_scan/semgrep-requirements.lock /tmp/semgrep.lock
+COPY engine/boss_engine/security_scan/rulepack.py /tmp/rulepack.py
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) osv_arch=amd64; osv_sum="$OSV_SCANNER_SHA256_AMD64" ;; \
+      arm64) osv_arch=arm64; osv_sum="$OSV_SCANNER_SHA256_ARM64" ;; \
+      *) echo "no security toolchain for $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    get() { python -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$1" "$2"; }; \
+    sec=/opt/toolchains/security; mkdir -p "$sec"; cd /tmp; \
+    python -m venv "$sec/semgrep"; \
+    "$sec/semgrep/bin/pip" install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/semgrep.lock; \
+    "$sec/semgrep/bin/semgrep" --version | grep -qx "$SEMGREP_VERSION"; \
+    get "https://codeload.github.com/semgrep/semgrep-rules/tar.gz/$SEMGREP_RULES_COMMIT" rules.tgz; \
+    mkdir rules-src; tar -xzf rules.tgz -C rules-src --strip-components=1; \
+    got="$(python /tmp/rulepack.py select rules-src "$sec/semgrep-rules")"; \
+    [ "$got" = "$SEMGREP_RULES_DIGEST" ] || { echo "semgrep rules digest $got != $SEMGREP_RULES_DIGEST" >&2; exit 1; }; \
+    get "https://github.com/google/osv-scanner/releases/download/v$OSV_SCANNER_VERSION/osv-scanner_linux_$osv_arch" osv-scanner; \
+    echo "$osv_sum  osv-scanner" | sha256sum -c -; \
+    install -m 0755 osv-scanner "$sec/osv-scanner"; \
+    get "https://github.com/zaproxy/zaproxy/releases/download/v$ZAP_VERSION/ZAP_${ZAP_VERSION}_Linux.tar.gz" zap.tgz; \
+    echo "$ZAP_SHA256  zap.tgz" | sha256sum -c -; \
+    mkdir "$sec/zap"; tar -xzf zap.tgz -C "$sec/zap" --strip-components=1; \
+    rm -rf /tmp/rules.tgz /tmp/rules-src /tmp/osv-scanner /tmp/zap.tgz /tmp/semgrep.lock /tmp/rulepack.py; \
+    ln -s ../security/semgrep/bin/semgrep /opt/toolchains/bin/semgrep; \
+    ln -s ../security/osv-scanner /opt/toolchains/bin/osv-scanner; \
+    ln -s ../security/zap/zap.sh /opt/toolchains/bin/zap.sh; \
+    chmod -R a+rX,go-w /opt/toolchains; \
+    /opt/toolchains/bin/osv-scanner --version; \
+    python - "$SEMGREP_VERSION" "$SEMGREP_RULES_DIGEST" "$OSV_SCANNER_VERSION" "$ZAP_VERSION" <<'PY'
+import json, sys
+path = "/opt/toolchains/manifest.json"
+manifest = json.load(open(path))
+manifest["security"] = dict(zip(("semgrep", "semgrep_rules", "osv_scanner", "zap"), sys.argv[1:]))
+json.dump(manifest, open(path, "w"))
+PY
+
 FROM toolchains-${BOSS_TOOLCHAINS} AS toolchains
 
 FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS python-runtime
