@@ -1195,6 +1195,9 @@ Branch `feat/app-platform-finish` (worktree `~/src/boss-wt-finish`), from
 |---|---|---|---|
 | (o) | The insecure-template deploy guard is per APP | 4a1407b8 | done |
 | (h) | Sign in with BOSS for a login-oauth app: client, redirect URIs, OIDC_BOSS_* app secrets, one click | 9b4293c2 | done |
+| (p) | The payment templates map catalog-cart's CatalogError themselves (3 stacks x stripe/paypal) | fe2dbc86 (merge e7be941a) | done |
+| (s) | Template tests on a micro-VM install: refused up front and in words (not feasible in the guest) | b443087a (merge 5550afd0) | done |
+| (q) | The composer's "Talks to" | af1056b5 (merge e1f40892) | done; further composer/template UI now belongs to `fix/fx-templateui` |
 
 ### (o) The deploy guard is per app (4a1407b8)
 
@@ -1261,3 +1264,49 @@ repository, the host route deploying the other app past both planners).
   the bindings only once that wiring exists. (3) The Node stack builds its callback URL from
   `req.originalUrl` against APP_BASE_URL, which drops a path prefix such as a preview's; harmless
   until (1) is solved.
+
+### (p) Payments map CatalogError themselves (fe2dbc86)
+
+The shared `payments/catalog` adapter (node `catalog.js`, python `catalog.py`, java `Catalog.java`;
+identical in stripe-checkout and paypal-checkout) wraps both catalog calls and turns an error whose
+class is named `CatalogError` with a 4xx `status` and a `code` into its CheckoutInputError /
+CheckoutInputException: a 400 with catalog-cart's code, before any order or provider call. Matched by
+name and shape, not imported, so a payment template still works alone; a look-alike, a 5xx
+CatalogError or any other error is left to the app. The integration's "Payments wiring" decision is
+settled (briefs and spec §3.4 say so). Tests: one more per stack (stripe node 17, python 27, java 19;
+paypal node 19, python 26, java 21; each mutation-checked); the compose test's glue no longer maps
+the error and a route test per stack goes through the payment template's real checkout route over
+catalog-cart with a provider that must not be called (6 compose tests per stack).
+`engine/tests/templates`: 251 passed; 263 with `BOSS_TEMPLATE_REAL_RUN=1` (Java via Docker), all 6
+combined real runs green. Seen, not from this change: the payments python real run fails inside a
+virtualenv (the gate installs with `pip --user`); use the system python with `PYTHONUSERBASE`.
+
+### (s) Template tests on a micro-VM install (b443087a)
+
+Not feasible within the guest: the micro-VM contract (`sandbox_contract` 1.0) returns a command's
+exit code and output tail, never the JUnit report `template_tests` counts; an exit code cannot prove
+`min_tests` and a count read from the output would trust the agent's code. So on
+`BOSS_GOVERNED_SANDBOX_PROVIDER=microvm`, `POST /v1/templates/{id}/apply` answers 409
+`template_tests_need_local_sandbox` with the reason and the remedy before anything starts; a template
+build reaching the gate there anyway fails it closed with the same sentence (`gate.MICROVM_REFUSAL`)
+in its evidence and the blocked run's error (every template-gate failure now carries its reason
+there); the secret scan still runs; the trial always runs in the local sandbox. Documented in spec
+§2.3 and `docs/community/FEATURES.md`. Tests: `engine/tests/templates/test_template_tests_on_microvm.py`
+(11) and an API test in `test_templates_api.py`. Lifting it needs an artifact channel in the sandbox
+contract (the guest returning named report files).
+
+### (q) The composer's "Talks to" (af1056b5)
+
+Committed before the scope change (2026-10-09: a new stream, `fix/fx-templateui`, owns all composer
+and template console UI from here; it builds on af1056b5). New app and "Add to an existing app" offer
+"Talks to" rows: another app of the project, alias (from its name, editable), Preview/Deployed, Test
+users; gated on `app_link:manage` (greyed with the reason without it). For an existing app the links
+are created (`POST /v1/apps/{app}/links`) before the change starts, so its build already gets
+`BOSS_LINK_<ALIAS>_*`; a refused link names itself and starts nothing. A new app exists only after its
+first build, so `POST /v1/delivery-workflows/start` takes `input.app_links`: checked first
+(`app_link:manage` on top of `workflow_run:start`, D7, aliases), recorded in `app_link_requests` (F5
+block; never in the run's input), created by the first build (`run_env.for_run` ->
+`create_requested_links`) once and audited; a refusal is recorded with its reason and the build runs
+without that link. Tests: `apps/web/tests/composer-talks-to.test.tsx` (7),
+`apps/api/tests/test_start_requests_app_links.py` (11). Needs the web and api images rebuilt to be
+visible. Independent tester walk: to do (by the UI stream).
