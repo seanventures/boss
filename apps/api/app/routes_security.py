@@ -1,24 +1,69 @@
 """/v1/security/*: scans, findings, triage and the before/after report (F4, the security review).
 
-Spec: docs/product/APP_TEMPLATES_AND_SECURITY_LOOP.md §4.3. Owner: stream S4. (The older
-`/v1/security-scan` router in routers/security_scan.py is a different, in-process surface.)
+Spec: docs/product/APP_TEMPLATES_AND_SECURITY_LOOP.md §4.3. Owner: stream S4. The engine is
+`boss_engine/security_scan/`. (The older `/v1/security-scan` router in routers/security_scan.py is a
+different, in-process surface.)
 
-DAY-1 INTERFACE (stream S0): every route is declared with its permission and answers
-501 `not_implemented_yet` until S4 builds it. The full loop starts through the existing
-`POST /v1/delivery-workflows/start` with `workflow_key=security_review`.
+A scan is a worker job (`security.scan`): the worker leases it and asks the API to run it
+(`POST /v1/security/scans/{id}/run`, worker only), because the scanners and the sandbox helper are in
+the api image. The full loop starts through `POST /v1/delivery-workflows/start` with
+`workflow_key=security_review` (built later).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from typing import Any, Literal, Optional
+
+from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from boss_engine.identity import P, Scope, permit
 
 SPEC = "APP_TEMPLATES_AND_SECURITY_LOOP.md §4.3"
 
 
-def not_implemented_yet() -> JSONResponse:
-    return JSONResponse({"error": "not_implemented_yet", "owner": "S4", "spec": SPEC}, status_code=501)
+class ZapOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["baseline", "api"] = "baseline"
+    #: `sandbox` or `preview:<id>`; anything else (a URL) is refused by the target resolver.
+    target: str = Field(default="sandbox", max_length=140)
+
+
+class ScanRequestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project_id: str = Field(min_length=1, max_length=128)
+    app_key: str = Field(min_length=1, max_length=128)
+    ref: Optional[str] = Field(default=None, max_length=200)
+    tools: Optional[list[str]] = Field(default=None, max_length=3)
+    zap: Optional[ZapOptions] = None
+    workflow_run_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class TriageBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["accepted", "false_positive"]
+    reason: str = Field(min_length=3, max_length=2000)
+
+
+def _engine_settings():
+    from . import main
+
+    return main.engine, main.settings
+
+
+def _actor() -> str:
+    from boss_engine.identity import lineage
+
+    ctx = lineage.current_context()
+    if ctx is not None:
+        return str(ctx.principal.id)
+    from .main import current_api_principal
+
+    return str(current_api_principal.get() or "system")
+
+
+def _refused(exc: Any) -> JSONResponse:
+    return JSONResponse({"error": exc.code, "message": str(exc)}, status_code=exc.status)
 
 
 def build_security_router() -> APIRouter:
@@ -26,34 +71,101 @@ def build_security_router() -> APIRouter:
 
     @router.post("/v1/security/scans")
     @permit(P.SECURITY_SCAN_RUN, scope=Scope.project(body="project_id"))
-    def start_scan() -> JSONResponse:
-        return not_implemented_yet()
+    def start_scan(payload: ScanRequestBody) -> Any:
+        from boss_engine.security_scan import scope, service
+
+        engine, settings = _engine_settings()
+        try:
+            with engine.begin() as conn:
+                scan = service.request_scan(
+                    conn, project_id=payload.project_id, app_key=payload.app_key, ref=payload.ref,
+                    tools=payload.tools, zap=payload.zap.model_dump() if payload.zap else None,
+                    triggered_by=_actor(), workflow_run_id=payload.workflow_run_id, settings=settings)
+        except scope.ScopeRefused as exc:
+            return _refused(exc)
+        return JSONResponse({"scan_id": scan["id"], "scan": scan}, status_code=202)
 
     @router.get("/v1/security/scans")
     @permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
-    def list_scans() -> JSONResponse:
-        return not_implemented_yet()
+    def list_scans(project_id: str = Query(..., max_length=128),
+                   app_key: Optional[str] = Query(default=None, max_length=128),
+                   limit: int = Query(default=50, ge=1, le=200)) -> Any:
+        from boss_engine.security_scan import service
+
+        engine, _ = _engine_settings()
+        with engine.begin() as conn:
+            return {"scans": service.list_scans(conn, project_id, app_key, limit)}
 
     @router.get("/v1/security/scans/{scan_id}")
     @permit(P.PROJECT_READ, scope=Scope.of("security_scan", path="scan_id"))
-    def get_scan(scan_id: str) -> JSONResponse:
-        return not_implemented_yet()
+    def get_scan(scan_id: str) -> Any:
+        from boss_engine.security_scan import service
+
+        engine, _ = _engine_settings()
+        with engine.begin() as conn:
+            scan = service.get_scan(conn, scan_id)
+        if scan is None:
+            return JSONResponse({"error": "scan_not_found"}, status_code=404)
+        return scan
 
     # Normalised and redacted.
     @router.get("/v1/security/scans/{scan_id}/findings")
     @permit(P.PROJECT_READ, scope=Scope.of("security_scan", path="scan_id"))
-    def scan_findings(scan_id: str) -> JSONResponse:
-        return not_implemented_yet()
+    def scan_findings(scan_id: str, tool: Optional[Literal["semgrep", "osv", "zap"]] = None,
+                      severity: Optional[Literal["critical", "high", "medium", "low", "info"]] = None,
+                      status: Optional[Literal["open", "fixed", "accepted", "false_positive"]] = None) -> Any:
+        from boss_engine.security_scan import service
+
+        engine, _ = _engine_settings()
+        with engine.begin() as conn:
+            scan = service.get_scan(conn, scan_id)
+            if scan is None:
+                return JSONResponse({"error": "scan_not_found"}, status_code=404)
+            findings = service.list_findings(conn, scan_id, tool=tool, severity=severity, status=status)
+        return {"scan_id": scan_id, "status": scan["status"], "findings": findings}
 
     @router.post("/v1/security/findings/{finding_id}/triage")
     @permit(P.SECURITY_FINDING_TRIAGE, scope=Scope.of("security_finding", path="finding_id"))
-    def triage_finding(finding_id: str) -> JSONResponse:
-        return not_implemented_yet()
+    def triage_finding(finding_id: str, payload: TriageBody) -> Any:
+        from boss_engine.security_scan import service
+
+        engine, _ = _engine_settings()
+        try:
+            with engine.begin() as conn:
+                return service.triage(conn, finding_id, status=payload.status, reason=payload.reason,
+                                      actor=_actor())
+        except service.TriageRefused as exc:
+            return _refused(exc)
 
     # ?before=<scan>&after=<scan>; ?format=md for export.
     @router.get("/v1/security/reports/{app_key}")
     @permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
-    def security_report(app_key: str) -> JSONResponse:
-        return not_implemented_yet()
+    def security_report(app_key: str, project_id: str = Query(..., max_length=128),
+                        before: Optional[str] = Query(default=None, max_length=128),
+                        after: Optional[str] = Query(default=None, max_length=128),
+                        format: Literal["json", "md"] = "json") -> Any:  # noqa: A002
+        from boss_engine.security_scan import report
+
+        engine, _ = _engine_settings()
+        try:
+            with engine.begin() as conn:
+                rep = report.build_report(conn, project_id, app_key, before=before, after=after)
+        except report.ReportError as exc:
+            return _refused(exc)
+        if format == "md":
+            return PlainTextResponse(report.to_markdown(rep), media_type="text/markdown; charset=utf-8")
+        return rep
+
+    # Worker-invoked: run one leased `security.scan` job here, where the scanners are.
+    @router.post("/v1/security/scans/{scan_id}/run")
+    @permit(P.WORKER_LEASE)
+    def run_scan(scan_id: str) -> Any:
+        from boss_engine.security_scan import service
+
+        from .identity_guard import require_worker_principal
+
+        require_worker_principal()
+        engine, settings = _engine_settings()
+        return service.execute_scan(engine, settings, scan_id)
 
     return router

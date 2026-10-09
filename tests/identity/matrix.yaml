@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1442 operations.
+# 1443 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -1243,6 +1243,7 @@
 "POST /v1/security/scans": ["permit security_scan:run @ project(body=project_id)", "OAP"]
 "GET /v1/security/scans/{scan_id}": ["permit project:read @ security_scan(path=scan_id)", "OAPVU"]
 "GET /v1/security/scans/{scan_id}/findings": ["permit project:read @ security_scan(path=scan_id)", "OAPVU"]
+"POST /v1/security/scans/{scan_id}/run": ["permit worker:lease @ org", "-"]
 "GET /v1/self/diagnostics": ["permit system:read @ org", "OAPVU"]
 "POST /v1/self/host-sample": ["permit system:operate @ org", "OA"]
 "POST /v1/self/host-stall": ["permit worker:lease @ org", "-"]

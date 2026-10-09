@@ -124,8 +124,8 @@ Branch `feat/s4-security` (worktree `~/src/boss-wt-s4-security`), from
 |---|---|---|
 | 1 | `security` toolchain layer: Dockerfile.community stage, registry entry, egress `api.osv.dev` (D6) | done |
 | 2 | `engine/boss_engine/security_scan/`: parsers, fingerprints, redaction, scope, runners, service, report + unit tests | done |
-| 3 | `routes_security.py` (501s replaced), worker job `security.scan`, authz tests | in progress |
-| 4 | End-to-end proof on a compose stack (Node/Express + SQLite app: scan, fix, re-scan) | todo |
+| 3 | `routes_security.py` (501s replaced), worker job `security.scan`, authz tests | done |
+| 4 | End-to-end proof on a compose stack (Node/Express + SQLite app: scan, fix, re-scan) | in progress |
 
 ### Notes per step
 
@@ -166,3 +166,22 @@ Branch `feat/s4-security` (worktree `~/src/boss-wt-s4-security`), from
    `vulnapp-fixed`. Tests: `engine/tests/test_security_scan_engine.py` (51).
    Decision: old scans' findings are never rewritten to `fixed`; "fixed" is the report's verdict
    between two scans (history stays as scanned; only triage changes a row).
+
+3. API and job. The six §4.3 routes answer for real (`apps/api/app/routes_security.py`); bodies are
+   `extra=forbid` (a smuggled `url` is a 422). `POST /v1/security/scans` → 202 `{scan_id}` and a
+   `security.scan` job (`job_permissions`: `security_scan:run`), stamped with the requester's
+   authority; the worker leases it and calls `POST /v1/security/scans/{id}/run` (worker:lease,
+   `require_worker_principal`), which runs the scan in the API (where the scanners and the sandbox
+   helper are). Worker: one capability, one branch, one client method. Tests:
+   `apps/api/tests/test_security_scan_routes.py` (13: roles O/A/P run and triage, V/Auditor read
+   only; another project's person gets 404s; worker-only run; scope refusals against the DB —
+   free URLs incl. the metadata address, another project's preview, another app's, a remote or
+   stopped preview, a branch ref, an unknown tool, scanners not installed; scan → fix → re-scan
+   report from real tool output; triage reason/event/carry-over; failed tool = not_rescanned;
+   rules-digest difference flagged). `test_app_platform_day1_routes.py` no longer lists S4.
+   Regenerated `tests/identity/matrix.yaml`, `apps/web/tests/fixtures/identity-api-routes.json`.
+   Identity suites (catalogue use, matrix, public, read-only, system-only, job kinds) + worker: green.
+   Observation for S0/identity: there is no `security_finding:read` / `security_scan:read`, so the
+   PDP's no-existence-oracle rule answers a DENIED triage with 404 even to a viewer who can read the
+   finding through `project:read`. Harmless (the viewer still cannot triage), but the console must
+   not read a 404 there as "gone".

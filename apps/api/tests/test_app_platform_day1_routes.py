@@ -20,7 +20,6 @@ from boss_engine.identity.declarations import Public, access_of
 
 STUB_OWNERS = {
     "apps.api.app.routes_templates": "S2",
-    "apps.api.app.routes_security": "S4",
     "apps.api.app.routes_links": "S5",
     "apps.api.app.oidc_routes": "S6",
 }
@@ -53,10 +52,11 @@ def objects_in_project_a(monkeypatch, world):
                             lambda db, oid, o=world.org, p=world.project_a: (o, p))
 
 
-def test_the_four_modules_are_mounted():
+def test_the_stub_modules_are_mounted():
     mounted = {route.endpoint.__module__ for _, route in _operations()}
     assert mounted == set(STUB_OWNERS)
-    assert len(list(_operations())) >= 54       # the day-1 surface; streams only add
+    # the day-1 surface (54) less S4's six, built (test_security_scan_routes.py); streams only add
+    assert len(list(_operations())) >= 48
 
 
 def test_an_owner_reaches_every_stub_and_it_says_who_builds_it(world, objects_in_project_a):
