@@ -178,3 +178,13 @@ def test_a_library_previews_tests_run_as_the_preview_too():
 def test_teardown_of_a_process_preview_releases_its_uid():
     src = inspect.getsource(preview_service._teardown)  # noqa: SLF001
     assert "_release_preview_sandbox(" in src
+
+
+def test_any_owner_holding_a_sandbox_uid_spawns_as_it_whatever_its_kind(fake_sandbox):
+    """THE CLASS (owned_process): the wrap follows the bound identity, not a list of owner kinds.
+    The template trial's owner kind `template_trial` was not in WORKLOAD_KINDS, so its bound uid
+    was ignored and the template's tests ran as the API's uid."""
+    with owned_process.owner_scope("template_trial", "trial_x"), sandbox_identity.bind("trial_x") as ident:
+        owned_process.run([sys.executable, "-c", "pass"], timeout=30)
+    runs = [l for l in _lines(fake_sandbox["log"]) if l.startswith("run ")]
+    assert runs and runs[0].startswith(f"run {ident.uid} -- ")

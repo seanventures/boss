@@ -13,6 +13,7 @@ judges them. `evaluate()` is called by the one hook in governed_code_task_servic
 """
 from __future__ import annotations
 
+import os
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -101,6 +102,51 @@ def template_test_files(files: Mapping[str, Any], stack: str) -> list[str]:
     return sorted(p[len(prefix):] for p in files if p.startswith(prefix) and not p.endswith("/"))
 
 
+def install_command(stack: str, cwd: Path) -> Optional[str]:
+    """The stack's dependency install for the app in `cwd`, run before a template's tests (the
+    gate and the trial): the image holds no app's dependencies (a Python template's authlib, a
+    Java template's Maven artifacts). Through the sandbox runner, so through egress's
+    allowlisted package route like every build command. None when the app declares nothing."""
+    if stack == "python" and (cwd / "requirements.txt").is_file():
+        return "python3 -m pip install --user --disable-pip-version-check --no-input -q -r requirements.txt"
+    if stack == "node" and (cwd / "package-lock.json").is_file():
+        return "npm ci --no-audit --no-fund"
+    if stack == "node" and (cwd / "package.json").is_file():
+        return "npm install --no-audit --no-fund"
+    if stack == "java" and (cwd / "pom.xml").is_file():
+        return "mvn -q -B dependency:go-offline"
+    return None
+
+
+def install_dependencies(stack: str, cwd: Path, run_command: Callable[[str, Path], Any]) -> dict:
+    """Run `install_command` (if any) with `run_command`; {command, exit_code[, error]}."""
+    command = install_command(stack, cwd)
+    if command is None:
+        return {"command": None}
+    result = run_command(command, cwd)
+    out: dict[str, Any] = {"command": command, "exit_code": getattr(result, "exit_code", None)}
+    if out["exit_code"] not in (0, None):
+        from ..identity.redaction import redact_text
+
+        tail = str(getattr(result, "stdout", "") or "") + str(getattr(result, "stderr", "") or "")
+        out["error"] = f"installing the app's dependencies failed (exit {out['exit_code']})"
+        out["output_tail"] = redact_text(tail[-1500:])
+    return out
+
+
+def present_in_app(test_files: list[str], cwd: Optional[Path]) -> set[str]:
+    """Names of template test files already in the app's tree (an apply of a template whose
+    tests an earlier apply already put on the branch: the PR carries them, unchanged)."""
+    if cwd is None or not cwd.is_dir():
+        return set()
+    wanted = {PurePosixPath(t).name for t in test_files}
+    found: set[str] = set()
+    for dirpath, dirnames, filenames in os.walk(cwd):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        found |= wanted.intersection(filenames)
+    return found
+
+
 def missing_from_diff(test_files: list[str], changed_paths: list[str]) -> list[str]:
     """Template test files with no file of the same name in the diff. The agent ADAPTS the
     reference into the app, so a test may land in another directory; its file name is what
@@ -152,6 +198,10 @@ def evaluate(*, template: Mapping[str, Any], files: Mapping[str, bytes], changed
     else:
         wanted = template_test_files(files, stack)
         missing = missing_from_diff(wanted, list(changed.keys()))
+        already = present_in_app(missing, cwd)
+        if already:
+            tt["already_in_app"] = sorted(already)
+            missing = [t for t in missing if PurePosixPath(t).name not in already]
         tt["test_files"] = wanted
         tt["missing_from_diff"] = missing
         if not wanted:
@@ -162,7 +212,12 @@ def evaluate(*, template: Mapping[str, Any], files: Mapping[str, bytes], changed
             tt["error"] = "the build's own tests did not pass, so the template's were not run"
         elif cwd is None or run_command is None:
             tt["error"] = "the template's tests cannot run in this sandbox mode"
+        elif (install := install_dependencies(stack, cwd, run_command)).get("error"):
+            tt["install"] = install
+            tt["error"] = install["error"]
+            tt["output_tail"] = install.get("output_tail")
         else:
+            tt["install"] = install
             started = time.time()
             result = run_command(spec.command, cwd)
             tt["exit_code"] = getattr(result, "exit_code", None)

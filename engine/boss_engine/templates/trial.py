@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .gate import JUnitCounts, find_reports, parse_junit
+from .gate import JUnitCounts, find_reports, install_dependencies, parse_junit
 from .manifest import TemplateManifest
 
 
@@ -42,6 +42,10 @@ def run_stack(manifest: TemplateManifest, files: dict[str, bytes], stack: str, *
 
     spec = manifest.tests[stack]  # type: ignore[index]
     _write_tree(workdir, files, f"stacks/{stack}/")
+    install = install_dependencies(stack, workdir, runner)
+    if install.get("error"):
+        return {"ok": False, "tests": 0, "passed": 0, "failures": 0, "exit_code": install.get("exit_code"),
+                "install": install, "error": install["error"], "output_tail": install.get("output_tail")}
     started = time.time()
     result = runner(spec.command, workdir)
     counts = JUnitCounts()
@@ -52,7 +56,8 @@ def run_stack(manifest: TemplateManifest, files: dict[str, bytes], stack: str, *
     ok = (getattr(result, "exit_code", 1) == 0 and counts.tests > 0 and not counts.failures
           and not counts.errors and counts.passed >= spec.min_tests)
     out = {"ok": ok, "tests": counts.tests, "passed": counts.passed,
-           "failures": counts.failures + counts.errors, "exit_code": getattr(result, "exit_code", None)}
+           "failures": counts.failures + counts.errors, "exit_code": getattr(result, "exit_code", None),
+           "install": install}
     if not ok:
         tail = str(getattr(result, "stdout", "") or "") + str(getattr(result, "stderr", "") or "")
         from ..identity.redaction import redact_text
