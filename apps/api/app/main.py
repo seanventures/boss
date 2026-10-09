@@ -26220,6 +26220,25 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
     dropped = sorted(k for k in run_input if k.startswith("adopt_"))
     run_input = {k: v for k, v in run_input.items() if not k.startswith("adopt_")}
 
+    # "TALKS TO" (APP_TEMPLATES_AND_SECURITY_LOOP.md §5.5): links the new app asks for. Checked
+    # NOW, before anything is spent — app_link:manage on top of workflow_run:start (an agent's
+    # delegated start cannot link apps: the permission is not delegable), each provider an app of
+    # this project, the aliases valid — and recorded as requests the run's first build turns into
+    # links (app_links.service.create_requested_links). Never kept in the run's input.
+    asked_links = run_input.pop("app_links", None)
+    requested_links: list = []
+    if asked_links:
+        from boss_engine.app_links import service as _links
+        from .routers.identity_access import require_permission as _require_permission
+
+        _require_permission(None, P.APP_LINK_MANAGE.value, project_id, label="delivery_start_links")
+        with begin(engine) as connection:
+            try:
+                requested_links = _links.requested_links(connection, project_id, asked_links)
+            except _links.LinkError as error:
+                raise HTTPException(status_code=error.status,
+                                    detail={"error": error.code, "message": error.detail}) from error
+
     # CARRY FINISHED RESEARCH FORWARD INSTEAD OF PAYING FOR IT TWICE.
     #
     # "I want to take that PRD and go to implementation instead of repeating the research
@@ -26419,12 +26438,21 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
 
         if not run.get("duplicate"):
             record_started_anyway(connection, project_id, actor, run.get("id") or "", readiness)
+            if requested_links:
+                from boss_engine.app_links import service as _links
+
+                who = identity_guard.REQUEST_IDENTITY.get()
+                _links.record_requests(
+                    connection, project_id=project_id, workflow_run_id=str(run.get("id") or ""),
+                    requested=requested_links,
+                    requested_by=who.principal.id if who is not None else actor)
         # Named in the response rather than dropped in silence: a caller that asked for
         # adoption and did not get it should be able to see that, not wonder why its run
         # behaved differently from the one it copied.
         return {"run": run, **({"ignored_input": dropped} if dropped else {}),
                 **({"readiness": readiness} if readiness.get("missing") else {}),
-                **({"extends": extends} if extends else {})}
+                **({"extends": extends} if extends else {}),
+                **({"app_links": requested_links} if requested_links else {})}
 
 
 def _delivery_readiness_or_409(

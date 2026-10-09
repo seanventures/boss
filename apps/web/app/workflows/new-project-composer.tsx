@@ -40,6 +40,8 @@ import { notifyChanged } from "../changed";
 import { nameOf } from "../agents/run-face";
 import { CHANGE_CHIPS, specFirstDirective } from "../factory/change-it";
 import { builtBuild, parseApps, type AppRow } from "../factory/apps-tab";
+import { createLinkAction } from "../factory/links-actions";
+import { TalksTo, linkRequests, talksToProblem, type TalksToRow } from "./talks-to";
 import { defaultInputs, invalidInputs, missingRequired, startsFromABrief, suppliedInputs,
          typedInputs, workflowInputFields } from "../../lib/workflow-inputs";
 import { ReadinessPanel, WIZARD_COLLECTS, unaccepted, useWorkflowReadiness, type Readiness }
@@ -508,7 +510,8 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   };
 
   // ── Add mode's own state ────────────────────────────────────────────────────────────────
-  const { apps, loaded: appsLoaded } = useApps(projectId, mode === "add");
+  // Read in both modes: add mode picks the app; "Talks to" (either mode) picks what it calls.
+  const { apps, loaded: appsLoaded } = useApps(projectId, true);
   const [appId, setAppId] = useState<string | null>(appKey ?? null);
   const app = findApp(apps, appId);
   const [appQuery, setAppQuery] = useState("");
@@ -518,6 +521,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const [addChecks, setAddChecks] = useState<string[]>([KEEPS_WORKING]);
   const [addLinks, setAddLinks] = useState<string[]>([]);
   const [proposal, setProposal] = useState<FeedbackActionResult | null>(null);
+  /** "Talks to": the project's other apps this one should call (§5.5). */
+  const [talks, setTalks] = useState<TalksToRow[]>([]);
+  const linkGate = useGate("app_link:manage");
   // A deep link to an app that is not on the first page of cards still shows it first.
   const shownApps = useMemo(() => {
     const matched = apps.filter((a) => appMatches(a, appQuery));
@@ -645,6 +651,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const blocked = (adding ? addBlockingReason({ app, gain }) : blockingReason(0, draft, !brief))
     || (stillBlank.length ? `Needs ${stillBlank.join(", ")}` : "")
     || (malformed.length ? `Check ${malformed.join(", ")}` : "")
+    || talksToProblem(talks)
     // So does something the project lacks, unless the operator chose to start without it.
     || (notReady.length
         ? `Not ready here yet: ${notReady.map((m) => m.label).join("; ")} — see the plan.`
@@ -710,9 +717,13 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const startNew = async () => {
     const input = startInput({ brief, draft, fields: declaredInputs, supplied: inputsToSend,
                                needsRepository });
+    // A NEW APP'S LINKS travel with its start: the app exists only once it is built, so the start
+    // checks them (app_link:manage, the apps, the aliases) and the first build makes them.
+    if (brief && talks.length) input.app_links = linkRequests(talks);
     const started = await startRun(draft.workflowKey, input);
     if (!started.ok) return;
     setDraft(EMPTY_DRAFT);
+    setTalks([]);
     onStarted(started.id);
   };
 
@@ -774,8 +785,39 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     onStarted(null);
   };
 
+  /** AN EXISTING APP'S LINKS are made BEFORE the change starts, so its build already gets
+   *  BOSS_LINK_<ALIAS>_*. A refused link stops here, says which and why, and starts nothing;
+   *  the ones made before it stay made (they are listed under the app's Links) and leave the form. */
+  const createLinks = async (): Promise<boolean> => {
+    if (!app || !talks.length) return true;
+    const made: string[] = [];
+    for (const row of talks) {
+      const [body] = linkRequests([row]);
+      const form = new FormData();
+      form.set("project_id", projectId);
+      form.set("app_key", app.key);
+      form.set("provider_app_key", body.provider_app_key);
+      form.set("alias", body.alias);
+      form.set("env", body.env);
+      if (body.credentials === "test_users") form.set("test_users", "on");
+      const r = await callAction(createLinkAction, undefined, "app_link:manage")(form);
+      if (!r?.ok) {
+        setTalks((rows) => rows.filter((x) => !made.includes(x.alias)));
+        setError(`${body.alias} was not linked: ${r?.error || "refused"}. Nothing was started`
+          + `${made.length ? `; ${made.join(", ")} ${made.length === 1 ? "is" : "are"} linked` : ""}.`);
+        return false;
+      }
+      made.push(body.alias);
+    }
+    setTalks([]);
+    showToast("success", `Linked ${made.join(", ")}`);
+    return true;
+  };
+
   const startAdd = async () => {
     if (!app) return;
+    // The quick change's first press only asks for a proposal: nothing is linked until Start.
+    if (!(addPath === QUICK && !proposal?.proposal) && !(await createLinks())) return;
     if (addPath === QUICK) { await (proposal?.proposal ? confirmChange() : propose()); return; }
     if (addPath === SPEC) { await convene(); return; }
     const input = { ...featureInput({ app: appName, runId: baseRun, gain, kinds, checks: addChecks,
@@ -1004,6 +1046,8 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           <Links links={draft.links} onChange={(l) => set("links", l)} testid="dw-new-link" />
         </div>
       ) : null}
+      <TalksTo apps={apps.map((a) => ({ key: a.key, app: a.app }))} rows={talks} onChange={setTalks}
+               gate={linkGate} />
       {declaredForm}
     </>
   );
@@ -1077,6 +1121,8 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
         <div className="np-lbl">Read first <em>optional</em></div>
         <Links links={addLinks} onChange={setAddLinks} testid="np-link" />
       </div>
+      <TalksTo apps={apps.filter((a) => a.key !== app?.key).map((a) => ({ key: a.key, app: a.app }))}
+               rows={talks} onChange={setTalks} gate={linkGate} />
       {addPath.startsWith("@") ? null : declaredForm}
     </>
   );

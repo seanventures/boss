@@ -8384,6 +8384,26 @@ CREATE TABLE IF NOT EXISTS app_test_users (
   rotated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (project_id, app_key, env)
 );
+-- A link a NEW app asked for when it was started (the composer's "Talks to", §5.5): the app does
+-- not exist until its first build, so the start records the request (checked then: app_link:manage,
+-- the provider in this project, the alias) and that build creates the link. Written only by
+-- POST /v1/delivery-workflows/start, never from a run's input, so no caller can forge one.
+CREATE TABLE IF NOT EXISTS app_link_requests (
+  id                 TEXT PRIMARY KEY,
+  project_id         TEXT NOT NULL REFERENCES projects(id),
+  workflow_run_id    TEXT NOT NULL,
+  provider_app_key   TEXT NOT NULL,
+  alias              TEXT NOT NULL CHECK (alias ~ '^[A-Z][A-Z0-9_]{1,30}$'),
+  env                TEXT NOT NULL CHECK (env IN ('preview', 'deploy')),
+  credentials        TEXT NOT NULL DEFAULT 'none' CHECK (credentials IN ('none', 'test_users')),
+  requested_by       TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  outcome            TEXT CHECK (outcome IN ('created', 'refused')),
+  outcome_detail     TEXT,
+  link_id            TEXT,
+  resolved_at        TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS app_link_requests_run ON app_link_requests (workflow_run_id);
 -- END F5 ------------------------------------------------------------------------------------------
 
 -- BEGIN F6 (BOSS as an OIDC provider; owner: stream S6; spec §6.3) --------------------------------

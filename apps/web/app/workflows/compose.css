@@ -346,3 +346,11 @@
   .np-fs-card { height: 100%; border-radius: 0; }
 }
 .np-fs { --np-faint: #9AAACB; }
+
+/* "Talks to" (§5.5): one row per link — app, alias, preview/deployed, test users, remove. */
+.np-talks { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.np-talk { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.np-talk-app { flex: 1 1 160px; min-width: 0; }
+.np-talk-alias { flex: 0 1 120px; min-width: 80px; text-transform: uppercase; font-family: var(--mono, ui-monospace, monospace); }
+.np-talk-env { flex: 0 0 auto; }
+.np-talk-users { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; font-size: 12px; }
