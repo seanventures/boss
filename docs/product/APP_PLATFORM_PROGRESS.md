@@ -243,7 +243,7 @@ plus one new engine test (`engine/tests/templates/test_builtin_templates_apply.p
 | 4 | `catalog-cart` node (Express, signed cart cookie, merge on sign-in, checkout contract, 12 tests) | done |
 | 5 | `catalog-cart` python (FastAPI, 12 tests); tests of both templates build their app from the template modules, not main.py/server.mjs, so they survive adaptation and run together (27 in one app per stack, checked) | done |
 | 6 | `catalog-cart` java (if time allows) | todo |
-| 7 | engine test: every built-in manifest validates and applies (apply assembly) | todo |
+| 7 | engine test `engine/tests/templates/test_builtin_templates_apply.py`: every built-in x stack validates (also as an import), its directive assembles, a build copying the reference passes `template_tests` + `no_committed_secrets`, test mode needs no pasted secret; `BOSS_TEMPLATE_TRIALS=1` runs the REAL test commands through the real gate (node + python green locally; java via docker) | done |
 
 ### Resume (S3-login-catalog)
 
