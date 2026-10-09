@@ -143,8 +143,8 @@ def test_deleting_a_client_ends_its_tokens(w, api):
     assert w.userinfo(tok["access_token"]).status_code == 401
 
 
-def test_customer_pool_users_are_phase_2(w, api):
+def test_a_workforce_pool_has_no_pool_users(w, api):
     owner = w.ids.person("own")
     w.ids.bind(owner, "owner")
     with w.ids.acting_as(w.ids.ctx(owner)):
-        assert api.get(f"/v1/oidc/pools/{w.pool['id']}/users").status_code == 501
+        assert api.get(f"/v1/oidc/pools/{w.pool['id']}/users").status_code == 404     # its members are BOSS people

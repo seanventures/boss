@@ -1,0 +1,7 @@
+/* Identity › App sign-in (F6): rows open side sheets; the secret card shows values to copy. */
+.idn-app-signin tr.idn-click { cursor: pointer; }
+.idn-app-signin tr.idn-click:hover td { background: color-mix(in srgb, var(--teal) 5%, transparent); }
+.idn-app-signin .idn-tabs { margin: 0 0 16px; }
+.idn-app-signin code { font: 500 12px var(--mono); word-break: break-all; }
+.idn-sheet [data-testid="client-secret"] .idn-row { margin: 8px 0; }
+.idn-sheet [data-testid="client-secret"] .idn-label { min-width: 110px; font: 500 10px var(--mono); letter-spacing: 0.16em; color: var(--faint); text-transform: uppercase; }

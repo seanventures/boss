@@ -18,6 +18,7 @@ and Replies into responses.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Optional
 from urllib.parse import parse_qsl
 
@@ -31,7 +32,8 @@ from boss_engine.identity import P, PublicReason, Scope, permit, public
 from boss_engine.oidc_provider import clients as oidc_clients
 from boss_engine.oidc_provider import consent as oidc_consent
 from boss_engine.oidc_provider import pools as oidc_pools
-from boss_engine.oidc_provider import protocol
+from boss_engine.oidc_provider import hosted, protocol
+from boss_engine.oidc_provider import customers as oidc_customers
 
 SPEC = "APP_TEMPLATES_AND_SECURITY_LOOP.md §6"
 MAX_BODY = 64 * 1024
@@ -58,10 +60,15 @@ def _browser(request: Request) -> protocol.Browser:
 
     from .routers.identity_auth import credentials
 
+    from boss_engine.oidc_provider import customers
+
     return protocol.Browser(
         session_cookie=request.cookies.get(authn.SESSION_COOKIE), ip=authn.client_ip_of(credentials(request)),
         user_agent=(request.headers.get("user-agent") or "")[:400] or None,
-        origin=request.headers.get("origin"), sec_fetch_site=request.headers.get("sec-fetch-site"))
+        origin=request.headers.get("origin"), sec_fetch_site=request.headers.get("sec-fetch-site"),
+        app_session=request.cookies.get(customers.APP_SESSION_COOKIE),
+        app_preauth=request.cookies.get(customers.APP_PREAUTH_COOKIE),
+        content_type=(request.headers.get("content-type") or "").lower() or None)
 
 
 async def _form(request: Request) -> Optional[list[tuple[str, str]]]:
@@ -90,10 +97,14 @@ def _query(request: Request) -> list[tuple[str, str]]:
 
 def _render(reply: protocol.Reply) -> Response:
     if isinstance(reply.body, dict):
-        return JSONResponse(reply.body, status_code=reply.status, headers=reply.headers)
-    if isinstance(reply.body, str):
-        return HTMLResponse(reply.body, status_code=reply.status, headers=reply.headers)
-    return Response(status_code=reply.status, headers=reply.headers)
+        response: Response = JSONResponse(reply.body, status_code=reply.status, headers=reply.headers)
+    elif isinstance(reply.body, str):
+        response = HTMLResponse(reply.body, status_code=reply.status, headers=reply.headers)
+    else:
+        response = Response(status_code=reply.status, headers=reply.headers)
+    for cookie in reply.cookies:
+        response.raw_headers.append((b"set-cookie", cookie.encode("latin-1")))
+    return response
 
 
 async def _run(fn: Callable[[Any], protocol.Reply]) -> Response:
@@ -161,6 +172,14 @@ class ClientBody(BaseModel):
     first_party: Optional[bool] = None
     resource: Optional[str] = None
     status: Optional[str] = None
+
+
+class PoolUserBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: Optional[str] = Field(default=None, max_length=254)
+    name: Optional[str] = Field(default=None, max_length=120)
+    status: Optional[str] = None
+    reset_mfa: Optional[bool] = None
 
 
 class RoleBody(BaseModel):
@@ -239,6 +258,46 @@ def build_oidc_router() -> APIRouter:
             return _too_large()
         browser = _browser(request)
         return await _run(lambda db: protocol.consent_submit(db, org_slug, form, browser))
+
+    # The hosted pages (customer pools; workforce re-authentication): a view, and the steps.
+    @router.get("/oidc/{org_slug}/account")
+    @public(reason=OP, verifier=verify_oidc_request)
+    async def account(org_slug: str, request: Request) -> Response:
+        params, browser = dict(_query(request)), _browser(request)
+
+        def call(db: Any) -> protocol.Reply:
+            try:
+                org_id, _, _ = protocol.resolve(db, org_slug)
+            except Exception:  # noqa: BLE001
+                return protocol.discovery(db, org_slug)   # the same 404/503 answer
+            return hosted.view(db, org_id, params, browser)
+        return await _run(call)
+
+    @router.post("/oidc/{org_slug}/hosted/{step}")
+    @public(reason=OP, verifier=verify_oidc_request)
+    async def hosted_step(org_slug: str, step: str, request: Request) -> Response:
+        browser = _browser(request)
+        if (browser.content_type or "").startswith("application/json"):
+            raw = await request.body()
+            if len(raw) > MAX_BODY:
+                return _too_large()
+            try:
+                params = json.loads(raw or b"{}")
+            except ValueError:
+                params = None
+            if not isinstance(params, dict):
+                return JSONResponse({"error": "invalid_request"}, status_code=400)
+        else:
+            form = await _form(request)
+            if form is None:
+                return _too_large()
+            params, seen = {}, set()
+            for k, v in form:
+                if k in seen:
+                    return JSONResponse({"error": "invalid_request"}, status_code=400)
+                seen.add(k)
+                params[k] = v
+        return await _run(lambda db: hosted.step(db, org_slug, step, params, browser))
 
     @router.post("/oidc/{org_slug}/token")
     @public(reason=OP, verifier=verify_oidc_request)
@@ -320,22 +379,40 @@ def build_oidc_router() -> APIRouter:
             return {"deleted": pool_id}
         return _admin(request, fn)
 
-    # ---- admin: a pool's users (customer pools; phase 2) -----------------------------------------
+    # ---- admin: a pool's users (customer pools) ------------------------------------------------
+    def _customer_pool(db: Any, ctx: Any, pool_id: str) -> dict[str, Any]:
+        pool = oidc_pools.load(db, org_id=ctx.principal.org_id, pool_id=pool_id)
+        if pool is None or pool["kind"] != "customer":
+            raise LookupError("not_found")
+        return pool
+
     @router.get("/v1/oidc/pools/{pool_id}/users")
     @permit(P.OIDC_POOL_USER_MANAGE, scope=Scope.org())
-    def list_pool_users(pool_id: str) -> JSONResponse:
-        return not_implemented_yet()
+    def list_pool_users(pool_id: str, request: Request) -> JSONResponse:
+        return _admin(request, lambda db, ctx: {"users": oidc_customers.list_users(
+            db, pool_id=_customer_pool(db, ctx, pool_id)["id"])})
 
     @router.post("/v1/oidc/pools/{pool_id}/users")
     @permit(P.OIDC_POOL_USER_MANAGE, scope=Scope.org())
-    def invite_pool_user(pool_id: str) -> JSONResponse:
-        return not_implemented_yet()
+    def invite_pool_user(pool_id: str, request: Request, body: PoolUserBody) -> JSONResponse:
+        def fn(db: Any, ctx: Any) -> Any:
+            from boss_engine.identity.authn_support import public_origin
+
+            pool = _customer_pool(db, ctx, pool_id)
+            if not body.email:
+                raise ValueError("email is required")
+            url = f"{public_origin(db, ctx.principal.org_id)}/oidc/{ctx.principal.org_id}/account?pool={pool['id']}"
+            return oidc_customers.invite(db, org_id=ctx.principal.org_id, actor=ctx.principal.id, pool=pool,
+                                         email=body.email, name=body.name, account_url=url)
+        return _admin(request, fn, 201)
 
     # Disable / enable, reset MFA.
     @router.patch("/v1/oidc/pools/{pool_id}/users/{user_id}")
     @permit(P.OIDC_POOL_USER_MANAGE, scope=Scope.org())
-    def update_pool_user(pool_id: str, user_id: str) -> JSONResponse:
-        return not_implemented_yet()
+    def update_pool_user(pool_id: str, user_id: str, request: Request, body: PoolUserBody) -> JSONResponse:
+        return _admin(request, lambda db, ctx: oidc_customers.admin_update(
+            db, org_id=ctx.principal.org_id, actor=ctx.principal.id, pool=_customer_pool(db, ctx, pool_id),
+            user_id=user_id, status=body.status, reset_mfa=bool(body.reset_mfa), name=body.name))
 
     # ---- admin: clients (Admins everywhere; app owners on their project) -------------------------
     @router.get("/v1/oidc/clients")

@@ -830,7 +830,10 @@ Worktree `~/src/boss-wt-s6-oidc`, branch `feat/s6-oidc` (from `feat/app-platform
 | 2 | Unit, admin API and adversarial suites (the named list) | done |
 | 3 | End-to-end proof: a Node app with openid-client on a local stack | done |
 | 4 | OpenID conformance suite (Basic OP), if Docker allows | not run (see below) |
-| P2 | Customer pools, hosted pages polish, console Identity ▸ App sign-in | phase 2 |
+| P2.1 | Customer pools: hosted sign-in/sign-up/email code/TOTP/passkeys/reset/account pages, pool-user API, web proxy | done |
+| P2.2 | Re-authentication for prompt=login/max_age, step-up for require_mfa | done |
+| P2.3 | Console Identity ▸ App sign-in | done (independent tester walk: todo) |
+| P2.4 | Conformance (if a stack slot is free) | blocked by decision (see below) |
 
 ### Decisions and notes
 
@@ -855,10 +858,8 @@ Worktree `~/src/boss-wt-s6-oidc`, branch `feat/s6-oidc` (from `feat/app-platform
 - **Access tokens**: RS256 always, `typ: at+jwt`, `aud` = client `resource` or client_id.
 - **Pairwise `sub`** = HMAC(pool subject key, subject ‖ client); `public` = HMAC(pool key, subject).
   Never a BOSS id. The pool key is random, in the vault.
-- **Phase-1 limits**: `prompt=login` or an exceeded `max_age` for a signed-in person answers
-  `login_required` (no forced re-authentication from the OIDC flow yet); a client with
-  `require_mfa` and a session without MFA gets a BOSS page, not a step-up prompt. Customer pools
-  answer `temporarily_unavailable` at authorize; their user routes stay 501.
+- Phase-1 limits (prompt=login/max_age answered `login_required`, require_mfa as an error page,
+  customer pools unavailable) are lifted by phase 2 (below).
 - **Amendment AP-4** (IDENTITY_BUILD.md §7): `oidc.*` audit events, `oidc.*` rate-limit buckets,
   the one signing_keys function.
 - Open question from S0 (Auditor `oidc:read`): not added; every admin GET needs `oidc:admin` or
@@ -898,13 +899,116 @@ console `/login?next=/oidc/<org>/resume?...` (200), an unregistered redirect_uri
 Found and fixed by the e2e: a token-endpoint 401 for a non-Basic client carried a Bearer challenge
 (openid-client v6 treats any challenge as fatal); it now carries none (Basic when Basic was used).
 
+### Phase 2.1: customer pools (S6)
+
+- `oidc_provider/customers.py` is the realm: pool users (`opu_`, no identity_principals row), sessions
+  (`oidc_sessions`, cookie `__Host-boss_app_session`, `bas_` tokens, 12 h idle / 7 d absolute, a NEW
+  session at every sign-in and MFA), challenges (`oidc_app_challenges`, new table, bound to
+  `__Host-boss_app_preauth`, 5 attempts, 10 min), Argon2id + the fair hash queue + new-password rules
+  (passwords.py), TOTP via totp.py's constant-time ±1-step matching with last-step replay
+  prevention (secret in the vault), passkeys via py_webauthn with identity's `rp_for` (RP ID = the
+  BOSS host, user handle = pool user id, credential looked up in THIS pool only), emailed 6-digit
+  codes (email_signin.DELIVER) for verification and reset, rate limits and soft lock in `oidc.*`
+  buckets (AP-5). Every lookup names the pool.
+- Deviation from §6.3: a `__Host-` cookie must have `Path=/`, so the app cookies are `Path=/`
+  (host-only, Secure, HttpOnly, Lax). They are read only by the OIDC module; the console proxy
+  forwards them only on /oidc/ browser steps; identity's authn never reads them.
+- `oidc_provider/hosted.py`: pages and steps. `GET /oidc/{org}/account?view=signin|signup|forgot|
+  account` and `POST /oidc/{org}/hosted/{step}` (signin, signup, verify-email, mfa, enrol-totp,
+  forgot, reset, passkey-options, passkey-verify, account; wf-reauth for workforce). Steps check
+  Origin + Sec-Fetch-Site; JSON steps need application/json; account actions need an HMAC of the app
+  session. Pages: strict CSP with a nonce for the one passkey script, no framing.
+- `protocol.py` is pool-agnostic now (`Who`): customer pools sign in on the hosted pages;
+  `pool.mfa = required`, `client.require_mfa` or `acr_values=urn:boss:acr:mfa` force a second
+  factor (enrolment if none). Signup: open, or domain; invite/closed = admin invite only (the
+  invitee sets a password through "Forgot password"). `password_policy.verify_email` (default true)
+  needs mail; `min_length` (default 12).
+- Pool-user API (`oidc_pool_user:manage`): list, invite, PATCH status/reset_mfa/name; disable and
+  MFA reset end sessions, challenges and every grant.
+- Tests: `apps/api/tests/test_oidc_provider_customers.py` (26): the flow, then C1 a pool user is
+  never a principal (no row; app cookie, app session as console cookie, as bearer, customer
+  AT/ID token on `/v1/identity/me` and `/v1/projects` under enforce: 401; a workforce client never
+  takes an app session; no BOSS or cross-client role), C2 cross-pool/org (session, challenge,
+  same email in two pools, admin API from another org and on a workforce pool: 404, pairwise
+  subjects), C3 anti-enumeration (same page for unknown email and wrong password; taken email at
+  sign-up: same page, no mail, no verifiable code) and lockout, C4 TOTP replay and 5-strike
+  challenge, password alone never finishes an MFA pool, C5 passkeys (register on the account page,
+  sign in with the passkey alone; forged user handle, another pool, another origin, register
+  without a session: refused), C6 CSRF on steps and account actions, framing/CSP, C7 consent revoke
+  on the account page, disable, reset by code ends sessions, invite + MFA reset, viewer 403, C8 a
+  new session at every sign-in.
+
+### Phase 2.2: re-authentication (S6)
+
+- Workforce: `prompt=login`, an exceeded `max_age`, or `require_mfa`/`acr_values=urn:boss:acr:mfa`
+  with a session that has no second factor -> the hosted "Confirm it's you" page. The step is
+  identity's own `signin.step_up` (TOTP with its replay guard; the password only for a member with
+  no factor and only when MFA is not required) or `signin.passkey_options/verify` with purpose
+  `step_up`; it rotates the console session (the new cookie is relayed) and the request continues
+  with `since` = the interaction's creation, so only a confirmation made after the request counts.
+  `prompt=none` with a stale session answers `login_required`/`interaction_required`.
+- A workforce session counts as MFA only when it has a second-factor method (totp, passkey,
+  webauthn, recovery_code, sso), not merely a `mfa_at` stamped by a password step-up: acr
+  `urn:boss:acr:pwd` then.
+- Customers: the same triggers show the hosted sign-in again; MFA-required asks the second factor
+  (or enrolment).
+- Tests: `apps/api/tests/test_oidc_provider_reauth.py` (R1 confirm with TOTP rotates the session
+  and issues a fresh auth_time, R1 the same TOTP code cannot confirm twice, R2 max_age incl.
+  prompt=none, R3 require_mfa refuses a password, R4 password route for a member with no factor
+  gives acr pwd, R5 CSRF and no session).
+
+### Phase 2.3: the console (S6)
+
+- `apps/web/app/identity/app-sign-in/` (page + `app-sign-in.tsx`), registered in
+  `lib/identity/pages.ts` (tab "App sign-in", access `anyScope: oidc_client:manage`), styles in
+  `app/identity/identity-app-sign-in.css`. Tabs Pools · Clients · Users · Roles; rows open side
+  sheets; register shows issuer, client id and secret ONCE in a locked sheet; rotate secret;
+  disable/remove; pool create/edit/delete; invite, disable/enable, reset MFA; roles add/assign/
+  remove. The admin reads are step-up permissions, so the lists load through `useGuardedCall`
+  (the step-up sheet opens on first load). Recommendation (needs a catalogue amendment): an
+  `oidc:read` (Auditor, Admin, Owner; no step-up) for the lists.
+- Proxy: `lib/oidc-proxy.ts` forwards `account` and `hosted/<step>` as browser steps (console
+  session + app cookies + Origin/Sec-Fetch-Site) and relays only the identity Set-Cookies.
+- Tests: `apps/web/tests/identity-app-sign-in.test.tsx` (6), `oidc-proxy.test.ts` (5); all 35
+  identity web test files pass; tsc clean. Not yet done: an independent tester's browser walk.
+
+### Phase 2 results (2026-10-09)
+
+- API suites after the phase-2 refactor: flow, admin, adversarial, day-1 routes, public routes,
+  engine oidc + frozen interfaces: 193 passed, 1 skipped, after two expectations changed on
+  purpose (require_mfa now steps up instead of a 403 page; a workforce pool has no pool users:
+  404). Customers 26/26, re-authentication 6/6. Web: identity (35 files) and proxy tests pass.
+- End-to-end (`tests/e2e/oidc/run.sh`, local API + console, through the console origin): the
+  workforce proof (`E2E PASS`) and the customer-pool proof (`E2E CUSTOMER PASS`: hosted sign-up,
+  TOTP enrolment, consent, MFA acr and pairwise sub verified by openid-client, userinfo, refresh,
+  prompt=login with password + next TOTP, same sub, the account page disconnects the app, the
+  app's next refresh fails).
+- Not done: the passkey ceremony in a real browser (covered by API tests with a soft
+  authenticator), the independent tester's walk of Identity ▸ App sign-in and the hosted pages,
+  conformance (below).
+
+### Phase 2.4: conformance (S6) — not run, needs an operator decision
+
+The slot was free (2026-10-09) and the suite has prebuilt images (`docker-compose-prebuilt.yml`),
+but the OpenID **Basic OP** plan (`oidcc-basic-certification-test-plan`, code flow,
+client_secret_basic) sends no PKCE in every test but one (`oidcc-ensure-request-with-valid-pkce-
+succeeds`) and requires a code flow WITHOUT a nonce to succeed (`OP-nonce-NoReq-code`); it also
+requests `address` and `phone` scopes. §6.2 makes PKCE S256 mandatory for every client and nonce
+mandatory for `openid`, and BOSS refuses unknown scopes; so nearly every module would fail at
+authorize by design. Running it is only meaningful after one of: (a) a per-client "OIDC
+certification compatibility" switch (PKCE optional for confidential clients, nonce optional, unknown
+scopes ignored), off by default and Admin-only; or (b) accepting that BOSS is not Basic-OP
+certifiable and running the suite's individual modules that match the profile (discovery, ID token
+signature/kid, userinfo GET/POST header/body, code reuse, redirect_uri not registered, valid PKCE,
+end_session). Decision for the operator (suggested D14).
+
 ### Resume (S6)
 
 - `cd ~/src/boss-wt-s6-oidc && git pull` (branch `feat/s6-oidc`).
 - Tests: DB `boss_test_s6` on boss-test-pg (localhost:55432, user boss; password via
   `docker exec boss-test-pg printenv POSTGRES_PASSWORD`, never printed). Run with
   `DATABASE_URL=postgresql+psycopg://boss:$PW@localhost:55432/boss_test_s6 PYTHONPATH=.:engine python3 -m pytest -q apps/api/tests/test_oidc_provider_*.py`.
-- DB `boss_test_s6` was DROPPED at the end of phase 1: `CREATE DATABASE boss_test_s6` first.
+- DB `boss_test_s6` is DROPPED after each session: `CREATE DATABASE boss_test_s6` first.
 - Conformance (step 4), not run: the suite is its own compose stack (server, MongoDB, nginx), and
   the one-stack slot was held (bosss4, then bosss2). It also needs the issuer reachable from its
   containers (BOSS_PUBLIC_URL on host.docker.internal, or the suite on the host network) and a

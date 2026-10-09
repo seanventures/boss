@@ -21,6 +21,9 @@ GET /health:
 GET /oidc/{org_slug}/.well-known/openid-configuration:
   reason: jwks
   verifier: null
+GET /oidc/{org_slug}/account:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.oidc_routes:verify_oidc_request
 GET /oidc/{org_slug}/authorize:
   reason: oidc_provider_endpoint
   verifier: apps.api.app.oidc_routes:verify_oidc_request
@@ -88,6 +91,9 @@ POST /oidc/{org_slug}/consent:
   reason: oidc_provider_endpoint
   verifier: apps.api.app.oidc_routes:verify_oidc_request
 POST /oidc/{org_slug}/end_session:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.oidc_routes:verify_oidc_request
+POST /oidc/{org_slug}/hosted/{step}:
   reason: oidc_provider_endpoint
   verifier: apps.api.app.oidc_routes:verify_oidc_request
 POST /oidc/{org_slug}/revocation:

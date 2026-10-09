@@ -12,17 +12,20 @@
  *                   and the form; never a cookie
  *   public          discovery and the JWKS: nothing
  *
- * No Set-Cookie is relayed (phase 1 sets none). Bodies are capped; the API answers redirects
+ * Set-Cookie is relayed only for the console session (a workforce step-up rotates it) and the
+ * customer pools' own cookies, and only from browser steps. Bodies are capped; the API answers redirects
  * itself (relayed, never followed). The API's own page headers (CSP, X-Frame-Options) pass
  * through; middleware.ts adds no console CSP here.
  */
 import { clientHop, proxyHops } from "./client-hop";
 
 export const OIDC_BODY_CAP = 64 * 1024;
-const OIDC = /^\/oidc\/[A-Za-z0-9_-]{1,100}\/(?:\.well-known\/openid-configuration|jwks|authorize|resume|consent|token|userinfo|revocation|end_session)$/;
-const BROWSER_STEPS = new Set(["authorize", "resume", "consent", "end_session"]);
+const OIDC = /^\/oidc\/[A-Za-z0-9_-]{1,100}\/(?:\.well-known\/openid-configuration|jwks|authorize|resume|consent|token|userinfo|revocation|end_session|account|hosted\/[a-z-]{2,40})$/;
+const BROWSER_STEPS = new Set(["authorize", "resume", "consent", "end_session", "account", "hosted"]);
 const APP_CALLS = new Set(["token", "revocation", "userinfo"]);
 const SESSION_COOKIE = "__Host-boss_session";
+/** A customer pool's own cookies (never a console credential; the API reads them only on /oidc/). */
+const APP_COOKIES = ["__Host-boss_app_session", "__Host-boss_app_preauth"];
 
 /** Is this exactly one of the provider's endpoints (no other spelling)? */
 export function isOidcPath(pathname: string): boolean {
@@ -30,13 +33,21 @@ export function isOidcPath(pathname: string): boolean {
 }
 
 function endpointOf(pathname: string): string {
-  return pathname.split("/").pop() ?? "";
+  const parts = pathname.split("/");
+  return parts[3] ?? "";
 }
 
-/** Only the console session cookie, and only for the browser steps. */
+/** Only the console session cookie and the app cookies, and only for the browser steps. */
 export function sessionCookieOnly(cookieHeader: string | null): string {
   if (!cookieHeader) return "";
-  return cookieHeader.split(";").map((p) => p.trim()).filter((p) => p.startsWith(`${SESSION_COOKIE}=`)).join("; ");
+  const allowed = [SESSION_COOKIE, ...APP_COOKIES];
+  return cookieHeader.split(";").map((p) => p.trim()).filter((p) => allowed.some((n) => p.startsWith(`${n}=`))).join("; ");
+}
+
+/** Set-Cookie values the API may set through this proxy: the console session (a workforce
+ * step-up rotates it) and the app cookies. Anything else is dropped. */
+export function relayedCookie(value: string): boolean {
+  return [SESSION_COOKIE, ...APP_COOKIES].some((n) => value.startsWith(`${n}=`));
 }
 
 export function oidcRequestHeaders(pathname: string, incoming: Headers): Headers {
@@ -100,6 +111,9 @@ export async function forwardOidc(req: Request, opts: { apiUrl: string; fetchImp
   for (const name of RELAYED) {
     const value = upstream.headers.get(name);
     if (value) headers.set(name, value);
+  }
+  if (BROWSER_STEPS.has(endpointOf(url.pathname))) {
+    for (const c of upstream.headers.getSetCookie?.() ?? []) if (relayedCookie(c)) headers.append("set-cookie", c);
   }
   return new Response(upstream.body, { status: upstream.status, headers });
 }
