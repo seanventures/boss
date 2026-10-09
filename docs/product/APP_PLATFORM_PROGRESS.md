@@ -10,8 +10,8 @@ Branch: `feat/app-platform` (worktree `~/src/boss-wt-appplat`). Push after every
 | 1 | `db/schema.sql`: `-- BEGIN Fn … -- END Fn` blocks for F2, F4, F5, F6 with the tables the spec defines | done |
 | 2 | Permission catalogue: the §8.2 permissions + regenerated files | done |
 | 3 | Router stubs (`routes_templates.py`, `routes_security.py`, `routes_links.py`, `oidc_routes.py`), 501 `not_implemented_yet`, included in `main.py` | done |
-| 4 | `engine/boss_engine/templates/manifest.py` (boss.template/v1, frozen) + unit tests | next |
-| 5 | IDENTITY.md amendment for D10 (RS256 ID tokens for apps; EdDSA-only is BOSS-internal) | todo |
+| 4 | `engine/boss_engine/templates/manifest.py` (boss.template/v1, frozen) + unit tests | done |
+| 5 | IDENTITY.md amendment for D10 (RS256 ID tokens for apps; EdDSA-only is BOSS-internal) | next |
 
 ### Notes per step
 
@@ -80,6 +80,17 @@ Branch: `feat/app-platform` (worktree `~/src/boss-wt-appplat`). Push after every
    `PYTHONPATH=.:engine python3 scripts/dump-identity-api-routes.py`.
    Known failure on the base, not from this work:
    `test_a_streaming_write_is_excluded_rather_than_buffered` (`POST /v1/agents/{role_key}/test`).
+
+4. Manifest. `engine/boss_engine/templates/manifest.py`: `validate_manifest(text|dict)`,
+   `load_manifest(path|dir)`, `TemplateManifest` (pydantic, frozen, `extra="forbid"`),
+   `ManifestError.reasons` (one `<field>: <what is wrong>` line per problem, all at once).
+   Checks the manifest alone: id/semver/word/env-name patterns, stacks ∈ node|python|java, a test
+   command (junit, min_tests ≥ 1) for exactly the declared stacks, compilable secret patterns,
+   egress = bare FQDNs (no wildcard, IP, scheme/port, local/reserved TLD), `METHOD /path` routes,
+   relative guide/security paths, no self-reference, no duplicate names. The import's checks that
+   need the repo or the install (tree, sizes, secret scan, built-in id clash, BOSS hosts in egress,
+   who may set `insecure_by_design`) are S2's. Tests: `engine/tests/test_template_manifest.py`
+   (45; the spec's example verbatim is valid; the field set is pinned).
 
 ## Resume instructions
 
