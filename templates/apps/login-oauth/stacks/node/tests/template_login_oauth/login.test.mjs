@@ -5,7 +5,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 
 import { loadConfig } from "../../auth/config.mjs";
-import { createApp } from "../../server.mjs";
+import express from "express";
+
+import { createAuth } from "../../auth/routes.mjs";
 import { startFakeIdp } from "./fake-idp.mjs";
 
 const BASE_URL = "https://app.example.test"; // https, so the session cookie must be Secure
@@ -42,7 +44,12 @@ beforeEach(async () => {
   if (server) { server.closeAllConnections(); await new Promise((r) => server.close(r)); }
   idp.tamper = {};
   idp.user = { sub: "g-1", email: "ada@example.com", email_verified: true, name: "Ada", picture: null };
-  server = createApp(config()).listen(0, "127.0.0.1");
+  // The app as server.mjs builds it, from the auth modules alone (so the tests do not depend on
+  // the app's own entry point once the template is adapted into it).
+  const app = express();
+  app.set("trust proxy", "loopback");
+  app.use(createAuth(config()).router);
+  server = app.listen(0, "127.0.0.1");
   await new Promise((r) => server.once("listening", r));
   origin = `http://127.0.0.1:${server.address().port}`;
 });

@@ -6,6 +6,7 @@ summary: Product list with search and pages, product detail, a cart with server-
 adds: [routes, ui, db_tables, seed_data]
 stacks:
   node:   {frameworks: [express], min_toolchain: node20}
+  python: {frameworks: [fastapi], min_toolchain: python311}
 requires: []
 works_with: [login-oauth, payments-stripe, payments-paypal]
 secrets:
@@ -27,6 +28,7 @@ routes:
   - GET /api/cart/checkout
 tests:
   node:   {command: npm run test:catalog-cart, report: junit, min_tests: 10}
+  python: {command: python3 -m pytest -q tests/template_catalog_cart --junitxml=boss-template-junit.xml, report: junit, min_tests: 10}
 security_note: SECURITY.md
 guide: guide.md
 labels: []

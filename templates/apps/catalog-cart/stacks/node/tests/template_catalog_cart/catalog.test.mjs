@@ -6,7 +6,9 @@ import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 
 import { CatalogStore, loadSeed } from "../../catalog/store.mjs";
-import { createApp } from "../../server.mjs";
+import express from "express";
+
+import { createCatalog } from "../../catalog/routes.mjs";
 
 let server;
 let origin;
@@ -18,10 +20,11 @@ beforeEach(async () => {
     await new Promise((r) => server.close(r));
   }
   store = new CatalogStore({ products: loadSeed() });
-  const app = createApp(
+  const app = express();
+  app.use(createCatalog(
     { cartSecret: "fake-cart-secret-for-the-template-tests-only", secureCookies: true, currency: "usd" },
     { store, getUserId: (req) => req.get("x-test-user") || null },
-  );
+  ).router);
   server = app.listen(0, "127.0.0.1");
   await new Promise((r) => server.once("listening", r));
   origin = `http://127.0.0.1:${server.address().port}`;

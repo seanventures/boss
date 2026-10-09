@@ -241,7 +241,7 @@ plus one new engine test (`engine/tests/templates/test_builtin_templates_apply.p
 | 2 | `login-oauth` python (FastAPI + Authlib 1.8, server-side session middleware, fake IdP, 15 tests) | done |
 | 3 | `login-oauth` java (Spring Boot 3.5.16 + Spring Security OAuth2 client, lazy registrations, one-shot state repo, fake IdP on com.sun.net.httpserver + Nimbus, 15 tests) | done |
 | 4 | `catalog-cart` node (Express, signed cart cookie, merge on sign-in, checkout contract, 12 tests) | done |
-| 5 | `catalog-cart` python | todo |
+| 5 | `catalog-cart` python (FastAPI, 12 tests); tests of both templates build their app from the template modules, not main.py/server.mjs, so they survive adaptation and run together (27 in one app per stack, checked) | done |
 | 6 | `catalog-cart` java (if time allows) | todo |
 | 7 | engine test: every built-in manifest validates and applies (apply assembly) | todo |
 

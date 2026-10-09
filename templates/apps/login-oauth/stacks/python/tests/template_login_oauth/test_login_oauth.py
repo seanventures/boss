@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 import httpx
 from fastapi.testclient import TestClient
 
-from conftest import BASE_URL
+BASE_URL = "https://app.example.test"  # as in conftest.py: https, so cookies must be Secure
 
 
 class Browser:

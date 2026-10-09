@@ -26,12 +26,16 @@ def idp():
 
 @pytest.fixture
 def app(idp):
+    from fastapi import FastAPI, HTTPException
+
+    from auth import create_auth
     from auth.config import load_config
-    from main import create_app
+    from auth.routes import error_body
+    from auth.sessions import ServerSessionMiddleware
 
     idp.tamper = {}
     idp.user = {"sub": "g-1", "email": "ada@example.com", "email_verified": True, "name": "Ada", "picture": None}
-    return create_app(load_config({
+    config = load_config({
         "APP_BASE_URL": BASE_URL,
         "SESSION_SECRET": "fake-session-secret-for-the-template-tests-only",
         "AUTH_ADMIN_EMAILS": "boss@example.com",
@@ -41,4 +45,12 @@ def app(idp):
         "GITHUB_CLIENT_ID": "fake-github-client", "GITHUB_CLIENT_SECRET": "fake-github-secret",
         "OIDC_BOSS_ISSUER": idp.issuer, "OIDC_BOSS_CLIENT_ID": "fake-boss-client",
         "OIDC_BOSS_CLIENT_SECRET": "fake-boss-secret",
-    }))
+    })
+    # The app as main.py builds it, from the auth package alone (so the tests do not depend on
+    # the app's own entry point once the template is adapted into it).
+    auth = create_auth(config)
+    app = FastAPI()
+    app.add_middleware(ServerSessionMiddleware, **auth.session_settings)
+    app.include_router(auth.router)
+    app.add_exception_handler(HTTPException, lambda request, exc: error_body(exc))
+    return app
