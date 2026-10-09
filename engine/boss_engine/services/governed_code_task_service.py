@@ -1821,6 +1821,20 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
 # --------------------------------------------------------------------------- #
 #  The governed job handler                                                   #
 # --------------------------------------------------------------------------- #
+def _authority_refused(engine, budget, project_id: str, reservation_id: Optional[str], run_id: str,
+                       exc: BaseException):
+    """The build was refused its authority before anything ran: its budget reservation goes back
+    and the refusal (code_task_service.AuthorityRefused) is what the caller raises."""
+    from .code_task_service import AuthorityRefused
+
+    try:
+        with _transaction(engine) as c:
+            _release(budget, c, project_id, reservation_id, "authority refused", run_id=run_id)
+    except Exception:  # noqa: BLE001 — the refusal is the answer either way
+        pass
+    return AuthorityRefused(getattr(exc, "reason", None) or type(exc).__name__)
+
+
 def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            *, fencing_token: Optional[str] = None) -> dict:
     """One governed attempt, with the MCP servers of the agent it runs as (skills-mcp E6).
@@ -2809,14 +2823,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             engine, task_run_id=run_id, project_id=project_id, owner=owner, repo=repo,
             role_key=identity_runs.code_task_builder(spec, fctx), job_id=job_id)
     except Exception as exc:  # noqa: BLE001 — refused authority fails the build, never widens
-        from .code_task_service import AuthorityRefused
-
-        try:                       # nothing was spent: the reservation goes back
-            with _transaction(engine) as c:
-                _release(budget, c, project_id, reservation_id, "authority refused", run_id=run_id)
-        except Exception:  # noqa: BLE001 — the refusal is the answer either way
-            pass
-        raise AuthorityRefused(getattr(exc, 'reason', None) or type(exc).__name__) from exc
+        raise _authority_refused(engine, budget, project_id, reservation_id, run_id, exc) from exc
     egress_access = identity_run[1] if identity_run is not None else None
     if identity_run is not None:
         token = ""
