@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "3343b0e1b01afa60"
+CATALOGUE_FINGERPRINT = "f138655cb1d69b37"
 
 
 class Permission(StrEnum):
@@ -175,7 +175,7 @@ class Permission(StrEnum):
     SECRET_MANAGE = "secret:manage"
     KMS_KEY_MANAGE = "kms_key:manage"
     SECRET_LEASE = "secret:lease"
-    APP_SECRET_READ_META = "app_secret:read_meta"
+    APP_SECRET_READ_METADATA = "app_secret:read_metadata"
     APP_SECRET_WRITE = "app_secret:write"
     APP_SECRET_LIVE = "app_secret:live"
     INTEGRATION_READ = "integration:read"
@@ -373,7 +373,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "secret:manage": PermissionMeta(key="secret:manage", title="Manage secrets", description="Create and verify secrets and key pairs.", category="Secrets and integrations", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "kms_key:manage": PermissionMeta(key="kms_key:manage", title="Manage KMS keys", description="Create KMS keys and grant or revoke agent access.", category="Secrets and integrations", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "secret:lease": PermissionMeta(key="secret:lease", title="Lease secrets", description="Lease a secret for a running step (runtime only).", category="Secrets and integrations", roles=('system_worker',), scope='project', step_up=False, delegable=True, critical=False, system_only=True, readonly_post=False),
-    "app_secret:read_meta": PermissionMeta(key="app_secret:read_meta", title="View an app's secret metadata", description="See an app's secrets: name, environment, mode and shape. Never the value.", category="Secrets and integrations", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
+    "app_secret:read_metadata": PermissionMeta(key="app_secret:read_metadata", title="View an app's secret metadata", description="See an app's secrets: name, environment, mode and shape. Never the value.", category="Secrets and integrations", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "app_secret:write": PermissionMeta(key="app_secret:write", title="Set an app's test secrets", description="Set, replace and remove an app's test, generated and stub secrets; reveal its test users.", category="Secrets and integrations", roles=('owner', 'admin', 'operator'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "app_secret:live": PermissionMeta(key="app_secret:live", title="Use live keys for an app", description="Set an app's live secrets, used only by a deploy after a person's decision.", category="Secrets and integrations", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "integration:read": PermissionMeta(key="integration:read", title="View integrations", description="See integrations, work trackers, channels, webhooks and subscriptions.", category="Secrets and integrations", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
@@ -578,7 +578,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "secret:read_metadata",
         "secret:manage",
         "kms_key:manage",
-        "app_secret:read_meta",
+        "app_secret:read_metadata",
         "app_secret:write",
         "app_secret:live",
         "integration:read",
@@ -759,7 +759,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "secret:read_metadata",
         "secret:manage",
         "kms_key:manage",
-        "app_secret:read_meta",
+        "app_secret:read_metadata",
         "app_secret:write",
         "app_secret:live",
         "integration:read",
@@ -864,7 +864,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "policy:read",
         "pipeline:read",
         "secret:read_metadata",
-        "app_secret:read_meta",
+        "app_secret:read_metadata",
         "app_secret:write",
         "integration:read",
         "comms:read",

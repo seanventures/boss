@@ -55,6 +55,8 @@ class PublicReason(StrEnum):
     LOOPBACK_HOST_ONLY = "loopback_host_only"               # answers only to a loopback peer (A1)
     API_DESCRIPTION = "api_description"                     # /openapi.json, /docs (A1; S2 decides)
     EGRESS_SERVICE_CREDENTIAL = "egress_service_credential"  # /v1/identity/introspect: sys_egress's key only (A40)
+    OIDC_PROVIDER_ENDPOINT = "oidc_provider_endpoint"       # /oidc/<org>/*: BOSS as an OP for its apps (AP-2):
+                                                            # client auth, PKCE, the app session or an app token
 
 
 #: Reasons whose route has nothing to verify, so `verifier` may be None.

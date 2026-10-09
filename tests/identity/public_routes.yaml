@@ -18,6 +18,21 @@ GET /docs/oauth2-redirect:
 GET /health:
   reason: liveness
   verifier: null
+GET /oidc/{org_slug}/.well-known/openid-configuration:
+  reason: jwks
+  verifier: null
+GET /oidc/{org_slug}/authorize:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.oidc_routes:verify_oidc_request
+GET /oidc/{org_slug}/end_session:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.oidc_routes:verify_oidc_request
+GET /oidc/{org_slug}/jwks:
+  reason: jwks
+  verifier: null
+GET /oidc/{org_slug}/userinfo:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.oidc_routes:verify_oidc_request
 GET /openapi.json:
   reason: api_description
   verifier: null
@@ -63,6 +78,21 @@ PATCH /v1/previews/{preview_id}/web:
 PATCH /v1/previews/{preview_id}/web/{path:path}:
   reason: preview_capability_url
   verifier: boss_engine.services.preview_service:proxy_preview
+POST /oidc/{org_slug}/authorize:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.oidc_routes:verify_oidc_request
+POST /oidc/{org_slug}/end_session:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.oidc_routes:verify_oidc_request
+POST /oidc/{org_slug}/revocation:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.oidc_routes:verify_oidc_request
+POST /oidc/{org_slug}/token:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.oidc_routes:verify_oidc_request
+POST /oidc/{org_slug}/userinfo:
+  reason: oidc_provider_endpoint
+  verifier: apps.api.app.oidc_routes:verify_oidc_request
 POST /saml/v2/acs:
   reason: saml_signed_assertion
   verifier: apps.api.app.routers.identity_sso:verify_saml_assertion

@@ -30,6 +30,10 @@ RESERVED = {
     "project:delete": "no project deletion route exists",
     "telemetry:ingest": "the collector's machine routes are public:collector_signed (A1); kept "
                         "for an authenticated collector principal",
+    "app_secret:live": "checked inside PUT /v1/apps/{app_key}/secrets/{name} when mode=live, on "
+                       "top of the route's app_secret:write (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.6)",
+    "oidc_app:sign_in": "checked by the OIDC authorize endpoint for a workforce-pool sign-in; the "
+                        "route itself is public:oidc_provider_endpoint (§6.3)",
 }
 
 

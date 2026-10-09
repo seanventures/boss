@@ -23,6 +23,11 @@ GET_NOT_READ = {
     "telemetry:share": "the outbound share bundle (it is what leaves the install)",
     "role_binding:assign": "a project's bindings, for the Admin who manages that project's access "
                            "(role_binding:read is org-only)",
+    # App sign-in (APP_TEMPLATES_AND_SECURITY_LOOP.md §6.5): the admin surface has no separate read
+    # key; whoever manages pools, clients or pool users is who reads them.
+    "oidc:admin": "OIDC pools and consents are read by their administrators",
+    "oidc_client:manage": "an app's OIDC client (redirect URIs, roles) is read by who manages it",
+    "oidc_pool_user:manage": "a customer pool's users are read by who manages them",
 }
 
 #: GETs the review found writing (IDENTITY_PERMISSIONS.md §9 note 6). Shrinking list. Each one

@@ -30385,6 +30385,18 @@ from .routers.identity_access import declare_framework_routes  # noqa: E402  (id
 
 declare_framework_routes(app)
 
+# The app platform (docs/product/APP_TEMPLATES_AND_SECURITY_LOOP.md §8.2): one router module per
+# feature, each owned by its stream. Day-1 stubs answer 501 not_implemented_yet.
+from .routes_templates import build_templates_router  # noqa: E402  (F2, stream S2)
+from .routes_security import build_security_router  # noqa: E402  (F4, stream S4)
+from .routes_links import build_links_router  # noqa: E402  (F5, stream S5)
+from .oidc_routes import build_oidc_router  # noqa: E402  (F6, stream S6)
+
+app.include_router(build_templates_router())
+app.include_router(build_security_router())
+app.include_router(build_links_router())
+app.include_router(build_oidc_router())
+
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)
 

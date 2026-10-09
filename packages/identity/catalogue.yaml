@@ -1147,7 +1147,7 @@ categories:
         roles: [system_worker]
         scope: project
         flags: [delegable, system_only]
-      - key: app_secret:read_meta
+      - key: app_secret:read_metadata
         title: "View an app's secret metadata"
         description: "See an app's secrets: name, environment, mode and shape. Never the value."
         roles: [owner, admin, operator]

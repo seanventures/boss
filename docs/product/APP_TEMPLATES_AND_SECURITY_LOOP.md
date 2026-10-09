@@ -253,7 +253,7 @@ scaffold's verify both run.
 | `DELETE /v1/templates/{id}` | `template:approve` | built-ins cannot be deleted, only hidden |
 | `POST /v1/templates/{id}/apply` | `workflow_run:start` (project scope) + `template:read` | body `{project_id, app_key?, new_app?: {name}, stack, framework?, options}`; returns `{workflow_run_id, application_id}` |
 | `GET /v1/apps/{app_key}/templates` | `project:read` | applied templates + versions |
-| `GET /v1/apps/{app_key}/secrets` | `app_secret:read_meta` | presence/mode only |
+| `GET /v1/apps/{app_key}/secrets` | `app_secret:read_metadata` | presence/mode only |
 | `PUT /v1/apps/{app_key}/secrets/{name}` | `app_secret:write` (+ `app_secret:live` for live) | body `{env, value? , mode}`; write-only |
 | `DELETE /v1/apps/{app_key}/secrets/{name}?env=` | `app_secret:write` | |
 | `GET /v1/apps/{app_key}/setup-guide` | `project:read` | guides of applied templates with placeholders filled (preview URL, webhook URL, redirect URIs) |
@@ -312,7 +312,7 @@ app_secret_bindings(...)   -- §2.4
 
 F1 for Java stacks and the `java` scaffold kind. The np/compose composer (already on main or
 landing) for the gallery door. Identity rc6 permissions catalogue for the new permissions:
-`template:read`, `template:import`, `template:approve`, `app_secret:read_meta`,
+`template:read`, `template:import`, `template:approve`, `app_secret:read_metadata`,
 `app_secret:write`, `app_secret:live`.
 
 ### 2.11 Risks

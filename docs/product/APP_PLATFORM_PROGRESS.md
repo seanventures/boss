@@ -9,8 +9,8 @@ Branch: `feat/app-platform` (worktree `~/src/boss-wt-appplat`). Push after every
 |---|---|---|
 | 1 | `db/schema.sql`: `-- BEGIN Fn … -- END Fn` blocks for F2, F4, F5, F6 with the tables the spec defines | done |
 | 2 | Permission catalogue: the §8.2 permissions + regenerated files | done |
-| 3 | Router stubs (`routes_templates.py`, `routes_security.py`, `routes_links.py`, `oidc_routes.py`), 501 `not_implemented_yet`, included in `main.py` | next |
-| 4 | `engine/boss_engine/templates/manifest.py` (boss.template/v1, frozen) + unit tests | todo |
+| 3 | Router stubs (`routes_templates.py`, `routes_security.py`, `routes_links.py`, `oidc_routes.py`), 501 `not_implemented_yet`, included in `main.py` | done |
+| 4 | `engine/boss_engine/templates/manifest.py` (boss.template/v1, frozen) + unit tests | next |
 | 5 | IDENTITY.md amendment for D10 (RS256 ID tokens for apps; EdDSA-only is BOSS-internal) | todo |
 
 ### Notes per step
@@ -32,7 +32,7 @@ Branch: `feat/app-platform` (worktree `~/src/boss-wt-appplat`). Push after every
    | `template:read` | org | O A P V U | delegable |
    | `template:import` | org | O A P | — |
    | `template:approve` | org | O A (D3) | step-up, critical |
-   | `app_secret:read_meta` | project | O A P | delegable |
+   | `app_secret:read_metadata` | project | O A P | delegable |
    | `app_secret:write` | project | O A P | step-up (D9: reveal test users is behind it) |
    | `app_secret:live` | project | O A | step-up, critical |
    | `security_scan:run` | project | O A P | delegable |
@@ -45,6 +45,41 @@ Branch: `feat/app-platform` (worktree `~/src/boss-wt-appplat`). Push after every
    Not done (owner streams decide): no Passport preset holds a new permission yet. S2 decides whether
    the builder/planner presets get `template:read`; S4 whether the reviewer preset gets
    `security_scan:run`.
+
+   The spec's `app_secret:read_meta` is named `app_secret:read_metadata` (the catalogue's read
+   actions are `read`, `read_metadata`, `read_all`; the spec now says so too).
+
+3. Router stubs. `apps/api/app/routes_templates.py` (S2), `routes_security.py` (S4),
+   `routes_links.py` (S5), `oidc_routes.py` (S6), included at the end of `main.py` before the
+   coverage check. 54 operations, all declared (coverage 1442/1442). Each answers 501
+   `{"error": "not_implemented_yet", "owner": "<stream>", "spec": ...}`;
+   `apps/api/tests/test_app_platform_day1_routes.py` pins that under enforce (owner reaches every
+   stub; no credential reaches only `/oidc/*`; a viewer cannot import or approve). A stream that
+   builds its routes updates that test.
+   Decisions made here (S-owners may revisit):
+   - App-level routes take `project_id` (query for GET/DELETE, body otherwise): an app key is
+     unique per project only.
+   - Link create/revoke use `project:update` (the spec's "project:write" does not exist). That is
+     Owner/Admin + step-up: operators cannot link apps until S5 or the operator decides otherwise.
+   - D9's reveal is `POST /v1/apps/{app_key}/test-users/reveal` (`app_secret:write`, step-up).
+   - OIDC admin GETs are declared with the manage keys (no `oidc:read` exists; listed in
+     `GET_NOT_READ` of `test_identity_authz_read_only.py`). Open question for S6: does the Auditor
+     need an `oidc:read`?
+   - Protocol routes: discovery and JWKS are `public:jwks`; authorize, token, userinfo,
+     revocation and end_session are `public:oidc_provider_endpoint`, a new `PublicReason`
+     (IDENTITY_BUILD.md §7, AP-2) with verifier `oidc_routes.verify_oidc_request` (S6).
+     `/oidc/` joins SCIM and SAML as a foreign protocol outside the idempotency contract.
+   - New object kinds (`identity/object_kinds.py`): `security_scan`, `security_finding` (project via
+     its scan), `app_link`, `oidc_client` (so `oidc_clients.project_id`/`app_key` are NOT NULL: a
+     client belongs to one app).
+   - `app_secret:live` and `oidc_app:sign_in` are checked inside handlers, not by a route: listed
+     in `RESERVED` of `test_identity_authz_catalogue_use.py`.
+   Regenerate after any route change:
+   `PYTHONPATH=.:engine python3 -m apps.api.tests.identity_matrix`,
+   `PYTHONPATH=.:engine python3 apps/api/tests/test_identity_authz_public_routes.py`,
+   `PYTHONPATH=.:engine python3 scripts/dump-identity-api-routes.py`.
+   Known failure on the base, not from this work:
+   `test_a_streaming_write_is_excluded_rather_than_buffered` (`POST /v1/agents/{role_key}/test`).
 
 ## Resume instructions
 

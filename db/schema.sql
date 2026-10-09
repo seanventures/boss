@@ -8328,8 +8328,8 @@ CREATE TABLE IF NOT EXISTS oidc_user_pools (
 CREATE TABLE IF NOT EXISTS oidc_clients (
   id                          TEXT PRIMARY KEY,
   org_id                      TEXT NOT NULL REFERENCES orgs(id),
-  project_id                  TEXT REFERENCES projects(id),
-  app_key                     TEXT,
+  project_id                  TEXT NOT NULL REFERENCES projects(id),   -- a client is one app's
+  app_key                     TEXT NOT NULL,
   pool_id                     TEXT NOT NULL REFERENCES oidc_user_pools(id),
   name                        TEXT NOT NULL,
   type                        TEXT NOT NULL CHECK (type IN ('confidential', 'public')),
