@@ -1,4 +1,4 @@
-// DELIBERATELY VULNERABLE (the F4 security-scan proof, tests/e2e/security/README.md). Planted:
+// DELIBERATELY VULNERABLE (the F4 security-scan proof, tests/e2e/security/scan_proof.py). Planted:
 //   V1 SQL injection in findUser (string-built query)       -> Semgrep
 //   V2 hardcoded JWT signing secret in issueToken            -> Semgrep
 //   V3 a dependency with known advisories (lodash 4.17.20)   -> OSV-Scanner

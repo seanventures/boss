@@ -193,9 +193,13 @@ def execute_scan(engine: Any, settings: Any, scan_id: str, *,
     inventory: list[str] = []
     sha = ""
     error = None
+    isolation: dict[str, Any] = {"isolated": False}
     try:
         with owned_process.owner_scope(OWNER_KIND, owner_id, project_id=row["project_id"], fresh=True):
             with sandbox_identity.bind(owner_id, project_id=row["project_id"]) as ident:
+                # Recorded on the scan (S4.2): which uid the tools ran as, or that they did not.
+                isolation = {"isolated": ident is not None, "uid": ident.uid if ident is not None else None,
+                             "network_fenced": sandbox_identity.network_fenced()}
                 base = ident.workspace("scan-") if ident is not None else Path(tempfile.mkdtemp(prefix="boss-scan-"))
                 try:
                     src_dir, out_dir = base / "src", base / "out"
@@ -214,11 +218,12 @@ def execute_scan(engine: Any, settings: Any, scan_id: str, *,
         log.exception("security scan %s failed", scan_id)
         error = redact_text(str(exc))[:500]
     status = "failed" if error or not results or all(r.status == "failed" for r in results) else "done"
-    return _finish(engine, row, results, inventory, sha, status=status, error=error)
+    return _finish(engine, row, results, inventory, sha, status=status, error=error, sandbox=isolation)
 
 
 def _finish(engine: Any, row: dict[str, Any], results: list[ToolResult], inventory: list[str],
-            sha: str, *, status: str, error: Optional[str]) -> dict[str, Any]:
+            sha: str, *, status: str, error: Optional[str],
+            sandbox: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     scan_id, project_id, app_key = row["id"], row["project_id"], row["app_key"]
     findings: list[Finding] = [f for r in results if r.status == "done" for f in r.findings]
     routes = sorted({p for r in results for p in r.routes})
@@ -243,6 +248,7 @@ def _finish(engine: Any, row: dict[str, Any], results: list[ToolResult], invento
                  "st": status_, "by": by, "reason": reason, "first": first_seen})
         target = dict(row.get("target") or {})
         target["inventory"] = {"files": inventory, "routes": routes}
+        target["sandbox"] = sandbox or {"isolated": False}
         conn.execute(text(
             "UPDATE security_scans SET status = :st, tools = CAST(:tools AS JSONB), counts = CAST(:c AS JSONB), "
             "target = CAST(:t AS JSONB), commit_sha = COALESCE(NULLIF(:sha, ''), commit_sha), "

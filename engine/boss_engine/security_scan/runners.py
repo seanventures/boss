@@ -122,8 +122,10 @@ def tool_env(home: Path) -> dict[str, str]:
 
     env = agent_environment(os.environ, {"SEMGREP_SEND_METRICS": "off",
                                          "SEMGREP_ENABLE_VERSION_CHECK": "0"})
+    # BOSS's own PYTHONPATH (/app, /app/engine) must not leak into Semgrep's interpreter.
     env = {k: v for k, v in env.items()
-           if not re.search(r"(?i)(anthropic|openai|claude|token|secret|password|key)", k)}
+           if not re.search(r"(?i)(anthropic|openai|claude|token|secret|password|key)", k)
+           and k not in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV")}
     path = env.get("PATH") or "/usr/local/bin:/usr/bin:/bin"
     if "/opt/toolchains/bin" not in path.split(":"):
         path = f"{path}:/opt/toolchains/bin"

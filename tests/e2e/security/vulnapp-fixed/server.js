@@ -1,4 +1,4 @@
-// The F4 security-scan proof's app AFTER the fix (tests/e2e/security/README.md):
+// The F4 security-scan proof's app AFTER the fix (tests/e2e/security/scan_proof.py):
 //   V1 findUser uses a bound parameter; V2 the signing key comes from the environment;
 //   V3 lodash is upgraded; V4 security headers are set and X-Powered-By is off.
 // Every handler keeps its name, and lines move: findings that remain must keep their fingerprints.

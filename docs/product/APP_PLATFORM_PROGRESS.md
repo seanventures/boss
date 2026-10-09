@@ -125,7 +125,7 @@ Branch `feat/s4-security` (worktree `~/src/boss-wt-s4-security`), from
 | 1 | `security` toolchain layer: Dockerfile.community stage, registry entry, egress `api.osv.dev` (D6) | done |
 | 2 | `engine/boss_engine/security_scan/`: parsers, fingerprints, redaction, scope, runners, service, report + unit tests | done |
 | 3 | `routes_security.py` (501s replaced), worker job `security.scan`, authz tests | done |
-| 4 | End-to-end proof on a compose stack (Node/Express + SQLite app: scan, fix, re-scan) | in progress |
+| 4 | End-to-end proof on a compose stack (Node/Express + SQLite app: scan, fix, re-scan) | done |
 
 ### Notes per step
 
@@ -185,3 +185,37 @@ Branch `feat/s4-security` (worktree `~/src/boss-wt-s4-security`), from
    PDP's no-existence-oracle rule answers a DENIED triage with 404 even to a viewer who can read the
    finding through `project:read`. Harmless (the viewer still cannot triage), but the console must
    not read a 404 there as "gone".
+
+4. The proof (`python3 tests/e2e/security/scan_proof.py`; ~15 min cold, mostly the image build).
+   Own compose project and image tag `bosss4` (refuses to start when another e2e stack is up),
+   `BOSS_TOOLCHAINS=security`, db + api + worker + egress with the real egress (internet for npm and
+   api.osv.dev), `down -v` always. The app (`tests/e2e/security/vulnapp`: Express + sql.js SQLite,
+   SQLi in `findUser`, hardcoded JWT key in `issueToken`, lodash 4.17.20, no security headers) is
+   registered as a build's LOCAL workspace (a build with no PR; `checkout` copies it, as previews
+   do) — the GitHub clone path (`identity.runs.repo_access`) is the production one but is not
+   driven here (it needs a connected GitHub App). Everything after that is the product: POST
+   /v1/security/scans as the owner key → worker leases `security.scan` → API runs the tools as a
+   sandbox uid. Result 2026-10-08, all PASS:
+   - before (d1a1af20): Semgrep 3 (SQLi high, hardcoded JWT medium, csurf low; 18 s), OSV 3 lodash
+     advisories (GHSA-35jh high; 0.6 s, through egress), ZAP baseline 14 (CSP, anti-clickjacking,
+     nosniff, X-Powered-By, …; 12 s, app started in the sandbox on loopback);
+   - after the fix (cab05493): Semgrep 1, OSV 0, ZAP 4; the planted findings are gone; all 5
+     remaining findings keep their fingerprints (one moved lines);
+   - report: 15 fixed, 5 still open, 0 new, 0 moved/removed; Markdown export;
+   - scans recorded `sandbox: {isolated: true, uid: 61610 / 61095, network_fenced: true}`; egress
+     refused nothing.
+   Image: api with `security` 1.82 GB vs 1.21 GB default (docker content size, compressed);
+   ≈ +1.08 GB on disk uncompressed (stage measure in step 1).
+
+### Resume notes (S4)
+
+- Not built here (later streams): the `security_review` workflow template, the Panel /
+  recommendations (`security_recommendations` table is untouched), MCP tools, the UI, F5 links
+  (a preview on another host is refused with `preview_not_reachable`), the vulns.yaml detection
+  score. ZAP `mode=api` is wired (openapi + activeScan jobs, off by default per D12) but only
+  unit-tested; the banking Java demo will be its first real run.
+- Open: the Semgrep Rules License question (step 1); whether the reviewer Passport preset gets
+  `security_scan:run` (S0 left it to S4: not granted — the workflow stream should decide with the
+  template); `security_finding:read` absence (step 3 note).
+- Re-run: unit `PYTHONPATH=.:engine pytest engine/tests/test_security_scan_engine.py`; API (needs
+  a test DB) `apps/api/tests/test_security_scan_routes.py`; e2e `tests/e2e/security/scan_proof.py`.
