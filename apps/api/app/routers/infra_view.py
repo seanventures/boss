@@ -217,9 +217,9 @@ def build_infra_router(
             run_id = item.get("deployment_run_id") or item.get("id")
             return {"ref": f"registry:{run_id}", "kind": "registry", "run": item}
         from .. import main as api_main
-        from ..request_bodies import ManualDeployBody
 
-        out = api_main.delivery_deploy_endpoint(ManualDeployBody(
+        # The service, not the route handler: a handler's signature is FastAPI's to fill.
+        out = api_main.plan_manual_deploy(dict(
             target_id=target_id, actor=actor, ref=(body.ref or None),
             expected_cost_usd_micros=cost, reservation_id=(body.budget_reservation_id or None)))
         return {"ref": f"delivery:{out.get('deployment_run_id')}", "kind": "delivery", **out}
