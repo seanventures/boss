@@ -220,12 +220,8 @@ def test_the_stacks_real_tests_pass_through_the_gate(template_id, stack, tmp_pat
     assert r.evidence["template_tests"]["passed"] >= tpl["manifest"]["tests"][stack]["min_tests"]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "S2 finding: apply.build_directive inlines a stack's reference in path order up to "
-    "MAX_INLINE_REFERENCE (48 KB) and lists the rest by name; the payments references are 49-81 KB, "
-    "so their tests/ files (which the agent must copy verbatim) are the ones left out, and the "
-    "/opt/boss/template/ mount is not built yet. Fix in S2 (inline tests/ first, or mount the "
-    "reference); this test then passes and strict xfail flags it for removal."))
+# Was a strict xfail (the S2 48 KB inline limit dropped tests/): fixed by inlining tests first
+# and giving the build the whole file set (templates.run_ref).
 @pytest.mark.parametrize("template_id,stack", CASES)
 def test_the_directive_inlines_every_template_test_file(template_id, stack):
     report = _report(template_id)
@@ -233,4 +229,4 @@ def test_the_directive_inlines_every_template_test_file(template_id, stack):
     directive = apply_service.build_directive(row={"source": "builtin"}, manifest=report.manifest, stack=stack,
                                               framework=None, files=files, note="", app_name="Shop")
     for t in template_test_files(files, stack):
-        assert f"### {t}" in directive, f"{t} is not inlined"
+        assert f"### tests/{t}" in directive, f"{t} is not inlined"

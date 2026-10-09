@@ -72,8 +72,13 @@ def test_the_service_offers_every_built_in():
 @pytest.mark.parametrize("name", BUILTINS)
 def test_a_built_in_would_also_pass_as_a_customer_import(name):
     tree = tree_from_dir(APPS / name)
-    report = validate_tree(tree, source="git", builtin_ids=())
+    # An insecure-by-design built-in imports only as the label requires: by an importer holding
+    # template:approve who acknowledges it (the validator's rule, §2.5); without both it is refused.
+    insecure = "insecure" in name
+    report = validate_tree(tree, source="git", builtin_ids=(), may_label_insecure=insecure, ack_insecure=insecure)
     assert report.ok, report.reasons
+    if insecure:
+        assert not validate_tree(tree, source="git", builtin_ids=()).ok
 
 
 @pytest.mark.parametrize("name,stack", CASES)
