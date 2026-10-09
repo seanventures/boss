@@ -208,8 +208,15 @@
 .fx-link-meta { font-size: 0.78rem; overflow-wrap: anywhere; }
 .fx-link-url { font-family: var(--mono, ui-monospace, monospace); font-size: 0.78rem; padding: 0; }
 .fx-link-acts { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.fx-link-users { margin-top: 4px; font-size: 0.78rem; border-collapse: collapse; }
-.fx-link-users td { padding: 2px 8px 2px 0; color: var(--ink); }
+/* Revealed test users: a table with headers, one line per login (no wrapping inside an email),
+   scrolling sideways inside the row rather than the page; Hide puts it away. */
+.fx-link-users-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: 6px; max-width: 100%; overflow-x: auto; }
+.fx-link-users { font-size: 0.78rem; border-collapse: collapse; }
+.fx-link-users th { padding: 2px 12px 2px 0; text-align: left; font: 600 0.66rem var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+.fx-link-users td { padding: 3px 12px 3px 0; color: var(--ink); white-space: nowrap; border-top: 1px solid var(--border); }
+.fx-link-users code { font: 0.76rem var(--mono); }
+.fx-link-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: 0.8rem; color: var(--amber); }
+.fx-links { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .fx-link-opts { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
 .fx-links-empty, .fx-links-revoked { margin: 0; font-size: 0.82rem; }
 @media (max-width: 560px) { .fx-link { flex-direction: column; } }

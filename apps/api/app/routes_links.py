@@ -82,14 +82,15 @@ def build_links_router() -> APIRouter:
                     db, project_id=project_id, consumer=app_key,
                     provider=str(payload.get("provider_app_key") or ""),
                     alias=str(payload.get("alias") or ""), env=str(payload.get("env") or "preview"),
-                    credentials=str(payload.get("credentials") or "none"), created_by=_actor(request))
+                    credentials=str(payload.get("credentials") or "none"), created_by=_actor(request),
+                    new_consumer=payload.get("new_app") is True)
                 _audit(request, db, "app_link.created", target_id=row["id"], permission=P.APP_LINK_MANAGE.value,
                        project_id=project_id,
                        details={"consumer": row["consumer_app_key"], "provider": row["provider_app_key"],
                                 "alias": row["alias"], "env": row["env"], "gives": row["credentials"],
                                 "gateway_port": row["gateway_port"]})
-                shown = next(r for r in links.list_links(db, project_id, row["consumer_app_key"])
-                             if r["id"] == row["id"])
+                shown = next((r for r in links.list_links(db, project_id, row["consumer_app_key"])
+                              if r["id"] == row["id"]), {"id": row["id"], "alias": row["alias"]})
         except links.LinkError as exc:
             return _refuse(exc.status, exc.code, exc.detail)
         return JSONResponse(shown, status_code=201)

@@ -139,6 +139,9 @@
   outline: 2px solid var(--accent-text); outline-offset: 2px;
 }
 .ag-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* GREYED WITH A REASON (components/gated.tsx): a control the viewer cannot use reads as disabled
+   too, not only one that is busy; its tooltip says why. */
+.ag-btn[data-can="no"], .ag-link[data-can="no"] { opacity: 0.5; cursor: not-allowed; }
 .ag-btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .ag-btn-primary:hover:not(:disabled) { background: var(--accent-press); color: var(--accent-ink); }
 .ag-btn-icon { padding: 0 6px; }

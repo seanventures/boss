@@ -53,6 +53,11 @@ import {
   youApproveWord, type ComposeMode, type CostHistory, type TimelineStep,
 } from "./compose-plan";
 import type { CatalogueEntry, Installed } from "../delivery-workflows-ui";
+import { TemplateGallery } from "../../components/v2/templates/gallery";
+import { TemplateSheet, type ApplyTarget } from "../../components/v2/templates/template-sheet";
+import { SideSheet } from "../../components/v2/templates/side-sheet";
+import { templatesApi, type TemplateCard } from "../../lib/templates";
+import { TalksToField, aliasProblem, linkAfterStart, type TalksTo } from "./talks-to";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 /** A repository this project can build in, from its registry. */
@@ -511,6 +516,17 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const { apps, loaded: appsLoaded } = useApps(projectId, mode === "add");
   const [appId, setAppId] = useState<string | null>(appKey ?? null);
   const app = findApp(apps, appId);
+  // The app's stack, from the templates it already has (none known: the gallery shows all, and
+  // the API refuses a stack the app's files do not show).
+  useEffect(() => {
+    setAppStack(null);
+    if (!app?.appKey) return undefined;
+    let alive = true;
+    templatesApi.applied(projectId, app.appKey)
+      .then((a) => { if (alive) setAppStack(a.find((x) => x.stack)?.stack ?? null); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [projectId, app?.appKey]);
   const [appQuery, setAppQuery] = useState("");
   const [allApps, setAllApps] = useState(false);
   const [gain, setGain] = useState("");
@@ -518,6 +534,13 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const [addChecks, setAddChecks] = useState<string[]>([KEEPS_WORKING]);
   const [addLinks, setAddLinks] = useState<string[]>([]);
   const [proposal, setProposal] = useState<FeedbackActionResult | null>(null);
+  // ── Templates (APP_TEMPLATES §2.8): the card whose sheet is open, and in add mode the gallery
+  //    sheet "+ Template" opens, filtered to the app's stack when its applied templates say it.
+  const [tplCard, setTplCard] = useState<{ card: TemplateCard; target: ApplyTarget } | null>(null);
+  const [tplPicking, setTplPicking] = useState(false);
+  const [appStack, setAppStack] = useState<string | null>(null);
+  /** "Talks to" (APP_TEMPLATES §5.5): the link made once the start is accepted. */
+  const [talks, setTalks] = useState<TalksTo | null>(null);
   // A deep link to an app that is not on the first page of cards still shows it first.
   const shownApps = useMemo(() => {
     const matched = apps.filter((a) => appMatches(a, appQuery));
@@ -642,7 +665,8 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
 
   // `??` WAS WRONG HERE AND IT COST A RUN: "" is "nothing blocking", and `??` never looks past
   // it. A required input left blank must stop the start at the form, not at the runtime.
-  const blocked = (adding ? addBlockingReason({ app, gain }) : blockingReason(0, draft, !brief))
+  const blocked = (mode === "template" ? "" : adding ? addBlockingReason({ app, gain }) : blockingReason(0, draft, !brief))
+    || (talks?.provider && mode !== "template" ? aliasProblem(talks.alias) : "")
     || (stillBlank.length ? `Needs ${stillBlank.join(", ")}` : "")
     || (malformed.length ? `Check ${malformed.join(", ")}` : "")
     // So does something the project lacks, unless the operator chose to start without it.
@@ -688,6 +712,16 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     }
   };
 
+  /** "Talks to": the link, once the start is accepted. A refused link does not undo the start;
+   *  it says so, and where to add it again (App ▸ Links). */
+  const linkIfAsked = async (title: string) => {
+    if (!talks?.provider) return;
+    const consumer = mode === "add" && app ? app.key : title;
+    const r = await linkAfterStart(projectId, consumer, mode !== "add", talks);
+    if (r.ok) showToast("success", `Talks to ${talks.providerName} as ${talks.alias}`);
+    else showToast("error", `Started, but not linked: ${r.error ?? "refused"}. Add it in the app's Links.`);
+  };
+
   /** Start a workflow run: a new app's, or one built onto an app (`extends_run_id`). */
   const startRun = async (workflowKey: string, input: Record<string, unknown>) => {
     const r = await post("start", {
@@ -704,6 +738,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     }
     const run = (r.data as { run?: { id?: string }; id?: string } | undefined);
     await assignTeam(String(input.title || heading));
+    await linkIfAsked(String(input.title || heading));
     return { ok: true as const, id: String(run?.run?.id ?? run?.id ?? "") || null };
   };
 
@@ -796,6 +831,8 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const primaryGate = adding && addPath === QUICK ? steerGate : adding && addPath === SPEC ? conveneGate : runGate;
 
   const primary = async () => {
+    // From a template, Start is the template sheet's own: ⌘↵ here starts nothing.
+    if (mode === "template" && !formOnly) return;
     if (busy || (blocked && !(adding && proposal?.proposal))) return;
     if (!primaryGate.allowed) { showToast("error", primaryGate.reason); return; }
     setBusy(true);
@@ -1004,6 +1041,13 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           <Links links={draft.links} onChange={(l) => set("links", l)} testid="dw-new-link" />
         </div>
       ) : null}
+      {needsRepository ? (
+        <div>
+          <div className="np-lbl">Talks to <em>optional</em>
+            <HelpTip label="Talks to" text="This app gets the other app's address and test logins at build and run time." /></div>
+          <TalksToField projectId={projectId} value={talks} onChange={setTalks} />
+        </div>
+      ) : null}
       {declaredForm}
     </>
   );
@@ -1066,6 +1110,11 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
               </button>
             );
           })}
+          {/* + TEMPLATE: the gallery, filtered to the app's stack (APP_TEMPLATES §2.8). */}
+          <GatedButton permission="template:read" type="button" className="np-pill np-kind np-tpl-chip"
+                       data-testid="np-add-template" aria-disabled={!app || undefined}
+                       title={app ? "Add a template to this app: login, payments, a catalog…" : "Pick the app first"}
+                       onClick={() => { if (app) setTplPicking(true); }}>+ Template</GatedButton>
         </div>
       </div>
       <div>
@@ -1076,6 +1125,11 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
       <div>
         <div className="np-lbl">Read first <em>optional</em></div>
         <Links links={addLinks} onChange={setAddLinks} testid="np-link" />
+      </div>
+      <div>
+        <div className="np-lbl">Talks to <em>optional</em>
+          <HelpTip label="Talks to" text="This app gets the other app's address and test logins at build and run time." /></div>
+        <TalksToField projectId={projectId} exclude={app?.key ?? null} value={talks} onChange={setTalks} />
       </div>
       {addPath.startsWith("@") ? null : declaredForm}
     </>
@@ -1314,6 +1368,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                     onClick={() => setMode("new")}><span aria-hidden>✦</span>A new app</button>
             <button type="button" role="radio" aria-checked={adding} data-testid="np-mode-add"
                     onClick={() => setMode("add")}><span aria-hidden>＋</span>Add to an existing app</button>
+            <button type="button" role="radio" aria-checked={mode === "template"} data-testid="np-mode-template"
+                    title="Start a new app from an approved template: login, payments, a catalog, a banking starter"
+                    onClick={() => setMode("template")}><span aria-hidden>▦</span>From a template</button>
           </div>
         )}
         <span className="np-spacer" />
@@ -1321,12 +1378,25 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           <button type="button" className="np-x" aria-label="Close" data-testid="np-close" onClick={onCancel}>✕</button>
         ) : null}
       </header>
+      {mode === "template" && !formOnly ? (
+        <div className="np-body np-tpl" data-testid="np-templates">
+          <TemplateGallery projectId={projectId} onPick={(card) => setTplCard({ card, target: { kind: "new" } })} />
+        </div>
+      ) : (
       <div className="np-body">
         <div className="np-brief" data-testid="np-brief">
           {formOnly ? declaredForm ?? <p className="np-dim">Nothing to fill in.</p> : adding ? addBrief : newBrief}
         </div>
         {plan}
       </div>
+      )}
+      {mode === "template" && !formOnly ? (
+        <footer className="np-foot">
+          <span className="np-cost">Pick a template: its sheet says what it adds, needs and talks to.</span>
+          <span className="np-spacer" />
+          {onCancel ? <button type="button" className="np-btn" data-testid="np-cancel" onClick={onCancel}>Cancel</button> : null}
+        </footer>
+      ) : (
       <footer className="np-foot">
         <span className="np-cost" data-testid="np-cost">
           {cost ? <>{adding ? "Changes" : "Builds"} like this cost <b>{cost}</b> · </> : null}
@@ -1360,7 +1430,25 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           </span>
         </span>
       </footer>
+      )}
       {error ? <p className="dw-new-error" role="alert" data-testid="dw-new-error" data-user-text>{error}</p> : null}
+      {tplPicking && app ? (
+        <SideSheet title="Add a template" sub={app.app} onClose={() => setTplPicking(false)} testId="np-template-picker" wide>
+          <TemplateGallery projectId={projectId} stack={appStack} testId="np-template-gallery"
+                           onPick={(card) => { setTplPicking(false);
+                                               setTplCard({ card, target: { kind: "add", runId: baseRun, appKey: app.appKey ?? null, name: app.app } }); }} />
+        </SideSheet>
+      ) : null}
+      {tplCard ? (
+        <TemplateSheet projectId={projectId} card={tplCard.card} target={tplCard.target}
+                       onClose={() => setTplCard(null)}
+                       onStarted={(runId) => {
+                         setTplCard(null);
+                         notifyChanged("code-tasks");
+                         showToast("success", `${tplCard.card.name} started`);
+                         onStarted(runId);
+                       }} />
+      ) : null}
       {full ? (
         <FullEditor label={full === "brief" ? "What should it do?" : "What should it gain?"}
                     value={full === "brief" ? draft.directive : gain}

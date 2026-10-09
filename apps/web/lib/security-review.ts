@@ -6,6 +6,7 @@
  * (lib/identity/api.ts: CSRF on every write, refusals as IdentityError).
  */
 import { IdentityError, idGet, idPost } from "./identity/api";
+import { consentFromError, withConsent } from "./identity/consent";
 import { refusalFrom } from "../lib/start-refusal";
 
 export const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
@@ -277,11 +278,14 @@ export const securityApi = {
    *  (409 with the readiness checklist, say) is flattened to its sentence (lib/start-refusal). */
   startReview: async (projectId: string, appKey: string, focus: string) => {
     try {
-      return await idPost<{ run_id?: string; id?: string }>("/v1/delivery-workflows/start", {
+      // NEEDS YOUR CONSENT (409 consent_required): the build consent sheet, then the same start
+      // once more (tester P0-4: this answered a raw 409 and no sheet opened).
+      return await withConsent(() => idPost<{ run_id?: string; id?: string }>("/v1/delivery-workflows/start", {
         project_id: projectId, workflow_key: "security_review",
         input: { app_key: appKey, ...(focus.trim() ? { directive: focus.trim() } : {}) },
-      });
+      }));
     } catch (e) {
+      if (consentFromError(e)) throw new Error("Not started: the review's agents need your consent.");
       if (e instanceof IdentityError && e.status !== 401 && e.status !== 403) throw new Error(refusalFrom(e.status, e.body).error);
       throw e;
     }

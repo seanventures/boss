@@ -152,8 +152,12 @@ def _allocate_port(db: Any) -> int:
 
 
 def create_link(db: Any, *, project_id: str, consumer: str, provider: str, alias: str, env: str,
-                credentials: str, created_by: Optional[str]) -> dict[str, Any]:
-    """One active, one-way link consumer -> provider in one project. Raises LinkError."""
+                credentials: str, created_by: Optional[str], new_consumer: bool = False) -> dict[str, Any]:
+    """One active, one-way link consumer -> provider in one project. Raises LinkError.
+
+    `new_consumer`: the consumer is an app being started now (the composer's "Talks to" on a new
+    app), named by the title its start sends; it has no build yet, so it is filed under that
+    name's key, the key its first build will have (agent_assignment.app_key)."""
     from ..services.core import make_id
 
     alias = (alias or "").strip()
@@ -167,6 +171,10 @@ def create_link(db: Any, *, project_id: str, consumer: str, provider: str, alias
         raise LinkError("client_credentials_not_available", 422,
                         "client credentials come with BOSS sign-in for apps (F6)")
     consumer_key = resolve_app_key(db, project_id, consumer)
+    if consumer_key is None and new_consumer and str(consumer or "").strip():
+        from ..services.agent_assignment import app_key
+
+        consumer_key = app_key(str(consumer).strip()) or None
     if consumer_key is None:
         raise LinkError("unknown_app", 404, "no such app in this project")
     # D7: the provider must be an app of the SAME project. An app of another project (or no app

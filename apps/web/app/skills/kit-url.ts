@@ -1,10 +1,10 @@
 /**
- * Skills & MCP's place in the URL (spec §5.1 deep links): `&tab=kit|who|library`,
+ * Skills & MCP's place in the URL (spec §5.1 deep links): `&tab=kit|who|library|templates`,
  * `&ability=<key>` (the Kit with that drawer open), `&lib=skills|mcp`, `&skill=<key>`,
  * `&mcp=<id>`, `&role=<key>` (Who can, that agent's row), `&setup=1` (Essentials forced open).
  * Read once on load and written with replaceState, so a link or a reload lands on the same view.
  */
-export type KitTab = "kit" | "who" | "library";
+export type KitTab = "kit" | "who" | "library" | "templates";
 export type KitParams = {
   tab: KitTab; ability: string | null; lib: "skills" | "mcp"; skill: string | null;
   mcp: string | null; role: string | null; setup: boolean;
@@ -16,7 +16,7 @@ export function readKitParams(search?: string): KitParams {
   const lib = p.get("lib");
   const ability = p.get("ability");
   return {
-    tab: tab === "who" || tab === "library" ? tab : (p.get("skill") || p.get("mcp") || lib) ? "library" : "kit",
+    tab: tab === "who" || tab === "library" || tab === "templates" ? tab : (p.get("skill") || p.get("mcp") || lib) ? "library" : "kit",
     ability: ability && /^[a-z][a-z0-9_]{1,40}$/.test(ability) ? ability : null,
     lib: lib === "mcp" || p.get("mcp") ? "mcp" : "skills",
     skill: p.get("skill"), mcp: p.get("mcp"), role: p.get("role"), setup: p.get("setup") === "1",

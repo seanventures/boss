@@ -227,8 +227,10 @@ def plan(c, *, org_id: str, project_id: str, template_ref: str, body: dict,
     needs = app_secrets.ensure_test_defaults(c, org_id=org_id, project_id=project_id,
                                              app_key=app["app_key"], manifest=manifest, actor_id=actor_id)
     if needs:
+        # The app's key travels with the refusal: a NEW app's key is minted here, and the
+        # console sets the test values under it, then applies again.
         raise TemplateError(409, "secrets_needed", "set a test value for: " + ", ".join(needs),
-                            secrets=needs)
+                            secrets=needs, app_key=app["app_key"])
     files = files_of(c, row["id"])
     application_id = make_id("tap")
     note = str(body.get("note") or "")

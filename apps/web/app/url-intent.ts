@@ -43,11 +43,11 @@ export function readNewProjectIntent(search: string): NewProjectIntent {
   return { open: true, nextSearch: rest ? `?${rest}` : "" };
 }
 
-/** `?compose=new|add[&app=<key>][&preview=<id>]`: open the New project composer in that mode,
+/** `?compose=new|add|template[&app=<key>][&preview=<id>]`: open the New project composer in that mode,
  *  with the app (and a running preview of it) chosen. The Factory's "Add a feature" and the
  *  Command Center's app cards send it. One-shot, like `new=1`: consumed on read, with its app
  *  and preview, so a later navigation cannot re-open the composer. */
-export type ComposeIntent = { open: boolean; mode: "new" | "add" | null; app: string | null;
+export type ComposeIntent = { open: boolean; mode: "new" | "add" | "template" | null; app: string | null;
                               preview: string | null; nextSearch: string };
 
 export function readComposeIntent(search: string): ComposeIntent {
@@ -55,7 +55,7 @@ export function readComposeIntent(search: string): ComposeIntent {
   const raw = params.get("compose");
   const legacy = params.get("new") === "1";
   if (!raw && !legacy) return { open: false, mode: null, app: null, preview: null, nextSearch: search };
-  const mode = raw === "add" ? "add" : raw === "new" ? "new" : null;
+  const mode = raw === "add" ? "add" : raw === "new" ? "new" : raw === "template" ? "template" : null;
   const app = mode === "add" ? (params.get("app")?.trim() || null) : null;
   const preview = mode === "add" ? (params.get("preview")?.trim() || null) : null;
   for (const key of [...ONE_SHOT_PARAMS, ...COMPOSE_PARAMS]) params.delete(key);
