@@ -151,12 +151,9 @@ def _allocate_port(db: Any) -> int:
     raise LinkError("no_free_link_port", 409, f"every port of {LINK_PORTS_ENV} is in use")
 
 
-def create_link(db: Any, *, project_id: str, consumer: str, provider: str, alias: str, env: str,
-                credentials: str, created_by: Optional[str]) -> dict[str, Any]:
-    """One active, one-way link consumer -> provider in one project. Raises LinkError."""
-    from ..services.core import make_id
-
-    alias = (alias or "").strip()
+def _check_shape(alias: str, env: str, credentials: str) -> None:
+    """What a link's own fields must be, whoever asks for it (a link now, or one a new app's
+    start requests for its first build)."""
     if not ALIAS_RE.match(alias):
         raise LinkError("bad_alias", 422, "an alias is A-Z, 0-9 and _, starts with a letter, 2-31 long")
     if env not in ENVS:
@@ -166,6 +163,15 @@ def create_link(db: Any, *, project_id: str, consumer: str, provider: str, alias
     if credentials == "client":
         raise LinkError("client_credentials_not_available", 422,
                         "client credentials come with BOSS sign-in for apps (F6)")
+
+
+def create_link(db: Any, *, project_id: str, consumer: str, provider: str, alias: str, env: str,
+                credentials: str, created_by: Optional[str]) -> dict[str, Any]:
+    """One active, one-way link consumer -> provider in one project. Raises LinkError."""
+    from ..services.core import make_id
+
+    alias = (alias or "").strip()
+    _check_shape(alias, env, credentials)
     consumer_key = resolve_app_key(db, project_id, consumer)
     if consumer_key is None:
         raise LinkError("unknown_app", 404, "no such app in this project")
@@ -194,6 +200,115 @@ def create_link(db: Any, *, project_id: str, consumer: str, provider: str, alias
         ensure_test_users(db, project_id, provider_key, env)
     _notify(db, link_id)
     return _row(db, link_id) or {}
+
+
+# ---- links a new app asks for at its start (the composer's "Talks to", §5.5) ----------------------
+#
+# A NEW app does not exist until its first build: the app key is the build's name, which the brief
+# (or the panel) settles. So the start checks what it can then — the caller holds app_link:manage,
+# each provider is an app of THIS project, the aliases are valid and distinct — and records the
+# requests (app_link_requests, written only by the start, never read from a run's input, so a caller
+# cannot smuggle one in through another door). The first build of that run creates them, before its
+# link environment is computed, so that build already gets BOSS_LINK_<ALIAS>_*. Each request is
+# resolved once (created or refused, with the reason) and never retried: a link revoked later stays
+# revoked.
+
+MAX_REQUESTED_LINKS = 8
+
+
+def requested_links(db: Any, project_id: str, raw: Any) -> list[dict[str, str]]:
+    """The start's `app_links`, checked as create_link checks a link (less the consumer, which does
+    not exist yet), normalised to {provider_app_key, alias, env, credentials}. Raises LinkError."""
+    if not isinstance(raw, list):
+        raise LinkError("bad_app_links", 422, "app_links is a list of {provider_app_key, alias, env, credentials}")
+    if len(raw) > MAX_REQUESTED_LINKS:
+        raise LinkError("too_many_links", 422, f"at most {MAX_REQUESTED_LINKS} links at a start")
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, Mapping):
+            raise LinkError("bad_app_links", 422, "each link is {provider_app_key, alias, env, credentials}")
+        alias = str(item.get("alias") or "").strip()
+        env = str(item.get("env") or "preview")
+        credentials = str(item.get("credentials") or "none")
+        _check_shape(alias, env, credentials)
+        provider = resolve_app_key(db, project_id, str(item.get("provider_app_key") or ""))
+        if provider is None:
+            raise LinkError("provider_not_in_project", 422, "links join two apps of the same project")
+        if (alias, env) in seen:
+            raise LinkError("alias_taken", 409, f"{alias} is asked for twice")
+        seen.add((alias, env))
+        out.append({"provider_app_key": provider, "alias": alias, "env": env, "credentials": credentials})
+    return out
+
+
+def record_requests(db: Any, *, project_id: str, workflow_run_id: str, requested: list[dict[str, str]],
+                    requested_by: Optional[str]) -> None:
+    from ..services.core import make_id
+
+    for r in requested:
+        db.execute(text(
+            "INSERT INTO app_link_requests (id, project_id, workflow_run_id, provider_app_key, alias, env, "
+            " credentials, requested_by) VALUES (:i, :p, :w, :pr, :a, :e, :c, :by)"),
+            {"i": make_id("lnkreq"), "p": project_id, "w": workflow_run_id, "pr": r["provider_app_key"],
+             "a": r["alias"], "e": r["env"], "c": r["credentials"], "by": requested_by})
+
+
+def requests_of(db: Any, workflow_run_id: str) -> list[dict[str, Any]]:
+    """A start's link requests and what became of each (none of them name a credential)."""
+    rows = db.execute(text(
+        "SELECT id, provider_app_key, alias, env, credentials, outcome, outcome_detail, link_id "
+        "FROM app_link_requests WHERE workflow_run_id = :w ORDER BY created_at, alias"),
+        {"w": workflow_run_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def create_requested_links(db: Any, *, project_id: str, run_id: str) -> list[dict[str, Any]]:
+    """Create the links build `run_id`'s workflow run asked for at its start, once. Returns what was
+    resolved now (empty when nothing was pending, or the build is not yet an app of the project)."""
+    wf = db.execute(text(
+        "SELECT COALESCE(finalize_ctx->'origin'->>'workflow_run_id', finalize_ctx->>'workflow_run_id') "
+        "FROM code_task_runs WHERE id = :i AND project_id = :p"), {"i": run_id, "p": project_id}).scalar()
+    if not wf:
+        return []
+    pending = db.execute(text(
+        "SELECT * FROM app_link_requests WHERE workflow_run_id = :w AND project_id = :p AND outcome IS NULL "
+        "ORDER BY created_at, alias FOR UPDATE SKIP LOCKED"), {"w": wf, "p": project_id}).mappings().all()
+    if not pending:
+        return []
+    by_run, _ = app_index(db, project_id)
+    consumer = by_run.get(run_id)
+    if not consumer:
+        return []                     # not an app yet: the next build of the run tries again
+    from ..identity import audit
+
+    org = project_org(db, project_id)
+    done: list[dict[str, Any]] = []
+    for req in pending:
+        link_id, outcome, detail = None, "created", None
+        try:
+            with db.begin_nested():
+                row = create_link(db, project_id=project_id, consumer=consumer,
+                                  provider=req["provider_app_key"], alias=req["alias"], env=req["env"],
+                                  credentials=req["credentials"], created_by=req["requested_by"])
+            link_id = row["id"]
+        except LinkError as exc:
+            outcome, detail = "refused", exc.code
+        db.execute(text("UPDATE app_link_requests SET outcome = :o, outcome_detail = :d, link_id = :l, "
+                        "resolved_at = now() WHERE id = :i"),
+                   {"o": outcome, "d": detail, "l": link_id, "i": req["id"]})
+        if org:
+            audit.record(audit.SecurityEvent(
+                org_id=org, event_type="app_link.created",
+                outcome=audit.Outcome.SUCCESS if outcome == "created" else audit.Outcome.FAILURE,
+                actor_principal_id=req["requested_by"], target_type="app_link", target_id=link_id or req["id"],
+                permission="app_link:manage", scope=f"project:{project_id}",
+                details={"consumer": consumer, "provider": req["provider_app_key"], "alias": req["alias"],
+                         "env": req["env"], "gives": req["credentials"], "requested_at_start": wf,
+                         **({"refused": detail} if detail else {})}), db=db)
+        done.append({"alias": req["alias"], "env": req["env"], "outcome": outcome,
+                     "detail": detail, "link_id": link_id})
+    return done
 
 
 def revoke_link(db: Any, *, project_id: str, link_id: str, revoked_by: Optional[str]) -> dict[str, Any]:

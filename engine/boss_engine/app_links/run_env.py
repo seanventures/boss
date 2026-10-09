@@ -40,6 +40,16 @@ def for_run(engine: Any, run_id: str, project_id: Optional[str]) -> Iterator[dic
 
     env: dict[str, str] = {}
     if project_id:
+        # A new app's start may have asked for links ("Talks to"): its first build creates them,
+        # before its own link environment is computed. A refusal is recorded on the request (and
+        # audited), never raised: the build runs, without that link.
+        try:
+            with engine.begin() as db:
+                for made in service.create_requested_links(db, project_id=project_id, run_id=run_id):
+                    log.info("links: build %s %s link %s (%s)%s", run_id, made["outcome"], made["alias"],
+                             made["env"], f": {made['detail']}" if made["detail"] else "")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("links: build %s could not create its requested links (%s)", run_id, type(exc).__name__)
         try:
             with engine.begin() as db:
                 env = service.workload_environment(db, project_id=project_id, run_id=run_id, env="preview",
