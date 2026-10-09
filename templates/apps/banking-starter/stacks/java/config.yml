@@ -1,0 +1,23 @@
+# Dropwizard configuration. ${NAME:-default} is filled from the environment at start-up
+# (EnvironmentVariableSubstitutor, non-strict), so the preview's $PORT is honoured.
+databasePath: ${BANK_DB_PATH:-bank.db}
+tokenTtlSeconds: ${BANK_TOKEN_TTL_SECONDS:-1800}
+appEnv: ${APP_ENV:-development}
+loginMaxFailures: 5
+loginWindowSeconds: 900
+
+server:
+  # The admin servlet (metrics, threads, tasks) listens on loopback only, on a free port,
+  # so it is never reachable through the preview or a host's public port.
+  applicationConnectors:
+    - type: http
+      port: ${PORT:-8080}
+  adminConnectors:
+    - type: http
+      bindHost: 127.0.0.1
+      port: 0
+
+logging:
+  level: INFO
+  loggers:
+    org.eclipse.jetty: WARN
