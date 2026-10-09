@@ -142,3 +142,105 @@ def test_the_choice_is_checked_against_the_review(world, engine):
         assert r.status_code == 422
     with engine.begin() as c:
         assert [x["selected"] for x in review.list_recommendations(c, run_id)] == [True, False]
+
+
+# ---- "Fix selected": the choice and the gate's approval are ONE action -------------------------
+
+def _waiting(engine, run_id: str, project: str) -> str:
+    """Put the review at its decide step, waiting on a real decision."""
+    from boss_engine.services.core import create_blocking_decision
+
+    with engine.begin() as c:
+        decision_id = create_blocking_decision(c, project, None, "Choose the security fixes",
+                                               {"action": "security_review_choose", "workflow_run_id": run_id},
+                                               {}, "security_review_choice", risk_tier=1)
+        c.execute(text("UPDATE workflow_step_runs SET status = 'waiting', decision_id = :d "
+                       "WHERE workflow_run_id = :r AND step_id = 'decide'"), {"d": decision_id, "r": run_id})
+    return decision_id
+
+
+def _recorded(engine, run_id: str) -> int:
+    with engine.begin() as c:
+        return c.execute(text("SELECT count(*) FROM events WHERE event_type = 'security_review.selection_recorded' "
+                              "AND entity_id = :r"), {"r": run_id}).scalar()
+
+
+def test_fix_selected_records_and_approves_in_one_commit(world, engine, monkeypatch):
+    # The decision's own actor checks are the approve route's (legacy org membership): the owner
+    # is a member there too, as a claimed install's owner is.
+    monkeypatch.setattr(main, "require_decision_actor_binding", lambda *_a, **_k: None)
+    monkeypatch.setattr(main, "_decision_route_actor", lambda _c, _d, actor: actor)
+    run_id, ids = _review(engine, world.project_a)
+    decision_id = _waiting(engine, run_id, world.project_a)
+    who = _person(world, "owner")
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO org_members (id, org_id, member_id, display_name, member_type, role_keys, permissions, "
+            "status, created_by) VALUES (:i, :o, :m, 'Review owner', 'human', '[\"owner\"]'::jsonb, "
+            "'[\"decision_resolve\", \"decision:approve\"]'::jsonb, 'active', 'test')"),
+            {"i": f"om_{who.id}", "o": world.org, "m": who.id})
+    with world.acting_as(world.ctx(who)):
+        r = _client().post(f"/v1/security/reviews/{run_id}/selection",
+                           json={"selected": [ids["p0"]], "approve": True, "note": "fix the P0"})
+    assert r.status_code == 200, r.text
+    assert r.json()["approved"] is True and r.json()["decision_id"] == decision_id
+    assert _recorded(engine, run_id) == 1
+    with engine.begin() as c:
+        assert c.execute(text("SELECT status FROM decisions WHERE id = :d"), {"d": decision_id}).scalar() == "approved"
+
+
+def test_a_refused_approval_records_nothing(world, engine, monkeypatch):
+    """The approval refused AFTER the choice was written in the same transaction: both roll back."""
+    from fastapi import HTTPException
+
+    run_id, ids = _review(engine, world.project_a)
+    decision_id = _waiting(engine, run_id, world.project_a)
+
+    def refuse(*_a, **_k):
+        raise HTTPException(status_code=409, detail="a second person must approve this")
+
+    monkeypatch.setattr(main, "approve_decision_in", refuse)
+    who = _person(world, "owner")
+    with world.acting_as(world.ctx(who)):
+        r = _client().post(f"/v1/security/reviews/{run_id}/selection",
+                           json={"selected": [ids["p3"]], "approve": True,
+                                 "accept": [{"finding_id": ids["finding0"], "reason": "behind admin auth"}]})
+    assert r.status_code == 409, r.text
+    assert _recorded(engine, run_id) == 0
+    with engine.begin() as c:
+        recs = review.list_recommendations(c, run_id)
+        finding = c.execute(text("SELECT status FROM security_findings WHERE id = :i"), {"i": ids["finding0"]}).scalar()
+        decision = c.execute(text("SELECT status FROM decisions WHERE id = :d"), {"d": decision_id}).scalar()
+    assert [x["selected"] for x in recs] == [True, False] and finding == "open" and decision != "approved"
+
+
+def test_the_right_to_approve_is_checked_before_anything_is_written(world, engine, monkeypatch):
+    from fastapi import HTTPException
+
+    from apps.api.app.routers import identity_access
+
+    run_id, ids = _review(engine, world.project_a)
+    _waiting(engine, run_id, world.project_a)
+    seen = []
+
+    def deny(request, permission, project_id, label=""):
+        seen.append(permission)
+        if permission == "decision:approve":
+            raise HTTPException(status_code=403, detail={"error": "forbidden", "needs": permission})
+
+    monkeypatch.setattr(identity_access, "require_permission", deny)
+    monkeypatch.setattr(review, "record_selection", lambda *a, **k: pytest.fail("the choice was written first"))
+    who = _person(world, "operator")
+    with world.acting_as(world.ctx(who)):
+        r = _client().post(f"/v1/security/reviews/{run_id}/selection", json={"selected": [ids["p0"]], "approve": True})
+    assert r.status_code == 403 and seen == ["decision:approve"]
+    assert _recorded(engine, run_id) == 0
+
+
+def test_approve_when_the_review_is_not_waiting_is_refused_and_records_nothing(world, engine):
+    run_id, ids = _review(engine, world.project_a)
+    who = _person(world, "owner")
+    with world.acting_as(world.ctx(who)):
+        r = _client().post(f"/v1/security/reviews/{run_id}/selection", json={"selected": [ids["p0"]], "approve": True})
+    assert r.status_code == 409 and r.json()["error"] == "not_awaiting_choice"
+    assert _recorded(engine, run_id) == 0

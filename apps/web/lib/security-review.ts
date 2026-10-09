@@ -290,6 +290,10 @@ export const securityApi = {
     idPost(`/v1/security/findings/${encodeURIComponent(findingId)}/triage`, { status, reason }),
   choose: (runId: string, selected: string[], accept: { finding_id: string; reason: string }[] = []) =>
     idPost(`/v1/security/reviews/${encodeURIComponent(runId)}/selection`, { selected, accept }),
+  /** "Fix selected": record the ticks AND approve the review's gate as ONE server action. The
+   * server checks the right to approve first; a refusal records nothing. */
+  chooseAndApprove: (runId: string, selected: string[], accept: { finding_id: string; reason: string }[], note: string) =>
+    idPost(`/v1/security/reviews/${encodeURIComponent(runId)}/selection`, { selected, accept, approve: true, note }),
   approve: (decisionId: string, note: string) =>
     idPost(`/v1/decisions/${encodeURIComponent(decisionId)}/approve`, { note }),
 };

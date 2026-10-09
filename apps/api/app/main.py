@@ -23144,43 +23144,53 @@ def create_decision_digest(payload: DecisionDigestRequest) -> DecisionDigestResp
 def approve_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
-    with begin(engine) as connection:
-        # Ordinary keys use their bound principal; exact MCP confirmations use
-        # the independently authenticated human reviewer.
-        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
-        require_decision_actor_binding(connection, decision_id, payload.actor)
-        from boss_engine.identity.approvals import ApprovalPending
+    from boss_engine.identity.approvals import ApprovalPending
 
+    with begin(engine) as connection:
         try:
-            row = decisions.transition(
-                connection,
-                decision_id,
-                action="approve",
-                actor=payload.actor,
-                note=payload.note,
-                delegate_to=payload.delegate_to,
-                external_ref=payload.external_ref,
-                content_hash=payload.content_hash,
-            )
+            row = approve_decision_in(connection, decision_id, payload)
         except ApprovalPending as pending:
             # §6.13: the first of two approvals of a tier-3 decision is recorded (this transaction
             # commits it); the decision stays pending for a second person.
             return JSONResponse(status_code=202, content=pending.body())
-        except DecisionNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except InvalidDecisionTransitionError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
-            raise_decision_actor_error(decision_id, payload.actor, error)
-        _record_governed(
-            connection,
-            project_id=row["project_id"],
-            actor=payload.actor,
-            effect_kind="decision.approve",
-            dedupe_parts=[decision_id],
-            payload={"decision_id": decision_id, "status": row.get("status")},
-        )
         return decision_card_from_row(row)
+
+
+def approve_decision_in(connection, decision_id: str, payload: DecisionActionRequest) -> dict:
+    """The approval itself, inside the caller's transaction (POST /v1/decisions/{id}/approve, and
+    an action that must record something AND approve in one commit, e.g. a security review's
+    "Fix selected"). Raises HTTPException for a refusal, ApprovalPending for a first of two
+    approvals; the caller's transaction then rolls back or commits as a whole."""
+    # Ordinary keys use their bound principal; exact MCP confirmations use
+    # the independently authenticated human reviewer.
+    payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
+    require_decision_actor_binding(connection, decision_id, payload.actor)
+    try:
+        row = decisions.transition(
+            connection,
+            decision_id,
+            action="approve",
+            actor=payload.actor,
+            note=payload.note,
+            delegate_to=payload.delegate_to,
+            external_ref=payload.external_ref,
+            content_hash=payload.content_hash,
+        )
+    except DecisionNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except InvalidDecisionTransitionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+        raise_decision_actor_error(decision_id, payload.actor, error)
+    _record_governed(
+        connection,
+        project_id=row["project_id"],
+        actor=payload.actor,
+        effect_kind="decision.approve",
+        dedupe_parts=[decision_id],
+        payload={"decision_id": decision_id, "status": row.get("status")},
+    )
+    return row
 
 
 @app.post("/v1/decisions/{decision_id}/reject", response_model=DecisionCard)

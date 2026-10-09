@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
@@ -53,6 +53,11 @@ class SelectionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     selected: list[str] = Field(default_factory=list, max_length=100)
     accept: list[AcceptItem] = Field(default_factory=list, max_length=200)
+    #: "Fix selected": also approve the review's gate (this decision) in the SAME commit. The
+    #: caller's right to approve is checked FIRST, before anything is written; a refused approval
+    #: leaves the choice unrecorded (one action, never half of one).
+    approve: bool = False
+    note: Optional[str] = Field(default=None, max_length=2000)
 
 
 class TriageBody(BaseModel):
@@ -207,19 +212,45 @@ def build_security_router() -> APIRouter:
 
     @router.post("/v1/security/reviews/{run_id}/selection")
     @permit(P.SECURITY_FINDING_TRIAGE, scope=Scope.of("workflow_run", path="run_id"))
-    def record_selection(run_id: str, payload: SelectionBody) -> Any:
+    def record_selection(run_id: str, payload: SelectionBody, request: Request) -> Any:
         from boss_engine.security_scan import review
+        from boss_engine.services import security_review_steps
 
         engine, _ = _engine_settings()
+        with engine.begin() as conn:
+            project_id = conn.execute(text("SELECT project_id FROM workflow_runs WHERE id = :r"),
+                                      {"r": run_id}).scalar()
+            state = security_review_steps.review_state(conn, run_id) if payload.approve else None
+        if project_id is None:
+            return JSONResponse({"error": "review_not_found"}, status_code=404)
+        decision_id = (state or {}).get("decision_id")
+        if payload.approve:
+            if not decision_id:
+                return JSONResponse({"error": "not_awaiting_choice",
+                                     "message": "this review is not waiting for a choice"}, status_code=409)
+            # FIRST: may this person approve the gate at all? Refused here, nothing is written.
+            from .routers.identity_access import require_permission
+
+            require_permission(request, P.DECISION_APPROVE, str(project_id), label="security review")
+        from boss_engine.identity.approvals import ApprovalPending
+
         try:
             with engine.begin() as conn:
-                project_id = conn.execute(text("SELECT project_id FROM workflow_runs WHERE id = :r"),
-                                          {"r": run_id}).scalar()
-                if project_id is None:
-                    return JSONResponse({"error": "review_not_found"}, status_code=404)
-                return review.record_selection(
+                out = review.record_selection(
                     conn, project_id=str(project_id), run_id=run_id, selected=payload.selected,
                     accept=[a.model_dump() for a in payload.accept], actor=_actor())
+                if payload.approve:
+                    from . import main
+                    from .main import DecisionActionRequest
+
+                    try:
+                        main.approve_decision_in(conn, decision_id, DecisionActionRequest(
+                            actor=_actor(), note=payload.note or "Fix the selected recommendations."))
+                        out = {**out, "approved": True, "decision_id": decision_id}
+                    except ApprovalPending as pending:
+                        # the first of two approvals: recorded with the choice; a second person approves
+                        out = {**out, "approved": False, "decision_id": decision_id, "pending": pending.body()}
+                return out
         except review.ReviewRefused as exc:
             return _refused(exc)
 

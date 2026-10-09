@@ -3,13 +3,15 @@
 /**
  * The Panel's recommendations as the checklist that becomes the decision (spec §4.2 step 3, §4.6
  * "Panel"). P0/P1 start ticked; a recommendation the Panel called a false positive does not.
- * "Fix selected" records the ticks (`/v1/security/reviews/{run}/selection`, security_finding:triage)
- * and then approves the review's gate (`/v1/decisions/{id}/approve`), so the fix build starts from
- * exactly what was ticked. Findings left unticked can be accepted, with one reason, in the same act.
+ * "Fix selected" records the ticks AND approves the review's gate in ONE server action
+ * (`/v1/security/reviews/{run}/selection` with `approve: true`): the server checks the right to
+ * approve (decision:approve) first, then saves and approves in one commit, so a refused approval
+ * never leaves half the action done. The button is greyed for a person who cannot both triage
+ * and approve. Findings left unticked can be accepted, with one reason, in the same act.
  */
 import React, { useEffect, useMemo, useState } from "react";
 
-import { GatedButton } from "../../../components/gated";
+import { GatedButton, useGate } from "../../../components/gated";
 import { TOOL_LABEL, securityApi, type Review } from "../../../lib/security-review";
 import { SevPill, errorWords } from "./security-bits";
 
@@ -25,6 +27,9 @@ export function ReviewChecklist({ projectId, runId, onDone, review: given }: Rev
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [done, setDone] = useState(false);
+  // "Fix selected" needs BOTH: recording the choice (triage) and approving the gate. The button is
+  // gated on triage and greyed, with the reason, when the approval is not this person's to give.
+  const approve = useGate("decision:approve", projectId);
 
   useEffect(() => {
     if (given) return;
@@ -58,10 +63,8 @@ export function ReviewChecklist({ projectId, runId, onDone, review: given }: Rev
     setBusy(true);
     try {
       const accept = reason.trim() ? unticked.map((id) => ({ finding_id: id, reason: reason.trim() })) : [];
-      await securityApi.choose(runId, [...ticked], accept);
-      if (review.decisionId) {
-        await securityApi.approve(review.decisionId, `Fix ${ticked.size} of ${review.recommendations.length} recommendations.`);
-      }
+      await securityApi.chooseAndApprove(runId, [...ticked], accept,
+        `Fix ${ticked.size} of ${review.recommendations.length} recommendations.`);
       setDone(true);
       setErr("");
       onDone?.();
@@ -117,8 +120,10 @@ export function ReviewChecklist({ projectId, runId, onDone, review: given }: Rev
                    aria-label="Reason to accept the unticked findings" data-testid="sec-accept-reason"
                    placeholder={`Accept the ${unticked.length} unticked finding${unticked.length === 1 ? "" : "s"}? Say why (optional)`} />
           ) : null}
-          <GatedButton permission="security_finding:triage" projectId={projectId} className="ag-btn ag-btn-primary"
-                       disabled={busy || !review.decisionId} aria-busy={busy || undefined} data-testid="sec-fix-selected"
+          <GatedButton permission="security_finding:triage" projectId={projectId}
+                       className="ag-btn ag-btn-primary"
+                       {...(approve.allowed ? {} : approve.props)}
+                       disabled={busy || !review.decisionId || !approve.allowed} aria-busy={busy || undefined} data-testid="sec-fix-selected"
                        title={review.decisionId ? "Record your choice and start the fix build" : "The review is not waiting for a choice"}
                        onClick={() => void fix()}>
             {ticked.size ? `Fix selected (${ticked.size})` : "Fix nothing"}

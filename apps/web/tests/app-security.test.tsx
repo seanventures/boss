@@ -198,7 +198,7 @@ describe("App › Security", () => {
 });
 
 describe("The checklist", () => {
-  it("pre-ticks P0 and P1; Fix selected records the ticks, then approves the gate", async () => {
+  it("pre-ticks P0 and P1; Fix selected records the ticks AND approves the gate in one server action", async () => {
     await mount(<ReviewChecklist projectId="p1" runId="wfr_1" review={parseReview(REVIEW)} />, "operator");
     const ticked = (id: string) => ($(`[data-testid="sec-tick-${id}"]`) as HTMLInputElement).checked;
     expect([ticked("srec_1"), ticked("srec_2"), ticked("srec_3"), ticked("srec_4")]).toEqual([true, true, false, false]);
@@ -213,11 +213,13 @@ describe("The checklist", () => {
     });
     await act(async () => $('[data-testid="sec-fix-selected"]').click());
     await settle();
-    const [choose, approve] = writes();
+    const all = writes();
+    expect(all.length).toBe(1);                                   // ONE action: never half of one
+    const [choose] = all;
     expect(choose.path).toBe("/v1/security/reviews/wfr_1/selection");
     expect((choose.body as { selected: string[] }).selected.sort()).toEqual(["srec_1", "srec_3"]);
     expect((choose.body as { accept: { finding_id: string }[] }).accept.map((a) => a.finding_id).sort()).toEqual(["sf_csp", "sf_lodash"]);
-    expect(approve.path).toBe("/v1/decisions/dec_1/approve");
+    expect((choose.body as { approve: boolean }).approve).toBe(true);
     expect($('[data-testid="sec-chosen"]')).toBeTruthy();
   });
 
