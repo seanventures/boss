@@ -151,3 +151,103 @@ describe("the feed cache and a person's session", () => {
     expect(calls).toBe(2);
   });
 });
+
+/**
+ * PROVEN-LIVE REUSE (console latency, 2026-10-09). With no reuse at all every render asked the API
+ * all ~40 of its feeds again, and rc6's Factory took 3.6-4.6 s on boss-1. A page render now proves
+ * the session live first — /me and /me/permissions, fresh — and only for the rest of THAT request
+ * may a kept answer for the same session, at the same identity epoch, be served.
+ */
+describe("a person's kept read, under this request's proof that the session is live", () => {
+  (globalThis as unknown as { AsyncLocalStorage?: unknown }).AsyncLocalStorage ??= AsyncLocalStorage;
+
+  /** A page render: serving `token`'s request, proven live at `epoch` (null: nothing proven). */
+  async function render<T>(token: string, epoch: number | null, fn: () => Promise<T>): Promise<T> {
+    const cache = await import("../lib/feed-cache");
+    return served.run({ cookie: `__Host-boss_session=${token}` }, async () => {
+      if (epoch !== null) cache.enterLiveProof(await cache.liveProofFor(`__Host-boss_session=${token}`, epoch));
+      return fn();
+    });
+  }
+
+  async function counting(status = () => 200) {
+    const seen: string[] = [];
+    const { cached } = await install((async (u: RequestInfo | URL, init?: RequestInit) => {
+      seen.push(`${init?.method ?? "GET"} ${String(u)}`);
+      return new Response(JSON.stringify({ n: seen.length }), { status: status() });
+    }) as typeof fetch, resolver);
+    return { cached, seen };
+  }
+
+  it("is served again to the same session's next proven render at the same epoch", async () => {
+    const { cached, seen } = await counting();
+    await render("bss_dana", 4, () => cached(`${API}/v1/packs?project_id=p`));
+    const again = await render("bss_dana", 4, () => cached(`${API}/v1/packs?project_id=p`));
+    expect(again.status).toBe(200);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("is never served to a request that proved nothing (a route handler, a server action)", async () => {
+    const { cached, seen } = await counting();
+    await render("bss_dana", 4, () => cached(`${API}/v1/packs?project_id=p`));
+    await render("bss_dana", null, () => cached(`${API}/v1/packs?project_id=p`));
+    expect(seen).toHaveLength(2);
+  });
+
+  it("a revoked session proves nothing, so the API answers it — and it says 401", async () => {
+    let revoked = false;
+    const { cached, seen } = await counting(() => (revoked ? 401 : 200));
+    await render("bss_erin", 4, () => cached(`${API}/v1/packs?project_id=p`));
+    revoked = true;                                   // the page's own /me now fails: no proof
+    const after = await render("bss_erin", null, () => cached(`${API}/v1/packs?project_id=p`));
+    expect(after.status).toBe(401);
+    expect(seen).toHaveLength(2);
+  });
+
+  it("is never served across an identity epoch (a role or binding changed)", async () => {
+    const { cached, seen } = await counting();
+    await render("bss_dana", 4, () => cached(`${API}/v1/packs?project_id=p`));
+    await render("bss_dana", 5, () => cached(`${API}/v1/packs?project_id=p`));
+    expect(seen).toHaveLength(2);
+  });
+
+  it("is never served to another person, whatever they proved", async () => {
+    const { cached, seen } = await counting();
+    await render("bss_dana", 4, () => cached(`${API}/v1/packs?project_id=p`));
+    await render("bss_frank", 4, () => cached(`${API}/v1/packs?project_id=p`));
+    expect(seen).toHaveLength(2);
+  });
+
+  it("never keeps an identity read — they ARE the proof", async () => {
+    const { cached, seen } = await counting();
+    for (let i = 0; i < 2; i += 1) {
+      await render("bss_dana", 4, () => cached(`${API}/v1/identity/me`));
+      await render("bss_dana", 4, () => cached(`${API}/v1/identity/me/permissions?project_id=p`));
+    }
+    expect(seen).toHaveLength(4);
+  });
+
+  it("a writing GET's /load twin reads like a GET; a real write drops every kept read", async () => {
+    const { cached, seen } = await counting();
+    await render("bss_dana", 4, () => cached(`${API}/v1/status/load?project_id=p`, { method: "POST" }));
+    await render("bss_dana", 4, () => cached(`${API}/v1/packs?project_id=p`));
+    await render("bss_dana", 4, () => cached(`${API}/v1/status/load?project_id=p`, { method: "POST" }));
+    await render("bss_dana", 4, () => cached(`${API}/v1/packs?project_id=p`));
+    expect(seen).toHaveLength(2);                     // the twin did not clear the kept pack read
+    await render("bss_dana", 4, () => cached(`${API}/v1/packs/install`, { method: "POST", body: "{}" }));
+    await render("bss_dana", 4, () => cached(`${API}/v1/packs?project_id=p`));
+    expect(seen.slice(2)).toEqual([`POST ${API}/v1/packs/install`, `GET ${API}/v1/packs?project_id=p`]);
+  });
+
+  it("a page proves the session from its own fresh identity reads before any feed", async () => {
+    const { readFileSync } = await import("node:fs");
+    const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+    const proof = page.indexOf("enterLiveProof(await liveProofFor(");
+    expect(proof).toBeGreaterThan(-1);
+    // Only after /me and /me/permissions answered, and after the dead-session and enrolment exits.
+    expect(page.slice(page.indexOf("const enrolment = await identityFirstP;"), proof))
+      .toMatch(/needsEnrolment[\s\S]*signInAgainHref[\s\S]*enrolment\.me && enrolment\.org && !enrolment\.problem/);
+    // …and before the first feed.
+    expect(proof).toBeLessThan(page.indexOf("await Promise.all([\n      fetchStatus(activeProjectId)"));
+  });
+});

@@ -150,11 +150,23 @@ describe("only the requested area is fetched", () => {
 
   it("the feeds still fetched everywhere are the ones read everywhere", () => {
     const start = PAGE.indexOf("await Promise.all([\n      fetchStatus(activeProjectId)");
-    const wave = PAGE.slice(start, PAGE.indexOf("\n    ]);", start));
-    const calls = [...wave.matchAll(/(fetch[A-Za-z]+)\((?:[^()]|\([^()]*\))*\)/gs)];
-    const ungated = calls
-      .filter((m) => !m[0].includes("needs("))
-      .map((m) => m[1])
+    const wave = PAGE.slice(start + "await Promise.all([".length, PAGE.indexOf("\n    ]);", start));
+    // One entry per position (split at top-level commas), so a feed wrapped in
+    // `gate(needs(...), () => fetchX(...), ...)` is seen as the gated entry it is.
+    const entries: string[] = [];
+    let depth = 0;
+    let current = "";
+    for (const ch of wave) {
+      if (ch === "(" || ch === "[" || ch === "{") depth += 1;
+      if (ch === ")" || ch === "]" || ch === "}") depth -= 1;
+      if (ch === "," && depth === 0) { entries.push(current); current = ""; continue; }
+      current += ch;
+    }
+    if (current.trim()) entries.push(current);
+    const ungated = entries
+      .filter((entry) => !entry.includes("needs("))
+      .map((entry) => entry.match(/(fetch[A-Za-z]+)\(/)?.[1])
+      .filter((fn): fn is string => Boolean(fn))
       // Gated by a ternary outside its own parens rather than by an `active` argument,
       // so the per-call check above cannot see it. The assertion for it is in the test above.
       .filter((fn) => fn !== "fetchAuditSummary")
@@ -162,31 +174,52 @@ describe("only the requested area is fetched", () => {
       .filter((fn) => fn !== "fetchPipelineData");
     expect(wave).toContain("fetchPipelineData(activeProjectId, false)");
     // These are read outside any `shows(...)` block — header counts, the nav rail, the "what
-    // needs you" badge — so they are genuinely needed no matter which area renders. Adding to
-    // this list is a real cost paid by all forty areas; do it deliberately.
+    // needs you" badge, who is acting — so they are genuinely needed no matter which area
+    // renders. Adding to this list is a real cost paid by all forty areas; do it deliberately.
+    // (console-latency 2026-10-09: decisions, tasks, meetings, artifacts, events, packs, roles,
+    // skills, receipts, self-improvement, inbox and capabilities are read only inside the areas
+    // their gates name, and GET /v1/auth/session was read by nothing — 16 of the Factory's 38
+    // render calls.)
     expect(new Set(ungated)).toEqual(
       new Set([
         "fetchStatus",
-        "fetchDecisionFeed",
-        "fetchTaskFeed",
-        "fetchMeetingFeed",
-        "fetchArtifactFeed",
-        "fetchActivityFeed",
         "fetchDeadletterFeed",
-        "fetchPackFeed",
-        "fetchRoleFeed",
-        "fetchSkillFeed",
-        "fetchReceiptFeed",
-        "fetchSelfImprovementFeed",
-        "fetchInboxFeed",
         "fetchMemberFeed",
         "fetchMetatronQuery",
-        "fetchAuthSession",
-        "fetchCapabilities",
         // Self-gating: returns null unless the URL names a run to trace.
         "fetchRunTrace",
       ]),
     );
+    expect(wave).not.toContain("fetchAuthSession(");
+  });
+
+  it("each gated feed in the main wave is gated by the areas that read it", () => {
+    // Derived by finding each destructured name's uses and the `shows(...)` blocks enclosing them
+    // (none of these is read outside one); the gate must name every one of those areas.
+    const GATES: ReadonlyArray<readonly [string, readonly string[]]> = [
+      ["fetchDecisionFeed", ["work", "decisions"]],
+      ["fetchTaskFeed", ["org", "meetings", "work", "decisions"]],
+      ["fetchMeetingFeed", ["code_tasks", "meetings", "work"]],
+      ["fetchArtifactFeed", ["ops", "work"]],
+      ["fetchActivityFeed", ["ops", "work"]],
+      ["fetchPackFeed", ["org"]],
+      ["fetchRoleFeed", ["decisions", "meetings", "org"]],
+      ["fetchSkillFeed", ["agent", "capabilities", "ops", "org", "skills"]],
+      ["fetchReceiptFeed", ["ops", "reports", "work"]],
+      ["fetchSelfImprovementFeed", ["ops"]],
+      ["fetchInboxFeed", ["comms", "decisions"]],
+      ["fetchCapabilities", ["capabilities"]],
+      ["fetchWorkforce", ["workforce"]],
+      ["fetchOrgChart", ["workforce"]],
+      ["fetchReliabilityFeed", ["reliability"]],
+      ["fetchAiSreCapabilities", ["ai-sre"]],
+    ];
+    for (const [fn, areas] of GATES) {
+      const at = PAGE.indexOf(`() => ${fn}(`);
+      expect(at, `${fn} is not behind gate(...)`).toBeGreaterThan(-1);
+      const line = PAGE.slice(PAGE.lastIndexOf("gate(", at), at);
+      for (const area of areas) expect(line, `${fn}'s gate omits ${area}`).toContain(`"${area}"`);
+    }
   });
 
   it("a skipped feed returns the shape its unreachable path returns", () => {
