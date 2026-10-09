@@ -56,6 +56,7 @@ class VaultItemKind(StrEnum):
     TOTP_SECRET = "totp_secret"
     SIGNING_KEY = "signing_key"                  # run/actor token private keys
     LEGACY_PAT = "legacy_pat"                    # classic GitHub PATs, Admin-only, red in posture
+    APP_SECRET = "app_secret"                    # an app's secret per env (F2 §2.4); never a sandbox's for live
 
 
 class CredentialPurpose(StrEnum):
@@ -432,10 +433,49 @@ def read_secret(item_id: str, *, db: Any, kind: VaultItemKind) -> str:
         raise VaultForbidden("wrong_kind")
     if row["kind"] in (VaultItemKind.OAUTH_USER.value, VaultItemKind.LEGACY_PAT.value):
         raise VaultForbidden("use_get_credential")
+    if row["kind"] == VaultItemKind.APP_SECRET.value:
+        raise VaultForbidden("use_read_app_secret")   # bound to its app and env, checked there
     if row["status"] != "active":
         raise VaultNeedsReauth(row["status"])
     return _open(db, row)
 
+
+
+# ---- app secrets (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.4, stream S2) ------------------------------
+#: The AAD of an app secret binds it to (org, project, app, env, name): those five go into the
+#: item's `provider` column, which `aad()` covers, so a ciphertext copied to another app's or
+#: another environment's binding fails to decrypt.
+APP_SECRET_PROVIDER_PREFIX = "app_secret:"
+
+
+def app_secret_provider(org_id: str, project_id: str, app_key: str, env: str, name: str) -> str:
+    parts = (org_id, project_id, app_key, env, name)
+    if any(not p or "/" in p or AAD_SEPARATOR.decode() in p for p in parts):
+        raise ValueError("an app secret's binding parts must be non-empty and contain no '/'")
+    return APP_SECRET_PROVIDER_PREFIX + "/".join(parts)
+
+
+def store_app_secret(*, org_id: str, project_id: str, app_key: str, env: str, name: str,
+                     value: str, db: Any) -> str:
+    """Encrypt an app's secret; returns the vlt_ id the binding row references. Org-level (no
+    owner): the app's, not a person's."""
+    return store(org_id=org_id, owner_principal_id=None, kind=VaultItemKind.APP_SECRET,
+                 provider=app_secret_provider(org_id, project_id, app_key, env, name),
+                 secret=value, db=db)
+
+
+def read_app_secret(item_id: str, *, org_id: str, project_id: str, app_key: str, env: str,
+                    name: str, db: Any) -> str:
+    """Decrypt an app secret FOR THE BINDING IT WAS STORED FOR, or VaultForbidden. Only the
+    templates engine calls this (a preview/deploy resolving a binding, the build gate's scan);
+    the value is never returned by an API."""
+    row = _load(db, item_id)
+    if row["kind"] != VaultItemKind.APP_SECRET.value or row["org_id"] != org_id \
+            or row.get("provider") != app_secret_provider(org_id, project_id, app_key, env, name):
+        raise VaultForbidden("wrong_kind")
+    if row["status"] != "active":
+        raise VaultNeedsReauth(row["status"])
+    return _open(db, row)
 
 #: provider -> refresh(refresh_token) -> (access_token, new_refresh_token|None, expires_in_seconds).
 #: Raise RefreshRejected when the provider refuses the refresh token (revoked, expired, REUSED).

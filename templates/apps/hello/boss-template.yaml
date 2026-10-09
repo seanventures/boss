@@ -1,0 +1,24 @@
+schema: boss.template/v1
+id: hello
+name: Hello endpoint
+version: 1.0.0
+summary: Adds GET /hello answering a JSON greeting; the smallest template, for proving the engine
+adds: [routes]
+stacks:
+  node:   {frameworks: [express, node-http], min_toolchain: node20}
+  python: {frameworks: [fastapi, flask, wsgi], min_toolchain: python311}
+requires: []
+works_with: []
+secrets: []
+env: [{name: HELLO_GREETING, default: hello from BOSS}]
+egress: []
+webhooks: []
+routes: [GET /hello]
+tests:
+  node:   {command: node --test --test-reporter=junit --test-reporter-destination=boss-template-junit.xml tests/template_hello/hello.test.mjs, report: junit, min_tests: 2}
+  python: {command: python3 -m pytest -q tests/template_hello --junitxml=boss-template-junit.xml, report: junit, min_tests: 2}
+security_note: SECURITY.md
+guide: guide.md
+labels: []
+license: Apache-2.0
+min_boss: 1.0.0
