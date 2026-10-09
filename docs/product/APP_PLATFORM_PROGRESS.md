@@ -114,3 +114,57 @@ routes stop answering 501.
 - Test DB: container `boss-test-pg` on localhost:55432, user `boss`; password via
   `docker exec boss-test-pg printenv POSTGRES_PASSWORD` (never print it). Create a private database
   (S0 used `boss_test_s0`) and drop it afterwards.
+
+## Stream S6: BOSS as an OIDC provider (F6)
+
+Worktree `~/src/boss-wt-s6-oidc`, branch `feat/s6-oidc` (from `feat/app-platform`
+@ 8b7cc39d). Engine: `engine/boss_engine/oidc_provider/`; routes: `apps/api/app/oidc_routes.py`.
+
+| # | Step | State |
+|---|---|---|
+| 1 | Protocol core (discovery, JWKS, authorize, consent, token, userinfo, revocation, end_session), client registry API, workforce pools on the console session | done |
+| 2 | Adversarial suite (the named list) | in progress |
+| 3 | End-to-end proof: a Node app with openid-client on a local stack | todo |
+| 4 | OpenID conformance suite (Basic OP), if Docker allows | todo |
+| P2 | Customer pools, hosted pages polish, console Identity ▸ App sign-in | phase 2 |
+
+### Decisions and notes
+
+- **Issuer** = `${BOSS_PUBLIC_URL origin}/oidc/<org_id>` (the org slug is the org id: `orgs` has no
+  slug). Built only from the configured public origin, never from Host; no public origin = 503.
+- **Keys**: the `oidc` family lives in its own table `oidc_signing_keys` (per org, RS256 + EdDSA,
+  next/active/retiring/retired, private halves in the vault). BOSS-internal verifiers only read
+  `identity_signing_keys`, and the oidc verifier only reads `oidc_signing_keys` (kids start
+  `oidc-`): the separation is structural. `signing_keys.rotate_oidc_family_if_due` is the one
+  function S6 adds there; keys are provisioned when the first pool or client is created, and
+  `keys.signing_key` rotates a due key on use. TODO (identity owner): call
+  `rotate_oidc_family_if_due` from `identity/maintenance.py` next to `rotate_if_due`.
+- **Grants**: one `oidc_grants` row per sign-in; the code, every access token (`sid` claim) and the
+  refresh family hang off it. Code replay, refresh reuse, a code or refresh token presented by
+  another client, logout with `id_token_hint`, consent revoke, client disable/delete and losing
+  `oidc_app:sign_in` all revoke the grant; userinfo checks it live.
+- **Interactions** (`oidc_interactions`): no session -> `/login?next=/oidc/<org>/resume?interaction=…`
+  (single use, 10 min); consent page -> POST `/oidc/<org>/consent` (session + Origin + HMAC(session,
+  interaction) token). Two routes beyond S0's stubs: `GET /oidc/{org}/resume`, `POST /oidc/{org}/consent`.
+- **Refresh tokens** only with `offline_access`, which always needs an explicit consent (even
+  `first_party`). Family max age 90 days, each token 30 days, rotated on every use.
+- **Access tokens**: RS256 always, `typ: at+jwt`, `aud` = client `resource` or client_id.
+- **Pairwise `sub`** = HMAC(pool subject key, subject ‖ client); `public` = HMAC(pool key, subject).
+  Never a BOSS id. The pool key is random, in the vault.
+- **Phase-1 limits**: `prompt=login` or an exceeded `max_age` for a signed-in person answers
+  `login_required` (no forced re-authentication from the OIDC flow yet); a client with
+  `require_mfa` and a session without MFA gets a BOSS page, not a step-up prompt. Customer pools
+  answer `temporarily_unavailable` at authorize; their user routes stay 501.
+- **Amendment AP-4** (IDENTITY_BUILD.md §7): `oidc.*` audit events, `oidc.*` rate-limit buckets,
+  the one signing_keys function.
+- Open question from S0 (Auditor `oidc:read`): not added; every admin GET needs `oidc:admin` or
+  `oidc_client:manage` (both step-up). Revisit with the console UI in phase 2.
+
+### Resume (S6)
+
+- `cd ~/src/boss-wt-s6-oidc && git pull` (branch `feat/s6-oidc`).
+- Tests: DB `boss_test_s6` on boss-test-pg (localhost:55432, user boss; password via
+  `docker exec boss-test-pg printenv POSTGRES_PASSWORD`, never printed). Run with
+  `DATABASE_URL=postgresql+psycopg://boss:$PW@localhost:55432/boss_test_s6 PYTHONPATH=.:engine python3 -m pytest -q apps/api/tests/test_oidc_provider_*.py`.
+- After a route change regenerate: `python3 -m apps.api.tests.identity_matrix`,
+  `python3 apps/api/tests/test_identity_authz_public_routes.py`, `python3 scripts/dump-identity-api-routes.py`.

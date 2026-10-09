@@ -26,9 +26,19 @@ STUB_OWNERS = {
 }
 
 
-def _operations():
+#: Routes a stream has built (they no longer answer 501), per module.
+BUILT = {
+    # S6 phase 1: the protocol, pools, clients, roles and consents; customer-pool users are phase 2.
+    "apps.api.app.oidc_routes": lambda path: "/users" not in path,
+}
+
+
+def _operations(*, stubs_only: bool = True):
     for route in main.app.routes:
         if isinstance(route, APIRoute) and route.endpoint.__module__ in STUB_OWNERS:
+            built = BUILT.get(route.endpoint.__module__)
+            if stubs_only and built is not None and built(route.path):
+                continue
             for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
                 yield method, route
 
@@ -54,9 +64,9 @@ def objects_in_project_a(monkeypatch, world):
 
 
 def test_the_four_modules_are_mounted():
-    mounted = {route.endpoint.__module__ for _, route in _operations()}
+    mounted = {route.endpoint.__module__ for _, route in _operations(stubs_only=False)}
     assert mounted == set(STUB_OWNERS)
-    assert len(list(_operations())) >= 54       # the day-1 surface; streams only add
+    assert len(list(_operations(stubs_only=False))) >= 54       # the day-1 surface; streams only add
 
 
 def test_an_owner_reaches_every_stub_and_it_says_who_builds_it(world, objects_in_project_a):
@@ -79,12 +89,15 @@ def test_without_a_credential_only_the_oidc_protocol_answers(world):
     client = TestClient(main.app, raise_server_exceptions=False)
     wrong = []
     with world.acting_as(None):
-        for method, route in _operations():
+        for method, route in _operations(stubs_only=False):
             response = _call(client, method, route, world.project_a)
+            built = BUILT.get(route.endpoint.__module__, lambda _p: False)(route.path)
             is_public = isinstance(access_of(route.endpoint), Public)
             if is_public != route.path.startswith("/oidc/"):
                 wrong.append(f"{method} {route.path}: public={is_public}")
-            elif (response.status_code == 501) != is_public:
+            elif not built and (response.status_code == 501) != is_public:
+                wrong.append(f"{method} {route.path}: {response.status_code}")
+            elif built and not is_public and response.status_code not in (401, 403):
                 wrong.append(f"{method} {route.path}: {response.status_code}")
     assert not wrong, wrong
 

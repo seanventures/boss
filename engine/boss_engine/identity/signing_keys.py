@@ -225,3 +225,15 @@ def jwks_document(*, db: Any, now: Optional[datetime] = None) -> dict[str, Any]:
 def clear_cache() -> None:
     with _cache_lock:
         _private_cache.clear()
+
+
+def rotate_oidc_family_if_due(*, db: Any, org_id: Optional[str] = None, now: Optional[datetime] = None) -> list[str]:
+    """The `oidc` family (BOSS as an OIDC provider, F6; IDENTITY.md D35): ID and access tokens for
+    the apps BOSS builds, RS256 by default and EdDSA per client. Its keys live in
+    `oidc_signing_keys` (oidc_provider/keys.py), NEVER in `identity_signing_keys`: every verifier in
+    this module looks keys up by (kid, family) there only, so an app token never verifies as a run or
+    actor token, and the oidc verifier never sees a BOSS key. This is the family's rotation entry
+    for the maintenance loop (30 days; retiring keys retire after their overlap)."""
+    from ..oidc_provider import keys as oidc_keys
+
+    return oidc_keys.rotate_if_due(db, org_id=org_id, at=now)

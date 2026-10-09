@@ -91,6 +91,15 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "legacy.api_key_used", "legacy.network_used", "legacy.claimed_actor_ignored",
     "legacy.path_retired", "catalogue.permission_removed", "audit.exported", "audit.verified",
     "audit.checkpoint",
+    # BOSS as an OIDC provider for the apps it builds (APP_TEMPLATES_AND_SECURITY_LOOP.md §6.6
+    # S6.8; amendment AP-4). Never logged: codes, tokens, secrets, passwords.
+    "oidc.signin", "oidc.consent.granted", "oidc.consent.revoked", "oidc.token.issued",
+    "oidc.token.refreshed", "oidc.token.revoked", "oidc.token.reuse_detected", "oidc.code.replayed",
+    "oidc.logout", "oidc.client.created", "oidc.client.updated", "oidc.client.deleted",
+    "oidc.client.secret_rotated", "oidc.client.auth_failed", "oidc.client.locked",
+    "oidc.pool.created", "oidc.pool.updated", "oidc.pool.deleted", "oidc.pool_user.created",
+    "oidc.pool_user.updated", "oidc.pool_user.disabled", "oidc.role.created", "oidc.role.assigned",
+    "oidc.role.unassigned", "oidc.keys.provisioned", "oidc.keys.rotated",
 })
 
 #: hash of "no previous event" for the first row of an org's chain.

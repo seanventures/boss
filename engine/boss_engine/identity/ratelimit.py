@@ -17,6 +17,9 @@ BUCKETS = frozenset({
     # F3/L2: the password soft lock counts failures per (account, device) and (account, IP), so
     # an attacker's failures lock only the attacker's own device and address, never the victim's.
     "signin.account_device", "signin.account_ip",
+    # BOSS as an OIDC provider (§6.6 S6.10; amendment AP-4): per IP and per client on authorize and
+    # token, and client-secret failures (N in the window lock the client's secret auth).
+    "oidc.authorize.ip", "oidc.token.ip", "oidc.token.client", "oidc.client_auth_failure.client",
 })
 
 
