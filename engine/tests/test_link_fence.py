@@ -19,6 +19,14 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "sandbox" / "entrypoint.sh"
 
 
+def _clean_env() -> dict[str, str]:
+    """This process's environment without the fence's own settings: a test that leaves
+    BOSS_PREVIEW_PORTS / BOSS_LINK_PORTS / BOSS_SANDBOX_ALLOWED_PORTS behind must not change what
+    the defaults render (each test passes the settings it means)."""
+    return {k: v for k, v in os.environ.items()
+            if k not in ("BOSS_PREVIEW_PORTS", "BOSS_LINK_PORTS", "BOSS_SANDBOX_ALLOWED_PORTS")}
+
+
 def _restore_stub_path() -> str:
     """A directory holding an `iptables-restore` that prints its input (a shell function cannot
     carry a dash in its name)."""
@@ -44,7 +52,7 @@ def _chain(env: dict[str, str]) -> list[str]:
     script = f"set -eu\n{stub}{head}\n{fence}\nfence_network\n"
     path = f"{_restore_stub_path()}:{os.environ.get('PATH', '')}"
     out = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
-                         env={**os.environ, "PATH": path, **env}, check=True)
+                         env={**_clean_env(), "PATH": path, **env}, check=True)
     return [l for l in out.stdout.splitlines() if l.startswith("iptables -A BOSS_SANDBOX ")]
 
 
@@ -58,7 +66,7 @@ def _restored(env: dict[str, str]) -> list[str]:
             "python3() { cat >/dev/null; echo 172.18.0.0/16; }\n")
     path = f"{_restore_stub_path()}:{os.environ.get('PATH', '')}"
     out = subprocess.run(["sh", "-c", f"set -eu\n{stub}{head}\n{fence}\nfence_network\n"],
-                         capture_output=True, text=True, env={**os.environ, "PATH": path, **env}, check=True)
+                         capture_output=True, text=True, env={**_clean_env(), "PATH": path, **env}, check=True)
     return [l[len("restore "):] for l in out.stdout.splitlines() if l.startswith("restore ")]
 
 
@@ -112,6 +120,7 @@ def test_a_smaller_preview_range_maps_only_the_uids_it_has_ports_for():
 def test_the_engine_maps_uids_to_ports_the_way_the_fence_does(monkeypatch):
     from boss_engine.services import sandbox_identity as si
 
+    monkeypatch.delenv("BOSS_PREVIEW_PORTS", raising=False)
     assert si.preview_port_for_uid(61000) == 19000
     assert si.preview_port_for_uid(61999) == 19999
     monkeypatch.setenv("BOSS_PREVIEW_PORTS", "20000-20009")
