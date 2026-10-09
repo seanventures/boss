@@ -930,8 +930,16 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "routing": _routing(connection, settings, project_id),
         "budget": budget,
         "try": trying,
+        # Build toolchains in this image (Python and Node always; Java when turned on).
+        "toolchains": _toolchains(),
         "generated_at": now.isoformat(),
     }
+
+
+def _toolchains() -> list[dict[str, Any]]:
+    from . import toolchains
+
+    return toolchains.setup_summary()
 
 
 def _routing(connection: Connection, settings: Any, project_id: str) -> Optional[dict[str, Any]]:

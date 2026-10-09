@@ -1011,6 +1011,12 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
     # it produced a preview that could never serve.
     if not candidates and (workdir / "package.json").exists() and _node_dir_can_build("."):
         candidates.append(("node", "."))
+    # A Java service at the root (pom.xml / build.gradle): build the jar and run it.
+    if not candidates:
+        from . import toolchains
+
+        if toolchains.detect_java(workdir):
+            return ("java", ".")
     if len(candidates) == 1:
         return candidates[0]
     if candidates:
@@ -1114,7 +1120,7 @@ def how_app_runs(workdir: Path, changed: Optional[list[str]] = None) -> Optional
     # workspaces root: "Build failed in 6ms | Could not resolve entry module index.html",
     # nothing listened, "app did not serve HTTP within timeout" — for an app that was never
     # started.
-    if kind == "py" and value:
+    if kind in ("py", "java") and value:
         command = command_for_entry(workdir, kind, value)
         return AppRun(command, "resolved", entry) if command else None
     if kind in {"node", "static"} and value not in {"", "."}:
@@ -1324,6 +1330,18 @@ def command_for_entry(workdir: Path, kind: str, value: str) -> Optional[list[str
         if run_dir == ".":
             return argv
         return ["sh", "-lc", f"cd {shlex.quote(run_dir)} && {shlex.join(argv)}"]
+    if kind == "java":
+        from . import toolchains
+
+        app_root = workdir if value in (".", "") else workdir / value
+        build = toolchains.detect_java(app_root)
+        if build is None:
+            return None
+        if not toolchains.has("java"):
+            return ["sh", "-lc", "echo " + shlex.quote(toolchains.missing_message(
+                "java", toolchains.build_file(build))) + " >&2; exit 78"]
+        argv = toolchains.java_preview_command(app_root, build)
+        return argv if value in (".", "") else ["sh", "-lc", f"cd {shlex.quote(value)} && {argv[2]}"]
     if kind == "static":
         # A static site still needs a SERVER — ES modules refuse to load over file:// — so a
         # bare index.html is a runnable app, not a library.
@@ -1394,8 +1412,32 @@ def _url_ok(url: str, *, headers: Optional[dict[str, str]] = None, check_body: b
         return False
 
 
-def _http_ok(port: int) -> bool:
-    return _url_ok(f"http://127.0.0.1:{port}", check_body=True)
+HEALTH_DECLARATION_FILE = "boss.preview.health"
+
+
+def preview_health_path(workdir: Optional[Path]) -> str:
+    """The path a preview's health check asks for: `/`, or the one line of boss.preview.health
+    (an API with nothing at `/`, e.g. a Dropwizard service: `/hello`)."""
+    try:
+        line = (Path(workdir) / HEALTH_DECLARATION_FILE).read_text(errors="ignore").strip()
+    except (OSError, TypeError):
+        return "/"
+    line = line.splitlines()[0].strip() if line else ""
+    return line if line.startswith("/") and "://" not in line and len(line) < 300 else "/"
+
+
+def preview_start_timeout(workdir: Optional[Path], default: float = 180.0) -> float:
+    """A Java service builds its jar (and downloads its dependencies) before it binds."""
+    from . import toolchains
+
+    try:
+        return max(default, 600.0) if workdir and toolchains.detect_java(workdir) else default
+    except OSError:
+        return default
+
+
+def _http_ok(port: int, path: str = "/") -> bool:
+    return _url_ok(f"http://127.0.0.1:{port}{path if path != '/' else ''}", check_body=True)
 
 
 def _diagnose_listening_port(log_path: str, port_hint: int) -> Optional[str]:
@@ -1563,7 +1605,8 @@ def _why_it_failed(log_path: str, limit: int = 900) -> str:
 
 
 def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
-                           proc: Optional[subprocess.Popen] = None) -> Optional[int]:
+                           proc: Optional[subprocess.Popen] = None,
+                           health_path: str = "/") -> Optional[int]:
     """Return the port the app actually serves HTTP on — its log-announced port first, then the
     injected PORT — each health-checked, so a neighboring local service is never mistaken for it.
 
@@ -1572,12 +1615,12 @@ def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
     deadline = time.time() + timeout
     while time.time() < deadline:
         for port in _candidate_ports(log_path, port_hint):
-            if _http_ok(port):
+            if _http_ok(port, health_path):
                 return port
         if proc is not None and proc.poll() is not None:
             # One last look: a server that forked and exited its parent may be up by now.
             for port in _candidate_ports(log_path, port_hint):
-                if _http_ok(port):
+                if _http_ok(port, health_path):
                     return port
             return None
         time.sleep(0.8)
@@ -1875,7 +1918,9 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
         log_path = str(tree / ".boss-serve-proof.log")
         proc, port_hint = launch_app(tree, plan.command, log_path)
         try:
-            port = _discover_working_port(log_path, port_hint, timeout=timeout, proc=proc)
+            port = _discover_working_port(log_path, port_hint,
+                                          timeout=preview_start_timeout(tree, timeout), proc=proc,
+                                          health_path=preview_health_path(tree))
             exit_code = proc.poll()
             if port is not None:
                 record.update(proven=True, port=port)
@@ -2133,7 +2178,8 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     # answers, so this never slows the fast case).
     # Given the process, discovery stops the moment it exits — an app that died on an
     # ImportError never binds, and waiting out three minutes only delayed the real error.
-    port = _discover_working_port(log_path, port_hint, timeout=180.0, proc=proc)
+    port = _discover_working_port(log_path, port_hint, timeout=preview_start_timeout(workdir),
+                                  proc=proc, health_path=preview_health_path(workdir))
     if port is None:
         # NAME WHICH FAILURE THIS IS before killing the process — once it is dead, the
         # difference between "never bound" and "bound and served the wrong thing" is gone.
@@ -2518,7 +2564,8 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         proc, port_hint = launch_app(
             workdir, command, log_path,
             owner=owned_process.Owner("preview", preview_id, row.get("project_id")))
-        port = _discover_working_port(log_path, port_hint, timeout=180.0)
+        port = _discover_working_port(log_path, port_hint, timeout=preview_start_timeout(workdir),
+                                      health_path=preview_health_path(workdir))
         if port is None:
             _kill(proc.pid)
             return

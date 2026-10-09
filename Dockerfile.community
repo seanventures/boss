@@ -3,6 +3,12 @@
 # Build only from a reviewed Community tree. The source export gate verifies
 # that every copied path belongs in that tree before publication.
 # Pin the multi-architecture base indexes reviewed for this release candidate.
+# OPT-IN TOOLCHAINS (docs/community/TOOLCHAINS.md). Python and Node are always in the image; any
+# other stack is chosen per install: BOSS_TOOLCHAINS=java in .env (compose passes it here) selects
+# the toolchains-java stage below. The default, "none", selects an empty one, and BuildKit never
+# builds a stage nothing uses, so a default install downloads no JDK at all.
+ARG BOSS_TOOLCHAINS=none
+
 # THE SANDBOX HELPER (IDENTITY.md §7.6): the one privileged binary, built here so the runtime image
 # carries no compiler. scripts/sandbox/boss-sandbox-exec.c says what it may do (and nothing more).
 FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS sandbox-helper
@@ -10,6 +16,55 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev &
 COPY scripts/sandbox/boss-sandbox-exec.c /tmp/boss-sandbox-exec.c
 RUN gcc -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -pie \
       -o /tmp/boss-sandbox-exec /tmp/boss-sandbox-exec.c
+
+FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS toolchains-none
+RUN mkdir -p /opt/toolchains/bin && printf '{}\n' > /opt/toolchains/manifest.json
+
+# JAVA: Temurin JDK 21, Maven 3.9, Gradle 8, each pinned and checked against its published
+# checksum before it is unpacked. Downloaded with Python's urllib (no curl | sh). The JDK's
+# jmods and src.zip are dropped (jlink is not a build-loop need); everything lands under
+# /opt/toolchains/java, with java/javac/mvn/gradle linked from /opt/toolchains/bin.
+FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS toolchains-java
+ARG TARGETARCH
+ARG JDK_VERSION=21.0.12.1+1
+ARG JDK_SHA256_AMD64=ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94
+ARG JDK_SHA256_ARM64=23e37e026f12f3e706f18938ff611db3032d075b09d0879a25d06718c773e223
+ARG MAVEN_VERSION=3.9.16
+ARG MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
+ARG GRADLE_VERSION=8.14.6
+ARG GRADLE_SHA256=7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) arch=x64; jdk_sum="$JDK_SHA256_AMD64" ;; \
+      arm64) arch=aarch64; jdk_sum="$JDK_SHA256_ARM64" ;; \
+      *) echo "no Java toolchain for $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    get() { python -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$1" "$2"; }; \
+    tag="jdk-$(printf %s "$JDK_VERSION" | sed 's/+/%2B/')"; \
+    file="$(printf 'OpenJDK21U-jdk_%s_linux_hotspot_%s.tar.gz' "$arch" "$(printf %s "$JDK_VERSION" | tr + _)")"; \
+    cd /tmp; \
+    get "https://github.com/adoptium/temurin21-binaries/releases/download/$tag/$file" jdk.tgz; \
+    echo "$jdk_sum  jdk.tgz" | sha256sum -c -; \
+    get "https://archive.apache.org/dist/maven/maven-3/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz" maven.tgz; \
+    echo "$MAVEN_SHA512  maven.tgz" | sha512sum -c -; \
+    get "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip" gradle.zip; \
+    echo "$GRADLE_SHA256  gradle.zip" | sha256sum -c -; \
+    mkdir -p /opt/toolchains/java/jdk /opt/toolchains/java/maven /opt/toolchains/bin; \
+    tar -xzf jdk.tgz -C /opt/toolchains/java/jdk --strip-components=1; \
+    tar -xzf maven.tgz -C /opt/toolchains/java/maven --strip-components=1; \
+    python -m zipfile -e gradle.zip /tmp/gradle-x; \
+    mv "/tmp/gradle-x/gradle-$GRADLE_VERSION" /opt/toolchains/java/gradle; \
+    chmod 0755 /opt/toolchains/java/gradle/bin/gradle; \
+    rm -rf jdk.tgz maven.tgz gradle.zip /tmp/gradle-x /opt/toolchains/java/jdk/jmods /opt/toolchains/java/jdk/lib/src.zip; \
+    for b in java javac jar; do ln -s "../java/jdk/bin/$b" "/opt/toolchains/bin/$b"; done; \
+    ln -s ../java/maven/bin/mvn /opt/toolchains/bin/mvn; \
+    ln -s ../java/gradle/bin/gradle /opt/toolchains/bin/gradle; \
+    chmod -R a+rX,go-w /opt/toolchains; \
+    /opt/toolchains/bin/java -version; \
+    printf '{"java": {"jdk": "Temurin %s", "maven": "%s", "gradle": "%s"}}\n' \
+      "$JDK_VERSION" "$MAVEN_VERSION" "$GRADLE_VERSION" > /opt/toolchains/manifest.json
+
+FROM toolchains-${BOSS_TOOLCHAINS} AS toolchains
 
 FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS python-runtime
 
@@ -69,6 +124,15 @@ RUN pip install --no-cache-dir --upgrade pip \
 RUN python -m playwright install --with-deps chromium \
     && chmod -R a+rX /opt/pw-browsers \
     && rm -rf /var/lib/apt/lists/*
+
+# The install's opt-in toolchains (empty unless BOSS_TOOLCHAINS names one), on every process's
+# PATH, and the per-project dependency cache the build sandbox keeps between runs (boss-only).
+COPY --from=toolchains /opt/toolchains /opt/toolchains
+ENV PATH=$PATH:/opt/toolchains/bin
+# A login shell (`sh -lc`, how previews start) resets PATH from /etc/profile: put it back there too.
+RUN mkdir -p /var/lib/boss/toolchain-cache && chown boss:boss /var/lib/boss/toolchain-cache \
+    && chmod 700 /var/lib/boss/toolchain-cache \
+    && printf 'PATH="$PATH:/opt/toolchains/bin"\nexport PATH\n' > /etc/profile.d/boss-toolchains.sh
 
 # These are the Community runtime directories. The reviewed export tree omits
 # private modules inside shared directories; the dedicated ignore file also

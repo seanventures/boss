@@ -33,6 +33,11 @@ DEFAULT_ALLOW = (
     "registry.npmjs.org", "registry.yarnpkg.com", "pypi.org", "files.pythonhosted.org",
     "playwright.azureedge.net", "playwright-akamai.azureedge.net", "playwright-verizon.azureedge.net",
     "cdn.playwright.dev", "nodejs.org",
+    # Java (an opt-in toolchain, docs/community/TOOLCHAINS.md): Maven Central and the Gradle
+    # plugin portal (which redirects its downloads to plugins-artifacts). Nothing broader: no
+    # services.gradle.org, so a project's ./gradlew cannot fetch a distribution; BOSS runs the
+    # image's pinned Gradle instead.
+    "repo.maven.apache.org", "repo1.maven.org", "plugins.gradle.org", "plugins-artifacts.gradle.org",
 )
 #: Never through the tunnel, whatever the allowlist says.
 NEVER = ("github.com", "*.github.com", "*.githubusercontent.com", "api.github.com")

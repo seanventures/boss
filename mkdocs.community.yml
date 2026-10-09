@@ -71,6 +71,7 @@ nav:
       - Sign-in setup: SIGN_IN_SETUP.md
       - Agents and access: AGENTS_AND_ACCESS.md
       - Build sandbox: SANDBOX.md
+      - Build toolchains: TOOLCHAINS.md
       - Identity administration: IDENTITY_ADMIN.md
       - Connect models: MODEL_CONNECTIONS.md
       - Use cases: use-cases.md

@@ -1758,7 +1758,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         with owned_process.owner_scope("code_run", run_id,
                                        project_id=(run or {}).get("project_id"), fresh=True), \
-                _sandbox_bind(run_id) as _sbx:
+                _sandbox_bind(run_id, project_id=(run or {}).get("project_id")) as _sbx:
             if mcp is not None and _sbx is not None:
                 mcp.move_into(_sbx)
             return _run_governed_code_task(engine, settings, jobs, run_id,
@@ -2739,13 +2739,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if _gate_plan0.source != "task":
             verify_commands = list(_gate_plan0.commands)
             test_cmd = ((verification_target.manifest_display(root, _pinned_manifest)
-                         if _gate_plan0.from_manifest else " && ".join(verify_commands))
+                         if _gate_plan0.from_manifest else _gate_plan0.description
+                         if _gate_plan0.runs_steps else " && ".join(verify_commands))
                         or test_cmd)
         _web_verify = (
             verification_target.detect_kind(spec, title) == "web"
             or str(test_cmd or "").startswith("npm ")
             or bool(_app_id)
-        ) and not _gate_plan0.from_manifest
+        ) and not _gate_plan0.runs_steps
         last_verify_cwd = None
         last_verify_output = ""
 
@@ -2824,7 +2825,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 last_verify_cwd = str(cwd.relative_to(root)) if cwd != root else "."
             except ValueError:
                 last_verify_cwd = str(cwd)
-            if plan.from_manifest:
+            if plan.runs_steps:
                 return _run_manifest_verify(plan, record=record)
             try:
                 verification_target.ensure_verify_script(cwd)

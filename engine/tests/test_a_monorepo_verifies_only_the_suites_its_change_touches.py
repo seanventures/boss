@@ -334,11 +334,12 @@ def test_the_governed_gate_scopes_every_verify_by_the_runs_changed_files():
     src = " ".join(code_only(g).split())
     assert ("resolve_gate_plan( spec, title, root, app_id=_app_id, changed=_changed_paths(), "
             "pinned=_pinned_manifest)" in src)
-    assert "if plan.from_manifest: return _run_manifest_verify(plan, record=record)" in src
+    # runs_steps: a manifest plan, or an opt-in toolchain's stack plan (services.toolchains).
+    assert "if plan.runs_steps: return _run_manifest_verify(plan, record=record)" in src
     assert "run_until_failure(_CwdSandbox(), plan.commands)" in src
     # A manifest-declared repo is not a scaffolded web app: its root package.json is a
     # workspace, and the scaffold's package contract would fail it for not being one.
-    assert ") and not _gate_plan0.from_manifest" in src
+    assert ") and not _gate_plan0.runs_steps" in src
 
 
 # --------------------------------------------------------------- BOSS's own declaration

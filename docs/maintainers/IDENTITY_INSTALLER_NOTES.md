@@ -73,3 +73,29 @@ and issue it during install if missing (`bash scripts/install/boss.sh --dir "$IN
 **What.** The host tools' key lives in `.env` as `BOSS_HOST_API_KEY`. The installer rewrites `.env` from a heredoc.
 
 **Status.** `scripts/install/restore_preserved_env.sh` already lists `BOSS_HOST_API_KEY` in `KEEP_PREVIOUS`, so a rerun keeps it. If it were lost, `boss` issues a new one on the next command. Nothing to change in `install.sh`; noted so a future refactor of the preserved-lines list keeps it.
+
+# Toolchains: installer follow-ups
+
+Build toolchains (docs/community/TOOLCHAINS.md) ship without touching `install.sh`. Java is
+turned on after an install with `boss toolchains enable java`, or by putting
+`BOSS_TOOLCHAINS=java` in `.env` before `boss update`. Compose passes the value to the image
+build as `${BOSS_TOOLCHAINS:-none}`, and `restore_preserved_env.sh` keeps it when the installer
+rewrites `.env`.
+
+## (h) `--toolchains LIST` on the installer
+
+**What.** A first install can't turn Java on. `.env` doesn't exist until `install.sh` writes it,
+so the only route is to install, then run `boss toolchains enable java`. That means building the
+api and worker images twice.
+
+**Suggested change.** Add `--toolchains java` (env `BOSS_TOOLCHAINS`) to the option parser and
+to the env-override list (around `install.sh:281`). Validate it against `none|java`, write
+`BOSS_TOOLCHAINS=<value>` into the `.env` heredoc next to the other build settings, and print
+it in the summary ("Toolchains: Python, Node, Java"). Nothing else is needed: the build at
+`install.sh:1196-1201` already runs `compose build` with `--env-file "$ENV_FILE"`, and
+`restore_preserved_env.sh` already lists `BOSS_TOOLCHAINS` in `KEEP_PREVIOUS`, so on a rerun the
+previous value wins unless the flag is given. If the flag should override on a rerun, set
+`BOSS_TOOLCHAINS_EXPLICIT=1` the same way `BOSS_PUBLIC_URL_EXPLICIT` works.
+
+**Disk check.** Java adds about 0.5 GB to the api/worker image. If the installer's disk
+preflight has a threshold, raise it by that much when `java` is chosen.

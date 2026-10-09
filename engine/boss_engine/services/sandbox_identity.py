@@ -266,10 +266,14 @@ def current() -> Optional[SandboxIdentity]:
 
 
 @contextlib.contextmanager
-def bind(owner_id: str) -> Iterator[Optional[SandboxIdentity]]:
+def bind(owner_id: str, *, project_id: Optional[str] = None) -> Iterator[Optional[SandboxIdentity]]:
     """Give the run `owner_id` its own uid and directory for the block. Everything spawned under
     that owner (owned_process) runs as it. Yields None when isolation is off, or `auto` with no
-    helper (logged); raises SandboxUnavailable when it is `required` and impossible."""
+    helper (logged); raises SandboxUnavailable when it is `required` and impossible.
+
+    With `project_id` and an opt-in toolchain (services.toolchains), the run's HOME starts with
+    that project's dependency caches from its earlier runs, and they are kept when it ends —
+    per project, never another project's."""
     m = mode()
     if m == "off":
         yield None
@@ -302,6 +306,7 @@ def bind(owner_id: str) -> Iterator[Optional[SandboxIdentity]]:
         finally:
             os.umask(old)
         _seed_cli_logins(ident)
+        _seed_toolchains(ident, project_id)
         ident._helper("adopt", str(uid), str(ident.run_dir))
         with _ACTIVE_LOCK:
             _ACTIVE[owner_id] = ident
@@ -311,6 +316,11 @@ def bind(owner_id: str) -> Iterator[Optional[SandboxIdentity]]:
         with _ACTIVE_LOCK:
             _ACTIVE.pop(owner_id, None)
         ident.killall()
+        if project_id:
+            with contextlib.suppress(Exception):
+                from . import toolchains
+
+                toolchains.save_cache(ident.home, project_id)
         _purge(ident)
         with contextlib.suppress(OSError):
             os.close(lock_fd)
@@ -332,6 +342,18 @@ def _seed_cli_logins(ident: SandboxIdentity) -> None:
             if os.path.isfile(path):
                 shutil.copyfile(path, dst / name)
                 os.chmod(dst / name, 0o644)
+
+
+def _seed_toolchains(ident: SandboxIdentity, project_id: Optional[str]) -> None:
+    """Opt-in toolchains (Java): the egress proxy in Maven's and Gradle's own config (they ignore
+    HTTPS_PROXY), and this project's dependency caches. Never fails the run."""
+    try:
+        from . import toolchains
+
+        toolchains.write_proxy_config(ident.home, os.environ.get(EGRESS_CONNECT_ENV))
+        toolchains.restore_cache(ident.home, project_id)
+    except Exception as exc:  # noqa: BLE001 — a cold cache is slower, not broken
+        log.warning("toolchain setup for run %s failed: %s", ident.key, exc)
 
 
 def _purge(ident: SandboxIdentity) -> None:
