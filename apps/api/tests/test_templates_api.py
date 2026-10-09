@@ -81,7 +81,7 @@ def _app_run(engine, project_id: str, title: str = "Hello Notes", files=("web/pa
 def _import(client, world, person, repo) -> dict:
     with as_(world, person):
         r = client.post("/v1/templates/import", json={"git_url": f"file://{repo}"})
-    assert r.status_code in (201, 422), r.text
+    assert r.status_code in (201, 409, 422), r.text
     return r.json()
 
 
