@@ -178,6 +178,14 @@ def plan(c, *, org_id: str, project_id: str, template_ref: str, body: dict,
     """Validate an apply and build its start payload. Writes only the test-default secret
     bindings (generated/stub) the template declares; the application row is written by
     `record()` once the run has started."""
+    from ..config import get_settings
+    from .gate import microvm_refusal
+
+    refusal = microvm_refusal(get_settings())
+    if refusal:
+        # Refused BEFORE a build starts: on the micro-VM substrate the template_tests gate cannot
+        # run and fails closed, so the build could only end blocked (gate.MICROVM_REFUSAL).
+        raise TemplateError(409, "template_tests_need_local_sandbox", refusal)
     row = get_row(c, org_id, template_ref)
     if row["status"] != "active":
         raise TemplateError(409, "not_active", f"this template is {row['status']}; only an approved "

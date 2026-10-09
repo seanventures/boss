@@ -187,6 +187,16 @@ Apply = a normal governed build, through the existing start path:
    requires ≥ `min_tests` passing tests from the JUnit report, and that the template's test
    files exist in the diff (so the PR carries them). It sits with `run_all_tests` in the
    inner loop; failing it is a "changes asked" like any other gate.
+   **Not on the micro-VM substrate.** With `BOSS_GOVERNED_SANDBOX_PROVIDER=microvm` the build runs
+   in a guest of the sandbox-service, whose contract (1.0) returns a command's exit code and
+   output tail but not the JUnit report this gate counts; an exit code cannot prove `min_tests`
+   passed. So on such an install `POST /v1/templates/{id}/apply` answers **409
+   `template_tests_need_local_sandbox`** with the reason and the remedy (build on the local
+   sandbox, `BOSS_GOVERNED_SANDBOX_PROVIDER=local`, the default), and a template build that reaches
+   the gate there anyway (the setting changed after the apply) fails `template_tests` closed with
+   the same sentence in its evidence and in the blocked run's error. The secret scan still runs.
+   The trial always runs in the local build sandbox and is unaffected. Lifting this needs an
+   artifact channel in the sandbox contract (the guest returning named report files).
 4. A **secret scan** gate (already conceptually part of `security_check`; made mechanical here)
    refuses any diff containing a value matching a bound secret, a manifest `pattern`, or a
    common key format.
