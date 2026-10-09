@@ -153,6 +153,50 @@ def test_checkout_from_a_catalog_cart_cart_uses_server_prices_and_a_price_change
     assert shop.http.post("/api/checkout", json={"cart_id": "someone-elses"}).status_code == 400
 
 
+class CatalogError(Exception):
+    """Declared here exactly as catalog-cart declares it (the payment template never imports it)."""
+
+    def __init__(self, status: int, code: str, **extra) -> None:
+        super().__init__(code)
+        self.status, self.code, self.extra = status, code, extra
+
+
+class RefusingCatalog(StaticCatalog):
+    """catalog-cart's provider refusing a cart it cannot sell now."""
+
+    def __init__(self) -> None:
+        super().__init__(DEFAULT_PRODUCTS)
+        self.failure: Exception = CatalogError(409, "product_unavailable", product_id="tee-1")
+
+    def cart_line_items(self, cart_id, request=None):
+        raise self.failure
+
+    def get_product(self, product_id):
+        if product_id == "gone":
+            raise CatalogError(404, "product_not_found")
+        return super().get_product(product_id)
+
+
+def test_a_cart_catalog_cart_cannot_sell_is_a_400_with_its_code_before_stripe_is_called(fake):
+    """The payment template maps catalog-cart's CatalogError itself (by name and shape): a 400 with
+    its code, never a 500, and no order or Stripe call. Anything else stays the app's own error."""
+    catalog = RefusingCatalog()
+    shop = Shop(fake, catalog=catalog)
+    before = len(fake.requests)
+    for payload, code in (({"cart_id": "cart-abc"}, "product_unavailable"),
+                          ({"items": [{"product_id": "gone", "quantity": 1}]}, "product_not_found")):
+        r = shop.http.post("/api/checkout", json=payload)
+        assert r.status_code == 400 and r.json() == {"error": code}, r.text
+    catalog.failure = CatalogError(409, "cart_empty")
+    assert shop.http.post("/api/checkout", json={"cart_id": "cart-abc"}).json() == {"error": "cart_empty"}
+    loose = TestClient(shop.app, raise_server_exceptions=False)
+    for failure in (RuntimeError("database is down"), CatalogError(503, "catalog_down"),
+                    type("Lookalike", (Exception,), {"status": 409, "code": "product_unavailable"})()):
+        catalog.failure = failure
+        assert loose.post("/api/checkout", json={"cart_id": "cart-abc"}).status_code == 500, failure
+    assert len(fake.requests) == before, "Stripe must not be called"
+
+
 # ---- webhooks: signed, fresh, idempotent ---------------------------------------------------------
 
 def test_a_webhook_with_a_bad_forged_or_missing_signature_is_refused_and_changes_nothing(fake):

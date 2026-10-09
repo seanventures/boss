@@ -450,8 +450,8 @@ React/Vite scaffold UI), Python = FastAPI, Java = Spring Boot for login/payments
   from the product at that moment; `[]` for an empty cart; null / `None` / `Optional.empty()`
   unless `cartId` is the requester's own cart, resolved from the request exactly as the cart
   routes resolve it (signed cookie, or the signed-in user's cart). An unsellable cart raises
-  `CatalogError` (409 + code), which the wiring maps to the payment template's checkout input
-  error. `GET /api/cart/checkout` (`checkoutLines` / `checkout_lines`) stays as the HTTP view of
+  `CatalogError` (409 + code), which the payment templates' adapters map to their own checkout
+  input error (a 400, no payment call), matched by class name and status/code, not imported. `GET /api/cart/checkout` (`checkoutLines` / `checkout_lines`) stays as the HTTP view of
   the same pricing. `engine/tests/templates/test_catalog_and_payments_compose.py` lays both
   templates into one app per stack and checks this.
 - **Tests (≥10):** search, pagination bounds, inactive products hidden, quantity bounds, stock

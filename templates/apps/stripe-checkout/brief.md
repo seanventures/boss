@@ -37,8 +37,11 @@ reference's static catalog with that contract and add a "Checkout" button to the
 catalog-cart provides it under exactly the names `payments/catalog` calls: node `createCatalog(...)`
 returns `getProduct` / `cartLineItems(cartId, req)`, python `create_catalog(...)` returns
 `get_product` / `cart_line_items(cart_id, request)`, java `CheckoutCatalog.product` /
-`cartLines(cartId, request)`; turn its `CatalogError` into `CheckoutInputError` /
-`CheckoutInputException` in the wiring so an unsellable cart is a 400, not a 500.
+`cartLines(cartId, request)`. Its `CatalogError` (a cart that cannot be sold now) needs no
+wiring: `payments/catalog` itself turns it into `CheckoutInputError` / `CheckoutInputException`
+(matched by class name and its 4xx `status` + `code`, not imported), so an unsellable cart is a
+400 with catalog-cart's code, never a 500, and Stripe is never called. Keep that mapping when
+adapting the adapter.
 Without it, keep the static catalog and a single "Buy now" button.
 
 ## Per stack

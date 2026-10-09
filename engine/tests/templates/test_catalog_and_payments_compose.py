@@ -13,7 +13,10 @@ Each template's own tests passing alone proved nothing about the two together (t
 match), so this file lays both into one app directory, deliberately: their trees collide
 (package.json, main.py, requirements.txt, pom.xml, schema.sql) and every collision has a planned
 merge; anything else colliding fails the layout. A small glue file wires the payments adapter to
-catalog-cart's provider, the way the briefs tell the build to.
+catalog-cart's provider, the way the briefs tell the build to. The glue does NOT map catalog-cart's
+CatalogError: the payment templates' adapters do that themselves (a cart that cannot be sold now
+is the payment route's 400, never a 500), and the route tests below prove it through each payment
+template's real checkout route, with a payment provider that must never be called.
 
 Without any variable: the contract's names and shapes are checked in the sources, the combined
 app lays out and passes both templates' gates on its files, and (when FastAPI is importable) the
@@ -163,7 +166,8 @@ def _merge_package_json(catalog: bytes, payments: bytes) -> bytes:
         scripts.setdefault(k, v)
     scripts["start"] = "node shop.mjs"  # both start their own example server; the shop is the app
     scripts["test:compose"] = ("node --test --test-reporter=junit --test-reporter-destination=boss-compose-junit.xml "
-                               "--test-reporter=spec --test-reporter-destination=stdout tests/compose/contract.test.mjs")
+                               "--test-reporter=spec --test-reporter-destination=stdout "
+                               "tests/compose/contract.test.mjs tests/compose/route.test.mjs")
     deps = dict(a.get("dependencies", {}))
     for k, v in b.get("dependencies", {}).items():
         if k in deps and _version(deps[k]) != _version(v):
@@ -284,26 +288,13 @@ def _merge_pom(catalog: bytes, payments: bytes) -> bytes:
 # ---- the glue: the payments adapter wired to catalog-cart's provider, as the briefs say ----------
 
 NODE_SHOP_CATALOG = """\
-// The payment template's `catalog`, backed by catalog-cart (spec §3.4): its names already match;
-// a CatalogError (a cart that cannot be sold now) becomes the payment template's 400.
-import { createRequire } from "node:module";
-
-import { CatalogError } from "./catalog/store.mjs";
-
-const require = createRequire(import.meta.url);
-const { CheckoutInputError } = require("./payments/catalog.js");
-
+// The payment template's `catalog`, backed by catalog-cart (spec §3.4): its names already match.
+// A CatalogError (a cart that cannot be sold now) passes through: the payment template's adapter
+// turns it into its CheckoutInputError (a 400) itself.
 export function paymentsCatalog(catalog) {
   return {
     getProduct: (id) => catalog.getProduct(id),
-    async cartLineItems(cartId, req) {
-      try {
-        return catalog.cartLineItems(cartId, req);
-      } catch (err) {
-        if (err instanceof CatalogError) throw new CheckoutInputError(err.code);
-        throw err;
-      }
-    },
+    cartLineItems: (cartId, req) => catalog.cartLineItems(cartId, req),
   };
 }
 """
@@ -438,14 +429,12 @@ test("items without a cart are priced from catalog-cart's products, and the shop
 """
 
 PY_SHOP_CATALOG = '''\
-"""The payment template's `catalog`, backed by catalog-cart (spec §3.4): its names already match;
-a CatalogError (a cart that cannot be sold now) becomes the payment template's 400."""
+"""The payment template's `catalog`, backed by catalog-cart (spec §3.4): its names already match.
+A CatalogError (a cart that cannot be sold now) passes through: the payment template's adapter
+turns it into its CheckoutInputError (a 400) itself."""
 from __future__ import annotations
 
 from typing import Any, Optional
-
-from catalog import CatalogError
-from payments.catalog import CheckoutInputError
 
 
 class PaymentsCatalog:
@@ -456,10 +445,7 @@ class PaymentsCatalog:
         return self._catalog.get_product(product_id)
 
     def cart_line_items(self, cart_id: str, request: Any = None) -> Optional[list[dict]]:
-        try:
-            return self._catalog.cart_line_items(cart_id, request)
-        except CatalogError as exc:
-            raise CheckoutInputError(exc.code) from exc
+        return self._catalog.cart_line_items(cart_id, request)
 '''
 
 PY_SHOP = '''\
@@ -582,7 +568,6 @@ def test_items_without_a_cart_are_priced_from_catalog_carts_products(app):
 JAVA_GLUE = """\
 package com.example.shop;
 
-import com.example.catalog.cart.CatalogError;
 import com.example.catalog.cart.CheckoutCatalog;
 import com.example.payments.Catalog;
 import jakarta.servlet.http.HttpServletRequest;
@@ -590,7 +575,9 @@ import java.util.List;
 import java.util.Optional;
 
 /** The payment template's Catalog, backed by catalog-cart's CheckoutCatalog (spec §3.4): the
- *  records mirror each other, so this only copies fields; a CatalogError becomes a 400. */
+ *  records mirror each other, so this only copies fields. A CatalogError (a cart that cannot be
+ *  sold now) passes through: the payment template's Catalog.price turns it into its
+ *  CheckoutInputException (a 400) itself. */
 public class CartPaymentsCatalog implements Catalog {
   private final CheckoutCatalog cart;
 
@@ -605,12 +592,8 @@ public class CartPaymentsCatalog implements Catalog {
 
   @Override
   public Optional<List<Line>> cartLines(String cartId, HttpServletRequest request) {
-    try {
-      return cart.cartLines(cartId, request).map(lines -> lines.stream()
-          .map(l -> new Line(l.productId(), l.name(), l.unitAmountCents(), l.currency(), l.quantity())).toList());
-    } catch (CatalogError e) {
-      throw new CheckoutInputException(e.code);
-    }
+    return cart.cartLines(cartId, request).map(lines -> lines.stream()
+        .map(l -> new Line(l.productId(), l.name(), l.unitAmountCents(), l.currency(), l.quantity())).toList());
   }
 }
 """
@@ -702,6 +685,294 @@ class CatalogPaymentsContractTest {
 }
 """
 
+NODE_ROUTE_TEST = """\
+// The payment template's OWN checkout route over catalog-cart's provider, in one app (composed as
+// shop.mjs composes them): a cart that cannot be sold now is a 400 with catalog-cart's code, never
+// a 500, and the payment provider is never called. The glue does not map CatalogError: the payment
+// template's adapter does. The provider client below records every call and fails it.
+import { after, before, test } from "node:test";
+import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import { createRequire } from "node:module";
+
+import { createCatalog } from "../../catalog/routes.mjs";
+import { CatalogStore, loadSeed } from "../../catalog/store.mjs";
+import { paymentsCatalog } from "../../shop_catalog.mjs";
+
+const require = createRequire(import.meta.url);
+const { createApp } = require("../../server.js");
+const ROUTE = "@ROUTE@";
+const hex = () => crypto.randomBytes(16).toString("hex");
+
+const calls = [];
+function provider(path = "provider") {
+  return new Proxy(function () {}, {
+    get: (_t, key) => (key === "then" ? undefined : provider(`${path}.${String(key)}`)),
+    apply: () => {
+      calls.push(path);
+      throw new Error(`${path} was called`);
+    },
+  });
+}
+
+let server;
+let origin;
+let store;
+
+before(async () => {
+  store = new CatalogStore({ products: loadSeed() });
+  const catalog = createCatalog({ cartSecret: "fake-cart-secret-for-the-compose-tests-only", secureCookies: false, currency: "usd" }, { store });
+  const { app } = createApp({ env: @NODE_ENV@, @NODE_CLIENT@: provider(), catalog: paymentsCatalog(catalog) });
+  app.use(catalog.router);
+  server = app.listen(0, "127.0.0.1");
+  await new Promise((r) => server.once("listening", r));
+  origin = `http://127.0.0.1:${server.address().port}`;
+});
+
+after(async () => {
+  server.closeAllConnections();
+  await new Promise((r) => server.close(r));
+});
+
+async function call(method, path, body, cookie) {
+  const headers = { "Content-Type": "application/json" };
+  if (cookie) headers.Cookie = cookie;
+  const res = await fetch(origin + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const set = res.headers.getSetCookie().map((c) => c.split(";")[0]).find((c) => c.startsWith("cart="));
+  const text = await res.text();
+  return { status: res.status, body: text.startsWith("{") ? JSON.parse(text) : text, cookie: set || cookie };
+}
+
+async function shopper(...items) {
+  let cookie;
+  for (const [productId, quantity] of items) {
+    ({ cookie } = await call("POST", "/api/cart/items", { product_id: productId, quantity }, cookie));
+  }
+  const cart = await call("GET", "/api/cart", undefined, cookie);
+  return { cookie, cartId: cart.body.id };
+}
+
+test("an unsellable cart is the payment route's 400 with catalog-cart's code; the provider is never called", async () => {
+  const s = await shopper(["p07", 1], ["p02", 1]);
+  store.setActive("p07", false);
+  const r = await call("POST", ROUTE, { cart_id: s.cartId }, s.cookie);
+  assert.equal(r.status, 400, JSON.stringify(r.body));
+  assert.deepEqual(r.body, { error: "product_unavailable" });
+  assert.deepEqual(calls, []);
+});
+
+test("a sellable cart in the same shop does reach the provider (the recording client sees it)", async () => {
+  const s = await shopper(["p02", 1]);
+  const r = await call("POST", ROUTE, { cart_id: s.cartId }, s.cookie);
+  assert.notEqual(r.status, 400, JSON.stringify(r.body));
+  assert.ok(calls.length > 0, "the provider was not reached");
+});
+"""
+
+PY_ROUTE_TEST = '''\
+"""The payment template's OWN checkout route over catalog-cart's provider, in one app (composed as
+shop.py composes them): a cart that cannot be sold now is a 400 with catalog-cart's code, never a
+500, and the payment provider is never called. The glue does not map CatalogError: the payment
+template's adapter does. The provider client below records every call and fails it."""
+from __future__ import annotations
+
+import secrets
+
+from fastapi.testclient import TestClient
+
+from catalog import CatalogStore, create_catalog, load_seed
+from catalog.routes import CatalogConfig
+from main import create_app
+from shop_catalog import PaymentsCatalog
+
+ROUTE = "@ROUTE@"
+
+
+class RecordingProvider:
+    def __init__(self, calls: list, path: str = "provider") -> None:
+        self._calls, self._path = calls, path
+
+    def __getattr__(self, name: str) -> "RecordingProvider":
+        return RecordingProvider(self._calls, f"{self._path}.{name}")
+
+    def __call__(self, *args, **kwargs):
+        self._calls.append(self._path)
+        raise RuntimeError(f"{self._path} was called")
+
+
+def shop():
+    store = CatalogStore(load_seed())
+    catalog = create_catalog(CatalogConfig(cart_secret="fake-cart-secret-for-the-compose-tests-only",
+                                           secure_cookies=True), store=store)
+    calls: list = []
+    app = create_app(env=@PY_ENV@, client=RecordingProvider(calls), catalog=PaymentsCatalog(catalog))
+    app.include_router(catalog.router)
+    return app, store, calls
+
+
+def shopper(app, *items):
+    client = TestClient(app, base_url="https://shop.test", raise_server_exceptions=False)
+    for product_id, quantity in items:
+        assert client.post("/api/cart/items", json={"product_id": product_id, "quantity": quantity}).status_code == 201
+    return client, client.get("/api/cart").json()["id"]
+
+
+def test_an_unsellable_cart_is_the_payment_routes_400_and_the_provider_is_never_called():
+    app, store, calls = shop()
+    client, cart_id = shopper(app, ("p07", 1), ("p02", 1))
+    store.set_active("p07", False)
+    r = client.post(ROUTE, json={"cart_id": cart_id})
+    assert r.status_code == 400, r.text
+    assert r.json() == {"error": "product_unavailable"}
+    assert calls == []
+
+
+def test_a_sellable_cart_in_the_same_shop_does_reach_the_provider():
+    app, _, calls = shop()
+    client, cart_id = shopper(app, ("p02", 1))
+    assert client.post(ROUTE, json={"cart_id": cart_id}).status_code != 400
+    assert calls, "the provider was not reached"
+'''
+
+JAVA_ROUTE_TEST = """\
+package com.example.shop;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.example.catalog.cart.CatalogController;
+import com.example.catalog.cart.CatalogStore;
+import com.example.catalog.cart.CheckoutCatalog;
+import com.example.payments.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.Cookie;
+import java.security.SecureRandom;
+import java.util.HexFormat;
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+
+/** The payment template's OWN checkout route over catalog-cart's provider, in one app: a cart that
+ *  cannot be sold now is a 400 with catalog-cart's code, never a 500, and the payment provider is
+ *  never called. The glue does not map CatalogError: the payment template's Catalog.price does.
+ *  The provider's API address is unreachable, so any call to it would answer 502, not 400. */
+class CatalogPaymentsRouteTest {
+  static final String ROUTE = "@ROUTE@";
+  static final String NOWHERE = "http://127.0.0.1:9";
+  final CatalogStore store = new CatalogStore("usd");
+  final CatalogController routes = new CatalogController(store, req -> null,
+      "fake-cart-secret-for-the-compose-tests-only", "https://shop.test");
+  final MockMvc mvc;
+
+  static String hex() {
+    byte[] b = new byte[16];
+    new SecureRandom().nextBytes(b);
+    return HexFormat.of().formatHex(b);
+  }
+
+  CatalogPaymentsRouteTest() {
+    Catalog payments = new CartPaymentsCatalog(new CheckoutCatalog(store, routes));
+@JAVA_BUILD@
+    mvc = MockMvcBuilders.standaloneSetup(controller).build();
+  }
+
+  record Shopper(Cookie[] cookies, String cartId) {}
+
+  Shopper shopper(Object... items) throws Exception {
+    MockHttpServletRequest req = new MockHttpServletRequest();
+    for (int i = 0; i < items.length; i += 2) {
+      MockHttpServletResponse res = new MockHttpServletResponse();
+      routes.add(new ObjectMapper().valueToTree(Map.of("product_id", items[i], "quantity", items[i + 1])), req, res);
+      String set = res.getHeader("Set-Cookie");
+      if (set != null) {
+        String value = set.split(";", 2)[0].substring("cart=".length());
+        req = new MockHttpServletRequest();
+        req.setCookies(new Cookie("cart", value));
+      }
+    }
+    Object id = routes.cart(req, new MockHttpServletResponse()).get("id");
+    return new Shopper(req.getCookies(), id == null ? null : id.toString());
+  }
+
+  MockHttpServletResponse checkout(Shopper s) throws Exception {
+    return mvc.perform(MockMvcRequestBuilders.post(ROUTE).contentType(MediaType.APPLICATION_JSON)
+        .content(new ObjectMapper().writeValueAsString(Map.of("cart_id", s.cartId()))).cookie(s.cookies()))
+        .andReturn().getResponse();
+  }
+
+  @Test
+  void anUnsellableCartIsThePaymentRoutes400WithCatalogCartsCode() throws Exception {
+    Shopper s = shopper("p07", 1, "p02", 1);
+    store.setActive("p07", false);
+    MockHttpServletResponse r = checkout(s);
+    assertEquals(400, r.getStatus(), r.getContentAsString());
+    assertEquals(Map.of("error", "product_unavailable"), new ObjectMapper().readValue(r.getContentAsString(), Map.class));
+  }
+
+  @Test
+  void aSellableCartInTheSameShopDoesReachTheProvider() throws Exception {
+    Shopper s = shopper("p02", 1);
+    int status;
+    try {
+      status = checkout(s).getStatus();
+    } catch (Exception e) {
+      status = 500;
+    }
+    assertTrue(status >= 500, "the unreachable provider was not called: " + status);
+  }
+}
+"""
+
+# The payment template's own checkout route, its env and its provider client, per payment template.
+ROUTES = {
+    "stripe-checkout": {
+        "route": "/api/checkout",
+        "node_client": "stripe",
+        "node_env": '{ STRIPE_SECRET_KEY: "sk_" + "test_" + hex(), STRIPE_PUBLISHABLE_KEY: "pk_" + "test_" + hex(), '
+                    'STRIPE_WEBHOOK_SECRET: "whsec_" + hex(), APP_BASE_URL: "http://shop.test" }',
+        "py_env": '{"STRIPE_SECRET_KEY": "sk_" + "test_" + secrets.token_hex(16), '
+                  '"STRIPE_PUBLISHABLE_KEY": "pk_" + "test_" + secrets.token_hex(16), '
+                  '"STRIPE_WEBHOOK_SECRET": "whsec_" + secrets.token_hex(16), "APP_BASE_URL": "https://shop.test"}',
+        "java_build": """\
+    StripeSettings settings = StripeSettings.load(Map.of("STRIPE_SECRET_KEY", "sk_" + "test_" + hex(),
+        "STRIPE_PUBLISHABLE_KEY", "pk_" + "test_" + hex(), "STRIPE_WEBHOOK_SECRET", "whsec_" + hex(),
+        "APP_BASE_URL", "https://shop.test")::get);
+    com.stripe.StripeClient client = com.stripe.StripeClient.builder().setApiKey(settings.secretKey)
+        .setApiBase(NOWHERE).setMaxNetworkRetries(0).build();
+    StripeCheckoutController controller = new StripeCheckoutController(client, settings, new OrderStore(), payments,
+        request -> false, order -> {});""",
+    },
+    "paypal-checkout": {
+        "route": "/api/paypal/orders",
+        "node_client": "paypal",
+        "node_env": '{ PAYPAL_CLIENT_ID: "fake-client-" + hex(), PAYPAL_CLIENT_SECRET: "fake-" + hex(), '
+                    'PAYPAL_WEBHOOK_ID: "WH" + hex(), APP_BASE_URL: "http://shop.test" }',
+        "py_env": '{"PAYPAL_CLIENT_ID": "fake-client-" + secrets.token_hex(16), '
+                  '"PAYPAL_CLIENT_SECRET": "fake-" + secrets.token_hex(16), '
+                  '"PAYPAL_WEBHOOK_ID": "WH" + secrets.token_hex(8), "APP_BASE_URL": "https://shop.test"}',
+        "java_build": """\
+    PayPalSettings settings = PayPalSettings.load(Map.of("PAYPAL_CLIENT_ID", "fake-client-" + hex(),
+        "PAYPAL_CLIENT_SECRET", "fake-" + hex(), "PAYPAL_WEBHOOK_ID", "WH" + hex(),
+        "APP_BASE_URL", "https://shop.test")::get);
+    PayPalClient client = new PayPalClient(NOWHERE, "fake-client-" + hex(), "fake-" + hex());
+    PayPalCheckoutController controller = new PayPalCheckoutController(client, settings, new OrderStore(), payments,
+        request -> false, order -> {});""",
+    },
+}
+
+
+def _fill(text: str, payments_id: str) -> str:
+    for key, value in ROUTES[payments_id].items():
+        text = text.replace(f"@{key.upper()}@", value)
+    assert not re.search(r"@[A-Z_]+@", text), "an unfilled placeholder"
+    return text
+
+
 GLUE = {
     "node": {"shop_catalog.mjs": NODE_SHOP_CATALOG, "shop.mjs": NODE_SHOP,
              "tests/compose/contract.test.mjs": NODE_CONTRACT_TEST},
@@ -711,9 +982,16 @@ GLUE = {
              "tests/compose/com/example/shop/CatalogPaymentsContractTest.java": JAVA_CONTRACT_TEST},
 }
 
-COMPOSE_TESTS = {"node": ("npm run test:compose", 4),
-                 "python": ("python3 -m pytest -q tests/compose --junitxml=boss-compose-junit.xml", 4),
-                 "java": ("mvn -q -B test -Dtest=CatalogPaymentsContractTest", 4)}
+ROUTE_GLUE = {
+    "node": {"tests/compose/route.test.mjs": NODE_ROUTE_TEST},
+    "python": {"tests/compose/test_compose_route.py": PY_ROUTE_TEST},
+    "java": {"tests/compose/com/example/shop/CatalogPaymentsRouteTest.java": JAVA_ROUTE_TEST},
+}
+
+# 4 contract tests + 2 route tests per stack.
+COMPOSE_TESTS = {"node": ("npm run test:compose", 6),
+                 "python": ("python3 -m pytest -q tests/compose --junitxml=boss-compose-junit.xml", 6),
+                 "java": ("mvn -q -B test -Dtest=CatalogPayments*", 6)}
 
 
 def compose(payments_id: str, stack: str) -> dict[str, bytes]:
@@ -731,9 +1009,9 @@ def compose(payments_id: str, stack: str) -> dict[str, bytes]:
     else:
         app["pom.xml"] = _merge_pom(cat["pom.xml"], pay["pom.xml"])
         app["schema.sql"] = _merge_schema(cat["schema.sql"], pay["schema.sql"])
-    for rel, text in GLUE[stack].items():
+    for rel, text in {**GLUE[stack], **ROUTE_GLUE[stack]}.items():
         assert rel not in app, rel
-        app[rel] = text.encode()
+        app[rel] = _fill(text, payments_id).encode()
     return app
 
 
@@ -807,15 +1085,18 @@ def test_the_combined_app_passes_both_templates_gates(payments_id, stack, tmp_pa
 @pytest.mark.parametrize("payments_id", [p for p, s in CASES if s == "python"])
 def test_the_python_contract_runs_in_the_combined_app(payments_id, tmp_path):
     """No variable needed: the payment template's price_line_items over catalog-cart's provider
-    (FastAPI only; the payment provider's SDK is never imported)."""
+    (FastAPI only), and, when the payment template's own imports are installed (stripe-checkout
+    needs the stripe SDK), its real checkout route refusing an unsellable cart with a 400."""
     for module in ("fastapi", "httpx"):
         if importlib.util.find_spec(module) is None:
             pytest.skip(f"{module} is not installed")
     app = _write(compose(payments_id, "python"), tmp_path / "app")
-    proc = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/compose"],
+    route = payments_id != "stripe-checkout" or importlib.util.find_spec("stripe") is not None
+    target = "tests/compose" if route else "tests/compose/test_compose_contract.py"
+    proc = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", target],
                           cwd=app, capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
-    assert "4 passed" in proc.stdout, proc.stdout[-2000:]
+    assert f"{6 if route else 4} passed" in proc.stdout, proc.stdout[-2000:]
 
 
 # ---- the real runs (opt-in) ----------------------------------------------------------------------
