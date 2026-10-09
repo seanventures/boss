@@ -947,6 +947,18 @@ Catalogue permissions with no route today are used by the new identity API (§5)
 | `list_mcp_servers` | `mcp_server:read` |  | `watch_code_task` | `code_task:read` |
 | `list_meetings` | `meeting:read` |  | `write_db` | `host:exec` |
 
+App platform tools (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.6, §4.3; `tools/app_platform_tools.py`), declared like their routes:
+
+| Tool | Permission | | Tool | Permission |
+|---|---|---|---|---|
+| `list_templates` | `template:read` (org) |  | `run_security_scan` | `security_scan:run` |
+| `describe_template` | `template:read` (org) |  | `security_scan_status` | `project:read` |
+| `template_status` | `project:read` |  | `list_security_findings` | `project:read` |
+| `apply_template` | `workflow_run:start` + `template:read` (`also_requires`) |  | `security_report` | `project:read` |
+|  |  |  | `security_review_status` | `project:read` |
+
+A tool whose route checks a second key in its handler declares it in `ToolSpec.also_requires`; the identity gate checks each at its own scope (an org-only key at the org) after the first. Import, approve, trial, delete and triage stay console/API only.
+
 `query_db` and `write_db` map to `host:exec` because they run arbitrary SQL. They are not delegable, so an agent cannot hold them through a grant. Today these two tools are already kept off the unscoped MCP surface (`_UNSCOPED_SQL_TOOLS`), and that stays.
 
 ## 8. Console pages and actions → permission
