@@ -11,7 +11,7 @@ Branch: `feat/app-platform` (worktree `~/src/boss-wt-appplat`). Push after every
 | 2 | Permission catalogue: the §8.2 permissions + regenerated files | done |
 | 3 | Router stubs (`routes_templates.py`, `routes_security.py`, `routes_links.py`, `oidc_routes.py`), 501 `not_implemented_yet`, included in `main.py` | done |
 | 4 | `engine/boss_engine/templates/manifest.py` (boss.template/v1, frozen) + unit tests | done |
-| 5 | IDENTITY.md amendment for D10 (RS256 ID tokens for apps; EdDSA-only is BOSS-internal) | next |
+| 5 | IDENTITY.md amendment for D10 (RS256 ID tokens for apps; EdDSA-only is BOSS-internal) | done |
 
 ### Notes per step
 
@@ -91,6 +91,21 @@ Branch: `feat/app-platform` (worktree `~/src/boss-wt-appplat`). Push after every
    need the repo or the install (tree, sizes, secret scan, built-in id clash, BOSS hosts in egress,
    who may set `insecure_by_design`) are S2's. Tests: `engine/tests/test_template_manifest.py`
    (45; the spec's example verbatim is valid; the field set is pinned).
+
+5. D10. IDENTITY.md gains D35 and a paragraph under the token families: "EdDSA only" is for
+   BOSS's own tokens; app ID tokens are RS256 by default, EdDSA per client, in a separate `oidc`
+   key family neither side accepts from the other; D3 points at D35. The amendment log
+   (docs/maintainers/IDENTITY_BUILD.md §7) records AP-1 (catalogue), AP-2 (`oidc_provider_endpoint`)
+   and AP-3 (D35).
+
+## What's next (after S0)
+
+S0 is complete. Per §8.2 the next streams start in parallel against these interfaces: S2 (F2
+engine/API: `engine/boss_engine/templates/` beyond `manifest.py`, `routes_templates.py`, the
+`template_tests` gate, vault kind `app_secret`, which needs `identity_vault_items.kind`'s CHECK
+widened in the identity block by amendment), S4, S5, S6, then the UI streams. Each stream edits only
+its own schema block and router module, and updates `test_app_platform_day1_routes.py` as its
+routes stop answering 501.
 
 ## Resume instructions
 
