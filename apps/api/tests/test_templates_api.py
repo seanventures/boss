@@ -72,7 +72,7 @@ def _app_run(engine, project_id: str, title: str = "Hello Notes", files=("web/pa
     with engine.begin() as db:
         db.execute(text(
             "INSERT INTO code_task_runs (id, project_id, status, phase, title, spec, state, finalize_ctx) "
-            "VALUES (:id, :p, 'succeeded', 'done', :t, '{}'::jsonb, CAST(:s AS JSONB), '{}'::jsonb)"),
+            "VALUES (:id, :p, 'completed', 'done', :t, '{}'::jsonb, CAST(:s AS JSONB), '{}'::jsonb)"),
             {"id": run_id, "p": project_id, "t": title,
              "s": json.dumps({"impl_files": list(files), "test_files": []})})
     return run_id

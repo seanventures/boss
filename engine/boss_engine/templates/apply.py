@@ -58,18 +58,18 @@ def _app_key_of(run: dict) -> tuple[str, str]:
 
 def resolve_app(c, project_id: str, *, app_key: Optional[str] = None,
                 extends_run_id: Optional[str] = None) -> dict:
-    """{app_key, app_name, run_id, files}: the app's newest succeeded build (the run the change
+    """{app_key, app_name, run_id, files}: the app's newest finished (completed) build (the run the change
     builds onto) and the files its lineage wrote. 404 when the project has no such app."""
     rows = c.execute(text(
         "SELECT id, project_id, title, spec, finalize_ctx, state, status, created_at FROM code_task_runs "
-        "WHERE project_id = :p AND status = 'succeeded' ORDER BY created_at DESC LIMIT 500"),
+        "WHERE project_id = :p AND status IN ('completed', 'succeeded') ORDER BY created_at DESC LIMIT 500"),
         {"p": project_id}).mappings().all()
     runs = [dict(r) for r in rows]
     chosen = None
     if extends_run_id:
         chosen = next((r for r in runs if r["id"] == extends_run_id), None)
         if chosen is None:
-            raise TemplateError(404, "app_not_found", "that build is not a succeeded build in this project")
+            raise TemplateError(404, "app_not_found", "that build is not a finished build in this project")
     key = name = None
     if chosen is not None:
         key, name = _app_key_of(chosen)
@@ -82,7 +82,7 @@ def resolve_app(c, project_id: str, *, app_key: Optional[str] = None,
                 chosen, key, name = r, k, n
                 break
         if chosen is None:
-            raise TemplateError(404, "app_not_found", "no app with that key has a succeeded build here")
+            raise TemplateError(404, "app_not_found", "no app with that key has a finished build here")
     files: set[str] = set()
     for r in runs:
         if _app_key_of(r)[0] == key:
