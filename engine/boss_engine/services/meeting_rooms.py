@@ -131,7 +131,7 @@ def meeting_room_items(connection, project_id: str, *, limit: int = 25, offset: 
     covered_meetings: set = set()
     runs = connection.execute(
         text("""SELECT id, task_id, status, phase, directive, url, role_keys, constraints, state, usage,
-                       created_at, updated_at, title, decision_id, meeting_id, error
+                       created_at, updated_at, title, decision_id, meeting_id, error, finalize_ctx
                 FROM meeting_runs WHERE project_id = :p
                   AND (CAST(:only AS text) IS NULL OR id = :only)
                   AND (CAST(:task AS text) IS NULL OR task_id = :task)
@@ -163,6 +163,11 @@ def meeting_room_items(connection, project_id: str, *, limit: int = 25, offset: 
             "title": _title(r["title"], r["directive"], prefix=True),  # via meeting_title
             "purpose": "Cross-functional PRD review and drafting",
             "meeting_type": mtype,
+            # A SECURITY REVIEW'S PANEL (security_review workflow): its document is the review's
+            # recommendations, drawn as the checklist that becomes the decision (spec §4.6).
+            **({"security_review": {"run_id": str(((_j(r["finalize_ctx"]) or {}).get("origin") or {})
+                                                   .get("workflow_run_id") or "") or None}}
+               if constraints.get("purpose") == "security_review" else {}),
             "status": r["status"], "phase": r["phase"], "error": r["error"],
             **prd_state_of(connection, run_status=r["status"], decision_id=r["decision_id"],
                            task_id=r["task_id"], pull_request_url=pr_url),

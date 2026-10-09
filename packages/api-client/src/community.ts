@@ -1649,6 +1649,8 @@ export type Meeting = {
   /** What BOSS added to the prompt (the workflow's purpose, the research), as markdown. */
   context?: string | null;
   meeting_type?: "prd_panel" | "go_no_go" | "standup" | string | null;
+  /** A security review's panel: the review run whose checklist this panel's document became. */
+  security_review?: { run_id: string | null } | null;
   /** Why a failed panel stopped. */
   error?: string | null;
   /** The decision that gates publishing the PRD. */
