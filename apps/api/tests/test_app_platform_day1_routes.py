@@ -4,6 +4,7 @@ real app under enforce.
 Every route the four router modules declare boots with the API, is guarded by its declaration,
 and, past the guard, answers 501 `not_implemented_yet` naming its owner stream. As each stream
 builds its routes, it narrows STUB_OWNERS (a route that really works no longer answers 501).
+S5 (links) is built: apps/api/tests/test_app_links.py.
 """
 from __future__ import annotations
 
@@ -21,7 +22,6 @@ from boss_engine.identity.declarations import Public, access_of
 STUB_OWNERS = {
     "apps.api.app.routes_templates": "S2",
     "apps.api.app.routes_security": "S4",
-    "apps.api.app.routes_links": "S5",
     "apps.api.app.oidc_routes": "S6",
 }
 
@@ -53,10 +53,10 @@ def objects_in_project_a(monkeypatch, world):
                             lambda db, oid, o=world.org, p=world.project_a: (o, p))
 
 
-def test_the_four_modules_are_mounted():
+def test_the_stub_modules_are_mounted():
     mounted = {route.endpoint.__module__ for _, route in _operations()}
     assert mounted == set(STUB_OWNERS)
-    assert len(list(_operations())) >= 54       # the day-1 surface; streams only add
+    assert len(list(_operations())) >= 49       # the day-1 surface less S5's five; streams only add
 
 
 def test_an_owner_reaches_every_stub_and_it_says_who_builds_it(world, objects_in_project_a):

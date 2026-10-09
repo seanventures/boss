@@ -114,3 +114,60 @@ routes stop answering 501.
 - Test DB: container `boss-test-pg` on localhost:55432, user `boss`; password via
   `docker exec boss-test-pg printenv POSTGRES_PASSWORD` (never print it). Create a private database
   (S0 used `boss_test_s0`) and drop it afterwards.
+
+## Stream S5: cross-app links (F5)
+
+Branch `feat/s5-links` (worktree `~/src/boss-wt-s5-links`, from `feat/app-platform` @ 8b7cc39d).
+
+| # | Step | State |
+|---|---|---|
+| 1 | Engine: `app_links/service.py`, rule module `identity/link_rules.py`, F5 schema block, `app_link:manage`, audit event types | done |
+| 2 | API: `routes_links.py` built (list, create, revoke, test-user presence, D9 reveal) + `test_app_links.py` | done |
+| 3 | Link gateway `apps/egress/boss_egress/links.py` (a port per link, per-request checks, NOTIFY) + adversarial tests | todo |
+| 4 | Wiring: preview start/respawn and the build get the link env; previews take ports from `BOSS_PREVIEW_PORTS`; the sandbox fence | todo |
+| 5 | Console App ▸ Links + browser-walked screenshot | todo |
+| 6 | End-to-end proof on a compose stack | todo |
+
+### Decisions
+
+- **`app_link:manage` (new, project scope, Owner/Admin/Operator, not step-up).** S0 left create/revoke
+  on `project:update` (Owner/Admin + step-up), which would stop the operator in §5.1's own stories from
+  linking the two apps they preview. A link hands out only GENERATED, test-only users of an app of the
+  SAME project (D7, S5.3) through a gateway that reaches only that app's preview, so it is an
+  operator's job and not a critical one. Not delegable: an agent cannot link apps. Catalogue 192 → 193;
+  role sizes owner 188, admin 179, operator 92 (pins updated in the two catalogue tests).
+- Listing links and test-user presence stay `project:read` (no value is ever shown). The reveal is
+  `app_secret:write` (step-up, D9) and writes `app_link.test_users_revealed`.
+- Audit: `app_link.created`, `app_link.revoked`, `app_link.test_users_revealed` join `audit.EVENT_TYPES`.
+  Detail keys never name a credential (`gives`, not `credentials`: the audit refuses credential-named keys).
+- **App key** = `agent_assignment.app_key(app name)`, the identity key every app view groups runs by;
+  a path may also name the app by any of its run ids (the console's app rows are keyed by run id) or
+  its name. `service.resolve_app_key` — S2 may want to share it for `/v1/apps/{app_key}/…`.
+- **Schema**: the alias is unique among ACTIVE links only (partial index), so a revoked alias can be
+  linked again; `gateway_port` is unique among active links. New tables in the F5 block:
+  `app_link_passes` (hash only), `app_test_users` (presence, count, generation; values in the vault).
+- **Test users** live in the vault as `provider_credential` items with provider `boss_test_users` (S2
+  owns the `app_secret` vault kind; switch to it, mode `generated`, once S2 lands). 3 users per
+  (provider app, env): two `user`, one `admin` (two users make IDOR tests possible). Rotated on each new
+  preview of the provider; the old vault item is deleted. Every value is registered with the
+  redaction filter in the process that holds it.
+- **Link pass** (`boss_lnk_…`, header `X-Boss-Link`, env `BOSS_LINK_<ALIAS>_TOKEN`): one per (link,
+  consumer workload). The gateway cannot tell sandbox uids apart (they share the api container's
+  address) and the API process cannot change iptables at runtime (it drops NET_ADMIN for good), so
+  the identity "B's run token or B's preview" is carried by a pass BOSS mints for that workload, and
+  the gateway checks the workload is live on every request (the run is running and its egress
+  credential is not revoked; the preview is running and unexpired). B's own `Authorization` and
+  cookies go to A untouched; the pass never does.
+- `credentials=client` is refused (422) until F6 exists.
+
+### Tests
+
+- `engine/tests/test_link_rules.py` (26): the gateway decision table row by row, header filtering,
+  port ranges.
+- `apps/api/tests/test_app_links.py` (23): who may link/see/revoke per role; D7 by every door (provider
+  of another project, consumer of another project, revoke naming another project); bad alias/env/
+  credentials; one port per link and alias reuse after revoke; revocation kills every pass and both
+  events are audited; test users flow to provider and consumer, rotate per preview, are encrypted at
+  rest, never appear in logs, lists, presence, create responses or audit rows; the D9 reveal needs
+  step-up and is audited; a pass dies with its workload.
+- Regenerated: `tests/identity/matrix.yaml`; `test_app_platform_day1_routes.py` no longer lists S5.
