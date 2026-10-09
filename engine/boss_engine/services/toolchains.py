@@ -38,7 +38,10 @@ CACHE_MAX_ENV = "BOSS_TOOLCHAIN_CACHE_MAX_MB"
 DEFAULT_CACHE_MAX_MB = 2048
 
 #: Every toolchain an install can turn on, and how to say so.
-KNOWN = {"java": "Java (Temurin JDK 21, Maven, Gradle)"}
+KNOWN = {"java": "Java (Temurin JDK 21, Maven, Gradle)",
+         # The security review's scanners (APP_TEMPLATES_AND_SECURITY_LOOP.md §4.5); the stage is
+         # built on the Java one because ZAP needs a JRE, so this install has Java too.
+         "security": "Security scanners (Semgrep, OSV-Scanner, OWASP ZAP; includes Java)"}
 ENABLE_HINT = "boss toolchains enable {name}"
 
 MAVEN_FILES = ("pom.xml",)
@@ -112,7 +115,7 @@ def build_file(build: str) -> str:
 
 def missing_message(name: str, found: str) -> str:
     """The words a build shows when the project needs a toolchain this install does not have."""
-    label = {"java": "Java"}.get(name, name)
+    label = {"java": "Java", "security": "the security scanners"}.get(name, name)
     return (f"This project needs {label} (it has a {found}), and {label} is not turned on for "
             f"this BOSS. Turn it on with `{ENABLE_HINT.format(name=name)}` on the BOSS host "
             f"(or set BOSS_TOOLCHAINS={name} in .env and run `boss update`), then run the build "

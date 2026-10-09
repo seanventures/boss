@@ -114,3 +114,32 @@ routes stop answering 501.
 - Test DB: container `boss-test-pg` on localhost:55432, user `boss`; password via
   `docker exec boss-test-pg printenv POSTGRES_PASSWORD` (never print it). Create a private database
   (S0 used `boss_test_s0`) and drop it afterwards.
+
+## Stream S4: security scan engine and API (F4, §4; UI and workflow wiring later)
+
+Branch `feat/s4-security` (worktree `~/src/boss-wt-s4-security`), from
+`feat/app-platform` @ 8b7cc39d.
+
+| # | Step | State |
+|---|---|---|
+| 1 | `security` toolchain layer: Dockerfile.community stage, registry entry, egress `api.osv.dev` (D6) | done |
+| 2 | `engine/boss_engine/security_scan/`: parsers, fingerprints, redaction, scope, runners, service, report + unit tests | in progress |
+| 3 | `routes_security.py` (501s replaced), worker job `security.scan`, authz tests | todo |
+| 4 | End-to-end proof on a compose stack (Node/Express + SQLite app: scan, fix, re-scan) | todo |
+
+### Notes per step
+
+1. The layer. `BOSS_TOOLCHAINS=security` selects `toolchains-security`, built FROM `toolchains-java`
+   (ZAP needs a JRE; spec §4.2), so the manifest carries `java` and `security`. Pinned:
+   Semgrep 1.180.0 + every dependency from a hashed lock
+   (`engine/boss_engine/security_scan/semgrep-requirements.lock`, `pip --require-hashes
+   --only-binary=:all:`) in its own venv; OSV-Scanner 2.6.0 and ZAP 2.17.0 (Linux tarball) checked
+   against the release SHA-256s. Rule packs: semgrep-rules @ 9bbf021d, directories javascript,
+   typescript, python, java, generic/secrets (891 rule files), selected by `rulepack.py` and
+   verified by a CONTENT digest (`sha256:1ebc108c…`), not the archive's hash (GitHub re-gzips).
+   No rule is fetched at scan time. The rules are **not committed** to this repo: they are under the
+   Semgrep Rules License v1.0 — fetched at image build on the operator's host. Open question for
+   the operator: is that use within the license for BOSS Community? (Flagged, not decided here.)
+   Image size (arm64 stage, measured): Java 372 MB + Semgrep venv 383 MB + ZAP 268 MB + OSV 52 MB
+   + rules 5 MB ≈ 1.08 GB on the api/worker image when `security` is on; nothing when off.
+   `boss toolchains enable security` works (`KNOWN_TOOLCHAINS` in boss.sh).

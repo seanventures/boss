@@ -73,10 +73,11 @@ Commands:
                         legacy status         the shared credentials still in use, with end dates
                         posture | audit verify | migrate
   toolchains [list]   Build toolchains: which this install has (Python and Node always)
-  toolchains enable java | disable java
+  toolchains enable java|security | disable java|security
                       Turn an opt-in toolchain on or off: saves BOSS_TOOLCHAINS in .env,
                       rebuilds the api and worker images and restarts them. Java adds a
-                      pinned Temurin JDK 21, Maven and Gradle (about 0.5 GB). See
+                      pinned Temurin JDK 21, Maven and Gradle (about 0.5 GB); security adds
+                      Semgrep, OSV-Scanner and OWASP ZAP on top of Java. See
                       docs/community/TOOLCHAINS.md
   version             Installed release and commit
 
@@ -343,7 +344,7 @@ cmd_update() {
 
 # ---- toolchains ------------------------------------------------------------------------------
 
-KNOWN_TOOLCHAINS=(java)
+KNOWN_TOOLCHAINS=(java security)
 
 cmd_toolchains() {
   need_install

@@ -1,0 +1,80 @@
+{
+ "version": "2.1.0",
+ "runs": [
+  {
+   "invocations": [
+    {
+     "executionSuccessful": true,
+     "toolExecutionNotifications": []
+    }
+   ],
+   "results": [
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "requires login"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "server.js",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 22,
+         "endLine": 10,
+         "snippet": {
+          "text": "const app = express();"
+         },
+         "startColumn": 7,
+         "startLine": 10
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "A CSRF middleware was not detected in your express application. Ensure you are either using one such as `csurf` or `csrf` (see rule references) and/or you are properly doing CSRF validation in your routes with a token or cookies."
+     },
+     "properties": {},
+     "ruleId": "opt.toolchains.security.semgrep-rules.javascript.express.security.audit.express-check-csurf-middleware-usage"
+    }
+   ],
+   "tool": {
+    "driver": {
+     "name": "Semgrep OSS",
+     "rules": [
+      {
+       "defaultConfiguration": {
+        "level": "note"
+       },
+       "fullDescription": {
+        "text": "A CSRF middleware was not detected in your express application. Ensure you are either using one such as `csurf` or `csrf` (see rule references) and/or you are properly doing CSRF validation in your routes with a token or cookies."
+       },
+       "help": {
+        "markdown": "A CSRF middleware was not detected in your express application. Ensure you are either using one such as `csurf` or `csrf` (see rule references) and/or you are properly doing CSRF validation in your routes with a token or cookies.\n\n<b>References:</b>\n - [https://www.npmjs.com/package/csurf](https://www.npmjs.com/package/csurf)\n - [https://www.npmjs.com/package/csrf](https://www.npmjs.com/package/csrf)\n - [https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)\n",
+        "text": "A CSRF middleware was not detected in your express application. Ensure you are either using one such as `csurf` or `csrf` (see rule references) and/or you are properly doing CSRF validation in your routes with a token or cookies."
+       },
+       "id": "opt.toolchains.security.semgrep-rules.javascript.express.security.audit.express-check-csurf-middleware-usage",
+       "name": "opt.toolchains.security.semgrep-rules.javascript.express.security.audit.express-check-csurf-middleware-usage",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-352: Cross-Site Request Forgery (CSRF)",
+         "LOW CONFIDENCE",
+         "OWASP-A01:2021 - Broken Access Control",
+         "OWASP-A01:2025 - Broken Access Control",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Semgrep Finding: opt.toolchains.security.semgrep-rules.javascript.express.security.audit.express-check-csurf-middleware-usage"
+       }
+      }
+     ],
+     "semanticVersion": "1.180.0"
+    }
+   }
+  }
+ ],
+ "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json"
+}
