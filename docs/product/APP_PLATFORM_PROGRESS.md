@@ -304,7 +304,7 @@ end_session). Decision for the operator (suggested D14).
 - Tests: DB `boss_test_s6` on boss-test-pg (localhost:55432, user boss; password via
   `docker exec boss-test-pg printenv POSTGRES_PASSWORD`, never printed). Run with
   `DATABASE_URL=postgresql+psycopg://boss:$PW@localhost:55432/boss_test_s6 PYTHONPATH=.:engine python3 -m pytest -q apps/api/tests/test_oidc_provider_*.py`.
-- DB `boss_test_s6` was DROPPED at the end of phase 1: `CREATE DATABASE boss_test_s6` first.
+- DB `boss_test_s6` is DROPPED after each session: `CREATE DATABASE boss_test_s6` first.
 - Conformance (step 4), not run: the suite is its own compose stack (server, MongoDB, nginx), and
   the one-stack slot was held (bosss4, then bosss2). It also needs the issuer reachable from its
   containers (BOSS_PUBLIC_URL on host.docker.internal, or the suite on the host network) and a
