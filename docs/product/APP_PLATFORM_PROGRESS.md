@@ -245,3 +245,23 @@ routes stop answering 501.
 - Test DB: container `boss-test-pg` on localhost:55432, user `boss`; password via
   `docker exec boss-test-pg printenv POSTGRES_PASSWORD` (never print it). Create a private database
   (S0 used `boss_test_s0`) and drop it afterwards.
+
+## Integration (feat/app-platform)
+
+Integrator merges S2, S4, S5, S6 in that order, then three must-fixes (preview sandbox uid,
+template gates block the PR, `COPY templates` in the image), then one combined compose proof.
+Test DB: `boss_test_integ` on boss-test-pg (drop it when done).
+
+| # | Step | State |
+|---|---|---|
+| 1a | Merge S2 (feat/s2-templates @ 54f32a91): clean. engine/tests/templates + test_templates_api 156 passed; identity suites 46 passed | done |
+| 1b | Merge S4 (feat/s4-security @ bae890a7) | next |
+| 1c | Merge S5 (feat/s5-links @ 5caa424c) | |
+| 1d | Merge S6 (feat/s6-oidc @ 9123ee29) | |
+| 2a | Previews run as a sandbox uid, fenced | |
+| 2b | template_tests / no_committed_secrets block the push and the PR | |
+| 2c | Dockerfile.community ships templates/ | |
+| 3 | Combined compose proof | |
+
+Identity coverage suites run after each merge: catalogue use, matrix, public routes, read-only
+GETs, system-only, route fixture freshness, day-1 routes, catalogue-is-generated.
