@@ -1080,3 +1080,20 @@ including F6**.
 | D11 | Run the OpenID conformance suite in CI (needs Docker on a CI runner) | Yes, nightly, not per-PR |
 | D12 | Active ZAP (API scan) default | Off by default; on for `lab` projects and in the security_review workflow's options |
 | D13 | Customer pools in Community or Enterprise only | Workforce pool in Community, customer pools Enterprise (operator's packaging call) |
+
+## Decisions (operator, 2026-10-08)
+
+The operator accepted every recommendation:
+- **D1:** built-in templates live in the BOSS repo.
+- **D2:** one framework per stack (Express, FastAPI, Spring Boot), plus Dropwizard for the banking starter only.
+- **D3:** only Owners and Admins approve imported templates, and never their own import.
+- **D4:** previews stay private; a documented tunnel handles webhooks.
+- **D5:** a test GitHub OAuth app for the end-to-end proofs; the operator creates it.
+- **D6:** OSV online by default.
+- **D7:** no cross-project links in v1.
+- **D8:** one port per link.
+- **D9:** test-pool passwords can be revealed in the console, behind step-up and audited.
+- **D10:** RS256 ID tokens by default; IDENTITY.md's "EdDSA only" covers BOSS's own internal tokens only (amend it).
+- **D11:** OpenID conformance runs nightly in CI when a runner has Docker.
+- **D12:** active ZAP scanning off by default; the banking demo turns it on.
+- **D13:** customer pools are in Community.
