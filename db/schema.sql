@@ -8360,7 +8360,7 @@ CREATE TABLE IF NOT EXISTS oidc_pool_users (
   email            TEXT NOT NULL,
   email_verified   BOOLEAN NOT NULL DEFAULT false,
   name             TEXT,
-  status           TEXT NOT NULL DEFAULT 'active',
+  status           TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('pending', 'active', 'disabled')),
   password_hash    TEXT,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_sign_in_at  TIMESTAMPTZ
@@ -8507,4 +8507,21 @@ CREATE TABLE IF NOT EXISTS oidc_sessions (
   ip                   INET,
   user_agent           TEXT
 );
+
+-- Customer-pool challenges, bound to the pre-auth cookie __Host-boss_app_preauth (hashed here):
+-- the second factor after a password, a pending TOTP enrolment, a passkey ceremony, an emailed
+-- code (verification, reset). Never identity_auth_challenges: a pool user is not a principal.
+CREATE TABLE IF NOT EXISTS oidc_app_challenges (
+  id_hash       TEXT PRIMARY KEY,
+  binding_hash  TEXT NOT NULL,
+  pool_id       TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  pool_user_id  TEXT REFERENCES oidc_pool_users(id),
+  purpose       TEXT NOT NULL CHECK (purpose IN ('mfa', 'enrol_totp', 'passkey', 'verify_email', 'reset')),
+  payload       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at    TIMESTAMPTZ NOT NULL,
+  used_at       TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS oidc_app_challenges_binding ON oidc_app_challenges (binding_hash);
 -- END F6 ------------------------------------------------------------------------------------------

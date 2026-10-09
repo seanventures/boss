@@ -25,7 +25,7 @@ from urllib.parse import quote, urlencode
 
 from sqlalchemy import text
 
-from . import clients, consent, pages, pools, tokens
+from . import clients, consent, customers, pages, pools, tokens
 from .util import (ACCESS_TTL, ACR_MFA, ACR_PWD, INTERACTION_TTL, SUPPORTED_SCOPES, TYP_ACCESS, TYP_ID, OidcError,
                    audit, now, random_token, sha256_hex)
 
@@ -42,15 +42,32 @@ class Reply:
     status: int
     body: Any = None                    # dict -> JSON; str -> HTML; None -> empty
     headers: dict[str, str] = field(default_factory=dict)
+    cookies: list[str] = field(default_factory=list)     # Set-Cookie values
 
 
 @dataclass(frozen=True)
 class Browser:
-    session_cookie: Optional[str] = None
+    """What a browser step carried. Cookie values are secrets: never logged (repr hides them)."""
+    session_cookie: Optional[str] = field(default=None, repr=False)        # the console's (workforce)
     ip: Optional[str] = None
     user_agent: Optional[str] = None
     origin: Optional[str] = None
     sec_fetch_site: Optional[str] = None
+    app_session: Optional[str] = field(default=None, repr=False)           # __Host-boss_app_session
+    app_preauth: Optional[str] = field(default=None, repr=False)           # __Host-boss_app_preauth
+    content_type: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class Who:
+    """The signed-in subject of a browser step: a BOSS person (workforce) or a pool user (customer)."""
+    kind: str
+    subject_ref: str
+    session_id: str
+    label: str
+    auth_time: datetime
+    mfa: bool
+    methods: tuple[str, ...]
 
 
 # ---- helpers ---------------------------------------------------------------------------------
@@ -247,8 +264,19 @@ def _workforce_session(db: Any, cookie: Optional[str]) -> tuple[str, Any]:
     return "ok", (row, principal)
 
 
-def _auth_time(row: Any) -> datetime:
-    return max(t for t in (row.created_at, row.mfa_at) if t is not None)
+_SECOND_FACTORS = {"totp", "passkey", "webauthn", "recovery_code", "sso"}
+
+
+def _workforce_who(row: Any, principal: Any) -> Who:
+    auth_time = max(t for t in (row.created_at, row.mfa_at) if t is not None)
+    # A step-up by password (allowed for a person with no factor) stamps mfa_at but is not MFA.
+    mfa = row.mfa_at is not None and bool(set(row.auth_methods) & _SECOND_FACTORS)
+    return Who("workforce", principal.id, row.id, principal.display_name, auth_time, mfa, tuple(row.auth_methods))
+
+
+def _customer_who(sess: Any) -> Who:
+    return Who("customer", sess.user["id"], sess.id, sess.user.get("name") or sess.user["email"], sess.created_at,
+               sess.mfa_at is not None, sess.auth_methods)
 
 
 def _new_interaction(db: Any, org_id: str, client_id: str, params: Mapping[str, Any]) -> str:
@@ -258,6 +286,17 @@ def _new_interaction(db: Any, org_id: str, client_id: str, params: Mapping[str, 
                {"h": sha256_hex(raw), "o": org_id, "c": client_id, "p": json.dumps(dict(params)),
                 "e": now() + INTERACTION_TTL})
     return raw
+
+
+def peek_interaction(db: Any, org_id: str, raw: Optional[str]) -> Optional[dict[str, Any]]:
+    """A live interaction, left live (a multi-step sign-in carries it to the end)."""
+    if not raw or not raw.startswith("oin_") or len(raw) > 100:
+        return None
+    r = db.execute(text("SELECT * FROM oidc_interactions WHERE id_hash = :h AND org_id = :o"),
+                   {"h": sha256_hex(raw), "o": org_id}).mappings().first()
+    if r is None or r["used_at"] is not None or r["expires_at"] <= now():
+        return None
+    return dict(r)
 
 
 def _take_interaction(db: Any, org_id: str, raw: Optional[str]) -> Optional[dict[str, Any]]:
@@ -273,76 +312,111 @@ def _take_interaction(db: Any, org_id: str, raw: Optional[str]) -> Optional[dict
 
 def _proceed(db: Any, org_id: str, issuer: str, origin: str, client: Mapping[str, Any], req: Mapping[str, Any],
              browser: Browser, *, since: Optional[datetime]) -> Reply:
+    from . import hosted
+
     redirect_uri, state, prompt = req["redirect_uri"], req["state"], set(req["prompt"])
 
     def fail(code: str, description: str) -> Reply:
         return _redirect_error(redirect_uri, issuer, state, code, description)
 
     pool = pools.load(db, org_id=org_id, pool_id=client["pool_id"])
-    if pool is None or pool["kind"] != "workforce":
-        return fail("temporarily_unavailable", "this app's user pool cannot sign in yet")
-    status, found = _workforce_session(db, browser.session_cookie)
-    if status == "unusable":
-        return _page(403, "Sign in as yourself", "This BOSS sign-in is not a person's own account, so it cannot "
-                     "sign in to apps. Sign in to BOSS with your own account, then return to the app.")
-    if status == "enrol":
-        return _page(403, "Finish setting up BOSS", "Add a second factor to your BOSS account, then return to the app.")
-    if status == "none":
-        if "none" in prompt:
-            return fail("login_required", "the user is not signed in")
-        if since is not None:
-            # Back from the console sign-in without a session: say so instead of looping.
-            return _page(401, "Sign in to BOSS first", "Sign in to BOSS, then return to the app and try again.")
-        raw = _new_interaction(db, org_id, client["id"], req)
-        nxt = f"/oidc/{org_id}/resume?interaction={raw}"
-        return Reply(302, None, {"Location": f"{origin}/login?next={quote(nxt, safe='')}", "Cache-Control": "no-store",
-                                 "Referrer-Policy": "no-referrer"})
-    row, principal = found
-    if principal.org_id != org_id:
-        return fail("access_denied", "this account is not a member of this BOSS")
-    age = (now() - _auth_time(row)).total_seconds()
-    reauth = "login" in prompt or (req["max_age"] is not None and age > req["max_age"])
-    if reauth and not (since is not None and _auth_time(row) >= since):
-        # Phase 1: BOSS cannot yet ask a signed-in person to sign in again from here.
-        return fail("login_required", "a fresh sign-in is required")
-    if (client["require_mfa"] or req["mfa"]) and row.mfa_at is None:
-        if "none" in prompt:
-            return fail("interaction_required", "a second factor is required")
-        return _page(403, "A second factor is required", f"{client['name']} requires a second factor. Add one to "
-                     "your BOSS account, sign in again with it, then return to the app.")
-    if not pools.workforce_may_sign_in(db, principal=principal, client=client, session=row.ref()):
-        audit(db, org_id=org_id, event_type="oidc.signin", outcome="denied", actor_principal_id=principal.id,
-              actor_kind="user", target_type="oidc_client", target_id=client["id"], session_ref=row.id, ip=browser.ip,
-              details={"reason": "no_sign_in_grant"})
-        return fail("access_denied", "you may not sign in to this app")
+    if pool is None:
+        return fail("temporarily_unavailable", "this app's user pool is gone")
+    need_mfa = bool(client["require_mfa"] or req["mfa"] or (pool["kind"] == "customer" and pool["mfa"] == "required"))
+    if pool["kind"] == "customer":
+        sess = customers.session_lookup(db, pool_id=pool["id"], token=browser.app_session)
+        who = _customer_who(sess) if sess else None
+        fresh_since = since is not None and who is not None and who.auth_time >= since
+        stale = who is not None and not fresh_since and (
+            "login" in prompt or (req["max_age"] is not None and (now() - who.auth_time).total_seconds() > req["max_age"]))
+        if who is None or stale or (need_mfa and not who.mfa):
+            if "none" in prompt:
+                return fail("login_required" if who is None or stale else "interaction_required",
+                            "the user must sign in")
+            raw = _new_interaction(db, org_id, client["id"], req)
+            return hosted.signin_page(db, org_id=org_id, pool=pool, client=client, interaction=raw,
+                                      origin=origin, mfa_needed=need_mfa)
+    else:
+        status, found = _workforce_session(db, browser.session_cookie)
+        if status == "unusable":
+            return _page(403, "Sign in as yourself", "This BOSS sign-in is not a person's own account, so it cannot "
+                         "sign in to apps. Sign in to BOSS with your own account, then return to the app.")
+        if status == "enrol":
+            return _page(403, "Finish setting up BOSS", "Add a second factor to your BOSS account, then return to the app.")
+        if status == "none":
+            if "none" in prompt:
+                return fail("login_required", "the user is not signed in")
+            if since is not None:
+                # Back from the console sign-in without a session: say so instead of looping.
+                return _page(401, "Sign in to BOSS first", "Sign in to BOSS, then return to the app and try again.")
+            raw = _new_interaction(db, org_id, client["id"], req)
+            nxt = f"/oidc/{org_id}/resume?interaction={raw}"
+            return Reply(302, None, {"Location": f"{origin}/login?next={quote(nxt, safe='')}", "Cache-Control": "no-store",
+                                     "Referrer-Policy": "no-referrer"})
+        row, principal = found
+        if principal.org_id != org_id:
+            return fail("access_denied", "this account is not a member of this BOSS")
+        who = _workforce_who(row, principal)
+        fresh_since = since is not None and who.auth_time >= since
+        stale = not fresh_since and ("login" in prompt or (
+            req["max_age"] is not None and (now() - who.auth_time).total_seconds() > req["max_age"]))
+        if stale or (need_mfa and not who.mfa):
+            if "none" in prompt:
+                return fail("login_required" if stale else "interaction_required", "a fresh sign-in is required")
+            raw = _new_interaction(db, org_id, client["id"], req)
+            return hosted.workforce_reauth_page(db, org_id=org_id, client=client, interaction=raw,
+                                                principal=principal, mfa_needed=need_mfa)
+        if not pools.workforce_may_sign_in(db, principal=principal, client=client, session=row.ref()):
+            audit(db, org_id=org_id, event_type="oidc.signin", outcome="denied", actor_principal_id=principal.id,
+                  actor_kind="user", target_type="oidc_client", target_id=client["id"], session_ref=row.id,
+                  ip=browser.ip, details={"reason": "no_sign_in_grant"})
+            return fail("access_denied", "you may not sign in to this app")
     scopes = list(req["scopes"])
-    if consent.needed(db, client=client, subject_ref=principal.id, scopes=scopes, forced="consent" in prompt):
+    if consent.needed(db, client=client, subject_ref=who.subject_ref, scopes=scopes, forced="consent" in prompt):
         if "none" in prompt:
             return fail("consent_required", "consent is required")
-        raw = _new_interaction(db, org_id, client["id"], {**req, "subject_ref": principal.id, "session_id": row.id})
+        raw = _new_interaction(db, org_id, client["id"], {**req, "subject_ref": who.subject_ref,
+                                                          "session_id": who.session_id, "who": who.kind})
         body, headers = pages.consent_page(
-            app_name=client["name"], user_label=principal.display_name, scopes=scopes,
-            action=f"/oidc/{org_id}/consent", interaction=raw, csrf=consent.csrf_token(row.id, raw),
+            app_name=client["name"], user_label=who.label, scopes=scopes,
+            action=f"/oidc/{org_id}/consent", interaction=raw, csrf=consent.csrf_token(who.session_id, raw),
             redirect_uri=redirect_uri)
         return Reply(200, body, headers)
-    return _issue(db, org_id, issuer, client, pool, req, row, principal, browser)
+    return _issue(db, org_id, issuer, client, pool, req, who, browser)
 
 
 def _issue(db: Any, org_id: str, issuer: str, client: Mapping[str, Any], pool: Mapping[str, Any],
-           req: Mapping[str, Any], row: Any, principal: Any, browser: Browser, status: int = 302) -> Reply:
-    acr = ACR_MFA if row.mfa_at else ACR_PWD
-    amr = sorted(set(row.auth_methods) | ({"mfa"} if row.mfa_at else set()))
-    auth_time = _auth_time(row)
+           req: Mapping[str, Any], who: Who, browser: Browser, status: int = 302) -> Reply:
+    acr = ACR_MFA if who.mfa else ACR_PWD
+    amr = sorted(set(who.methods) | ({"mfa"} if who.mfa else set()))
     grant_id = tokens.create_grant(db, org_id=org_id, client_id=client["id"], pool_id=pool["id"],
-                                   subject_ref=principal.id, session_ref=row.id, scopes=list(req["scopes"]),
-                                   acr=acr, amr=amr, auth_time=auth_time)
-    code = tokens.issue_code(db, grant_id=grant_id, client_id=client["id"], subject_ref=principal.id,
+                                   subject_ref=who.subject_ref, session_ref=who.session_id, scopes=list(req["scopes"]),
+                                   acr=acr, amr=amr, auth_time=who.auth_time)
+    code = tokens.issue_code(db, grant_id=grant_id, client_id=client["id"], subject_ref=who.subject_ref,
                              redirect_uri=req["redirect_uri"], code_challenge=req["code_challenge"],
-                             nonce=req["nonce"], scopes=list(req["scopes"]), acr=acr, auth_time=auth_time)
-    audit(db, org_id=org_id, event_type="oidc.signin", actor_principal_id=principal.id, actor_kind="user",
-          target_type="oidc_client", target_id=client["id"], session_ref=row.id, ip=browser.ip,
-          details={"grant_id": grant_id, "scopes": list(req["scopes"]), "acr": acr})
+                             nonce=req["nonce"], scopes=list(req["scopes"]), acr=acr, auth_time=who.auth_time)
+    audit(db, org_id=org_id, event_type="oidc.signin",
+          actor_principal_id=who.subject_ref if who.kind == "workforce" else None,
+          actor_kind="user" if who.kind == "workforce" else "pool_user", target_type="oidc_client",
+          target_id=client["id"], session_ref=who.session_id if who.kind == "workforce" else None, ip=browser.ip,
+          details={"grant_id": grant_id, "scopes": list(req["scopes"]), "acr": acr, "pool_id": pool["id"]})
     return _redirect(req["redirect_uri"], {"code": code, "state": req["state"], "iss": issuer}, status)
+
+
+def continue_after_signin(db: Any, org_id: str, raw: Optional[str], browser: Browser) -> Reply:
+    """A hosted sign-in step finished (the browser now holds a fresh session): the pending
+    authorization request, once."""
+    from ..identity.authn_support import public_origin
+
+    issuer = f"{public_origin(db, org_id)}/oidc/{org_id}"
+    it = _take_interaction(db, org_id, raw)
+    if it is None or "subject_ref" in it["params"]:
+        return _page(400, "This sign-in has expired", "Go back to the app and sign in again.")
+    req = it["params"]
+    client = clients.load(db, org_id=org_id, client_id=req.get("client_id"))
+    if client is None or req.get("redirect_uri") not in client["redirect_uris"]:
+        return _page(400, "Invalid sign-in request", "The app is no longer registered for this sign-in.")
+    return _proceed(db, org_id, issuer, public_origin(db, org_id) or "", client, req, browser, since=it["created_at"])
 
 
 def resume(db: Any, org_slug: str, pairs: Iterable[tuple[str, str]], browser: Browser) -> Reply:
@@ -352,19 +426,17 @@ def resume(db: Any, org_slug: str, pairs: Iterable[tuple[str, str]], browser: Br
     except OidcError as e:
         return _page(e.status, "Sign-in unavailable", e.description)
     params, _ = _single(pairs)
-    it = _take_interaction(db, org_id, params.get("interaction"))
-    if it is None or "subject_ref" in it["params"]:
-        return _page(400, "This sign-in has expired", "Go back to the app and sign in again.")
-    req = it["params"]
-    client = clients.load(db, org_id=org_id, client_id=req.get("client_id"))
-    if client is None or req.get("redirect_uri") not in client["redirect_uris"]:
-        return _page(400, "Invalid sign-in request", "The app is no longer registered for this sign-in.")
-    return _proceed(db, org_id, issuer, origin, client, req, browser, since=it["created_at"])
+    return continue_after_signin(db, org_id, params.get("interaction"), browser)
+
+
+def same_origin_post(browser: Browser, origin: str) -> bool:
+    from ..identity.authn_support import origin_of
+
+    return origin_of(browser.origin or "") == origin and \
+        (browser.sec_fetch_site is None or browser.sec_fetch_site.lower() == "same-origin")
 
 
 def consent_submit(db: Any, org_slug: str, pairs: Iterable[tuple[str, str]], browser: Browser) -> Reply:
-    from ..identity.authn_support import origin_of
-
     try:
         org_id, issuer, origin = resolve(db, org_slug)
     except OidcError as e:
@@ -372,34 +444,42 @@ def consent_submit(db: Any, org_slug: str, pairs: Iterable[tuple[str, str]], bro
     params, dups = _single(pairs)
     forged = _page(403, "Request refused", "This consent did not come from BOSS's own page. Go back to the app and "
                    "sign in again.")
-    if dups or origin_of(browser.origin or "") != origin or \
-            (browser.sec_fetch_site is not None and browser.sec_fetch_site.lower() != "same-origin"):
+    if dups or not same_origin_post(browser, origin):
         return forged
-    status, found = _workforce_session(db, browser.session_cookie)
-    if status != "ok":
-        return forged
-    row, principal = found
     raw = params.get("interaction")
-    if not consent.csrf_ok(row.id, raw or "", params.get("csrf")):
-        return forged
-    it = _take_interaction(db, org_id, raw)
-    if it is None:
+    pending = peek_interaction(db, org_id, raw)
+    if pending is None:
         return _page(400, "This sign-in has expired", "Go back to the app and sign in again.")
-    req = it["params"]
-    if req.get("session_id") != row.id or req.get("subject_ref") != principal.id:
-        return forged
+    req = pending["params"]
     client = clients.load(db, org_id=org_id, client_id=req.get("client_id"))
-    if client is None or req.get("redirect_uri") not in client["redirect_uris"]:
+    pool = pools.load(db, org_id=org_id, pool_id=client["pool_id"]) if client else None
+    if client is None or pool is None or req.get("redirect_uri") not in client["redirect_uris"]:
         return _page(400, "Invalid sign-in request", "The app is no longer registered for this sign-in.")
+    who: Optional[Who] = None
+    principal = row = None
+    if pool["kind"] == "workforce" and req.get("who") == "workforce":
+        status, found = _workforce_session(db, browser.session_cookie)
+        if status == "ok":
+            row, principal = found
+            who = _workforce_who(row, principal)
+    elif pool["kind"] == "customer" and req.get("who") == "customer":
+        sess = customers.session_lookup(db, pool_id=pool["id"], token=browser.app_session)
+        who = _customer_who(sess) if sess else None
+    if who is None or not consent.csrf_ok(who.session_id, raw or "", params.get("csrf")):
+        return forged
+    if req.get("session_id") != who.session_id or req.get("subject_ref") != who.subject_ref:
+        return forged
+    if _take_interaction(db, org_id, raw) is None:
+        return _page(400, "This sign-in has expired", "Go back to the app and sign in again.")
     if params.get("decision") != "allow":
         return _redirect_error(req["redirect_uri"], issuer, req["state"], "access_denied", "the user declined", 303)
-    pool = pools.load(db, org_id=org_id, pool_id=client["pool_id"])
-    if pool is None or pool["kind"] != "workforce" or \
-            not pools.workforce_may_sign_in(db, principal=principal, client=client, session=row.ref()):
+    if who.kind == "workforce" and not pools.workforce_may_sign_in(db, principal=principal, client=client,
+                                                                   session=row.ref()):
         return _redirect_error(req["redirect_uri"], issuer, req["state"], "access_denied",
                                "you may not sign in to this app", 303)
-    consent.grant(db, client=client, subject_ref=principal.id, scopes=req["scopes"], actor_kind="user", ip=browser.ip)
-    return _issue(db, org_id, issuer, client, pool, req, row, principal, browser, status=303)
+    consent.grant(db, client=client, subject_ref=who.subject_ref, scopes=req["scopes"],
+                  actor_kind="user" if who.kind == "workforce" else "pool_user", ip=browser.ip)
+    return _issue(db, org_id, issuer, client, pool, req, who, browser, status=303)
 
 
 # ---- token -----------------------------------------------------------------------------------

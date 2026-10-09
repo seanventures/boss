@@ -26,14 +26,28 @@ describe("the OIDC provider on the public origin (F6)", () => {
     expect(sessionCookieOnly("x__Host-boss_session=1")).toBe("");
   });
 
-  it("relays redirects and page headers but never a cookie", async () => {
-    const fetchImpl = (async () => new Response(null, { status: 302, headers: {
-      location: "https://app.test/cb?code=c", "set-cookie": "a=b", "x-frame-options": "DENY" } })) as typeof fetch;
-    const r = await forwardOidc(new Request("https://boss.test/oidc/o/authorize?x=1"), { apiUrl: "http://api", fetchImpl });
+  it("relays redirects and page headers, and only the identity cookies of browser steps", async () => {
+    const make = () => (async () => {
+      const h = new Headers({ location: "https://app.test/cb?code=c", "x-frame-options": "DENY" });
+      h.append("set-cookie", "a=b; Path=/");
+      h.append("set-cookie", "__Host-boss_app_session=bas_x; Path=/; Secure; HttpOnly; SameSite=Lax");
+      return new Response(null, { status: 302, headers: h });
+    }) as typeof fetch;
+    const r = await forwardOidc(new Request("https://boss.test/oidc/o/authorize?x=1"), { apiUrl: "http://api", fetchImpl: make() });
     expect(r.status).toBe(302);
     expect(r.headers.get("location")).toBe("https://app.test/cb?code=c");
-    expect(r.headers.get("set-cookie")).toBeNull();
+    expect(r.headers.getSetCookie()).toEqual(["__Host-boss_app_session=bas_x; Path=/; Secure; HttpOnly; SameSite=Lax"]);
     expect(r.headers.get("x-frame-options")).toBe("DENY");
+    const t = await forwardOidc(new Request("https://boss.test/oidc/o/token", { method: "POST", body: "" }), { apiUrl: "http://api", fetchImpl: make() });
+    expect(t.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("forwards the app cookies on hosted steps and never on app calls", () => {
+    const h = new Headers({ cookie: "__Host-boss_app_session=bas_a; __Host-boss_app_preauth=bap_b; x=1" });
+    expect(isOidcPath("/oidc/o/hosted/signin")).toBe(true);
+    expect(isOidcPath("/oidc/o/hosted/../token")).toBe(false);
+    expect(oidcRequestHeaders("/oidc/o/hosted/signin", h).get("cookie")).toBe("__Host-boss_app_session=bas_a; __Host-boss_app_preauth=bap_b");
+    expect(oidcRequestHeaders("/oidc/o/userinfo", h).get("cookie")).toBeNull();
   });
 
   it("refuses large bodies before calling the API", async () => {

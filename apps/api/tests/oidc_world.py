@@ -175,6 +175,7 @@ def make_world(engine: Any, monkeypatch: Any) -> OidcWorld:
     monkeypatch.setattr(get_settings(), "public_url", ORIGIN)
     ids = IdentityWorld.create(engine)
     with begin() as db:
+        db.execute(text("DELETE FROM identity_rate_limits"))     # every test starts with no strikes
         pool = oidc_pools.create(db, org_id=ids.org, actor="usr_test", body={"name": "Staff", "kind": "workforce"})
     http = TestClient(main.app, raise_server_exceptions=True, base_url=ORIGIN)
     return OidcWorld(ids, http, f"{ORIGIN}/oidc/{ids.org}", pool)
@@ -183,3 +184,112 @@ def make_world(engine: Any, monkeypatch: Any) -> OidcWorld:
 def expire_codes() -> None:
     with begin() as db:
         db.execute(text("UPDATE oidc_auth_codes SET expires_at = now() - interval '1 second'"))
+
+
+# ---- customer pools ---------------------------------------------------------------------------------
+
+STRONG_PW = "violet-otter-harbour-1987"
+HOSTED = {"Origin": ORIGIN, "Sec-Fetch-Site": "same-origin", "Content-Type": "application/x-www-form-urlencoded"}
+
+
+class SoftAuthenticator:
+    """One discoverable ES256 passkey, as a platform authenticator holds it (RP = the BOSS host)."""
+
+    def __init__(self, user_handle: bytes = b"", *, rp_id: str = "boss.oidc.test"):
+        import os
+
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        self.key = ec.generate_private_key(ec.SECP256R1())
+        self.credential_id = os.urandom(16)
+        self.user_handle = user_handle
+        self.rp_id = rp_id
+        self.sign_count = 0
+
+    def _cose(self) -> bytes:
+        import cbor2
+
+        n = self.key.public_key().public_numbers()
+        return cbor2.dumps({1: 2, 3: -7, -1: 1, -2: n.x.to_bytes(32, "big"), -3: n.y.to_bytes(32, "big")})
+
+    def register(self, options: dict, *, origin: str = ORIGIN) -> dict:
+        import json
+        import struct
+
+        import cbor2
+
+        self.user_handle = base64.urlsafe_b64decode(options["user"]["id"] + "==")
+        cd = json.dumps({"type": "webauthn.create", "challenge": options["challenge"], "origin": origin}).encode()
+        ad = (hashlib.sha256(self.rp_id.encode()).digest() + bytes([0x45]) + struct.pack(">I", 0) + b"\0" * 16
+              + struct.pack(">H", len(self.credential_id)) + self.credential_id + self._cose())
+        att = cbor2.dumps({"fmt": "none", "attStmt": {}, "authData": ad})
+        return {"id": b64u(self.credential_id), "rawId": b64u(self.credential_id), "type": "public-key",
+                "response": {"clientDataJSON": b64u(cd), "attestationObject": b64u(att), "transports": ["internal"]},
+                "clientExtensionResults": {}}
+
+    def assert_(self, options: dict, *, origin: str = ORIGIN, user_handle: Optional[bytes] = None) -> dict:
+        import json
+        import struct
+
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        self.sign_count += 1
+        cd = json.dumps({"type": "webauthn.get", "challenge": options["challenge"], "origin": origin}).encode()
+        ad = hashlib.sha256(self.rp_id.encode()).digest() + bytes([0x05]) + struct.pack(">I", self.sign_count)
+        sig = self.key.sign(ad + hashlib.sha256(cd).digest(), ec.ECDSA(hashes.SHA256()))
+        return {"id": b64u(self.credential_id), "rawId": b64u(self.credential_id), "type": "public-key",
+                "response": {"clientDataJSON": b64u(cd), "authenticatorData": b64u(ad), "signature": b64u(sig),
+                             "userHandle": b64u(user_handle if user_handle is not None else self.user_handle)},
+                "clientExtensionResults": {}}
+
+
+def field_of(html: str, name: str) -> Optional[str]:
+    import re
+
+    m = re.search(rf'name="{name}" value="([^"]*)"', html)
+    return m.group(1) if m else None
+
+
+def totp_from_page(html: str) -> str:
+    import re
+
+    from boss_engine.identity import totp
+
+    secret = re.search(r"<code>([A-Z2-7]+)</code>", html).group(1)
+    return secret
+
+
+def totp_code(secret: str, offset: int = 0) -> str:
+    from boss_engine.identity import totp
+
+    return totp.code_at(secret, totp.current_step() + offset)
+
+
+def customer_world(engine: Any, monkeypatch: Any, **pool_over: Any) -> tuple[OidcWorld, list[tuple[str, str, str]]]:
+    from boss_engine.identity import email_signin
+
+    w = make_world(engine, monkeypatch)
+    mail: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(email_signin, "DELIVER", lambda to, subject, body: mail.append((to, subject, body)))
+    body = {"name": "Bank customers", "kind": "customer", "signup": "open", "mfa": "required", "passkeys": True}
+    body.update(pool_over)
+    with begin() as db:
+        w.cpool = oidc_pools.create(db, org_id=w.org, actor="usr_test", body=body)  # type: ignore[attr-defined]
+    return w, mail
+
+
+def hosted(w: OidcWorld, step: str, form: dict[str, str], **headers: str):
+    h = {**HOSTED, **headers}
+    return w.http.post(f"/oidc/{w.org}/hosted/{step}", content=urlencode(form), headers=h, follow_redirects=False)
+
+
+def hosted_json(w: OidcWorld, step: str, body: dict[str, Any]):
+    return w.http.post(f"/oidc/{w.org}/hosted/{step}", json=body,
+                       headers={"Origin": ORIGIN, "Sec-Fetch-Site": "same-origin"}, follow_redirects=False)
+
+
+def last_code(mail: list[tuple[str, str, str]]) -> str:
+    import re
+
+    return re.search(r"code is (\d{6})", mail[-1][2]).group(1)

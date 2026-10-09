@@ -28,8 +28,8 @@ STUB_OWNERS = {
 
 #: Routes a stream has built (they no longer answer 501), per module.
 BUILT = {
-    # S6 phase 1: the protocol, pools, clients, roles and consents; customer-pool users are phase 2.
-    "apps.api.app.oidc_routes": lambda path: "/users" not in path,
+    # S6: every OIDC route (phase 2 built the customer-pool user routes).
+    "apps.api.app.oidc_routes": lambda path: True,
 }
 
 

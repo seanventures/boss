@@ -100,6 +100,11 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "oidc.pool.created", "oidc.pool.updated", "oidc.pool.deleted", "oidc.pool_user.created",
     "oidc.pool_user.updated", "oidc.pool_user.disabled", "oidc.role.created", "oidc.role.assigned",
     "oidc.role.unassigned", "oidc.keys.provisioned", "oidc.keys.rotated",
+    # customer pools (amendment AP-5): a pool user is never a principal; actor_kind = pool_user
+    "oidc.pool_user.login_failed", "oidc.pool_user.locked", "oidc.pool_user.signed_up",
+    "oidc.pool_user.email_verified", "oidc.pool_user.mfa_enrolled", "oidc.pool_user.mfa_failed",
+    "oidc.pool_user.passkey_added", "oidc.pool_user.factor_removed", "oidc.pool_user.password_reset",
+    "oidc.pool_user.signed_out",
 })
 
 #: hash of "no previous event" for the first row of an org's chain.
