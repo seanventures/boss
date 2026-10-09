@@ -154,8 +154,13 @@ const NEVER_KEPT_FOR_A_PERSON = /^\/v1\/(identity|auth)(\/|\?|$)/;
  *  it, and its only writes are housekeeping (seed a default, reap an expired reservation). It is
  *  treated as the read it replaces — collapsed and kept like a GET — and it does not throw away
  *  every kept read the way a real write does. Only with no body: a twin never takes one. */
-function isReadTwin(method: string, path: string, init: RequestInit | undefined): boolean {
-  return method === "POST" && /\/load$/.test(path.split("?")[0]) && (init?.body === undefined || init?.body === null);
+function isReadTwin(method: string, path: string, input: RequestInfo | URL,
+                    init: RequestInit | undefined): boolean {
+  // The body can ride on the init OR on a Request (the identity wrapper outside this cache hands
+  // a Request input on as a new Request, with no init): either one makes it a write (rc6.1).
+  const requestBody = input instanceof Request ? input.body : null;
+  return method === "POST" && /\/load$/.test(path.split("?")[0])
+    && (init?.body === undefined || init?.body === null) && requestBody === null;
 }
 
 /**
@@ -238,7 +243,7 @@ export function installFeedCache(apiUrl: string): void {
     // Which reads a write changes is not knowable here, so every write drops them all, before
     // it is sent and again when it lands (a read cached while it was in flight is stale too).
     const path = url.startsWith(apiUrl) ? url.slice(apiUrl.length) : url;
-    const readTwin = url.startsWith(apiUrl) && isReadTwin(method, path, init);
+    const readTwin = url.startsWith(apiUrl) && isReadTwin(method, path, input, init);
     if (method !== "GET" && method !== "HEAD" && url.startsWith(apiUrl) && !readTwin) {
       completed.clear();
       try {
@@ -255,11 +260,20 @@ export function installFeedCache(apiUrl: string): void {
       return original(input as RequestInfo, init);
     }
 
+    // AN IDENTITY READ IS NEVER SHARED FOR A PERSON, NOT EVEN IN FLIGHT (rc6.1). /me and
+    // /me/permissions ARE the live proof: a render that joined another render's in-flight /me
+    // would hold an answer the API gave BEFORE this render began — a session revoked, or a role
+    // taken away, in between would still "prove" live, at the old epoch, and unlock answers kept
+    // for seconds (the-live-proof-cannot-be-borrowed.test.ts). Each render asks for itself.
+    const asker = await sessionTag(given);
+    if (asker !== "anon" && NEVER_KEPT_FOR_A_PERSON.test(path)) {
+      return original(input as RequestInfo, init);
+    }
+
     // ONE PERSON'S ANSWER IS NEVER ANOTHER'S. Every call carries the signed-in person's own
     // session now (lib/identity/server-fetch.ts), and the same URL answers differently for an
     // Owner and a Viewer — so the key is the URL AND whose session asked. A request with no
     // session shares only with other sessionless requests.
-    const asker = await sessionTag(given);
     // B2: A SESSIONLESS ANSWER IS ONE CLIENT'S, TOO. The API judges a request without a session
     // by WHERE it comes from (the network bridge admits only a private peer; /v1/auth/options
     // answers about the caller's address) and by its pre-auth cookie (an SSO start). So a
