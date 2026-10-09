@@ -123,7 +123,7 @@ Branch `feat/s5-links` (worktree `~/src/boss-wt-s5-links`, from `feat/app-platfo
 |---|---|---|
 | 1 | Engine: `app_links/service.py`, rule module `identity/link_rules.py`, F5 schema block, `app_link:manage`, audit event types | done |
 | 2 | API: `routes_links.py` built (list, create, revoke, test-user presence, D9 reveal) + `test_app_links.py` | done |
-| 3 | Link gateway `apps/egress/boss_egress/links.py` (a port per link, per-request checks, NOTIFY) + adversarial tests | todo |
+| 3 | Link gateway `apps/egress/boss_egress/links.py` (a port per link, per-request checks, NOTIFY) + adversarial tests | done |
 | 4 | Wiring: preview start/respawn and the build get the link env; previews take ports from `BOSS_PREVIEW_PORTS`; the sandbox fence | todo |
 | 5 | Console App ▸ Links + browser-walked screenshot | todo |
 | 6 | End-to-end proof on a compose stack | todo |
@@ -170,4 +170,23 @@ Branch `feat/s5-links` (worktree `~/src/boss-wt-s5-links`, from `feat/app-platfo
   events are audited; test users flow to provider and consumer, rotate per preview, are encrypted at
   rest, never appear in logs, lists, presence, create responses or audit rows; the D9 reveal needs
   step-up and is audited; a pass dies with its workload.
+- `apps/api/tests/test_link_gateway.py` (12, real sockets, real LISTEN/NOTIFY): B signs in to A as A's
+  test user through the link; A sees B's own Authorization, never the pass, and a clean Host; no pass,
+  a forged pass or a run token instead of a pass → 401 and A is never called; absolute-form targets
+  naming the API, another preview, the metadata IP or the DB → 400 and none is called; traversal and
+  encoded separators → 400; a Host header naming another preview is ignored; a pass opens only its own
+  link's port; a pool port with no link refuses connections; a preview row tampered to point at BOSS
+  (outside the preview range, or 8000) → 403 and BOSS is never called; B's preview stopping kills its
+  pass; A's preview gone → 502 `provider_not_running`; the cache alone (no NOTIFY) sees a revocation
+  within `CACHE_SECONDS` (2 s); revoking cuts B off (measured < 5 s, typically < 1 s) and closes the port.
 - Regenerated: `tests/identity/matrix.yaml`; `test_app_platform_day1_routes.py` no longer lists S5.
+
+### The gateway (step 3)
+
+`apps/egress/boss_egress/links.py`, started by `python -m apps.egress.boss_egress` unless
+`BOSS_LINK_GATEWAY=off`. One `ThreadingHTTPServer` per active preview link's port (pool
+`BOSS_LINK_PORTS`, default 18100-18199), opened and closed by a sync every second and on every NOTIFY
+on `app_links`. Facts are cached ≤ 2 s and dropped on NOTIFY. Forwards to `BOSS_LINK_PREVIEW_HOST`
+(default `api`, where process previews run) on the provider's newest running process preview port,
+only inside `BOSS_PREVIEW_PORTS`. Request bodies ≤ 10 MB, no chunked uploads (411). Logs a line per
+refusal (port, link, reason), never a header or a query.

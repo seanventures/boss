@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import ipaddress
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from .egress_rules import PathRefused, canonical_path
 
@@ -170,5 +170,6 @@ def forward_headers(headers: Mapping[str, str], upstream: tuple[str, int]) -> di
     return out
 
 
-def response_headers(headers: Mapping[str, str]) -> dict[str, str]:
-    return {k: v for k, v in headers.items() if k.lower() not in _DROP_RESPONSE}
+def response_headers(headers: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The provider's response headers minus hop-by-hop ones (repeated Set-Cookie kept)."""
+    return [(k, v) for k, v in headers if k.lower() not in _DROP_RESPONSE]
