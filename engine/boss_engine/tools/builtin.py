@@ -6922,6 +6922,10 @@ def build_default_registry() -> ToolRegistry:
     from .agent_tools import register_agent_tools
 
     register_agent_tools(reg)
+    # App templates and the security loop's reads (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.6, §4.3).
+    from .app_platform_tools import register_app_platform_tools
+
+    register_app_platform_tools(reg)
     return reg
 
 
@@ -7080,6 +7084,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # standing page for one because nobody should be starting them individually. The workflow is
     # the unit of work and its document is the outcome.
     "start_workflow",
+    # ...and its narrower twin: "add Stripe checkout to the shop" is a build onto the app's
+    # branch through the same governed start, gated by the template's own tests.
+    "apply_template",
     # Delivery and environment
     # A shell on the operator's own host. Gated a second time by BOSS_AGENT_HOST_SHELL, so
     # admitting it here does not by itself hand anybody a shell.

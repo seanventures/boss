@@ -165,6 +165,9 @@ _EXPECTED_TOOLS: set[str] = {
     "set_job_priority",
     "start_preview",
     "run_security_scan",
+    # App templates and the security loop's reads (tools/app_platform_tools.py).
+    "list_templates", "describe_template", "template_status", "apply_template",
+    "security_scan_status", "list_security_findings", "security_report", "security_review_status",
     # Authoring the PATH, as opposed to starting work on it.
     "draft_workflow",
     "draft_custom_step",
@@ -204,11 +207,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 115, (
+    assert len(reg.names()) == 123, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 64  # + my_recent_work (Agent World), + system_health (stability)
-    assert len(write) == 51  # + system_doctor_act (stability), + run_security_scan (F4)
+    assert len(read) == 71  # + my_recent_work, + system_health, + 7 template/security reads
+    assert len(write) == 52  # + system_doctor_act, + run_security_scan (F4), + apply_template (F2)
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",

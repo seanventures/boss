@@ -93,6 +93,11 @@ class ToolSpec:
     #: HTTP (decide: approve vs delegate vs execute) needs the chosen operation's permission,
     #: not one key for all of them. A value not listed takes `permission`.
     permission_by_arg: tuple = ()
+    #: FURTHER permissions the call also needs, each checked at its own scope (an org-only key at
+    #: the org, the rest at the acting project) after `permission` is allowed. A route that checks a
+    #: second key in its handler (apply_template: workflow_run:start at the project AND
+    #: template:read, §2.6) is mirrored here, so the tool cannot be weaker than its route.
+    also_requires: tuple = ()
 
     def permission_for(self, args: Optional[dict]) -> Optional[str]:
         """The permission THIS call needs (see `permission_by_arg`)."""
@@ -120,6 +125,10 @@ class ToolSpec:
             require_known(self.permission)
             for _value, key in (self.permission_by_arg[1] if self.permission_by_arg else ()):
                 require_known(key)
+            for key in self.also_requires:
+                require_known(key)
+        elif self.also_requires:
+            raise CatalogueError(f"tool {self.name!r}: also_requires needs a permission= first")
         elif not self.inherits_route_permission:
             raise CatalogueError(f"tool {self.name!r} declares no permission: pass permission= "
                                  "(a catalogue key) or inherits_route_permission=True")
@@ -181,6 +190,7 @@ class ToolRegistry:
         permission: Optional[str] = None,
         org_scope: Any = False,
         permission_by_arg: tuple = (),
+        also_requires: tuple = (),
     ) -> Callable[[ToolHandler], ToolHandler]:
         """Decorator form: @registry.tool("list_x", "…", {...}, kind="read")."""
 
@@ -200,6 +210,7 @@ class ToolRegistry:
                     permission=permission,
                     org_scope=org_scope,
                     permission_by_arg=permission_by_arg,
+                    also_requires=tuple(also_requires),
                 )
             )
             return fn
@@ -429,6 +440,18 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
                  else ResolvedScope.in_project(org, acting_in))
         try:
             decision = authz.check(auth, permission, scope)
+            # Every further key the call needs (`also_requires`), each at its own scope; the
+            # first refusal is the answer and names its key.
+            for extra in (getattr(spec, "also_requires", ()) if decision.allowed else ()):
+                extra_meta = PERMISSION_META.get(extra)
+                extra_scope = (ResolvedScope.org_level(org)
+                               if extra_meta is None or extra_meta.org_only or extra_meta.system_only
+                               or org_wide or not acting_in
+                               else ResolvedScope.in_project(org, acting_in))
+                decision = authz.check(auth, extra, extra_scope)
+                if not decision.allowed:
+                    permission = extra
+                    break
         except Exception as exc:  # noqa: BLE001 — a decision that cannot be made is not an allow
             outcome = Outcome(False, DenyReason.NOT_EVALUATED, permission, f"tool:{permission}",
                               detail=f"authz error: {type(exc).__name__}")
