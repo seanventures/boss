@@ -7,6 +7,7 @@ adds: [routes, ui, db_tables, sessions, middleware]
 stacks:
   node:   {frameworks: [express], min_toolchain: node20}
   python: {frameworks: [fastapi], min_toolchain: python311}
+  java:   {frameworks: [spring-boot], min_toolchain: jdk21}
 requires: []
 works_with: [catalog-cart]
 secrets:
@@ -58,6 +59,7 @@ routes:
 tests:
   node:   {command: npm run test:login-oauth, report: junit, min_tests: 8}
   python: {command: python3 -m pytest -q tests/template_login_oauth --junitxml=boss-template-junit.xml, report: junit, min_tests: 8}
+  java:   {command: mvn -q -B test -Dtest=LoginOauthTemplateTest, report: junit, min_tests: 8}
 security_note: SECURITY.md
 guide: guide.md
 labels: []

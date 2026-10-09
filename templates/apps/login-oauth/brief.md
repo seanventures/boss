@@ -48,6 +48,16 @@ of the app's own.
   (how to mount it) and `ui/account.html` (framework-free login buttons). Add the lines of
   `requirements.txt` to the app's requirements. Copy `tests/template_login_oauth/` (the tests,
   `conftest.py` and the fake provider) to the same path.
+- **java** (Spring Boot 3.5, Spring Security OAuth2 Client): the `auth` package
+  (`SecurityConfig` with the filter chain, PKCE on every provider and the JSON error answers;
+  `ProviderRegistrations`, lazy client registrations; `OneShotAuthorizationRequests`;
+  `AppUserServices`, `UserStore`, `SignedInUser`, `AuthController`) and the session cookie
+  settings in `application.properties`. Add `spring-boot-starter-oauth2-client` to the app's
+  build. Protect the app's own routes in `SecurityConfig.filterChain`. Copy
+  `tests/java/com/example/login/LoginOauthTemplateTest.java` and `LoginFakeIdp.java` into the
+  app's test sources (`src/test/java/<the app's package>/`, package line adjusted; keep the file
+  names). The servlet container's session ids are random and server-side, so the java stack
+  does not use `SESSION_SECRET`.
 
 ## The tests are the proof
 
