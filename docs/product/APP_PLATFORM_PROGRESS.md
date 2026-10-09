@@ -124,7 +124,7 @@ Worktree `~/src/boss-wt-s6-oidc`, branch `feat/s6-oidc` (from `feat/app-platform
 |---|---|---|
 | 1 | Protocol core (discovery, JWKS, authorize, consent, token, userinfo, revocation, end_session), client registry API, workforce pools on the console session | done |
 | 2 | Unit, admin API and adversarial suites (the named list) | done |
-| 3 | End-to-end proof: a Node app with openid-client on a local stack | todo |
+| 3 | End-to-end proof: a Node app with openid-client on a local stack | done |
 | 4 | OpenID conformance suite (Basic OP), if Docker allows | todo |
 | P2 | Customer pools, hosted pages polish, console Identity ▸ App sign-in | phase 2 |
 
@@ -178,6 +178,21 @@ Worktree `~/src/boss-wt-s6-oidc`, branch `feat/s6-oidc` (from `feat/app-platform
   audit details, hashed at rest, no AT in URLs), A13 client auth downgrade and lockout, A14 grant
   loss, disabled person/client, legacy shared session, require_mfa, A15 logout open redirect, A16
   request/request_uri/registration/response modes/duplicates.
+
+### End-to-end proof (S6)
+
+`tests/e2e/oidc/` (`run.sh <console origin>`; `setup_world.py` + `rp.mjs`, openid-client 6.8.1
+pinned). Run 2026-10-08 on a local stack: API (`python -m apps.api.serve`, port 18093, DB
+`boss_test_s6`, BOSS_PUBLIC_URL=http://localhost:13000) + console (`next dev`, port 13000,
+forwarding /oidc/* through `apps/web/lib/oidc-proxy.ts`). A compose stack was not used: bosss4
+then bosss2 held the one-stack slot. Result, all through the console origin: discovery -> consent
+page for a signed-in member -> consent POST -> callback with `iss` -> openid-client code exchange
+(state, iss, PKCE, nonce, ID token signature) -> userinfo (name, email, roles) -> refresh rotation
+-> userinfo with the refreshed AT -> end_session back to the app -> the AT is dead (401) -> the
+rotated refresh token is refused. `E2E PASS`. Also checked by hand: no session -> 302 to the
+console `/login?next=/oidc/<org>/resume?...` (200), an unregistered redirect_uri -> 400, no Location.
+Found and fixed by the e2e: a token-endpoint 401 for a non-Basic client carried a Bearer challenge
+(openid-client v6 treats any challenge as fatal); it now carries none (Basic when Basic was used).
 
 ### Resume (S6)
 

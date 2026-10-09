@@ -560,6 +560,7 @@ def test_a13_a_client_authenticates_only_by_its_registered_method(w):
     assert both.status_code == 400
     r = w.token(form, client=client, secret="nope")
     assert r.headers["www-authenticate"].startswith("Basic")
+    assert "www-authenticate" not in w.token({**form, "client_id": client["id"]}).headers   # no Bearer challenge
     public, _ = w.client(name="spa", type="public", token_endpoint_auth_method="none")
     assert w.token({**form, "client_id": public["id"]}, client=public, secret="anything").status_code == 401
 

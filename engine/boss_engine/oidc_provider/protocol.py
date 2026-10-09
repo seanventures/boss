@@ -97,10 +97,15 @@ def _redirect_error(uri: str, issuer: str, state: Optional[str], code: str, desc
     return _redirect(uri, {"error": code, "error_description": description, "state": state, "iss": issuer}, status)
 
 
-def _json_error(e: OidcError, *, basic: bool = False) -> Reply:
+def _json_error(e: OidcError, *, basic: Optional[bool] = None) -> Reply:
+    """`basic` is None for bearer endpoints (userinfo); at the token and revocation endpoints a
+    401 names Basic only when the client used it (RFC 6749 §5.2), and no challenge otherwise."""
     headers = dict(JSON_NO_STORE)
     if e.status == 401:
-        headers["WWW-Authenticate"] = 'Basic realm="oidc"' if basic else 'Bearer realm="oidc", error="invalid_token"'
+        if basic is None:
+            headers["WWW-Authenticate"] = 'Bearer realm="oidc", error="invalid_token"'
+        elif basic:
+            headers["WWW-Authenticate"] = 'Basic realm="oidc"'
     body = {"error": e.code}
     if e.description:
         body["error_description"] = e.description
