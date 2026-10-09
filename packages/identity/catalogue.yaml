@@ -389,6 +389,30 @@ categories:
         roles: [system_scim]
         scope: org
         flags: [system_only]
+      - key: oidc:admin
+        title: "Administer app sign-in"
+        description: "Create and change OIDC user pools and every app client (BOSS as an identity provider for the apps it builds)."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
+      - key: oidc_client:manage
+        title: "Manage an app's sign-in client"
+        description: "Register an app as an OIDC client, change its redirect URIs, scopes and roles, and rotate its secret."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [step_up]
+      - key: oidc_pool_user:manage
+        title: "Manage app sign-in users"
+        description: "Invite, disable and reset the MFA of the users of an app sign-in pool."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up]
+      - key: oidc_app:sign_in
+        title: "Sign in to apps with BOSS"
+        description: "Sign in to a project's apps through BOSS's workforce pool."
+        roles: [owner, admin, operator, viewer]
+        scope: project
+        flags: []
 
   # ---- Org and projects --------------------------------------------------------------------------
   - category: "Org and projects"
@@ -565,6 +589,24 @@ categories:
         roles: [owner, admin, operator]
         scope: project
         flags: [delegable]
+      - key: template:read
+        title: "View app templates"
+        description: "See the template gallery: what each template adds, its secrets, hosts and security note."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: org
+        flags: [delegable]
+      - key: template:import
+        title: "Import app templates"
+        description: "Import a template from a git URL for review. Nothing in it runs until it is approved."
+        roles: [owner, admin, operator]
+        scope: org
+        flags: []
+      - key: template:approve
+        title: "Approve app templates"
+        description: "Approve, reject, trial, hide or delete an imported template; never your own import."
+        roles: [owner, admin]
+        scope: org
+        flags: [step_up, critical]
 
   # ---- Workflows and work ------------------------------------------------------------------------
   - category: "Workflows and work"
@@ -1105,6 +1147,24 @@ categories:
         roles: [system_worker]
         scope: project
         flags: [delegable, system_only]
+      - key: app_secret:read_meta
+        title: "View an app's secret metadata"
+        description: "See an app's secrets: name, environment, mode and shape. Never the value."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: app_secret:write
+        title: "Set an app's test secrets"
+        description: "Set, replace and remove an app's test, generated and stub secrets; reveal its test users."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [step_up]
+      - key: app_secret:live
+        title: "Use live keys for an app"
+        description: "Set an app's live secrets, used only by a deploy after a person's decision."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up, critical]
       - key: integration:read
         title: "View integrations"
         description: "See integrations, work trackers, channels, webhooks and subscriptions."
@@ -1199,6 +1259,18 @@ categories:
         roles: [owner, admin, operator]
         scope: project
         flags: [delegable]
+      - key: security_scan:run
+        title: "Run security scans"
+        description: "Scan an app's code, dependencies and preview (Semgrep, OSV, ZAP)."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: [delegable]
+      - key: security_finding:triage
+        title: "Triage security findings"
+        description: "Mark a security finding accepted or a false positive, with a reason."
+        roles: [owner, admin, operator]
+        scope: project
+        flags: []
       - key: improvement:read
         title: "View improvements"
         description: "See self-improvement proposals, programs and experiments."

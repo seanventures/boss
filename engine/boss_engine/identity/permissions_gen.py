@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "9966fa420cdde42e"
+CATALOGUE_FINGERPRINT = "3343b0e1b01afa60"
 
 
 class Permission(StrEnum):
@@ -54,6 +54,10 @@ class Permission(StrEnum):
     AUDIT_READ = "audit:read"
     AUDIT_EXPORT = "audit:export"
     SCIM_PROVISION = "scim:provision"
+    OIDC_ADMIN = "oidc:admin"
+    OIDC_CLIENT_MANAGE = "oidc_client:manage"
+    OIDC_POOL_USER_MANAGE = "oidc_pool_user:manage"
+    OIDC_APP_SIGN_IN = "oidc_app:sign_in"
     ORG_READ = "org:read"
     ORG_UPDATE = "org:update"
     ORG_DELETE = "org:delete"
@@ -82,6 +86,9 @@ class Permission(StrEnum):
     PREVIEW_APPROVE = "preview:approve"
     ARTIFACT_READ = "artifact:read"
     ARTIFACT_REBUILD = "artifact:rebuild"
+    TEMPLATE_READ = "template:read"
+    TEMPLATE_IMPORT = "template:import"
+    TEMPLATE_APPROVE = "template:approve"
     WORKFLOW_READ = "workflow:read"
     WORKFLOW_CREATE = "workflow:create"
     WORKFLOW_PUBLISH = "workflow:publish"
@@ -168,6 +175,9 @@ class Permission(StrEnum):
     SECRET_MANAGE = "secret:manage"
     KMS_KEY_MANAGE = "kms_key:manage"
     SECRET_LEASE = "secret:lease"
+    APP_SECRET_READ_META = "app_secret:read_meta"
+    APP_SECRET_WRITE = "app_secret:write"
+    APP_SECRET_LIVE = "app_secret:live"
     INTEGRATION_READ = "integration:read"
     INTEGRATION_MANAGE = "integration:manage"
     COMMS_READ = "comms:read"
@@ -183,6 +193,8 @@ class Permission(StrEnum):
     ASSURANCE_READ = "assurance:read"
     ASSURANCE_MANAGE = "assurance:manage"
     ASSURANCE_RUN = "assurance:run"
+    SECURITY_SCAN_RUN = "security_scan:run"
+    SECURITY_FINDING_TRIAGE = "security_finding:triage"
     IMPROVEMENT_READ = "improvement:read"
     IMPROVEMENT_MANAGE = "improvement:manage"
     ACTIVITY_READ = "activity:read"
@@ -240,6 +252,10 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "audit:read": PermissionMeta(key="audit:read", title="View the security audit log", description="Read the security audit log.", category="Identity and access", roles=('owner', 'admin', 'auditor'), scope='org', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "audit:export": PermissionMeta(key="audit:export", title="Export and verify the security audit log", description="Export the security audit log and verify its hash chain.", category="Identity and access", roles=('owner', 'admin', 'auditor'), scope='org', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "scim:provision": PermissionMeta(key="scim:provision", title="Provision over SCIM", description="Provision users and groups over SCIM 2.0.", category="Identity and access", roles=('system_scim',), scope='org', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
+    "oidc:admin": PermissionMeta(key="oidc:admin", title="Administer app sign-in", description="Create and change OIDC user pools and every app client (BOSS as an identity provider for the apps it builds).", category="Identity and access", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
+    "oidc_client:manage": PermissionMeta(key="oidc_client:manage", title="Manage an app's sign-in client", description="Register an app as an OIDC client, change its redirect URIs, scopes and roles, and rotate its secret.", category="Identity and access", roles=('owner', 'admin', 'operator'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "oidc_pool_user:manage": PermissionMeta(key="oidc_pool_user:manage", title="Manage app sign-in users", description="Invite, disable and reset the MFA of the users of an app sign-in pool.", category="Identity and access", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "oidc_app:sign_in": PermissionMeta(key="oidc_app:sign_in", title="Sign in to apps with BOSS", description="Sign in to a project's apps through BOSS's workforce pool.", category="Identity and access", roles=('owner', 'admin', 'operator', 'viewer'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "org:read": PermissionMeta(key="org:read", title="View the org", description="See the org's name and settings.", category="Org and projects", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='org', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "org:update": PermissionMeta(key="org:update", title="Edit the org", description="Rename the org and change org-wide settings.", category="Org and projects", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "org:delete": PermissionMeta(key="org:delete", title="Delete the org", description="Delete the org and everything in it.", category="Org and projects", roles=('owner',), scope='org', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
@@ -268,6 +284,9 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "preview:approve": PermissionMeta(key="preview:approve", title="Approve previews", description="Approve a preview or leave preview feedback.", category="Factory and code", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "artifact:read": PermissionMeta(key="artifact:read", title="View artifacts", description="Open artifacts, media and PDFs.", category="Factory and code", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "artifact:rebuild": PermissionMeta(key="artifact:rebuild", title="Rebuild artifacts", description="Rebuild an artifact.", category="Factory and code", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
+    "template:read": PermissionMeta(key="template:read", title="View app templates", description="See the template gallery: what each template adds, its secrets, hosts and security note.", category="Factory and code", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='org', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
+    "template:import": PermissionMeta(key="template:import", title="Import app templates", description="Import a template from a git URL for review. Nothing in it runs until it is approved.", category="Factory and code", roles=('owner', 'admin', 'operator'), scope='org', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "template:approve": PermissionMeta(key="template:approve", title="Approve app templates", description="Approve, reject, trial, hide or delete an imported template; never your own import.", category="Factory and code", roles=('owner', 'admin'), scope='org', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "workflow:read": PermissionMeta(key="workflow:read", title="View workflows", description="See workflow definitions, specs, plans, readiness and costs.", category="Workflows and work", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "workflow:create": PermissionMeta(key="workflow:create", title="Create workflows", description="Draft, save, fork and wire workflows and custom steps.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "workflow:publish": PermissionMeta(key="workflow:publish", title="Publish workflows", description="Publish a workflow version so it can run.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
@@ -354,6 +373,9 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "secret:manage": PermissionMeta(key="secret:manage", title="Manage secrets", description="Create and verify secrets and key pairs.", category="Secrets and integrations", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "kms_key:manage": PermissionMeta(key="kms_key:manage", title="Manage KMS keys", description="Create KMS keys and grant or revoke agent access.", category="Secrets and integrations", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "secret:lease": PermissionMeta(key="secret:lease", title="Lease secrets", description="Lease a secret for a running step (runtime only).", category="Secrets and integrations", roles=('system_worker',), scope='project', step_up=False, delegable=True, critical=False, system_only=True, readonly_post=False),
+    "app_secret:read_meta": PermissionMeta(key="app_secret:read_meta", title="View an app's secret metadata", description="See an app's secrets: name, environment, mode and shape. Never the value.", category="Secrets and integrations", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
+    "app_secret:write": PermissionMeta(key="app_secret:write", title="Set an app's test secrets", description="Set, replace and remove an app's test, generated and stub secrets; reveal its test users.", category="Secrets and integrations", roles=('owner', 'admin', 'operator'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "app_secret:live": PermissionMeta(key="app_secret:live", title="Use live keys for an app", description="Set an app's live secrets, used only by a deploy after a person's decision.", category="Secrets and integrations", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "integration:read": PermissionMeta(key="integration:read", title="View integrations", description="See integrations, work trackers, channels, webhooks and subscriptions.", category="Secrets and integrations", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "integration:manage": PermissionMeta(key="integration:manage", title="Manage integrations", description="Connect and change integrations, trackers, channels, webhooks and subscriptions.", category="Secrets and integrations", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "comms:read": PermissionMeta(key="comms:read", title="View comms", description="See the comms inbox, outbox and policies.", category="Secrets and integrations", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
@@ -369,6 +391,8 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "assurance:read": PermissionMeta(key="assurance:read", title="View assurance", description="See assurance cases, gates and security scans.", category="Operations and assurance", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "assurance:manage": PermissionMeta(key="assurance:manage", title="Manage assurance", description="Add claims, evidence, policies; evaluate and transfer surfaces.", category="Operations and assurance", roles=('owner', 'admin'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "assurance:run": PermissionMeta(key="assurance:run", title="Run assurance checks", description="Run security scans, evals, benchmarks and verification gates.", category="Operations and assurance", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
+    "security_scan:run": PermissionMeta(key="security_scan:run", title="Run security scans", description="Scan an app's code, dependencies and preview (Semgrep, OSV, ZAP).", category="Operations and assurance", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
+    "security_finding:triage": PermissionMeta(key="security_finding:triage", title="Triage security findings", description="Mark a security finding accepted or a false positive, with a reason.", category="Operations and assurance", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "improvement:read": PermissionMeta(key="improvement:read", title="View improvements", description="See self-improvement proposals, programs and experiments.", category="Operations and assurance", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "improvement:manage": PermissionMeta(key="improvement:manage", title="Manage improvements", description="Canary, roll out, promote and roll back improvements and experiments.", category="Operations and assurance", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=True, system_only=False, readonly_post=False),
     "activity:read": PermissionMeta(key="activity:read", title="View the activity log", description="Read the activity log, events, receipts and change journal.", category="Operations and assurance", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
@@ -394,7 +418,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 175
+    "owner": frozenset({  # 187
         "directory:read",
         "user:read",
         "user:invite",
@@ -435,6 +459,10 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "security_policy:manage",
         "audit:read",
         "audit:export",
+        "oidc:admin",
+        "oidc_client:manage",
+        "oidc_pool_user:manage",
+        "oidc_app:sign_in",
         "org:read",
         "org:update",
         "org:delete",
@@ -463,6 +491,9 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "preview:approve",
         "artifact:read",
         "artifact:rebuild",
+        "template:read",
+        "template:import",
+        "template:approve",
         "workflow:read",
         "workflow:create",
         "workflow:publish",
@@ -547,6 +578,9 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "secret:read_metadata",
         "secret:manage",
         "kms_key:manage",
+        "app_secret:read_meta",
+        "app_secret:write",
+        "app_secret:live",
         "integration:read",
         "integration:manage",
         "comms:read",
@@ -562,6 +596,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "assurance:read",
         "assurance:manage",
         "assurance:run",
+        "security_scan:run",
+        "security_finding:triage",
         "improvement:read",
         "improvement:manage",
         "activity:read",
@@ -571,7 +607,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "telemetry:share",
         "telemetry:manage",
     }),
-    "admin": frozenset({  # 166
+    "admin": frozenset({  # 178
         "directory:read",
         "user:read",
         "user:invite",
@@ -608,6 +644,10 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "security_policy:read",
         "audit:read",
         "audit:export",
+        "oidc:admin",
+        "oidc_client:manage",
+        "oidc_pool_user:manage",
+        "oidc_app:sign_in",
         "org:read",
         "org:update",
         "project:read",
@@ -634,6 +674,9 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "preview:approve",
         "artifact:read",
         "artifact:rebuild",
+        "template:read",
+        "template:import",
+        "template:approve",
         "workflow:read",
         "workflow:create",
         "workflow:publish",
@@ -716,6 +759,9 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "secret:read_metadata",
         "secret:manage",
         "kms_key:manage",
+        "app_secret:read_meta",
+        "app_secret:write",
+        "app_secret:live",
         "integration:read",
         "integration:manage",
         "comms:read",
@@ -731,6 +777,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "assurance:read",
         "assurance:manage",
         "assurance:run",
+        "security_scan:run",
+        "security_finding:triage",
         "improvement:read",
         "improvement:manage",
         "activity:read",
@@ -739,13 +787,15 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "telemetry:share",
         "telemetry:manage",
     }),
-    "operator": frozenset({  # 83
+    "operator": frozenset({  # 91
         "directory:read",
         "access_role:read",
         "api_key:manage_own",
         "agent_passport:read",
         "delegation:grant",
         "connection:use_own",
+        "oidc_client:manage",
+        "oidc_app:sign_in",
         "org:read",
         "project:read",
         "settings:read",
@@ -763,6 +813,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "preview:approve",
         "artifact:read",
         "artifact:rebuild",
+        "template:read",
+        "template:import",
         "workflow:read",
         "workflow:create",
         "workflow:publish",
@@ -812,6 +864,8 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "policy:read",
         "pipeline:read",
         "secret:read_metadata",
+        "app_secret:read_meta",
+        "app_secret:write",
         "integration:read",
         "comms:read",
         "comms:send",
@@ -821,14 +875,17 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "reliability:respond",
         "assurance:read",
         "assurance:run",
+        "security_scan:run",
+        "security_finding:triage",
         "improvement:read",
         "activity:read",
     }),
-    "viewer": frozenset({  # 46
+    "viewer": frozenset({  # 48
         "directory:read",
         "access_role:read",
         "api_key:manage_own",
         "agent_passport:read",
+        "oidc_app:sign_in",
         "org:read",
         "project:read",
         "settings:read",
@@ -837,6 +894,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "github:read",
         "preview:read",
         "artifact:read",
+        "template:read",
         "workflow:read",
         "workflow_run:read",
         "meeting:read",
@@ -872,7 +930,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "improvement:read",
         "activity:read",
     }),
-    "auditor": frozenset({  # 59
+    "auditor": frozenset({  # 60
         "directory:read",
         "user:read",
         "group:read",
@@ -897,6 +955,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "github:read",
         "preview:read",
         "artifact:read",
+        "template:read",
         "workflow:read",
         "workflow_run:read",
         "meeting:read",
