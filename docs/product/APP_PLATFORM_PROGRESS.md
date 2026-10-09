@@ -1194,7 +1194,7 @@ Branch `feat/app-platform-finish` (worktree `~/src/boss-wt-finish`), from
 | Item | What | Commit | State |
 |---|---|---|---|
 | (o) | The insecure-template deploy guard is per APP | 4a1407b8 | done |
-| (h) | Sign in with BOSS for a login-oauth app: client, redirect URIs, OIDC_BOSS_* app secrets, one click | H_SHA | done |
+| (h) | Sign in with BOSS for a login-oauth app: client, redirect URIs, OIDC_BOSS_* app secrets, one click | 9b4293c2 | done |
 
 ### (o) The deploy guard is per app (4a1407b8)
 
@@ -1213,7 +1213,7 @@ Tests: `apps/api/tests/test_an_insecure_template_app_is_never_deployed.py` (20: 
 the insecure app, what BOSS cannot attribute, a shared repository before/after merge, an unknown
 repository, the host route deploying the other app past both planners).
 
-### (h) Sign in with BOSS for a login-oauth app (H_SHA)
+### (h) Sign in with BOSS for a login-oauth app (9b4293c2)
 
 - **One click**: `POST /v1/apps/{app}/sign-in-with-boss {project_id, pool_id?}` (`oidc_client:manage`,
   step-up, plus `app_secret:write` checked in the handler; the app named by key, name or run id).
