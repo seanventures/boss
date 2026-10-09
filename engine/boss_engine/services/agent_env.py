@@ -138,6 +138,10 @@ def agent_environment(
     from ..app_links import run_env as _link_env
 
     kept.update(_link_env.current())
+    # A BUILD that applies a template: where its files are, read-only (templates.run_ref).
+    from ..templates import run_ref as _template_ref
+
+    kept.update(_template_ref.current())
 
     withheld = sorted(set(source) - set(kept))
     if withheld:

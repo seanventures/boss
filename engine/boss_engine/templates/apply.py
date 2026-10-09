@@ -128,6 +128,11 @@ def build_directive(*, row: dict, manifest: TemplateManifest, stack: str, framew
         f"`template_tests` gate with `{test_spec.command}` from the app's directory and requires "
         f"at least {test_spec.min_tests} passing tests.",
         "Never commit a secret: the template's secrets arrive at run time from the vault.",
+        "The template's COMPLETE files are on disk, read-only: the directory named by the "
+        "environment variable BOSS_TEMPLATE_DIR (its brief, guide and every stack), and "
+        f"BOSS_TEMPLATE_STACK_DIR for stacks/{stack}/ (the reference below, whole). Read and copy "
+        "from there; this brief may inline only part of it. Never write into that directory.",
+        f"The reference files for {stack}: " + ", ".join(sorted(ref)) + ".",
     ]
     if manifest.routes:
         head.append("The routes this template adds: " + ", ".join(manifest.routes) + ".")
@@ -138,7 +143,10 @@ def build_directive(*, row: dict, manifest: TemplateManifest, stack: str, framew
                 f"## The reference implementation (stacks/{stack}/)", ""]
     size = 0
     inlined = []
-    for path in sorted(ref):
+    # The tests FIRST: they are what the agent must copy as they are, and what the gate runs. A
+    # template larger than the inline budget then loses later sources, never its tests; the whole
+    # file set is on disk anyway (templates.run_ref).
+    for path in tests + sorted(p for p in ref if p not in tests):
         body = ref[path]
         if b"\x00" in body[:8192]:
             continue
@@ -149,7 +157,7 @@ def build_directive(*, row: dict, manifest: TemplateManifest, stack: str, framew
         material += [f"### {path}", "```", body.decode("utf-8", errors="replace"), "```", ""]
     rest = [p for p in sorted(ref) if p not in inlined]
     if rest:
-        material.append("Not inlined (too large): " + ", ".join(rest))
+        material.append("Not inlined here (read them in $BOSS_TEMPLATE_STACK_DIR): " + ", ".join(rest))
     body = "\n".join(material)
     if untrusted:
         body = "\n".join([

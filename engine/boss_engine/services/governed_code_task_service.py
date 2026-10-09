@@ -1844,11 +1844,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # and its seats never run as the control plane's uid.
         from .sandbox_identity import bind as _sandbox_bind
         from ..app_links.run_env import for_run as _link_env
+        from ..templates.run_ref import for_run as _template_files
 
         with owned_process.owner_scope("code_run", run_id,
                                        project_id=(run or {}).get("project_id"), fresh=True), \
                 _sandbox_bind(run_id, project_id=(run or {}).get("project_id")) as _sbx, \
-                _link_env(engine, run_id, (run or {}).get("project_id")):
+                _link_env(engine, run_id, (run or {}).get("project_id")), \
+                _template_files(engine, run, _sbx):
             if mcp is not None and _sbx is not None:
                 mcp.move_into(_sbx)
             return _run_governed_code_task(engine, settings, jobs, run_id,
