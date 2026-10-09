@@ -143,6 +143,33 @@ def lookup(db: Any, token: Optional[str]) -> Optional[SessionRow]:
     return row
 
 
+def lookup_with_principal(db: Any, token: Optional[str]) -> Optional[tuple[SessionRow, Any, int]]:
+    """`lookup` and the session's principal and its org's identity epoch, in ONE statement: the
+    session row, `users.load_principal`'s columns (live: status is never cached) and the epoch
+    the PDP decides at. Same liveness rules as `lookup`. None for no live session or no principal."""
+    if not token or not token.startswith(SESSION_PREFIX) or len(token) > 100:
+        return None
+    r = db.execute(text(
+        f"SELECT {_COLUMNS_S}, p.kind AS p_kind, p.org_id AS p_org_id, p.status AS p_status, "
+        "p.display_name AS p_display_name, p.network_bound AS p_network_bound, "
+        "p.legacy_member_ids AS p_legacy_member_ids, "
+        "(SELECT st.epoch FROM identity_settings st WHERE st.org_id = p.org_id) AS org_epoch "
+        "FROM identity_sessions s JOIN identity_principals p ON p.id = s.principal_id "
+        "WHERE s.token_hash = :th"), {"th": sha256_hex(token)}).first()
+    if r is None:
+        return None
+    row = _row(r)
+    now = utcnow()
+    if row.revoked_at is not None or now >= row.idle_expires_at or now >= row.absolute_expires_at:
+        return None
+    from .principal import Principal, PrincipalKind, PrincipalStatus
+
+    principal = Principal(row.principal_id, PrincipalKind(r.p_kind), r.p_org_id,
+                          PrincipalStatus(r.p_status), r.p_display_name, bool(r.p_network_bound),
+                          tuple(r.p_legacy_member_ids or ()))
+    return row, principal, int(r.org_epoch or 0)
+
+
 def touch(db: Any, row: SessionRow, *, org_id: str) -> None:
     """Slide the idle expiry, at most once a minute."""
     now = utcnow()

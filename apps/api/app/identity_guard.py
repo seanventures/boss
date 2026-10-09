@@ -174,9 +174,12 @@ def _authenticate(creds: authn.RequestCredentials, conn: Optional[HTTPConnection
             raise failed
         if getattr(conn.state, "identity_checked", False):
             return None
+    from .request_metrics import auth_span
+
     try:
         try:
-            ctx = authn.authenticate(creds)
+            with auth_span():
+                ctx = authn.authenticate(creds)
         except NotImplementedError:
             # Until S1 lands, the only identity a request has is what the legacy transport decided.
             ctx = legacy.bridge(creds)
@@ -205,6 +208,13 @@ def identity_enforced() -> bool:
 
 async def enforce_access(conn: HTTPConnection) -> None:
     """The dependency. Never raises in shadow mode; in enforce mode raises AccessRefused."""
+    from .request_metrics import auth_span
+
+    with auth_span():
+        await _enforce_access(conn)
+
+
+async def _enforce_access(conn: HTTPConnection) -> None:
     route = conn.scope.get("route")
     endpoint = getattr(route, "endpoint", None) or conn.scope.get("endpoint")
     settings = get_settings()
