@@ -125,7 +125,7 @@ Worktree `~/src/boss-wt-s6-oidc`, branch `feat/s6-oidc` (from `feat/app-platform
 | 1 | Protocol core (discovery, JWKS, authorize, consent, token, userinfo, revocation, end_session), client registry API, workforce pools on the console session | done |
 | 2 | Unit, admin API and adversarial suites (the named list) | done |
 | 3 | End-to-end proof: a Node app with openid-client on a local stack | done |
-| 4 | OpenID conformance suite (Basic OP), if Docker allows | todo |
+| 4 | OpenID conformance suite (Basic OP), if Docker allows | not run (see below) |
 | P2 | Customer pools, hosted pages polish, console Identity ▸ App sign-in | phase 2 |
 
 ### Decisions and notes
@@ -200,5 +200,19 @@ Found and fixed by the e2e: a token-endpoint 401 for a non-Basic client carried 
 - Tests: DB `boss_test_s6` on boss-test-pg (localhost:55432, user boss; password via
   `docker exec boss-test-pg printenv POSTGRES_PASSWORD`, never printed). Run with
   `DATABASE_URL=postgresql+psycopg://boss:$PW@localhost:55432/boss_test_s6 PYTHONPATH=.:engine python3 -m pytest -q apps/api/tests/test_oidc_provider_*.py`.
+- DB `boss_test_s6` was DROPPED at the end of phase 1: `CREATE DATABASE boss_test_s6` first.
+- Conformance (step 4), not run: the suite is its own compose stack (server, MongoDB, nginx), and
+  the one-stack slot was held (bosss4, then bosss2). It also needs the issuer reachable from its
+  containers (BOSS_PUBLIC_URL on host.docker.internal, or the suite on the host network) and a
+  browser step for authorize (its `browser` config: a cookie of a signed-in member, the consent
+  click). Expected gaps it will flag: `prompt=login` and `max_age` re-authentication
+  (`login_required` today), and `response_mode=form_post` (not offered).
+- Phase 2, in order: (1) customer pools: `oidc_pool_users`, `oidc_sessions` (cookie
+  `__Host-boss_app_session`, Path=/oidc/), `oidc_pool_user_factors` (tables exist), reusing
+  passwords/totp/webauthn/ratelimit/email_signin parameterised by a realm; sign-in/sign-up/MFA/
+  passkey hosted pages; the pool-user admin routes (still 501); (2) re-authentication for
+  `prompt=login`/`max_age` and step-up for `require_mfa` instead of the error page; (3) the
+  console Identity ▸ App sign-in (Pools, Clients, Users, Roles; side sheets); (4) hosted pages in
+  the console's sign-in style; (5) conformance.
 - After a route change regenerate: `python3 -m apps.api.tests.identity_matrix`,
   `python3 apps/api/tests/test_identity_authz_public_routes.py`, `python3 scripts/dump-identity-api-routes.py`.
