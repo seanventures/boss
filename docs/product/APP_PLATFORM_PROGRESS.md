@@ -1183,3 +1183,172 @@ templates mount: the built-ins come from the image.
   "Talks to" (S5); S2's MCP tools; the independent tester walks (§8.3) of App ▸ Links, App ▸
   Security and App sign-in.
 
+
+## Finish (feat/app-platform-finish)
+
+Branch `feat/app-platform-finish` (worktree `~/src/boss-wt-finish`), from
+`feat/app-platform` @ f9982f7e. Items (h), (o) here; (p), (q), (r), (s) built on their own branches
+(`feat/app-platform-finish-<item>`, worktrees `boss-wt-finish-<item>`) and merged in. Test DB
+`boss_test_finish` on boss-test-pg (dropped at the end). No compose stack was used.
+
+| Item | What | Commit | State |
+|---|---|---|---|
+| (o) | The insecure-template deploy guard is per APP | 4a1407b8 | done |
+| (h) | Sign in with BOSS for a login-oauth app: client, redirect URIs, OIDC_BOSS_* app secrets, one click | 9b4293c2 | done |
+| (p) | The payment templates map catalog-cart's CatalogError themselves (3 stacks x stripe/paypal) | fe2dbc86 (merge e7be941a) | done |
+| (s) | Template tests on a micro-VM install: refused up front and in words (not feasible in the guest) | b443087a (merge 5550afd0) | done |
+| (r) | MCP tools for templates and security scans/reviews, declared in the tool registry | 838ec54a (merge 4296125b) | done |
+| (q) | The composer's "Talks to" | af1056b5 (merge e1f40892) | done; further composer/template UI now belongs to `fix/fx-templateui` |
+
+### (o) The deploy guard is per app (4a1407b8)
+
+`templates/deploy_guard.deploy_refusal(connection, project_id, *, target, commit_ref, release_packet,
+source_run_id)`: the operator's decision replaces "per project". In a project that holds an
+insecure_by_design application (not abandoned), a deploy is refused when any app it can be
+attributed to is the insecure one (the target's `app_name` by key/name/run id, and by its normalised
+key even when its builds are past the 200-run app index; the release packet's `code_task_run_id`; a
+stack deploy's `run_id`; a `boss/code/<run>` branch ref), when it cannot be attributed to any app of
+the project (a target named after nothing BOSS built) or names a build/branch BOSS cannot place, and,
+in the insecure app's own repository, when its change is merged (`applied`) or the ref is one BOSS
+cannot place (a bare sha, an unknown branch). The default branch while the insecure change is
+unmerged and another app's own build branch deploy. Fails closed; each refusal carries its own
+action. Every planner and the governed host apply pass the deploy's context (source test pins it).
+Tests: `apps/api/tests/test_an_insecure_template_app_is_never_deployed.py` (20: every way of naming
+the insecure app, what BOSS cannot attribute, a shared repository before/after merge, an unknown
+repository, the host route deploying the other app past both planners).
+
+### (h) Sign in with BOSS for a login-oauth app (9b4293c2)
+
+- **One click**: `POST /v1/apps/{app}/sign-in-with-boss {project_id, pool_id?}` (`oidc_client:manage`,
+  step-up, plus `app_secret:write` checked in the handler; the app named by key, name or run id).
+  `engine/boss_engine/oidc_provider/app_sign_in.py`: needs a login-oauth application on the app (409
+  in words otherwise); registers a confidential `client_secret_basic` client (scopes openid profile
+  email roles; not first-party, so the person consents) in the org's first workforce pool (an
+  Owner/Admin's click creates one if none exists; an Operator's gets 409 `no_pool` in words), and
+  binds `OIDC_BOSS_CLIENT_ID`, `OIDC_BOSS_CLIENT_SECRET`, `OIDC_BOSS_ISSUER` as app secrets
+  (`templates.secrets.bind_issued`: vault kind app_secret, mode generated) for **preview and deploy,
+  never build**. Idempotent: a second click rotates nothing; a client registered by hand is reused
+  and its secret reissued (BOSS cannot read the shown-once secret back). `GET` (project:read) shows
+  presence, client id, issuer and redirect URIs; `DELETE` removes the client (its grants end) and the
+  bindings. No response ever carries the secret.
+- **Redirect URIs** = `<base>/auth/callback/boss` for each running preview
+  (`<preview origin>/v1/previews/<id>/web`; BOSS_PREVIEW_ORIGIN, else the public URL's host on
+  BOSS_PREVIEW_PORT) and the app's deploy addresses (newest healthy deploy's public URL, its targets'
+  public_url / https domains). `preview_service.preview_link_environment` now also adds
+  `preview_app_environment`: the app's `preview` secrets (F2 §2.4, never live; only for apps with a
+  template applied), `APP_BASE_URL`, and the new preview's redirect URI; `stop_preview` removes it.
+  URIs an operator added stay. With no address yet, `http://localhost:3000/...` keeps the client
+  valid until a real one exists. OIDC client `app_key` now accepts the platform's app keys
+  (lowercase words, single-spaced).
+- **Console**: Factory › Apps › ⋯ › **Sign-in** (`apps/web/app/factory/sign-in-sheet.tsx`,
+  `sign-in-actions.ts`): state, client, issuer, "Returns to" in words, *Use Sign in with BOSS* /
+  *Refresh addresses* / *Stop using*. Needs a rebuild of the web container to be visible.
+- **Found and fixed by the proof**: the login-oauth Node stack sent the BOSS client secret in the
+  body (openid-client's default, client_secret_post), which BOSS refuses: BOSS sign-in could never
+  have worked. It now uses `ClientSecretBasic` for BOSS, and the stack's fake IdP accepts only Basic
+  for the BOSS client (mutation-checked: the old code fails the template test). Python (Authlib) and
+  Java (Spring) already use Basic.
+- **Tests**: `apps/api/tests/test_sign_in_with_boss.py` (16), ending with the proof: the login-oauth
+  Node stack (npm-installed into a scratch copy) runs with EXACTLY the environment a preview of the
+  app gets from the vault, BOSS serves on a real loopback port; GET /auth/login/boss -> BOSS authorize
+  (PKCE S256, nonce, state) -> a member's consent -> the app's callback -> code exchange with the bound
+  secret -> `/api/me` = the member, provider boss; the secret never in the app's output. Skips only
+  without Node 20+ or npm. `apps/web/tests/app-sign-in-sheet.test.tsx` (6). Node template tests 15/15.
+  Affected: identity suites 46, OIDC engine + admin + flow + oidc:read + links + previews sandbox +
+  name-twice 104 (+1 skip), templates API 45. tsc clean.
+- **Not done / known limits**: (1) a sign-in **inside a preview cannot hold a session**: the preview
+  proxy strips the browser's Cookie header and serves previews with a sandbox CSP (no
+  allow-same-origin), so the app's session cookie never reaches it; the preview redirect URI is
+  registered, but an interactive login works on a deployed or locally run app only. Fixing it is a
+  preview-isolation decision (per-app preview origins), not this item. (2) Deploys do not yet read app
+  secrets (`values_for_env(env="deploy")` has no caller in the deploy path), so a deployed app gets
+  the bindings only once that wiring exists. (3) The Node stack builds its callback URL from
+  `req.originalUrl` against APP_BASE_URL, which drops a path prefix such as a preview's; harmless
+  until (1) is solved.
+
+### (p) Payments map CatalogError themselves (fe2dbc86)
+
+The shared `payments/catalog` adapter (node `catalog.js`, python `catalog.py`, java `Catalog.java`;
+identical in stripe-checkout and paypal-checkout) wraps both catalog calls and turns an error whose
+class is named `CatalogError` with a 4xx `status` and a `code` into its CheckoutInputError /
+CheckoutInputException: a 400 with catalog-cart's code, before any order or provider call. Matched by
+name and shape, not imported, so a payment template still works alone; a look-alike, a 5xx
+CatalogError or any other error is left to the app. The integration's "Payments wiring" decision is
+settled (briefs and spec §3.4 say so). Tests: one more per stack (stripe node 17, python 27, java 19;
+paypal node 19, python 26, java 21; each mutation-checked); the compose test's glue no longer maps
+the error and a route test per stack goes through the payment template's real checkout route over
+catalog-cart with a provider that must not be called (6 compose tests per stack).
+`engine/tests/templates`: 251 passed; 263 with `BOSS_TEMPLATE_REAL_RUN=1` (Java via Docker), all 6
+combined real runs green. Seen, not from this change: the payments python real run fails inside a
+virtualenv (the gate installs with `pip --user`); use the system python with `PYTHONUSERBASE`.
+
+### (s) Template tests on a micro-VM install (b443087a)
+
+Not feasible within the guest: the micro-VM contract (`sandbox_contract` 1.0) returns a command's
+exit code and output tail, never the JUnit report `template_tests` counts; an exit code cannot prove
+`min_tests` and a count read from the output would trust the agent's code. So on
+`BOSS_GOVERNED_SANDBOX_PROVIDER=microvm`, `POST /v1/templates/{id}/apply` answers 409
+`template_tests_need_local_sandbox` with the reason and the remedy before anything starts; a template
+build reaching the gate there anyway fails it closed with the same sentence (`gate.MICROVM_REFUSAL`)
+in its evidence and the blocked run's error (every template-gate failure now carries its reason
+there); the secret scan still runs; the trial always runs in the local sandbox. Documented in spec
+§2.3 and `docs/community/FEATURES.md`. Tests: `engine/tests/templates/test_template_tests_on_microvm.py`
+(11) and an API test in `test_templates_api.py`. Lifting it needs an artifact channel in the sandbox
+contract (the guest returning named report files).
+
+### (q) The composer's "Talks to" (af1056b5)
+
+Committed before the scope change (2026-10-09: a new stream, `fix/fx-templateui`, owns all composer
+and template console UI from here; it builds on af1056b5). New app and "Add to an existing app" offer
+"Talks to" rows: another app of the project, alias (from its name, editable), Preview/Deployed, Test
+users; gated on `app_link:manage` (greyed with the reason without it). For an existing app the links
+are created (`POST /v1/apps/{app}/links`) before the change starts, so its build already gets
+`BOSS_LINK_<ALIAS>_*`; a refused link names itself and starts nothing. A new app exists only after its
+first build, so `POST /v1/delivery-workflows/start` takes `input.app_links`: checked first
+(`app_link:manage` on top of `workflow_run:start`, D7, aliases), recorded in `app_link_requests` (F5
+block; never in the run's input), created by the first build (`run_env.for_run` ->
+`create_requested_links`) once and audited; a refusal is recorded with its reason and the build runs
+without that link. Tests: `apps/web/tests/composer-talks-to.test.tsx` (7),
+`apps/api/tests/test_start_requests_app_links.py` (11). Needs the web and api images rebuilt to be
+visible. Independent tester walk: to do (by the UI stream).
+
+### (r) MCP tools (838ec54a)
+
+`engine/boss_engine/tools/app_platform_tools.py`, declared like their routes: `list_templates`,
+`describe_template` (`template:read`, org; an imported template's brief/guide/security note marked
+untrusted); `template_status` (`project:read`: applied templates and their status, secret presence
+only); `apply_template` (`workflow_run:start` + `template:read` through the new
+`ToolSpec.also_requires`, which the identity gate checks at each key's own scope; the API route's
+plan -> readiness -> start -> record path, also from chat); `security_scan_status`,
+`list_security_findings`, `security_report` (JSON or Markdown), `security_review_status`
+(`project:read`). Scanning stays `run_security_scan` (`security_scan:run`); a review is
+`start_workflow(security_review)`. Import, approve, trial, delete and triage stay console/API only
+(tested absent). Ids are confined to the call's project in `object_args`. Registry: 123 tools (71
+read, 52 write); MCP.md, the landing count and IDENTITY_PERMISSIONS.md §7 updated. Tests:
+`apps/api/tests/test_app_platform_mcp_tools.py` (8, real DB, enforce, real bindings),
+`engine/tests/test_app_platform_tools_declared.py` (4), 3 `also_requires` cases in
+`test_identity_authz_tool_gate.py`.
+
+### Final gate (2026-10-09, merged head, `boss_test_finish`, one session per group)
+
+- Engine (templates incl. compose + microVM, link rules/fence, name-twice, oidc, tool declarations,
+  tool gate, registry, catalogue, previews sandbox, gate labels): 397 passed, 29 skipped.
+- API: templates 46; deploy guard + Sign in with BOSS 36; links + start requests + gateway 47; MCP
+  tools + tool object args 27; identity coverage 29; previews origin + security scan/review routes +
+  feature-onto-app 36; OIDC flow/admin/adversarial/customers/reauth/oidc:read 151 passed + 1 failed +
+  3 errors in the 22-minute session, all 4 pass when rerun (13/13: a TOTP step boundary and fixture
+  setup under load).
+- Web: tsc clean (with `@boss/api-client` resolved to this worktree's package: a node_modules
+  symlinked whole from the main checkout reads the main checkout's api-client and reports a false
+  `security_review` error); full vitest 5923 passed + 1 failed (the action-permissions table, fixed in
+  94fef360), then 5913 passed + 11 failed in a run beside the API suites: the 2 files
+  (setup-github-access, setup-model-routing) pass alone (18/18), timing under load.
+- `test_registry.py` fails 2 only when run in one session after the API suites; alone 12/12.
+
+### Resume (finish)
+
+- `cd ~/src/boss-wt-finish && git pull` (branch `feat/app-platform-finish`). Runner:
+  the session scratchpad `finish/t.sh` (pytest against `boss_test_finish`, created per session).
+- Open: preview sign-in needs per-app preview origins (cookies); deploys do not read app secrets yet;
+  the Node login stack's callback URL drops a base path; independent tester walks of App ▸ Sign-in,
+  App ▸ Links, App ▸ Security, App sign-in and the composer's Talks to (UI stream `fix/fx-templateui`).

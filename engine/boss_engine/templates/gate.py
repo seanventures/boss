@@ -155,6 +155,32 @@ def missing_from_diff(test_files: list[str], changed_paths: list[str]) -> list[s
     return [t for t in test_files if PurePosixPath(t).name not in names]
 
 
+# TEMPLATE TESTS DO NOT RUN ON THE MICRO-VM SUBSTRATE (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.3).
+#
+# With BOSS_GOVERNED_SANDBOX_PROVIDER=microvm every working stage runs in a guest of the external
+# sandbox-service, and the Python<->Go contract (sandbox_contract, 1.0) brings back only a stage's
+# diff and, per test command, its exit code and the tail of its output. This gate counts passing
+# tests from the JUnit report the command writes; that file never crosses back, and an exit code
+# alone cannot prove `min_tests` passed (a runner that collects nothing exits 0). Reading a count
+# out of the output tail would trust text the agent-written code prints. So in micro-VM mode the
+# gate does not run and FAILS CLOSED in these words, and an apply is refused up front with the
+# same words (apply.plan) rather than starting a build that can only end blocked. Lifting this
+# needs an artifact channel in the sandbox contract (the guest returning named report files).
+MICROVM_REFUSAL = (
+    "Template tests cannot run on the micro-VM build substrate "
+    "(BOSS_GOVERNED_SANDBOX_PROVIDER=microvm): the micro-VM guest returns a command's exit code "
+    "and output, not the JUnit report this gate counts, so BOSS cannot prove the template's tests "
+    "passed. Build template applies on the local sandbox instead: set "
+    "BOSS_GOVERNED_SANDBOX_PROVIDER=local (the default) and apply the template again.")
+
+
+def microvm_refusal(settings: Any) -> Optional[str]:
+    """MICROVM_REFUSAL when this install builds on the micro-VM substrate, else None. The same
+    test governed_code_task_service._resolve_use_microvm makes for a run with no override."""
+    provider = str(getattr(settings, "governed_sandbox_provider", "") or "local").lower()
+    return MICROVM_REFUSAL if provider in ("microvm", "firecracker") else None
+
+
 @dataclass
 class GateResult:
     gates: dict[str, bool]
@@ -165,13 +191,15 @@ class GateResult:
 
 def evaluate(*, template: Mapping[str, Any], files: Mapping[str, bytes], changed: Mapping[str, Any],
              cwd: Optional[Path], run_command: Optional[Callable[[str, Path], Any]],
-             bound_values: Optional[Mapping[str, str]] = None, tests_passed: bool = True) -> GateResult:
+             bound_values: Optional[Mapping[str, str]] = None, tests_passed: bool = True,
+             substrate: str = "local") -> GateResult:
     """Both gates for one applied template.
 
     `template` is `{id, version, digest, stack, manifest}` (manifest as a dict), `files` the
     template version's files, `changed` the build's {path: content}, `cwd` the app directory the
     test command runs in, `run_command(command, cwd)` the sandbox's runner (returns an object with
-    exit_code/stdout/stderr), `bound_values` the app's bound secret values (scan only)."""
+    exit_code/stdout/stderr), `bound_values` the app's bound secret values (scan only),
+    `substrate` where the build ran ("microvm": the tests cannot run there, MICROVM_REFUSAL)."""
     from .manifest import validate_manifest
     from .secret_scan import manifest_patterns
 
@@ -195,6 +223,9 @@ def evaluate(*, template: Mapping[str, Any], files: Mapping[str, bytes], changed
     ok = False
     if spec is None:
         tt["error"] = f"the template does not support the {stack!r} stack"
+    elif substrate == "microvm":
+        tt["not_run"] = "microvm"
+        tt["error"] = MICROVM_REFUSAL
     else:
         wanted = template_test_files(files, stack)
         missing = missing_from_diff(wanted, list(changed.keys()))
@@ -211,7 +242,7 @@ def evaluate(*, template: Mapping[str, Any], files: Mapping[str, bytes], changed
         elif not tests_passed:
             tt["error"] = "the build's own tests did not pass, so the template's were not run"
         elif cwd is None or run_command is None:
-            tt["error"] = "the template's tests cannot run in this sandbox mode"
+            tt["error"] = "the template's tests cannot run here: the build has no app directory to run them in"
         elif (install := install_dependencies(stack, cwd, run_command)).get("error"):
             tt["install"] = install
             tt["error"] = install["error"]

@@ -112,3 +112,49 @@ def test_the_workflow_runner_cannot_go_around_the_gate(monkeypatch):
     body = source[source.index("def _invoke_tool"):]
     body = body[: body.index("\ndef ", 10)]
     assert body.index("identity_gate(") < body.index("spec.handler(")
+
+
+# ---- also_requires: a tool needing two keys, like the route it mirrors (apply_template) -----------
+
+def _two_keys(monkeypatch):
+    calls: list = []
+    r = ToolRegistry()
+    r.register(ToolSpec("apply", "a", {"type": "object"}, lambda ctx, **k: calls.append(k) or {"done": True},
+                        kind="write", permission="workflow_run:start", also_requires=("template:read",)))
+    settings = get_settings()
+    monkeypatch.setattr(settings, "authz_mode", "enforce")
+    monkeypatch.setattr(settings, "authz_router_modes", "")
+    return r, calls
+
+
+def test_also_requires_refuses_without_the_second_key_and_checks_it_at_its_own_scope(monkeypatch):
+    r, calls = _two_keys(monkeypatch)
+    seen: list = []
+    monkeypatch.setattr(authz, "check", _decide({"workflow_run:start"}, seen))
+    out = r.invoke("apply", None, project_id="p1", actor="x", args={}, auth=ALICE)
+    assert out["ok"] is False and out["permission"] == "template:read" and calls == []
+    # the project key at the project, the org-only key at the org
+    assert seen == [("workflow_run:start", "project:p1"), ("template:read", "org")]
+    seen.clear()
+    monkeypatch.setattr(authz, "check", _decide({"workflow_run:start", "template:read"}, seen))
+    assert r.invoke("apply", None, project_id="p1", actor="x", args={}, auth=ALICE)["done"] and len(calls) == 1
+
+
+def test_also_requires_is_not_asked_when_the_first_key_is_refused(monkeypatch):
+    r, calls = _two_keys(monkeypatch)
+    seen: list = []
+    monkeypatch.setattr(authz, "check", _decide({"template:read"}, seen))
+    out = r.invoke("apply", None, project_id="p1", actor="x", args={}, auth=ALICE)
+    assert out["permission"] == "workflow_run:start" and seen == [("workflow_run:start", "project:p1")]
+    assert calls == []
+
+
+def test_also_requires_names_only_catalogue_keys_and_needs_a_permission():
+    from boss_engine.identity.catalogue import CatalogueError
+
+    with pytest.raises(CatalogueError):
+        ToolSpec("x", "x", {"type": "object"}, lambda ctx, **k: {}, permission="project:read",
+                 also_requires=("template:reed",))
+    with pytest.raises(CatalogueError):
+        ToolSpec("y", "y", {"type": "object"}, lambda ctx, **k: {}, inherits_route_permission=True,
+                 also_requires=("template:read",))

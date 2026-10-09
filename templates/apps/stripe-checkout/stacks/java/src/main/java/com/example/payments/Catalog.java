@@ -16,6 +16,13 @@ import java.util.Set;
  * <p>The checkout contract (shared with the {@code catalog-cart} template, spec §3.4): {@link
  * #product} and {@link #cartLines}. When {@code catalog-cart} is applied, implement this interface
  * over its products table and its cart's checkout function. Without it, {@link StaticCatalog}.
+ *
+ * <p>A cart that cannot be sold now (a product gone, the cart empty, stock): catalog-cart's
+ * provider throws its {@code CatalogError} (a 4xx status + a code). {@link #price} turns that into
+ * a {@link CheckoutInputException} (the checkout route's 400, before any order or payment-provider
+ * call), so a shop combining both templates never answers a 500 for it and needs no glue for it.
+ * It is matched by its class name and public {@code status}/{@code code} fields, not imported:
+ * this template compiles and works without catalog-cart.
  */
 public interface Catalog {
   record Product(String id, String name, long unitAmountCents, String currency, boolean active) {}
@@ -63,6 +70,38 @@ public interface Catalog {
     }
   }
 
+  /** catalog-cart's CatalogError (or a subclass) refusing the request: its code, else null. */
+  private static String catalogRefusalCode(RuntimeException e) {
+    for (Class<?> c = e.getClass(); c != null && c != RuntimeException.class; c = c.getSuperclass()) {
+      if (!c.getSimpleName().equals("CatalogError")) continue;
+      try {
+        Object status = c.getField("status").get(e);
+        Object code = c.getField("code").get(e);
+        if (status instanceof Integer s && s >= 400 && s <= 499 && code instanceof String k && !k.isEmpty()) {
+          return k;
+        }
+      } catch (ReflectiveOperationException | RuntimeException ignored) {
+        // not catalog-cart's shape: leave the error as it is
+      }
+      return null;
+    }
+    return null;
+  }
+
+  /** Call the catalog; its refusal of the cart is the client's input error, anything else stays
+   *  an error of the app (a 500 that must be fixed, not hidden). */
+  private static <T> T fromCatalog(java.util.function.Supplier<T> call) {
+    try {
+      return call.get();
+    } catch (CheckoutInputException e) {
+      throw e;
+    } catch (RuntimeException e) {
+      String code = catalogRefusalCode(e);
+      if (code != null) throw new CheckoutInputException(code);
+      throw e;
+    }
+  }
+
   private static boolean isWholeNumber(Object v) {
     return v instanceof Integer || v instanceof Long;
   }
@@ -71,7 +110,7 @@ public interface Catalog {
   static Priced price(Catalog catalog, Map<String, Object> body, HttpServletRequest request) {
     List<Line> lines = new ArrayList<>();
     if (body != null && body.get("cart_id") != null) {
-      lines.addAll(catalog.cartLines(String.valueOf(body.get("cart_id")), request)
+      lines.addAll(fromCatalog(() -> catalog.cartLines(String.valueOf(body.get("cart_id")), request))
           .orElseThrow(() -> new CheckoutInputException("no such cart")));
     } else {
       Object raw = body == null ? null : body.get("items");
@@ -82,7 +121,7 @@ public interface Catalog {
       for (Object o : items) {
         Map<?, ?> item = o instanceof Map<?, ?> m ? m : Map.of();
         Object pid = item.get("product_id");
-        Product p = catalog.product(pid == null ? null : String.valueOf(pid))
+        Product p = fromCatalog(() -> catalog.product(pid == null ? null : String.valueOf(pid)))
             .filter(Product::active)
             .orElseThrow(() -> new CheckoutInputException("unknown product"));
         Object q = item.get("quantity");

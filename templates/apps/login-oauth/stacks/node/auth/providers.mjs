@@ -42,7 +42,9 @@ export class Providers {
         new URL(p.issuer),
         p.clientId,
         p.clientSecret,
-        undefined,
+        // openid-client sends a secret in the body by default; a provider that takes it only in
+        // the Authorization header (BOSS) says so in its spec.
+        p.clientAuth === "client_secret_basic" ? oidc.ClientSecretBasic(p.clientSecret) : undefined,
         local ? { execute: [oidc.allowInsecureRequests] } : undefined,
       );
     } else {

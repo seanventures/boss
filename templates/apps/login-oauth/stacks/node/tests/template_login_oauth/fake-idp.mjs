@@ -20,6 +20,7 @@ export async function startFakeIdp() {
 
   const fake = {
     clients: new Map(), // client id -> secret
+    basicOnly: new Set(), // clients whose secret is accepted only in the Authorization header (BOSS)
     // The person who "signs in" at the provider next.
     user: { sub: "user-1", email: "ada@example.com", email_verified: true, name: "Ada", picture: null },
     // Test knobs: an ID token with a different nonce.
@@ -70,7 +71,8 @@ export async function startFakeIdp() {
       clientId = decodeURIComponent(id);
       secret = decodeURIComponent(pw || "");
     }
-    if (!fake.clients.has(clientId) || fake.clients.get(clientId) !== secret) {
+    if (!fake.clients.has(clientId) || fake.clients.get(clientId) !== secret
+        || (fake.basicOnly.has(clientId) && !basic)) {
       return json(res, 401, { error: "invalid_client" });
     }
     const grant = codes.get(p.code);

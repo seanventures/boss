@@ -30,6 +30,7 @@ import { GatedButton } from "../../components/gated";
 import { NEW_BUILD_TIP } from "../../lib/compose-links";
 import { LINKS_TIP, LinksSheet } from "./links-sheet";
 import { SecuritySheet, readSecurityParam, writeSecurityParam } from "./security/security-sheet";
+import { SIGN_IN_TIP, SignInSheet } from "./sign-in-sheet";
 
 /** Where "＋ Add a feature" goes: New project, in add mode, with this app chosen. */
 export function addFeatureHref(appKey: string, previewId?: string | null): string {
@@ -256,6 +257,8 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
   const [menu, setMenu] = useState<string | null>(null);
   /** App ▸ Links (F5): the app whose links sheet is open. */
   const [linksOf, setLinksOf] = useState<AppRow | null>(null);
+  /** App ▸ Sign-in (F6): the app whose Sign in with BOSS sheet is open. */
+  const [signInOf, setSignInOf] = useState<AppRow | null>(null);
   /** App › Security: the app id it is open on (`?security=<app id>`, so it can be linked). */
   const [security, setSecurity] = useState<string | null>(() => readSecurityParam());
   const openSecurity = (appId: string | null) => { setSecurity(appId); writeSecurityParam(appId); };
@@ -354,6 +357,8 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
                           }}>Open its build</button>
                           <button type="button" role="menuitem" title={LINKS_TIP} data-testid={`fx-app-menu-links-${a.key}`}
                                   onClick={(e) => { e.stopPropagation(); setMenu(null); setLinksOf(a); }}>Links</button>
+                          <button type="button" role="menuitem" title={SIGN_IN_TIP} data-testid={`fx-app-menu-signin-${a.key}`}
+                                  onClick={(e) => { e.stopPropagation(); setMenu(null); setSignInOf(a); }}>Sign-in</button>
                           {a.appId ? (
                             <button type="button" role="menuitem" data-testid={`fx-app-menu-security-${a.key}`}
                                     title="Scans, findings and security reviews of this app" onClick={(e) => {
@@ -425,6 +430,9 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
         <LinksSheet projectId={projectId} appKey={linksOf.key} app={linksOf.app}
                     others={apps.filter((o) => o.key !== linksOf.key).map((o) => ({ key: o.key, app: o.app }))}
                     onClose={() => setLinksOf(null)} />
+      ) : null}
+      {signInOf ? (
+        <SignInSheet projectId={projectId} appKey={signInOf.key} app={signInOf.app} onClose={() => setSignInOf(null)} />
       ) : null}
       {security ? (
         <SecuritySheet projectId={projectId} appKey={security}

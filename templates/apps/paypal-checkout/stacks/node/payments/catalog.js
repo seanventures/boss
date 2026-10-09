@@ -8,6 +8,12 @@
 // When `catalog-cart` is applied, replace this module's functions with its `products` table and
 // its cart's checkout function (same shapes). Without it, the app sells the products below with
 // a single buy button.
+//
+// A cart that cannot be sold now (a product gone, the cart empty, stock): catalog-cart's provider
+// throws its `CatalogError` (a 4xx status + a code). This module turns that into a
+// CheckoutInputError (the checkout route's 400, before any order or payment-provider call), so a
+// shop combining both templates never answers a 500 for it and needs no glue for it. It is
+// matched by its class name and shape, not imported: this template works without catalog-cart.
 const DEFAULT_PRODUCTS = [
   { id: "starter-pack", name: "Starter pack", unit_amount_cents: 1500, currency: "usd", active: true },
   { id: "pro-pack", name: "Pro pack", unit_amount_cents: 4900, currency: "usd", active: true },
@@ -32,12 +38,33 @@ const MAX_LINES = 50;
 
 class CheckoutInputError extends Error {}
 
+// catalog-cart's CatalogError (or a subclass), refusing the request with a 4xx status and a code.
+function isCatalogRefusal(err) {
+  if (!(err instanceof Error) || typeof err.code !== "string" || !err.code) return false;
+  if (!Number.isInteger(err.status) || err.status < 400 || err.status > 499) return false;
+  for (let c = err.constructor; c && c !== Error; c = Object.getPrototypeOf(c)) {
+    if (c.name === "CatalogError") return true;
+  }
+  return false;
+}
+
+// Call the catalog; its refusal of the cart is the client's input error, anything else stays an
+// error of the app (a 500 that must be fixed, not hidden).
+async function fromCatalog(call) {
+  try {
+    return await call();
+  } catch (err) {
+    if (isCatalogRefusal(err)) throw new CheckoutInputError(err.code);
+    throw err;
+  }
+}
+
 // Turn the client's request into server-priced line items. Throws CheckoutInputError on anything
 // it cannot price. `req` is the HTTP request (a cart provider may need its session cookie).
 async function priceLineItems(catalog, body, req) {
   let lines;
   if (body && body.cart_id !== undefined && body.cart_id !== null) {
-    const cartLines = await catalog.cartLineItems(String(body.cart_id), req);
+    const cartLines = await fromCatalog(() => catalog.cartLineItems(String(body.cart_id), req));
     if (!cartLines) throw new CheckoutInputError("no such cart");
     lines = cartLines.map((l) => ({
       product_id: String(l.product_id),
@@ -52,7 +79,7 @@ async function priceLineItems(catalog, body, req) {
     if (items.length > MAX_LINES) throw new CheckoutInputError("too many items");
     lines = [];
     for (const item of items) {
-      const product = await catalog.getProduct(item && item.product_id);
+      const product = await fromCatalog(() => catalog.getProduct(item && item.product_id));
       if (!product || !product.active) throw new CheckoutInputError("unknown product");
       // Only the id and quantity are read from the client; item.price / item.amount are ignored.
       lines.push({

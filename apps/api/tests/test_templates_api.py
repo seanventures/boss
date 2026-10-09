@@ -341,6 +341,29 @@ def test_apply_refuses_what_it_must(world, people, client, engine, tmp_path):
         assert r.status_code == 409 and r.json() == {**r.json(), "error": "secrets_needed", "secrets": ["PAY_KEY"]}
 
 
+def test_apply_on_a_microvm_install_is_refused_up_front_in_words(world, people, client, engine, monkeypatch):
+    # Template tests cannot run on the micro-VM build substrate (gate.MICROVM_REFUSAL): the apply
+    # says so with a 409 and starts nothing, instead of a build that can only end blocked.
+    from boss_engine.config import get_settings
+    from boss_engine.templates.gate import MICROVM_REFUSAL
+
+    started = []
+    monkeypatch.setattr(main, "start_delivery_workflow", lambda body: started.append(body))
+    monkeypatch.setenv("BOSS_GOVERNED_SANDBOX_PROVIDER", "microvm")
+    get_settings.cache_clear()
+    try:
+        run_id = _app_run(engine, world.project_a, title="Hello VM")
+        with as_(world, people["operator"]):
+            r = client.post("/v1/templates/hello/apply", json={"project_id": world.project_a,
+                                                               "extends_run_id": run_id, "stack": "node"})
+    finally:
+        monkeypatch.delenv("BOSS_GOVERNED_SANDBOX_PROVIDER")
+        get_settings.cache_clear()
+    assert r.status_code == 409, r.text
+    assert r.json() == {"error": "template_tests_need_local_sandbox", "message": MICROVM_REFUSAL}
+    assert not started
+
+
 def test_apply_on_a_pending_template_is_refused(world, people, client, engine, tmp_path):
     m = copy.deepcopy(MANIFEST)
     m["id"] = "still-pending"

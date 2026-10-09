@@ -187,6 +187,16 @@ Apply = a normal governed build, through the existing start path:
    requires ≥ `min_tests` passing tests from the JUnit report, and that the template's test
    files exist in the diff (so the PR carries them). It sits with `run_all_tests` in the
    inner loop; failing it is a "changes asked" like any other gate.
+   **Not on the micro-VM substrate.** With `BOSS_GOVERNED_SANDBOX_PROVIDER=microvm` the build runs
+   in a guest of the sandbox-service, whose contract (1.0) returns a command's exit code and
+   output tail but not the JUnit report this gate counts; an exit code cannot prove `min_tests`
+   passed. So on such an install `POST /v1/templates/{id}/apply` answers **409
+   `template_tests_need_local_sandbox`** with the reason and the remedy (build on the local
+   sandbox, `BOSS_GOVERNED_SANDBOX_PROVIDER=local`, the default), and a template build that reaches
+   the gate there anyway (the setting changed after the apply) fails `template_tests` closed with
+   the same sentence in its evidence and in the blocked run's error. The secret scan still runs.
+   The trial always runs in the local build sandbox and is unaffected. Lifting this needs an
+   artifact channel in the sandbox contract (the guest returning named report files).
 4. A **secret scan** gate (already conceptually part of `security_check`; made mechanical here)
    refuses any diff containing a value matching a bound secret, a manifest `pattern`, or a
    common key format.
@@ -450,8 +460,8 @@ React/Vite scaffold UI), Python = FastAPI, Java = Spring Boot for login/payments
   from the product at that moment; `[]` for an empty cart; null / `None` / `Optional.empty()`
   unless `cartId` is the requester's own cart, resolved from the request exactly as the cart
   routes resolve it (signed cookie, or the signed-in user's cart). An unsellable cart raises
-  `CatalogError` (409 + code), which the wiring maps to the payment template's checkout input
-  error. `GET /api/cart/checkout` (`checkoutLines` / `checkout_lines`) stays as the HTTP view of
+  `CatalogError` (409 + code), which the payment templates' adapters map to their own checkout
+  input error (a 400, no payment call), matched by class name and status/code, not imported. `GET /api/cart/checkout` (`checkoutLines` / `checkout_lines`) stays as the HTTP view of
   the same pricing. `engine/tests/templates/test_catalog_and_payments_compose.py` lays both
   templates into one app per stack and checks this.
 - **Tests (≥10):** search, pagination bounds, inactive products hidden, quantity bounds, stock
@@ -504,7 +514,10 @@ Guardrails (security properties of the variant):
   `lab=true`; the app shows a red "Insecure by design — training only" banner on every page.
 - **Never deployed to a host**: the governed host deploy refuses an app whose applied templates
   carry `insecure_by_design` (a hard check in `governed_host_deploy.py`, not a UI hide). Preview
-  only, on the preview origin.
+  only, on the preview origin. The check is **per app** (operator, 2026-10-09): the project's
+  other apps deploy, but a deploy BOSS cannot attribute to a non-insecure app (a target named after
+  nothing BOSS built, an unknown build or build branch, a bare sha in the insecure app's repository,
+  or that repository once the insecure change is merged) is refused (`templates/deploy_guard.py`).
 - Its preview is not reachable from outside the BOSS host unless the operator explicitly makes
   it so (decision D4).
 - The build loop's `security_check` is told (via `input.template.labels`) that planted flaws are

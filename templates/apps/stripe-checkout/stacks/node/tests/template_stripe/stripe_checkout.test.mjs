@@ -186,6 +186,62 @@ test("checkout from a catalog-cart cart uses the cart's server prices, and a pri
   }
 });
 
+// catalog-cart's provider refuses a cart it cannot sell now with its CatalogError (4xx + code). The
+// payment template maps it itself (by name and shape, no import): a 400, never a 500, and no order
+// or Stripe call. Declared here exactly as catalog-cart declares it.
+class CatalogError extends Error {
+  constructor(status, code, extra = {}) {
+    super(code);
+    this.status = status;
+    this.code = code;
+    this.extra = extra;
+  }
+}
+
+test("a cart catalog-cart cannot sell (its CatalogError) is a 400 with its code before Stripe is called", async () => {
+  let failure = new CatalogError(409, "product_unavailable", { product_id: "tee-1" });
+  const catalog = {
+    ...staticCatalog(DEFAULT_PRODUCTS),
+    cartLineItems() {
+      throw failure;
+    },
+    getProduct(id) {
+      if (id === "gone") throw new CatalogError(404, "product_not_found");
+      return staticCatalog(DEFAULT_PRODUCTS).getProduct(id);
+    },
+  };
+  const app = await boot({ catalog });
+  try {
+    const requests = fake.state.requests.length;
+    for (const [body, code] of [
+      [{ cart_id: "cart-abc" }, "product_unavailable"],
+      [{ items: [{ product_id: "gone", quantity: 1 }] }, "product_not_found"],
+    ]) {
+      const r = await app.post("/api/checkout", body);
+      assert.equal(r.status, 400, JSON.stringify(r.body));
+      assert.deepEqual(r.body, { error: code });
+    }
+    failure = new CatalogError(409, "cart_empty");
+    assert.deepEqual((await app.post("/api/checkout", { cart_id: "cart-abc" })).body, { error: "cart_empty" });
+    assert.equal(fake.state.requests.length, requests, "Stripe must not be called");
+    // Anything else from the catalog is the app's own error, not the client's: never the 400.
+    const status = async () => (await fetch(app.base + "/api/checkout", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cart_id: "cart-abc" }),
+    })).status;
+    failure = new TypeError("database is down");
+    assert.equal(await status(), 500);
+    // A look-alike that is not a CatalogError, and a CatalogError that is not a refusal (5xx), are
+    // left to the app's error handler (Express answers with the error's own status), not mapped.
+    failure = Object.assign(new Error("look-alike"), { status: 409, code: "product_unavailable" });
+    assert.equal(await status(), 409);
+    failure = new CatalogError(503, "catalog_down");
+    assert.equal(await status(), 503);
+    assert.equal(fake.state.requests.length, requests, "Stripe must not be called");
+  } finally {
+    await app.close();
+  }
+});
+
 // ---- webhooks: signed, fresh, idempotent ---------------------------------------------------------
 
 test("a webhook with a bad, forged or missing signature is refused with 400 and changes nothing", async () => {

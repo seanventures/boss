@@ -255,6 +255,65 @@ class PayPalCheckoutTest {
     assertEquals(400, shop.post("/api/paypal/orders", Map.of("cart_id", "someone-elses")).status());
   }
 
+  /** Declared here exactly as catalog-cart declares it (the payment template never imports it). */
+  public static class CatalogError extends RuntimeException {
+    public final int status;
+    public final String code;
+
+    public CatalogError(int status, String code) {
+      super(code);
+      this.status = status;
+      this.code = code;
+    }
+  }
+
+  /** Not catalog-cart's class, though it has the same fields. */
+  public static class Lookalike extends RuntimeException {
+    public final int status = 409;
+    public final String code = "product_unavailable";
+  }
+
+  /** catalog-cart's provider refusing a cart it cannot sell now. */
+  static final class RefusingCatalog implements Catalog {
+    final Catalog base = new Catalog.StaticCatalog("usd");
+    RuntimeException failure = new CatalogError(409, "product_unavailable");
+
+    @Override
+    public Optional<Catalog.Product> product(String id) {
+      if ("gone".equals(id)) throw new CatalogError(404, "product_not_found");
+      return base.product(id);
+    }
+
+    @Override
+    public Optional<List<Catalog.Line>> cartLines(String cartId, jakarta.servlet.http.HttpServletRequest request) {
+      throw failure;
+    }
+  }
+
+  /** The payment template maps catalog-cart's CatalogError itself (by name and shape): a 400 with
+   *  its code, never a 500, and no order or PayPal call. Anything else stays the app's own error. */
+  @Test
+  void aCartCatalogCartCannotSellIsA400WithItsCodeBeforePayPalIsCalled() throws Exception {
+    RefusingCatalog catalog = new RefusingCatalog();
+    Shop shop = new Shop(Map.of(), catalog, null, null);
+    int before = shop.fake.requests.size();
+    Res cart = shop.post("/api/paypal/orders", Map.of("cart_id", "cart-abc"));
+    assertEquals(400, cart.status(), cart.text());
+    assertEquals(Map.of("error", "product_unavailable"), cart.body());
+    Res items = shop.post("/api/paypal/orders", Map.of("items", List.of(Map.of("product_id", "gone", "quantity", 1))));
+    assertEquals(400, items.status(), items.text());
+    assertEquals(Map.of("error", "product_not_found"), items.body());
+    catalog.failure = new CatalogError(409, "cart_empty");
+    assertEquals(Map.of("error", "cart_empty"), shop.post("/api/paypal/orders", Map.of("cart_id", "cart-abc")).body());
+    for (RuntimeException failure : List.of(new IllegalStateException("database is down"),
+        new CatalogError(503, "catalog_down"), new Lookalike())) {
+      catalog.failure = failure;
+      Exception thrown = assertThrows(Exception.class, () -> shop.post("/api/paypal/orders", Map.of("cart_id", "cart-abc")));
+      assertEquals(failure, thrown.getCause(), "not mapped to the client's 400");
+    }
+    assertEquals(before, shop.fake.requests.size(), "PayPal must not be called");
+  }
+
   // ---- capture: only ours, only once -----------------------------------------------------------
 
   @Test

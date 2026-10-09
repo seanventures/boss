@@ -558,8 +558,8 @@ def _app_serves_sentence(record: Optional[dict]) -> str:
     return app_serves_failure_sentence(record)
 
 
-def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional[dict]
-                          ) -> tuple[str, str]:
+def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional[dict],
+                          template_tests_record: Optional[dict] = None) -> tuple[str, str]:
     """(code_task_runs.error, partial-PR rescue reason) for a run the quality gate blocked.
 
     The error used to name the failing gates only — "failing gates: ['app_serves']" — so an
@@ -576,6 +576,13 @@ def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional
         sentence = _app_serves_sentence(app_serves_record)
         error += f" The app does not serve HTTP. {sentence[:700]}"
         reason = "the app does not serve HTTP, so the build is not done"
+    # The template gate's own words (e.g. "cannot run on the micro-VM build substrate: …"), so a
+    # blocked apply says WHY and what to do, not only the gate's name.
+    why = str((template_tests_record or {}).get("error") or "")
+    if "template_tests" in (failing or []) and why:
+        error += f" Template tests: {why[:700]}"
+        if "app_serves" not in (failing or []):
+            reason = "the applied template's tests did not pass, so the build is not done"
     return error, reason
 
 
@@ -802,7 +809,8 @@ def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dic
     result = template_gate.evaluate(
         template=applied, files=applied.get("files") or {}, changed=changed_files,
         cwd=None if use_microvm else Path(cwd), run_command=None if use_microvm else _run,
-        bound_values=bound, tests_passed=bool(tests_passed))
+        bound_values=bound, tests_passed=bool(tests_passed),
+        substrate="microvm" if use_microvm else "local")
     return {"gates": result.gates, "evidence": result.evidence}
 
 
@@ -4900,7 +4908,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             elif action == "block":
                 _finish_vms(success=False)  # retain the stage VMs for inspection
                 _blocked_error, _blocked_reason = blocked_gate_messages(
-                    qg_id, failing, app_serves_record)
+                    qg_id, failing, app_serves_record,
+                    ((_template_record or {}).get("evidence") or {}).get("template_tests"))
                 # Human escape hatch: preserve the produced diff so an operator can WAIVE the failing
                 # gate(s) and open the PR without a re-run. Governance is kept — gates the human does
                 # NOT waive still block, and the PR still carries its own merge-gate Decision.

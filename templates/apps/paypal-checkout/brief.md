@@ -37,9 +37,11 @@ requesting session's cart only). Show the PayPal buttons in the cart drawer. Wit
 static catalog and one product's buttons. catalog-cart provides it under exactly the names
 `payments/catalog` calls: node `createCatalog(...)` returns `getProduct` / `cartLineItems(cartId,
 req)`, python `create_catalog(...)` returns `get_product` / `cart_line_items(cart_id, request)`,
-java `CheckoutCatalog.product` / `cartLines(cartId, request)`; turn its `CatalogError` into
-`CheckoutInputError` / `CheckoutInputException` in the wiring so an unsellable cart is a 400, not
-a 500.
+java `CheckoutCatalog.product` / `cartLines(cartId, request)`. Its `CatalogError` (a cart that
+cannot be sold now) needs no wiring: `payments/catalog` itself turns it into `CheckoutInputError` /
+`CheckoutInputException` (matched by class name and its 4xx `status` + `code`, not imported), so
+an unsellable cart is a 400 with catalog-cart's code, never a 500, and PayPal is never called.
+Keep that mapping when adapting the adapter.
 
 ## Per stack
 

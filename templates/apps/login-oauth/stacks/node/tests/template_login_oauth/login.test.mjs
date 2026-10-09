@@ -38,6 +38,7 @@ before(async () => {
   idp.clients.set("fake-google-client", "fake-google-secret");
   idp.clients.set("fake-github-client", "fake-github-secret");
   idp.clients.set("fake-boss-client", "fake-boss-secret");
+  idp.basicOnly.add("fake-boss-client"); // as BOSS: client_secret_basic only
 });
 
 beforeEach(async () => {

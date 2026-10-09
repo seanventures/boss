@@ -452,7 +452,8 @@ def preview_link_environment(engine, *, project_id: str, run_id: Optional[str], 
                              expires_at, rotate: bool) -> dict[str, str]:
     """What cross-app links add to a preview (F5 §5.3): as a consumer, BOSS_LINK_<ALIAS>_* and
     this preview's link pass; as a provider, BOSS_TEST_USERS (rotated on a NEW preview). Never
-    fails the preview: a link that cannot be resolved is logged by name and left out."""
+    fails the preview: a link that cannot be resolved is logged by name and left out. Also the
+    app's own template environment (preview_app_environment); links win on a name clash."""
     try:
         from ..app_links import service as _links
 
@@ -462,6 +463,24 @@ def preview_link_environment(engine, *, project_id: str, run_id: Optional[str], 
                                               expires_at=expires_at, rotate=rotate)
     except Exception as exc:  # noqa: BLE001
         logger.warning("preview %s starts without its link environment (%s)", preview_id, type(exc).__name__)
+        return preview_app_environment(engine, project_id=project_id, run_id=run_id, preview_id=preview_id)
+    if env:
+        logger.info("preview %s gets %s", preview_id, ", ".join(sorted(env)))
+    return {**preview_app_environment(engine, project_id=project_id, run_id=run_id, preview_id=preview_id),
+            **env}
+
+
+def preview_app_environment(engine, *, project_id: str, run_id: Optional[str], preview_id: str) -> dict[str, str]:
+    """What the app's templates give a preview (F2 §2.4, F6): its `preview` secrets (never live),
+    APP_BASE_URL, and its Sign in with BOSS redirect URI registered for this preview. Never fails the
+    preview: logged by kind and left out."""
+    try:
+        from ..oidc_provider.app_sign_in import preview_environment
+
+        with begin(engine) as c:
+            env = preview_environment(c, project_id=project_id, run_id=run_id, preview_id=preview_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("preview %s starts without its app secrets (%s)", preview_id, type(exc).__name__)
         return {}
     if env:
         logger.info("preview %s gets %s", preview_id, ", ".join(sorted(env)))
@@ -3425,6 +3444,17 @@ def stop_preview(engine, preview_id: str, settings: Optional[Settings] = None) -
             _links.revoke_passes_of(c, "preview", preview_id)
     except Exception:  # noqa: BLE001 — a schema without links has no passes to revoke
         pass
+    # Its Sign in with BOSS redirect URI goes with it.
+    try:
+        from ..oidc_provider.app_sign_in import preview_stopped
+
+        with begin(engine) as c:
+            run_id = c.execute(text("SELECT run_id, project_id FROM app_previews WHERE id = :id"),
+                               {"id": preview_id}).first()
+            if run_id is not None:
+                preview_stopped(c, project_id=run_id[1], run_id=run_id[0], preview_id=preview_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("preview %s: its sign-in redirect was not removed (%s)", preview_id, type(exc).__name__)
     return {"id": preview_id, "status": "stopped"}
 
 

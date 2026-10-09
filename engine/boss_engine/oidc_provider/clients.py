@@ -157,8 +157,9 @@ def validate(body: Mapping[str, Any], *, existing: Optional[Mapping[str, Any]] =
     if not name or len(name) > 120:
         raise ValueError("name is required (120 characters at most)")
     app_key = str(c.get("app_key") or "")
-    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", app_key):
-        raise ValueError("app_key must be a lowercase word")
+    # The platform's app key (agent_assignment.app_key): lowercase words, single-spaced.
+    if len(app_key) > 80 or not re.fullmatch(r"[a-z0-9]+(?:[ _-][a-z0-9]+)*", app_key):
+        raise ValueError("app_key must be an app key (lowercase words)")
     return {**c, "type": ctype, "token_endpoint_auth_method": method, "redirect_uris": uris,
             "post_logout_redirect_uris": logout, "allowed_scopes": scopes, "jwks": jwks,
             "id_token_alg": alg, "subject_type": subject_type, "resource": resource, "name": name,

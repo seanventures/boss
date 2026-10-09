@@ -207,6 +207,8 @@ export const ACTION_PERMISSIONS: Readonly<Record<string, Permission>> = {
   "app/factory/links-actions.ts#createLinkAction": "app_link:manage",
   "app/factory/links-actions.ts#revokeLinkAction": "app_link:manage",
   "app/factory/links-actions.ts#revealTestUsersAction": "app_secret:write",
+  "app/factory/sign-in-actions.ts#useSignInWithBossAction": "oidc_client:manage",
+  "app/factory/sign-in-actions.ts#stopSignInWithBossAction": "oidc_client:manage",
   "app/focused-agents-actions.ts#loadFocusedAgentsAction": "autopilot:read",
   "app/focused-agents-actions.ts#createFocusedAgentAction": "autopilot:configure",
   "app/focused-agents-actions.ts#wakeFocusedAgentAction": "autopilot:operate",

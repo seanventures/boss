@@ -46,10 +46,11 @@ layer and UI rather than copying files over the top of the app's own.
   cart**, found from the request exactly as the routes find it (the signed `cart` cookie, or the
   signed-in user's cart). A cart that cannot be sold now raises the store's `CatalogError`
   (409 + `code`: `product_unavailable`, `insufficient_stock`). Wiring it into a payment
-  template: in node and python pass `catalog` as its `catalog`, wrapping `cartLineItems` /
-  `cart_line_items` so a `CatalogError` becomes the payment template's `CheckoutInputError`
-  (a 400 with the code, no payment created); in java write one `Catalog` implementation that
-  copies the records across and turns `CatalogError` into `Catalog.CheckoutInputException`.
+  template: in node and python pass `catalog` as its `catalog`; in java write one `Catalog`
+  implementation that copies the records across. Let `CatalogError` propagate: the payment
+  templates' adapters turn it into their `CheckoutInputError` / `CheckoutInputException`
+  themselves (a 400 with the code, no payment created), so keep its name and its `status` /
+  `code` fields.
   Never compute an amount anywhere else.
 - **UI**: a product list with a search box and Previous/Next paging, a detail view, and a cart
   drawer with quantity inputs, line totals, the subtotal and Remove, on the app's design tokens;
