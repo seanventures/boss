@@ -1,0 +1,34 @@
+schema: boss.template/v1
+id: catalog-cart
+name: Product catalog and cart
+version: 1.0.0
+summary: Product list with search and pages, product detail, a cart with server-computed totals, and the checkout contract payments use
+adds: [routes, ui, db_tables, seed_data]
+stacks:
+  node:   {frameworks: [express], min_toolchain: node20}
+requires: []
+works_with: [login-oauth, payments-stripe, payments-paypal]
+secrets:
+  - name: CART_SECRET
+    purpose: Signs the anonymous cart cookie; BOSS generates a random one per app and environment
+    test_default: generated
+env:
+  - {name: APP_BASE_URL, default: 'http://localhost:3000'}
+  - {name: CATALOG_CURRENCY, default: usd}
+egress: []
+webhooks: []
+routes:
+  - GET /api/products
+  - GET /api/products/:id
+  - GET /api/cart
+  - POST /api/cart/items
+  - PATCH /api/cart/items/:product_id
+  - DELETE /api/cart/items/:product_id
+  - GET /api/cart/checkout
+tests:
+  node:   {command: npm run test:catalog-cart, report: junit, min_tests: 10}
+security_note: SECURITY.md
+guide: guide.md
+labels: []
+license: Apache-2.0
+min_boss: 1.0.0

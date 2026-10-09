@@ -240,7 +240,7 @@ plus one new engine test (`engine/tests/templates/test_builtin_templates_apply.p
 | 1 | `login-oauth` node (Express + openid-client 6, express-session, fake IdP, 15 tests) | done |
 | 2 | `login-oauth` python (FastAPI + Authlib 1.8, server-side session middleware, fake IdP, 15 tests) | done |
 | 3 | `login-oauth` java (Spring Boot 3.5.16 + Spring Security OAuth2 client, lazy registrations, one-shot state repo, fake IdP on com.sun.net.httpserver + Nimbus, 15 tests) | done |
-| 4 | `catalog-cart` node | todo |
+| 4 | `catalog-cart` node (Express, signed cart cookie, merge on sign-in, checkout contract, 12 tests) | done |
 | 5 | `catalog-cart` python | todo |
 | 6 | `catalog-cart` java (if time allows) | todo |
 | 7 | engine test: every built-in manifest validates and applies (apply assembly) | todo |
