@@ -238,7 +238,7 @@ Worktree `~/src/boss-wt-s3-payments`, branch `feat/s3-payments` (from
 
 Ids follow the stream brief (`stripe-checkout`, `paypal-checkout`); the spec's §3.2/§3.3 headings
 say `payments-stripe` / `payments-paypal`. Rename in one place (the directory and `id:`) if the
-operator prefers the spec's names; nothing else refers to them.
+operator prefers the spec's names, plus paypal-checkout's `works_with` and the engine suite's `PAYMENTS` tuple.
 
 | Step | Status |
 |---|---|
@@ -251,18 +251,77 @@ operator prefers the spec's names; nothing else refers to them.
 | paypal-checkout python (FastAPI, httpx, SQLite) | done: 25 tests |
 | paypal-checkout java (Spring Boot, java.net.http) | done: 20 tests (18 MockMvc + 2 Spring boot-up) |
 
+### What each template does (both, every stack)
+
+- Prices only from the server (product table or the catalog-cart cart); client price/amount/currency
+  ignored; quantities whole 1-99; integer minor units throughout.
+- Two idempotent fulfilment paths: Stripe = success page retrieves the session + signed webhook;
+  PayPal = server-side capture (buttons or return page) + PayPal-verified webhook. Both work on a
+  private preview without inbound webhooks (D4); the guides document `stripe listen` and a tunnel.
+- Webhooks: Stripe `constructEvent` (HMAC over the raw body, 300 s tolerance); PayPal
+  verify-webhook-signature bound to `PAYPAL_WEBHOOK_ID`. Event ids recorded once (primary key)
+  with the order change. Order state machine shared; amount mismatch or money for a cancelled
+  order -> `needs_review`; the "ship it" hook runs once.
+- Test mode: Stripe keys must match `sk_test_`/`pk_test_` (manifest patterns, and the app refuses a
+  live key unless `STRIPE_MODE=live`); PayPal uses the sandbox host unless `PAYPAL_ENV=live` and
+  `APP_ENV=production` (PayPal credentials have no shape, so no manifest pattern: a loose one would
+  make the secret scan flag ordinary identifiers).
+- Refunds optional: off by default, admin hook (default deny), recorded amount, idempotency key.
+- catalog-cart contract coded against spec §3.4: Node `catalog.cartLineItems(cartId, req)`, Python
+  `catalog.cart_line_items(cart_id, request)`, Java `Catalog.cartLines(cartId, request)`, each
+  returning `[{product_id, name, unit_amount_cents, currency, quantity}]` or null/empty for a cart
+  the requester does not own. If catalog-cart ships different names, only the adapter changes.
+
+### Tests (S3-payments)
+
+| Template / stack | Tests | Command (from the stack dir) |
+|---|---|---|
+| stripe-checkout node | 16 | `npm run test:template` (pretest runs `npm install`) |
+| stripe-checkout python | 26 | `python3 -m pytest -q tests/template_stripe --junitxml=boss-template-junit.xml` |
+| stripe-checkout java | 18 | `mvn -q test -Dtest=Stripe*` |
+| paypal-checkout node | 18 | `npm run test:template` |
+| paypal-checkout python | 25 | `python3 -m pytest -q tests/template_paypal --junitxml=boss-template-junit.xml` |
+| paypal-checkout java | 20 | `mvn -q test -Dtest=PayPal*` |
+| engine `test_payments_templates.py` | 29 + 6 real-run + 6 strict xfail | see Resume |
+
+Every stack covers: signature verification with a secret generated in-test (Stripe: HMAC computed
+in the test; PayPal: the fake's verify API with a per-test signing key), forged / edited /
+unsigned / stale (Stripe) webhooks refused, replayed event processed once, tampered client price
+ignored, capture/fulfilment idempotent, amount mismatch held, refunds, provider outage. Each
+stack's signature check was mutation-tested (disabling it fails the webhook tests).
+
+### Findings for other streams (S3-payments)
+
+- **S2 (apply)**: `build_directive` inlines the reference in path order up to 48 KB and lists the
+  rest by name. The payments references are 49-81 KB per stack, so the `tests/` files (which the
+  agent must copy verbatim for `template_tests`) are the ones left out, and the
+  `/opt/boss/template/` mount is not built. Fix: inline `tests/` first (or mount the reference).
+  `test_the_directive_inlines_every_template_test_file` is a strict xfail that flips when fixed.
+- **S2 (trial)**: the trial runs the manifest command in a bare copy. Node installs its deps
+  (`pretest:template`), Maven resolves its own; Python needs `requirements.txt` installed first,
+  which a single sandbox command cannot do. Either the trial installs `requirements.txt` for the
+  python stack, or the image carries fastapi/httpx/stripe/pytest.
+- **Spec naming**: the spec's §3.2/§3.3 call them `payments-stripe` / `payments-paypal`; the stream
+  brief said `stripe-checkout` / `paypal-checkout`, which is what shipped.
+- **Live PayPal egress**: the manifest requests only `api-m.sandbox.paypal.com`; going live needs
+  `api-m.paypal.com` approved with the live-keys decision (documented in the guide).
+
 ### Resume (S3-payments)
 
-- `cd ~/src/boss-wt-s3-payments && git pull`.
-- Engine suite (no database needed): `PYTHONPATH=.:engine python3 -m pytest -q
-  engine/tests/templates/test_payments_templates.py engine/tests/templates/test_template_validator.py`.
+- `cd ~/src/boss-wt-s3-payments && git pull` (branch `feat/s3-payments`).
+- All six stacks are done and pushed. Remaining work belongs to other streams (findings above),
+  plus the F3 end-to-end proof (§3.8) once catalog-cart and the S2 console land.
+- Engine suite (no database needed): `PYTHONPATH=.:engine python3 -m pytest -q engine/tests/templates`.
   Add `BOSS_TEMPLATE_REAL_RUN=1` to run each stack's real tests through the gate (needs npm; a
-  python3 on PATH with `stacks/python/requirements.txt` installed; mvn + network for Maven Central).
+  `python3` on PATH with `stacks/python/requirements.txt` installed, e.g. a venv first on PATH;
+  mvn + Maven Central).
 - Run a stack's tests by hand in a COPY (never in the template dir: `node_modules/` or `target/`
   there would break the validator's file limits): copy `stacks/<stack>/` to a scratch dir, then the
   manifest's `tests.<stack>.command`.
 - Never paste a real key; tests build key-shaped values at run time (`"sk_test_" + random`), so the
   secret scan stays clean (a literal `sk_test_<alnum>` in a template file fails validation).
+- The API suite (`apps/api/tests/test_templates_api.py`) keys on `hello` by name, so the new
+  built-ins do not change it; it was not re-run here (it needs a test Postgres).
 
 ## What's next (after S0)
 
