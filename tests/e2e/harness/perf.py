@@ -42,8 +42,9 @@ API_ENDPOINTS = [
     "/v1/identity/me",
     "/v1/identity/me/projects",
     "/v1/identity/me/permissions",
-    f"/v1/decisions?project_id={PROJECT}",
-    f"/v1/status?project_id={PROJECT}",
+    "/v1/orgs",
+    "/v1/projects",
+    f"/v1/meetings?project_id={PROJECT}",
 ]
 
 PAGES = {
