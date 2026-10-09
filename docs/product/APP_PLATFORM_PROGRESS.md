@@ -515,8 +515,7 @@ Test DB: `boss_test_integ` on boss-test-pg (drop it when done).
 | # | Step | State |
 |---|---|---|
 | 1a | Merge S2 (feat/s2-templates @ 54f32a91): clean. engine/tests/templates + test_templates_api 156 passed; identity suites 46 passed | done |
-| 1b | Merge S4 (feat/s4-security @ bae890a7): conflicts in the day-1 test (rewritten: MODULES + BUILT per module) and this file. S4 suites 64 passed; identity suites 46 passed | done |
-| 1c | Merge S5 (feat/s5-links @ 5caa424c) | |
+| 1b | Merge S4 (feat/s4-security @ bae890a7): conflicts in the day-1 test (rewritten: MODULES + BUILT per module) and this file. S4 suites 64 passed; identity suites 46 passed | done | 1c | Merge S5 (feat/s5-links @ 5caa424c): conflicts in the day-1 test (links added to BUILT) and this file; regenerated matrix/public/fixture/catalogue: no diff. S5 suites 65 passed; identity suites 46 passed | done |
 | 1d | Merge S6 (feat/s6-oidc @ 9123ee29) | |
 | 2a | Previews run as a sandbox uid, fenced | |
 | 2b | template_tests / no_committed_secrets block the push and the PR | |
