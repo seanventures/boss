@@ -337,9 +337,19 @@ GATE_LABELS: dict[str, tuple[str, str]] = {
     "nothing_broke": ("Nothing broke", "check"),
     "app_serves": ("App starts", "check"),
     "web_package_honest": ("Package honest", "build"),
+    # An applied template's two gates (F2 §2.3; unwaivable, see UNWAIVABLE_GATES).
+    "template_tests": ("Template tests", "check"),
+    "no_committed_secrets": ("No secrets", "check"),
 }
-#: Gates a waiver can never open a PR past.
-UNWAIVABLE_GATES = frozenset({"app_serves"})
+#: Gates a waiver can never open a PR past: the app must start, and an applied template's own
+#: tests must pass and its diff must hold no secret (governed_code_task_service.TEMPLATE_GATES).
+UNWAIVABLE_GATES = frozenset({"app_serves", "template_tests", "no_committed_secrets"})
+#: Why each unwaivable gate cannot be waived, in the words the refusal uses.
+UNWAIVABLE_WHY = {
+    "app_serves": "the app must start",
+    "template_tests": "an applied template's tests must pass",
+    "no_committed_secrets": "a committed secret never reaches a pull request",
+}
 
 
 def gate_label(name: str) -> str:
@@ -1273,7 +1283,7 @@ def build_attention_rows(connection: Any, project_id: str,
 def attention_build(info: Mapping[str, Any]) -> dict[str, Any]:
     """The `build` an attention item carries (lib/agents-live-board.ts AttentionBuild)."""
     failing = [{"name": g, "label": gate_label(g), "waivable": g not in UNWAIVABLE_GATES,
-                **({"reason": "Can't be waived: the app must start"}
+                **({"reason": "Can't be waived: " + UNWAIVABLE_WHY[g]}
                    if g in UNWAIVABLE_GATES else {})}
                for g in info.get("failing") or []]
     out: dict[str, Any] = {"run_id": info.get("run_id"), "app": info.get("app") or "",
@@ -2375,7 +2385,7 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
                 "role_key": gate_owner(name, acts), "station": gate_station(name),
                 "evidence": ev[:160] if isinstance(ev, str) else None,
                 "waivable": name not in UNWAIVABLE_GATES,
-                **({"reason": "Can't be waived: the app must start"}
+                **({"reason": "Can't be waived: " + UNWAIVABLE_WHY[name]}
                    if name in UNWAIVABLE_GATES else {})})
         advisory = bool(failed) and bool(run.get("pull_request_url")) and not waived and bool(
             fctx.get("advisory_failing_gates"))

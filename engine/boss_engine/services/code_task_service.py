@@ -1725,13 +1725,16 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
     waive = list(waive_gates or [])
     if "*" in waive or "all" in waive:
         waive = list(failing)
-    from .factory_view import UNWAIVABLE_GATES
+    from .factory_view import UNWAIVABLE_GATES, UNWAIVABLE_WHY
     unwaivable = [g for g in waive if g in UNWAIVABLE_GATES] + [
         g for g in failing if g in UNWAIVABLE_GATES and g not in waive]
     if unwaivable:
-        # A PR for an app that does not start is not a PR anyone can review (factory §4.2.1).
-        raise ValueError("refused: can't be waived: the app must start "
-                         f"({', '.join(sorted(set(unwaivable)))})")
+        # A PR for an app that does not start is not a PR anyone can review (factory §4.2.1);
+        # a template's failed tests or a committed secret never reach one either (F2 §2.3).
+        names = sorted(set(unwaivable))
+        raise ValueError("refused: can't be waived: "
+                         + "; ".join(UNWAIVABLE_WHY.get(g, g) for g in names)
+                         + f" ({', '.join(names)})")
     not_waived = [g for g in failing if g not in waive]
     if not_waived:
         raise ValueError(f"refused: failing gates not waived: {not_waived}. "
