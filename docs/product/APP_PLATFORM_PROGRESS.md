@@ -249,7 +249,7 @@ operator prefers the spec's names; nothing else refers to them.
 | paypal-checkout: manifest, brief, guide, SECURITY | done |
 | paypal-checkout node (Express, fetch client, no SDK) | done: 18 tests |
 | paypal-checkout python (FastAPI, httpx, SQLite) | done: 25 tests |
-| paypal-checkout java (Spring Boot) | next (optional per the brief) |
+| paypal-checkout java (Spring Boot, java.net.http) | done: 20 tests (18 MockMvc + 2 Spring boot-up) |
 
 ### Resume (S3-payments)
 

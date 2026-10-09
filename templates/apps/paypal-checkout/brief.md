@@ -45,6 +45,13 @@ static catalog and one product's buttons.
 - **python (FastAPI)**: `payments/` (config, `paypal_client.py` on httpx, store, catalog,
   `paypal_checkout.py` with an `APIRouter` factory) and `main.py`. Add `fastapi`, `httpx` and
   `pytest` to the app's requirements. Copy `tests/template_paypal/` as is.
+- **java (Spring Boot)**: the `com.example.payments` package (`PayPalSettings`, `PayPalClient` on
+  `java.net.http`, `OrderStore`, `Catalog`, `PayPalCheckoutController`); no extra dependency
+  beyond `spring-boot-starter-web`. Move the package under the app's base package if needed. The
+  reference keeps its tests under `tests/template_paypal/` (its `pom.xml` points
+  `testSourceDirectory` there); in the app put `PayPalCheckoutTest.java`,
+  `PayPalCheckoutAppTest.java` and `FakePayPalApi.java` under `src/test/java/` in the controller's
+  package, keeping the file and class names (the gate runs `-Dtest=PayPal*`).
 
 The template's tests run against an in-process fake of the PayPal API (token, orders, capture,
 refund, verify-webhook-signature) and never reach the network. Keep them as they are; they are
