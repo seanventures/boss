@@ -18,8 +18,9 @@ from apps.api.tests.identity_fixtures import IdentityWorld
 from boss_engine.identity import scope as scope_module
 from boss_engine.identity.declarations import Public, access_of
 
+#: S2 built its routes (routes_templates); its tests are test_templates_api.py.
+BUILT = {"apps.api.app.routes_templates"}
 STUB_OWNERS = {
-    "apps.api.app.routes_templates": "S2",
     "apps.api.app.routes_security": "S4",
     "apps.api.app.routes_links": "S5",
     "apps.api.app.oidc_routes": "S6",
@@ -56,7 +57,10 @@ def objects_in_project_a(monkeypatch, world):
 def test_the_four_modules_are_mounted():
     mounted = {route.endpoint.__module__ for _, route in _operations()}
     assert mounted == set(STUB_OWNERS)
-    assert len(list(_operations())) >= 54       # the day-1 surface; streams only add
+    built = {r.endpoint.__module__ for r in main.app.routes if isinstance(r, APIRoute)} & BUILT
+    assert built == BUILT
+    templates = [r for r in main.app.routes if isinstance(r, APIRoute) and r.endpoint.__module__ in BUILT]
+    assert len(list(_operations())) + len(templates) >= 54       # the day-1 surface; streams only add
 
 
 def test_an_owner_reaches_every_stub_and_it_says_who_builds_it(world, objects_in_project_a):
@@ -94,6 +98,6 @@ def test_a_viewer_cannot_import_or_approve_a_template(world):
     world.bind(viewer, "viewer")
     client = TestClient(main.app, raise_server_exceptions=False)
     with world.acting_as(world.ctx(viewer)):
-        assert client.get("/v1/templates").status_code == 501
+        assert client.get("/v1/templates").status_code == 200
         assert client.post("/v1/templates/import", json={}).status_code == 403
         assert client.post("/v1/templates/zz1/approve", json={}).status_code == 403

@@ -98,6 +98,89 @@ Branch: `feat/app-platform` (worktree `~/src/boss-wt-appplat`). Push after every
    (docs/maintainers/IDENTITY_BUILD.md §7) records AP-1 (catalogue), AP-2 (`oidc_provider_endpoint`)
    and AP-3 (D35).
 
+## Stream S2: F2 template engine and API
+
+Branch `feat/s2-templates` (worktree `~/src/boss-wt-s2-templates`), from
+`feat/app-platform` @ 8b7cc39d. Engine: `engine/boss_engine/templates/`; API:
+`apps/api/app/routes_templates.py` (the 501 stubs replaced, declarations unchanged).
+
+| # | Step | State |
+|---|---|---|
+| 1 | Engine core: `validator.py` (the whole-tree import checks), `importer.py` (read-only git fetch), `secret_scan.py`, `gate.py`, `service.py` (catalogue, review), `secrets.py` (app secret bindings), built-in `templates/apps/hello/` | done |
+| 2 | Vault kind `app_secret` (`identity/vault.py`) + the kind CHECK widened in the identity block (in place, `DO $$` like the skill_definitions widenings); F2 block: `app_template_files`, `app_secret_bindings.live_decision_id`, `.shape` | done |
+| 3 | `apply.py` (apply = a governed build through `start_delivery_workflow`), `trial.py`, the `_template_gates` hook in `governed_code_task_service.py`, the real handlers | done |
+| 4 | Unit suites `engine/tests/templates/` (validator, adversarial importer, gates, scan, apply assembly) | done |
+| 5 | API suite `apps/api/tests/test_templates_api.py`; `test_app_platform_day1_routes.py` narrowed (S2 built) | in progress |
+| 6 | E2E proof on a compose stack: apply hello to a scaffolded app via the API, `template_tests` passes, PR on the fake GitHub | to do |
+
+### Design notes (S2)
+
+- **One store for every template.** Built-ins are validated and upserted per org on first read
+  (`sync_builtins`, idempotent by digest; a hidden one stays hidden) with their files in
+  `app_template_files`, so apply, the gate and the gallery read built-ins and imports the same
+  way, pinned by digest, with no shared volume between api and worker. `BOSS_TEMPLATES_DIR`
+  overrides where built-ins are read from. **S1 / image owner: `Dockerfile.community` must
+  `COPY templates ./templates`** for built-ins to exist in the image (not edited here: S1 owns it).
+- **Import is fetch-and-read only.** `git init --bare` + `git fetch --depth 1` into a quarantine
+  dir, read with `ls-tree`/`cat-file --batch`: no checkout, so no file, symlink or hook of the
+  template ever exists on disk; git runs with hooks off, no system/global config, no submodules,
+  fsck on, https only (`file://` only with `BOSS_TEMPLATE_IMPORT_ALLOW_LOCAL=1`), through
+  `BOSS_EGRESS_CONNECT_PROXY` when set (the host must be on egress's allowlist: an operator
+  decision). URL refusals: non-https, user-info, IP literals, local names, non-443 ports; refs
+  that could be options (`--upload-pack=…`). `connection_id` (private repos via a GitHub
+  connection) answers 422 not-supported for now.
+- **Validation** (one list of reasons): size/count/2 MB per file, symlinks, submodules,
+  `.gitmodules`, `.git` paths, escaping paths, binaries outside images/fonts, manifest, built-in
+  id clash, stack dirs + non-empty tests, brief/guide/security note, LICENSE, egress to this
+  BOSS's own hosts (`BOSS_PUBLIC_URL` & co.), **reserved env names** (a template may not ask for
+  `BOSS_*`, `DATABASE_URL`, `GITHUB_TOKEN`, cloud creds, proxies, loader vars…),
+  `insecure_by_design` only with template:approve + acknowledgement, and the secret scan.
+  A rejected import keeps its report but no files; re-importing a rejected version replaces it.
+- **Approval** (D3): template:approve (Owner/Admin) and never the importer (`seat_separation`
+  403); pins (git_url, commit_sha, digest). Built-ins: DELETE → 403, `?hide=true` hides.
+- **Apply** validates (active, stack declared, the app's inferred stack from its builds' files,
+  `requires` applied, egress accepted via `accept_egress`, secrets bound or test-defaulted:
+  generated/stub bindings are created) and calls `main.start_delivery_workflow` with
+  `workflow_key` (default `fast_fix`), `extends_run_id` (the app's newest succeeded build) and
+  `input.template = {id, key, version, digest, source, stack, framework, options,
+  application_id, egress, app_key}`. The template's brief and its stack's reference
+  implementation are inlined in the directive (≤ 48 KB; an imported template's inside an
+  UNTRUSTED envelope whose end marker cannot be forged). **Deviation:** the spec's read-only
+  mount at `/opt/boss/template/` needs sandbox code S2 does not own; the inline reference serves
+  for now.
+- **The gate hook** (`_template_gates`, one function + its call + one evidence key): reads
+  `input.template` through the build's workflow run (the stored row, digest re-checked), adds
+  `template_tests` (manifest command via `sandbox.run` in the app dir; JUnit reports written
+  after the start are parsed by `<testcase>`, need ≥ `min_tests` passing, no failures, exit 0;
+  each template test file's name must be in the diff; report files are removed so they never
+  reach the PR) and `no_committed_secrets` (scan of the diff incl. the app's build-binding
+  values). Fails closed on any lookup error. In microVM mode the template tests are not run
+  (gate fails, says so): follow-up.
+- **Secrets**: write-only; reads return name/env/mode/set_by/set_at/last_used_at/shape only.
+  A name must be declared by a template applied to the app (or the `template_id` in the PUT).
+  `test` values must match `pattern` and must not look live; `live` needs app_secret:live,
+  env=deploy, and creates a pending decision (risk 3) that must be approved before
+  `values_for_env(env="deploy")` returns it; builds and previews never get live.
+  `values_for_env` is the engine-side reader for preview/deploy wiring (not wired into the
+  sandbox env here: sandbox/preview/deploy code is other streams'). Replacing or deleting a
+  binding crypto-shreds the old vault item.
+- **Trial**: approved/built-in only (it runs template code), per stack in the build sandbox
+  (`sandbox_identity.bind`, so `BOSS_SANDBOX_ISOLATION=required` refuses unisolated), recorded in
+  `app_templates.trial`; cards show `tested` stacks.
+- **Application status** is derived on read from the build its workflow run started: `pr_open`
+  when a PR exists, `applied` when the PR's merge decision executed, `failed` otherwise.
+- Org confinement: every handler reads templates by the caller's org; app routes check the
+  project is in the caller's org.
+
+### Tests (S2)
+
+- `engine/tests/templates/` — validator (40), importer (39, real git over file://: symlink escape,
+  huge file, hooks, submodule, size cap, option-injection refs, only-git-runs, proxy), gate +
+  scan + apply assembly (32, incl. hello's real node and pytest tests through the gate).
+- `apps/api/tests/test_templates_api.py` — every route per role, seat separation, malicious
+  import, insecure label, built-in delete, trial, apply refusals and success, prompt injection,
+  secrets round trip / patterns / live + decision / no value in responses or logs.
+
 ## What's next (after S0)
 
 S0 is complete. Per §8.2 the next streams start in parallel against these interfaces: S2 (F2
