@@ -32,6 +32,9 @@ BUILT = {
     "apps.api.app.routes_templates": lambda path: True,      # S2: test_templates_api.py
     "apps.api.app.routes_security": lambda path: True,       # S4: test_security_scan_routes.py
     "apps.api.app.routes_links": lambda path: True,          # S5: test_app_links.py
+    # S6 phase 1: the protocol, pools, clients, roles and consents (test_oidc_provider_*.py);
+    # customer-pool users are phase 2 and still answer 501.
+    "apps.api.app.oidc_routes": lambda path: "/users" not in path,
 }
 
 

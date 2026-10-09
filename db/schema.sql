@@ -8385,6 +8385,8 @@ CREATE TABLE IF NOT EXISTS oidc_user_pools (
   mfa              TEXT NOT NULL DEFAULT 'optional' CHECK (mfa IN ('off', 'optional', 'required')),
   passkeys         BOOLEAN NOT NULL DEFAULT true,
   password_policy  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- The pool's pairwise-subject key (§6.2): random, in the vault (kind signing_key), made with the pool.
+  subject_key_vault_item_id TEXT,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -8408,7 +8410,9 @@ CREATE TABLE IF NOT EXISTS oidc_clients (
   subject_type                TEXT NOT NULL DEFAULT 'pairwise' CHECK (subject_type IN ('pairwise', 'public')),
   require_mfa                 BOOLEAN NOT NULL DEFAULT false,
   first_party                 BOOLEAN NOT NULL DEFAULT false,
-  status                      TEXT NOT NULL DEFAULT 'active',
+  -- The access token's `aud` (RFC 9068): the app's resource identifier; NULL means the client_id.
+  resource                    TEXT,
+  status                      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'deleted')),
   created_by                  TEXT,
   created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
   rotated_at                  TIMESTAMPTZ
@@ -8454,9 +8458,30 @@ CREATE TABLE IF NOT EXISTS oidc_consents (
 );
 
 -- Codes and refresh tokens are stored hashed only; a code is single-use, 60 s.
+-- A grant is one sign-in of one subject to one client: the code, every access token (claim `sid`)
+-- and the refresh family hang off it, so revoking it (code replay, refresh reuse, logout, consent
+-- revoke, user disable) ends all of them at once.
+CREATE TABLE IF NOT EXISTS oidc_grants (
+  id              TEXT PRIMARY KEY,
+  org_id          TEXT NOT NULL REFERENCES orgs(id),
+  client_id       TEXT NOT NULL REFERENCES oidc_clients(id),
+  pool_id         TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  subject_ref     TEXT NOT NULL,             -- usr_ (workforce) or opu_ (customer); never sent to an app
+  session_ref     TEXT,                      -- the BOSS console session (workforce) or app session
+  scopes          TEXT[] NOT NULL DEFAULT '{}',
+  acr             TEXT,
+  amr             TEXT[] NOT NULL DEFAULT '{}',
+  auth_time       TIMESTAMPTZ NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at      TIMESTAMPTZ,
+  revoked_reason  TEXT
+);
+CREATE INDEX IF NOT EXISTS oidc_grants_subject ON oidc_grants (client_id, subject_ref) WHERE revoked_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS oidc_auth_codes (
   code_hash       TEXT PRIMARY KEY,
   client_id       TEXT NOT NULL REFERENCES oidc_clients(id),
+  grant_id        TEXT NOT NULL REFERENCES oidc_grants(id),
   subject_ref     TEXT NOT NULL,
   redirect_uri    TEXT NOT NULL,
   code_challenge  TEXT NOT NULL,
@@ -8470,7 +8495,7 @@ CREATE TABLE IF NOT EXISTS oidc_auth_codes (
 
 CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
   token_hash   TEXT PRIMARY KEY,
-  family_id    TEXT NOT NULL,
+  family_id    TEXT NOT NULL,             -- = the grant id: one rotating family per grant
   client_id    TEXT NOT NULL REFERENCES oidc_clients(id),
   subject_ref  TEXT NOT NULL,
   scopes       TEXT[] NOT NULL DEFAULT '{}',
@@ -8480,7 +8505,71 @@ CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
 );
 CREATE INDEX IF NOT EXISTS oidc_refresh_tokens_family ON oidc_refresh_tokens (family_id);
 
--- TODO(S6): oidc_pool_user_factors (TOTP / WebAuthn credentials, same shapes as identity's) and
--- oidc_sessions (customer-pool sessions, cookie __Host-boss_app_session) are not specified column
--- by column in §6.3; stream S6 defines them here.
+-- Pending authorization requests (sign-in, consent): the browser carries only the id (hashed here).
+CREATE TABLE IF NOT EXISTS oidc_interactions (
+  id_hash      TEXT PRIMARY KEY,
+  org_id       TEXT NOT NULL REFERENCES orgs(id),
+  client_id    TEXT NOT NULL REFERENCES oidc_clients(id),
+  params       JSONB NOT NULL,             -- the validated authorization request
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at   TIMESTAMPTZ NOT NULL,
+  used_at      TIMESTAMPTZ
+);
+
+-- The `oidc` signing-key family (D10, IDENTITY.md D35): per org, RS256 (default) and EdDSA, in its
+-- own table so no BOSS-internal verifier (identity_signing_keys) can ever find one of these keys.
+CREATE TABLE IF NOT EXISTS oidc_signing_keys (
+  kid                    TEXT PRIMARY KEY,
+  org_id                 TEXT NOT NULL REFERENCES orgs(id),
+  alg                    TEXT NOT NULL CHECK (alg IN ('RS256', 'EdDSA')),
+  public_jwk             JSONB NOT NULL,
+  private_vault_item_id  TEXT NOT NULL,
+  status                 TEXT NOT NULL CHECK (status IN ('next', 'active', 'retiring', 'retired')),
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  activated_at           TIMESTAMPTZ,
+  retire_after           TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS oidc_signing_keys_one_active ON oidc_signing_keys (org_id, alg) WHERE status = 'active';
+
+-- private_key_jwt client assertions are single-use (RFC 7523 §3): the jti, hashed, until it expires.
+CREATE TABLE IF NOT EXISTS oidc_client_assertion_jtis (
+  jti_hash    TEXT PRIMARY KEY,
+  client_id   TEXT NOT NULL REFERENCES oidc_clients(id),
+  expires_at  TIMESTAMPTZ NOT NULL
+);
+
+-- Customer pools (phase 2): a pool user's factors, the same shapes as identity's TOTP and WebAuthn.
+CREATE TABLE IF NOT EXISTS oidc_pool_user_factors (
+  id                    TEXT PRIMARY KEY,
+  pool_user_id          TEXT NOT NULL REFERENCES oidc_pool_users(id),
+  kind                  TEXT NOT NULL CHECK (kind IN ('totp', 'webauthn', 'recovery_code')),
+  secret_vault_item_id  TEXT,              -- totp
+  credential_id         BYTEA,             -- webauthn
+  public_key            BYTEA,             -- webauthn (COSE)
+  sign_count            BIGINT NOT NULL DEFAULT 0,
+  last_used_step        BIGINT,            -- totp replay prevention
+  code_hash             TEXT,              -- recovery_code
+  label                 TEXT,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at          TIMESTAMPTZ,
+  used_at               TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS oidc_pool_user_factors_cred ON oidc_pool_user_factors (credential_id) WHERE credential_id IS NOT NULL;
+
+-- Customer-pool sessions (phase 2): cookie __Host-boss_app_session, Path=/oidc/; never identity_sessions.
+CREATE TABLE IF NOT EXISTS oidc_sessions (
+  id                   TEXT PRIMARY KEY,
+  token_hash           TEXT NOT NULL UNIQUE,
+  pool_id              TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  pool_user_id         TEXT NOT NULL REFERENCES oidc_pool_users(id),
+  auth_methods         TEXT[] NOT NULL DEFAULT '{}',
+  mfa_at               TIMESTAMPTZ,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  idle_expires_at      TIMESTAMPTZ NOT NULL,
+  absolute_expires_at  TIMESTAMPTZ NOT NULL,
+  revoked_at           TIMESTAMPTZ,
+  ip                   INET,
+  user_agent           TEXT
+);
 -- END F6 ------------------------------------------------------------------------------------------

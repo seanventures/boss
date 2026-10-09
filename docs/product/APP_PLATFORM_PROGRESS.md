@@ -489,6 +489,108 @@ set), then `proof.py`. Only one compose stack on this Mac at a time.
 9. Resume: `cd ~/src/boss-wt-s5-links && git pull` (branch `feat/s5-links`); test DB
    `boss_test_s5` was dropped (recreate it on boss-test-pg to run the API suites).
 
+## Stream S6: BOSS as an OIDC provider (F6)
+
+Worktree `~/src/boss-wt-s6-oidc`, branch `feat/s6-oidc` (from `feat/app-platform`
+@ 8b7cc39d). Engine: `engine/boss_engine/oidc_provider/`; routes: `apps/api/app/oidc_routes.py`.
+
+| # | Step | State |
+|---|---|---|
+| 1 | Protocol core (discovery, JWKS, authorize, consent, token, userinfo, revocation, end_session), client registry API, workforce pools on the console session | done |
+| 2 | Unit, admin API and adversarial suites (the named list) | done |
+| 3 | End-to-end proof: a Node app with openid-client on a local stack | done |
+| 4 | OpenID conformance suite (Basic OP), if Docker allows | not run (see below) |
+| P2 | Customer pools, hosted pages polish, console Identity ▸ App sign-in | phase 2 |
+
+### Decisions and notes
+
+- **Issuer** = `${BOSS_PUBLIC_URL origin}/oidc/<org_id>` (the org slug is the org id: `orgs` has no
+  slug). Built only from the configured public origin, never from Host; no public origin = 503.
+- **Keys**: the `oidc` family lives in its own table `oidc_signing_keys` (per org, RS256 + EdDSA,
+  next/active/retiring/retired, private halves in the vault). BOSS-internal verifiers only read
+  `identity_signing_keys`, and the oidc verifier only reads `oidc_signing_keys` (kids start
+  `oidc-`): the separation is structural. `signing_keys.rotate_oidc_family_if_due` is the one
+  function S6 adds there; keys are provisioned when the first pool or client is created, and
+  `keys.signing_key` rotates a due key on use. TODO (identity owner): call
+  `rotate_oidc_family_if_due` from `identity/maintenance.py` next to `rotate_if_due`.
+- **Grants**: one `oidc_grants` row per sign-in; the code, every access token (`sid` claim) and the
+  refresh family hang off it. Code replay, refresh reuse, a code or refresh token presented by
+  another client, logout with `id_token_hint`, consent revoke, client disable/delete and losing
+  `oidc_app:sign_in` all revoke the grant; userinfo checks it live.
+- **Interactions** (`oidc_interactions`): no session -> `/login?next=/oidc/<org>/resume?interaction=…`
+  (single use, 10 min); consent page -> POST `/oidc/<org>/consent` (session + Origin + HMAC(session,
+  interaction) token). Two routes beyond S0's stubs: `GET /oidc/{org}/resume`, `POST /oidc/{org}/consent`.
+- **Refresh tokens** only with `offline_access`, which always needs an explicit consent (even
+  `first_party`). Family max age 90 days, each token 30 days, rotated on every use.
+- **Access tokens**: RS256 always, `typ: at+jwt`, `aud` = client `resource` or client_id.
+- **Pairwise `sub`** = HMAC(pool subject key, subject ‖ client); `public` = HMAC(pool key, subject).
+  Never a BOSS id. The pool key is random, in the vault.
+- **Phase-1 limits**: `prompt=login` or an exceeded `max_age` for a signed-in person answers
+  `login_required` (no forced re-authentication from the OIDC flow yet); a client with
+  `require_mfa` and a session without MFA gets a BOSS page, not a step-up prompt. Customer pools
+  answer `temporarily_unavailable` at authorize; their user routes stay 501.
+- **Amendment AP-4** (IDENTITY_BUILD.md §7): `oidc.*` audit events, `oidc.*` rate-limit buckets,
+  the one signing_keys function.
+- Open question from S0 (Auditor `oidc:read`): not added; every admin GET needs `oidc:admin` or
+  `oidc_client:manage` (both step-up). Revisit with the console UI in phase 2.
+
+### Tests (S6)
+
+- `engine/tests/oidc/test_oidc_rules.py` (44, no DB): S256 vector, redirect-URI rules, client
+  validation, inline-JWKS rules, page escaping and headers.
+- `apps/api/tests/test_oidc_provider_flow.py` (10): discovery, JWKS, the whole workforce flow,
+  sign-in redirect and resume, remembered consent, EdDSA client, public client, revocation.
+- `apps/api/tests/test_oidc_provider_admin.py` (11): permissions, secret once, first-party, no URL
+  fields (422), roles in tokens, consent revoke and client delete end tokens.
+- `apps/api/tests/test_oidc_provider_adversarial.py` (99): A1 code replay, A2 PKCE, A3 redirect_uri
+  tricks (16 shapes at authorize, 12 at registration), A4 mix-up, A5 refresh reuse, A6 alg/typ/
+  key-family confusion (none, HS256 with the public key, rogue key under a real kid, ES256, BOSS
+  run/actor typ, ID token as AT, AT as id_token_hint, app tokens and refresh token as BOSS bearer,
+  console cookie as AT), A7 aud/azp and private_key_jwt (8 bad assertions, jti replay), A8 nonce,
+  A9 pairwise/public subjects and client binding, A10 app cookie on a BOSS route, A11 CSRF on
+  consent (Origin, Sec-Fetch-Site, token, other session, reuse) and prompt=none, A12 leakage (logs,
+  audit details, hashed at rest, no AT in URLs), A13 client auth downgrade and lockout, A14 grant
+  loss, disabled person/client, legacy shared session, require_mfa, A15 logout open redirect, A16
+  request/request_uri/registration/response modes/duplicates.
+
+### End-to-end proof (S6)
+
+`tests/e2e/oidc/` (`run.sh <console origin>`; `setup_world.py` + `rp.mjs`, openid-client 6.8.1
+pinned). Run 2026-10-08 on a local stack: API (`python -m apps.api.serve`, port 18093, DB
+`boss_test_s6`, BOSS_PUBLIC_URL=http://localhost:13000) + console (`next dev`, port 13000,
+forwarding /oidc/* through `apps/web/lib/oidc-proxy.ts`). A compose stack was not used: bosss4
+then bosss2 held the one-stack slot. Result, all through the console origin: discovery -> consent
+page for a signed-in member -> consent POST -> callback with `iss` -> openid-client code exchange
+(state, iss, PKCE, nonce, ID token signature) -> userinfo (name, email, roles) -> refresh rotation
+-> userinfo with the refreshed AT -> end_session back to the app -> the AT is dead (401) -> the
+rotated refresh token is refused. `E2E PASS`. Also checked by hand: no session -> 302 to the
+console `/login?next=/oidc/<org>/resume?...` (200), an unregistered redirect_uri -> 400, no Location.
+Found and fixed by the e2e: a token-endpoint 401 for a non-Basic client carried a Bearer challenge
+(openid-client v6 treats any challenge as fatal); it now carries none (Basic when Basic was used).
+
+### Resume (S6)
+
+- `cd ~/src/boss-wt-s6-oidc && git pull` (branch `feat/s6-oidc`).
+- Tests: DB `boss_test_s6` on boss-test-pg (localhost:55432, user boss; password via
+  `docker exec boss-test-pg printenv POSTGRES_PASSWORD`, never printed). Run with
+  `DATABASE_URL=postgresql+psycopg://boss:$PW@localhost:55432/boss_test_s6 PYTHONPATH=.:engine python3 -m pytest -q apps/api/tests/test_oidc_provider_*.py`.
+- DB `boss_test_s6` was DROPPED at the end of phase 1: `CREATE DATABASE boss_test_s6` first.
+- Conformance (step 4), not run: the suite is its own compose stack (server, MongoDB, nginx), and
+  the one-stack slot was held (bosss4, then bosss2). It also needs the issuer reachable from its
+  containers (BOSS_PUBLIC_URL on host.docker.internal, or the suite on the host network) and a
+  browser step for authorize (its `browser` config: a cookie of a signed-in member, the consent
+  click). Expected gaps it will flag: `prompt=login` and `max_age` re-authentication
+  (`login_required` today), and `response_mode=form_post` (not offered).
+- Phase 2, in order: (1) customer pools: `oidc_pool_users`, `oidc_sessions` (cookie
+  `__Host-boss_app_session`, Path=/oidc/), `oidc_pool_user_factors` (tables exist), reusing
+  passwords/totp/webauthn/ratelimit/email_signin parameterised by a realm; sign-in/sign-up/MFA/
+  passkey hosted pages; the pool-user admin routes (still 501); (2) re-authentication for
+  `prompt=login`/`max_age` and step-up for `require_mfa` instead of the error page; (3) the
+  console Identity ▸ App sign-in (Pools, Clients, Users, Roles; side sheets); (4) hosted pages in
+  the console's sign-in style; (5) conformance.
+- After a route change regenerate: `python3 -m apps.api.tests.identity_matrix`,
+  `python3 apps/api/tests/test_identity_authz_public_routes.py`, `python3 scripts/dump-identity-api-routes.py`.
+
 ## What's next (after S0)
 
 S0 is complete. Per §8.2 the next streams start in parallel against these interfaces: S2 (F2
@@ -515,7 +617,8 @@ Test DB: `boss_test_integ` on boss-test-pg (drop it when done).
 | # | Step | State |
 |---|---|---|
 | 1a | Merge S2 (feat/s2-templates @ 54f32a91): clean. engine/tests/templates + test_templates_api 156 passed; identity suites 46 passed | done |
-| 1b | Merge S4 (feat/s4-security @ bae890a7): conflicts in the day-1 test (rewritten: MODULES + BUILT per module) and this file. S4 suites 64 passed; identity suites 46 passed | done | 1c | Merge S5 (feat/s5-links @ 5caa424c): conflicts in the day-1 test (links added to BUILT) and this file; regenerated matrix/public/fixture/catalogue: no diff. S5 suites 65 passed; identity suites 46 passed | done |
+| 1b | Merge S4 (feat/s4-security @ bae890a7): conflicts in the day-1 test (rewritten: MODULES + BUILT per module) and this file. S4 suites 64 passed; identity suites 46 passed | done |
+| 1c | Merge S5 (feat/s5-links @ 5caa424c): conflicts in the day-1 test (links added to BUILT) and this file; regenerated matrix/public/fixture/catalogue: no diff. S5 suites 65 passed; identity suites 46 passed | done |
 | 1d | Merge S6 (feat/s6-oidc @ 9123ee29) | |
 | 2a | Previews run as a sandbox uid, fenced | |
 | 2b | template_tests / no_committed_secrets block the push and the PR | |
