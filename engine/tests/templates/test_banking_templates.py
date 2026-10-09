@@ -1,5 +1,6 @@
 """The banking built-ins (F3 §3.5, §3.6): they validate as built-ins, their build directive
-assembles for the java stack, and their real JUnit suites pass the real `template_tests` gate.
+assembles for the java stack, the training variant's answer key (vulns.yaml) matches its code and
+stays out of the build, and their real JUnit suites pass the real `template_tests` gate.
 
 The gate run needs Java 21 + Maven: either `mvn` on PATH with a JDK 21, or the toolchain image
 named by BOSS_TEST_JAVA_IMAGE (default `boss-s3-tcjava:dev`) under docker. Neither = skipped.
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import yaml
 
 from boss_engine.templates import apply as apply_service
 from boss_engine.templates.gate import evaluate, template_test_files
@@ -22,6 +24,7 @@ from ._fixtures import REPO_ROOT
 
 APPS = REPO_ROOT / "templates" / "apps"
 SECURE = APPS / "banking-starter"
+INSECURE = APPS / "banking-starter-insecure"
 JAVA_IMAGE = os.environ.get("BOSS_TEST_JAVA_IMAGE", "boss-s3-tcjava:dev")
 
 
@@ -55,6 +58,71 @@ def test_the_banking_starters_directive_carries_the_java_reference():
     assert "Apply the template \"Banking starter\" (banking-starter 1.0.0)" in text
     assert "at least 14 passing tests" in text
     assert apply_service.UNTRUSTED_BEGIN not in text
+
+
+# ---- the training variant (F3 §3.6) ----------------------------------------------------------------
+
+def test_the_insecure_variant_is_a_valid_built_in_labelled_insecure_by_design():
+    r = _report(INSECURE)
+    assert r.ok, r.reasons
+    m = r.manifest
+    assert m.id == "banking-starter-insecure" and m.insecure_by_design
+    assert m.tests["java"].min_tests >= 14
+    secure_routes = set(_report(SECURE).manifest.routes)
+    assert secure_routes <= set(m.routes)       # same routes as the starter (+ the banner page)
+    # As an import, the label needs template:approve and the acknowledgement (§2.5).
+    imported = validate_tree(tree_from_dir(INSECURE), source="git")
+    assert not imported.ok and any("insecure_by_design" in x for x in imported.reasons)
+
+
+def _vulns() -> dict:
+    return yaml.safe_load((INSECURE / "vulns.yaml").read_text())
+
+
+def test_vulns_yaml_catalogues_every_planted_flaw_with_a_checkable_location_and_fix():
+    doc = _vulns()
+    assert doc["template"] == "banking-starter-insecure" and doc["secure_reference"] == "banking-starter"
+    vulns = doc["vulns"]
+    ids = [v["id"] for v in vulns]
+    assert len(ids) == len(set(ids))
+    assert {f"V{i}" for i in range(1, 11)} <= set(ids)          # the spec's table, V1-V10
+    spec_cwes = {"V1": "CWE-89", "V2": "CWE-639", "V3": "CWE-916", "V4": "CWE-20", "V5": "CWE-620",
+                 "V6": "CWE-798", "V7": "CWE-209", "V8": "CWE-693", "V9": "CWE-1395", "V10": "CWE-307"}
+    for v in vulns:
+        assert v["title"] and v["owasp"].startswith("A") and v["severity"] in {"low", "medium", "high", "critical"}
+        assert v["cwe"] and all(c.startswith("CWE-") for c in v["cwe"])
+        if v["id"] in spec_cwes:
+            assert spec_cwes[v["id"]] in v["cwe"], v["id"]
+        assert v["detect"] and all(d["by"] and d["how"] for d in v["detect"])
+        assert v["locations"], v["id"]
+        for loc in v["locations"]:
+            lines = (INSECURE / loc["file"]).read_text().splitlines()
+            assert loc["match"] in lines[loc["line"] - 1], (v["id"], loc)
+        assert v["fix"]["summary"] and v["fix"]["reference"]
+        for ref in v["fix"]["reference"]:
+            assert ref["file"].startswith("banking-starter/")
+            assert (APPS / ref["file"]).is_file(), (v["id"], ref)
+
+
+def test_the_answer_key_never_reaches_the_build_directive():
+    r = _report(INSECURE)
+    files = tree_from_dir(INSECURE).files()
+    assert "vulns.yaml" in files
+    text = apply_service.build_directive(row={"source": "builtin", "digest": r.digest}, manifest=r.manifest,
+                                         stack="java", framework="dropwizard", files=files, note="",
+                                         app_name="Bank lab")
+    assert "CWE-" not in text and "vulns.yaml" not in text
+    for v in _vulns()["vulns"]:
+        assert v["title"] not in text
+
+
+def test_the_insecure_variants_tests_check_functionality_not_exploits():
+    tests = {p: b.decode() for p, b in tree_from_dir(INSECURE).files().items()
+             if p.startswith("stacks/java/tests/")}
+    assert tests
+    body = "\n".join(tests.values())
+    for marker in ("\"none\"", "1=1", "' OR", "-100", "alg"):
+        assert marker not in body, marker
 
 
 # ---- the real JUnit suite through the real gate ---------------------------------------------------
@@ -115,3 +183,10 @@ def test_the_banking_starter_applies_and_passes_the_template_tests_gate(tmp_path
     assert result.gates == {"template_tests": True, "no_committed_secrets": True}, result.evidence
     assert result.evidence["template_tests"]["passed"] >= 14
     assert result.evidence["template_tests"]["failures"] == 0
+
+
+@pytest.mark.skipif(RUNNER is None, reason=f"no JDK 21 + mvn, and no docker image {JAVA_IMAGE}")
+def test_the_insecure_variant_applies_and_passes_the_template_tests_gate(tmp_path):
+    result = _apply_and_gate(INSECURE, tmp_path)
+    assert result.gates == {"template_tests": True, "no_committed_secrets": True}, result.evidence
+    assert result.evidence["template_tests"]["passed"] >= 14

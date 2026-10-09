@@ -238,7 +238,7 @@ Branch `feat/s3-banking` (worktree `~/src/boss-wt-s3-banking`), from
 | # | Step | State |
 |---|---|---|
 | 1 | `banking-starter` (Java 21, Dropwizard 4.0.17, JDBI 3 + SQLite, Argon2id via BouncyCastle, opaque expiring bearer tokens): 22 JUnit tests; validator OK; real gate run green | done |
-| 2 | `banking-starter-insecure` (label `insecure_by_design`, `vulns.yaml`), functional tests only | pending |
+| 2 | `banking-starter-insecure` (label `insecure_by_design`, `vulns.yaml` V1-V12), 15 functional JUnit tests (no exploit tests); validator OK (an import needs template:approve + ack); real gate run green | done |
 
 ### Notes (S3-banking)
 
@@ -268,6 +268,20 @@ Branch `feat/s3-banking` (worktree `~/src/boss-wt-s3-banking`), from
 - **Finding for S4 / deploy**: nothing yet refuses a host deploy of an app whose applied templates
   carry `insecure_by_design` (spec §3.6 says a hard check in `governed_host_deploy.py`). Until it
   lands, the label only gates import (validator).
+
+- **The training variant**: same routes as the starter plus `GET /` (red "Insecure by design —
+  training only" banner) and an `X-Insecure-By-Design` header on every response. Planted flaws
+  V1-V10 are the spec's table (§3.6; V3 is unsalted MD5 as the spec says), plus V11 (no auth on
+  `GET /api/accounts/{id}/entries`, CWE-306) and V12 (JWT without `exp`, logout/password change
+  revoke nothing, CWE-613). V9 is `commons-text` 1.9 (CVE-2022-42889), used only for HTML
+  escaping on the banner page. `vulns.yaml` gives each flaw's locations (file, symbol, line,
+  match), CWE/OWASP, detectors (semgrep / zap_baseline / zap_active / dependency_audit /
+  tester_app / review) and the fix as references into `banking-starter`. The engine test checks
+  every `line`/`match` against the code and every fix reference exists, so **when the code moves,
+  update `vulns.yaml`'s lines**. The answer key is at the template root, so `build_directive`
+  (brief + `stacks/java/`) never inlines it (tested). **Deviation from §3.6**: the spec's
+  "exploit test per V-id" was NOT written (operator instruction 2026-10-08: functionality tests
+  only; detection is verified by BOSS's scanners against `vulns.yaml`).
 
 ### Resume (S3-banking)
 
