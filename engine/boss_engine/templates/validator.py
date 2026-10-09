@@ -113,6 +113,9 @@ def tree_from_dir(root: Path, *, max_files: int = MAX_FILES) -> TemplateTree:
         rel_dir = Path(dirpath).relative_to(root)
         if rel_dir == Path("."):
             dirnames[:] = [d for d in dirnames if d != ".git"]
+        # Python's bytecode cache is the interpreter's, written by a local test run, never part of
+        # the template (git never holds it: an import reads git objects, not this directory).
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
         names = sorted(dirnames + filenames)
         for name in names:
             full = Path(dirpath) / name
