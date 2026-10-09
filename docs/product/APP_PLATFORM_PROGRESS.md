@@ -229,6 +229,38 @@ ports 53750/58750/55850/58751/58780/58781, `dc.sh` = compose -p bosss2 with the 
 apps/api/tests/test_app_platform_day1_routes.py` with `DATABASE_URL` at boss-test-pg (a private
 database, e.g. `boss_test_s2`, created and dropped by the runner). All 156 + the day-1 suite pass.
 
+## Stream S3-payments: `stripe-checkout` and `paypal-checkout` (F3 §3.2, §3.3)
+
+Worktree `~/src/boss-wt-s3-payments`, branch `feat/s3-payments` (from
+`feat/s2-templates`). Files only under `templates/apps/stripe-checkout/`,
+`templates/apps/paypal-checkout/`, plus the engine suite
+`engine/tests/templates/test_payments_templates.py` and this section.
+
+Ids follow the stream brief (`stripe-checkout`, `paypal-checkout`); the spec's §3.2/§3.3 headings
+say `payments-stripe` / `payments-paypal`. Rename in one place (the directory and `id:`) if the
+operator prefers the spec's names; nothing else refers to them.
+
+| Step | Status |
+|---|---|
+| stripe-checkout: manifest, brief, guide (Emergent/Lovable compared), SECURITY | done |
+| stripe-checkout node (Express, stripe 23) | done: 16 tests |
+| stripe-checkout python (FastAPI, stripe 16, SQLite) | done: 26 tests |
+| stripe-checkout java (Spring Boot 3.4, stripe-java 34) | next |
+| paypal-checkout node / python / java | not started |
+
+### Resume (S3-payments)
+
+- `cd ~/src/boss-wt-s3-payments && git pull`.
+- Engine suite (no database needed): `PYTHONPATH=.:engine python3 -m pytest -q
+  engine/tests/templates/test_payments_templates.py engine/tests/templates/test_template_validator.py`.
+  Add `BOSS_TEMPLATE_REAL_RUN=1` to run each stack's real tests through the gate (needs npm; a
+  python3 on PATH with `stacks/python/requirements.txt` installed; mvn + network for Maven Central).
+- Run a stack's tests by hand in a COPY (never in the template dir: `node_modules/` or `target/`
+  there would break the validator's file limits): copy `stacks/<stack>/` to a scratch dir, then the
+  manifest's `tests.<stack>.command`.
+- Never paste a real key; tests build key-shaped values at run time (`"sk_test_" + random`), so the
+  secret scan stays clean (a literal `sk_test_<alnum>` in a template file fails validation).
+
 ## What's next (after S0)
 
 S0 is complete. Per §8.2 the next streams start in parallel against these interfaces: S2 (F2
