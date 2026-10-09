@@ -1,0 +1,38 @@
+schema: boss.template/v1
+id: banking-starter-insecure
+name: Banking starter (insecure, training)
+version: 1.0.0
+summary: The banking starter with planted, catalogued security flaws (vulns.yaml), for security-review training in a private preview; never deployable
+adds: [routes, db_tables, auth]
+stacks:
+  java: {frameworks: [dropwizard], min_toolchain: jdk21}
+requires: []
+works_with: []
+secrets: []
+env:
+  - {name: APP_ENV, default: development}
+  - {name: BANK_DB_PATH, default: bank.db}
+egress: []
+webhooks: []
+routes:
+  - GET /
+  - POST /api/register
+  - POST /api/login
+  - POST /api/logout
+  - POST /api/password
+  - POST /api/accounts
+  - GET /api/accounts
+  - GET /api/accounts/{id}/balance
+  - GET /api/accounts/{id}/entries
+  - POST /api/accounts/{id}/deposit
+  - POST /api/accounts/{id}/withdraw
+  - POST /api/transfers
+  - GET /openapi.json
+  - GET /health
+tests:
+  java: {command: mvn -B -ntp verify, report: junit, min_tests: 14}
+security_note: SECURITY.md
+guide: guide.md
+labels: [insecure_by_design]
+license: Apache-2.0
+min_boss: 1.0.0

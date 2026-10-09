@@ -229,6 +229,64 @@ ports 53750/58750/55850/58751/58780/58781, `dc.sh` = compose -p bosss2 with the 
 apps/api/tests/test_app_platform_day1_routes.py` with `DATABASE_URL` at boss-test-pg (a private
 database, e.g. `boss_test_s2`, created and dropped by the runner). All 156 + the day-1 suite pass.
 
+## Stream S3-banking: `banking-starter` and `banking-starter-insecure`
+
+Branch `feat/s3-banking` (worktree `~/src/boss-wt-s3-banking`), from
+`feat/s2-templates` @ 54f32a91. Files: `templates/apps/banking-starter/`,
+`templates/apps/banking-starter-insecure/`, `engine/tests/templates/test_banking_templates.py`.
+
+| # | Step | State |
+|---|---|---|
+| 1 | `banking-starter` (Java 21, Dropwizard 4.0.17, JDBI 3 + SQLite, Argon2id via BouncyCastle, opaque expiring bearer tokens): 22 JUnit tests; validator OK; real gate run green | done |
+| 2 | `banking-starter-insecure` (label `insecure_by_design`, `vulns.yaml` V1-V12), 15 functional JUnit tests (no exploit tests); validator OK (an import needs template:approve + ack); real gate run green | done |
+
+### Notes (S3-banking)
+
+- **Run the Java tests** (no local JDK 21): `docker run --rm -v <stack dir>:/w -v boss-s3-m2:/root/.m2
+  -w /w -e JAVA_HOME=/opt/toolchains/java/jdk boss-s3-tcjava:dev /opt/toolchains/bin/mvn -B -ntp verify`
+  (the image's `mvn` needs `JAVA_HOME`; `java` is not on its PATH). Then `rm -rf <stack dir>/target`:
+  a local `target/` (jars > 2 MB) makes the built-in fail validation, and `sync_builtins` then
+  silently skips it.
+- **Engine test**: `PYTHONPATH=.:engine python3 -m pytest -q engine/tests/templates/test_banking_templates.py`
+  validates both built-ins, assembles the java directive, and runs each template's real
+  `mvn -B -ntp verify` through the real `template_tests` gate (in the image above, or a local
+  JDK 21 + mvn; skipped when neither; `BOSS_TEST_JAVA_IMAGE` overrides the image).
+- **Design**: opaque 256-bit tokens (SHA-256 stored, TTL `BANK_TOKEN_TTL_SECONDS`, revoked on
+  logout and on password change for other sessions), not JWT, so no signing secret: the manifest
+  declares no secrets. Ownership = `WHERE id = :id AND user_id = :user` (404 for not-yours).
+  Movements run in SQLite `BEGIN IMMEDIATE` transactions (`SQLiteConfig.TransactionMode`), so
+  two concurrent withdrawals cannot overdraw (tested, 5 rounds). Jackson coercion is turned off
+  for integers (10.5 and "10" refused). Admin connector on 127.0.0.1:0. Preview: `port:
+  ${PORT:-8080}` + `SubstitutingSourceProvider`, `boss.preview.health` = `/health`; verified the
+  shaded jar binds `$PORT` in the image.
+- **Finding for S2 (apply)**: `MAX_INLINE_REFERENCE` is 48 KB and `build_directive` inlines the
+  reference in sorted order, stopping at the first file that does not fit. The banking reference
+  is ~84 KB, so `src/main/java/bank/ledger/...` onward and every `tests/` file are listed as
+  "Not inlined (too large)". The build agent then cannot copy the template's tests, and
+  `template_tests` fails closed. Fix in S2: the read-only reference mount at `/opt/boss/template/`
+  (spec §2.3), or inline `tests/` first and raise the cap. Not changed here (S2's file).
+- **Finding for S4 / deploy**: nothing yet refuses a host deploy of an app whose applied templates
+  carry `insecure_by_design` (spec §3.6 says a hard check in `governed_host_deploy.py`). Until it
+  lands, the label only gates import (validator).
+
+- **The training variant**: same routes as the starter plus `GET /` (red "Insecure by design —
+  training only" banner) and an `X-Insecure-By-Design` header on every response. Planted flaws
+  V1-V10 are the spec's table (§3.6; V3 is unsalted MD5 as the spec says), plus V11 (no auth on
+  `GET /api/accounts/{id}/entries`, CWE-306) and V12 (JWT without `exp`, logout/password change
+  revoke nothing, CWE-613). V9 is `commons-text` 1.9 (CVE-2022-42889), used only for HTML
+  escaping on the banner page. `vulns.yaml` gives each flaw's locations (file, symbol, line,
+  match), CWE/OWASP, detectors (semgrep / zap_baseline / zap_active / dependency_audit /
+  tester_app / review) and the fix as references into `banking-starter`. The engine test checks
+  every `line`/`match` against the code and every fix reference exists, so **when the code moves,
+  update `vulns.yaml`'s lines**. The answer key is at the template root, so `build_directive`
+  (brief + `stacks/java/`) never inlines it (tested). **Deviation from §3.6**: the spec's
+  "exploit test per V-id" was NOT written (operator instruction 2026-10-08: functionality tests
+  only; detection is verified by BOSS's scanners against `vulns.yaml`).
+
+### Resume (S3-banking)
+
+`cd ~/src/boss-wt-s3-banking && git pull` (branch `feat/s3-banking`). Check the
+step table above; rerun the docker `mvn verify` per stack and the engine test.
 ## Stream S4: security scan engine and API (F4, §4; UI and workflow wiring later)
 
 Branch `feat/s4-security` (worktree `~/src/boss-wt-s4-security`), from
