@@ -158,7 +158,8 @@ def test_a_websocket_never_gets_a_memo():
     seen = {}
 
     async def app(scope, receive, send):
-        seen[scope["type"]] = request_memo.MEMO.get()
+        memo = request_memo.MEMO.get()
+        seen[scope["type"]] = None if memo is None else dict(memo)
 
     mw = RequestMemoMiddleware(app)
     asyncio.run(mw({"type": "websocket"}, None, None))
@@ -183,3 +184,189 @@ def test_a_memoised_fact_expires_inside_a_long_request(monkeypatch):
     finally:
         request_memo.reset(token)
 
+
+
+# ---- rc6.1 security verification: attacks on the memo -------------------------------------------------
+
+def _run_http(app) -> None:
+    import asyncio
+
+    from boss_engine.identity.request_memo import RequestMemoMiddleware
+
+    asyncio.run(RequestMemoMiddleware(app)({"type": "http"}, None, None))
+
+
+def test_two_requests_at_once_never_share_a_memo_and_their_threads_share_their_own():
+    """Concurrent requests (two tabs, two people) each get their own dict; a threadpool hop inside a
+    request (anyio copies the context) sees that request's, and a bare pool thread sees none."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    import anyio.to_thread
+
+    from boss_engine.identity.request_memo import RequestMemoMiddleware
+
+    seen: dict[str, object] = {}
+    pool = ThreadPoolExecutor(1)
+
+    def app_for(name: str):
+        async def app(scope, receive, send):
+            request_memo.put(("status", "org_a", name), "active")
+            await asyncio.sleep(0.01)
+            seen[f"{name}:other"] = request_memo.get(("status", "org_a", "bob" if name == "ann" else "ann"))
+            seen[f"{name}:thread"] = await anyio.to_thread.run_sync(
+                lambda: request_memo.get(("status", "org_a", name)))
+            seen[f"{name}:bare"] = await asyncio.get_running_loop().run_in_executor(
+                pool, lambda: request_memo.MEMO.get())
+        return app
+
+    async def both():
+        await asyncio.gather(RequestMemoMiddleware(app_for("ann"))({"type": "http"}, None, None),
+                             RequestMemoMiddleware(app_for("bob"))({"type": "http"}, None, None))
+
+    asyncio.run(both())
+    for name in ("ann", "bob"):
+        assert not request_memo.has(seen[f"{name}:other"])
+        assert seen[f"{name}:thread"] == "active"
+    # run_in_executor copies the context in 3.12+; either way it may only ever be THIS request's
+    # memo or none, never another's (the dict is per request).
+    pool.shutdown()
+
+
+def test_a_task_the_request_started_reads_live_once_the_request_ended():
+    """asyncio.create_task copies the context, so a task started by a request keeps a reference to
+    its memo after the request returned. Closing the memo at the end makes that reference useless."""
+    import asyncio
+
+    out: dict[str, object] = {}
+
+    async def scenario():
+        from boss_engine.identity.request_memo import RequestMemoMiddleware
+
+        release = asyncio.Event()
+
+        async def leaked():
+            await release.wait()
+            out["after"] = request_memo.get(("epoch", "org_t"))
+            request_memo.put(("epoch", "org_t"), 99)
+            out["after_put"] = request_memo.get(("epoch", "org_t"))
+
+        tasks = []
+
+        async def app(scope, receive, send):
+            request_memo.put(("epoch", "org_t"), 5)
+            tasks.append(asyncio.create_task(leaked()))
+
+        await RequestMemoMiddleware(app)({"type": "http"}, None, None)
+        release.set()
+        await tasks[0]
+
+    asyncio.run(scenario())
+    assert not request_memo.has(out["after"])
+    assert not request_memo.has(out["after_put"])
+
+
+def test_an_epoch_or_a_status_never_crosses_orgs_or_people():
+    token = request_memo.start()
+    try:
+        request_memo.put(("epoch", "org_a"), 4)
+        request_memo.put(("status", "org_a", "usr_1"), "active")
+        assert not request_memo.has(request_memo.get(("epoch", "org_b")))
+        assert not request_memo.has(request_memo.get(("status", "org_b", "usr_1")))
+        assert not request_memo.has(request_memo.get(("status", "org_a", "usr_2")))
+    finally:
+        request_memo.reset(token)
+
+
+def _live(engine, org: str, pid: str) -> tuple[int, str]:
+    with engine.connect() as db:
+        row = db.execute(text(
+            "SELECT (SELECT epoch FROM identity_settings WHERE org_id = :o), "
+            "(SELECT status FROM identity_principals WHERE id = :p)"), {"o": org, "p": pid}).first()
+    return int(row[0] or 0), row[1]
+
+
+@pytest.mark.parametrize("how", ["bump", "trigger_only"])
+def test_a_read_between_an_identity_write_and_its_commit_is_never_reused_after_it(enforced_owner, engine, how):
+    """The PDP's own short connection, used BEFORE the mutation's transaction commits, reads the OLD
+    committed epoch and status. Memoised, the rest of the request would decide on them after the
+    commit. An identity write (an explicit bump, or a plain write the epoch trigger watches) turns
+    the memo off for the rest of the request."""
+    _client, _project, pid = enforced_owner
+    with engine.connect() as db:
+        org = org_id(db)
+    token = request_memo.start()
+    try:
+        with engine.begin() as db:
+            db.execute(text("UPDATE identity_principals SET status = 'disabled' WHERE id = :p"), {"p": pid})
+            if how == "bump":
+                authz.bump_epoch(org, db=db, reason="test: memo off")
+            with authz._LazyConnection(None) as conn:
+                before_commit = authz._epoch_and_status(conn, org, pid)
+        assert before_commit[1] == "active"           # the old committed state, as expected
+        with authz._LazyConnection(None) as conn:
+            after_commit = authz._epoch_and_status(conn, org, pid)
+        assert after_commit == _live(engine, org, pid)
+        assert after_commit[1] == "disabled"
+    finally:
+        request_memo.reset(token)
+
+
+def test_a_long_request_sees_a_disabled_person_after_the_memo_window(enforced_owner, engine, monkeypatch):
+    """A streamed response repeats its check: past MAX_AGE_SECONDS it reads the person live."""
+    import time as _time
+
+    _client, _project, pid = enforced_owner
+    with engine.connect() as db:
+        org = org_id(db)
+    now = [1000.0]
+    monkeypatch.setattr(_time, "monotonic", lambda: now[0])
+    token = request_memo.start()
+    try:
+        with authz._LazyConnection(None) as conn:
+            assert authz._epoch_and_status(conn, org, pid)[1] == "active"
+        with engine.begin() as db:                    # another request disables her (committed)
+            db.execute(text("UPDATE identity_principals SET status = 'disabled' WHERE id = :p"), {"p": pid})
+        now[0] += request_memo.MAX_AGE_SECONDS + 0.1
+        with authz._LazyConnection(None) as conn:
+            assert authz._epoch_and_status(conn, org, pid)[1] == "disabled"
+    finally:
+        request_memo.reset(token)
+
+
+def test_requests_racing_a_revocation_are_refused_from_the_first_one_that_starts_after_it(enforced_owner, engine):
+    """Requests in flight on other threads while the session is revoked: every request that STARTS
+    after the commit is refused (none is answered from another request's memo)."""
+    import threading
+
+    client, project, _ = enforced_owner
+    path = f"/v1/code-tasks?project_id={project}"
+    token = client.cookies.get(authn.SESSION_COOKIE)
+    stop = threading.Event()
+    results: list[tuple[float, int]] = []
+
+    def hammer():
+        from apps.api.tests.identity_s1_world import fresh_client as _fresh
+        c = _fresh()
+        c.cookies.set(authn.SESSION_COOKIE, token)
+        while not stop.is_set():
+            import time as _t
+            started = _t.monotonic()
+            results.append((started, c.get(path, headers=HEADERS).status_code))
+
+    threads = [threading.Thread(target=hammer) for _ in range(3)]
+    for t in threads:
+        t.start()
+    import time as _t
+    _t.sleep(0.5)
+    with engine.begin() as db:
+        db.execute(text("UPDATE identity_sessions SET revoked_at = now() WHERE token_hash = :h"),
+                   {"h": hashlib.sha256(token.encode()).hexdigest()})
+    revoked_at = _t.monotonic()
+    _t.sleep(0.5)
+    stop.set()
+    for t in threads:
+        t.join()
+    after = [code for started, code in results if started > revoked_at]
+    assert after and all(code == 401 for code in after), after
+    assert any(code == 200 for started, code in results if started < revoked_at)
