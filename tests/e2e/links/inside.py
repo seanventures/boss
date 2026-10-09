@@ -98,7 +98,7 @@ from boss_engine.services import preview_service as ps                        # 
 procs, ports, previews = [], {}, {}
 expires = datetime.now(timezone.utc) + timedelta(minutes=30)
 for k in ("a", "c"):
-    ports[k] = ps.preview_port()
+    ports[k] = ps.app_preview_port()
     previews[k] = f"prev_s5{k}{uuid.uuid4().hex[:6]}"
     extra = ps.preview_link_environment(engine, project_id=project, run_id=runs[k], preview_id=previews[k],
                                         expires_at=expires, rotate=True)

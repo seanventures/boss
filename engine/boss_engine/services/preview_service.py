@@ -9,6 +9,7 @@ macOS where container host-networking is awkward. Containerized isolation is the
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import shlex
 import logging
@@ -43,6 +44,109 @@ from .scheduling import low_priority
 logger = logging.getLogger(__name__)
 
 PREVIEW_ROOT = Path(os.environ.get("BOSS_PREVIEW_ROOT", "/tmp/boss-previews"))
+
+
+# ------------------------------------------------------------------------------------------ #
+# THE PREVIEW SANDBOX. A preview runs an app an agent (or a template, or a deliberately insecure
+# demo) wrote. It ran as the control plane's own uid, so it could read whatever the API can: the
+# identity master key, /proc/<api>/environ (DATABASE_URL, provider keys), every other run's
+# directory, the database over the network. Now every process preview runs the way a build does
+# (sandbox_identity, IDENTITY.md §7.6): its own pool uid, leased for the preview's life
+# (`acquire`, released by `_teardown`), its tree inside that uid's 2770 run directory, the
+# sandbox environment (no control-plane variable), and the entrypoint's network fence: loopback
+# and its OWN preview port, the API and egress (allowlisted outbound) and the link gateway; never
+# another preview's port, the database or anything else. Its log lives OUTSIDE its tree (the app
+# could otherwise swap the log for a link to a BOSS file and have BOSS read it back).
+# ------------------------------------------------------------------------------------------ #
+
+def _preview_root() -> Path:
+    PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(PREVIEW_ROOT, 0o700)
+    return PREVIEW_ROOT
+
+
+def preview_log_path(preview_id: str) -> str:
+    """Where a preview's output goes: BOSS's directory, never the app's tree."""
+    return str(_preview_root() / f"{preview_id}.log")
+
+
+def _preview_sandbox(preview_id: str):
+    """The preview's own sandbox uid, held until `_teardown` (None when isolation is off, or
+    `auto` without the helper). Raises SandboxUnavailable when isolation is required and
+    impossible: the preview then fails, it never runs as the control plane."""
+    from . import sandbox_identity
+
+    return sandbox_identity.acquire(preview_id, what="preview")
+
+
+def _release_preview_sandbox(preview_id: Optional[str]) -> None:
+    if not preview_id:
+        return
+    with contextlib.suppress(Exception):
+        from . import sandbox_identity
+
+        sandbox_identity.release(str(preview_id))
+
+
+def _preview_workdir(preview_id: str, ident) -> Path:
+    if ident is not None:
+        return ident.workspace(f"{preview_id}-")
+    return Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(_preview_root())))
+
+
+def _open_to_sandbox(root: Path) -> None:
+    """What BOSS copied into a sandboxed preview's tree becomes editable by its uid (npm install
+    writes beside the sources). Only that uid and BOSS can enter the 2770 run directory, so this
+    opens nothing to anyone else. Never follows a symlink."""
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        with contextlib.suppress(OSError):
+            os.chmod(dirpath, 0o2777)
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            if not os.path.islink(path):
+                with contextlib.suppress(OSError):
+                    os.chmod(path, os.stat(path).st_mode | 0o666)
+
+
+def _sandboxed_preview_port(ident) -> int:
+    """The port the fence opens to this preview's own uid (BOSS_PREVIEW_SELF), when free; any
+    free preview port otherwise (the app then cannot call itself on its port)."""
+    if ident is not None:
+        from .sandbox_identity import preview_port_for_uid
+
+        own = preview_port_for_uid(ident.uid)
+        if own is not None:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                # As servers bind (SO_REUSEADDR): the last preview's closed connections in
+                # TIME_WAIT do not make the port busy; a live listener still does.
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    probe.bind(("0.0.0.0", own))
+                    return own
+                except OSError:
+                    pass
+    return app_preview_port()
+
+
+def ports_listened_by(uid: int, tables: tuple[str, ...] = ("/proc/net/tcp", "/proc/net/tcp6")
+                      ) -> Optional[set[int]]:
+    """TCP ports with a LISTEN socket owned by `uid` (/proc/net/tcp, tcp6), or None where /proc
+    cannot say (a developer's Mac: no sandbox there either)."""
+    found: set[int] = set()
+    seen_any = False
+    for table in tables:
+        try:
+            with open(table, encoding="ascii", errors="ignore") as fh:
+                next(fh, None)
+                seen_any = True
+                for line in fh:
+                    f = line.split()
+                    if len(f) > 7 and f[3] == "0A" and f[7] == str(int(uid)):
+                        found.add(int(f[1].rsplit(":", 1)[1], 16))
+        except OSError:
+            continue
+    return found if seen_any else None
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -320,8 +424,8 @@ def _free_port() -> int:
     return port
 
 
-def preview_port() -> int:
-    """A free port for a PREVIEW, from BOSS_PREVIEW_PORTS (default 19000-19999). Previews live in
+def app_preview_port() -> int:
+    """A free port for a PREVIEW's app, from BOSS_PREVIEW_PORTS (default 19000-19999). Previews live in
     their own range so the sandbox fence can refuse it to every build (a build reaches another
     app's preview only through the link gateway, F5 §5.4) and the link gateway can refuse
     anything outside it as an upstream. Falls back to any free port only if the range is full."""
@@ -1650,20 +1754,29 @@ def _why_it_failed(log_path: str, limit: int = 900) -> str:
 
 def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
                            proc: Optional[subprocess.Popen] = None,
-                           health_path: str = "/") -> Optional[int]:
+                           health_path: str = "/", listener_uid: Optional[int] = None) -> Optional[int]:
     """Return the port the app actually serves HTTP on — its log-announced port first, then the
     injected PORT — each health-checked, so a neighboring local service is never mistaken for it.
 
     Given the process, stop waiting the moment it exits: an app that died on an ImportError at
     import time will never bind, and waiting out the full window only delays the real error."""
+    def candidates() -> list[int]:
+        ports = _candidate_ports(log_path, port_hint)
+        if listener_uid is None:
+            return ports
+        # A SANDBOXED preview's port is one ITS uid listens on. The log is the app's to write:
+        # "listening on 8000" must not make BOSS's own API (or another preview) its preview.
+        mine = ports_listened_by(listener_uid)
+        return ports if mine is None else [p for p in ports if p in mine]
+
     deadline = time.time() + timeout
     while time.time() < deadline:
-        for port in _candidate_ports(log_path, port_hint):
+        for port in candidates():
             if _http_ok(port, health_path):
                 return port
         if proc is not None and proc.poll() is not None:
             # One last look: a server that forked and exited its parent may be up by now.
-            for port in _candidate_ports(log_path, port_hint):
+            for port in candidates():
                 if _http_ok(port, health_path):
                     return port
             return None
@@ -1734,7 +1847,8 @@ def launch_app(workdir: Path, command: list[str], log_path: str, *,
     """
     port_hint = port or _free_port()
     env = app_environment(workdir, port_hint, extra_env)
-    logf = open(log_path, "w")
+    logf = os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+                             0o600), "w")
     try:
         # OWNED (owned_process): the serve proof belongs to the build that runs it (the
         # enclosing owner scope) and dies with it; a preview passes its own `owner`, so it
@@ -2094,15 +2208,15 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     project_id = run["project_id"]
     preview_id = make_id("prev")
 
-    PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
-    workdir = Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(PREVIEW_ROOT)))
-    log_path = str(workdir / "_preview.log")
+    log_path = preview_log_path(preview_id)
+    workdir = Path(tempfile.gettempdir())     # set below, once the sandbox is held
 
     def _fail(msg: str, *, command: Optional[str] = None, exited: Optional[bool] = None) -> dict:
         # THE LAUNCH COMMAND IS PART OF THE RECORD. app_previews.command was empty on every
         # failed row, so "it crashed" could not be followed by "running WHAT" — the one fact
         # needed to reproduce it by hand.
         failure_kind, suggested_action = _classify_start_failure(msg, exited=exited)
+        _release_preview_sandbox(preview_id)
         with begin(engine) as c:
             c.execute(text(
                 "INSERT INTO app_previews (id,project_id,run_id,repo,branch,command,substrate,"
@@ -2128,6 +2242,13 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         return {"id": preview_id, "status": "failed", "error": msg, "command": command,
                 "failure_kind": failure_kind, "suggested_action": suggested_action}
 
+    from .sandbox_identity import SandboxUnavailable
+
+    try:
+        ident = _preview_sandbox(preview_id)
+    except SandboxUnavailable as exc:
+        return _fail(f"the preview sandbox is unavailable: {exc}")
+    workdir = _preview_workdir(preview_id, ident)
     local_ws = None if (run.get("pull_request_url") or "") else find_local_run_workspace(run_id)
     if local_ws is not None:
         src = local_ws / "bugbox" if (local_ws / "bugbox" / "package.json").is_file() else local_ws
@@ -2137,6 +2258,8 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             )
         except OSError as exc:
             return _fail(f"copy local workspace failed: {exc}")
+        if ident is not None:
+            _open_to_sandbox(workdir)
     else:
         # NOT settings.github_token. That field is the old install-wide way of naming a
         # target repo and is empty wherever the repository was connected through the
@@ -2155,7 +2278,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                                         owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
             clone_url = _access.url
             clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-                               capture_output=True, text=True, timeout=120, env=_access.environ())
+                               capture_output=True, text=True, timeout=120, env=_access.environ(),
+                               # BOSS's git, writing a tree the preview's uid must be able to edit
+                               **({"umask": 0} if ident is not None else {}))
         if clone.returncode != 0:
             return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
@@ -2164,12 +2289,19 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         tests: execute the suite one-shot, capture output, and return the result so the user sees
         it work, instead of a misleading 'add a preview command' error."""
         try:
-            proc = owned_process.run(["sh", "-lc", cmd_str], cwd=str(workdir),
+            # The app's own tests: its code, so the preview's sandbox uid and the app's
+            # environment, never the control plane's.
+            env = app_environment(workdir, 0)
+            env.pop("PORT", None)
+            proc = owned_process.run(["sh", "-lc", cmd_str], cwd=str(workdir), env=env,
+                                  owner=owned_process.Owner("preview", preview_id, project_id),
                                   capture_output=True, text=True, timeout=300)
             output = (proc.stdout or "") + (proc.stderr or "")
             exit_code = proc.returncode
         except subprocess.TimeoutExpired:
             output, exit_code = "test run exceeded 300s and was stopped", 124
+        finally:
+            _release_preview_sandbox(preview_id)
         try:
             Path(log_path).write_text(output, encoding="utf-8")
         except OSError:
@@ -2220,7 +2352,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     proc, port_hint = launch_app(
         workdir, command, log_path,
         owner=owned_process.Owner("preview", preview_id, project_id),
-        expires_at=_expires, port=preview_port(),
+        expires_at=_expires, port=_sandboxed_preview_port(ident),
         extra_env=preview_link_environment(engine, project_id=project_id, run_id=run_id,
                                            preview_id=preview_id, expires_at=_expires, rotate=True))
 
@@ -2230,7 +2362,8 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     # Given the process, discovery stops the moment it exits — an app that died on an
     # ImportError never binds, and waiting out three minutes only delayed the real error.
     port = _discover_working_port(log_path, port_hint, timeout=preview_start_timeout(workdir),
-                                  proc=proc, health_path=preview_health_path(workdir))
+                                  proc=proc, health_path=preview_health_path(workdir),
+                                  listener_uid=ident.uid if ident is not None else None)
     if port is None:
         # NAME WHICH FAILURE THIS IS before killing the process — once it is dead, the
         # difference between "never bound" and "bound and served the wrong thing" is gone.
@@ -2582,9 +2715,9 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         branch = row["branch"]
         if not owner or not repo or not branch:
             return
-        PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
-        workdir = Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(PREVIEW_ROOT)))
-        log_path = str(workdir / "_preview.log")
+        ident = _preview_sandbox(preview_id)       # SandboxUnavailable: stays stopped (below)
+        workdir = _preview_workdir(preview_id, ident)
+        log_path = preview_log_path(preview_id)
         # NOT settings.github_token. That field is the old install-wide way of naming a
         # target repo and is empty wherever the repository was connected through the
         # wizard, so this handed git an anonymous URL for a private repo and every clone
@@ -2603,26 +2736,31 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             clone_url = _access.url
             clone = owned_process.run(
             ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-            capture_output=True, text=True, timeout=120, env=_access.environ(), sandboxed=False)
+            capture_output=True, text=True, timeout=120, env=_access.environ(), sandboxed=False,
+            **({"umask": 0} if ident is not None else {}))
         if clone.returncode != 0:
+            _release_preview_sandbox(preview_id)
             return
         _changed = lineage_impl_files(engine, {"id": row["run_id"]})
         command = _detect_command(workdir, _changed)
         if not command:
+            _release_preview_sandbox(preview_id)
             return
         # The one launcher, so a respawned preview gets the same filtered environment as the
         # first start (app_environment) instead of the worker's own.
         proc, port_hint = launch_app(
             workdir, command, log_path,
             owner=owned_process.Owner("preview", preview_id, row.get("project_id")),
-            port=preview_port(),
+            port=_sandboxed_preview_port(ident),
             extra_env=preview_link_environment(engine, project_id=project_id, run_id=row.get("run_id"),
                                                preview_id=preview_id, expires_at=row.get("expires_at"),
                                                rotate=False))
         port = _discover_working_port(log_path, port_hint, timeout=preview_start_timeout(workdir),
-                                      health_path=preview_health_path(workdir))
+                                      health_path=preview_health_path(workdir),
+                                      listener_uid=ident.uid if ident is not None else None)
         if port is None:
             _kill(proc.pid)
+            _release_preview_sandbox(preview_id)
             return
         url = f"http://127.0.0.1:{port}"
         with begin(engine) as c:
@@ -2631,6 +2769,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
                 "log_path=:lg WHERE id=:id"),
                 {"pid": proc.pid, "port": port, "url": url, "lg": log_path, "id": preview_id})
     except Exception:  # noqa: BLE001 — best-effort; a failed respawn just leaves it 'stopped'
+        _release_preview_sandbox(preview_id)
         return
 
 
@@ -3264,6 +3403,8 @@ def _teardown(row, settings: Optional[Settings] = None) -> None:
             MicroVMProvider(settings).release(sandbox_id)
     else:
         _kill(row.get("pid"))
+        # The preview's uid: every process it left is killed, its tree removed, the uid freed.
+        _release_preview_sandbox(row.get("id"))
 
 
 def stop_preview(engine, preview_id: str, settings: Optional[Settings] = None) -> dict:

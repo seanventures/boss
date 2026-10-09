@@ -282,5 +282,5 @@ def test_the_build_and_the_preview_get_the_link_environment_and_nothing_else_doe
         engine, project_id=world.project_a, run_id=world.bank, preview_id="prev_bank",
         expires_at=None, rotate=True)
     assert "BOSS_TEST_USERS" in provider and not any(k.startswith("BOSS_LINK_") for k in provider)
-    assert 19000 <= preview_service.preview_port() <= 19999
+    assert 19000 <= preview_service.app_preview_port() <= 19999
     _revoke(client, world, link["id"])
