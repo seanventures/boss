@@ -127,7 +127,23 @@ boss.example.com {
 
 On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once: copy `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` from the server (`ssh user@your-server sudo cat …`) and add it to each device's trusted roots — on a Mac, `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt`. Installed without `--console-origin`? [Add the address to a running install](docs/community/hostname.md#add-a-hostname-to-a-running-install).
 
-**4. Claim and sign in** at your address. The first visit to `/claim` (for example `http://127.0.0.1:3000/claim`) claims the install: the password from `boss password` (or a one-hour link from `boss identity setup-link`) proves you are the operator, then you create your own Owner account with a passkey. `boss doctor` reminds you until it is done. Invite your team in **Identity › People**. BOSS opens on **Repo and models**: paste a GitHub token, connect a model, and open your first PR. Upgrading an existing install? [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) explains the claim and the 30-day window for the shared password.
+**4. Claim it.** Nobody owns a new install until you claim it. On the server, run:
+
+```sh
+boss identity setup-link
+```
+
+It prints a one-hour, single-use link. Open it in the browser you will sign in with, enter your name and email, and create a passkey (on an IP address, where browsers allow no passkeys, choose a password and scan the code with an authenticator app). Save the recovery codes, then press **Continue setup**. `boss open`, `boss doctor` and the sign-in page all say "not claimed yet" with the same command until you do. Upgrading an existing install? [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) explains the claim and the 30-day window for the shared password.
+
+**5. Connect GitHub.** BOSS opens on **Repo and models**. Under **GitHub access › GitHub App**, leave **Organization** blank to use your own GitHub account, or type an organization you own, then press **Create the App on GitHub**. On GitHub press **Create GitHub App**, then **Install** it on the repositories BOSS may work on. Back in BOSS the card says what GitHub actually granted: **Installed on @you**, **All permissions accepted ✓**, and a ✓ for each repository. Anything GitHub has not granted is listed with a link to the GitHub page that grants it. Then, under **Repository**, press **Use the GitHub App**, pick the repository, and **Connect**.
+
+**6. Connect a model.** Under **Model**, add a provider key or a coding subscription (models the installer found are already there; `boss connect` does the same from a terminal). It turns green once it answers a test question.
+
+**7. Open your first pull request.** The header says **Next: open your first PR**. In **Try it**, describe one small change and press **Open a PR**. The first time, BOSS asks you to allow its agents to act for you on that repository; allow it. The pull request appears on GitHub for you to review.
+
+**8. Deploy.** Add the machine apps run on: **Infra › + Add › Host**, its address and SSH user, then **Add host**. In the host's drawer press **Generate key**, copy the command and run it from your own computer (name your key file there if your SSH key is not the default one), then press **I ran it**. Now start a build that ends in a deploy (**+ New build**, e.g. **Standard**). Its deploy step asks only **Where**: your machine, or "Ask me at deploy time". The app's first deploy creates its place on the machine (a free port, its URL and a health check); the approval card shows all of it, with a link to change it, before anything ships.
+
+Optional, when builds should be allowed to change GitHub Actions: on the repository's row turn **CI changes** on, then follow **Accept on GitHub** until the row says **Workflows accepted ✓**. A build that needs a database gets its own PostgreSQL automatically when the brief, its plan or the app's code says so (**Build database: Auto**).
 
 Models found by the installer appear there already; `boss connect` does the same from a terminal. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
