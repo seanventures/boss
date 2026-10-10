@@ -698,7 +698,9 @@ def start_code_task(
         if _from_origin:
             run_finalize["workflow_run_id"] = str(_from_origin)
     _already_governed = bool(run_finalize.get("workflow_run_id"))
-    _continuation = ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark")
+    # A LANE OF A MULTI-REPO CHANGE (multirepo/change_sets.py) is governed by its change set:
+    # never an outer workflow run of its own per repository.
+    _continuation = ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark", "change_set_id")
     _is_new_project = (not _already_governed) and (_chose_a_workflow or (
         not any(run_finalize.get(k) for k in _continuation)
         # Slice 1 of a decomposition IS the project; slices 2..N are the rest of the same one.
