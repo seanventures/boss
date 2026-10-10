@@ -137,16 +137,19 @@ This is the same command as [Install](#install): it installs the newest release 
 
 ### Straight from GitHub
 
-The same install without the website. The download and the Git checkout use the same commit, the installer verifies it, and a failed download stops before anything runs:
+Install the reviewed RC8 source without the website. This uses Git authentication if the repository requires access, resolves the release checkout to a full commit SHA, and installs that same commit:
 
 ```bash
-BOSS_RELEASE_COMMIT=f9ceffc5dc078c5a21be6d8dde8d76be10e2dd2d bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
+(
+  set -e
+  git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git boss-rc8
+  cd boss-rc8
+  BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
+  ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
+)
 ```
 
-> [!WARNING]
-> Do not point the download URL at another host.
-
-The installer uses `~/boss` unless you pass `--dir`. Add installer flags after the final `_`, for example `_ --console-origin https://boss.example.com`.
+The `boss-rc8` directory must not already exist. Read the script in that checkout before running it if you want to inspect it. This records a pinned commit; a later upgrade needs `boss upgrade --to REF`. Add installer flags to the `./install.sh` line, for example `--console-origin https://boss.example.com`.
 
 ### From a local checkout
 
