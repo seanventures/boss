@@ -337,7 +337,9 @@
 }
 .cc-btn:hover:not(:disabled) { border-color: #34508a; color: var(--ink); }
 .cc-btn:disabled { opacity: .55; cursor: default; }
-.cc-btn.primary { border: 0; color: #fff; background: linear-gradient(120deg, #2EC5C5, #2F6FE0); box-shadow: 0 8px 24px -8px rgba(47, 111, 224, .8); }
+.cc-btn.primary { border: 0; color: #fff; background: linear-gradient(120deg, #137c7c, #285ec0); box-shadow: 0 8px 24px -8px rgba(47, 111, 224, .8); }
+.cc-btn.primary:hover:not(:disabled) { color: #fff; background: linear-gradient(120deg, #106b6b, #234fa7); }
+.cc-btn.primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .cc-btn.sm { padding: 6px 12px; font-size: 13px; border-radius: 8px; }
 .cc-more {
   align-self: flex-start; background: none; border: 0; padding: 4px 2px; cursor: pointer;
