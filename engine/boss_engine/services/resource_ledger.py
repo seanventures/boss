@@ -104,6 +104,33 @@ class DbLedger:
             _log.debug("owned_resources release_handle failed", exc_info=True)
             return 0
 
+    def open_resources(self, resource_kind: str, handle_prefix: str) -> list[dict[str, Any]]:
+        """Read durable retry evidence; a read failure is not an empty ledger.
+
+        Network-resource owners may reconcile a prior process's rows. Their own
+        substrate, ownership and liveness checks must precede any row release.
+        """
+        with self.engine.connect() as c:
+            return [dict(row) for row in c.execute(text(
+                "SELECT id, owner_kind, owner_id, owner_chain, handle, meta, created_at "
+                "FROM owned_resources WHERE resource_kind=:kind AND released_at IS NULL "
+                "AND starts_with(handle, :prefix) ORDER BY created_at, id"),
+                {"kind": resource_kind, "prefix": handle_prefix}).mappings()]
+
+    def release_owned_row(self, row_id: str, resource_kind: str, handle: str, reason: str) -> int:
+        """Strictly close only the inspected row, never a later duplicate handle.
+
+        Exceptions propagate so the cleanup owner reports pending reconciliation.
+        Existing best-effort release methods keep their contracts.
+        """
+        with self.engine.begin() as c:
+            return int(c.execute(text(
+                "UPDATE owned_resources SET released_at=now(), release_reason=:reason "
+                "WHERE id=:id AND resource_kind=:kind AND handle=:handle "
+                "AND released_at IS NULL"),
+                {"id": row_id, "kind": resource_kind, "handle": handle,
+                 "reason": (reason or "")[:200]}).rowcount or 0)
+
 
 def record(resource_kind: str, handle: str, *, owner: Any = None, expires_at: Any = None,
            meta: Optional[dict[str, Any]] = None) -> Optional[str]:
