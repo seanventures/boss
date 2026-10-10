@@ -25765,7 +25765,9 @@ def _editor_problems(problems: list) -> list[dict]:
              # A warning (an ability not set up yet) is said on the step and does not block Save;
              # `ability` is what the Studio links to (?area=skills&ability=<key>).
              **({"severity": p["severity"]} if p.get("severity") else {}),
-             **({"ability": p["ability"]} if p.get("ability") else {})}
+             **({"ability": p["ability"]} if p.get("ability") else {}),
+             # Where the gap is closed (kit.setup_fix): the editor shows it as a button.
+             **({"fix_label": p["fix_label"], "fix_href": p["fix_href"]} if p.get("fix_href") else {})}
             for p in problems]
 
 

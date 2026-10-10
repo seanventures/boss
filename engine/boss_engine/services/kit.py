@@ -1119,10 +1119,27 @@ def ability_problems(connection: Connection, settings: Any, project_id: str,
         status = _facts(connection, settings, project_id, by_key[key], dep=dep, state=state,
                         tests=tests, by_name=by_name, held=held[key])["status"]
         if status in ("setup", "needs_repo"):
+            label, href = setup_fix(by_key[key], status, dep)
             for step_id in step_ids:
                 out.append({"step_id": step_id, "field": "ability", "ability": key,
-                            "message": f"Needs {by_key[key]['label']} set up"})
+                            "message": f"Needs {by_key[key]['label']} set up",
+                            "fix_label": label, "fix_href": href})
     return out
+
+
+def setup_fix(ability: dict[str, Any], status: str, dep: dict[str, Any]) -> tuple[str, str]:
+    """WHERE a gap is closed, as a button's words and a console link — never just "set it up".
+    The same landings as the start checklist (workflow_readiness.NEEDS): the repository row, Infra
+    with the App target sheet open, or the ability's own drawer in Skills & MCP."""
+    from .workflow_readiness import NEEDS
+
+    if status == "needs_repo":
+        need = NEEDS["repository"]
+        return "Connect a repository", str(need.href)
+    if "deploy_target" in ability.get("depends_on", ()) and not dep.get("deploy_target"):
+        need = NEEDS["deployment_target"]
+        return "Set up where it deploys", str(need.href)
+    return f"Set up {ability['label']}", f"/?area=skills&ability={ability['key']}"
 
 
 # --------------------------------------------------------------------------- #

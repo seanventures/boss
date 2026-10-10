@@ -44,6 +44,8 @@ const OPS: Record<string, Op> = {
   decision_key: { method: "POST", path: () => "/v1/setup/decisions/key" },
   routing: { method: "PUT", path: () => "/v1/setup/routing" },
   routing_catalogue: { method: "POST", path: () => "/v1/setup/routing/catalogue" },
+  // "Give builds a database (Postgres)": the project setting build_services (Owner/Admin).
+  build_database: { method: "PUT", path: () => "/v1/settings/build_services" },
 };
 
 async function forward(r: Response) {

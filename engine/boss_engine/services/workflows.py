@@ -915,7 +915,7 @@ def check_spec(
 
         with connection.begin_nested():
             needs = [{**problem(p["step_id"], "ability", p["message"]), "severity": "warning",
-                      "ability": p["ability"]}
+                      "ability": p["ability"], "fix_label": p.get("fix_label"), "fix_href": p.get("fix_href")}
                      for p in ability_problems(connection, get_settings(), project_id, normalized)]
     except Exception:  # noqa: BLE001 — the Kit must never be why a check fails
         logger.debug("ability problems could not be read", exc_info=True)
