@@ -78,6 +78,7 @@ nav:
       - Build sandbox: SANDBOX.md
       - Architecture approval and spending: ARCHITECTURE_GOVERNANCE.md
       - Hearing an agent's voice: AGENT_VOICE_TESTS.md
+      - Conversation costs and retries: CONVERSATION_STREAMS.md
       - Identity administration: IDENTITY_ADMIN.md
       - Connect models: MODEL_CONNECTIONS.md
       - Use cases: use-cases.md
