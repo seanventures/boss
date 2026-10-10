@@ -461,6 +461,25 @@ class Handler(Base):
                          else "local")}
         return ok
 
+    def _route(self, method: str) -> None:
+        """A browser pointed at this fake DIRECTLY (BOSS_GITHUB_WEB_URL=http://127.0.0.1:<port>,
+        tests/e2e/compose/browser-github.yml) gets the github.com pages here, so a walk in an
+        ordinary browser never leaves localhost."""
+        target = str(self.path)
+        if self._tunnel_host is None and not target.startswith(("http://", "https://")):
+            path, _, query = target.partition("?")
+            if "/settings/" in path or path.startswith(("/apps/", "/login/oauth/", "/organizations/")):
+                raw = self._raw_body() if method in ("POST", "PUT", "PATCH") else b""
+                page = browser_page(method, path, query, raw) or (
+                    404, _page("Page not found", f"<h2 data-testid=fake-gh-404>404</h2><code>{escape(path)}</code>"),
+                    "text/html; charset=utf-8", {})
+                status, payload, ctype, headers = page
+                self.world.record({"egress": "github.com", "method": method, "path": path, "route": "github-web-direct",
+                                   "status": status})
+                self._send(status, payload, ctype, headers)
+                return
+        super()._route(method)
+
     def _dispatch(self, method: str, path: str, body: Any) -> tuple[int, Any, str]:
         if path == "/_github_app":
             return 200, {**APPS.public_view(), "account": {"login": OWNER, "type": ACCOUNT_TYPE}, "repos": REPOS,
