@@ -387,6 +387,13 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
         c.execute(sql("UPDATE deployment_runs SET trigger = 'operator' WHERE id = :i"),
                   {"i": deployment_run_id})
         plan_view = deploy_plan_view(target, auto_target, run)
+        if planned.get("decision_id"):
+            # THE APPROVER READS WHAT WILL HAPPEN, on the card itself (Approvals shows
+            # recommendation.plan): where, which port and URL, how it is checked, the database.
+            c.execute(sql("UPDATE decisions SET recommendation = COALESCE(recommendation, '{}'::jsonb) || "
+                          "CAST(:r AS jsonb) WHERE id = :d"),
+                      {"d": planned["decision_id"],
+                       "r": json.dumps({"deploy_plan": plan_view, "plan": deploy_plan_words(plan_view)})})
         emit_event(c, project_id, "delivery.requested", actor, "code_task_run", run_id,
                    {"deployment_run_id": deployment_run_id, "target": target["id"],
                     "environment": target["environment"],
@@ -438,6 +445,24 @@ def deploy_plan_view(target: Any, auto_target: Optional[dict[str, Any]], run: An
         "created_now": bool(auto_target and not auto_target.get("adopted_existing")),
         "edit_href": f"/?area=infra&view=fleet&target={t.get('id')}" if t.get("id") else None,
     }
+
+
+def deploy_plan_words(plan: dict[str, Any]) -> str:
+    """The plan as the approval card says it, one fact a line; the Edit link is the target's page."""
+    lines = [f"Deploys {plan.get('app') or 'the app'} ({plan.get('environment') or 'staging'})"
+             + (f" to {plan['host']}" if plan.get("host") else "")
+             + (f" on port {plan['port']}" if plan.get("port") else "")
+             + (" — its place there is created now" if plan.get("created_now") else "")]
+    if plan.get("url"):
+        lines.append(f"URL: {plan['url']}")
+    if plan.get("health"):
+        lines.append(f"Health: {plan['health']}")
+    lines.append(f"Credential: {plan.get('credential') or 'the host’s own key'}")
+    if plan.get("database"):
+        lines.append(f"Database: {plan['database']} for this build")
+    if plan.get("edit_href"):
+        lines.append(f"Edit: {plan['edit_href']}")
+    return "\n".join(lines)
 
 
 def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_id: str,

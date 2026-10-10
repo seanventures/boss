@@ -99,3 +99,16 @@ def test_with_two_machines_and_no_choice_it_asks_where(client, engine):
 def test_the_build_of_a_deploying_workflow_is_told_to_write_its_manifest():
     assert "boss.deploy.yaml" in workflow_capability_runner.DEPLOY_MANIFEST_BRIEF
     assert "{target.public_url}" in workflow_capability_runner.DEPLOY_MANIFEST_BRIEF
+
+
+def test_the_plan_is_said_on_the_approval_card():
+    words = delivery_pipeline.deploy_plan_words({
+        "app": "Shift Swap Board", "environment": "staging", "host": "vm-a", "port": 8001,
+        "url": "http://203.0.113.77:8001/", "health": "http://203.0.113.77:8001/ expecting 200",
+        "credential": "the host's own key", "database": "Postgres", "created_now": True,
+        "edit_href": "/?area=infra&view=fleet&target=deptgt_1"})
+    assert words.splitlines() == [
+        "Deploys Shift Swap Board (staging) to vm-a on port 8001 — its place there is created now",
+        "URL: http://203.0.113.77:8001/", "Health: http://203.0.113.77:8001/ expecting 200",
+        "Credential: the host's own key", "Database: Postgres for this build",
+        "Edit: /?area=infra&view=fleet&target=deptgt_1"]
