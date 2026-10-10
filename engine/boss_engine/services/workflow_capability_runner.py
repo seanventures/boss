@@ -1327,6 +1327,31 @@ def _running_preview(
             "open_url": f"/v1/previews/{row['id']}/web/"}
 
 
+def _architecture_step(connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
+                       context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """Run the Architecture step (services/architecture_docs.py) and translate its refusals.
+
+    No approved PRD upstream is SETTLED — a retry would be refused the same way until somebody
+    approves the PRD. A model failure is an ordinary, retryable failure.
+    """
+    from . import architecture_docs
+
+    run_id = str(context.get("run_id") or "")
+    try:
+        spec_steps = {s["id"]: s for s in workflows._run_spec(connection, run_id).get("steps", [])}
+    except Exception:  # noqa: BLE001 — without the spec, only the panel decision proves approval
+        spec_steps = {}
+    try:
+        return architecture_docs.start(
+            connection, getattr(ctx, "settings", None), project_id=project_id, run_id=run_id,
+            step=step, context=context, spec_steps=spec_steps,
+            constraints=str(inputs.get("constraints") or "").strip())
+    except architecture_docs.ArchitectureRefused as refused:
+        raise SettledCapabilityError(str(refused)) from refused
+    except architecture_docs.ArchitectureDraftError as error:
+        raise CapabilityExecutionError(str(error)) from error
+
+
 def _plrr_brief(connection: Connection, project_id: str, context: dict[str, Any]) -> str:
     """The instructions a readiness repair is given, built from THIS run's own spec.
 
@@ -2066,6 +2091,12 @@ def _perform_capability(
             return _settle_started_work(capability, key, started)
         if key == "document":
             return _write_the_record(connection, project_id, context, inputs)
+        if key == "architecture":
+            # THE ARCHITECT DESIGNS FROM THE APPROVED PRD, THEN A PERSON SIGNS IT OFF. The step
+            # waits on its review (services/architecture_docs.py) like a build waits on its task.
+            return _settle_started_work(
+                capability, key,
+                _architecture_step(connection, ctx, project_id, step, context, inputs))
         if key == "notify":
             return _notify(connection, ctx, project_id, step, context, inputs)
         # Same shape as `document`: no tool because it commissions nothing — it READS what the
@@ -2323,6 +2354,19 @@ def _perform_capability(
                 f"differ in detail, the spec is the decision.\n\n"
                 f"{spec}"
             )}
+        # THE APPROVED ARCHITECTURE TRAVELS WITH THE SPEC. Read from whichever step produced it
+        # (only a SUCCEEDED step is in the context, and an architecture step succeeds only when
+        # a person approved it), so every workflow that has one gets it — no binding to forget.
+        architecture = str(_from_any_step(context, "architecture_markdown") or "").strip()
+        if architecture:
+            inputs = {**inputs, "instructions": (
+                f"{str(inputs.get('instructions') or '').strip()}\n\n"
+                f"---\n\n"
+                f"THE APPROVED ARCHITECTURE BELOW IS BINDING. A person approved this design\n"
+                f"before the build started; follow its components, data model, APIs and\n"
+                f"security model. Where you must deviate, say so and why in the pull request.\n\n"
+                f"{architecture}"
+            ).strip()}
 
     # WHOSE WORK THIS IS. A step may name a captain, overriding the capability's default —
     # the console already shows it as "the captain this WORKFLOW named for this step", and
@@ -2374,6 +2418,8 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     "research": ("discovery", ("discovery_id", "run_id", "id")),
     "meeting": ("meeting", ("meeting_run_id", "run_id", "id")),
     "build": ("code_task", ("code_task_run_id", "run_id", "id")),
+    # The architecture review a person answers: approved, sent back, or rejected.
+    "architecture": ("architecture", ("architecture_review_id", "id")),
     # STARTED IS NOT SERVING. start_preview returns as soon as the request is accepted, so the
     # step completed while the app was still booting — and the workflow walked on to `deploy`
     # with nothing anybody could look at. "Without a preview, do not move to deploy" is the
@@ -2622,6 +2668,12 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     "stack_deployment": ("stack_deployments",
                          frozenset({"healthy"}),
                          frozenset({"failed", "rejected"})),
+    # An architecture is done when a PERSON approved it. `awaiting_approval`,
+    # `revision_requested` and `drafting` are in flight: nobody has answered, or the architect
+    # is writing the version a person asked for.
+    "architecture": ("architecture_reviews",
+                     frozenset({"approved"}),
+                     frozenset({"rejected", "cancelled", "failed"})),
 }
 
 #: Where a table keeps the reason its run ended, when it is not a column called `error`.
@@ -2638,6 +2690,11 @@ def _terminal_evidence(
     onto the step's output rather than being looked up again by preview and deploy.
     """
     try:
+        if kind == "architecture":
+            # THE APPROVED DOCUMENT, so every later step's brief can carry it.
+            from . import architecture_docs
+
+            return architecture_docs.evidence(connection, awaited_id)
         if kind == "code_task":
             row = connection.execute(
                 text("SELECT pull_request_url, pull_request_number FROM code_task_runs "
@@ -3024,7 +3081,8 @@ def resume_awaited(
                         # A person said no. `workflow_run_actions` reads this and never offers
                         # "Skip and proceed" on it: skipping would turn the refusal into a yes.
                         **({REJECTED_BY_APPROVER: True}
-                           if kind == "stack_deployment" and status == "rejected" else {})},
+                           if kind in ("stack_deployment", "architecture")
+                           and status == "rejected" else {})},
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "failed", "awaited": kind, "awaited_status": status,
@@ -4098,6 +4156,15 @@ def tick(
 
             # Work that FINISHED while we were away, first of all: a build that completed a
             # moment ago should release the next step in this pass rather than a tick later.
+            # AN ARCHITECTURE SENT BACK IS REWRITTEN NOW, before its step is looked at: the
+            # architect writes the version the person asked for and a fresh approval opens.
+            phase = "revise architectures sent back"
+            from . import architecture_docs
+
+            performed.extend(architecture_docs.revise_sent_back(
+                connection, getattr(ctx, "settings", None), project_id=project_id,
+                run_id=run_id))
+
             phase = "resume awaited work"
             performed.extend(resume_awaited(
                 connection, project_id=project_id, run_id=run_id, worker_id=worker_id

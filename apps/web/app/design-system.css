@@ -2954,6 +2954,10 @@ select.input:focus,
 .dq-impact.teal { color: var(--teal); }
 .dq-impact.red { color: var(--red); }
 .dq-impact.muted { color: var(--faint); }
+/* Architecture approval: the step panel and the Approvals card (architecture-ui.tsx). */
+.arch-head { display: flex; align-items: center; gap: 8px; }
+.arch-versions { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.arch-doc { max-height: 520px; overflow: auto; overflow-wrap: anywhere; }
 .dq-title {
   font-family: var(--display);
   font-size: 17px;
