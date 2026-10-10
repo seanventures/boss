@@ -61,6 +61,7 @@ nav:
   - Home: README.md
   - Get started:
       - First useful change: FIRST_USEFUL_CHANGE.md
+      - Review a result (RC9): RESULT_REVIEW.md
       - Getting started: GETTING_STARTED.md
       - Quickstart: QUICKSTART.md
       - Deploy: hostname.md
