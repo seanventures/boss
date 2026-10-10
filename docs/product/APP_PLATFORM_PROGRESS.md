@@ -1169,6 +1169,12 @@ templates mount: the built-ins come from the image.
 - The template reference is a directory of the run (`$BOSS_TEMPLATE_DIR`), not the spec's
   `/opt/boss/template/` mount (no per-run mount namespace in the sandbox).
 
+### Round 2 (2026-10-09, integrator 2, test DB `boss_test_integ2`)
+
+| # | Step | Commit | State |
+|---|---|---|---|
+| R2.1 | Merge feat/app-platform-finish (ecfeefe9): clean. Deploy guard 20 + Sign in with BOSS 16 + templates 46 + start requests 11 = 93; MCP tools 8 (alone; it errors only after the templates suite in one session); tool gate/declared/microVM 25; web 13 | (this merge) | done |
+
 ### Resume (integration)
 
 - `cd ~/src/boss-wt-appplat && git pull` (branch `feat/app-platform`).
