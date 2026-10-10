@@ -83,12 +83,14 @@ def test_runtime_context_excludes_tests_and_scratch_but_retains_runtime_sources(
     ignored = set((ROOT / ".dockerignore").read_text().splitlines())
     for path in ("apps/api/tests", "apps/worker/tests", "apps/web/tests",
                  "packages/api-client/tests", "tools/tests", "**/__probe_tmp",
+                 "scripts/seed_demo.py",
                  "engine/boss_engine/identity/seed_accounts.py",
                  "engine/boss_engine/cli/console_test.py",
                  "engine/boss_engine/services/console_driver.py",
                  "engine/boss_engine/services/console_test_agent.py",
                  "engine/boss_engine/services/console_screen_check.py"):
         assert path in ignored
+    assert "COPY scripts/seed_demo.py" not in (ROOT / "Dockerfile.community").read_text()
     for path in ("apps/api/app", "apps/worker/boss_worker", "apps/web/app", "apps/web/lib"):
         assert path not in ignored and (ROOT / path).is_dir()
 
