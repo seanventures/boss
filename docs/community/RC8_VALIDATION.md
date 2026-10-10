@@ -1,6 +1,6 @@
-# RC7 validation
+# RC8 validation
 
-This record describes the checks behind the RC7 candidate. The release page identifies the published commit. Source publication, live deployment and permission to invite testers are separate milestones.
+This record describes the checks behind the RC8 candidate. The release page identifies the published commit. Source publication, live deployment and permission to invite testers are separate milestones.
 
 ## Checks completed
 
@@ -29,4 +29,4 @@ The following qualification remains open:
 
 The worker currently stops its heartbeat before sending the completion acknowledgment. Crash/reclaim fencing passed, but a delayed completion acknowledgment remains a qualification limit. Protect an uncertain attempt from duplicate effects and reconcile its outcome before retrying.
 
-The release download contains source code and a checksum, rather than prebuilt container images. Check the pinned release instructions in the [release notes](RELEASE_NOTES_v1.0-rc7.md).
+The release download contains source code and a checksum, rather than prebuilt container images. Check the pinned release instructions in the [release notes](RELEASE_NOTES_v1.0-rc8.md).

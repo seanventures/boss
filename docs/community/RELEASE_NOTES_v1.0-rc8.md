@@ -1,6 +1,6 @@
-# BOSS Community 1.0.0-rc.7
+# BOSS Community 1.0.0-rc.8
 
-RC7 prepares BOSS for friends-and-family testing. It builds on public RC6.1 and preserves the existing contributor history.
+RC8 prepares BOSS for friends-and-family testing. It builds on public RC6.1 and preserves the existing contributor history.
 
 ## What changed
 
@@ -16,15 +16,15 @@ RC7 prepares BOSS for friends-and-family testing. It builds on public RC6.1 and 
 
 ## Install or upgrade
 
-Use the [Quickstart](QUICKSTART.md) or the [installer guide](https://github.com/seanventures/boss/blob/v1.0-rc7/scripts/install/README.md). For a new checkout:
+Use the [Quickstart](QUICKSTART.md) or the [installer guide](https://github.com/seanventures/boss/blob/v1.0-rc8/scripts/install/README.md). For a new checkout:
 
 ```bash
-git clone --branch v1.0-rc7 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc7
+./install.sh --dir "$PWD" --ref v1.0-rc8
 ```
 
-The website installer may be deployed separately from this source release. The pinned GitHub checkout above selects RC7 directly. An existing install should take a complete protected backup before upgrading. Changing the checkout back to an older release does not undo database migrations.
+The website installer may be deployed separately from this source release. The pinned GitHub checkout above selects RC8 directly. An existing install should take a complete protected backup before upgrading. Changing the checkout back to an older release does not undo database migrations.
 
 Backups contain encrypted connection data and the key needed to recover it. Protect the archive as a credential. Do not attach it, your `.env`, session cookies or model credentials to a bug report.
 
@@ -38,9 +38,9 @@ This correction does not reconstruct exposure that an older release already disc
 
 The release changes have targeted source tests and independent review. Recovery tests used disposable Docker databases and fresh volumes with a real Owner, authenticator sign-in and vault decryption. Repository isolation tests used the actual Linux UID helper against owned markers. Financial tests used real Postgres concurrency and restart schedules. These checks have different scopes; they are not proof of every live provider or host.
 
-The production API and worker were also exercised in a disposable Docker installation: canonical Owner sign-in, tenant and worker authority, audit verification, a harmless job, cancellation, heartbeat, crash/reclaim fencing and clean restart passed. Browser checks covered actual sign-in, the Home next action and responsive task composition. See the [validation record](RC7_VALIDATION.md) for the final scope.
+The production API and worker were also exercised in a disposable Docker installation: canonical Owner sign-in, tenant and worker authority, audit verification, a harmless job, cancellation, heartbeat, crash/reclaim fencing and clean restart passed. Browser checks covered actual sign-in, the Home next action and responsive task composition. See the [validation record](RC8_VALIDATION.md) for the final scope.
 
-Supported-host clean installation, a genuine useful provider result, restored-snapshot effect reconciliation and uncoached human testing remain open. The worker stops its heartbeat before sending its completion acknowledgment; delayed completion remains a qualification limit. RC7 publication alone does not qualify invitations or deploy the hosted website.
+Supported-host clean installation, a genuine useful provider result, restored-snapshot effect reconciliation and uncoached human testing remain open. The worker stops its heartbeat before sending its completion acknowledgment; delayed completion remains a qualification limit. RC8 publication alone does not qualify invitations or deploy the hosted website.
 
 Several capabilities remain held behind their existing safeguards: live debugging investigations, direct host changes outside an approved plan, cloud-account deploy runs, auto-deploy, the agent host shell and host-backed preview sandboxes. Readable records do not imply these execution paths are enabled.
 
@@ -48,4 +48,4 @@ Several capabilities remain held behind their existing safeguards: live debuggin
 
 This is an incremental public release, rather than a wholesale private-source export. Reviewed public changes preserve RC6.1 ancestry and use preparation provenance. Historical private/public synchronization remains pending; the full-export guard has not been waived. See [Publishing](publishing.md).
 
-The release download is source code, with a checksum for the attached source bundle. It is not a prebuilt container image. The installer program retains its independent version; the application reports `1.0.0-rc.7`, and the Python engine package reports `1.0.0rc7`.
+The release download is source code, with a checksum for the attached source bundle. It is not a prebuilt container image. The installer program retains its independent version; the application reports `1.0.0-rc.8`, and the Python engine package reports `1.0.0rc8`.

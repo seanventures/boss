@@ -22,7 +22,7 @@ Pass installer flags after `bash -s --`:
 
 ```bash
 curl -fsSL https://boss.sean.network/install.sh | bash -s -- --yes
-curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc7 --console-origin https://boss.example.com
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc8 --console-origin https://boss.example.com
 ```
 
 `BOSS_REF=main` (or `--ref main`) installs the development branch instead of a release.
@@ -153,9 +153,9 @@ The installer uses `~/boss` unless you pass `--dir`. Add installer flags after t
 Clone the release and install it in place:
 
 ```bash
-git clone --branch v1.0-rc7 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc7
+./install.sh --dir "$PWD" --ref v1.0-rc8
 ```
 
 A checkout at a release tag stays on that release. A checkout on a branch follows `main` unless you pass `--ref`, and the ref is then [recorded](#which-release-and-staying-on-it). From a checkout you already have on the branch you want:

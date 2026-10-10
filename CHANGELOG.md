@@ -2,9 +2,9 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
-## [v1.0-rc7]
+## [v1.0-rc8]
 
-Friends-and-family preparation. Notes: [docs/community/RELEASE_NOTES_v1.0-rc7.md](docs/community/RELEASE_NOTES_v1.0-rc7.md).
+Friends-and-family preparation. Notes: [docs/community/RELEASE_NOTES_v1.0-rc8.md](docs/community/RELEASE_NOTES_v1.0-rc8.md).
 
 ### Changed
 

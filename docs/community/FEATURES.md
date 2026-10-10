@@ -1,6 +1,6 @@
 # Features
 
-Everything in BOSS Community as of `v1.0-rc7`, grouped by area. Cloud and Enterprise capabilities are marked so the open-core boundary is explicit; the full v1 scope is tracked in [V1_FEATURE_LOCK.md](https://github.com/seanventures/boss/blob/main/docs/product/V1_FEATURE_LOCK.md).
+Everything in BOSS Community as of `v1.0-rc8`, grouped by area. Cloud and Enterprise capabilities are marked so the open-core boundary is explicit; the full v1 scope is tracked in [V1_FEATURE_LOCK.md](https://github.com/seanventures/boss/blob/main/docs/product/V1_FEATURE_LOCK.md).
 
 **Legend:** ✅ Stable · ◐ Preview: works today, still being hardened · ○ Planned · ✦ Cloud / Enterprise only
 

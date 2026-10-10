@@ -22,8 +22,8 @@ The release-pinned GitHub command in the installer guide selects one release tag
 
 ## Changes pushed to `main`
 
-RC7 is an incremental release on the existing public RC6.1 history. Reviewed product changes and public guides are added as focused commits, preserving contributor ancestry. Reconstructed changes name their reviewed preparation commit with a `Prepared-from:` trailer; this is not a claim that the whole private source was exported.
+RC8 is an incremental release on the existing public RC6.1 history. Reviewed product changes and public guides are added as focused commits, preserving contributor ancestry. Reconstructed changes name their reviewed preparation commit with a `Prepared-from:` trailer; this is not a claim that the whole private source was exported.
 
-A future full private-source export must first import all public contributor changes, retaining authors and `Imported-from:` provenance, and pass the export guard. That historical synchronization is still pending. A wholesale export that replaces the public tree remains refused until the guard passes; RC7 does not waive that requirement. Only a qualified full-export sync uses a `Private-source:` trailer.
+A future full private-source export must first import all public contributor changes, retaining authors and `Imported-from:` provenance, and pass the export guard. That historical synchronization is still pending. A wholesale export that replaces the public tree remains refused until the guard passes; RC8 does not waive that requirement. Only a qualified full-export sync uses a `Private-source:` trailer.
 
 The published candidate's source archive and checksum come from its public commit. Local builds, release publication and deployment of the hosted website are separate checks.
