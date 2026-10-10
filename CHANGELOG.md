@@ -2,6 +2,10 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## v1.0-rc6.2
+
+First-run setup without help (GitHub links and verification, deploy needs only a machine, automatic build database, step-up everywhere, claim discoverability, README quick start), opt-in CI workflow changes with Wait for CI, app traffic metrics, Architecture approval, and the Captain backoff. See docs/community/RELEASE_NOTES_v1.0-rc6.2.md.
+
 ## [v1.0-rc6.1]
 
 Hotfix on v1.0-rc6. Notes: [docs/community/RELEASE_NOTES_v1.0-rc6.1.md](docs/community/RELEASE_NOTES_v1.0-rc6.1.md).

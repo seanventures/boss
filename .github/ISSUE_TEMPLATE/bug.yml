@@ -53,7 +53,7 @@ body:
     id: version
     attributes:
       label: BOSS version or commit
-      placeholder: v1.0-rc6.1, or the full commit SHA from your checkout
+      placeholder: v1.0-rc6.2, or the full commit SHA from your checkout
     validations:
       required: true
   - type: textarea
