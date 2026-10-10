@@ -216,6 +216,13 @@ You can add a key to the private `.env` later. See [model connections](../../doc
 8. Reports the model keys and subscriptions it finds on this machine and connects only what you agree to.
 9. Installs the `boss` command and prints a summary card: console address, how to get the password, the release, what was connected, and the next commands.
 
+The health wait allows up to 60 attempts within 180 seconds, including requests
+and retry sleeps. Each request has a 2-second connection limit and at most
+5 seconds total, reduced to the remaining time. On timeout, check the printed
+health URL, API/database logs and whether another service occupies the API port.
+HTTP success alone does not verify that an unrelated listener is BOSS. Log
+collection and other installation phases are outside this wait budget.
+
 ### Reruns
 
 A rerun retains both API credentials and any operator-added API keys, the database password, model keys, the secret-store encryption key, the console login, public URL, console origin, API bind, port settings, the Mission Control choice, and the secret-store choice, unless this run sets the console origin or API bind again.

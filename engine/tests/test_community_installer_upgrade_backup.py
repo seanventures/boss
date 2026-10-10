@@ -5,13 +5,141 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import threading
+import time
 import uuid
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+@contextmanager
+def _health_listener(replies):
+    """Real TCP/HTTP fixture; None accepts the request but never sends a response."""
+    requests = []
+    finished = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append((self.path, time.monotonic()))
+            reply = replies[min(len(requests) - 1, len(replies) - 1)]
+            if reply is None:
+                finished.wait(20)
+                return
+            status, delay = reply
+            if finished.wait(delay):
+                return
+            body = b'{"status":"ok"}'
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02},
+                              daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", requests
+    finally:
+        finished.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def _readiness(tmp_path, url, *, budget=None, clock=""):
+    # Exercise the shipped readiness block, including its failure/log/exit path, without
+    # installing anything. A shorter function argument keeps real timeout tests bounded.
+    block = (REPO / "install.sh").read_text().split(
+        "# ---- wait health", 1)[1].split("# ---- seed", 1)[0]
+    block = block[block.index('ui_step "Waiting for API health"'):]
+    if budget is not None:
+        block = block.replace("if ! wait_for_api_health; then",
+                              f"if ! wait_for_api_health {int(budget)}; then")
+    script = tmp_path / "readiness.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        "ui_step() { printf '%s\\n' \"$*\"; }; ui_info() { ui_step \"$@\"; }\n"
+        "ui_err() { ui_step \"$@\"; }; ui_ok() { ui_step \"$@\"; }\n"
+        "compose() { printf 'DIAGNOSTIC %s\\n' \"$*\"; }\n"
+        "COMPOSE=(compose); COMPOSE_PROFILES=''; ENV_FILE=unused\n"
+        f"API_URL={shlex.quote(url)}\n{clock}\n{block}"
+    )
+    started = time.monotonic()
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True,
+                            check=False, timeout=15)
+    return result, time.monotonic() - started
+
+
+def test_installer_health_silent_connection_obeys_the_remaining_phase_time(tmp_path):
+    with _health_listener([None]) as (url, requests):
+        result, elapsed = _readiness(tmp_path, url, budget=2)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 1 <= elapsed < 4, elapsed
+    assert [path for path, _ in requests] == ["/health"]
+    assert "limit 2s" in result.stdout
+    assert "requests time out after at most 5s" in result.stdout
+    assert url + "/health" in result.stdout and "another service" in result.stdout
+    assert "DIAGNOSTIC" in result.stdout and "logs --tail 40 api db" in result.stdout
+    assert "API healthy at" not in result.stdout
+
+
+def test_installer_health_request_timeout_allows_a_later_healthy_response(tmp_path):
+    with _health_listener([None, (200, 0)]) as (url, requests):
+        result, elapsed = _readiness(tmp_path, url)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(requests) == 2
+    assert 7 <= requests[1][1] - requests[0][1] < 11  # max-time 5 + retry sleep 3
+    assert elapsed < 12
+    assert "API healthy at" in result.stdout and "DIAGNOSTIC" not in result.stdout
+
+
+@pytest.mark.parametrize("replies", [[(200, 0.25)], [(503, 0), (200, 0.25)]])
+def test_installer_health_accepts_slow_success_and_recovers_from_http_failure(tmp_path, replies):
+    with _health_listener(replies) as (url, requests):
+        result, elapsed = _readiness(tmp_path, url)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(requests) == len(replies)
+    assert elapsed < 6
+    assert "API healthy at" in result.stdout and "DIAGNOSTIC" not in result.stdout
+
+
+@pytest.mark.parametrize("request_seconds", [0, 2])
+def test_installer_health_default_phase_includes_requests_in_180_seconds(tmp_path, request_seconds):
+    # Advance Bash's own elapsed-time clock instead of taking three real minutes. Curl
+    # failures and retry sleeps both consume the same phase budget.
+    trace = tmp_path / "attempts"
+    clock = (
+        "SECONDS=0\n"
+        f"curl() {{ printf 'request\\n' >> {shlex.quote(str(trace))}; "
+        f"SECONDS=$((SECONDS + {request_seconds})); return 22; }}\n"
+        "sleep() { SECONDS=$((SECONDS + $1)); }"
+    )
+    result, _ = _readiness(tmp_path, "http://127.0.0.1:1", clock=clock)
+    assert result.returncode == 1
+    attempts = trace.read_text().splitlines()
+    assert len(attempts) == (60 if request_seconds == 0 else 36)
+    assert "180s; limit 180s" in result.stdout
+    assert "DIAGNOSTIC" in result.stdout
+
+
+def test_installer_health_never_exceeds_sixty_attempts_even_without_clock_progress(tmp_path):
+    trace = tmp_path / "attempts"
+    clock = (f"curl() {{ printf 'request\\n' >> {shlex.quote(str(trace))}; return 22; }}\n"
+             "sleep() { :; }")
+    result, _ = _readiness(tmp_path, "http://127.0.0.1:1", clock=clock)
+    assert result.returncode == 1
+    assert len(trace.read_text().splitlines()) == 60
+    assert "after 60 attempts" in result.stdout and "limit 180s" in result.stdout
 
 
 def _run(*args: str | Path, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:

@@ -1273,19 +1273,35 @@ fi
 # ---- wait health -----------------------------------------------------------
 ui_step "Waiting for API health"
 
-HEALTH_OK=0
-for i in $(seq 1 60); do
-  if curl -fsS "${API_URL}/health" >/dev/null 2>&1; then
-    HEALTH_OK=1
-    break
-  fi
-  sleep 3
-  if [[ $((i % 5)) -eq 0 ]]; then
-    ui_info "still waiting… (${i}/60)"
-  fi
-done
-if [[ "$HEALTH_OK" -ne 1 ]]; then
-  ui_err "API did not become healthy in time."
+# Keep the existing 60-attempt / three-minute wait, including time spent in curl.
+# A listener that accepts TCP but never answers must not hold the installer forever.
+wait_for_api_health() {
+  local budget="${1:-180}" started=$SECONDS attempts=0
+  local deadline=$((started + budget)) remaining request_seconds sleep_seconds i
+  for i in $(seq 1 60); do
+    remaining=$((deadline - SECONDS))
+    [[ "$remaining" -gt 0 ]] || break
+    attempts=$i
+    request_seconds=5
+    [[ "$remaining" -ge "$request_seconds" ]] || request_seconds=$remaining
+    if curl -fsS --connect-timeout 2 --max-time "$request_seconds" \
+      "${API_URL}/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    remaining=$((deadline - SECONDS))
+    [[ "$remaining" -gt 0 ]] || break
+    sleep_seconds=3
+    [[ "$remaining" -ge "$sleep_seconds" ]] || sleep_seconds=$remaining
+    sleep "$sleep_seconds"
+    if [[ $((i % 5)) -eq 0 ]]; then
+      ui_info "still waiting… (${i}/60; $((SECONDS - started))s/${budget}s)"
+    fi
+  done
+  ui_err "API did not become healthy after ${attempts} attempts ($((SECONDS - started))s; limit ${budget}s). Health requests time out after at most 5s. Check ${API_URL}/health and whether another service is using its port."
+  return 1
+}
+
+if ! wait_for_api_health; then
   ui_info "Recent API and database logs:"
   # shellcheck disable=SC2086
   ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
