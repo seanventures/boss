@@ -31,9 +31,14 @@ import { CopyValue, SideSheet } from "./side-sheet";
 /** What each copy key is called on the screen. */
 export const COPY_LABEL: Record<string, string> = {
   preview_url: "Preview URL", redirect_uri: "Redirect URI", public_url: "BOSS address",
+  deploy_url: "Deployed URL",
 };
+/** A provider's name as people know it ("github" → "GitHub"). */
+const PROVIDER_WORD: Record<string, string> = { github: "GitHub", google: "Google", boss: "BOSS" };
 export function copyLabel(key: string): string {
   if (COPY_LABEL[key]) return COPY_LABEL[key];
+  const cb = /^callback_url:(.+)$/.exec(key);
+  if (cb) return `Callback URL for ${PROVIDER_WORD[cb[1]] ?? cb[1]}`;
   const hook = /^webhook_url:(.+)$/.exec(key);
   return hook ? `Webhook URL (${hook[1]})` : key.replace(/_/g, " ");
 }

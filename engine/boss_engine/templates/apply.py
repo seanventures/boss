@@ -440,8 +440,17 @@ def applications(c, project_id: str, app_key: str) -> list[dict]:
 def setup_guide(c, *, project_id: str, app_key: str, public_url: str = "",
                 preview_url: Optional[str] = None) -> list[dict]:
     """The guides of the app's applied (or building) templates with placeholders filled.
-    Only known placeholders are filled; secret values are never placeholders (§2.9 S2.6)."""
+    Only known placeholders are filled; secret values are never placeholders (§2.9 S2.6).
+
+    A template that declares APP_BASE_URL also gets where the app is DEPLOYED
+    (templates.base_url: the deployment target's address, the same value its deploy writes into
+    the app's environment) and each provider's callback URL there, to register."""
     import re
+
+    from .base_url import callbacks as callback_urls
+    from .base_url import declares_base_url, deploy_address
+
+    deployed = deploy_address(c, project_id, app_key)
 
     out = []
     seen: set[str] = set()
@@ -469,6 +478,10 @@ def setup_guide(c, *, project_id: str, app_key: str, public_url: str = "",
         for hook in m.get("webhooks") or []:
             values[f"webhook_url:{hook.get('provider')}"] = (base or "<preview>") + str(hook.get("path") or "")
         values["redirect_uri"] = (base or "<preview>") + "/auth/callback"
+        if declares_base_url(m):
+            values["deploy_url"] = deployed.get("base_url") or "(deploy the app to get its address)"
+            for cb in callback_urls([m], deployed.get("base_url") or ""):
+                values[f"callback_url:{cb['provider']}"] = cb["url"]
         guide = re.sub(r"\{\{\s*([a-z_:]+)\s*\}\}", lambda mo: values.get(mo.group(1), mo.group(0)),
                        raw.decode("utf-8", errors="replace"))
         out.append({"template_key": app["template_key"], "version": app["version"], "status": app["status"],

@@ -343,6 +343,7 @@ def preview_environment(db: Any, *, project_id: str, run_id: Optional[str], prev
     (test/generated/stub, never live), APP_BASE_URL (where the browser reaches it), and, when the
     app uses Sign in with BOSS, its redirect URI registered for this preview."""
     from ..app_links.service import app_index, project_org
+    from ..templates.base_url import BASE_URL_ENV
     from ..templates.secrets import values_for_env
 
     if not run_id:
@@ -362,12 +363,12 @@ def preview_environment(db: Any, *, project_id: str, run_id: Optional[str], prev
         logger.warning("preview %s: %s", preview_id, why)
     base = preview_base(db, org_id, preview_id)
     if base:
-        env.setdefault("APP_BASE_URL", base)
+        env.setdefault(BASE_URL_ENV, base)
     sync_redirect_uris(db, org_id=org_id, project_id=project_id, app_key=app_key, also=preview_id)
     if env:
         from ..identity import redaction
 
-        redaction.register_secrets([v for k, v in env.items() if k != "APP_BASE_URL"])
+        redaction.register_secrets([v for k, v in env.items() if k != BASE_URL_ENV])
     return env
 
 

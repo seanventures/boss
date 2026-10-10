@@ -713,13 +713,18 @@ def _apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
         if secret_refusal:
             return {"status": "blocked", "reason": secret_refusal}
         app_env: dict[str, str] = {}
-        if app_key and _names:
+        address: dict[str, Any] = {}
+        if app_key:
+            # THE ONE READER of a deployed app's environment (templates.base_url): its deploy
+            # secrets plus APP_BASE_URL, the address this target serves it at, for every
+            # template that declares it — never left at the template's localhost default.
             from ..app_links.service import project_org
-            from ..templates.secrets import values_for_env
+            from ..templates.base_url import BASE_URL_ENV, deploy_environment
 
-            app_env, _withheld = values_for_env(c, org_id=project_org(c, project_id),
-                                                project_id=project_id, app_key=app_key, env="deploy")
-            hidden.extend(app_env.values())
+            app_env, _withheld, address = deploy_environment(
+                c, org_id=project_org(c, project_id) if _names else None,
+                project_id=project_id, app_key=app_key, target=target)
+            hidden.extend(v for k, v in app_env.items() if k != BASE_URL_ENV)
         try:
             material = resolve_target_secret(c, target, "ssh_key", settings)
             if material:
@@ -736,9 +741,12 @@ def _apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
 
     try:
         with rec.step("resolve") as h:
+            from ..templates.base_url import address_lines
+
             say(h, f"target={target.get('app_name')} env={target.get('environment')}\n"
                    f"repo={target.get('repo')} ref={row.get('commit_ref') or '(default branch)'}\n"
-                   f"host={target.get('target_ref')}\nchangeset={row['changeset_id']}")
+                   f"host={target.get('target_ref')}\nchangeset={row['changeset_id']}"
+                   + (f"\n{address_lines(address)}" if address else ""))
         with rec.step("preflight") as h:
             with begin(engine) as c:
                 pre = preflight(target, settings, c)
@@ -811,7 +819,8 @@ def _apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
                                  else " The rollback did not complete: check the host.")}
         rec.finish()
         return {"status": "succeeded", "applied": applied, "health": health,
-                "url": applied.get("url") or (target.get("domains") or [None])[0]}
+                "url": applied.get("url") or (target.get("domains") or [None])[0],
+                **({"app_address": address} if address else {})}
     except Exception as exc:  # noqa: BLE001 — a sentence, never a stack trace or a secret
         log.warning("governed host deploy %s failed", run_id, exc_info=True)
         rec.finish()

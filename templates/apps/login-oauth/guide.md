@@ -3,8 +3,8 @@
 The build works without any of this: its tests sign in through a fake provider. Do these steps
 when you want real people to sign in to the preview or the deployed app.
 
-Set `APP_BASE_URL` in the app's settings to the address people use, with no trailing slash
-(for the preview: `{{preview_url}}`). The redirect URIs below are built from it, and the session
+BOSS sets `APP_BASE_URL` to the address people use, with no trailing slash: the preview's
+(`{{preview_url}}`) in a preview, and the deployed address (`{{deploy_url}}`) on a deploy. The redirect URIs below are built from it, and the session
 cookie is marked `Secure` whenever it starts with `https://`.
 
 ## Google
@@ -15,7 +15,7 @@ cookie is marked `Secure` whenever it starts with `https://`.
    yourself as a test user.)
 2. Under **Authorized redirect URIs**, add:
    - `{{redirect_uri}}/google` (preview)
-   - `https://<your deployed host>/auth/callback/google` (deploy)
+   - `{{deploy_url}}/auth/callback/google` (deploy)
 3. Copy the client ID into the app's secret `GOOGLE_CLIENT_ID` and the client secret into
    `GOOGLE_CLIENT_SECRET` (App > Setup > Secrets). Paste them into BOSS only; never into code.
 
@@ -23,7 +23,8 @@ cookie is marked `Secure` whenever it starts with `https://`.
 
 1. GitHub > **Settings > Developer settings > OAuth Apps > New OAuth App**.
 2. **Homepage URL**: `{{preview_url}}`. **Authorization callback URL**: `{{redirect_uri}}/github`.
-   GitHub allows one callback URL per OAuth app: create a second app for the deployed host.
+   GitHub allows one callback URL per OAuth app: create a second app for the deployed host,
+   with **Homepage URL** `{{deploy_url}}` and callback `{{deploy_url}}/auth/callback/github`.
 3. **Generate a new client secret**. Copy the client ID into `GITHUB_CLIENT_ID` and the secret
    into `GITHUB_CLIENT_SECRET`.
 
