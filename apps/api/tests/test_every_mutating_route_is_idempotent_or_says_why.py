@@ -77,12 +77,18 @@ def test_a_streaming_write_has_a_durable_live_replay_contract_or_explicit_exclus
     A new write stream cannot silently inherit this route-specific policy.
     """
     from apps.api.app import stream_intent
+    discovered = set()
     for method, route in _mutating_routes():
         streams = (route.response_class is StreamingResponse
-                   or "StreamingResponse(" in inspect.getsource(route.endpoint))
+                   or "StreamingResponse(" in inspect.getsource(route.endpoint)
+                   or inspect.signature(route.endpoint).return_annotation in
+                   (StreamingResponse, "StreamingResponse"))
         if streams and route.path.startswith("/v1/"):
+            discovered.add(route.path)
             assert (stream_intent.governs(method, route.path)
                     or idempotency.exclusion_reason(method, route.path)), (method, route.path)
+    assert {f"/v1/conversations/{{conversation_id}}/{part}"
+            for part in ("turns", "summary", "propose")} <= discovered
     assert idempotency.is_streaming("text/event-stream; charset=utf-8")
     assert not idempotency.exclusion_reason("POST", "/v1/agents/qa/test")
 
@@ -108,7 +114,7 @@ def test_what_a_key_remembers():
 
 
 def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_does_not(
-        monkeypatch):
+        monkeypatch, client, engine):
     """NOT A TAUTOLOGY. The test above calls a route "covered" when the exclusion regex does not
     match its TEMPLATE — but the middleware decides on the CONCRETE path a request arrives on,
     and nothing proved a covered route ever reaches the claim (review of 45e7693, still open
@@ -121,6 +127,15 @@ def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_doe
 
     from apps.api.app import main
 
+    from apps.api.tests.identity_fixtures import IdentityWorld
+    world = IdentityWorld.create(engine)
+    owner = world.person("owned census caller")
+    world.bind(owner, "owner", project=world.project_a)
+    with engine.begin() as c:
+        from sqlalchemy import text
+        c.execute(text("INSERT INTO agent_conversations(conversation_id,project_id,actor,kind,title,seats) "
+                       "VALUES('cnv_census',:p,:a,'talk','Owned census','[\"qa\"]')"),
+                  {"p":world.project_a,"a":owner.id})
     reached: list[tuple[str, str]] = []
 
     def recorder(**kwargs):
@@ -144,8 +159,14 @@ def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_doe
         probe_body = ({"project_id": "boss-dogfood", "actor": "ceo",
                        "probe": "intro", "field": "mission"}
                       if stream_intent.governs(method, concrete) else {})
-        response = client.request(method, concrete, json=probe_body,
-                                  headers={idempotency.HEADER: "route-probe-1"})
+        if stream_intent.family(method, concrete) == "conversation":
+            concrete = concrete.replace("zzparam", "cnv_census")
+            with world.acting_as(world.ctx(owner)):
+                response = client.request(method, concrete, json={"project_id": world.project_a},
+                                          headers={idempotency.HEADER: "route-probe-1"})
+        else:
+            response = client.request(method, concrete, json=probe_body,
+                                      headers={idempotency.HEADER: "route-probe-1"})
         excluded = idempotency.exclusion_reason(method, route.path)
         if excluded:
             if reached:

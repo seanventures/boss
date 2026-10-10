@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 
 import pytest
 from sqlalchemy import text
@@ -23,6 +24,9 @@ SEATS = ["pm", "qa", "security_reviewer"]
 
 
 class Model:
+    from boss_engine.services.model_routing import ModelChoice
+    _boss_choice = ModelChoice("ollama", "owned conversation fixture", "approved_local_model_host")
+
     """Answers in a voice keyed off WHO the system prompt says it is, and records every call."""
 
     def __init__(self):
@@ -53,14 +57,51 @@ class Model:
 
 
 @pytest.fixture()
-def model(monkeypatch):
+def model(monkeypatch, engine, client):
     from boss_engine.services import agent_converse
 
     stub = Model()
     monkeypatch.setattr(agent_converse, "make_adapter", lambda *_a, **_k: stub)
     monkeypatch.setattr(agent_converse, "model_ready", lambda *_a, **_k: True)
     monkeypatch.setattr(agent_converse, "REVEAL_SECONDS", 0)
-    return stub
+    from apps.api.tests.identity_fixtures import IdentityWorld
+    from apps.api.tests.test_agent_voice_stream_intent import connect_owned
+    from boss_engine.identity import authz, lineage, request_memo
+    from boss_engine.identity import P
+    from boss_engine.identity.scope import ResolvedScope
+    from boss_engine.services.conversation_spend import ConversationAuthority
+    with engine.connect() as c:
+        row = c.execute(text("SELECT p.workspace_id,w.org_id FROM projects p JOIN workspaces w "
+                             "ON w.id=p.workspace_id WHERE p.id=:p"), {"p": PROJECT}).mappings().one()
+    world = IdentityWorld(engine, row["org_id"], row["workspace_id"], PROJECT, PROJECT)
+    owner = replace(world.person("owned conversation operator"), legacy_member_ids=(ACTOR,))
+    world.bind(owner, "owner", project=PROJECT)
+    ctx = world.ctx(owner)
+    from boss_engine.identity import consent, passports
+    from uuid import uuid4
+    with engine.begin() as c:
+        # These end-to-end fixtures now authenticate as a real person. Give the
+        # workflow's actual agent a Passport and an explicit owned standing grant;
+        # production consent resolution stays enabled and validates the match.
+        passports.upgrade_from_roles(org_id=world.org, db=c, default_sponsor=owner.id)
+        agents = c.execute(text("SELECT agent_id FROM roles WHERE project_id=:p AND role_key=ANY(:roles)"),
+                           {"p": PROJECT, "roles": SEATS}).scalars().all()
+        assert len(agents) == len(SEATS) and all(agents)
+        grant_id = "dlg_converse_" + uuid4().hex
+        c.execute(text("INSERT INTO identity_delegation_grants(id,org_id,user_principal_id,agent_ids,"
+                       "project_ids,status,expires_at) VALUES(:g,:o,:u,:a,:p,'active',now()+interval '1 day')"),
+                  {"g":grant_id,"o":world.org,"u":owner.id,"a":agents,"p":[PROJECT]})
+        for permission in consent.WORKFLOW_BASE_PERMISSIONS:
+            c.execute(text("INSERT INTO identity_delegation_grant_permissions(grant_id,permission_key) "
+                           "VALUES(:g,:k)"), {"g":grant_id,"k":permission})
+    connect_owned(engine, monkeypatch, PROJECT, paid=True)
+    def check():
+        request_memo.clear()
+        assert authz.check(ctx, P.MEETING_CONVENE, ResolvedScope.in_project(world.org, PROJECT)).allowed
+    authority = ConversationAuthority(owner.id, lineage.Acting(owner.id, world.org), check)
+    monkeypatch.setattr(engine, "_conversation_test_authority", authority, raising=False)
+    with world.acting_as(ctx):
+        yield stub
 
 
 @pytest.fixture()
@@ -165,6 +206,9 @@ def test_a_talk_greets_in_character_streams_and_signs_every_reply(client, engine
     kinds = [(t["speaker_kind"], t["status"]) for t in full["turns"]]
     assert kinds == [("agent", "complete"), ("person", "complete"), ("agent", "complete")]
     assert full["turns"][2]["content"].startswith("QA Lead speaking")
+    # A whole-response adapter emits each reply once, matching durable transcript bytes.
+    assert said == full["turns"][0]["content"]
+    assert "".join(e["text"] for e in reply if e["type"] == "token") == full["turns"][2]["content"]
 
     acts = _acts(engine, conv["conversation_id"])
     assert len(acts) == 2
@@ -190,9 +234,9 @@ def test_a_talk_greets_in_character_streams_and_signs_every_reply(client, engine
         (PROJECT, "qa", "converse", a["act_id"]) for a in acts)
     with engine.begin() as c:
         receipts = c.execute(text("SELECT count(*) FROM receipts WHERE effect_kind = "
-                                  "'model.converse_turn' AND dedupe_key LIKE 'converse:%'")).scalar()
+                                  "'model.invoke'")).scalar()
         consumed = c.execute(text("SELECT count(*) FROM cost_receipts WHERE category = "
-                                  "'agent_conversation'")).scalar()
+                                  "'model_gateway'")).scalar()
     assert receipts >= 2 and consumed >= 2
 
 
@@ -202,6 +246,10 @@ def test_a_talk_on_a_subscription_costs_no_money(client, engine, model, seated, 
     its act and the budget all say $0, and the receipt keeps the value as included. The same
     reply on a metered key is money everywhere."""
     model.billing = billing
+    with engine.begin() as c:
+        c.execute(text("UPDATE entitlement_sources SET entitlement_kind=:k,cost_mode=:k "
+                       "WHERE project_id=:p AND source_id='approved_local_model_host'"),
+                  {"p": PROJECT, "k": "subscription" if billing == "subscription" else "usage_based_api"})
     conv = _open(client, "talk", ["qa"], context={"from": "passport"})
     reply = _say(client, conv["conversation_id"], "")
     end = next(e for e in reply if e["type"] == "turn_end")
@@ -301,17 +349,18 @@ def test_a_shipped_agent_with_no_stored_persona_has_one_name_in_every_place(
                        else before})
 
 
-def test_a_seat_that_fails_is_explained_and_the_room_moves_on(client, engine, model, seated):
+def test_an_unknown_seat_outcome_is_explained_and_stops_later_seats(client, engine, model, seated):
     model.fail_for = {"QA Lead"}
     conv = _open(client, "room", SEATS)
     events = _say(client, conv["conversation_id"], "Is the rollout plan safe?")
     starts = [e["role_key"] for e in events if e["type"] == "turn_start"]
-    assert starts == SEATS
+    assert starts == SEATS[:2]
     error = next(e for e in events if e["type"] == "error")
     assert error["error"]["headline"] and error["error"]["action"]
     assert error["turn_id"]
     ends = {e["turn_id"]: e["status"] for e in events if e["type"] == "turn_end"}
-    assert sorted(ends.values()) == ["complete", "complete", "error"]
+    assert sorted(ends.values()) == ["complete", "error"]
+    assert error["error"]["retry"] is False
     assert events[-1]["type"] == "done"
     failed = next(a for a in _acts(engine, conv["conversation_id"]) if a["role_key"] == "qa")
     assert failed["status"] == "error"
@@ -593,14 +642,15 @@ def _turn_stream(engine, cid, message, **extra):
     from boss_engine.services import agent_converse
 
     return agent_converse.take_turn(engine, project_id=PROJECT, conversation_id=cid,
-                                    actor=ACTOR, message=message, **extra)
+                                    actor=ACTOR, message=message, authority=engine._conversation_test_authority, **extra)
 
 
 def _reservations(engine, conversation_id):
     with engine.begin() as c:
         return [r[0] for r in c.execute(text(
-            "SELECT status FROM budget_reservations WHERE reason = :r"),
-            {"r": f"conversation {conversation_id}"})]
+            "SELECT b.status FROM budget_reservations b JOIN jobs j ON j.id=b.job_id "
+            "WHERE j.payload->>'conversation_id'=:r"),
+            {"r": conversation_id})]
 
 
 def test_an_answer_cut_off_mid_stream_is_stopped_settled_and_frees_the_room(
@@ -621,7 +671,7 @@ def test_an_answer_cut_off_mid_stream_is_stopped_settled_and_frees_the_room(
     assert [(t["role_key"], t["status"]) for t in agent] == [("pm", "error")]
     assert agent[0]["payload"]["headline"] == "Stopped."
     assert [a["status"] for a in _acts(engine, cid)] == ["error"]
-    assert _reservations(engine, cid) == ["released"]
+    assert _reservations(engine, cid) == []
     assert len(model.calls) == 0
 
     again = _say(client, cid, "Then tell me now.")
@@ -632,12 +682,11 @@ def test_an_answer_cut_off_mid_stream_is_stopped_settled_and_frees_the_room(
 
 def test_a_failure_after_the_answer_settles_its_turn_and_names_it(
         client, engine, model, seated, monkeypatch):
-    from boss_engine.services import agent_converse
-
     conv = _open(client, "talk", ["qa"])
     cid = conv["conversation_id"]
-    real = agent_converse._receipt
-    monkeypatch.setattr(agent_converse, "_receipt",
+    from boss_engine.services.conversation_spend import ConversationCallSpend
+    real = ConversationCallSpend._settle_success
+    monkeypatch.setattr(ConversationCallSpend, "_settle_success",
                         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("ledger down")))
     events = _say(client, cid, "What would you test?")
     start = next(e for e in events if e["type"] == "turn_start")
@@ -645,8 +694,9 @@ def test_a_failure_after_the_answer_settles_its_turn_and_names_it(
     assert error["turn_id"] == start["turn_id"]
     assert next(e for e in events if e["type"] == "turn_end")["status"] == "error"
     assert [a["status"] for a in _acts(engine, cid)] == ["error"]
-    assert _reservations(engine, cid) == ["released"]
-    monkeypatch.setattr(agent_converse, "_receipt", real)
+    assert _reservations(engine, cid) == ["active"]
+    assert error["error"]["retry"] is False
+    monkeypatch.setattr(ConversationCallSpend, "_settle_success", real)
     assert _say(client, cid, "And now?")[-1]["type"] == "done"
 
 
@@ -665,14 +715,14 @@ def test_a_turn_left_streaming_by_a_dead_stream_is_swept_by_the_next(
                        params={"project_id": PROJECT, "actor": ACTOR}).json()["turns"]
     assert [t["status"] for t in turns if t["speaker_kind"] == "agent"] == ["error", "complete"]
     assert [a["status"] for a in _acts(engine, cid)] == ["error", "complete"]
-    assert sorted(_reservations(engine, cid)) == ["consumed", "released"]
+    assert sorted(_reservations(engine, cid)) == ["consumed"]
     # The hung stream, should it wake, finds its turn settled: it records nothing twice.
     rest = list(stream)
     assert [e["type"] for e in rest if e["type"] in ("turn_start", "turn_end")] == []
     turns = client.get(f"/v1/conversations/{cid}",
                        params={"project_id": PROJECT, "actor": ACTOR}).json()["turns"]
     assert [t["status"] for t in turns if t["speaker_kind"] == "agent"] == ["error", "complete"]
-    assert sorted(_reservations(engine, cid)) == ["consumed", "released"]
+    assert sorted(_reservations(engine, cid)) == ["consumed"]
 
 
 def test_two_sends_a_moment_apart_cannot_both_take_the_floor(client, engine, model, seated):
@@ -788,7 +838,7 @@ def test_a_reply_streams_while_the_model_is_still_writing_it(client, engine, mod
             yield "the failing case."
             timeline.append("model:finished")
             yield {"model": "stub-1", "prompt_tokens": 10, "completion_tokens": 5,
-                   "total_tokens": 15}
+                   "total_tokens": 15, "cost_usd_micros": 150}
 
     streaming = Streaming()
     monkeypatch.setattr(agent_converse, "make_adapter", lambda *_a, **_k: streaming)
@@ -796,7 +846,7 @@ def test_a_reply_streams_while_the_model_is_still_writing_it(client, engine, mod
     conv = _open(client, "talk", ["qa"])
     events = agent_converse.take_turn(engine, project_id=PROJECT,
                                       conversation_id=conv["conversation_id"], actor=ACTOR,
-                                      message="What would you test first?")
+                                      message="What would you test first?", authority=engine._conversation_test_authority)
     said = []
     for event in events:
         if event["type"] == "token":

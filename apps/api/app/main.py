@@ -1970,7 +1970,8 @@ async def one_effect_per_idempotency_key(request: Request, call_next):
     fingerprint = idempotency.request_fingerprint(
         request.method, route_path, request.url.query, body)
     from . import stream_intent
-    voice_intent = stream_intent.governs(request.method, route_path)
+    intent_family = stream_intent.family(request.method, route_path)
+    voice_intent = intent_family is not None
     if voice_intent:
         # A stored provider outcome cannot lend permission. Re-evaluate the existing
         # route declaration and legacy project admission even for a completed replay.
@@ -1985,15 +1986,26 @@ async def one_effect_per_idempotency_key(request: Request, call_next):
             await identity_guard.enforce_access(request)
             data = await request.json()
             with begin(engine) as connection:
-                require_project_write_actor(connection, str(data.get("project_id") or ""),
-                                            str(data.get("actor") or ""), "role_review")
+                project = str(data.get("project_id") or "")
+                claimed = str(data.get("actor") or "")
+                if intent_family == "conversation":
+                    who = _converse_actor(connection, project, claimed)
+                    conversation = _converse.get_conversation(
+                        connection, project, str(request.path_params.get("conversation_id") or ""))
+                    if conversation["actor"] != who:
+                        raise HTTPException(status_code=404, detail="No such conversation.")
+                    _conversation_authority(request, project).check_work()
+                else:
+                    require_project_write_actor(connection, project, claimed, "role_review")
         except identity_guard.AccessRefused as error:
             return JSONResponse(status_code=error.outcome.status,
                                 content=error.outcome.error_body())
+        except _converse.ConverseError as error:
+            return JSONResponse(status_code=error.status, content={"detail": error.detail()})
         except HTTPException as error:
             return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
         except (ValueError, TypeError, AttributeError):
-            return JSONResponse(status_code=422, content={"detail": "Invalid voice request."})
+            return JSONResponse(status_code=422, content={"detail": "Invalid model-stream request."})
         ctx = getattr(request.state, "identity", None)
         if ctx is not None:
             principal = str(ctx.principal.id)
@@ -2003,7 +2015,7 @@ async def one_effect_per_idempotency_key(request: Request, call_next):
         request.state.voice_intent_owner = owner
         request.state.voice_intent_fingerprint = fingerprint
         # BaseHTTPMiddleware can exhaust its outer iterator before re-raising a
-        # producer failure. Only the actual voice producer may certify completion.
+        # producer failure. Only the actual model-stream producer may certify completion.
         request.state.voice_stream_completed = False
     claim = await run_in_threadpool(
         _idempotency_claim, method=request.method, path=route_path,
@@ -30547,17 +30559,56 @@ def get_conversation_endpoint(conversation_id: str, project_id: str,
         return conversation
 
 
+def _conversation_authority(request: Request, project: str):
+    from boss_engine.identity import authz, lineage, request_memo
+    from boss_engine.identity.scope import ResolvedScope
+    from boss_engine.services.conversation_spend import ConversationAuthority
+
+    ctx = identity_guard.REQUEST_IDENTITY.get()
+    if ctx is None:
+        raise HTTPException(status_code=403, detail="A signed-in principal is required to ask an agent.")
+    def check_work():
+        request_memo.clear()
+        decision = authz.check(ctx, P.MEETING_CONVENE,
+                              ResolvedScope.in_project(ctx.principal.org_id, project))
+        if not decision.allowed:
+            raise HTTPException(status_code=403, detail="Conversation permission is no longer granted.")
+    owner = getattr(request.state, "voice_intent_owner", None)
+    fingerprint = getattr(request.state, "voice_intent_fingerprint", None)
+    return ConversationAuthority(
+        principal=str(ctx.principal.id),
+        acting=lineage.current() or lineage.Acting(
+            principal_id=str(ctx.principal.id), org_id=ctx.principal.org_id),
+        check_work=check_work,
+        protect=(lambda c: idempotency.protect(c, fingerprint=fingerprint, **owner)) if owner else None,
+        incomplete=lambda: setattr(request.state, "conversation_producer_failed", True),
+    )
+
+
 def _converse_stream(request: Request, project_id: str, claimed: Optional[str], endpoint: str,
                      open_stream) -> StreamingResponse:
     with begin(engine) as connection:
         actor = _converse_actor(connection, project_id, claimed)
+    authority = _conversation_authority(request, project_id)
+    authority.check_work()
     _enforce_high_cost_rate_limit(request, project_id, actor, endpoint=endpoint)
     try:
-        events = open_stream(actor)
+        events = open_stream(actor, authority)
     except _converse.ConverseError as error:
         raise _converse_refused(error) from error
-    return StreamingResponse(_converse.sse(events), media_type="text/event-stream",
-                             headers=_SSE_HEADERS)
+
+    def stream():
+        completed = False
+        try:
+            yield from _converse.sse(events)
+            completed = True
+        finally:
+            events.close()
+            if completed and not getattr(request.state, "conversation_producer_failed", False):
+                request.state.voice_stream_completed = True
+
+    return StreamingResponse(stream(), media_type="text/event-stream", headers=_SSE_HEADERS,
+                             background=BackgroundTask(events.close))
 
 
 @app.post("/v1/conversations/{conversation_id}/turns")
@@ -30568,10 +30619,10 @@ def conversation_turn_endpoint(conversation_id: str, payload: ConversationTurnBo
     project_id = str(payload.project_id or "")
     return _converse_stream(
         request, project_id, payload.actor, "/v1/conversations/turns",
-        lambda actor: _converse.take_turn(
+        lambda actor, authority: _converse.take_turn(
             engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
             message=str(payload.message or ""), to=list(payload.to or []),
-            rounds=int(payload.rounds or 1), settings=settings))
+            rounds=int(payload.rounds or 1), settings=settings, authority=authority))
 
 
 @app.post("/v1/conversations/{conversation_id}/summary")
@@ -30582,9 +30633,9 @@ def conversation_summary_endpoint(conversation_id: str, payload: open_bodies.Pro
     project_id = str(payload.project_id or "")
     return _converse_stream(
         request, project_id, payload.actor, "/v1/conversations/summary",
-        lambda actor: _converse.summarize_room(
+        lambda actor, authority: _converse.summarize_room(
             engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
-            settings=settings))
+            settings=settings, authority=authority))
 
 
 @app.post("/v1/conversations/{conversation_id}/propose")
@@ -30595,9 +30646,9 @@ def conversation_propose_endpoint(conversation_id: str, payload: open_bodies.Pro
     project_id = str(payload.project_id or "")
     return _converse_stream(
         request, project_id, payload.actor, "/v1/conversations/propose",
-        lambda actor: _converse.propose_start(
+        lambda actor, authority: _converse.propose_start(
             engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
-            settings=settings))
+            settings=settings, authority=authority))
 
 
 @app.post("/v1/conversations/{conversation_id}/start")
