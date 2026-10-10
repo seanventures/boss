@@ -14,25 +14,31 @@ A model key is optional. The control plane starts without one, and model work be
 
 ## Install
 
-Paste one command:
+For RC8, install from its release checkout. You need Git and a GitHub account with access if the repository asks you to sign in. On Ubuntu or Debian without Git, first run `sudo apt-get update && sudo apt-get install -y git`.
 
 ```bash
-curl -fsSL https://boss.sean.network/install.sh | bash
+(
+  set -e
+  git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git boss-rc8
+  cd boss-rc8
+  BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
+  ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
+)
 ```
 
-It installs the newest published release into `~/boss`. The only setup question is an optional OpenAI key, asked when no provider key is exported. Exported `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, or `OPENROUTER_API_KEY` values are saved to the private `.env` and never printed.
+Use a new directory named `boss-rc8`; the command stops if cloning fails. Continue from `cd boss-rc8` after installation. The installer records the exact checked-out commit. To select a later release deliberately, use `boss upgrade --to REF`.
+
+The website installer is updated separately from source releases. Once its RC8 parity is verified, the short installation path is:
+
+```bash
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc8
+```
+
+The website path installs into `~/boss`. The only setup question is an optional OpenAI key, asked when no provider key is exported. Exported `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, or `OPENROUTER_API_KEY` values are saved to the private `.env` and never printed.
 
 Models are part of the install. After the stack is healthy, the installer looks for a Codex, Claude Code, or Grok login, the coding CLIs, and Ollama, and asks once before connecting each one. A Codex login is copied into BOSS. Claude Code and Grok sign in again inside the BOSS container with the provider's own login, so login files on your machine are never copied. If no model is usable, it offers to sign you in to a subscription or to set up a free local model: Ollama with `qwen2.5-coder:7b`. That model then becomes the default for every role and for chat. After you connect a hosted model later, run `boss connect` to hand the roles back to it. Add `| bash -s -- --yes` instead of `| bash` to skip every question. With `--yes`, exported keys are still saved, but nothing is copied, signed in, or installed; add `--connect-found` to connect what was found, or `--install-ollama` to set up the local model. The summary card lists each model source with the command that fixes it, and [Model connections](MODEL_CONNECTIONS.md) has the details.
 
-Prefer git? Clone the release and install it in place:
-
-```bash
-git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git
-cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc8
-```
-
-Either way, the installer records the release in `.boss-release`, and reruns and upgrades stay on it instead of moving to `main`. Run the rest of this guide from the install directory.
+The installer records the selected release in `.boss-release`. Reruns stay on that source instead of moving to `main`. Run the rest of this guide from the install directory.
 
 When the installer finishes, you see a summary card confirming that BOSS Community is running. It lists Mission Control at `http://127.0.0.1:3000`, how to get the console password (you use it once, to claim the install), the release, the models it connected, the seeded local project `boss-dogfood`, and the install directory. The API key line tells you the key is stored in `.env` rather than printed.
 

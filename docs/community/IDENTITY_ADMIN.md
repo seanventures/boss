@@ -286,14 +286,14 @@ A device-bound passkey whose signature counter goes backwards looks like a clone
 These commands run on the machine where BOSS runs, against its database. No console page, API route or MCP tool can run them. Use the `boss` command:
 
 ```bash
-boss identity <command>
+boss identity claim-status
 ```
 
-It runs the identity CLI inside the api container as the `boss` user. Without the `boss` command, from the install directory:
+This checks whether the install has an Owner. Choose another command from the table below when needed. It runs the identity CLI inside the api container as the `boss` user. Without the `boss` command, from the install directory:
 
 ```bash
 docker compose -f scripts/install/community-compose.yml --env-file .env exec -u boss api \
-  python -m boss_engine.identity.cli <command>
+  python -m boss_engine.identity.cli claim-status
 ```
 
 Always pass `-u boss`: the api container starts as root (to fence the build sandbox), and files written as root can break the `boss` user later.

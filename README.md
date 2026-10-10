@@ -67,51 +67,23 @@ BOSS runs on a server you control, and your team reaches Mission Control over HT
 
 **1. Pick an address.** Use a domain such as `boss.example.com` with a DNS record pointing at the server, or the server's private IP on your network, such as `192.168.1.50`.
 
-**2. Install** on the server with one command. It installs the newest published release into `~/boss`, needs no answers, and finishes by installing the `boss` command:
+**2. Install RC8** from its release checkout. You need Git and repository access; if GitHub asks you to sign in, use an account with access. On Ubuntu or Debian without Git, first run `sudo apt-get update && sudo apt-get install -y git`.
 
 ```sh
-curl -fsSL https://boss.sean.network/install.sh | bash -s -- --console-origin https://boss.example.com
+(
+  set -e
+  git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git boss-rc8
+  cd boss-rc8
+  BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
+  ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT" --console-origin https://boss.example.com
+)
 ```
 
-Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. The installer writes that address to `.env` as `BOSS_CONSOLE_PUBLIC_ORIGIN`, and BOSS uses it as its public address (a `BOSS_PUBLIC_URL` you set yourself takes precedence): every emailed link, passkey and SSO redirect uses it and never a request's `Host`, so without one BOSS sends no sign-in or reset emails. Setup shows the URL BOSS uses. The installer records the release, so reruns and `boss upgrade` never move it to `main`. Want to read the script first? `curl -fsSL https://boss.sean.network/install.sh -o install.sh`, then `bash install.sh`.
+Use a new directory named `boss-rc8`. The command stops if cloning fails, and pins the install to the exact release commit. Continue from `cd boss-rc8` afterward. `boss upgrade --to REF` selects a later release deliberately.
 
-Prefer git? Clone the release and install it in place. `--ref` keeps the install on that release instead of moving it to `main`:
+Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. The installer writes that address to `.env` as `BOSS_CONSOLE_PUBLIC_ORIGIN`, and BOSS uses it as its public address (a `BOSS_PUBLIC_URL` you set yourself takes precedence). Email links, passkeys and SSO redirects use that configured address. Setup shows the URL BOSS uses.
 
-```sh
-git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git
-cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc8 --console-origin https://boss.example.com
-```
-
-The `boss` command works from anywhere: `boss open`, `boss password`, `boss doctor`, `boss upgrade`.
-
-**Deploying from your own machine instead?** Both commands above run on the server, and the server downloads BOSS from GitHub. If the server can't reach GitHub, or you're working from a private copy of the repository, deploy from a checkout on your own machine instead: `remote.sh` copies it to the server over SSH, runs the installer there, and backs up before every update. The server never needs GitHub access.
-
-```sh
-git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git
-cd boss
-scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc8 install --yes -- --console-origin https://boss.example.com
-```
-
-Everything after `--` goes to the installer on the server, so `--console-origin` is the same address as step 2. Use the same release for the local wrapper and remote install. The current wrapper resolves the quoted `~/boss` against the SSH user's home on the remote machine. For an old RC1 install, use a current wrapper when upgrading; RC1 treated that quoted path literally.
-
-Later, update or check that install from the same checkout:
-
-```sh
-scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc8 update --with-console
-scripts/install/remote.sh --host user@your-server --dir '~/boss' smoke
-scripts/install/remote.sh --host user@your-server --dir '~/boss' tunnel   # console at http://127.0.0.1:3000
-```
-
-Connect a Claude or Codex subscription from the same checkout. The credential goes over SSH on stdin, never on the command line. Use the current wrapper for credential import:
-
-```sh
-claude setup-token        # then paste the token it prints at the next command's hidden prompt
-read -rs T && printf %s "$T" | scripts/install/remote.sh --host user@your-server --dir '~/boss' subscription --provider claude_code; unset T
-scripts/install/remote.sh --host user@your-server --dir '~/boss' subscription --provider codex < ~/.codex/auth.json
-```
-
-`--host` is anything `ssh` accepts, including an alias from `~/.ssh/config` (use one for a non-standard SSH port), and `--key PATH` picks a private key. `--dir` defaults to `/opt/boss`, which needs root; `~/boss` keeps it where the commands above install. Add `--secret-store infisical` to `install` for the bundled secret store. The [installer guide](scripts/install/README.md#remote-archive-installs) covers recovery and uninstall.
+The [website installer](https://boss.sean.network/install.sh) and hosted manual are deployed separately. The Git checkout above selects RC8 directly; website parity remains part of release qualification.
 
 **3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you. On Ubuntu or Debian, `sudo apt install -y caddy`, replace the contents of `/etc/caddy/Caddyfile` with this block, then `sudo systemctl reload caddy`:
 
