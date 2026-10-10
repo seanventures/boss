@@ -62,6 +62,27 @@ def may_change_org_credentials(org_id: str, *, db: Any = None) -> bool:
     return authz.check(ctx, P.GITHUB_CONNECT, ResolvedScope.org_level(org_id), db=db).allowed
 
 
+def org_credentials_refusal(org_id: str, *, db: Any = None) -> Optional[str]:
+    """Why this caller may not change the org's GitHub credentials: None (they may), "step_up"
+    (they hold github:connect for the org but have not confirmed their second factor recently),
+    or "org_scope" (they do not hold it for the whole organisation). Same decision as
+    may_change_org_credentials, with the reason a person can act on."""
+    from . import authz, lineage
+    from .authz import DenyReason
+    from .permissions_gen import P
+    from .scope import ResolvedScope
+
+    if not lineage.request_enforced():
+        return None
+    ctx = lineage.current_context()
+    if ctx is None or ctx.principal.org_id != org_id:
+        return "org_scope"
+    decision = authz.check(ctx, P.GITHUB_CONNECT, ResolvedScope.org_level(org_id), db=db)
+    if decision.allowed:
+        return None
+    return "step_up" if getattr(decision, "reason", None) == DenyReason.STEP_UP_REQUIRED else "org_scope"
+
+
 def require_org_credentials_authority(org_id: str, *, db: Any = None) -> None:
     if not may_change_org_credentials(org_id, db=db):
         raise GitHubSetupError(

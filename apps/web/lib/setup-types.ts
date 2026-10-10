@@ -39,6 +39,8 @@ export type RepoConnection = {
   account_login: string | null;
   expires_at: string | null;
   source: "connected" | "install";
+  /** Whether builds can use this token (they read the org's GitHub token). */
+  builds?: { ok: boolean; message?: string; next?: string } | null;
 };
 
 export type ModelKind = "subscription" | "metered" | "local";

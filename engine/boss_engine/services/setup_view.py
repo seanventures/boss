@@ -364,7 +364,36 @@ def _repository(connection: Connection, settings: Any, project_id: str, now: dat
             "expires_at": _iso(connection_row.get("expires_at")),
             "source": source,
         }
+        if source == "connected" and connection_out["auth"] == "token" and repos:
+            connection_out["builds"] = _builds_reach(connection, project_id, connection_row["id"],
+                                                     repos[0]["full_name"])
     return {"connection": connection_out, "repos": repos}
+
+
+def _builds_reach(connection: Connection, project_id: str, connection_id: str,
+                  full_name: str) -> dict[str, Any]:
+    """Whether builds can use the token this row shows: under enforce they read the ORG's GitHub
+    token from the vault, never this project connection. Said plainly with the next step when
+    they cannot, because the row's green pill only proves the PROJECT token works."""
+    try:
+        from ..identity import github_setup
+
+        org_id = connection.execute(
+            text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                 "WHERE p.id = :p"), {"p": project_id}).scalar()
+        if not org_id or github_setup.app_ready(connection, str(org_id)):
+            return {"ok": True}
+        current = github_setup.org_token(connection, str(org_id))
+        if current is not None and full_name.lower() in [r.lower() for r in current["repos"]]:
+            return {"ok": True}
+    except Exception:  # noqa: BLE001 - an unreadable vault is not a reason to hide the row
+        return {"ok": True}
+    said = _latest_event(connection, project_id, "github.org_token_unchanged", connection_id)
+    message = str((said or {}).get("message") or "").strip() or (
+        "Builds can't use this token yet: it is not the organisation's GitHub token, which "
+        "builds use.")
+    return {"ok": False, "message": message,
+            "next": "Press Replace token and paste it again, or add it under Identity › GitHub."}
 
 
 def install_repository(settings: Any) -> tuple[str, str, str]:
