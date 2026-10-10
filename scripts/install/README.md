@@ -139,14 +139,15 @@ This is the same command as [Install](#install): it installs the newest release 
 
 ### Straight from GitHub
 
-Install the reviewed RC8 source without the website. This uses Git authentication if the repository requires access, resolves the release checkout to a full commit SHA, and installs that same commit:
+Install the reviewed RC8 source without the website. This uses Git authentication if the repository requires access, checks out the verified published commit, and installs that same commit:
 
 ```bash
 (
   set -e
+  BOSS_RELEASE_COMMIT=cb278010b4cef68c55a9684c3e9bd74b14c8b520
   git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git boss-rc8
   cd boss-rc8
-  BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
+  git checkout --detach "$BOSS_RELEASE_COMMIT"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
 )
 ```

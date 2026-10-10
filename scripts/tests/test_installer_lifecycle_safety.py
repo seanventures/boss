@@ -305,17 +305,13 @@ def test_installer_sources_do_not_name_private_hosts_or_registries() -> None:
     assert all("0.0.0.0" not in line for line in published)
     installer = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert 'BIND_ADDRESS="127.0.0.1"' in installer
-    # The GitHub-only command pins a full 40-character release commit.
-    assert re.search(r"^BOSS_RELEASE_COMMIT=[0-9a-f]{40} bash -c ", (
-        ROOT / "scripts/install/README.md"
-    ).read_text(encoding="utf-8"), re.MULTILINE)
-    assert './install.sh --dir "$PWD"' in (ROOT / "scripts/install/README.md").read_text(encoding="utf-8")
-    notes = (ROOT / "docs/operations/COMMUNITY_GA_RELEASE_NOTES_DRAFT.md").read_text(encoding="utf-8")
-    assert "Public installer URL" in notes
-    assert "REPLACE_WITH_REVIEWED_40_CHARACTER_SHA" not in notes
-    assert "7b88a18a2b4cd0b14b09a47fc415f7ffd4580066" in notes
-    assert "Clean VM of this SHA" in notes
-    assert "Thirty-four bundled agent definitions, twelve workflow templates and five" in notes
+    # The GitHub-only command checks out and installs the same literal full commit.
+    # Resolving an arbitrary tag's HEAD alone does not establish the reviewed source.
+    readme = (ROOT / "scripts/install/README.md").read_text(encoding="utf-8")
+    github_command = readme.split("### Straight from GitHub", 1)[1].split("```bash", 1)[1].split("```", 1)[0]
+    assert re.search(r"^\s*BOSS_RELEASE_COMMIT=[0-9a-f]{40}\s*$", github_command, re.MULTILINE)
+    assert 'git checkout --detach "$BOSS_RELEASE_COMMIT"' in github_command
+    assert './install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"' in github_command
     assert ".boss-shipped-commit" in installer
     remote = (ROOT / "scripts/install/remote.sh").read_text(encoding="utf-8")
     assert "Bearer $key" not in remote
