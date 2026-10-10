@@ -112,16 +112,19 @@ def test_services_are_declared_in_boss_verify_yaml():
         parse_verify_manifest(base + "services: {postgres: true}\n")
 
 
-def test_the_project_setting_opts_in_and_off_is_silence():
+def test_the_project_setting_is_an_override_auto_always_never():
+    """Auto (the default) decides from what the app needs (test_setup_build_database.py); the
+    setting only overrides. Older stored values still read: postgres = Always, off = Auto."""
     from boss_engine.services.project_settings import KNOBS, coerce
 
-    assert KNOBS[bs.SETTING_KEY]["choices"] == ("off", "postgres")
-    assert coerce(bs.SETTING_KEY, "Postgres") == "postgres"
+    assert KNOBS[bs.SETTING_KEY]["choices"] == ("auto", "always", "never")
+    assert coerce(bs.SETTING_KEY, "Always") == "always"
     with pytest.raises(ValueError):
         coerce(bs.SETTING_KEY, "mysql")
-    assert bs.requested((), "postgres") == ("postgres",)
+    assert bs.requested((), "always") == ("postgres",) and bs.requested((), "postgres") == ("postgres",)
     assert bs.requested((), "off") == () and bs.requested((), None) == ()
-    assert bs.requested(("postgres",), "off") == ("postgres",)      # the repo's word stands
+    assert bs.requested(("postgres",), "auto") == ("postgres",)     # the repo's word stands
+    assert bs.requested(("postgres",), "never") == ()               # unless the project says Never
 
 
 def test_a_run_that_asked_for_nothing_provisions_nothing(monkeypatch):

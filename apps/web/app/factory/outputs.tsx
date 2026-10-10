@@ -249,6 +249,12 @@ function BriefBody({ c }: { c: Cockpit }) {
           {b.testCommands.map((x, i) => <span key={i} className="fx-mono fx-trunc" title={x} data-user-text>{x}</span>)}
         </span>
       ) : null}
+      {b.database?.postgres ? (
+        <span className="fx-kv" data-testid="fx-brief-database" title={b.database.why.join("; ")}
+              data-tip={b.database.why.join("; ")}>
+          <span className="fx-out-sub">Database</span><span>Postgres for this build ✓</span>
+        </span>
+      ) : null}
       {b.repo ? (
         <span className="fx-kv"><span className="fx-out-sub">Repo</span>
           {github && b.branch ? (

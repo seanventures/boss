@@ -2259,6 +2259,11 @@ def brief_of(run: Mapping[str, Any]) -> dict[str, Any]:
         "repo": f"{owner}/{repo}" if owner and repo and owner != "_fixture" else None,
         "branch": fctx.get("work_branch") or None,
         "base_branch": spec.get("base_branch") or None,
+        # The build's database decision (build_services.decide), made before any agent ran.
+        "database": ({"postgres": bool(ev["build_database"].get("postgres")),
+                      "mode": ev["build_database"].get("mode"),
+                      "why": [str(w) for w in ev["build_database"].get("why") or []][:5]}
+                     if isinstance(ev.get("build_database"), dict) else None),
         "criteria": [str(c) for c in spec.get("acceptance_criteria") or [] if str(c).strip()],
         "test_commands": [str(c) for c in spec.get("test_commands") or [] if str(c).strip()],
         "workflow": ({"name": str(wf["name"]), "version": wf.get("version"),
