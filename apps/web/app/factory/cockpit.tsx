@@ -178,6 +178,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
   const [guidance, setGuidance] = useState("");
   const [steerChips, setSteerChips] = useState<string[]>([]);
   const [sharing, setSharing] = useState(false);
+  const [diagnostics, setDiagnostics] = useState(false);
   const [pending, setPending] = useState<{ id: string; text: string; at: string }[]>([]);
   const [changeIt, setChangeIt] = useState(false);
   const [reviewChange, setReviewChange] = useState("");
@@ -393,6 +394,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                   }}>Ask BOSS</button>
                   <a role="menuitem" href={logHref({ run: c.run.id })}>Activity log ↗</a>
                   <button type="button" role="menuitem" onClick={copyLink}>Copy link</button>
+                  <GatedButton permission="telemetry:share" type="button" role="menuitem" data-testid="fx-menu-diagnostics"
+                               onClick={() => { setMenu(false); setDiagnostics(true); }}>Download diagnostics</GatedButton>
                   <button type="button" role="menuitem" data-testid="fx-menu-share"
                           title="Send this run, redacted and edited by you, to the BOSS project"
                           onClick={() => { setMenu(false); setSharing(true); }}>Share this run</button>
@@ -453,6 +456,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
         ) : null}
         {sharing ? <ShareRunSheet projectId={projectId} actor={actor} unitKind="build" unitId={c.run.id}
                                   onClose={() => setSharing(false)} /> : null}
+        {diagnostics ? <ShareRunSheet projectId={projectId} actor={actor} unitKind="build" unitId={c.run.id}
+                                      localOnly onClose={() => setDiagnostics(false)} /> : null}
         {err ? <span className="fx-err" role="alert" data-user-text data-testid="fx-error">{err}</span> : null}
       </header>
 
