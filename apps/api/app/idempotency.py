@@ -160,6 +160,7 @@ def claim(connection, *, principal: str, key: str, method: str, path: str,
     connection.execute(text(f"""
         DELETE FROM api_idempotency_keys
         WHERE principal = :principal AND idempotency_key = :key
+          AND NOT durable_effect
           AND (expires_at < now()
                OR (state = 'in_progress'
                    AND created_at < now() - interval '{IN_PROGRESS_TAKEOVER}'))
@@ -182,7 +183,8 @@ def claim(connection, *, principal: str, key: str, method: str, path: str,
             # A cheap, bounded sweep so the table does not grow without limit on a busy install.
             connection.execute(text("""
                 DELETE FROM api_idempotency_keys WHERE ctid IN (
-                    SELECT ctid FROM api_idempotency_keys WHERE expires_at < now() LIMIT 100)
+                    SELECT ctid FROM api_idempotency_keys WHERE expires_at < now()
+                    AND NOT durable_effect LIMIT 100)
             """))
             return Claim("run")
         row = connection.execute(text("""
@@ -221,5 +223,22 @@ def complete(connection, *, principal: str, key: str, status_code: int, body: by
 def release(connection, *, principal: str, key: str) -> None:
     connection.execute(text("""
         DELETE FROM api_idempotency_keys
-        WHERE principal = :principal AND idempotency_key = :key AND state = 'in_progress'
+        WHERE principal = :principal AND idempotency_key = :key AND state = 'in_progress' AND NOT durable_effect
     """), {"principal": principal, "key": key})
+
+
+def protect(connection, *, principal: str, key: str, fingerprint: str) -> None:
+    """Commit with the domain intent; uncertain external effects cannot time out into retries.
+
+    Completed durable outcomes also keep their key: retention is not a new consent to spend.
+    Only the voice routes opt in, after their existing admission checks. No network abort or
+    provider success is inferred from this bookkeeping flag.
+    """
+    changed = connection.execute(text("""
+        UPDATE api_idempotency_keys SET durable_effect = TRUE
+        WHERE principal=:principal AND idempotency_key=:key AND state='in_progress'
+          AND request_hash=:fingerprint
+        RETURNING idempotency_key
+    """), {"principal": principal, "key": key, "fingerprint": fingerprint}).first()
+    if changed is None:
+        raise RuntimeError("The original stream intent is no longer owned.")
