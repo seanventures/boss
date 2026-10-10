@@ -45,6 +45,11 @@ class World:
         self.deploys: list[dict[str, Any]] = []
         self.mcp_calls: list[dict[str, Any]] = []
         self.refs: dict[str, str] = {}
+        # What the PRs were told, and the CI the test wants GitHub to report: check runs keyed by
+        # commit sha or branch name ("*" for any commit), set through POST /github/_checks.
+        self.pr_comments: list[dict[str, Any]] = []
+        self.pr_labels: list[dict[str, Any]] = []
+        self.checks: dict[str, list[dict[str, Any]]] = {}
         if state_dir:
             state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -325,7 +330,14 @@ class Handler(BaseHTTPRequestHandler):
             return 200, {"messages": list(w.mail)}, json_t
         if path == "/_world":
             return 200, {"prs": w.prs, "issues": w.issues, "videos": w.videos,
-                         "deploys": w.deploys, "mail": w.mail}, json_t
+                         "deploys": w.deploys, "mail": w.mail, "pr_comments": w.pr_comments,
+                         "pr_labels": w.pr_labels, "checks": w.checks}, json_t
+        if path == "/github/_checks" and method == "POST" and isinstance(body, dict):
+            # The test plays GitHub Actions: the check runs a commit (or branch) reports.
+            key = str(body.get("sha") or body.get("branch") or "*")
+            with w.lock:
+                w.checks[key] = [dict(run) for run in body.get("check_runs") or []]
+            return 200, {"ok": True, "key": key}, json_t
         if path.startswith("/github"):
             return self._github(method, path[len("/github"):] or "/", body)
         if path.startswith("/plane"):
