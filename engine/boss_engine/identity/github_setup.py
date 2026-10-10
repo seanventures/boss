@@ -199,7 +199,7 @@ def _check_state(state: str, purpose: str, *, db: Any, consume: bool = True) -> 
 
 def app_name(host: str) -> str:
     """A GitHub App's name is unique across ALL of GitHub (34 characters at most). "BOSS
-    localhost:3000" was the same for every laptop install, so the second stranger's App was
+    localhost" plus the default port was the same for every laptop install, so the second stranger's App was
     refused as "already taken". The host says which install it is; a short random tail makes it
     unique."""
     tail = secrets.token_hex(2)
