@@ -118,7 +118,9 @@ PENDING = [{"id": 3, "name": "e2e", "status": "in_progress", "conclusion": None,
 def test_the_opt_in_is_off_by_default_recorded_and_widens_the_apps_request(client, engine, monkeypatch):
     binding = _binding(engine)
     monkeypatch.setattr(github_setup, "app_config", lambda *a, **k: {
-        "slug": "boss-acme", "account_login": "acme", "installation_id": "4242"})
+        "slug": "boss-acme", "account_login": "acme", "installation_id": "4242",
+        # The account types GitHub reported (identity/github_urls.py builds every link from them).
+        "owner_login": "acme", "owner_type": "Organization", "account_type": "Organization"})
     try:
         got = client.get(f"/v1/setup/repository/{binding}/ci-workflows", params={"project_id": PROJECT})
         assert got.status_code == 200, got.text
