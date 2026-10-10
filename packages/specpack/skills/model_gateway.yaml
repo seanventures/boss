@@ -91,6 +91,32 @@ skills:
     retry:
       max_attempts: 1
       backoff: none
+  # Architecture uses the same governed model gateway, one pinned call per version.
+  - id: architecture.draft
+    kind: model
+    risk_tier: 1
+    mock_mode: false
+    description: Write one architecture document version from a canonical approved PRD with durable reservation, job lease and receipt.
+    data_boundary: internal
+    input_schema:
+      prompt: string
+      version: integer
+    output_schema:
+      text: string
+      receipt_id: string
+    cost:
+      estimator: token_estimate
+      category: model
+    permissions:
+      allowed_callers: [worker, control_plane]
+      required_permissions: [model_invoke]
+    policy:
+      requires_budget_reservation: true
+      requires_router_log: true
+      requires_provider_rule_compliance: true
+    retry:
+      max_attempts: 1
+      backoff: none
   # DISCOVERY RESEARCH. Each stage of a Community discovery (sweep, synthesize, vet, shape,
   # and a deep run's scouts) leases model capacity under this skill, inside the worker's lease
   # of its discovery.run job, with its own reservation and receipt (discovery_spend.py).

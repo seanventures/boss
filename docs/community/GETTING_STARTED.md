@@ -1,6 +1,6 @@
 # Getting started
 
-This guide takes you from a fresh machine to software that BOSS built for you. You will:
+This guide walks through installation and a small governed build. Follow the checks at each stage; starting a run does not mean its output is ready. The path is:
 
 1. Install BOSS.
 2. Sign in to Mission Control.
@@ -12,7 +12,7 @@ This guide takes you from a fresh machine to software that BOSS built for you. Y
 
 Plan on an hour or more. The install takes several minutes. On a machine without a GPU, a local model needs tens of minutes for the panel alone.
 
-The command output and messages quoted below were recorded on a fresh Ubuntu 24.04 install (8 CPUs, 16 GB of RAM, no GPU) with a local Ollama model and no paid API key. Steps 4, 6, and 7 depend on GitHub. The notes in those steps say which parts you will see for the first time on your own repository.
+The command output and messages quoted below were recorded on a fresh Ubuntu 24.04 install (8 CPUs, 16 GB of RAM, no GPU) with a local Ollama model and no paid API key. Steps 4, 6, and 7 depend on GitHub. The notes in those steps say which parts you will see for the first time on your own repository. This historical transcript proves installation and the recorded local-model stages; it is not an end-to-end RC8 qualification or a promise that every repository and model will complete a build.
 
 ## What you need
 
@@ -122,7 +122,7 @@ Then open `http://127.0.0.1:3000` on the computer that ran `ssh`. If ports 3000 
 
 **For your team, on a domain or private IP:** see [Deploy](hostname.md).
 
-The first time, the sign-in page says **This BOSS has no Owner yet. Claim it.** Click it, paste the password, enter your name and email, and add a passkey (or a password and an authenticator app). You are now the Owner, and you sign in as yourself from then on. Mission Control opens on **Command Center**.
+The first time, the sign-in page says **This BOSS has no Owner yet. Claim it.** Click it, paste the password, enter your name and email, and add a passkey (or a password and an authenticator app). You are now the Owner, and you sign in as yourself from then on. Mission Control opens on **Repo and models** while the selected project needs setup, and on **Command Center** once it is ready. You can open Repo and models from Settings at any time.
 
 Invite your team in **Identity › People** ([People and access](PEOPLE_AND_ACCESS.md)). More about sign-in is in [Sign in to Mission Control](CONSOLE_AUTH.md).
 
@@ -154,6 +154,8 @@ With only the free local model, the table ends like this (the model is the one t
 At least one row must say `connected`. To add an API key or a subscription you already have, follow the command on its row. [Model connections](MODEL_CONNECTIONS.md) covers each one.
 
 **Check that a model actually answers:**
+
+This optional check asks the model a question and uses model credit or local compute. `boss doctor` without `--probe` checks configuration without asking for a completion.
 
 ```bash
 boss doctor --probe
@@ -242,6 +244,7 @@ The same start, through the API. Run it from the install directory; `boss-commun
 
 ```bash
 cd ~/boss
+grep -q '^BOSS_HOST_API_KEY=.' .env || boss identity host-key
 source ./boss-community.env.sh
 export BOSS_API_KEY="$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env)"
 curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" -H "Content-Type: application/json" \
@@ -261,14 +264,24 @@ Open the run on the **Workflow** page. Runs are grouped as **Needs you**, **Runn
 
 1. **research.** With Claude Code connected, BOSS researches your request on the web as a governed job: each stage reserves budget, takes a model lease on the Claude Code subscription, and leaves a receipt, and the panel reads what it found. If the research fails partway, the step says so and the run carries on with whatever it had found. Without a usable Claude Code subscription, the step is shown as **skipped**. Hover the ⓘ for the reason, for example: `Skipped: research cannot run here. The panel works from your request instead. Research runs on the Claude Code subscription (the Claude CLI does the web search), and it cannot be used here: it is not connected.` The skip is also recorded as a `workflow.research_skipped` event. Nothing is researched and nothing is spent.
 1. **meeting.** A panel of agents discusses the goal and drafts a PRD. On 8 CPUs with no GPU, this took about 24 minutes with the local 7b model.
-1. **spec_review.** The PRD is approved. In this release, PRD approval is automatic by default. **Approvals** shows the decision "Approve publishing the PRD the team drafted" marked **AUTO-APPROVED**, with the PRD attached. The PRD is titled with your request, for example `PRD: A tiny command-line tip calculator in Python...`. Read it here: it is what the build will be measured against.
+1. **spec_review.** Review the drafted PRD in **Approvals** before the build proceeds. On an enforced install, automatic approval is off by default; a person with approval authority must approve it. If the Owner explicitly enables `BOSS_MEETING_PRD_AUTO_APPROVE=true`, the decision is instead marked **AUTO-APPROVED** and still appears in the audit trail. The PRD is titled with your request, for example `PRD: A tiny command-line tip calculator in Python...`. Read it here: it is what the build will be measured against.
 1. **build.** BOSS clones your repository and runs the governed coding pipeline. You can follow it in **Factory**: Queued, Cloning repo, Designing plan, QA writing tests, Engineer implementing, Running tests, Adversarial review, Mutation check, Opening PR, Done. If the plan touches something sensitive, it stops at **Awaiting plan approval** and an approval appears in **Approvals**.
-1. **preview**, **plrr** (production launch readiness), and a second **preview.** BOSS starts a preview of the built app, checks it against what the PRD promised about running it, and previews again after any repair.
+1. **preview** and **plrr** (production launch readiness). BOSS records the preview, then checks the built app against the PRD's operating requirements. Readiness can repair gaps and records what it changed in the run report. Standard Product Delivery has no second preview step. A preview record alone does not prove a live app is running; inspect its actual status and address.
 1. **report.** A run report with the cost per step.
 1. **deploy.** An approval gate. BOSS stops and asks before deploying anything. You do not need to deploy to see your software; stop at the pull request.
 1. **monitor** and **notify**, after a deploy you approve.
 
 Every step is recorded in **Activity log**, and a step that fails says why on the run.
+
+Stopping a workflow also cancels its Discovery research. Once cancellation is
+observed, Discovery starts no later research stage, and a late answer cannot
+turn the cancelled run into a completed run. A request already submitted to a
+model may still finish and report usage; cancellation does not promise zero
+charge. If its receipt cannot be settled safely, BOSS records a **Reconcile
+Discovery … stage …** decision and preserves the receipt and observed usage.
+Its budget reservation may remain held, including when cancellation invalidated
+the lease just before submission. Review that evidence before retrying; do not
+blindly restart research or assume the held budget has been released.
 
 !!! note "Verify this part on your own repository"
     For this guide, Build was run on a Community install with the local `qwen2.5-coder:1.5b` model: research was skipped, the meeting (about 7 minutes) and spec_review steps ran, and the build step was run up to the missing-repository stop shown in step 4. The pipeline stages after cloning, and the pull request, need a connected GitHub repository; the stage names above are the ones Factory shows.
@@ -287,14 +300,16 @@ Before you approve, review:
 - **The PRD** from step 6. Does the change do what it says?
 - **The pull request** on GitHub: the diff, and the tests BOSS wrote.
 - **The evidence** on the Factory task: test results and the review outcome, for example `tests ✓ · review ✓`.
-- **The receipt.** Opening the pull request is recorded as a receipt in **Activity log**, so it is never repeated by a retry.
+- **The receipt.** Inspect the pull-request receipt in **Activity log** and match it to this run. If the outcome is uncertain, resolve that state before retrying.
 
-To run the software, check out the branch from the pull request on your own machine. For the tip calculator:
+To run the software, check out the branch from the pull request on your own machine. Replace the repository URL and branch below with the values from your pull request, and choose a fresh local folder. For the tip calculator:
 
 ```bash
-git clone https://github.com/<owner>/<repo>.git
-cd <repo>
-git checkout boss/code/<run-id>      # the branch named on the pull request
+REPOSITORY_URL="https://github.com/YOUR-OWNER/YOUR-REPO.git"
+PR_BRANCH="COPY-THE-BRANCH-NAME-FROM-YOUR-PR"
+git clone "$REPOSITORY_URL" first-result-review
+cd first-result-review
+git checkout "$PR_BRANCH"
 python3 tip.py 50 20
 python3 -m pytest
 ```

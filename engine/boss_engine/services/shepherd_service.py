@@ -560,6 +560,7 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
     code_task_runs and not meeting_runs is exactly the miss that produced the third instance.
     """
     from ..db import begin
+    from .jobs import run_job_match_sql
 
     closed: list[dict[str, Any]] = []
     for table, id_col, working in _RUN_TABLES:
@@ -570,7 +571,8 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
                         f"WHERE r.project_id = :p AND r.status = ANY(:working) "
                         f"  AND r.updated_at < now() - (:m || ' minutes')::interval "
                         f"  AND NOT EXISTS (SELECT 1 FROM jobs j "
-                        f"                  WHERE j.payload->>'run_id' = r.{id_col} "
+                        f"                  WHERE {run_job_match_sql(table, f'r.{id_col}')} "
+                        f"                    AND j.project_id = r.project_id "
                         f"                    AND j.status IN ('queued','running','leased')) "
                         # A RUN WAITING ON AN ANSWERABLE DECISION IS NOT ABANDONED.
                         #
@@ -586,7 +588,7 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
                         # The real distinction is not "has a job" but "can still be resumed".
                         # A decision that can still be acted on IS the resume path.
                         f"{_answerable_decision_clause(table)}"
-                        f"LIMIT 200"),
+                        f"LIMIT 200 FOR UPDATE OF r"),
                     {"p": project_id, "working": list(working),
                      "m": ORPHAN_AFTER_MINUTES}).mappings().all()
                 # THE PHASE SAYS WHICH TERMINAL STATE IS TRUE.

@@ -7,9 +7,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ENGINE = ROOT / "engine"
-RELEASE_VERSION = "1.0.0-rc.6.2"
-#: PEP 440 cannot spell a fourth pre-release number: the engine package is the post-release of rc6.
-PYTHON_RELEASE_VERSION = "1.0.0-rc.6.post2"
+RELEASE_VERSION = "1.0.0-rc.8"
+PYTHON_RELEASE_VERSION = "1.0.0rc8"
 
 
 def _json(path: Path) -> dict[str, object]:
@@ -23,11 +22,9 @@ def test_release_versions_are_aligned() -> None:
 
     pyproject = (ENGINE / "pyproject.toml").read_text(encoding="utf-8")
     init = (ENGINE / "boss_engine/__init__.py").read_text(encoding="utf-8")
-    chart = (ROOT / "deploy/helm/boss/Chart.yaml").read_text(encoding="utf-8")
     assert f'version = "{PYTHON_RELEASE_VERSION}"' in pyproject
     assert f'__version__ = "{PYTHON_RELEASE_VERSION}"' in init
-    assert f"version: {RELEASE_VERSION}" in chart
-    assert f'appVersion: "{RELEASE_VERSION}"' in chart
+    assert f"version: {RELEASE_VERSION}" in (ROOT / "api/openapi.yaml").read_text()
 
 
 def test_wheel_discovers_the_complete_engine_package_tree() -> None:
@@ -46,52 +43,46 @@ def test_distribution_has_apache_license_evidence() -> None:
 
 
 def _stage_body(dockerfile: str, target: str) -> str:
-    marker = f"FROM python-base AS {target}"
-    start = dockerfile.index(marker)
-    nxt = dockerfile.find("\nFROM ", start + 1)
-    return dockerfile[start : nxt if nxt > 0 else len(dockerfile)]
+    start = re.search(rf"^FROM .+ AS {re.escape(target)}$", dockerfile, re.MULTILINE)
+    assert start is not None, f"missing Community stage {target}"
+    nxt = dockerfile.find("\nFROM ", start.end())
+    return dockerfile[start.start():nxt if nxt > 0 else len(dockerfile)]
 
 
-def test_container_boundaries_include_the_engine_without_api_source() -> None:
-    standalone = (ENGINE / "Dockerfile").read_text(encoding="utf-8")
-    assert "COPY engine/boss_engine engine/boss_engine" in standalone
-    assert "COPY engine/pyproject.toml engine/README.md engine/LICENSE engine/" in standalone
-    # Self-bootstrap data (Plane #306): the standalone image vendors the schema,
-    # the spec pack, and the traceability table so `bootstrap` works on a fresh DB.
-    assert "COPY db/schema.sql db/schema.sql" in standalone
-    assert "COPY packages/specpack packages/specpack" in standalone
-    assert "COPY docs/product/TRACEABILITY.md docs/product/TRACEABILITY.md" in standalone
-    # GET /v1/v1-lock (and engine-native load_v1_feature_lock) read this path via
-    # Settings.repo_root. Missing file yields honest zeros, not invented counts.
-    assert (
-        "COPY docs/product/V1_FEATURE_LOCK.md docs/product/V1_FEATURE_LOCK.md"
-        in standalone
-    )
-    assert "apps/" not in "\n".join(
-        line for line in standalone.splitlines() if line.lstrip().startswith("COPY ")
-    )
-
-    for relative in ("infra/containers/api.Dockerfile", "infra/containers/worker.Dockerfile"):
-        content = (ROOT / relative).read_text(encoding="utf-8")
-        assert "COPY engine ./engine" in content
-        assert "/app/engine" in content
+def test_community_runtime_vendors_its_local_dependencies() -> None:
+    dockerfile = (ROOT / "Dockerfile.community").read_text()
+    runtime = _stage_body(dockerfile, "python-runtime")
+    for path in ("engine/boss_engine", "apps/api", "apps/worker", "apps/egress",
+                 "db", "api", "packages/specpack", "tools"):
+        assert f"COPY {path} ./" in runtime
+        assert (ROOT / path).is_dir()
+    assert "PYTHONPATH=/app:/app/engine" in runtime
+    for target in ("api", "worker", "egress", "mcp-tools"):
+        assert f"FROM python-runtime AS {target}" in dockerfile
+    assert "COPY . " not in dockerfile
 
 
 def test_runtime_images_copy_v1_lock_and_traceability() -> None:
-    """Live GET /v1/v1-lock reads /app/docs/product/V1_FEATURE_LOCK.md.
+    dockerfile = (ROOT / "Dockerfile.community").read_text()
+    runtime = _stage_body(dockerfile, "python-runtime")
+    for path in ("docs/product/V1_FEATURE_LOCK.md", "docs/product/TRACEABILITY.md",
+                 "LICENSE", "THIRD-PARTY-NOTICES.md"):
+        assert f"COPY {path} ./" in runtime
+        assert (ROOT / path).is_file()
+    assert "COPY docs ./" not in dockerfile
+    web = _stage_body(dockerfile, "web")
+    assert "NODE_ENV=production" in web
+    assert "USER boss" in runtime and "USER boss" in web
 
-    Root api + worker stages must vendor the lock (and TRACEABILITY.md, which
-    the feature catalog seeds from). Do not dump all of docs/.
-    """
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    lock_copy = "COPY docs/product/V1_FEATURE_LOCK.md docs/product/V1_FEATURE_LOCK.md"
-    trace_copy = "COPY docs/product/TRACEABILITY.md docs/product/TRACEABILITY.md"
-    for target in ("api", "worker"):
-        stage = _stage_body(dockerfile, target)
-        assert lock_copy in stage, f"{target} stage must COPY V1_FEATURE_LOCK.md"
-        assert trace_copy in stage, f"{target} stage must COPY TRACEABILITY.md"
-        assert "COPY docs ./" not in stage
-        assert "COPY docs ./docs" not in stage
+
+def test_runtime_context_excludes_tests_and_scratch_but_retains_runtime_sources() -> None:
+    # Tests remain in the public Git/source distribution for contributors; broad COPY
+    # instructions must not carry them into API/worker or Next runtime images.
+    ignored = set((ROOT / ".dockerignore").read_text().splitlines())
+    for path in ("apps/api/tests", "apps/worker/tests", "apps/web/tests", "**/__probe_tmp"):
+        assert path in ignored
+    for path in ("apps/api/app", "apps/worker/boss_worker", "apps/web/app", "apps/web/lib"):
+        assert path not in ignored and (ROOT / path).is_dir()
 
 
 def test_local_entrypoints_include_the_engine_package() -> None:
@@ -104,8 +95,9 @@ def test_local_entrypoints_include_the_engine_package() -> None:
     assert "${PYTHON_BIN:-./.venv/bin/python}" in scripts["test"]
 
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    assert "PYTHON_REQUIREMENTS_STAMP" in makefile
-    assert 'sys.version_info >= (3, 11)' in makefile
-    for target in ("seed:", "smoke:", "real-smoke-plan:", "worker-drain-once:"):
-        section = makefile.split(target, maxsplit=1)[1].split("\n\n", maxsplit=1)[0]
-        assert "PYTHONPATH=.:engine" in section
+    assert "scripts/install/community-compose.yml --env-file .env" in makefile
+    assert "dev: .env docker-ready" in makefile
+    assert "$(COMPOSE) --profile web up -d --build" in makefile
+    assert "seed: .env docker-ready" in makefile
+    assert "$(COMPOSE) exec -T -u boss api python" in makefile
+    assert "./scripts/install/checkup.sh" in makefile

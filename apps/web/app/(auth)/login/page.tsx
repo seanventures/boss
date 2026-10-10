@@ -1,9 +1,11 @@
+import React from "react";
 import { redirect } from "next/navigation";
 
 import { safeNext } from "../../../lib/console-session";
 import { ME_PATH } from "../../../lib/identity/contract";
 import { serverGet } from "../../../lib/identity/server";
-import { loadAuthOptions } from "../auth-options";
+import { loadAuthOptionsState } from "../auth-options";
+import { AuthUnavailable } from "../auth-unavailable";
 import { ssoErrorWords } from "../auth-flow";
 import { SignIn } from "./sign-in";
 
@@ -18,5 +20,7 @@ export default async function LoginPage({ searchParams }: Props) {
   const next = safeNext(params.next ?? null);
   const me = await serverGet(ME_PATH);
   if (me.ok) redirect(next);
-  return <SignIn options={await loadAuthOptions()} next={next} notice={ssoErrorWords(params.error)} />;
+  const state = await loadAuthOptionsState();
+  if (!state.available) return <AuthUnavailable host={state.host} />;
+  return <SignIn options={state.options} next={next} notice={ssoErrorWords(params.error)} />;
 }

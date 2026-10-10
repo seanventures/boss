@@ -8,6 +8,12 @@ Each person signs in as themselves and holds an access role (Owner, Admin, Opera
 
 The first person to open a new or upgraded install **claims** it at `/claim` and becomes the first Owner. The sign-in page shows **This BOSS has no Owner yet. Claim it** until then. [Upgrade to named accounts](IDENTITY_UPGRADE.md) walks through the claim.
 
+If the sign-in or claim page says **Sign-in unavailable**, BOSS could not load
+the sign-in options. It cannot tell whether an Owner exists yet. Restore the
+API connection, then choose **Retry**; it reloads the current page and keeps
+your return destination or setup-link fragment. A failed read never counts as
+an Owner claim or a successful sign-in.
+
 ## Ways to sign in
 
 | Method | Needs |
@@ -34,7 +40,7 @@ An Owner can extend the 30 days once, by at most 30 more. Rotate the password wi
 
 ## What a session protects
 
-- Every page and every `/v1/*` request needs a valid session (or an API key, for scripts).
+- Protected console pages and business API requests need a valid session (or an appropriate API key, for scripts). Health, sign-in and initial claim endpoints have their own access rules; a reachable health endpoint does not prove a signed-in console works.
 - The session cookie is `__Host-`, HttpOnly and `Secure`. Its token never appears in a page or a response body.
 - Writes from the browser must come from the console's own origin and carry the session's CSRF token.
 - **Sign out** in the account menu ends the session. **My account › Sessions** ends the others.

@@ -1916,6 +1916,9 @@ def test_a_direct_change_raises_no_prd_approval_nobody_answers(eng, project, mon
     opened a "PRD approval (automatic)" decision nobody ever answered — one pending decision per
     build on the pill and in Approvals. It is recorded as not applicable, and nothing is asked."""
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+    from types import SimpleNamespace
+    monkeypatch.setattr(runner, "get_settings",
+                        lambda: SimpleNamespace(meeting_prd_auto_approve=True))
 
     with eng.begin() as c:
         _, version = _publish(c, project, "directgate", [
@@ -1933,6 +1936,41 @@ def test_a_direct_change_raises_no_prd_approval_nobody_answers(eng, project, mon
     assert steps["g"]["status"] == "succeeded"
     assert steps["g"]["output"]["status"] == "not_applicable"
     assert opened is None, "a PRD approval was raised for a build that has no PRD"
+
+
+@pytest.mark.parametrize("settings_read", ["disabled", "unavailable"])
+def test_direct_change_retains_manual_review_when_policy_does_not_permit_it(
+    eng, project, monkeypatch, settings_read,
+):
+    """A disabled or unreadable policy opens the same durable gate as ordinary spec review."""
+    from types import SimpleNamespace
+
+    def settings():
+        if settings_read == "unavailable":
+            raise RuntimeError("owned settings reader unavailable")
+        return SimpleNamespace(meeting_prd_auto_approve=False)
+
+    monkeypatch.setattr(runner, "get_settings", settings)
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+    with eng.begin() as c:
+        _, version = _publish(c, project, "manual_directgate", [
+            {"id": "g", "kind": "capability", "binding": {"capability": "spec_review"},
+             "next": []},
+        ], "g")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_direct"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        decision = c.execute(text(
+            "SELECT d.status, d.project_id FROM workflow_step_runs s "
+            "JOIN decisions d ON d.id = s.decision_id WHERE s.workflow_run_id=:r"
+        ), {"r": run["id"]}).mappings().first()
+
+    assert steps["g"]["status"] == "waiting"
+    assert steps["g"]["output"].get("act_id"), "manual review must retain its audit act"
+    assert steps["g"]["output"].get("status") != "not_applicable"
+    assert decision is not None
+    assert decision["status"] == "pending"
+    assert decision["project_id"] == project
 
 
 def test_the_runs_own_input_fills_optional_step_inputs(eng, project, monkeypatch):

@@ -172,6 +172,15 @@ def governed_decider(settings: Settings, role: str):
 
 
 class TypedDecisionSpend:
+    # Other single-call capabilities reuse the same durable authority envelope.
+    # Defaults preserve typed-decision routing, quotes and job identity.
+    max_cost_usd_micros = MAX_COST_USD_MICROS
+    job_kind = JOB_KIND
+    agent_id = AGENT_ID
+    skill_id = SKILL_ID
+    preferred_capabilities = ("classify",)
+    stage = "typed_decision"
+
     def __init__(
         self,
         *,
@@ -376,7 +385,7 @@ class TypedDecisionSpend:
         from .included_spend import reservation_estimate
 
         estimate = reservation_estimate(connection, self.project_id, source_id,
-                                        MAX_COST_USD_MICROS)
+                                        self.max_cost_usd_micros)
         reserved = self.budget.reserve(
             connection,
             self.project_id,
@@ -451,9 +460,9 @@ class TypedDecisionSpend:
                 job_id=job["id"],
                 worker_id=self.worker_id,
                 job_lease_token=leased["lease_token"],
-                agent_id=AGENT_ID,
-                skill_id=SKILL_ID,
-                preferred_capabilities=["classify"],
+                agent_id=self.agent_id,
+                skill_id=self.skill_id,
+                preferred_capabilities=list(self.preferred_capabilities),
                 risk_tier=1,
                 # Owner-scoped capacity is booked for its owner when the work is the
                 # workspace's own; see consumer_for.
@@ -508,7 +517,7 @@ class TypedDecisionSpend:
             request_hash=hashlib.sha256(dedupe.encode("utf-8")).hexdigest(),
             dedupe_key=dedupe,
             metadata={
-                "stage": "typed_decision",
+                "stage": self.stage,
                 "attempt": str(self.attempt),
                 "workflow_run_id": self.run_id[:256],
             },
@@ -594,7 +603,8 @@ class TypedDecisionSpend:
 
     def _enqueue(self, connection, dedupe: str, role: str) -> dict:
         payload = {
-            "agent_id": AGENT_ID,
+            "agent_id": self.agent_id,
+            "actor": self.actor,
             "workflow_run_id": self.run_id,
             "step_id": self.step_id,
             "attempt": self.attempt,
@@ -606,7 +616,7 @@ class TypedDecisionSpend:
         return enqueue(
             connection,
             self.project_id,
-            JOB_KIND,
+            self.job_kind,
             payload,
             priority=JOB_PRIORITY_INTERACTIVE,
             max_attempts=1,

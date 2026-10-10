@@ -317,7 +317,7 @@ python3 examples/setup_all.py</pre>
     <div class="wrap models-grid">
       <div>
         <h2 class="h2">Your models. Your keys. Your server.</h2>
-        <p class="lede">Use an API key or coding subscription you already pay for. Keys go to the secret backend you picked at install and stay unverified until a governed job uses one. Saving a key does not call the provider.</p>
+        <p class="lede">Use an API key or coding subscription you already pay for. Console Connect asks one small, budgeted question and records a receipt. Keys imported through the install environment are stored without a completion; check the connection before starting work.</p>
         <p class="lede">Local inference on Ollama or vLLM works through the OpenAI-compatible path, and can be priced at zero so cost accounting stays accurate.</p>
 <pre class="snippet">export BOSS_LLM_ENGINE=openai OPENAI_API_KEY=ollama
 export OPENAI_BASE_URL=http://localhost:11434/v1
@@ -385,7 +385,7 @@ export BOSS_MODEL_PRICES_JSON='{"qwen2.5-coder:14b":[0,0]}'</pre>
       <div class="doc-groups">
         <div class="doc-group">
           <h3>Start</h3>
-          <a class="doc-link" href="docs/GETTING_STARTED/"><b>Getting started</b><span>From install to a pull request BOSS built.</span></a>
+          <a class="doc-link" href="docs/GETTING_STARTED/"><b>Getting started</b><span>Install, connect a model and repo, then follow a small build.</span></a>
           <a class="doc-link" href="docs/QUICKSTART/"><b>Quickstart</b><span>Install, open the console, create one task.</span></a>
           <a class="doc-link" href="docs/hostname/"><b>Deploy</b><span>HTTPS on your domain or private network.</span></a>
           <a class="doc-link" href="docs/MODEL_CONNECTIONS/"><b>Connect models</b><span>API keys and coding subscriptions.</span></a>
@@ -445,12 +445,12 @@ export BOSS_MODEL_PRICES_JSON='{"qwen2.5-coder:14b":[0,0]}'</pre>
     <div class="wrap cta-grid">
       <div>
         <h2 class="h2">Deploy it on your server.</h2>
-        <p class="lede">Ubuntu 22.04/24.04 or Debian 12/13 with sudo, or any Linux or macOS host with git, curl, and Docker Compose. Point a domain or private IP at the server, and your team signs in over HTTPS. A model key is optional, and credentials never leave the server.</p>
+        <p class="lede">Ubuntu 22.04/24.04 or Debian 12/13 with sudo, or any Linux or macOS host with git, curl, and Docker Compose. Point a domain or private IP at the server, and your team signs in over HTTPS. A model key is optional. Credentials are stored locally; hosted model calls send authentication and the task data you select to that provider.</p>
       </div>
       <div>
         <div class="terminal">
           <div class="terminal-bar">
-            <span>Install v1.0-rc6.2</span>
+            <span>Install v1.0-rc8</span>
             <button class="copy" type="button" data-copy>Copy</button>
           </div>
 <pre data-copy-source>curl -fsSL https://boss.sean.network/install.sh | bash</pre>

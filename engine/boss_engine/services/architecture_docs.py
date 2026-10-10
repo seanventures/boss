@@ -122,98 +122,150 @@ def _json(value: Any, default: Any) -> Any:
     return value if value is not None else default
 
 
-def _decision_status(connection: Connection, decision_id: str) -> Optional[dict[str, Any]]:
+def _decision_status(connection: Connection, decision_id: str, project_id: str
+                     ) -> Optional[dict[str, Any]]:
     row = connection.execute(
-        text("SELECT id, status, approved_by FROM decisions WHERE id = :i"),
-        {"i": decision_id},
+        text("SELECT id, project_id, task_id, status, approved_by, recommendation "
+             "FROM decisions WHERE id = :i AND project_id = :p"),
+        {"i": decision_id, "p": project_id},
     ).mappings().first()
     return dict(row) if row else None
 
 
-def approved_prd(connection: Connection, project_id: str, context: Mapping[str, Any],
-                 spec_steps: Optional[Mapping[str, Mapping[str, Any]]] = None) -> dict[str, Any]:
-    """The run's PRD and who approved it — or ArchitectureRefused saying what is missing.
+def _prd_decision(row: Mapping[str, Any], *, task_id: str, markdown: str) -> bool:
+    """A typed publication decision for this task and this exact PRD text."""
+    if not task_id or str(row.get("task_id") or "") != task_id:
+        return False
+    rec = _json(row.get("recommendation"), {}) or {}
+    args = rec.get("args") or {}
+    recorded = str(args.get("markdown") or "").strip()
+    if recorded and recorded != markdown:
+        return False  # a prior PRD revision cannot approve the current text
+    return (rec.get("action") == "execute_agent_tool" and
+            rec.get("tool") == "publish_document" and recorded == markdown)
 
-    The PRD is the `prd_markdown` a panel step produced (whatever the step is called), or the
-    panel this run adopted. Approved means one of: the panel's own PRD decision is approved;
-    a PRD approval step (`spec_review`) of this run succeeded with an approval; or the run was
-    started with an approved PRD decision. Read from the database, never from the run input.
-    """
+
+def approved_prd(connection: Connection, project_id: str, context: Mapping[str, Any],
+                 spec_steps: Optional[Mapping[str, Mapping[str, Any]]] = None, *,
+                 run_id: Optional[str] = None) -> dict[str, Any]:
+    """Read a canonical project PRD and its approval; run input is only a locator."""
     steps = context.get("steps") or {}
     run_input = context.get("input") or {}
-    prd = ""
+    if run_id:
+        run = connection.execute(
+            text("SELECT input FROM workflow_runs WHERE id=:r AND project_id=:p"),
+            {"r": run_id, "p": project_id},
+        ).mappings().first()
+        if not run:
+            raise ArchitectureRefused("The architecture workflow belongs to another project or is missing.")
+        run_input = _json(run["input"], {}) or {}
+        produced_rows = connection.execute(
+            text("SELECT step_id, status, output FROM workflow_step_runs "
+                 "WHERE workflow_run_id=:r AND project_id=:p ORDER BY created_at, iteration"),
+            {"r": run_id, "p": project_id},
+        ).mappings().all()
+        steps = {}
+        for produced_row in produced_rows:
+            steps.pop(produced_row["step_id"], None)
+            if produced_row["status"] == "succeeded":
+                steps[produced_row["step_id"]] = _json(produced_row["output"], {}) or {}
     source_step = ""
-    meeting_run_id = ""
-    task_id = ""
-    for step_id, produced in steps.items():
-        if isinstance(produced, dict) and str(produced.get("prd_markdown") or "").strip():
-            prd = str(produced["prd_markdown"]).strip()
-            source_step = str(step_id)
-            meeting_run_id = str(produced.get("meeting_run_id") or "")
-            task_id = str(produced.get("task_id") or "")
+    produced = {}
+    for step_id, candidate in steps.items():
+        if isinstance(candidate, dict) and str(candidate.get("prd_markdown") or "").strip():
+            source_step, produced = str(step_id), candidate
             break
-    adopted_meeting = str(run_input.get("adopt_meeting_run_id") or "").strip()
-    if not prd and adopted_meeting:
-        row = connection.execute(
-            text("SELECT state, task_id FROM meeting_runs WHERE id = :r AND project_id = :p"),
-            {"r": adopted_meeting, "p": project_id},
-        ).mappings().first()
-        if row:
-            prd = str((_json(row["state"], {}) or {}).get("prd_markdown") or "").strip()
-            meeting_run_id, task_id = adopted_meeting, str(row["task_id"] or "")
-            source_step = "adopted panel"
-    if not prd:
+    meeting_id = str(produced.get("meeting_run_id") or
+                     run_input.get("adopt_meeting_run_id") or "").strip()
+    meeting = connection.execute(
+        text("SELECT state, task_id, decision_id FROM meeting_runs "
+             "WHERE id = :m AND project_id = :p"),
+        {"m": meeting_id, "p": project_id},
+    ).mappings().first() if meeting_id else None
+    markdown = str((_json(meeting["state"], {}) or {}).get("prd_markdown") or "").strip() \
+        if meeting else ""
+    claimed = str(produced.get("prd_markdown") or "").strip()
+    if not markdown or (claimed and claimed != markdown) or (
+            produced.get("task_id") and str(produced["task_id"]) != str(meeting["task_id"])):
         raise ArchitectureRefused(
-            "There is no PRD to design from. The Architecture step reads the PRD a panel wrote "
-            "earlier in this run, and no earlier step produced one. Put a 'Convene a panel' "
-            "step and its PRD approval before Architecture, then start the run again.")
-
-    approval: Optional[dict[str, Any]] = None
-    refused_by: Optional[dict[str, Any]] = None
-    # 1. The panel's own PRD decision (the meeting raises it against the panel's task).
-    if task_id:
-        row = connection.execute(
-            text("SELECT id, status, approved_by FROM decisions WHERE project_id = :p "
-                 "AND task_id = :t ORDER BY created_at DESC LIMIT 1"),
-            {"p": project_id, "t": task_id},
-        ).mappings().first()
-        if row and str(row["status"]) in ("approved", "executed", "completed"):
+            "There is no PRD to design from that matches this project and run. Complete a panel, approve its "
+            "current PRD, then retry Architecture. A foreign or changed PRD is not approved.")
+    task_id = str(meeting["task_id"] or "")
+    approval = None
+    rejected = False
+    current_decision_id = None
+    # A task may also have unrelated decisions. Only the exact PRD decision counts.
+    rows = connection.execute(
+        text("SELECT id, task_id, status, approved_by, recommendation FROM decisions "
+             "WHERE project_id = :p AND task_id = :t ORDER BY created_at DESC"),
+        {"p": project_id, "t": task_id},
+    ).mappings().all()
+    for row in rows:
+        if not _prd_decision(row, task_id=task_id, markdown=markdown):
+            continue
+        current_decision_id = row["id"]
+        rejected = str(row["status"]) == "rejected"
+        if str(row["status"]) in {"approved", "executed", "completed"}:
             approval = {"how": "the panel's PRD decision", "decision_id": row["id"],
                         "approved_by": row["approved_by"]}
-        elif row and str(row["status"]) == "rejected":
-            refused_by = dict(row)
-    # 2. A PRD approval step of this run that a person (or the PRD policy) answered yes.
-    if approval is None and spec_steps:
-        for step_id, spec in spec_steps.items():
-            if str((spec.get("binding") or {}).get("capability") or "") != "spec_review":
-                continue
-            out = steps.get(step_id)
-            if not isinstance(out, dict):
-                continue
-            if str(out.get("outcome") or "") == "approved" or str(out.get("status") or "") \
-                    == "adopted":
-                approval = {"how": "the PRD approval step", "step_id": step_id,
-                            "decision_id": out.get("decision_id"),
-                            "approved_by": out.get("approved_by")}
+        break  # a newer pending/rejected PRD gate is not bypassed by an older one
+    # A spec_review of this run must point back to a real approved decision for
+    # this PRD, never merely carry an 'approved' output string.
+    candidates = []
+    for step_id, spec in (spec_steps or {}).items():
+        if str((spec.get("binding") or {}).get("capability") or "") == "spec_review":
+            out = steps.get(step_id) or {}
+            if isinstance(out, dict) and out.get("decision_id"):
+                candidates.append((str(out["decision_id"]), "the PRD approval step"))
+    if run_input.get("adopt_decision_id"):
+        candidates.append((str(run_input["adopt_decision_id"]), "the adopted PRD decision"))
+    if approval is None and not rejected:
+        for decision_id, how in candidates:
+            row = _decision_status(connection, decision_id, project_id)
+            if row and (not current_decision_id or row["id"] == current_decision_id) and _prd_decision(row, task_id=task_id, markdown=markdown) and \
+                    str(row["status"]) in {"approved", "executed", "completed"}:
+                approval = {"how": how, "decision_id": row["id"],
+                            "approved_by": row["approved_by"]}
                 break
-    # 3. An approved PRD decision the run was started with.
-    adopted_decision = str(run_input.get("adopt_decision_id") or "").strip()
-    if approval is None and adopted_decision:
-        row = _decision_status(connection, adopted_decision)
-        if row and str(row["status"]) in ("approved", "executed", "completed"):
-            approval = {"how": "the PRD decision this run was started with",
-                        "decision_id": row["id"], "approved_by": row["approved_by"]}
     if approval is None:
-        if refused_by:
-            raise ArchitectureRefused(
-                "The PRD was rejected, so there is nothing agreed to design. Convene the panel "
-                "again or change the PRD, approve it, then retry this step.")
         raise ArchitectureRefused(
-            "The PRD has not been approved yet. An architecture is designed only from a PRD a "
-            "person (or the PRD approval policy) has approved: approve the PRD on the "
-            "Approvals page, or put the 'PRD approval' step before Architecture, then retry.")
-    return {"markdown": prd[:_PRD_CHARS], "source_step": source_step,
-            "meeting_run_id": meeting_run_id or None, "task_id": task_id or None, **approval}
+            "The current project PRD was rejected or has not been approved. Approve its PRD "
+            "decision before Architecture; another project's or another document's approval "
+            "cannot release this work.")
+    import hashlib
+    return {"markdown": markdown[:_PRD_CHARS], "source_step": source_step or "adopted panel",
+            "meeting_run_id": meeting_id, "task_id": task_id,
+            "prd_sha256": hashlib.sha256(markdown.encode()).hexdigest(), **approval}
+
+
+def _draft_authority(connection, project_id, run_id, step_id, *, version, review_id=None):
+    """Current claimed step, or the exact person-requested revision of a waiting step."""
+    row = connection.execute(
+        text("SELECT r.status AS run_status, r.actor, s.status, s.lease_owner, s.attempt, "
+             "s.lease_expires_at > clock_timestamp() AS lease_live "
+             "FROM workflow_runs r JOIN workflow_step_runs s ON s.workflow_run_id = r.id "
+             "WHERE r.id = :r AND r.project_id = :p AND s.project_id = :p AND s.step_id = :s "
+             "ORDER BY s.iteration DESC LIMIT 1"),
+        {"r": run_id, "p": project_id, "s": step_id},
+    ).mappings().first()
+    if not row or row["run_status"] not in {"running", "waiting"}:
+        raise ArchitectureRefused("Architecture run is missing, stopped or belongs to another project.")
+    if version == 1 and row["status"] in {"leased", "running"} and \
+            row["lease_owner"] and row["lease_live"]:
+        return dict(row)
+    if version > 1 and row["status"] == "waiting" and review_id:
+        review = _review(connection, review_id)
+        decision = _decision_status(connection, str(review.get("decision_id") or ""), project_id) \
+            if review else None
+        rec = _json(decision.get("recommendation"), {}) if decision else {}
+        if (review and review["project_id"] == project_id and review["workflow_run_id"] == run_id
+                and review["step_id"] == step_id and review["status"] == "revision_requested"
+                and int(review["current_version"]) + 1 == version and decision
+                and decision["status"] == "revision_requested" and rec.get("action") == DECISION_ACTION
+                and rec.get("architecture_review_id") == review_id
+                and int(rec.get("version") or 0) == version - 1):
+            return dict(row)
+    raise ArchitectureRefused("Architecture has no current workflow lease or person-requested revision.")
 
 
 # ── Writing the document ─────────────────────────────────────────────────────────────────────
@@ -318,20 +370,35 @@ def render(title: str, sections: Mapping[str, str], version: int) -> str:
 
 def draft(connection: Connection, settings: Any, project_id: str, *, architect: str,
           run_id: str, prd: str, title: str, constraints: str = "", previous: str = "",
-          note: str = "", version: int = 1) -> dict[str, Any]:
+          note: str = "", version: int = 1, step_id: str = CAPABILITY,
+          review_id: Optional[str] = None, prd_sha256: Optional[str] = None) -> dict[str, Any]:
     """Have the architect write one version. Raises ArchitectureDraftError when the model fails
     or returns nothing — never a placeholder passed off as a design."""
     prompt = _prompt(prd, title=title, constraints=constraints, previous=previous, note=note,
                      version=version)
+    def check_work():
+        authority = _draft_authority(connection, project_id, run_id, step_id,
+                                     version=version, review_id=review_id)
+        current = approved_prd(connection, project_id, {}, run_id=run_id)
+        if current["markdown"] != prd or (prd_sha256 and current["prd_sha256"] != prd_sha256):
+            raise ArchitectureRefused("The approved PRD changed before architecture submission.")
+        return authority
+
     try:
+        check_work()
         adapter = architect_adapter(connection, settings, project_id, architect=architect,
                                     run_id=run_id, brief=prd)
-        _ref, written, usage = adapter.create_text_response(
-            prompt, system_prompt=_system_prompt(architect))
+        from . import architecture_spend
+        _ref, written, usage = architecture_spend.generate(
+            connection, _settings(settings), project_id, run_id=run_id, step_id=step_id,
+            adapter=adapter, architect=architect, prompt=prompt, system_prompt=_system_prompt(architect),
+            version=version, check_work=check_work,
+        )
     except Exception as error:  # noqa: BLE001 — said in words on the step
+        from .redaction import redact_secrets
         raise ArchitectureDraftError(
             f"the architect could not write version {version}: {type(error).__name__}: "
-            f"{str(error)[:300]}") from error
+            f"{redact_secrets(str(error))[:300]}") from error
     written = str(written or "").strip()
     if not written:
         raise ArchitectureDraftError(
@@ -468,15 +535,15 @@ def start(connection: Connection, settings: Any, *, project_id: str, run_id: str
     """
     step_id = str(step.get("id") or CAPABILITY)
     existing = connection.execute(
-        text("SELECT * FROM architecture_reviews WHERE workflow_run_id = :r AND step_id = :s "
+        text("SELECT * FROM architecture_reviews WHERE workflow_run_id = :r AND step_id = :s AND project_id = :p "
              "AND status IN ('drafting','awaiting_approval','revision_requested','approved') "
              "ORDER BY created_at DESC LIMIT 1"),
-        {"r": run_id, "s": step_id},
+        {"r": run_id, "s": step_id, "p": project_id},
     ).mappings().first()
     if existing and existing["current_artifact_id"]:
         return handle(dict(existing))
 
-    prd = approved_prd(connection, project_id, context, spec_steps)
+    prd = approved_prd(connection, project_id, context, spec_steps, run_id=run_id)
     from .action_preview import run_title as _run_title
 
     run_input = context.get("input") or {}
@@ -488,7 +555,8 @@ def start(connection: Connection, settings: Any, *, project_id: str, run_id: str
     step_label = str(step.get("label") or step.get("name") or "Architecture approval").strip()
 
     written = draft(connection, settings, project_id, architect=architect, run_id=run_id,
-                    prd=prd["markdown"], title=app_name or title, constraints=constraints)
+                    prd=prd["markdown"], title=app_name or title, constraints=constraints,
+                    step_id=step_id, prd_sha256=prd["prd_sha256"])
     review_id = make_id("arch")
     connection.execute(
         text(
@@ -654,14 +722,15 @@ def revise_sent_back(connection: Connection, settings: Any, *, project_id: str,
             {"a": review["current_artifact_id"]},
         ).scalar()
         previous = _json(previous, {}) or {}
-        prd_markdown = _prd_for(connection, review)
         version = int(review["current_version"] or 0) + 1
         try:
+            prd_markdown = _prd_for(connection, review)
             written = draft(connection, settings, project_id, architect=review["architect"],
                             run_id=run_id, prd=prd_markdown, title=review.get("title") or "",
                             previous=str(previous.get("markdown") or ""), note=note,
-                            version=version)
-        except ArchitectureDraftError as error:
+                            version=version, step_id=review["step_id"], review_id=review_id,
+                            prd_sha256=(_json(review.get("prd_source"), {}) or {}).get("prd_sha256"))
+        except (ArchitectureDraftError, ArchitectureRefused) as error:
             connection.execute(
                 text("UPDATE architecture_reviews SET error = :e, updated_at = now() "
                      "WHERE id = :i"), {"e": str(error)[:500], "i": review_id})
@@ -702,21 +771,16 @@ def revise_sent_back(connection: Connection, settings: Any, *, project_id: str,
 
 
 def _prd_for(connection: Connection, review: Mapping[str, Any]) -> str:
-    """The approved PRD the review was designed from, read again from the run."""
+    """Revisions retain the original canonical PRD text and approval lineage."""
     source = _json(review.get("prd_source"), {}) or {}
-    step = str(source.get("source_step") or "")
-    row = connection.execute(
-        text("SELECT output FROM workflow_step_runs WHERE workflow_run_id = :r AND step_id = :s "
-             "AND status = 'succeeded' ORDER BY completed_at DESC NULLS LAST LIMIT 1"),
-        {"r": review["workflow_run_id"], "s": step},
-    ).scalar() if step else None
-    prd = str((_json(row, {}) or {}).get("prd_markdown") or "")
-    if not prd and source.get("meeting_run_id"):
-        state = connection.execute(
-            text("SELECT state FROM meeting_runs WHERE id = :m"),
-            {"m": source["meeting_run_id"]}).scalar()
-        prd = str((_json(state, {}) or {}).get("prd_markdown") or "")
-    return prd[:_PRD_CHARS]
+    current = approved_prd(connection, review["project_id"], {
+        "input": {"adopt_meeting_run_id": source.get("meeting_run_id"),
+                  "adopt_decision_id": source.get("decision_id")},
+    }, run_id=review["workflow_run_id"])
+    if current["meeting_run_id"] != source.get("meeting_run_id") or (
+            source.get("prd_sha256") and source["prd_sha256"] != current["prd_sha256"]):
+        raise ArchitectureDraftError("The approved PRD lineage changed; start a fresh architecture review.")
+    return current["markdown"]
 
 
 # ── Reading it ───────────────────────────────────────────────────────────────────────────────

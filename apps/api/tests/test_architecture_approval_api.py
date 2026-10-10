@@ -51,6 +51,14 @@ class _Registry:
 @pytest.fixture()
 def scripted(monkeypatch):
     model = _Architect()
+    from boss_engine.services import architecture_spend
+
+    def scripted_generate(connection, settings, project_id, **kwargs):
+        kwargs["check_work"]()
+        return kwargs["adapter"].create_text_response(
+            kwargs["prompt"], system_prompt=kwargs["system_prompt"])
+
+    monkeypatch.setattr(architecture_spend, "generate", scripted_generate)
     meeting_run = f"mrun_{uuid4().hex[:8]}"
     monkeypatch.setattr(arch, "architect_adapter", lambda *a, **k: model)
     monkeypatch.setattr(runner, "_tool_registry", lambda: _Registry(
@@ -82,8 +90,9 @@ def _panel_done(engine, meeting_run: str) -> None:
                   {"i": meeting_run, "p": PROJECT, "t": task_id,
                    "s": json.dumps({"prd_markdown": PRD})})
         c.execute(text("INSERT INTO decisions (id, project_id, task_id, question, status, "
-                       "approved_by) VALUES (:i, :p, :t, 'Publish the PRD?', 'approved', 'ceo')"),
-                  {"i": f"dec_{uuid4().hex[:8]}", "p": PROJECT, "t": task_id})
+                       "approved_by, recommendation) VALUES (:i, :p, :t, 'Publish the PRD?', 'approved', 'ceo', CAST(:rec AS JSONB))"),
+                  {"i": f"dec_{uuid4().hex[:8]}", "p": PROJECT, "t": task_id, "rec": json.dumps({"action": "execute_agent_tool",
+                      "tool": "publish_document", "args": {"markdown": PRD}})})
 
 
 def _reviews(client, run_id):

@@ -335,6 +335,14 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
                        "against it."),
             "href": BUDGET_HREF, "retry": False,
         }
+    if "budget admission is busy" in lowered:
+        return {"kind": "budget_wait", "headline": "Waiting for another budget admission to finish.",
+                "action": "Retry shortly; no budget increase is needed for this temporary wait.",
+                "href": "/?area=budget", "retry": True}
+    if "budget is held for an unresolved provider outcome" in lowered:
+        return {"kind": "budget_hold", "headline": "Budget is held until an unresolved attempt is reconciled.",
+                "action": "Review the reconciliation decision and provider outcome before retrying.",
+                "href": "/?area=budget", "retry": False}
     # Before the cap below: the governor's headroom refusal mentions the budget too, and it
     # clears by itself when the work holding the reservations finishes (BudgetGovernor.reserve).
     if ("held by other work" in lowered

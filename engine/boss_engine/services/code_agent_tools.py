@@ -40,6 +40,7 @@ import time
 from typing import Callable, Optional
 
 from . import owned_process
+from .repo_files import MAX_SCAN_BYTES, RepoFileRefused, RepoFiles
 
 _MAX_READ_BYTES = 60_000
 _MAX_GREP_RESULTS = 120
@@ -126,7 +127,8 @@ class SandboxToolset:
         settings=None,
         autonomy: Optional[str] = None,
     ) -> None:
-        self.root = Path(root).resolve()
+        self.root = Path(root).absolute()
+        self._files = RepoFiles(self.root)
         self.autonomy = autonomy or resolve_autonomy(settings, read_only=read_only)
         # `read_only` stays the authoritative flag for the write tools so the governance
         # invariant does not depend on the autonomy string being spelled correctly.
@@ -137,35 +139,6 @@ class SandboxToolset:
         #: implementer did not touch the tests without re-reading the whole tree.
         self.written_paths: list[str] = []
 
-    # ---- path safety -----------------------------------------------------
-    def _resolve(self, raw: str) -> Path:
-        candidate = (raw or "").strip()
-        if not candidate:
-            raise ToolError("path is required.")
-        p = Path(candidate)
-        # `~` is not absolute to pathlib, so without this it silently became
-        # `<root>/~/secrets` and the model got "does not exist" for what was really a
-        # refused escape. Say what actually happened.
-        if candidate.startswith("~"):
-            raise ToolError(
-                f"{candidate!r} is a home-directory path and resolves outside the "
-                "repository. Use a path relative to the repository root."
-            )
-        if p.is_absolute():
-            raise ToolError(
-                f"{candidate!r} is an absolute path. Use a path relative to the "
-                "repository root (the directory you are working in)."
-            )
-        resolved = (self.root / p).resolve()
-        try:
-            resolved.relative_to(self.root)
-        except ValueError:
-            raise ToolError(
-                f"{candidate!r} resolves outside the repository root and is refused. "
-                "Stay inside the working tree."
-            ) from None
-        return resolved
-
     def _rel(self, p: Path) -> str:
         try:
             return p.relative_to(self.root).as_posix()
@@ -173,47 +146,29 @@ class SandboxToolset:
             return p.as_posix()
 
     def _walk(self):
-        for dirpath, dirnames, filenames in os.walk(self.root):
-            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
-            for name in sorted(filenames):
-                yield Path(dirpath) / name
+        for rel in self._files.walk(skip=SKIP_DIRS):
+            yield self.root / rel
 
     # ---- read tools ------------------------------------------------------
     def read_file(self, path: str, offset: Optional[int] = None,
                   limit: Optional[int] = None) -> str:
-        target = self._resolve(path)
-        if not target.exists():
-            raise ToolError(f"{self._rel(target)} does not exist.")
-        if target.is_dir():
-            raise ToolError(f"{self._rel(target)} is a directory — use list_dir.")
-        try:
-            text = target.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            raise ToolError(f"cannot read {self._rel(target)}: {exc}") from None
+        text = self._files.read_text(path)
         lines = text.splitlines()
         start = max(0, (offset or 1) - 1)
         end = len(lines) if not limit else min(len(lines), start + int(limit))
         body = "\n".join(f"{i + 1}\t{lines[i]}" for i in range(start, end))
-        header = f"{self._rel(target)} ({len(lines)} lines)"
+        header = f"{path} ({len(lines)} lines)"
         if start or end < len(lines):
             header += f" — showing {start + 1}-{end}"
         return _truncate(f"{header}\n{body}", _MAX_READ_BYTES)
 
     def list_dir(self, path: str = ".") -> str:
-        target = self._resolve(path) if path not in ("", ".", "./") else self.root
-        if not target.exists():
-            raise ToolError(f"{self._rel(target)} does not exist.")
-        if not target.is_dir():
-            raise ToolError(f"{self._rel(target)} is a file — use read_file.")
-        entries = []
-        for child in sorted(target.iterdir(), key=lambda c: (c.is_file(), c.name)):
-            if child.name in SKIP_DIRS:
-                continue
-            entries.append(f"{child.name}/" if child.is_dir() else child.name)
-            if len(entries) >= _MAX_LIST_ENTRIES:
-                entries.append(f"…[truncated at {_MAX_LIST_ENTRIES} entries]")
-                break
-        return f"{self._rel(target) or '.'}/\n" + "\n".join(entries or ["(empty)"])
+        entries = self._files.entries(path, skip=SKIP_DIRS)
+        rows = [f"{name}/" if directory else name
+                for name, directory in sorted(entries, key=lambda item: (not item[1], item[0]))]
+        if len(rows) > _MAX_LIST_ENTRIES:
+            rows = rows[:_MAX_LIST_ENTRIES] + [f"…[truncated at {_MAX_LIST_ENTRIES} entries]"]
+        return f"{path}/\n" + "\n".join(rows or ["(empty)"])
 
     def glob(self, pattern: str) -> str:
         pat = (pattern or "").strip()
@@ -238,18 +193,29 @@ class SandboxToolset:
             rx = re.compile(pat)
         except re.error as exc:
             raise ToolError(f"invalid regular expression {pat!r}: {exc}") from None
-        base = self._resolve(path) if path not in ("", ".", "./") else self.root
         cap = min(int(max_results or _MAX_GREP_RESULTS), _MAX_GREP_RESULTS)
         out: list[str] = []
-        roots = [base] if base.is_dir() else [base.parent]
-        for f in (self._walk() if base == self.root else _walk_under(roots[0], base)):
-            rel = self._rel(f)
-            if glob and not (fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch(f.name, glob)):
-                continue
+        # Treat a file argument as one file. Directory traversal and every subsequent read
+        # use the same pinned root; neither follows a link checked earlier by resolve().
+        try:
+            self._files.entries(path, skip=SKIP_DIRS)
+            paths = self._files.walk(path, skip=SKIP_DIRS)
+        except RepoFileRefused as exc:
+            # ENOTDIR is also a refusal at the FD boundary. A regular file is the only
+            # alternative accepted here; read_text still refuses symlinks and special files.
             try:
-                content = f.read_text(encoding="utf-8", errors="replace")
-            except OSError:
+                self._files.read_text(path)
+            except Exception:
+                raise exc
+            paths = iter((path,))
+        used = 0
+        for rel in paths:
+            if glob and not (fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch(Path(rel).name, glob)):
                 continue
+            content = self._files.read_text(rel)
+            used += len(content.encode("utf-8"))
+            if used > MAX_SCAN_BYTES:
+                raise RepoFileRefused("repository grep exceeds read budget; narrow the path")
             if "\x00" in content[:1024]:
                 continue
             for n, line in enumerate(content.splitlines(), 1):
@@ -270,11 +236,8 @@ class SandboxToolset:
 
     def write_file(self, path: str, content: str) -> str:
         self._require_writable("write_file")
-        target = self._resolve(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        existed = target.exists()
-        target.write_text(content if content is not None else "", encoding="utf-8")
-        rel = self._rel(target)
+        existed = self._files.write_text(path, content if content is not None else "")
+        rel = path
         self.written_paths.append(rel)
         n = len((content or "").splitlines())
         return f"{'overwrote' if existed else 'created'} {rel} ({n} lines)"
@@ -282,27 +245,24 @@ class SandboxToolset:
     def edit_file(self, path: str, old_string: str, new_string: str,
                   replace_all: bool = False) -> str:
         self._require_writable("edit_file")
-        target = self._resolve(path)
-        if not target.exists():
-            raise ToolError(f"{self._rel(target)} does not exist — use write_file to create it.")
-        original = target.read_text(encoding="utf-8", errors="replace")
+        original = self._files.read_text(path)
+        rel = path
         if old_string == "":
             raise ToolError("old_string must not be empty — use write_file to create a file.")
         count = original.count(old_string)
         if count == 0:
             raise ToolError(
-                f"old_string was not found in {self._rel(target)}. Read the file again and "
+                f"old_string was not found in {rel}. Read the file again and "
                 "copy the exact text, including indentation."
             )
         if count > 1 and not replace_all:
             raise ToolError(
-                f"old_string appears {count} times in {self._rel(target)}. Include more "
+                f"old_string appears {count} times in {rel}. Include more "
                 "surrounding context to make it unique, or pass replace_all=true."
             )
         updated = (original.replace(old_string, new_string)
                    if replace_all else original.replace(old_string, new_string, 1))
-        target.write_text(updated, encoding="utf-8")
-        rel = self._rel(target)
+        self._files.write_text(path, updated)
         self.written_paths.append(rel)
         return f"edited {rel} ({count if replace_all else 1} replacement(s))"
 
@@ -432,13 +392,6 @@ class SandboxToolset:
             return ToolOutcome(f"error: {exc}", is_error=True)
         except Exception as exc:  # never kill the loop on one bad call
             return ToolOutcome(f"error: {type(exc).__name__}: {exc}", is_error=True)
-
-
-def _walk_under(_root: Path, base: Path):
-    for dirpath, dirnames, filenames in os.walk(base):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
-        for name in sorted(filenames):
-            yield Path(dirpath) / name
 
 
 # ---- schemas ------------------------------------------------------------

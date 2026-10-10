@@ -5744,7 +5744,7 @@ def _cancel_work_this_run_started(
     # for a bad import, and directly above the comment promising that "cancel has to mean the
     # work stops. Anything else is a button that lies." It lied by 500.
     from ..config import get_settings
-    from .jobs import JobLeaseService
+    from .jobs import JobLeaseService, run_job_match_sql
 
     job_service = JobLeaseService(get_settings())
     stopped: list[dict[str, Any]] = []
@@ -5772,13 +5772,12 @@ def _cancel_work_this_run_started(
         try:
             jobs = connection.execute(
                 text(
-                    """
-                    SELECT id FROM jobs
-                    WHERE payload->>'run_id' = :work_id
-                      AND status NOT IN ('succeeded','cancelled','deadlettered')
-                    """
+                    f"SELECT j.id FROM jobs j WHERE "
+                    f"{run_job_match_sql(_WORK_TABLES[kind], ':work_id')} "
+                    "AND j.project_id = :project_id "
+                    "AND j.status NOT IN ('succeeded','cancelled','deadlettered')"
                 ),
-                {"work_id": work_id},
+                {"work_id": work_id, "project_id": project_id},
             ).scalars().all()
             for job_id in jobs:
                 job_service.cancel_queued_job(
@@ -5795,10 +5794,10 @@ def _cancel_work_this_run_started(
                 text(
                     f"""
                     UPDATE {table} SET status='cancelled', updated_at=now()
-                    WHERE id = :work_id AND status NOT IN :terminal
+                    WHERE id = :work_id AND project_id = :project_id AND status NOT IN :terminal
                     """
                 ).bindparams(bindparam("terminal", expanding=True)),
-                {"work_id": work_id, "terminal": sorted(_WORK_TERMINAL)},
+                {"work_id": work_id, "project_id": project_id, "terminal": sorted(_WORK_TERMINAL)},
             )
         except Exception:  # noqa: BLE001 — table shapes differ; the job cancel is what matters
             logger.exception("could not mark %s %s cancelled", kind, work_id)

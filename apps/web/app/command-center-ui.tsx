@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
   TZ_COOKIE,
@@ -17,30 +17,20 @@ import type { AttentionItem } from "../lib/agents-live-board";
 import { splitAttention } from "./agents/live-board";
 import { ago, reducedMotion, useNow } from "./agents/live-util";
 import { FlightCard, HealthCard, NeedsCard } from "./command-center/cards";
-import { Proof, TeamGrid, proofOf, systemsWord } from "./command-center/hero";
+import { Go, Proof, TeamGrid, proofOf } from "./command-center/hero";
 import { PulseRow } from "./command-center/pulse";
 import { AppsShelf, TemplatesShelf } from "./command-center/rails";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { OnboardingHelpRows } from "./onboarding-help-card";
+import { HelpPopover } from "./command-center/help-popover";
+import { nextAction } from "./command-center/next-action";
 import { announcePainted } from "../lib/area-painted";
 
 /**
- * THE COMMAND CENTER (cc v2): the approved look, on real data. Top to bottom:
- *
- *   HERO      what should your team build next? — the composer, the proof row, and the team as
- *             nine tiles of faces (amber ring: waiting on you; glow: working);
- *   NOW       Needs you · In flight · Health;
- *   SHELVES   Start from a template · Built by your team — one scrolling row each;
- *   PULSE     the team's last 14 weeks and its latest moves (served by the API).
- *
- * ONE READ, GET /v1/command-center/view, plus the Factory's apps (/v1/factory/apps) for the
- * hero's numbers and the shelf. Both through the shared poll (usePolled: ETag, paused while the
- * tab is hidden or the console is Paused). Nothing here counts what the server counts.
- *
- * MOTION (the aurora, the bobbing faces, the radar) only while the console is Live, the tab is
- * visible, BOSS answers, the host is fine and the viewer has not asked for less motion; stills
- * otherwise. The parity table that maps the previous page to this one is
- * tests/command-center-parity.test.tsx.
+ * Existing Command Center records lead with the next useful action. The same composer stays
+ * mounted; Needs you, In flight, Health, app results, templates and team details remain.
+ * No readiness, completion, spend or execution authority is created by this presentation.
+ * Reads and motion retain the shared polling, visibility and console Live rules.
  */
 
 function useVisible(): boolean {
@@ -188,16 +178,10 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
     if (status.key !== lastKey.current) { lastKey.current = status.key; setSaid(status.text); }
   }, [status.key, status.text]);
 
-  const [helpOpen, setHelpOpen] = useState(false);
-  const helpRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!helpOpen) return undefined;
-    const outside = (e: PointerEvent) => { if (!helpRef.current?.contains(e.target as Node)) setHelpOpen(false); };
-    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") setHelpOpen(false); };
-    document.addEventListener("pointerdown", outside);
-    document.addEventListener("keydown", escape);
-    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
-  }, [helpOpen]);
+  const [helpOpener, setHelpOpener] = useState<HTMLElement | null>(null);
+  const helpOpen = helpOpener !== null;
+  const helpId = useId();
+  const closeHelp = useCallback(() => setHelpOpener(null), []);
 
   const [gone, setGone] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -214,13 +198,16 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const working = useMemo(() => new Set<string>(), []);
   const refresh = useCallback(() => { polled.refresh(); apps.refresh(); }, [polled, apps]);
 
+  const composeRef = useRef<HTMLDetailsElement>(null);
   const startWork = useCallback(() => {
+    if (composeRef.current) composeRef.current.open = true;
     const box = document.querySelector<HTMLTextAreaElement>('[data-testid="askboss-input"]');
     box?.scrollIntoView({ block: "center" });
     box?.focus();
   }, []);
 
-  const sys = systemsWord(view?.systems ?? [], reachable);
+  const action = nextAction(view, attention, apps.error ? null : apps.data, reachable, apps.error);
+  const sys = { tone: reachable ? "green" : "grey", text: reachable ? "BOSS connected" : "Can't reach BOSS" };
   const lastWork = view?.pulse?.lastActAt ?? view?.today.lastWorkAt ?? null;
   // WORKING NOW while anything moves (independent test: "last work 22d ago" beside a run
   // that was working): open work on any agent, or a live run that is not stalled.
@@ -249,7 +236,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       {/* The only banner: a critical host, in its own words. */}
       {host.show && host.severity === "critical" ? <HostAdviceBanner advice={host} /> : null}
 
-      <section className="cc-hero" aria-label="What should your team build next?" data-testid="cc-hero">
+      <section className="cc-hero cc-workspace" aria-label="Next action" data-testid="cc-hero" data-next={action.kind}>
         <div className="cc-hero-bg" aria-hidden><div className="cc-aurora" /></div>
         <div className="cc-hero-l">
           <div className="cc-eyebrow" data-tone={sys.tone} data-key={status.key} data-testid="cc-status" title={statusTip}>
@@ -264,59 +251,54 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
             ) : null}
             <span className="ag-sr" role="status" aria-live="polite">{said}</span>
             {help ? (
-              <div className="cc-help" ref={helpRef}>
+              <div className="cc-help">
                 <button type="button" className="cc-help-btn" aria-expanded={helpOpen} aria-haspopup="dialog"
+                        aria-controls={helpOpen ? helpId : undefined}
                         aria-label="What you can do here" title="What you can do here" data-testid="cc-help"
-                        onClick={() => setHelpOpen((v) => !v)}>?</button>
-                {helpOpen ? <div className="cc-help-pop" role="dialog" aria-label="What you can do here">{help}</div> : null}
+                        onClick={(event) => setHelpOpener(helpOpen ? null : event.currentTarget)}>?</button>
+                {helpOpener ? <HelpPopover id={helpId} opener={helpOpener} onClose={closeHelp}>{help}</HelpPopover> : null}
               </div>
             ) : null}
           </div>
-          <h1 className="cc-headline">What should your team <em>build next?</em></h1>
+          <div className="cc-next" data-testid="cc-next-action" data-kind={action.kind}>
+            <span className="cc-next-label">{action.kind === "active" ? "Current work" : action.kind === "result" ? "Ready to review" : "Next action"}</span>
+            <h1 className="cc-headline" data-user-text>{action.title}</h1>
+            <p className="cc-next-detail" data-user-text>{action.detail}</p>
+            {action.patch ? <Go className="cc-btn primary" patch={action.patch} orgId={orgId}
+              testId="cc-next-go">{action.label}</Go> : action.label ? (
+              <button type="button" className="cc-btn primary" data-testid="cc-next-go" onClick={refresh}>{action.label}</button>
+            ) : null}
+          </div>
+          <details className="cc-compose-disclosure" ref={composeRef} open={action.kind === "empty"} data-testid="cc-compose-disclosure">
+            <summary>{action.kind === "empty" ? "Your task" : "Describe another task"}</summary>
           <div className="cc-compose" id="cc-compose">
             {/* Keyed: it is an element the server page made, rendered here among siblings. */}
             <React.Fragment key="composer">{composer}</React.Fragment>
-            {firstRun ? <OnboardingHelpRows onMore={() => setHelpOpen(true)} /> : null}
+            {firstRun ? <OnboardingHelpRows onMore={(opener) => setHelpOpener(opener)} expanded={helpOpen} controls={helpId} /> : null}
           </div>
-          <Proof n={proof} orgId={orgId} />
+          </details>
         </div>
-        {view ? (
-          <TeamGrid teams={view.teams} agents={view.agents} waiting={waiting} working={working} orgId={orgId}
-                    still={motion !== "full"} />
-        ) : <div className="cc-hero-r" aria-hidden />}
       </section>
 
-      {fresh ? null : nowCards}
-      {/* A FRESH INSTALL (independent test): nothing built and no history yet. The templates
-          lead, under one line that says where the team stands; the pulse waits for history
-          instead of drawing two near-empty boxes. */}
-      {fresh ? <FirstBuild onStart={startWork} /> : null}
-      <TemplatesShelf />
-      {fresh ? nowCards : null}
+      {nowCards}
       <AppsShelf apps={appRows} attention={attention} orgId={orgId} />
+      <details className="cc-secondary" data-testid="cc-template-details">
+        <summary>Browse templates</summary>
+        <TemplatesShelf />
+      </details>
+      {view ? (
+        <details className="cc-secondary" data-testid="cc-team-details">
+          <summary>{view.counts.agents} configured roles · {reachable ? `${view.counts.working} observed working` : "current activity unavailable"}</summary>
+          <p className="cc-secondary-note">Configured roles; activity comes from records.</p>
+          <Proof n={proof} orgId={orgId} />
+          <TeamGrid teams={view.teams} agents={view.agents} waiting={waiting} working={working} orgId={orgId}
+                    still={motion !== "full"} />
+        </details>
+      ) : null}
       {fresh ? null : (
         <PulseRow pulse={view?.pulse ?? null} week={view?.week ?? null} prsOpen={proof ? proof.prs : null}
                   now={now} orgId={orgId} />
       )}
     </div>
-  );
-}
-
-/** The fresh install's one line: nothing yet, and the two ways to start. */
-function FirstBuild({ onStart }: { onStart: () => void }) {
-  return (
-    <section className="cc-first" data-testid="cc-first-build" aria-label="Your first build">
-      <span className="cc-radar" aria-hidden />
-      <div>
-        <b>Your team hasn&apos;t built anything yet</b>
-        <span>Describe one, or pick a template</span>
-      </div>
-      <span className="cc-spacer" />
-      <button type="button" className="cc-btn primary" data-testid="cc-first-start" onClick={onStart}>Describe a build</button>
-      <button type="button" className="cc-btn" data-testid="cc-first-templates"
-              onClick={() => document.getElementById("cc-tpl-h")?.scrollIntoView({ block: "start", behavior: "smooth" })}>
-        Browse templates
-      </button>
-    </section>
   );
 }

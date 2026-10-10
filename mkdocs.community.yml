@@ -71,6 +71,7 @@ nav:
       - Sign-in setup: SIGN_IN_SETUP.md
       - Agents and access: AGENTS_AND_ACCESS.md
       - Build sandbox: SANDBOX.md
+      - Architecture approval and spending: ARCHITECTURE_GOVERNANCE.md
       - Identity administration: IDENTITY_ADMIN.md
       - Connect models: MODEL_CONNECTIONS.md
       - Use cases: use-cases.md
@@ -87,6 +88,8 @@ nav:
       - Features: FEATURES.md
       - Control surfaces: CONTROL_SURFACES.md
       - Terminal capability matrix: TERMINAL_CAPABILITY_MATRIX.md
+      - Release notes (v1.0-rc8): RELEASE_NOTES_v1.0-rc8.md
+      - RC8 validation: RC8_VALIDATION.md
       - Release notes (v1.0-rc6.2): RELEASE_NOTES_v1.0-rc6.2.md
       - Release notes (v1.0-rc6.1): RELEASE_NOTES_v1.0-rc6.1.md
       - Release notes (v1.0-rc6): RELEASE_NOTES_v1.0-rc6.md

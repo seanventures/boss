@@ -806,8 +806,10 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
     if job.kind == "discovery.run":
         # The research agent lives in the API container. The lease token goes with it: every
         # stage's model lease is bound to this job's lease, so a reclaimed job cannot spend.
+        from boss_engine.services.jobs import job_run_id
+
         result = client.run_discovery({
-            "run_id": job.payload["discovery_run_id"], "job_id": job.id,
+            "run_id": job_run_id(job.kind, job.payload), "job_id": job.id,
             "worker_id": client.worker_id, "lease_token": job.lease_token,
         })
         if result.get("status") == "failed" and result.get("retry"):

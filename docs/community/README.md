@@ -9,7 +9,7 @@ hide:
 
 <div class="boss-hero__copy" markdown="1">
 
-<p class="boss-eyebrow">Open source · Apache 2.0 · v1.0-rc6.2</p>
+<p class="boss-eyebrow">Open source · Apache 2.0 · v1.0-rc8</p>
 
 # The control plane for AI software work
 
@@ -77,7 +77,7 @@ Every job holds a heartbeated lease. Failures retry, dead-letter, or escalate to
 
 ### Your infrastructure
 
-Self-hosted on your server and reached over HTTPS on your domain or private network. Credentials never leave it.
+Self-hosted on your server and reached over HTTPS on your domain or private network. Credentials are stored locally. Hosted model calls send authentication and selected task data to that provider.
 
 </div>
 

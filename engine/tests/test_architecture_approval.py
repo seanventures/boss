@@ -73,6 +73,14 @@ def _clean(eng, project):
 @pytest.fixture()
 def architect(monkeypatch):
     model = ScriptedArchitect()
+    from boss_engine.services import architecture_spend
+
+    def scripted_generate(connection, settings, project_id, **kwargs):
+        kwargs["check_work"]()
+        return kwargs["adapter"].create_text_response(
+            kwargs["prompt"], system_prompt=kwargs["system_prompt"])
+
+    monkeypatch.setattr(architecture_spend, "generate", scripted_generate)
     monkeypatch.setattr(arch, "architect_adapter", lambda *a, **k: model)
     return model
 
@@ -107,10 +115,11 @@ def _panel_finished(c, project_id, meeting_run_id, *, decision_status="approved"
          "s": json.dumps({"prd_markdown": PRD})},
     )
     c.execute(
-        text("INSERT INTO decisions (id, project_id, task_id, question, status, approved_by) "
-             "VALUES (:i, :p, :t, 'Publish the PRD?', :s, 'ceo')"),
+        text("INSERT INTO decisions (id, project_id, task_id, question, status, approved_by, recommendation) "
+             "VALUES (:i, :p, :t, 'Publish the PRD?', :s, 'ceo', CAST(:rec AS JSONB))"),
         {"i": f"dec_{uuid.uuid4().hex[:8]}", "p": project_id, "t": task_id,
-         "s": decision_status},
+         "s": decision_status, "rec": json.dumps({"action": "execute_agent_tool",
+             "tool": "publish_document", "args": {"markdown": PRD}})},
     )
 
 

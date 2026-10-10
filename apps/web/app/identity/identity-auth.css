@@ -80,7 +80,7 @@ a.idn-idp:hover { border-color: var(--accent-line); background: color-mix(in srg
 .idn-big.pk { border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); background: color-mix(in srgb, var(--accent) 13%, transparent); color: var(--idn-ink-blue); }
 .idn-big.pk:hover:not([aria-disabled="true"]):not(:disabled) { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 .idn-auth .idn-big.pk[aria-disabled="true"] { opacity: 1; cursor: not-allowed; color: var(--faint); border-style: dashed; border-color: var(--border-strong); background: transparent; }
-.idn-auth .idn-big.p:hover:not(:disabled) { filter: brightness(1.08); }
+.idn-auth .idn-big.p:hover:not(:disabled) { filter: none; }
 .idn-big.go svg { transition: transform 120ms; }
 .idn-big.go:hover:not(:disabled) svg { transform: translateX(3px); }
 .idn-auth form .idn-big.p { margin-top: 10px; }
@@ -121,11 +121,15 @@ a.idn-idp:hover { border-color: var(--accent-line); background: color-mix(in srg
 /* the foot: "New here? Create account" (sign-in) and the siblings' "Back to sign in" */
 .idn-new { text-align: center; font-size: 13.5px; color: var(--muted); margin: 20px 0 0; }
 .idn-new a, .idn-new button { color: var(--teal); font-weight: 700; padding: 0; }
+.idn-auth [data-testid="forgot"], .idn-auth [data-testid="create-account"] {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px;
+}
 .idn-new a:hover, .idn-new button:hover, .idn-hostline .idn-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 .idn-auth .idn-foot { border-top: 0; margin-top: 18px; padding-top: 0; font-size: 13.5px; color: var(--muted); }
 .idn-auth .idn-who-s { border-radius: 14px; padding: 10px 14px; }
 
 @media (max-width: 560px) {
+  .idn-auth [data-testid="forgot"], .idn-auth [data-testid="create-account"] { min-height: 44px; }
   .idn-auth .idn-panel { padding: 26px 18px 20px; border-radius: 22px; }
   .idn-panel:has(> .idn-hostline) { padding-bottom: 62px; }
   .idn-hostline { left: 18px; right: 18px; bottom: 14px; }

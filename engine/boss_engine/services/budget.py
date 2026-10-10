@@ -66,22 +66,23 @@ def budget_period(period: str, now: Optional[datetime] = None) -> dict[str, Any]
 def period_spend(connection: Connection, project_id: str, period: str,
                  now: Optional[datetime] = None) -> dict[str, Any]:
     """THE ONE MEASURE OF A PERIOD'S SPEND: the money settled in it (MONEY_SQL — a subscription
-    or local call is $0, included_spend.py) and the active reservations MADE in it. A hold made
-    yesterday counts against yesterday. Every cap, state, forecast and message reads this."""
+    or local call is $0, included_spend.py) plus ALL outstanding reservations. An unresolved
+    liability does not disappear at midnight: settlement replaces its hold with period spend.
+    Every cap, state, forecast and message reads this."""
     bounds = budget_period(period, now)
     params = {"p": project_id, "start": bounds["start"], "end": bounds["end"]}
-    actual = connection.execute(
-        text(f"SELECT COALESCE(SUM({MONEY_SQL}), 0) FROM cost_receipts "
-             "WHERE project_id = :p AND created_at >= :start AND created_at < :end"),
-        params).scalar_one()
-    held = connection.execute(
-        text("SELECT COALESCE(SUM(amount_usd_micros), 0) AS total, COUNT(*) AS n "
-             "FROM budget_reservations WHERE project_id = :p AND status = 'active' "
-             "AND created_at >= :start AND created_at < :end"),
+    # Both aggregates share one MVCC snapshot. Separate statements can miss a hold
+    # consumed between the actual-cost read and the held-cost read.
+    totals = connection.execute(
+        text(f"SELECT actual.total AS actual, held.total AS held, held.n FROM "
+             f"(SELECT COALESCE(SUM({MONEY_SQL}), 0) AS total FROM cost_receipts "
+             "WHERE project_id = :p AND created_at >= :start AND created_at < :end) actual "
+             "CROSS JOIN (SELECT COALESCE(SUM(amount_usd_micros), 0) AS total, COUNT(*) AS n "
+             "FROM budget_reservations WHERE project_id = :p AND status = 'active') held"),
         params).mappings().one()
-    return {**bounds, "actual_usd_micros": int(actual or 0),
-            "reserved_usd_micros": int(held["total"] or 0),
-            "active_reservations_count": int(held["n"] or 0)}
+    return {**bounds, "actual_usd_micros": int(totals["actual"] or 0),
+            "reserved_usd_micros": int(totals["held"] or 0),
+            "active_reservations_count": int(totals["n"] or 0)}
 
 
 def state_for_utilization(cap: int, utilization: float, soft: float, orange: float,
@@ -126,6 +127,7 @@ def burst_retry_after_seconds(frees_in: object) -> int:
 #: knowable here, so the caller looks again in a minute. Read by model_failures.explain.
 HEADROOM_MESSAGE = "Budget headroom is held by other work's active reservations. Retry shortly."
 HEADROOM_RETRY_AFTER_SECONDS = 60
+ADMISSION_BUSY_MESSAGE = "Budget admission is busy with another transaction. Retry shortly."
 
 #: The per-minute cap refusals. Both are `refusal: "burst"`, transient, and read by
 #: model_failures.explain as "Waiting for the per-minute budget to free up."
@@ -250,6 +252,7 @@ class BudgetGovernor:
                 SET status = 'expired'
                 WHERE status = 'active'
                   AND expires_at <= :now_utc
+                  AND amount_usd_micros = 0
                 RETURNING id, project_id
                 """
             )
@@ -260,6 +263,7 @@ class BudgetGovernor:
                 SET status = 'expired'
                 WHERE status = 'active'
                   AND expires_at <= :now_utc
+                  AND amount_usd_micros = 0
                   AND project_id = :project_id
                 RETURNING id, project_id
                 """
@@ -267,6 +271,34 @@ class BudgetGovernor:
             query_params["project_id"] = project_id
 
         rows = connection.execute(query, query_params).mappings().all()
+
+        # Expiry revokes authority; it is not evidence that a provider never accepted work.
+        # Keep positive exposure until explicit settlement or a known no-call release. The
+        # generic/proof path has no reliable receipt link, so missing job/lease is not proof.
+        pending = connection.execute(text(
+            "SELECT r.id, r.project_id, r.amount_usd_micros FROM budget_reservations r "
+            "WHERE r.status='active' AND r.amount_usd_micros > 0 AND r.expires_at <= :now_utc "
+            "AND (CAST(:project_id AS text) IS NULL OR r.project_id=:project_id) "
+            "AND NOT EXISTS (SELECT 1 FROM events e WHERE e.entity_id=r.id "
+            "AND e.event_type='budget.reservation_reconciliation_required') "
+            "FOR UPDATE OF r SKIP LOCKED"),
+            {"now_utc": query_params['now_utc'], "project_id": project_id}).mappings().all()
+        for row in pending:
+            if connection.execute(text(
+                    "SELECT 1 FROM events WHERE entity_id=:id "
+                    "AND event_type='budget.reservation_reconciliation_required' LIMIT 1"),
+                    {"id": row['id']}).first():
+                continue
+            decision_id = create_blocking_decision(
+                connection, row['project_id'], None,
+                f"Reconcile expired budget reservation {row['id']}",
+                {"action": "verify_provider_outcome_then_settle_or_release", "reservation_id": row['id']},
+                {"reserved_usd_micros": int(row['amount_usd_micros'])},
+                "budget_outcome_unknown",
+            )
+            emit_event(connection, row['project_id'], 'budget.reservation_reconciliation_required',
+                       'budget_governor', 'budget_reservation', row['id'],
+                       {"decision_id": decision_id, "held_usd_micros": int(row['amount_usd_micros'])})
 
         expired_ids: list[str] = []
         for row in rows:
@@ -873,6 +905,22 @@ class BudgetGovernor:
         allocation_id: Optional[str] = None,
         risk_tier: Optional[int] = None,
     ) -> dict:
+        # Covers every allocation and allocation-free caller. Try rather than wait: some
+        # callers retain their transaction across work or already own source/allocation
+        # locks. Contention must not form a lock-order cycle or queue behind provider I/O.
+        admitted = connection.execute(text(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended('boss-budget:' || :p, 0))"),
+            {"p": project_id}).scalar_one()
+        if not admitted:
+            refused = {"status": "denied", "refusal": "admission_busy", "transient": True,
+                       "retry_after_seconds": 1, "decision_id": None, "budget_state": "unknown",
+                       "message": ADMISSION_BUSY_MESSAGE}
+            record_policy_eval(connection, project_id, 'budget.reserve', 'defer', action=category,
+                               reason='project admission transaction busy',
+                               detail={"requested_usd_micros": amount_usd_micros, "retry_after_seconds": 1})
+            record_refusal(connection, project_id, refused, category=category, reason=reason,
+                           amount_usd_micros=amount_usd_micros)
+            return refused
         self.expire_stale_reservations(connection, project_id)
         snapshot = self.status_for_project(connection, project_id)
 
@@ -927,6 +975,23 @@ class BudgetGovernor:
             # decision and told a person to "raise the daily or monthly cap" for something that
             # clears by itself. Only a request the cap refuses on ACTUAL spend needs a person.
             if refusal["kind"] == "headroom":
+                reconciliation = connection.execute(text(
+                    "SELECT d.id FROM decisions d JOIN budget_reservations r ON "
+                    "(d.recommendation->>'reservation_id'=r.id OR d.cost_summary->>'budget_reservation_id'=r.id) "
+                    "WHERE d.project_id=:p AND r.project_id=:p AND d.status='pending' AND r.status='active' "
+                    "AND d.recommendation->>'action' IN ('verify_provider_outcome_then_settle_or_release', "
+                    "'verify_provider_outcome_before_retry') ORDER BY d.created_at LIMIT 1"),
+                    {"p": project_id}).first()
+                if reconciliation:
+                    refused = {"status": "denied", "refusal": "reconciliation_required", "transient": False,
+                               "decision_id": reconciliation[0], "budget_state": snapshot['budget_state'],
+                               "message": "Budget is held for an unresolved provider outcome. Reconcile the recorded attempt before retrying."}
+                    record_policy_eval(connection, project_id, 'budget.reserve', 'deny', action=category,
+                                       reason='outstanding exposure requires reconciliation',
+                                       detail={"decision_id": reconciliation[0], **period_detail})
+                    record_refusal(connection, project_id, refused, category=category, reason=reason,
+                                   amount_usd_micros=amount_usd_micros, period=refusal)
+                    return refused
                 record_policy_eval(
                     connection, project_id, "budget.reserve", "deny", action=category,
                     reason="budget headroom held by active reservations",
@@ -1215,13 +1280,13 @@ class BudgetGovernor:
         reservation_id: str,
         reason: str,
     ) -> dict[str, Any]:
-        self.expire_stale_reservations(connection, project_id)
         row = connection.execute(
             text(
                 """
                 SELECT id, status, category, amount_usd_micros
                 FROM budget_reservations
                 WHERE id = :reservation_id AND project_id = :project_id
+                FOR UPDATE
                 """
             ),
             {"reservation_id": reservation_id, "project_id": project_id},
@@ -1264,6 +1329,7 @@ class BudgetGovernor:
                 "amount_usd_micros": int(row["amount_usd_micros"]),
             },
         )
+        self._resolve_reconciliation(connection, project_id, reservation_id, reason)
         snapshot = self.status_for_project(connection, project_id)
         return {
             "status": "released",
@@ -1271,6 +1337,22 @@ class BudgetGovernor:
             "budget_state": snapshot["budget_state"],
             "message": reason,
         }
+
+    def _resolve_reconciliation(self, connection: Connection, project_id: str,
+                                reservation_id: str, reason: str) -> None:
+        rows = connection.execute(text(
+            "UPDATE decisions SET status='resolved', resolution_note=:reason, updated_at=clock_timestamp() "
+            "WHERE project_id=:p AND status='pending' "
+            "AND recommendation->>'action' IN ('verify_provider_outcome_then_settle_or_release', "
+            "'verify_provider_outcome_before_retry') "
+            "AND (recommendation->>'reservation_id'=:r OR cost_summary->>'budget_reservation_id'=:r) "
+            "AND (recommendation->>'action' != 'verify_provider_outcome_before_retry' OR NOT EXISTS "
+            "(SELECT 1 FROM model_gateway_invocations i WHERE i.model_gateway_lease_id=decisions.recommendation->>'lease_id' "
+            "AND i.status='in_progress')) "
+            "RETURNING id"), {"p": project_id, "r": reservation_id, "reason": reason}).scalars().all()
+        if rows:
+            emit_event(connection, project_id, 'budget.reservation_reconciled', 'budget_governor',
+                       'budget_reservation', reservation_id, {"decision_ids": list(rows), "reason": reason})
 
     def consume(
         self,
@@ -1293,7 +1375,30 @@ class BudgetGovernor:
             raise ValueError("estimated_usd_micros must be non-negative.")
         if actual_usd_micros is not None and actual_usd_micros < 0:
             raise ValueError("actual_usd_micros must be non-negative.")
-        reservation = self.assert_active_reservation(connection, project_id, reservation_id)
+        # Settlement reconciles an existing exposure; an expired authorization may not be
+        # reused for admission, but its already-incurred cost must still be recorded.
+        reservation = connection.execute(text(
+            "SELECT id, amount_usd_micros, status FROM budget_reservations "
+            "WHERE id=:id AND project_id=:p FOR UPDATE"),
+            {"id": reservation_id, "p": project_id}).mappings().first()
+        if reservation and reservation['status'] == 'consumed':
+            settled = connection.execute(text(
+                "SELECT * FROM cost_receipts WHERE reservation_id=:id AND receipt_id=:receipt "
+                "AND project_id=:p ORDER BY created_at LIMIT 1"),
+                {"id": reservation_id, "receipt": receipt_id, "p": project_id}).mappings().first()
+            if settled:
+                equivalent = (int(actual_usd_micros if actual_usd_micros is not None
+                                  else estimated_usd_micros) if included_in_subscription else None)
+                if (settled['estimated_usd_micros'] != estimated_usd_micros
+                        or settled['included_in_subscription'] != included_in_subscription
+                        or settled['equivalent_usd_micros'] != equivalent
+                        or (not included_in_subscription and settled['actual_usd_micros'] != actual_usd_micros)):
+                    raise ValueError("Reservation was already settled with different cost evidence.")
+                return {"status": "consumed", "reservation_id": reservation_id,
+                        "budget_state": self.status_for_project(connection, project_id)['budget_state'],
+                        "message": "Reservation already consumed.", "cost_receipt": dict(settled)}
+        if reservation and reservation['status'] != 'active':
+            reservation = None
         if not reservation:
             raise ValueError("Active budget reservation not found.")
         receipt = connection.execute(
@@ -1438,7 +1543,7 @@ class BudgetGovernor:
             {"reservation_id": reservation_id, "project_id": project_id},
         ).mappings().first()
 
-        if not row or row["status"] != "active":
+        if not row or row["status"] != "active" or row["expires_at"] <= now_utc():
             return None
         return dict(row)
 
@@ -1466,6 +1571,22 @@ class BudgetGovernor:
             equivalent = int(actual_usd_micros if actual_usd_micros is not None
                              else estimated_usd_micros)
             actual_usd_micros = 0
+        reservation = connection.execute(text(
+            "SELECT status FROM budget_reservations WHERE id=:id AND project_id=:p FOR UPDATE"),
+            {"id": reservation_id, "p": project_id}).mappings().first()
+        if reservation and reservation['status'] == 'consumed':
+            prior = connection.execute(text(
+                "SELECT * FROM cost_receipts WHERE reservation_id=:id AND project_id=:p "
+                "AND receipt_id=:receipt ORDER BY created_at LIMIT 1"),
+                {"id": reservation_id, "p": project_id, "receipt": receipt_id}).mappings().first()
+            if (prior and prior['estimated_usd_micros'] == estimated_usd_micros
+                    and prior['actual_usd_micros'] == actual_usd_micros
+                    and prior['included_in_subscription'] == included_in_subscription
+                    and prior['equivalent_usd_micros'] == equivalent):
+                return prior['id']
+            raise ValueError("Reservation was already settled with different cost evidence.")
+        if not reservation or reservation['status'] != 'active':
+            raise ValueError("Active budget reservation not found.")
         cost_receipt_id = make_id("cost")
         connection.execute(
             text(
@@ -1473,12 +1594,12 @@ class BudgetGovernor:
                 INSERT INTO cost_receipts (
                     id, project_id, reservation_id, receipt_id, category, skill_or_model_id,
                     estimated_usd_micros, actual_usd_micros, status,
-                    equivalent_usd_micros, included_in_subscription
+                    equivalent_usd_micros, included_in_subscription, created_at
                 )
                 VALUES (
                     :id, :project_id, :reservation_id, :receipt_id, :category, :skill_or_model_id,
                     :estimated_usd_micros, :actual_usd_micros, :status,
-                    :equivalent_usd_micros, :included
+                    :equivalent_usd_micros, :included, clock_timestamp()
                 )
                 """
             ),
@@ -1506,6 +1627,7 @@ class BudgetGovernor:
             ),
             {"reservation_id": reservation_id},
         )
+        self._resolve_reconciliation(connection, project_id, reservation_id, 'Cost receipt recorded.')
         emit_event(
             connection,
             project_id,

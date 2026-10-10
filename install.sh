@@ -887,18 +887,27 @@ if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
         # the new API may migrate the database as soon as it starts. Always create
         # this run's own snapshot; a prior path could refer to stale data even if
         # its source commit happens to match.
-        _backup_helper="$(mktemp)"
-        if ! git -C "$INSTALL_DIR" show FETCH_HEAD:scripts/install/backup.sh > "$_backup_helper"; then
-          rm -f "$_backup_helper"
+        _backup_bundle="$(mktemp -d)"
+        _backup_helper="$_backup_bundle/backup.sh"
+        if ! git -C "$INSTALL_DIR" show "$_fetched_commit:scripts/install/backup.sh" > "$_backup_helper"; then
+          rm -rf "$_backup_bundle"
           die "The fetched source has no backup helper; existing checkout left unchanged."
+        fi
+        # The fetched backup helper and archive validator are one versioned recovery boundary.
+        # Older targets without the validator keep their self-contained backup helper.
+        if git -C "$INSTALL_DIR" cat-file -e "$_fetched_commit:scripts/install/backup_archive.py" 2>/dev/null; then
+          if ! git -C "$INSTALL_DIR" show "$_fetched_commit:scripts/install/backup_archive.py" > "$_backup_bundle/backup_archive.py"; then
+            rm -rf "$_backup_bundle"
+            die "Could not prepare the fetched recovery validator; existing checkout left unchanged."
+          fi
         fi
         _backup_args=(--dir "$INSTALL_DIR")
         [[ -z "$BACKUP_DIR" ]] || _backup_args+=(--backup-dir "$BACKUP_DIR")
         if ! _recovery_backup="$(bash "$_backup_helper" "${_backup_args[@]}" </dev/null)"; then
-          rm -f "$_backup_helper"
+          rm -rf "$_backup_bundle"
           die "Recovery backup failed; existing source, credentials and volumes were left unchanged. Check the backup error above, start the installed database if needed, then retry."
         fi
-        rm -f "$_backup_helper"
+        rm -rf "$_backup_bundle"
         [[ -s "$_recovery_backup/.env" && -s "$_recovery_backup/boss.dump" &&
            -s "$_recovery_backup/artifacts.tar" &&
            "$(cat "$_recovery_backup/source-commit" 2>/dev/null)" == "$_installed_commit" ]] ||
@@ -1273,19 +1282,35 @@ fi
 # ---- wait health -----------------------------------------------------------
 ui_step "Waiting for API health"
 
-HEALTH_OK=0
-for i in $(seq 1 60); do
-  if curl -fsS "${API_URL}/health" >/dev/null 2>&1; then
-    HEALTH_OK=1
-    break
-  fi
-  sleep 3
-  if [[ $((i % 5)) -eq 0 ]]; then
-    ui_info "still waiting… (${i}/60)"
-  fi
-done
-if [[ "$HEALTH_OK" -ne 1 ]]; then
-  ui_err "API did not become healthy in time."
+# Keep the existing 60-attempt / three-minute wait, including time spent in curl.
+# A listener that accepts TCP but never answers must not hold the installer forever.
+wait_for_api_health() {
+  local budget="${1:-180}" started=$SECONDS attempts=0
+  local deadline=$((started + budget)) remaining request_seconds sleep_seconds i
+  for i in $(seq 1 60); do
+    remaining=$((deadline - SECONDS))
+    [[ "$remaining" -gt 0 ]] || break
+    attempts=$i
+    request_seconds=5
+    [[ "$remaining" -ge "$request_seconds" ]] || request_seconds=$remaining
+    if curl -fsS --connect-timeout 2 --max-time "$request_seconds" \
+      "${API_URL}/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    remaining=$((deadline - SECONDS))
+    [[ "$remaining" -gt 0 ]] || break
+    sleep_seconds=3
+    [[ "$remaining" -ge "$sleep_seconds" ]] || sleep_seconds=$remaining
+    sleep "$sleep_seconds"
+    if [[ $((i % 5)) -eq 0 ]]; then
+      ui_info "still waiting… (${i}/60; $((SECONDS - started))s/${budget}s)"
+    fi
+  done
+  ui_err "API did not become healthy after ${attempts} attempts ($((SECONDS - started))s; limit ${budget}s). Health requests time out after at most 5s. Check ${API_URL}/health and whether another service is using its port."
+  return 1
+}
+
+if ! wait_for_api_health; then
   ui_info "Recent API and database logs:"
   # shellcheck disable=SC2086
   ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
@@ -1327,7 +1352,7 @@ else
   # The agent refuses to install with an empty project id. The id is the
   # project this installer just seeded, not a value from the shell environment.
   if BOSS_PROJECT_ID="${_place_project}" \
-      sh "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
+      bash "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
     _place_agent_state="installed"
   else
     ui_warn "Hardware agent did not install. The local machine was not recorded."

@@ -27,6 +27,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from ..config import get_settings
 from . import agent_acts, change_record, step_agents, workflows
 from . import workflow_custom_steps as custom_steps
 from .core import emit_event, now_utc
@@ -535,12 +536,13 @@ def _no_prd_to_approve(key: str, context: Optional[dict[str, Any]]) -> bool:
         return False
     if run_input.get("adopt_decision_id") or run_input.get("adopt_meeting_run_id"):
         return False
-    # The gate is AUTOMATIC by default (BOSS_MEETING_PRD_AUTO_APPROVE). An operator who turned
-    # that off asked for a person to sign — that gate stays, as before.
+    # The setting follows identity enforcement unless the operator explicitly overrides it.
+    # Missing/unreadable policy cannot grant permission to bypass a person's approval.
     try:
-        return bool(getattr(get_settings(), "meeting_prd_auto_approve", True))
+        return getattr(get_settings(), "meeting_prd_auto_approve", False) is True
     except Exception:  # noqa: BLE001
-        return True
+        log.warning("PRD auto-approval settings unavailable; retaining manual spec review")
+        return False
 
 
 #: Phases that HAPPEN BEFORE a build. On a retrospective run — one started for a project whose

@@ -7,6 +7,16 @@ To file one, [open a new issue](https://github.com/seanventures/boss/issues/new/
 !!! warning "Security vulnerabilities"
     Do not open a public issue for a suspected vulnerability. Email **boss@sean.net** instead, and leave credentials out of the message. [SECURITY.md](https://github.com/seanventures/boss/blob/main/SECURITY.md) explains what to include.
 
+## Stuck during your first run?
+
+1. In the install directory, run `boss status` and `boss doctor`. A healthy API proves the service is reachable; it does not prove your model, repository or build works.
+2. If sign-in cannot reach BOSS, keep the install running, check your SSH tunnel or HTTPS proxy, and use **Retry**. Follow [Sign in](CONSOLE_AUTH.md) for claim or account recovery.
+3. If a model or repository is blocked, open **Repo and models** and read that connection's status. A model **Re-check** makes a small governed call; reviewing the status does not.
+4. If work stops, open the run in **Workflow** and read the failed or waiting step. Resolve its named cause or approval before retrying. Keep the run ID and receipt or request ID, if shown.
+5. [Report the problem](https://github.com/seanventures/boss/issues/new/choose) with the installed release (`cat .boss-release`), OS, install method, what you tried, the exact error and the run ID. Copy only relevant lines from `boss doctor`; remove private paths, repository content and account information.
+
+Never attach `.env`, `boss-community.env.sh`, a setup link, tokens, authentication files, browser cookies, private logs or a backup archive. Backups include identity keys and private data. If you suspect a vulnerability, use the private security contact above.
+
 ## From report to release
 
 1. **You report it.** Include the version or commit, the install method, and the edition, and remove credentials and private data. The issue stays open while it is investigated.

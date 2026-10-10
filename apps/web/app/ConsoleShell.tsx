@@ -647,8 +647,12 @@ function ConsoleShellInner({
     const loaded = loadedRef.current;
     if (!loaded || loaded.includes(id)) return;
     try {
+      // The first document renders its area without adding it to the cookie. Preserve every
+      // mounted area before fetching another, so that refresh cannot discard an unsaved draft.
+      let remembered = loadedAreasCookieValue(document.cookie);
+      for (const area of loaded) remembered = cookieWith(remembered, area);
       document.cookie = loadedAreasCookie(
-        cookieWith(loadedAreasCookieValue(document.cookie), id));
+        cookieWith(remembered, id));
     } catch {
       /* cookies blocked: the requested area still renders, from the URL */
     }

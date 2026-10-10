@@ -26,6 +26,7 @@ from ..config import Settings
 from ..db import begin, get_engine
 from .code_agent import make_code_agent
 from .core import create_blocking_decision, emit_event, make_id
+from .discovery_spend import DiscoveryStopped
 
 PHASES = ["queued", "signal_sweep", "synthesize", "vet", "shape", "gate", "done"]
 #: Recorded on a run that was running on the old in-process thread when Community restarted.
@@ -223,21 +224,32 @@ def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worke
         row = c.execute(
             text("SELECT d.project_id, d.seed, d.context, d.state, d.status, "
                  "j.attempt, j.max_attempts, j.payload FROM discovery_runs d "
-                 "JOIN jobs j ON j.id = :job WHERE d.id = :id"),
+                 "JOIN jobs j ON j.id = :job AND j.project_id = d.project_id "
+                 "AND j.kind = 'discovery.run' WHERE d.id = :id"),
             {"id": run_id, "job": job_id},
         ).mappings().first()
     if row is None:
         return {"status": "failed", "retry": False, "error": f"no discovery run {run_id}"}
+    from .jobs import JobLeaseService, job_run_id
+    payload = row["payload"] if isinstance(row["payload"], dict) else {}
+    if job_run_id("discovery.run", payload) != run_id:
+        raise ValueError("Discovery job does not name this run.")
     state = row["state"] if isinstance(row["state"], dict) else {}
+    if state.get("job_id") != job_id:
+        return {"status": row["status"], "retry": False}
     if row["status"] == "failed" and state.get("failed_by_job"):
         # A REQUEUED DEADLETTER resumes the run it failed: the job, not the research, stopped
         # it, and the stages it already paid for replay from their receipts.
         with begin(engine) as c:
-            c.execute(text(
+            JobLeaseService(settings).require_active_lease(c, worker_id, job_id, lease_token)
+            changed = c.execute(text(
                 "UPDATE discovery_runs SET status = 'running', error = NULL, "
                 "state = (state - 'failed_by_job' - 'job_error') || jsonb_build_object('job_id', CAST(:j AS text)), "
-                "updated_at = now() WHERE id = :id AND status = 'failed'"),
-                {"id": run_id, "j": job_id})
+                "updated_at = now() WHERE id = :id AND project_id=:p AND status = 'failed' "
+                "AND state->>'job_id' = :j AND state->>'failed_by_job' = :j"),
+                {"id": run_id, "j": job_id, "p": row["project_id"]}).rowcount
+            if not changed:
+                return {"status": _current_status(engine, run_id), "retry": False}
             emit_event(c, row["project_id"], "discovery.resumed", worker_id, "discovery_run",
                        run_id, {"reason": "its deadlettered job was requeued", "job_id": job_id})
         state = {k: v for k, v in state.items() if k not in ("failed_by_job", "job_error")}
@@ -250,6 +262,9 @@ def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worke
         worker_id=worker_id, job_lease_token=lease_token,
         actor=str(payload.get("actor") or "ceo"),
     )
+    def fail(error):
+        return _fail_run(engine, row["project_id"], run_id, error, guard=spend.check_active)
+
     agent = make_code_agent(settings, engine="claude_code")
     if not hasattr(agent, "run_research"):
         raise RuntimeError("Discovery requires the claude_code engine (web research).")
@@ -266,7 +281,9 @@ def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worke
     try:
         _run_discovery(run_id, row["project_id"], row["seed"] or "", row["context"] or "",
                        settings, bool(state.get("deep")), None, research=research,
-                       sequential=True, raise_errors=True)
+                       sequential=True, raise_errors=True, guard=spend.check_active)
+    except DiscoveryStopped as stopped:
+        return {"status": stopped.status, "retry": False}
     except DiscoverySpendRefused as refused:
         if refused.transient:
             # A REFUSAL THAT CLEARS BY ITSELF, and waiting for it is not a failed attempt —
@@ -274,13 +291,21 @@ def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worke
             # than three waits failed. Queue a fresh job a minute out instead; it replays every
             # stage already paid for and carries on.
             return _wait_or_fail(engine, row["project_id"], run_id, payload, state, refused,
-                                 kind=_wait_kind(refused))
-        _fail_run(engine, row["project_id"], run_id, refused)
-        return {"status": "failed", "retry": False, "error": str(refused)[:1000]}
+                                 kind=_wait_kind(refused), guard=spend.check_active)
+        status = fail(refused)
+        return {"status": status, "retry": False, "error": str(refused)[:1000]}
     except (DiscoveryReconciliationRequired, DiscoveryResearchUnavailable) as settled:
-        _fail_run(engine, row["project_id"], run_id, settled)
-        return {"status": "failed", "retry": False, "error": str(settled)[:1000]}
+        status = fail(settled)
+        return {"status": status, "retry": False, "error": str(settled)[:1000]}
     except Exception as error:  # noqa: BLE001 — a stage failed outright; retry if attempts remain
+        with begin(engine) as c:
+            current = c.execute(text("SELECT status FROM discovery_runs WHERE id=:id"),
+                                {"id": run_id}).scalar()
+        if current != "running":
+            return {"status": current or "missing", "retry": False}
+        from .jobs import LeaseNotFoundError
+        if isinstance(error, LeaseNotFoundError):
+            return {"status": "stopped", "retry": False, "error": str(error)}
         from .model_failures import explain, is_login_rejected, waiting_for
 
         waiting = waiting_for(error, source_id=discovery_spend.RESEARCH_SOURCE_ID)
@@ -288,20 +313,23 @@ def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worke
             # NOT A FAILED STAGE: it could not start yet (the store holding the login did not
             # answer). The same wait as a busy budget or a busy subscription.
             return _wait_or_fail(engine, row["project_id"], run_id, payload, state, error,
-                                 kind=waiting["kind"])
+                                 kind=waiting["kind"], guard=spend.check_active)
         if is_login_rejected(error):
             # A REJECTED LOGIN DOES NOT FIX ITSELF. Retrying spent three attempts saying the
             # same 401 while the run showed "queued"; stop now and say what to do.
             said = explain(error, source_id=discovery_spend.RESEARCH_SOURCE_ID)
-            _fail_run(engine, row["project_id"], run_id,
-                      RuntimeError(f"{said['headline']} {said['action']}"))
-            return {"status": "failed", "retry": False, "error": said["headline"]}
+            status = fail(RuntimeError(f"{said['headline']} {said['action']}"))
+            return {"status": status, "retry": False, "error": said["headline"]}
         if last_attempt:
-            _fail_run(engine, row["project_id"], run_id, error)
-            return {"status": "failed", "retry": False, "error": str(error)[:1000]}
-        with begin(engine) as c:
-            c.execute(text("UPDATE discovery_runs SET error = :e, updated_at = now() "
-                           "WHERE id = :id"), {"e": f"retrying: {error}"[:1000], "id": run_id})
+            status = fail(error)
+            return {"status": status, "retry": False, "error": str(error)[:1000]}
+        try:
+            with begin(engine) as c:
+                _require_running(c, run_id, row["project_id"], spend.check_active)
+                c.execute(text("UPDATE discovery_runs SET error = :e, updated_at = now() "
+                               "WHERE id = :id"), {"e": f"retrying: {error}"[:1000], "id": run_id})
+        except (DiscoveryStopped, LeaseNotFoundError):
+            return {"status": _current_status(engine, run_id), "retry": False}
         return {"status": "failed", "retry": True, "error": str(error)[:1000]}
     return {"status": "completed", "retry": False}
 
@@ -329,32 +357,37 @@ def _wait_kind(refused: BaseException) -> str:
 
 
 def _wait_or_fail(engine, project_id: str, run_id: str, payload: dict, state: dict,
-                  reason: BaseException, *, kind: str) -> dict:
+                  reason: BaseException, *, kind: str, guard: Optional[Callable] = None) -> dict:
     """Wait for a condition that clears by itself — bounded, and saying what for — or, once
     the bound is spent, fail with the explained sentence and how long it waited."""
     from .discovery_spend import RESEARCH_SOURCE_ID
     from .model_failures import explain
+    from .jobs import LeaseNotFoundError
 
     what, bound, key = _WAITS.get(kind, _WAITS["budget_wait"])
     waits = int(state.get(key) or 0)
     if waits < bound:
-        _defer_run(engine, project_id, run_id, payload, waits + 1, str(reason),
-                   kind=kind, what=what, key=key)
+        try:
+            _defer_run(engine, project_id, run_id, payload, waits + 1, str(reason),
+                       kind=kind, what=what, key=key, guard=guard)
+        except (DiscoveryStopped, LeaseNotFoundError):
+            return {"status": _current_status(engine, run_id), "retry": False}
         return {"status": "deferred", "retry": False, "error": str(reason)[:1000]}
     said = explain(reason, source_id=RESEARCH_SOURCE_ID)
     stopped = RuntimeError(f"{said['headline'].rstrip('.')} — still waiting after {waits} "
                            f"tries, so the research stopped. ({reason})")
-    _fail_run(engine, project_id, run_id, stopped)
-    return {"status": "failed", "retry": False, "error": str(stopped)[:1000]}
+    status = _fail_run(engine, project_id, run_id, stopped, guard=guard)
+    return {"status": status, "retry": False, "error": str(stopped)[:1000]}
 
 
 def _defer_run(engine, project_id: str, run_id: str, payload: dict, waits: int,
                reason: str, *, kind: str = "budget_wait", what: str = "the per-minute budget",
-               key: str = "budget_waits") -> None:
+               key: str = "budget_waits", guard: Optional[Callable] = None) -> None:
     from .discovery_spend import JOB_KIND
     from .jobs import enqueue_job
 
     with begin(engine) as c:
+        _require_running(c, run_id, project_id, guard)
         job = enqueue_job(
             c, project_id, JOB_KIND, dict(payload), priority=40, max_attempts=3,
             run_after_seconds=BUDGET_WAIT_SECONDS,
@@ -373,13 +406,27 @@ def _defer_run(engine, project_id: str, run_id: str, payload: dict, waits: int,
                     "retry_in_seconds": BUDGET_WAIT_SECONDS})
 
 
-def _fail_run(engine, project_id: str, run_id: str, error: BaseException) -> None:
+def _current_status(engine, run_id: str) -> str:
     with begin(engine) as c:
-        c.execute(text("UPDATE discovery_runs SET status = 'failed', error = :e, "
-                       "updated_at = now() WHERE id = :id AND status = 'running'"),
-                  {"e": f"{error}"[:1000], "id": run_id})
-        emit_event(c, project_id, "discovery.failed", "boss", "discovery_run", run_id,
-                   {"error": f"{error}"[:500], "kind": type(error).__name__})
+        return c.execute(text("SELECT status FROM discovery_runs WHERE id=:id"),
+                         {"id": run_id}).scalar() or "missing"
+
+
+def _fail_run(engine, project_id: str, run_id: str, error: BaseException,
+              *, guard: Optional[Callable] = None) -> str:
+    from .jobs import LeaseNotFoundError
+
+    try:
+        with begin(engine) as c:
+            _require_running(c, run_id, project_id, guard)
+            c.execute(text("UPDATE discovery_runs SET status = 'failed', error = :e, "
+                           "updated_at = now() WHERE id = :id AND project_id=:p AND status = 'running'"),
+                      {"e": f"{error}"[:1000], "id": run_id, "p": project_id})
+            emit_event(c, project_id, "discovery.failed", "boss", "discovery_run", run_id,
+                       {"error": f"{error}"[:500], "kind": type(error).__name__})
+        return "failed"
+    except (DiscoveryStopped, LeaseNotFoundError):
+        return _current_status(engine, run_id)
 
 
 def resume_interrupted(settings: Settings) -> dict:
@@ -736,7 +783,8 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
                    settings: Settings, deep: bool = False,
                    governance: Optional[dict] = None, *,
                    research: Optional[Callable[[str, str], dict]] = None,
-                   sequential: bool = False, raise_errors: bool = False) -> None:
+                   sequential: bool = False, raise_errors: bool = False,
+                   guard: Optional[Callable] = None) -> None:
     """The pipeline. `research(stage, prompt)` makes each model call: the governed job passes
     one that reserves, leases and receipts each stage (and replays a stage already paid for);
     the legacy path calls the agent directly. `raise_errors` hands a failure to the job, which
@@ -753,6 +801,13 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
 
             def research(stage: str, prompt: str) -> dict:  # noqa: F811 — the legacy path
                 return agent.run_research(prompt)
+        call_research = research
+
+        def research(stage: str, prompt: str) -> dict:
+            with begin(engine) as c:
+                _require_running(c, run_id, project_id, guard)
+            return call_research(stage, prompt)
+
         dossier: dict = {"deep": deep}
         if governance:
             dossier["governance"] = governance
@@ -760,7 +815,7 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
         model = None
 
         # P1 — Signal sweep (web research). Deep mode fans out to parallel focused scouts.
-        _phase(engine, run_id, "signal_sweep")
+        _phase(engine, run_id, "signal_sweep", guard=guard)
         if deep:
             brief, findings, sweep_cost, model = _deep_sweep(research, seed, context,
                                                              sequential=sequential)
@@ -775,7 +830,7 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
             dossier["research_brief"] = sweep.get("brief", {})
             dossier["signal_findings"] = sweep.get("findings", [])
             _record_stage(dossier, "signal_sweep", r, parsed=sweep)
-        _save(engine, run_id, dossier, cost, model)
+        _save(engine, run_id, dossier, cost, model, guard=guard)
 
         # A SWEEP THAT FOUND NOTHING IS A FAILED RUN, NOT A CAUTIOUS ONE.
         #
@@ -807,37 +862,38 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
                 "the agent in this environment. See state._diagnostics for what it returned.")
 
         # P2 — Synthesize
-        _phase(engine, run_id, "synthesize")
+        _phase(engine, run_id, "synthesize", guard=guard)
         r = research("synthesize", _synth_prompt(seed, context, dossier["signal_findings"]))
         cost += r["cost_usd_micros"]
         parsed = _extract_json(r["summary"])
         dossier["market_analysis"] = parsed.get("analysis", {})
         _record_stage(dossier, "synthesize", r, parsed=parsed)
-        _save(engine, run_id, dossier, cost, model)
+        _save(engine, run_id, dossier, cost, model, guard=guard)
 
         # P3 — Adversarial vetting (web research for disconfirming evidence)
-        _phase(engine, run_id, "vet")
+        _phase(engine, run_id, "vet", guard=guard)
         r = research("vet", _vet_prompt(seed, dossier))
         cost += r["cost_usd_micros"]
         parsed = _extract_json(r["summary"])
         dossier["critique"] = parsed.get("critique", {})
         _record_stage(dossier, "vet", r, parsed=parsed)
-        _save(engine, run_id, dossier, cost, model)
+        _save(engine, run_id, dossier, cost, model, guard=guard)
 
         # P4 — Shape outcomes
-        _phase(engine, run_id, "shape")
+        _phase(engine, run_id, "shape", guard=guard)
         r = research("shape", _shape_prompt(seed, context, dossier))
         cost += r["cost_usd_micros"]
         parsed = _extract_json(r["summary"])
         dossier["candidate_outcomes"] = parsed.get("outcomes", [])
         _record_stage(dossier, "shape", r, parsed=parsed)
-        _save(engine, run_id, dossier, cost, model)
+        _save(engine, run_id, dossier, cost, model, guard=guard)
 
         # P5 — Evidence gate (deterministic, fail-closed)
-        _phase(engine, run_id, "gate")
+        _phase(engine, run_id, "gate", guard=guard)
         dossier["gate"] = _evaluate_gate(dossier)
 
         with begin(engine) as c:
+            _require_running(c, run_id, project_id, guard)
             c.execute(
                 text("""UPDATE discovery_runs SET status='completed', phase='done',
                         state=CAST(:s AS JSONB) || jsonb_strip_nulls(jsonb_build_object('job_id', state->'job_id')),
@@ -876,13 +932,16 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
                         c, settings, project_id,
                         {"billing": claude_cli_billing(settings)}),
                 )
+    except DiscoveryStopped:
+        if raise_errors:
+            raise
     except Exception as exc:  # noqa: BLE001 — record the failure durably, never crash the thread
         if raise_errors:
             raise
         detail = f"{exc}"[:1000]
         try:
             with begin(engine) as c:
-                c.execute(text("UPDATE discovery_runs SET status='failed', error=:e, updated_at=now() WHERE id=:id"),
+                c.execute(text("UPDATE discovery_runs SET status='failed', error=:e, updated_at=now() WHERE id=:id AND status='running'"),
                           {"e": detail, "id": run_id})
                 if governance:
                     from .budget import BudgetGovernor
@@ -909,16 +968,31 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
         # run looking alive, which is precisely the state the shepherd exists to catch.
         _hb_stop.set()
 
-def _phase(engine, run_id: str, phase: str) -> None:
+def _require_running(connection, run_id: str, project_id: Optional[str] = None,
+                     guard: Optional[Callable] = None) -> None:
+    if guard is not None:
+        guard(connection)
+    row = connection.execute(text(
+        "SELECT status FROM discovery_runs WHERE id=:id "
+        + ("AND project_id=:p " if project_id else "") + "FOR UPDATE"),
+        {"id": run_id, "p": project_id}).first()
+    if not row or row[0] != "running":
+        raise DiscoveryStopped(str(row[0]) if row else "missing")
+
+
+def _phase(engine, run_id: str, phase: str, *, guard: Optional[Callable] = None) -> None:
     with begin(engine) as c:
+        _require_running(c, run_id, guard=guard)
         c.execute(text("UPDATE discovery_runs SET phase=:ph, updated_at=now() WHERE id=:id"),
                   {"ph": phase, "id": run_id})
 
 
-def _save(engine, run_id: str, dossier: dict, cost: int, model: Optional[str]) -> None:
+def _save(engine, run_id: str, dossier: dict, cost: int, model: Optional[str],
+          *, guard: Optional[Callable] = None) -> None:
     # The dossier REPLACES the state but the job that owns the run is kept: dropping it made a
     # governed run look like an orphan of the old in-process path to startup recovery.
     with begin(engine) as c:
+        _require_running(c, run_id, guard=guard)
         c.execute(
             text("""UPDATE discovery_runs SET state=CAST(:s AS JSONB) || jsonb_strip_nulls(jsonb_build_object('job_id', state->'job_id')),
                     usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint),
