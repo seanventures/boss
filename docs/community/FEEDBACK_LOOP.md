@@ -17,6 +17,16 @@ To file one, [open a new issue](https://github.com/seanventures/boss/issues/new/
 
 Never attach `.env`, `boss-community.env.sh`, a setup link, tokens, authentication files, browser cookies, private logs or a backup archive. Backups include identity keys and private data. If you suspect a vulnerability, use the private security contact above.
 
+## Download a report for one run (RC9)
+
+RC9 source adds **Download diagnostics** in a Factory build's **More** menu and beside the sharing control for a workflow run. The published RC8 release predates this local download.
+
+Open the report, inspect it and edit out anything private. BOSS uses its existing authenticated, project-scoped run-report service: the report contains bounded errors, step records and log excerpts, after the server's secret, personal-data and installation-name redaction. Redaction cannot recognize every private detail; the preview is yours to check. Editing the report resets its inspection checkbox.
+
+Check **I checked the report for private content**, then choose **Download report**. BOSS rechecks access to that run and saves the edited snapshot as `boss-run-diagnostics.txt`. A missing run or denied permission prevents the download. Local download works with telemetry off or no collector configured; it makes no model call and sends nothing to the BOSS project. The separate **Send** action in **Share this run** retains its own permission and sharing controls.
+
+Review the saved file again before attaching it to a report. Add the installed release or exact commit (`cat .boss-release`), OS, reproduction steps and the run ID yourself. This report is a bounded snapshot, not a full log archive, provider-invoice reconciliation or proof that an external effect stopped. For an uncertain provider outcome, preserve the original IDs and reconcile it before retrying.
+
 ## From report to release
 
 1. **You report it.** Include the version or commit, the install method, and the edition, and remove credentials and private data. The issue stays open while it is investigated.
