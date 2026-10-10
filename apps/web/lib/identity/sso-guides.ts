@@ -7,6 +7,7 @@
  * A step may say {redirect}: the sheet shows the copyable redirect URL (or SAML's ACS and entity
  * ID) right there; the doc shows the URL's shape.
  */
+import { newOAuthAppUrl } from "../github-urls";
 export type GuideKind = "google" | "github" | "microsoft" | "okta" | "keycloak" | "generic" | "saml" | "apple";
 
 export type Guide = {
@@ -35,7 +36,7 @@ export const GUIDES: Record<GuideKind, Guide> = {
   github: {
     title: "GitHub", anchor: "github",
     steps: [
-      { text: "On GitHub, register a new OAuth app (under an organization's settings for a team).", link: { label: "New OAuth app", href: "https://github.com/settings/applications/new" } },
+      { text: "On GitHub, register a new OAuth app (under an organization's settings for a team).", link: { label: "New OAuth app", href: newOAuthAppUrl() } },
       { text: "Set Authorization callback URL to {redirect}." },
       { text: "Generate a client secret." },
       { text: "Copy the Client ID and the secret into BOSS, then Add." },

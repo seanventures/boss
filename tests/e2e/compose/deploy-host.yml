@@ -1,0 +1,14 @@
+# A deployment host for a walk on the compose stack, with no VM: `ssh` in api and worker is the
+# harness's stub (tests/e2e/stubs/bin/ssh), which answers like a healthy host with Docker and
+# records every command at the fake's /deploy/ssh. ONLY ssh is shadowed (stubs/ssh-only holds
+# nothing else), so the rest of the services run their own tools. Layer it after
+# build-override.yml.
+x-ssh-host: &ssh-host
+  PATH: /fxd/tests/e2e/stubs/ssh-only:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+  BOSS_E2E_FAKES_URL: http://fakegh:8080
+
+services:
+  api:
+    environment: *ssh-host
+  worker:
+    environment: *ssh-host

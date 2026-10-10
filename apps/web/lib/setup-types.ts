@@ -39,6 +39,8 @@ export type RepoConnection = {
   account_login: string | null;
   expires_at: string | null;
   source: "connected" | "install";
+  /** Whether builds can use this token (they read the org's GitHub token). */
+  builds?: { ok: boolean; message?: string; next?: string } | null;
 };
 
 export type ModelKind = "subscription" | "metered" | "local";
@@ -189,6 +191,9 @@ export type SetupView = {
   try: { workflow_key: string; last_run: TryRun | null; done?: boolean };
   /** Build toolchains in this install's image. Absent on an older API. */
   toolchains?: Toolchain[];
+  /** "Give builds a database (Postgres)" — the project setting build_services. Absent on an older API. */
+  build_database?: { key: string; mode?: "auto" | "always" | "never"; enabled: boolean; source: "project" | "default"; configured: boolean;
+                     permission: string } | null;
   /** A background probe (signed-in CLIs, the secret store) is on its way: ask again soon. */
   detecting?: boolean;
 };

@@ -35,7 +35,7 @@ from typing import Any, Optional
 from ..config import Settings
 from ..ports import sql
 from ..schemas import FileChange
-from . import agent_acts, design_prompts, plane_sync, review_comments, verification_target
+from . import agent_acts, ci_gate, design_prompts, plane_sync, review_comments, verification_target
 from .bakeoff import (
     fixture_for_run as bakeoff_fixture_for_run,
     stage_fixture as stage_bakeoff_fixture,
@@ -1218,6 +1218,79 @@ def _post_review_comments_to_pr(sf, proposal: dict, evidence: dict, engine, proj
         return {"posted": False, "reason": f"{type(exc).__name__}: {exc}"[:200]}
 
 
+def _with_ci_static(rr: dict, files) -> dict:
+    """A review result with BOSS's deterministic workflow findings appended (ci_gate), so the
+    gate, the PR comments and the review in BOSS read them even from a scripted model."""
+    try:
+        block = ci_gate.findings_block(ci_gate.static_review(files))
+    except Exception:  # noqa: BLE001
+        block = ""
+    return {**(rr or {}), "summary": ((rr or {}).get("summary") or "") + block} if block else rr
+
+
+def _wait_for_ci(engine, settings, sf, proposal: dict, project_id: str, run_id: str,
+                 repository: str, *, sleep=time.sleep) -> dict:
+    """Wait for the pull request head's checks (ci_gate). Never raises: the step's result is
+    words — "CI passed: 3 checks", "CI failed: 'unit-tests' failed — <url>", "CI did not finish
+    in 30 min" — and the gate on merge/deploy is the recorded wait, not this return value."""
+    number = proposal.get("pull_request_number")
+    url = proposal.get("pull_request_url")
+    if not number:
+        return {"status": "skipped", "summary": "No pull request to wait for CI on."}
+    sha = ""
+    try:
+        reader = ci_gate.AdapterCiReader(sf.github)
+        sha = sf.github.pull_request_snapshot(int(number)).get("head_sha") or ""
+        if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha)):
+            sha = ""
+            return _ci_unreadable(engine, project_id, run_id, repository, url, "",
+                                  "the pull request's head commit is unknown")
+        has_ci = ci_gate._safe_has_workflows(reader, sha)  # noqa: SLF001
+        if not has_ci and not ci_gate.workflow_paths(
+                (proposal.get("files_changed") or [])):
+            out = {"status": "no_ci", "summary": f"No CI is configured for {repository} (no "
+                                                 ".github/workflows), so BOSS did not wait."}
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.ci_waited", "boss", "code_task_run",
+                           run_id, {"pull_request_url": url, **out})
+            return out
+        with _transaction(engine) as c:
+            wait = ci_gate.start_wait(
+                c, project_id=project_id, repository=repository, head_sha=sha,
+                pull_request_url=url, has_ci=True, code_task_run_id=run_id,
+                timeout_seconds=int(settings.ci_wait_timeout_seconds))
+        got = ci_gate.run_blocking(lambda: _transaction(engine), wait["id"], reader, sleep=sleep)
+        out = {"id": got["id"], "status": got["status"], "summary": got["summary"],
+               "failing_url": got.get("failing_url")}
+    except Exception as exc:  # noqa: BLE001 — never lose the PR to a CI read; FAIL CLOSED
+        return _ci_unreadable(engine, project_id, run_id, repository, url,
+                              sha if isinstance(sha, str) else "",
+                              f"{type(exc).__name__}: {str(exc)[:200]}")
+    with _transaction(engine) as c:
+        emit_event(c, project_id, "code_task.ci_waited", "boss", "code_task_run", run_id,
+                   {"pull_request_url": url, **out})
+    return out
+
+
+def _ci_unreadable(engine, project_id: str, run_id: str, repository: str, url, sha: str,
+                   why: str) -> dict:
+    """FAIL CLOSED: CI that could not be read is recorded against the PR as `unreadable`, so the
+    merge and the deploy approval say "CI could not be read: <why>" until it is read again (or a
+    person forces the merge with a note). Only an explicit no-CI repository passes unread."""
+    out = {"status": "unreadable", "summary": ci_gate.unreadable_words(why)}
+    try:
+        with _transaction(engine) as c:
+            wait = ci_gate.record_unreadable(c, project_id=project_id, repository=repository,
+                                             why=why, head_sha=sha, pull_request_url=url,
+                                             code_task_run_id=run_id)
+            out["id"] = wait["id"]
+            emit_event(c, project_id, "code_task.ci_waited", "boss", "code_task_run", run_id,
+                       {"pull_request_url": url, **out})
+    except Exception:  # noqa: BLE001 — recording must never sink the finished PR
+        logger.warning("could not record unreadable CI for %s", run_id, exc_info=True)
+    return out
+
+
 def _anchored_findings(summary: str, root, *, stage: str, header: str) -> str:
     """A review pass as line-anchored instructions, with the code quoted at each place.
 
@@ -1329,6 +1402,7 @@ def _review_prompt(title, criteria, *, instructions="", ui=False, change=""):
         "for a REAL correctness or edge-case failure (invalid inputs, empty/boundary values, case "
         "sensitivity, error handling, off-by-one).\n\n"
         + _change_clause(change)
+        + ci_gate.review_clause_for(change)
         + "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
         "— a feature that was not asked for, or a spec stricter than what was agreed — is NOT a "
         "defect; note it but do not fail the change for it.\n\n"
@@ -1636,7 +1710,10 @@ def _plan_prompt(title, spec):
     return (
         "You are a software architect. Given the spec, write a short technical plan: the files to "
         "add/change, the function signatures, and the key edge cases to handle. Do NOT edit any "
-        f"files.\n\nTASK: {title}\n\nSPEC:\n{spec}"
+        "files. If the app needs a relational database, end the plan with the line "
+        "`database: postgres` (BOSS then gives every build its own PostgreSQL database, "
+        "DATABASE_URL in the environment); otherwise end with `database: none`."
+        f"\n\nTASK: {title}\n\nSPEC:\n{spec}"
     )
 
 
@@ -1844,6 +1921,73 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
     return {"status": "blocked", "done": True, "awaiting_plan_approval": True, "decision_id": dec_id}
 
 
+def _provision_build_services(engine, settings: Settings, run_id: str, project_id: str,
+                              pinned: Any, *, use_microvm: bool = False, spec: Any = None,
+                              title: str = "", root: Any = None,
+                              decided: Optional[dict[str, Any]] = None) -> Any:
+    """The run's build-services lease, or None when it needs none (build_services.decide: the
+    brief, a template, the plan or the app's own code says PostgreSQL; or the project's
+    Always; never under Never). The decision is kept on the run (`state.build_database`) so the
+    build page and the deploy plan say "Database: Postgres for this build", and why."""
+    from . import build_services
+    from .project_settings import effective as _effective_setting
+
+    manifest = getattr(pinned, "manifest", None)
+    declared = tuple(getattr(manifest, "services", ()) or ())
+    try:
+        with _transaction(engine) as c:
+            setting = _effective_setting(c, project_id, settings, build_services.SETTING_KEY)
+    except Exception:  # noqa: BLE001 — the repo's declaration still stands
+        setting = None
+    design = None
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql("SELECT state FROM code_task_runs WHERE id = :id"), {"id": run_id}).first()
+        state = (row[0] if row else None) or {}
+        state = json.loads(state) if isinstance(state, str) else state
+        design = (state or {}).get("design") if isinstance(state, dict) else None
+    except Exception:  # noqa: BLE001 — no plan yet: the other signals decide
+        design = None
+    decision = build_services.decide(declared, setting, spec=spec, title=title, root=root, design=design)
+    wanted = decision["services"]
+    if decided is not None:       # the caller keeps it in the run's final state too
+        decided.update({"postgres": "postgres" in wanted, "mode": decision["mode"],
+                        "why": decision["why"][:5]})
+    try:
+        with _transaction(engine) as c:
+            c.execute(sql("UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) || "
+                          "jsonb_build_object('build_database', CAST(:d AS jsonb)) WHERE id = :id"),
+                      {"d": json.dumps({"postgres": "postgres" in wanted, "mode": decision["mode"],
+                                        "why": decision["why"][:5]}), "id": run_id})
+    except Exception:  # noqa: BLE001 — the record is for display; the build goes on
+        logger.debug("build_database decision not recorded", exc_info=True)
+    if "postgres" not in wanted:
+        return None
+    if use_microvm:
+        raise build_services.BuildServicesUnavailable(
+            "this run executes in a microVM, which cannot reach the build-services server. "
+            "Run it on the container sandbox, or remove services: [postgres]")
+    if str(getattr(settings, "sandbox_command_runtime", "subprocess")).lower() == "docker":
+        raise build_services.BuildServicesUnavailable(
+            "the docker command runtime runs build commands with no network, so they cannot "
+            "reach the run's database. Use the subprocess runtime, or remove services: [postgres]")
+    install = ""
+    try:
+        from .resource_ledger import install_id
+
+        with _transaction(engine) as c:
+            install = install_id(c)
+    except Exception:  # noqa: BLE001 — an unlabelled lease is still reaped by its run tag
+        install = ""
+    lease = build_services.provision(run_id, install=install)
+    with _transaction(engine) as c:
+        emit_event(c, project_id, "code_task.build_services_ready", "boss", "code_task_run",
+                   run_id, {"services": list(wanted), "database": lease.name,
+                            "host": lease.host, "port": lease.port,
+                            "env": list(build_services.ENV_NAMES)})
+    return lease
+
+
 # --------------------------------------------------------------------------- #
 #  The governed job handler                                                   #
 # --------------------------------------------------------------------------- #
@@ -1901,12 +2045,17 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # Whatever is still running under this build's name ends with it (a background child
         # an exception unwound past, a seat the panel deadline gave up on).
         owned_process.terminate_owner(run_id, reason="run_ended", grace=2.0)
+        # Its throwaway database ends with it too (after its processes: nothing still writes).
+        from .build_services import teardown as _services_teardown
+
+        _services_teardown(run_id)
 
 
 def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             *, fencing_token: Optional[str] = None, mcp: Any = None) -> dict:
     from .run_fencing import RunFenced, assert_owner, claim_run, hash_token  # noqa: F401
     _fence = hash_token(fencing_token)
+    _build_database: dict[str, Any] = {}      # filled by _provision_build_services
     with _transaction(engine) as c:
         run = load_code_task_run(c, run_id)
         if run is not None and _fence:
@@ -2891,6 +3040,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _pinned_manifest = verification_target.pin_verify_manifest(root)
         _gate_plan0 = verification_target.resolve_gate_plan(
             spec, title, root, app_id=_app_id, pinned=_pinned_manifest)
+        # BUILD SERVICES (build_services): the run's own throwaway Postgres when the repo
+        # declares `services: [postgres]` or the project's setting asks for it. Provisioned
+        # before any agent, so the agents and every verify command see DATABASE_URL; a run that
+        # asked and cannot have it fails here, saying why — its tests never run without it.
+        _services_lease = _provision_build_services(
+            engine, settings, run_id, project_id, _pinned_manifest, use_microvm=use_microvm,
+            spec=spec, title=title, root=root, decided=_build_database)
+        if _services_lease is not None:
+            from .build_services import brief as _services_brief
+
+            instructions = f"{instructions}\n\n{_services_brief(_services_lease)}"
         if _gate_plan0.source != "task":
             verify_commands = list(_gate_plan0.commands)
             test_cmd = ((verification_target.manifest_display(root, _pinned_manifest)
@@ -3844,6 +4004,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         mutation_caught = None
         regressions_ok = None
         panel_parallel = False
+        # A CHANGE TO CI IS ALWAYS REVIEWED, whatever the risk tier (services/ci_gate.py): the
+        # adversarial reviewer gets the workflow checklist, the security seat sits, and BOSS's own
+        # deterministic workflow checks are added to the review's findings.
+        try:
+            _ci_files = ci_gate.workflow_changes(
+                accumulated if use_microvm else {fc.path: fc.content for fc in sandbox.diff()})
+        except Exception:  # noqa: BLE001 — an unreadable diff is reviewed as tiered
+            _ci_files = {}
+        _ci_static = ci_gate.findings_block(ci_gate.static_review(_ci_files)) if _ci_files else ""
+        if _ci_files and not do_review:
+            do_review = True
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.ci_change_reviewed", "boss", "code_task_run",
+                           run_id, {"files": list(_ci_files), "risk_tier": risk_tier,
+                                    "reason": "a change to .github/workflows/ is always reviewed"})
         if do_review:
             with _transaction(engine) as c:
                 _phase(c, "review_panel")
@@ -3968,6 +4143,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             enabled_seats = set(
                 _ALL_PANEL_SEATS if risk_tier >= 2
                 else (profile.get("panel_checks") or _ALL_PANEL_SEATS))
+            if _ci_files:
+                enabled_seats |= {"review_code", "security_check"}
             checks = []
             if "review_code" in enabled_seats:
                 checks += review_checks
@@ -4095,6 +4272,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # normalize to an empty result so the check just reads as "not_run" (still gated).
             _empty = {"cost_usd_micros": 0, "summary": "", "model": None}
             r3 = r3 or _empty
+            if _ci_static:
+                r3 = {**r3, "summary": (r3.get("summary") or "") + _ci_static}
             r4 = r4 or _empty
             r6 = r6 or _empty
             regressions_ok = panel["full"]
@@ -4410,6 +4589,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "engine": stage_routes.get("implement", {}).get("engine", build_engine),
             "build_engine": build_engine,
             "review_engine": review_engine,
+            # The build's database decision (build_services.decide), shown on the build page.
+            **({"build_database": dict(_build_database)} if _build_database else {}),
             "model": r2.get("model") or r2.get("usage", {}).get("model"),
             "review_model": (r3.get("model") or r3.get("usage", {}).get("model")
                              or r4.get("model") or r6.get("model")),
@@ -4652,6 +4833,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                            ui=ui_task, change=change_block),
                             review_root, read_only=True, model=review_model)
                         cost += int(rr.get("cost_usd_micros") or 0)
+                        rr = _with_ci_static(rr, accumulated if use_microvm else sandbox.diff())
                         verdict = _parse_verdict(rr.get("summary", ""))
                         r3 = rr
                         review_confidence = 1.0 if verdict == "survived" else 0.0
@@ -4769,6 +4951,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             review_root, read_only=True, model=review_model,
                             max_turns=escalated)
                         cost += int(rr.get("cost_usd_micros") or 0)
+                        rr = _with_ci_static(rr, accumulated if use_microvm else sandbox.diff())
                         verdict = _parse_verdict(rr.get("summary", ""))
                         r3 = rr
                         _rev_pass, _blocking, _deferred = _review_gate_from_findings(
@@ -5162,6 +5345,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # The findings go ON the pull request, at the lines they are about.
         evidence["review_comments_posted"] = _post_review_comments_to_pr(
             sf, proposal, evidence, engine, project_id, run_id)
+
+        # WAIT FOR CI before the deploy approval (services/ci_gate.py). Blocking and bounded
+        # (BOSS_CI_WAIT_TIMEOUT_SECONDS), each look in its own short transaction. A failure or a
+        # timeout is recorded against the pull request, and the merge and deploy approvals
+        # refuse until CI passes; a repository with no CI is said so and not waited on.
+        if int(getattr(settings, "ci_wait_timeout_seconds", 0) or 0) > 0:
+            with _transaction(engine) as c:
+                _phase(c, "waiting_for_ci")
+            evidence["ci_wait"] = _wait_for_ci(engine, settings, sf, proposal, project_id,
+                                               run_id, f"{owner}/{repo}")
 
         # Bank `opening_pr` before the terminal write erases the clock it was measured
         # by — in its OWN transaction, committed first, never nested inside the one the

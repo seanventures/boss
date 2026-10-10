@@ -21,6 +21,7 @@ import { GatedButton } from "../../components/gated";
 import React, { useEffect, useState } from "react";
 
 import { registerLocalPlace } from "../../lib/hardware";
+import { withKeyFile } from "../../lib/ssh-key-file";
 import { STAGES, useHostDetail, type HostDetail, type Resident, type StageKey } from "../../lib/infra-view";
 import { showToast } from "../client-forms";
 import {
@@ -91,7 +92,9 @@ function Setup({ host, actor, refresh }: { host: HostDetail; actor: string; refr
   const [route, setRoute] = useState(host.routeOptions[0]?.key ?? "");
   const current = host.stage.stage;
   const can = host.can;
-  const command = host.routeOptions.find((r) => r.key === route)?.command ?? host.installCommand ?? "";
+  const [keyFile, setKeyFile] = useState("");
+  const shown = host.routeOptions.find((r) => r.key === route)?.command ?? host.installCommand ?? "";
+  const command = withKeyFile(shown, keyFile);
   const address = String(host.facts.address ?? host.name);
 
   const act = (key: string, fn: () => Promise<{ ok: boolean; error?: string }>, done?: string) => run(key, async () => {
@@ -176,6 +179,18 @@ function Setup({ host, actor, refresh }: { host: HostDetail; actor: string; refr
               {host.routeOptions.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
             </select>
           </label>
+        ) : null}
+        {/^ssh\s/.test(shown) ? (
+          <>
+            <p className="inf-muted" data-testid="inf-stage-key-note">
+              This uses your laptop&apos;s default SSH key. If another key opens {address}, name its file.
+            </p>
+            <label className="inf-inline-field" title="Adds -i <file> to the command below">
+              <span>Key file</span>
+              <input value={keyFile} onChange={(e) => setKeyFile(e.target.value)} spellCheck={false}
+                     placeholder="~/.ssh/id_ed25519 (optional)" data-testid="inf-stage-key-file" />
+            </label>
+          </>
         ) : null}
         {command ? <code className="inf-mono inf-code" data-copy="data" data-testid="inf-stage-command">{command}</code> : null}
         <div className="inf-actions">

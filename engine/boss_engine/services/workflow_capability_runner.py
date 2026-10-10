@@ -315,7 +315,24 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
         "step_index": len(rows),
         "objective": str(spec.get("objective") or ""),
         "workflow_name": str(spec.get("workflow_name") or (row or {}).get("workflow_name") or ""),
+        # Whether this run ends in a deploy: the build is then told to write the app's
+        # deploy manifest itself (DEPLOY_MANIFEST_BRIEF), so nobody writes one by hand.
+        "deploys": any(isinstance(s, dict) and (s.get("binding") or {}).get("capability") == "deploy"
+                       for s in (spec.get("steps") or [])),
     }
+
+
+#: Said to a build whose workflow deploys it. The app's own manifest is how BOSS deploys it
+#: without anybody filling a "manifest path" or a start command in by hand.
+DEPLOY_MANIFEST_BRIEF = (
+    "THIS APP WILL BE DEPLOYED by BOSS after review. If the repository has no boss.deploy.yaml "
+    "at its root, write one, so the app says how it runs instead of anyone filling it in:\n"
+    "  version: 1\n  name: <the app's short name, lower-case-with-dashes>\n  kind: commands\n"
+    "  install: [<the commands that install dependencies and start the app in the background on "
+    "port $PORT>]\n  health: [{url: \"{target.public_url}\", expect: 200}]\n"
+    "  open: {url: \"{target.public_url}\"}\n"
+    "Use compose (kind: compose, compose: {file: docker-compose.yml}) when the app already runs "
+    "with docker compose. Keep it in the same pull request.")
 
 
 def _tool_registry():
@@ -1327,6 +1344,31 @@ def _running_preview(
             "open_url": f"/v1/previews/{row['id']}/web/"}
 
 
+def _architecture_step(connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
+                       context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """Run the Architecture step (services/architecture_docs.py) and translate its refusals.
+
+    No approved PRD upstream is SETTLED — a retry would be refused the same way until somebody
+    approves the PRD. A model failure is an ordinary, retryable failure.
+    """
+    from . import architecture_docs
+
+    run_id = str(context.get("run_id") or "")
+    try:
+        spec_steps = {s["id"]: s for s in workflows._run_spec(connection, run_id).get("steps", [])}
+    except Exception:  # noqa: BLE001 — without the spec, only the panel decision proves approval
+        spec_steps = {}
+    try:
+        return architecture_docs.start(
+            connection, getattr(ctx, "settings", None), project_id=project_id, run_id=run_id,
+            step=step, context=context, spec_steps=spec_steps,
+            constraints=str(inputs.get("constraints") or "").strip())
+    except architecture_docs.ArchitectureRefused as refused:
+        raise SettledCapabilityError(str(refused)) from refused
+    except architecture_docs.ArchitectureDraftError as error:
+        raise CapabilityExecutionError(str(error)) from error
+
+
 def _plrr_brief(connection: Connection, project_id: str, context: dict[str, Any]) -> str:
     """The instructions a readiness repair is given, built from THIS run's own spec.
 
@@ -2012,6 +2054,67 @@ def _notify(
             "receipt": receipt, "subject": subject}
 
 
+def _start_ci_wait(connection: Connection, project_id: str, context: dict[str, Any],
+                   inputs: dict[str, Any]) -> dict[str, Any]:
+    """`wait_for_ci`: record a wait on the pull request head's checks and park on it.
+
+    The pull request is the step's input, else the build's (`pull_request_url` from the step
+    that produced one). Its head commit is read from GitHub unless `head_sha` is given."""
+    from ..config import get_settings
+    from . import ci_gate
+
+    settings = get_settings()
+    url = str(inputs.get("pull_request_url") or _from_any_step(context, "pull_request_url") or "")
+    sha = str(inputs.get("head_sha") or "").strip()
+    parsed = ci_gate.parse_pr_url(url)
+    repository = parsed[0] if parsed else ""
+    try:
+        reader = ci_gate.reader_for_project(connection, settings, project_id, repository or None)
+        repository = repository or reader.repository
+        if not sha and parsed:
+            sha = str(((reader.pull_request(parsed[1]) or {}).get("head") or {}).get("sha") or "")
+        if not sha:
+            return {"capability": "wait_for_ci", "status": "failed",
+                    "error": "There is no pull request or commit to wait for CI on: give the "
+                             "step a pull_request_url, or put it after the build."}
+        minutes = inputs.get("timeout_minutes")
+        timeout = (int(float(minutes) * 60) if minutes not in (None, "")
+                   else int(getattr(settings, "ci_wait_timeout_seconds", 0) or 0)
+                   or ci_gate.DEFAULT_TIMEOUT_SECONDS)
+        wait = ci_gate.start_wait(connection, project_id=project_id, repository=repository,
+                                  head_sha=sha, pull_request_url=url or None,
+                                  timeout_seconds=timeout, reader=reader,
+                                  workflow_run_id=str(context.get("run_id") or "") or None,
+                                  actor="workflow")
+        wait = ci_gate.poll_wait(connection, wait["id"], reader, force=True)
+    except ci_gate.CiSettingError as error:
+        return {"capability": "wait_for_ci", "status": "failed", "error": error.message}
+    return {"capability": "wait_for_ci", "tool": None, "status": "awaiting",
+            "await": {"kind": "ci_wait", "id": wait["id"]}, "ci_wait_id": wait["id"],
+            "ci_status": wait["status"], "note": wait["summary"] or "waiting for CI"}
+
+
+def _look_at_ci(connection: Connection, project_id: str, wait_id: str) -> None:
+    """One look at a parked CI wait, when due. Its own savepoint: a failed read never poisons
+    the tick's transaction."""
+    from ..config import get_settings
+    from . import ci_gate
+
+    point = connection.begin_nested()
+    try:
+        repo = connection.execute(text("SELECT repository FROM ci_waits WHERE id = :i"),
+                                  {"i": wait_id}).scalar()
+        try:
+            reader = ci_gate.reader_for_project(connection, get_settings(), project_id, repo)
+        except Exception as error:  # noqa: BLE001 — GitHub unreachable: the deadline still holds
+            reader = ci_gate.UnreadableCi(str(error))
+        ci_gate.poll_wait(connection, wait_id, reader)
+        point.commit()
+    except Exception as error:  # noqa: BLE001 — looked at again next tick; the deadline holds
+        point.rollback()
+        log.warning("cannot look at CI wait %s: %s", wait_id, error)
+
+
 def _existing_app_note(connection: Connection, project_id: str, run_id: str) -> str:
     """What a panel must know when the run builds onto an existing app; "" when it does not."""
     if not run_id:
@@ -2070,8 +2173,17 @@ def _perform_capability(
             return _settle_started_work(capability, key, started)
         if key == "document":
             return _write_the_record(connection, project_id, context, inputs)
+        if key == "architecture":
+            # THE ARCHITECT DESIGNS FROM THE APPROVED PRD, THEN A PERSON SIGNS IT OFF. The step
+            # waits on its review (services/architecture_docs.py) like a build waits on its task.
+            return _settle_started_work(
+                capability, key,
+                _architecture_step(connection, ctx, project_id, step, context, inputs))
         if key == "notify":
             return _notify(connection, ctx, project_id, step, context, inputs)
+        if key == "wait_for_ci":
+            return _settle_started_work(
+                capability, key, _start_ci_wait(connection, project_id, context, inputs))
         # Same shape as `document`: no tool because it commissions nothing — it READS what the
         # run has already recorded and leaves a document behind.
         # THE RE-REVIEW AND THE SECURITY REPORT (services/security_review_steps.py).
@@ -2318,6 +2430,8 @@ def _perform_capability(
     # described — an API, no screen — because no screen had been asked for anywhere it could
     # see. Folded in here rather than in the catalogue because a binding carries a value and
     # this needs two of them joined; `instructions` stays the field create_code_task owns.
+    if key == "build" and context.get("deploys") and "boss.deploy.yaml" not in str(inputs.get("instructions") or ""):
+        inputs = {**inputs, "instructions": f"{str(inputs.get('instructions') or '').strip()}\n\n{DEPLOY_MANIFEST_BRIEF}"}
     if key == "build":
         spec = str(inputs.get("spec_markdown") or "").strip()
         inputs = {k: v for k, v in inputs.items() if k != "spec_markdown"}
@@ -2332,6 +2446,19 @@ def _perform_capability(
                 f"differ in detail, the spec is the decision.\n\n"
                 f"{spec}"
             )}
+        # THE APPROVED ARCHITECTURE TRAVELS WITH THE SPEC. Read from whichever step produced it
+        # (only a SUCCEEDED step is in the context, and an architecture step succeeds only when
+        # a person approved it), so every workflow that has one gets it — no binding to forget.
+        architecture = str(_from_any_step(context, "architecture_markdown") or "").strip()
+        if architecture:
+            inputs = {**inputs, "instructions": (
+                f"{str(inputs.get('instructions') or '').strip()}\n\n"
+                f"---\n\n"
+                f"THE APPROVED ARCHITECTURE BELOW IS BINDING. A person approved this design\n"
+                f"before the build started; follow its components, data model, APIs and\n"
+                f"security model. Where you must deviate, say so and why in the pull request.\n\n"
+                f"{architecture}"
+            ).strip()}
 
     # THE SECURITY REVIEW'S TOOL-BACKED STEPS (services/security_review_steps.py): the scan, the
     # panel and the fix build their tool's arguments from what the run produced — or say why
@@ -2369,6 +2496,9 @@ def _perform_capability(
     result = {"capability": key, "tool": capability.tool, **output,
               "ran_as": {**ran_as, "tool": capability.tool,
                          "skills_offered": [], "skills_used": []}}
+    skipped = _preview_not_permitted(key, result, step_actor)
+    if skipped:
+        return skipped
     failed = _tool_failed_to_start(key, result)
     if failed:
         raise CapabilityExecutionError(failed)
@@ -2414,6 +2544,8 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     "research": ("discovery", ("discovery_id", "run_id", "id")),
     "meeting": ("meeting", ("meeting_run_id", "run_id", "id")),
     "build": ("code_task", ("code_task_run_id", "run_id", "id")),
+    # The architecture review a person answers: approved, sent back, or rejected.
+    "architecture": ("architecture", ("architecture_review_id", "id")),
     # STARTED IS NOT SERVING. start_preview returns as soon as the request is accepted, so the
     # step completed while the app was still booting — and the workflow walked on to `deploy`
     # with nothing anybody could look at. "Without a preview, do not move to deploy" is the
@@ -2439,6 +2571,9 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     "security_scan": ("security_scan", ("scan_id", "id")),
     "security_panel": ("meeting", ("meeting_run_id", "run_id", "id")),
     "security_fix": ("code_task", ("code_task_run_id", "run_id", "id")),
+    # WAITING FOR CI IS WAITING. The step records a ci_waits row and parks on it; every tick
+    # takes one look at GitHub (with backoff) until the checks finish or the wait times out.
+    "wait_for_ci": ("ci_wait", ("ci_wait_id", "id")),
 }
 
 #: Envelopes a capability's tool nests its handle in, beyond the ones named after the kind and
@@ -2577,6 +2712,27 @@ def _awaited_handle(key: str, output: dict[str, Any]) -> Optional[dict[str, Any]
     return None
 
 
+def _preview_not_permitted(key: str, output: dict[str, Any],
+                           actor: Optional[str]) -> Optional[dict[str, Any]]:
+    """A preview the step's agent may not start is SKIPPED, in words — not a deadletter.
+
+    The Captain's improve passes ran a workflow whose preview step runs as the QA agent, whose
+    Passport does not hold preview:manage. Every pass deadlettered with the raw
+    "'start_preview' needs preview:manage", and the next pass did the same. A preview is for a
+    person to look at; the build and its tests already stand without it. Any other refusal still
+    fails the step.
+    """
+    if key != "preview" or str(output.get("error") or "") != "forbidden":
+        return None
+    permission = str(output.get("permission") or "preview:manage")
+    who = str(actor or "the step's agent")
+    reason = (f"Preview skipped: {who} is not allowed to start previews ({permission}). "
+              "Grant it on that agent's Passport to get a preview here, or start one from the "
+              "build's card.")
+    return {**output, "ok": True, "status": "skipped", "skipped": True, "error": None,
+            "reason": reason, "message": reason, "summary": reason}
+
+
 def _tool_failed_to_start(key: str, output: dict[str, Any]) -> Optional[str]:
     """A sentence when the tool reported failure and there is nothing to wait on.
 
@@ -2660,10 +2816,21 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     # A scan with every tool run is `done`; one whose tools all failed (or that could not run)
     # is `failed`, with why in counts.error.
     "security_scan": ("security_scans", frozenset({"done"}), frozenset({"failed"})),
+    # An architecture is done when a PERSON approved it. `awaiting_approval`,
+    # `revision_requested` and `drafting` are in flight: nobody has answered, or the architect
+    # is writing the version a person asked for.
+    "architecture": ("architecture_reviews",
+                     frozenset({"approved"}),
+                     frozenset({"rejected", "cancelled", "failed"})),
+    # CI (services/ci_gate.py): passed, or no CI configured at all, lets the run go on; a failed
+    # check or a timeout fails the step with the words and the failing check's link.
+    "ci_wait": ("ci_waits",
+                frozenset({"passed", "no_ci"}),
+                frozenset({"failed", "timed_out", "unreadable", "cancelled"})),
 }
 
 #: Where a table keeps the reason its run ended, when it is not a column called `error`.
-_REASON_COLUMN: dict[str, str] = {"deployment_runs": "failure_reason",
+_REASON_COLUMN: dict[str, str] = {"ci_waits": "summary", "deployment_runs": "failure_reason",
                                   "stack_deployments": "failure_reason",
                                   "security_scans": "counts->>'error'"}
 
@@ -2677,6 +2844,11 @@ def _terminal_evidence(
     onto the step's output rather than being looked up again by preview and deploy.
     """
     try:
+        if kind == "architecture":
+            # THE APPROVED DOCUMENT, so every later step's brief can carry it.
+            from . import architecture_docs
+
+            return architecture_docs.evidence(connection, awaited_id)
         if kind == "code_task":
             row = connection.execute(
                 text("SELECT pull_request_url, pull_request_number FROM code_task_runs "
@@ -2761,6 +2933,15 @@ def _terminal_evidence(
             if first:
                 evidence["deployed_url"] = first if "://" in first else f"http://{first}"
             return evidence
+        if kind == "ci_wait":
+            row = connection.execute(
+                text("SELECT status, summary, failing_url, pull_request_url FROM ci_waits "
+                     "WHERE id = :r"), {"r": awaited_id}).mappings().first()
+            if not row:
+                return {}
+            return {"ci_wait_id": awaited_id, "ci_status": row["status"],
+                    "ci_summary": row["summary"], "failing_check_url": row["failing_url"],
+                    "note": row["summary"]}
         if kind == "stack_deployment":
             row = connection.execute(
                 text("SELECT status, open_url, commit_sha FROM stack_deployments WHERE id = :r"),
@@ -2967,6 +3148,8 @@ def resume_awaited(
             # resumption paths and must not be touched here.
             continue
         table, ok_states, bad_states = table_spec
+        if kind == "ci_wait":
+            _look_at_ci(connection, project_id, awaited_id)
         try:
             row = connection.execute(
                 text(f"SELECT status FROM {table} WHERE id = :id"),  # noqa: S608 - fixed set
@@ -3113,7 +3296,8 @@ def resume_awaited(
                         # A person said no. `workflow_run_actions` reads this and never offers
                         # "Skip and proceed" on it: skipping would turn the refusal into a yes.
                         **({REJECTED_BY_APPROVER: True}
-                           if kind == "stack_deployment" and status == "rejected" else {})},
+                           if kind in ("stack_deployment", "architecture")
+                           and status == "rejected" else {})},
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "failed", "awaited": kind, "awaited_status": status,
@@ -4230,6 +4414,15 @@ def tick(
 
             # Work that FINISHED while we were away, first of all: a build that completed a
             # moment ago should release the next step in this pass rather than a tick later.
+            # AN ARCHITECTURE SENT BACK IS REWRITTEN NOW, before its step is looked at: the
+            # architect writes the version the person asked for and a fresh approval opens.
+            phase = "revise architectures sent back"
+            from . import architecture_docs
+
+            performed.extend(architecture_docs.revise_sent_back(
+                connection, getattr(ctx, "settings", None), project_id=project_id,
+                run_id=run_id))
+
             phase = "resume awaited work"
             performed.extend(resume_awaited(
                 connection, project_id=project_id, run_id=run_id, worker_id=worker_id

@@ -105,3 +105,53 @@ def test_every_org_credential_change_checks_org_scope(world):
     finally:
         lineage._ENFORCED.reset(token)   # noqa: SLF001
     assert _org_token(world)["repos"] == ["acme/b-repo"]
+
+
+def test_an_owner_replacing_the_token_of_a_bound_repo_reaches_builds(world):
+    """D1 (2026-10-09): an Owner's token pasted in Setup › Repository did not land in the org
+    connection. Only `select` mirrored, and replacing the token of a repo already bound (the
+    installer binds it) never selects: the repo row went green, GitHub access said "Builds
+    can't reach GitHub"."""
+    _setup_repo(world, world.ctx(world.owner), "ghp_e2e_full")
+    with begin() as db:
+        db.execute(text("UPDATE identity_vault_items SET status = 'revoked' WHERE kind = 'legacy_pat' "
+                        "AND org_id = :o"), {"o": world.org})
+    assert _org_token(world) is None
+    c = TestClient(main.app)
+    with world.acting_as(world.ctx(world.owner)):
+        with begin() as db:
+            conn_id = db.execute(text("SELECT id FROM github_connections WHERE project_id = :p "
+                                      "AND status NOT IN ('disabled', 'revoked') LIMIT 1"),
+                                 {"p": world.project_a}).scalar()
+        replaced = c.post("/v1/setup/repository/token", json={
+            "project_id": world.project_a, "token": "ghp_e2e_full", "connection_id": conn_id})
+        assert replaced.status_code == 200, replaced.text
+    after = _org_token(world)
+    assert after is not None and "e2e/app" in after["repos"], after
+
+
+def test_a_token_builds_cannot_use_says_so_on_the_repository_row(world):
+    _setup_repo(world, world.ctx(world.padmin), "ghp_e2e_full")
+    from datetime import datetime, timezone
+
+    from boss_engine.config import get_settings
+    from boss_engine.services import setup_view
+
+    with begin() as db:
+        repo = setup_view._repository(db, get_settings(), world.project_a,   # noqa: SLF001
+                                      datetime.now(timezone.utc))
+    builds = repo["connection"].get("builds")
+    assert builds and builds["ok"] is False, builds
+    assert "project only" in builds["message"] and builds["next"], builds
+
+
+def test_a_stale_second_factor_is_named_not_called_a_missing_permission(world):
+    token = lineage._ENFORCED.set(True)   # noqa: SLF001
+    try:
+        for ctx, expected in ((world.ctx(world.owner), None),
+                              (world.ctx(world.owner, mfa=False), "step_up"),
+                              (world.ctx(world.padmin), "org_scope")):
+            with lineage.acting(ctx), begin() as db:
+                assert github_setup.org_credentials_refusal(world.org, db=db) == expected
+    finally:
+        lineage._ENFORCED.reset(token)   # noqa: SLF001

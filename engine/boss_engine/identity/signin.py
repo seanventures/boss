@@ -168,11 +168,13 @@ def finish(db: Any, user: users.UserRow, facts: RequestFacts, *, methods: list[s
          session_ref=issued.session_id, details={"methods": sorted(set(methods))})
     emit(db, org_id=user.org_id, event_type=event, outcome=Outcome.SUCCESS, ctx=ctx,
          session_ref=issued.session_id, details={"methods": sorted(set(methods)), "mfa": mfa})
-    if not familiar:
+    # A FIRST-EVER SIGN-IN IS NOT NEWS: not an email, and not a "Not you?" banner either. The
+    # claim's own sessions (the claim, then the authenticator step) greeted a brand-new Owner with
+    # "New sign-in from a new device … Not you?" on the very first page.
+    if not familiar and user.last_login_at is not None:
         emit(db, org_id=user.org_id, event_type="auth.new_device", outcome=Outcome.INFO, ctx=ctx,
              session_ref=issued.session_id, details={"methods": sorted(set(methods))})
-        if user.last_login_at is not None:       # a first-ever sign-in is not news to anyone
-            notify_new_device(user, facts, methods)
+        notify_new_device(user, facts, methods)
     max_age = int((issued.absolute_expires_at - now).total_seconds())
     cookies = [sessions.set_cookie_header(SESSION_COOKIE, issued.token, max_age=max_age),
                sessions.set_cookie_header(DEVICE_COOKIE, device, max_age=DEVICE_MAX_AGE),

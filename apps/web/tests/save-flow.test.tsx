@@ -270,6 +270,18 @@ describe("saving your own workflow", () => {
     expect(document.querySelector('[data-testid="wf-issues"]')!.textContent).toContain("2 issues");
   });
 
+  it("a step that cannot RUN yet (Needs Deploy set up) still saves, and the warning names where to fix it", async () => {
+    publishSpec.mockResolvedValue(created("def_own", "my_flow", "My flow", 4));
+    checkSpec.mockResolvedValue({ ok: true, summary: SUMMARY, problems: [
+      { step_id: "build", field: "ability", message: "Needs Deploy set up", severity: "warning",
+        fix_label: "Set up where it deploys", fix_href: "/?area=infra&view=fleet&add=target" },
+    ] });
+    await mount(SPEC);
+    await edit();
+    await press("save");
+    expect(publishSpec).toHaveBeenCalledTimes(1);
+  });
+
   it("a gate with no question is stopped before any request", async () => {
     await mount({ ...SPEC, steps: [SPEC.steps[0], { ...SPEC.steps[1], question: "" }] });
     await edit();

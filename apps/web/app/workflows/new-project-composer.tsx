@@ -1104,7 +1104,13 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
              data-testid="np-apps">
           {shownApps.map(appCard)}
           {appsLoaded && !apps.length ? (
-            <span className="np-empty" data-testid="np-no-apps">No apps yet. Start a new one.</span>
+            // NO DEAD END: a connected repository BOSS has not built in yet is changed through
+            // Try it (one change, one PR), not "start a new one" over the existing code.
+            <span className="np-empty" data-testid="np-no-apps">
+              Nothing built here yet. To change a connected repository, use{" "}
+              <a href="?area=setup&focus=try" data-testid="np-no-apps-try">Try it in Repo and models</a>;
+              or start a new app.
+            </span>
           ) : null}
           {appsLoaded && apps.length && !shownApps.length ? (
             <span className="np-empty">No app matches.</span>

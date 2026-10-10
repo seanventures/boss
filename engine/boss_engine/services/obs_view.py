@@ -123,6 +123,7 @@ class AppDetail(TypedDict, total=False):
                             # build_sha7, deployed_at, observed_version, serving_mismatch(bool),
                             # host{id,name}, open_url, dashboard_url, last_error
     series: list[dict[str, Any]]     # ≤ 288: {at, p95, avg, ok, n}
+    metrics: dict[str, Any]          # app_metrics.metrics_view: the app's own /metrics
     incidents: list[dict[str, Any]]  # {start, end|None, duration_s, first_error, deploy_before{ref, sha7}|None}
     pins: list[Pin]
     window: dict[str, Any]
@@ -723,12 +724,29 @@ def app_detail(connection: Any, settings: Any, project_id: str, target_id: str, 
         },
         "series": series,
         "incidents": incidents,
+        "metrics": _app_metrics(connection, project_id, t, now, pw["start"], partial),
         "pins": _pins(connection, [target_id], pw["start"], pw["end"], partial)[target_id],
         "window": {**_window_wire(pw), "series_cell_s": cell_s},
     }
     if partial:
         body["partial"] = partial  # type: ignore[typeddict-unknown-key]
     return _sealed(body)  # type: ignore[return-value]
+
+
+def _app_metrics(connection: Any, project_id: str, t: dict, now: datetime, start: datetime,
+                 partial: list[str]) -> dict[str, Any]:
+    """The app's OWN request rate, error rate and p50/p95 (app_metrics), read from stored
+    scrapes — never fetched on a poll."""
+    from . import app_metrics
+
+    try:
+        with connection.begin_nested():
+            return app_metrics.metrics_view(connection, {**t, "project_id": project_id},
+                                            now=now, since=start)
+    except Exception:  # noqa: BLE001
+        log.exception("obs_view: app metrics failed")
+        partial.append("metrics")
+        return {"declared": False, "word": "Metrics unavailable"}
 
 
 def probe_app(engine: Any, settings: Any, project_id: str, target_id: str) -> dict[str, Any]:
@@ -764,8 +782,13 @@ def probe_app(engine: Any, settings: Any, project_id: str, target_id: str) -> di
              "err": sample["error"]})
         state, _since = _state_of(_newest_samples(c, [target_id], at)[target_id], True)
     w = _health_word(state)
+    # `Probe now` also scrapes the app's declared metrics, so one press refreshes both halves
+    # of the drawer. Never raises; an app without `metrics:` is skipped.
+    from . import app_metrics
+
+    scraped = app_metrics.sweep(engine, settings, [target], now=at, force=True)
     return {"word": w["word"], "tone": w["tone"], "checked_at": _iso(at), "probed": True,
-            "ok": bool(sample["ok"])}
+            "ok": bool(sample["ok"]), "metrics_scraped": int(scraped.get("scraped") or 0)}
 
 
 # ── Models (§4.10) ──────────────────────────────────────────────────────────────────────────

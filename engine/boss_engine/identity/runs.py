@@ -741,6 +741,17 @@ BUILD_SCOPE = frozenset({"code_task:read", "code_task:steer", "repository:read",
 BUILD_GITHUB_NEEDS = {"contents": "write", "pull_requests": "write", "checks": "read", "statuses": "read"}
 
 
+def _build_needs(db: Any, project_id: str, owner: str, repo: str) -> dict[str, str]:
+    """BUILD_GITHUB_NEEDS, plus `workflows: write` when the repository opted in to builds changing
+    CI (Setup › Repo, "Builds may change CI workflows"; services/ci_gate.py)."""
+    from ..services.ci_gate import build_github_needs
+
+    try:
+        return build_github_needs(db, project_id, f"{owner}/{repo}", BUILD_GITHUB_NEEDS)
+    except Exception:  # noqa: BLE001 — unreadable: the default needs, never more
+        return dict(BUILD_GITHUB_NEEDS)
+
+
 def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner: str, repo: str,
                         role_key: Optional[str], acting: Any = None,
                         job_id: Optional[str] = None) -> Optional[tuple[Shim, CloneAccess]]:
@@ -801,7 +812,7 @@ def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner
             shim = start_run(subject_for(acting, db=db),
                              RunStart(run_id=rid, agent_id=agent_id, project_id=project_id,
                                       repos=(f"{owner}/{repo}",), scope=BUILD_SCOPE,
-                                      github_needs=BUILD_GITHUB_NEEDS),
+                                      github_needs=_build_needs(db, project_id, owner, repo)),
                              grant_id=acting.grant_id, db=db, audiences=(AUD_API,))
     remember_engine(engine)
     # The worker's own GitHub writes for this build (opening its PR) use tokens bound to this run:

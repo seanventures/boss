@@ -13,6 +13,7 @@
  */
 import {
   ArrowsClockwise,
+  Blueprint,
   ChatsCircle,
   CheckCircle,
   Cloud,
@@ -42,6 +43,7 @@ const STEP_ICONS: Record<string, IconType> = {
   research: ListMagnifyingGlass,       // reading the world before building in it
   meeting: ChatsCircle,                // a panel arguing to a PRD
   spec_review: CheckCircle,            // a person signing the spec off
+  architecture: Blueprint,             // how it is put together, signed off before code
   build: Wrench,                       // the inner pipeline doing the work
   review: MagnifyingGlass,             // reading the diff adversarially
   test: Flask,                         // proving it
