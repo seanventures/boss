@@ -41,6 +41,8 @@ let host: HTMLDivElement;
 let root: Root;
 let draftMounts: number;
 let draftUnmounts: number;
+let serverDelayMs: number;
+let omitNextArea: boolean;
 
 function Draft() {
   const [draft, setDraft] = useState("");
@@ -58,10 +60,17 @@ function ServerBoundary() {
   })]);
   // The RSC transport is a service double. Its selection rule is the actual page's rule;
   // omitting an area removes its subtree, as the server's shows(area) gate does.
-  router.refresh.mockImplementation(() => setLoaded([...areasToRender({
-    requested: new URLSearchParams(window.location.search).get("area") ?? "overview",
-    cookie: loadedAreasCookieValue(document.cookie), fullDocument: false,
-  })]));
+  router.refresh.mockImplementation(() => {
+    const requested = new URLSearchParams(window.location.search).get("area") ?? "overview";
+    const cookie = loadedAreasCookieValue(document.cookie);
+    const omitted = omitNextArea;
+    omitNextArea = false;
+    const deliver = () => setLoaded(omitted ? ["overview"] : [...areasToRender({
+      requested, cookie, fullDocument: false,
+    })]);
+    if (serverDelayMs) window.setTimeout(deliver, serverDelayMs);
+    else deliver();
+  });
   return <ConsoleShell initialArea="overview" loadedAreas={loaded}
     scope={{ project: "owned-navigation-fixture", actor: "owned-fixture" }}
     status={{ apiReachable: true, budgetState: "green", deadletters: 0, pendingDecisions: 0 }}>
@@ -78,6 +87,8 @@ beforeEach(() => {
   router.refresh.mockReset();
   draftMounts = 0;
   draftUnmounts = 0;
+  serverDelayMs = 0;
+  omitNextArea = false;
   window.localStorage.clear();
   window.history.replaceState(null, "", "/?area=overview");
   document.cookie = loadedAreasCookie("");
@@ -121,4 +132,62 @@ it.each(["", "setup"])("retains the initial area's mounted draft with remembered
   expect(host.querySelector("textarea[aria-label='Unsaved plan']")).toBe(draft);
   expect(draft.value).toBe("A plan that has not been submitted");
   expect(draftUnmounts).toBe(0);
+});
+
+// A router refresh is dispatched synchronously; a shell transition can settle before its
+// RSC response arrives. Only actual server props may acknowledge the refresh.
+it("waits for server data before retrying an unloaded area", async () => {
+  serverDelayMs = 1500;
+  await act(async () => root.render(<ServerBoundary />));
+  const draft = host.querySelector<HTMLTextAreaElement>("textarea[aria-label='Unsaved plan']")!;
+  await act(async () => {
+    draft.value = "Keep this unsubmitted plan";
+    draft.dispatchEvent(new Event("input", { bubbles: true }));
+    window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" }));
+  });
+  expect(host.querySelector("[data-testid='area-loading']")).not.toBeNull();
+  await act(async () => vi.advanceTimersByTime(1000));
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  await act(async () => vi.advanceTimersByTime(500));
+  expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  expect(host.querySelector("textarea[aria-label='Unsaved plan']")).toBe(draft);
+  expect(draft.value).toBe("Keep this unsubmitted plan");
+  expect(draftMounts).toBe(1);
+  expect(draftUnmounts).toBe(0);
+});
+
+it("coalesces a second area until the first server response commits", async () => {
+  serverDelayMs = 1500;
+  await act(async () => root.render(<ServerBoundary />));
+  const draft = host.querySelector<HTMLTextAreaElement>("textarea[aria-label='Unsaved plan']")!;
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
+  await act(async () => vi.advanceTimersByTime(250));
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "setup" })));
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  await act(async () => vi.advanceTimersByTime(1250));
+  expect(host.querySelector("[data-testid='area-loading']")).not.toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  await act(async () => vi.advanceTimersByTime(1500));
+  expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
+  expect(host.querySelector("[data-testid='console-area']")?.getAttribute("data-active")).toBe("setup");
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  expect(host.querySelector("textarea[aria-label='Unsaved plan']")).toBe(draft);
+  expect(draftMounts).toBe(1);
+  expect(draftUnmounts).toBe(0);
+});
+
+it("retries when newly committed server data still omits the requested area", async () => {
+  serverDelayMs = 100;
+  omitNextArea = true;
+  await act(async () => root.render(<ServerBoundary />));
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
+  await act(async () => vi.advanceTimersByTime(100));
+  expect(host.querySelector("[data-testid='area-loading']")).not.toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  await act(async () => vi.advanceTimersByTime(250));
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  await act(async () => vi.advanceTimersByTime(100));
+  expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(2);
 });
