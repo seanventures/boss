@@ -36,6 +36,8 @@ export type LineageItem = {
 /** What the build was asked to do and how it was built (the old page's head and meta rows). */
 export type Brief = {
   repo?: string; branch?: string; baseBranch?: string;
+  /** The build's own PostgreSQL (build_services.decide): given or not, and why. */
+  database?: { postgres: boolean; why: string[] } | null;
   criteria: string[]; testCommands: string[];
   workflow: { name: string; version?: number; default: boolean } | null;
   engine?: string; model?: string; reviewEngine?: string; reviewModel?: string; crossModel: boolean;
@@ -266,6 +268,7 @@ export function parseBrief(w: unknown): Brief {
   const bench = b.qa_benchmark ? obj(b.qa_benchmark) : null;
   return {
     repo: opt(b.repo), branch: opt(b.branch), baseBranch: opt(b.base_branch),
+    database: b.database ? { postgres: obj(b.database).postgres === true, why: strs(obj(b.database).why) } : null,
     criteria: strs(b.criteria), testCommands: strs(b.test_commands),
     workflow: wf && opt(wf.name) ? { name: str(wf.name), version: optNum(wf.version), default: wf.default === true } : null,
     engine: opt(b.engine), model: opt(b.model), reviewEngine: opt(b.review_engine), reviewModel: opt(b.review_model),

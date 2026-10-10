@@ -261,3 +261,16 @@ def test_a_pr_whose_question_moved_to_a_newer_attempt_is_still_open(client, engi
     body = client.get("/v1/factory/apps", params={"project_id": fx.PROJECT}).json()
     row = next(r for r in body["apps"] if run in r["run_ids"])
     assert row["pr_state"] == "open"
+
+
+def test_building_counts_only_builds_a_worker_is_running(client, engine):
+    """D1 (2026-10-09): an idle install read "7 building" while nothing ran. The count was the
+    whole BUILDING section, which also holds blocked and needs-you rows."""
+    fx.new_run(engine, status="blocked", phase="done", title=f"Blocked {uuid.uuid4().hex[:4]}")
+    fx.new_run(engine, status="blocked", phase="awaiting_plan_approval",
+               title=f"Plan wait {uuid.uuid4().hex[:4]}")
+    body = _floor(client).json()
+    running = sum(1 for b in body["builds"] if b["state"] == "building")
+    assert body["counts"]["building"] == running, body["counts"]
+    assert body["counts"]["waiting"] == len(body["builds"]) - running
+    assert any(b["state"] in ("blocked", "needs_plan") for b in body["builds"])

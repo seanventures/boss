@@ -50,6 +50,41 @@ Nothing ever runs unfenced unless you choose `off`.
 !!! warning "Docker Desktop on macOS"
     The fence on Docker Desktop for Mac is not yet verified. Run `boss doctor` after installing: it tells you if builds are held.
 
+## A database for a build's tests
+
+The sandbox has Node, Python and Playwright, but no database server. A build whose tests need a
+real PostgreSQL asks for one:
+
+```yaml
+# boss.verify.yaml at the repo root
+services: [postgres]
+```
+
+or, for a whole project, Govern › setting `build_services` = `postgres`.
+
+At run start, before any agent runs, BOSS creates a role and an empty database for that run on
+the `build-services` Postgres (its own container on port 5433, data on tmpfs; never the BOSS
+database). Every command the run starts, its tests included, gets `DATABASE_URL`
+(`postgresql://user:pass@host:5433/db`) and `PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE`. The
+database is dropped when the run ends. If the run's process dies, the reaper drops it within a
+few minutes.
+
+What keeps one run out of another's database:
+
+- each run has its own role and a random password, held only in BOSS's memory and in that run's
+  processes. A different run's uid cannot read them;
+- `CONNECT` on each database is revoked from everyone except its own role, and the server's
+  `pg_hba` (`sameuser`) lets a role log in only to the database named like it;
+- the role cannot create databases or roles, cannot read password hashes, and cannot become
+  another role;
+- the sandbox network fence opens only the build-services port, so the BOSS database stays
+  unreachable from a build.
+
+The password never appears in run logs, events or activity. If the run asked for Postgres and the
+server is not running, the run stops with `Build services unavailable: <why>`. It does not run
+the tests without the database. `BOSS_BUILD_SERVICES_PG_URL` points BOSS at another server (a
+superuser URL; it is never passed to a build).
+
 ## Upgrades
 
 If a new release cannot start on your host, `boss upgrade` puts the previous release back and starts it again. See [Upgrade to named accounts](IDENTITY_UPGRADE.md).

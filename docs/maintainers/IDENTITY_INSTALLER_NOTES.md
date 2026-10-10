@@ -39,16 +39,21 @@ For the owner of `install.sh`. Named accounts (Identity) ship in v1.0-rc6 withou
 
 ## (d) Print the claim link at the end of an install
 
-**What.** The final summary (`install.sh` ~1600-1670) prints `Password  python3 …/console_password.py show` and `boss open`. On a new install the next step is the claim.
+**What.** On a fresh install the next step is the claim, and today the only place the claim link appears unprompted is the API container's log (`[identity] this BOSS has no Owner yet. Claim it within 1 hour: …`, printed at boot by `engine/boss_engine/identity/claim.py:announce_setup_link`). The installer's final summary (`install.sh` ~1600-1670) prints the password command and `boss open`, but not the claim. On 2026-10-10 a first-run operator could not claim without reading `docker logs`.
 
-**Suggested change.** When the install is unclaimed (`docker compose … exec -T -u boss api python -m boss_engine.identity.cli claim-status` prints `unclaimed`), print:
+**What BOSS already does (no installer change needed for these).** `boss open` and `boss doctor` say "unclaimed" and print `boss identity setup-link`; the console's sign-in page shows the same command under "This BOSS has no Owner yet"; `/claim` without a link shows it with a copy button.
 
-```text
-  Claim it   open http://127.0.0.1:3000/claim — boss password proves it is you
-             or: boss identity setup-link   (a one-hour link)
+**Suggested change.** At the very end of a FIRST install (not a rerun or an upgrade), once the api is healthy, mint the link and print it as the last thing on screen:
+
+```bash
+if [[ "$(docker compose … exec -T -u boss api python -m boss_engine.identity.cli claim-status | tail -n 1)" == unclaimed ]]; then
+  printf '\n  Claim it (one hour, single use; open it in the browser you will sign in with):\n\n'
+  bash "$INSTALL_DIR/scripts/install/boss.sh" --dir "$INSTALL_DIR" identity setup-link | sed 's/^/    /'
+  printf '\n  Link expired? Run: boss identity setup-link\n'
+fi
 ```
 
-`boss open` already says this (`scripts/install/boss.sh`, `cmd_open`).
+The link's token is in the URL fragment, so it never reaches an access log; it is printed to the terminal of the person who just ran the installer, which is the proof the claim needs. When the install has a console origin (`--console-origin`), the link uses it; otherwise it is `http://localhost:3000/claim#…`, which is right for a laptop and for an SSH tunnel.
 
 ## (e) `boss-community.env.sh` exports the shared key
 

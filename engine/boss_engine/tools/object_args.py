@@ -28,7 +28,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
                          "extends_run_id": CODE_TASK, "preview_id": "app_preview"},
     "create_deployment_target": {"host_id": "deployment_host"},
     "decide": {"decision_id": "decision"},
-    "deploy_app": {"run_id": CODE_TASK, "target_id": "deployment_target"},
+    "deploy_app": {"run_id": CODE_TASK, "target_id": "deployment_target", "host_id": "deployment_host"},
     "describe_deployment_target": {"target_id": "deployment_target"},
     "describe_workflow_run": {"run_id": "workflow_run"},
     "diagnose_run": {"run_id": CODE_TASK},

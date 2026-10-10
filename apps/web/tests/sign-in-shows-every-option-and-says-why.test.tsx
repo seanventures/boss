@@ -68,6 +68,13 @@ const tipOf = (el: Element, target: Element | null) => {
 const click = (b: Element | null) => act(async () => { (b as HTMLElement).click(); });
 
 describe("all off: the page keeps its shape and says what turns each thing on", () => {
+  it("an unclaimed install says how to claim it without the logs: the host's setup-link command", async () => {
+    await mount({ ...OFF, claim: { path: "setup_token", seats: [], expires_at: null } as unknown as AuthOptions["claim"] });
+    const how = document.querySelector("[data-testid='claim-how']")!;
+    expect(how.querySelector("[data-testid='claim-door']")!.getAttribute("href")).toBe("/claim");
+    expect(how.textContent).toContain("boss identity setup-link");
+  });
+
   it("every provider square is there, disabled, naming where an Owner turns it on", async () => {
     const el = await mount(OFF);
     const squares = [...el.querySelectorAll(".idn-idp")];

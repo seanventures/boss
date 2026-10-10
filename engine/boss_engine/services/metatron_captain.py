@@ -64,6 +64,88 @@ SCORECARD_QUALITY_FLOOR = 70
 PREVIEW_FAILURE_WINDOW_MINUTES = 30
 PREVIEW_FAILURE_GIVE_UP = 3
 
+#: A Captain-started build that did not finish waits this long before the next one, doubling
+#: per consecutive failure, up to the cap. Measured on an idle install before this existed: 17
+#: improve passes in 55 minutes, 10 of them blocked, each one real model spend.
+LAUNCH_BACKOFF_BASE_MINUTES = 10
+LAUNCH_BACKOFF_CAP_MINUTES = 6 * 60
+#: Statuses a Captain build is still going in: never start a second beside it.
+_LAUNCH_LIVE = frozenset({"queued", "running", "repairing", "provisioning"})
+#: Words in a block that mean authority or consent refused it. Retrying cannot change that;
+#: only a person can, so the Captain holds until the run itself changes.
+_AUTHORITY_MARKERS = ("forbidden", "not allowed", "permission", "consent", "authority",
+                      "passport", "not permitted", "denied", "needs you", "approval")
+
+
+def _is_authority_block(row: dict[str, Any]) -> Optional[str]:
+    """Why a blocked Captain build is waiting on a person, in words, or None."""
+    phase = str(row.get("phase") or "")
+    if phase == "awaiting_plan_approval":
+        return "its plan is waiting for a person's approval"
+    if phase == "awaiting_gate_override":
+        return "its checks failed and it is waiting for a person to waive or fix them"
+    if str(row.get("reason_code") or "") == "budget_denied":
+        return "the build budget refused it"
+    error = str(row.get("error") or "")
+    if any(marker in error.lower() for marker in _AUTHORITY_MARKERS) or re.search(
+            r"needs [a-z_]+:[a-z_]+", error):
+        return f"it was refused for authority or consent ({error.strip()[:160]})"
+    return None
+
+
+def captain_launch_gate(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
+    """Whether the Captain may start another build now: None, or the refusal in words.
+
+    Every tick used to start a new improve pass whenever nothing was `running` — and a pass that
+    ended blocked or failed is not running, so the next tick started the same pass again, with
+    no memory of why the last one stopped. This is that memory:
+
+    - a Captain build still going holds the next one;
+    - a build blocked for authority or consent holds every later one until that run changes
+      (a person approves, retries or cancels it) — retrying cannot grant a permission;
+    - any other block or failure backs off exponentially from when it stopped, capped.
+    """
+    try:
+        with connection.begin_nested():
+            rows = [dict(r) for r in connection.execute(text(
+                "SELECT id, status, phase, error, finalize_ctx->>'reason_code' AS reason_code, "
+                "       EXTRACT(EPOCH FROM (now() - updated_at)) AS age_s "
+                "FROM code_task_runs WHERE project_id = :p "
+                "  AND (finalize_ctx->>'source' = 'metatron_captain' OR title ILIKE 'Captain:%') "
+                "ORDER BY created_at DESC LIMIT 12"), {"p": project_id}).mappings().all()]
+    except Exception:  # noqa: BLE001 - no history readable: the in-flight check still applies
+        return None
+    if not rows:
+        return None
+    last = rows[0]
+    status = str(last.get("status") or "")
+    if status in _LAUNCH_LIVE:
+        return {"reason": "captain_build_in_flight", "run_id": last["id"],
+                "message": f"The last improve pass ({last['id']}) is still {status}; the next "
+                           "one starts after it finishes."}
+    if status == "blocked":
+        why = _is_authority_block(last)
+        if why:
+            return {"reason": "captain_build_needs_a_person", "run_id": last["id"],
+                    "message": f"The last improve pass ({last['id']}) is blocked: {why}. No new "
+                               "pass starts until a person resolves, retries or cancels it."}
+    streak = 0
+    for row in rows:
+        if str(row.get("status") or "") not in ("failed", "blocked"):
+            break
+        streak += 1
+    if not streak:
+        return None
+    wait_min = min(LAUNCH_BACKOFF_BASE_MINUTES * (2 ** (streak - 1)), LAUNCH_BACKOFF_CAP_MINUTES)
+    age_min = float(last.get("age_s") or 0) / 60.0
+    if age_min >= wait_min:
+        return None
+    left = max(1, int(round(wait_min - age_min)))
+    return {"reason": "captain_backoff", "run_id": last["id"], "streak": streak,
+            "wait_minutes": wait_min,
+            "message": f"Backing off: the last {streak} improve pass(es) ended {status}. The "
+                       f"next one may start in about {left} minute(s)."}
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS metatron_goals (
   id TEXT PRIMARY KEY,
@@ -1584,6 +1666,9 @@ class MetatronCaptain:
                 "error": None if ok else preview.get("error"),
             }
         if kind == "launch_factory_job":
+            held = captain_launch_gate(connection, project_id)
+            if held:
+                return {"status": "rejected", "error": held["message"], "held": held}
             from .code_task_service import start_code_task
             from .jobs import JobLeaseService
             jobs = JobLeaseService(self.settings)

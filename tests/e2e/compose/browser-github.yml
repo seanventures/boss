@@ -1,0 +1,19 @@
+# GitHub's web pages for a browser that is NOT behind the fake's proxy (a person's own Chrome
+# walking the console at localhost): every github.com link BOSS builds (identity/github_urls.py)
+# goes to the fake on 127.0.0.1 instead, through BOSS_GITHUB_WEB_URL, which BOSS honours for a
+# GitHub Enterprise host. The paths are the real ones; only the origin differs. Layer it after
+# build-override.yml:
+#
+#   docker compose -p <project> --env-file <stack.env> --profile web \
+#     -f scripts/install/community-compose.yml -f tests/e2e/compose/build-override.yml \
+#     -f tests/e2e/compose/browser-github.yml up -d
+x-github-web: &github-web
+  BOSS_GITHUB_WEB_URL: http://127.0.0.1:${FXD_FAKEGH_PORT:-58180}
+
+services:
+  api:
+    environment: *github-web
+  worker:
+    environment: *github-web
+  web:
+    environment: *github-web

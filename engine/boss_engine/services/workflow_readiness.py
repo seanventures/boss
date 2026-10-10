@@ -77,10 +77,12 @@ NEEDS: dict[str, Need] = {
     "deployment_target": Need(
         "deployment_target",
         "Somewhere to deploy: a verified deployment host or a stack target",
-        "Add and verify a host in Infra → Where apps install, or create a stack target for a "
-        "repository that ships a boss.deploy.yaml (Infra → Deploy a repository). The release "
-        "step then puts the app there; until there is one, the deploy step cannot run.",
-        "delivery"),
+        "Add a host in Infra → Fleet (+ Add → Host), then Place app on it; or create a stack "
+        "target for a repository that ships a boss.deploy.yaml. The release step then puts the "
+        "app there; until there is one, the deploy step cannot run.",
+        # Lands on Infra › Fleet with the App target sheet open (the Host sheet when there is no
+        # host yet): the place the target is made, not a page that describes it.
+        "infra", (("view", "fleet"), ("add", "target"))),
     # The fix names a console form, not an API call, and the form is drawn inline on the start
     # checklist beside this item. Outgoing email lives in Skills & MCP › Email (the Kit;
     # skills-mcp spec §5.1), not in Repo and models.

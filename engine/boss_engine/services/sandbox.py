@@ -736,5 +736,9 @@ class EphemeralSandbox:
     def _truncate(self, output: str | bytes) -> str:
         if isinstance(output, bytes):
             output = output.decode("utf-8", errors="replace")
+        # A run's own build-service password never leaves in its output (build_services).
+        from .build_services import scrub
+
+        output = scrub(output)
         limit = self.settings.sandbox_validation_output_limit_chars
         return output if len(output) <= limit else output[:limit] + "\n…[truncated]"

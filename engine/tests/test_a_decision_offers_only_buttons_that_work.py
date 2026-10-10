@@ -24,6 +24,9 @@ SAMPLES = {
         "workflow_run_id": "wfr_1", "capability": "deploy", "step_id": "deploy"}},
     "workflow_gate": {"status": "pending", "recommendation": {
         "workflow_run_id": "wfr_1", "capability": "spec_review", "step_id": "spec"}},
+    "architecture_review": {"status": "pending", "recommendation": {
+        "action": "review_architecture", "workflow_run_id": "wfr_1", "step_id": "arch",
+        "capability": "architecture", "architecture_review_id": "arch_1", "version": 1}},
     "pull_request": {"status": "pending", "recommendation": {
         "action": "review_pull_request", "pull_request_url": "https://x/pull/7"}},
     "general": {"status": "pending", "recommendation": {"action": "role.autonomy_change"}},

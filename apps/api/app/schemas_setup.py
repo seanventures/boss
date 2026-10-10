@@ -44,6 +44,8 @@ class RepositoryConnection(_Open):
     account_login: Optional[str] = None
     expires_at: Optional[str] = None
     source: Literal["connected", "install"]
+    #: Whether builds can use this token (they read the org's vault token): {ok, message, next}.
+    builds: Optional[dict[str, Any]] = None
 
 
 class RepositoryEntry(_Open):
@@ -168,6 +170,7 @@ class SetupView(_Open):
     budget: Budget
     # `try` is a Python keyword.
     try_: TrySection = Field(alias="try")
+    build_database: Optional[dict[str, Any]] = None
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 

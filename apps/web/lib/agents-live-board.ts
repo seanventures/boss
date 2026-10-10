@@ -52,7 +52,9 @@ export function teamOfAgent(roleKey: string): { key: string; label: string; tip?
  *  a person's choice (stability spec §4d). */
 export type AttentionKind = "approval" | "failed_step" | "readiness" | "gate_override" | "budget_refused"
   | "system_health" | "infra";
-export type DecisionKindWire = "workflow_gate" | "deploy_gate" | "pull_request" | "refusal" | "general";
+export type DecisionKindWire = "workflow_gate" | "deploy_gate" | "pull_request" | "refusal" | "general"
+  // Read in Approvals, never decided inline: a person approves the document they read.
+  | "architecture_review";
 
 export type AttentionAction = {
   action: "approve" | "reject" | "revise" | "delegate" | "execute";
@@ -91,7 +93,7 @@ export type AttentionItem = {
   /** system_health: the finding the options act on, and how bad it is. */
   findingId?: string;
   severity?: "info" | "warn" | "critical";
-  /** infra (infra-observability spec §2.2): `deploy_failed` | `app_down` | `host_unreachable`;
+  /** infra (infra-observability spec §2.2): `deploy_failed` | `app_down` | `app_errors` | `host_unreachable`;
    *  its answers are pressed through POST /v1/infra/attention/act. `open` is the console href of
    *  its home (`?area=infra&view=deploys&deploy=…`); `area` says which screen it belongs to. */
   infraKind?: string;

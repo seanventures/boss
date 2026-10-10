@@ -27,6 +27,7 @@ import { methodWhyNot, passkeyWhyNot, providerOffers, type Method } from "../../
 import { CodeInput, Face, Sheet } from "../../../components/identity/kit";
 import { AuthStage, HostLine, Live, Logo, MethodTabs, ProviderRow, safeNextClient, Tip } from "../auth-parts";
 import { CopyCommand } from "../copy-command";
+import { HOST_COMMANDS } from "../../../lib/identity/host-commands";
 import { localWith } from "../../../lib/local-time";
 
 type Stage =
@@ -244,9 +245,15 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
       <h1>Welcome back</h1>
       <p className="idn-s" data-copy="prose">Sign in to {options.org_name} to pick up where your team left off.</p>
       {options.claim ? (
-        <a className="idn-note info" href="/claim" data-testid="claim-door">
-          <ShieldCheck size={16} aria-hidden /> <span><b>This BOSS has no Owner yet.</b> Claim it <ArrowRight size={12} aria-hidden /></span>
-        </a>
+        <div className="idn-claim" data-testid="claim-how">
+          <a className="idn-note info" href="/claim" data-testid="claim-door">
+            <ShieldCheck size={16} aria-hidden /> <span><b>This BOSS has no Owner yet.</b> Claim it <ArrowRight size={12} aria-hidden /></span>
+          </a>
+          {/* HOW, without the logs: the claim link is printed by the host command, so a
+              stranger who never saw the API log can still claim. */}
+          <p className="idn-s" data-copy="prose">On the server, print a one-hour claim link:</p>
+          <CopyCommand command={HOST_COMMANDS.setupLink} />
+        </div>
       ) : null}
       <ProviderRow offers={providerOffers(options.providers, target)} onWhy={(text) => setWhy({ at: "idp", text })} />
       {whyLine("idp")}
@@ -363,7 +370,7 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
         <Sheet title="Reset your password" icon={<LockSimple size={20} aria-hidden />} onClose={() => setSheet(null)} testId="forgot-sheet">
           <p className="idn-lede2" data-copy="prose">This BOSS sends no email. Ask an admin to send you a reset link.</p>
           <p className="idn-lede2" data-copy="prose">A locked-out sole Owner runs this on the host:</p>
-          <CopyCommand command="boss identity recover-owner --email you@example.com" />
+          <CopyCommand command={HOST_COMMANDS.recoverOwner} />
           <div className="idn-mf"><span className="idn-spacer" /><button type="button" className="idn-btn primary" onClick={() => setSheet(null)}>Got it</button></div>
         </Sheet>
       ) : null}
