@@ -4,10 +4,10 @@ import React, { act, useEffect, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const router = vi.hoisted(() => ({ refresh: vi.fn() }));
+const router = vi.hoisted(() => ({ refresh: vi.fn(), query: null as string | null }));
 vi.mock("next/navigation", () => ({
   useRouter: () => router,
-  useSearchParams: () => new URLSearchParams(window.location.search),
+  useSearchParams: () => new URLSearchParams(router.query ?? window.location.search),
 }));
 
 // Keep the actual shell, area selection, cookies, coordinator and React reconciliation.
@@ -85,6 +85,7 @@ beforeEach(() => {
     .IS_REACT_ACT_ENVIRONMENT = true;
   vi.useFakeTimers();
   router.refresh.mockReset();
+  router.query = null;
   draftMounts = 0;
   draftUnmounts = 0;
   serverDelayMs = 0;
@@ -190,4 +191,24 @@ it("retries when newly committed server data still omits the requested area", as
   await act(async () => vi.advanceTimersByTime(100));
   expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
   expect(router.refresh).toHaveBeenCalledTimes(2);
+});
+
+it("waits for the router URL snapshot before starting the first-area refresh", async () => {
+  serverDelayMs = 1500;
+  router.query = "area=overview";
+  await act(async () => root.render(<ServerBoundary />));
+  const draft = host.querySelector<HTMLTextAreaElement>("textarea[aria-label='Unsaved plan']")!;
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
+  expect(host.querySelector("[data-testid='console-area']")?.getAttribute("data-active")).toBe("decisions");
+  await act(async () => vi.advanceTimersByTime(1000));
+  expect(router.refresh).not.toHaveBeenCalled();
+  router.query = window.location.search;
+  await act(async () => root.render(<ServerBoundary />));
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  await act(async () => vi.advanceTimersByTime(1500));
+  expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  expect(host.querySelector("textarea[aria-label='Unsaved plan']")).toBe(draft);
+  expect(draftMounts).toBe(1);
+  expect(draftUnmounts).toBe(0);
 });
