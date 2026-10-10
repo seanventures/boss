@@ -1,4 +1,4 @@
-"""Durable voice HTTP intents, with bounded replay storage beside live delivery."""
+"""Durable model-stream HTTP intents, with bounded replay beside live delivery."""
 
 from __future__ import annotations
 
@@ -7,10 +7,21 @@ import json
 import re
 
 VOICE_ROUTES = re.compile(r"^/v1/agents/[^/]+/(?:test|persona/draft)$")
+CONVERSATION_ROUTES = re.compile(r"^/v1/conversations/[^/]+/(?:turns|summary|propose)$")
+
+
+def family(method: str, path: str) -> str | None:
+    if method.upper() != "POST":
+        return None
+    if VOICE_ROUTES.fullmatch(path):
+        return "voice"
+    if CONVERSATION_ROUTES.fullmatch(path):
+        return "conversation"
+    return None
 
 
 def governs(method: str, path: str) -> bool:
-    return method.upper() == "POST" and bool(VOICE_ROUTES.fullmatch(path))
+    return family(method, path) is not None
 
 
 def intent_id(principal: str, key: str) -> str:
