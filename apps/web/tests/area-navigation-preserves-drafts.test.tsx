@@ -33,6 +33,7 @@ vi.mock("../components/identity/identity-provider", () => {
 });
 
 import ConsoleShell from "../app/ConsoleShell";
+import { requestConsoleRefresh } from "../lib/console-refresh";
 import {
   areasToRender, loadedAreasCookie, loadedAreasCookieValue, parseLoadedAreas,
 } from "../lib/area-loading";
@@ -44,6 +45,7 @@ let draftUnmounts: number;
 let serverDelayMs: number;
 let omitNextArea: boolean;
 let discardRestoredResponse: boolean;
+let commitServer: ((loaded: string[]) => void) | null = null;
 const fixtureStatus = { apiReachable: true, budgetState: "green", deadletters: 0, pendingDecisions: 0 };
 
 function Draft() {
@@ -60,6 +62,7 @@ function ServerBoundary() {
   const [loaded, setLoaded] = useState(() => [...areasToRender({
     requested: "overview", cookie: loadedAreasCookieValue(document.cookie), fullDocument: true,
   })]);
+  commitServer = setLoaded;
   // The RSC transport is a service double. Its selection rule is the actual page's rule;
   // omitting an area removes its subtree, as the server's shows(area) gate does.
   router.refresh.mockImplementation(() => {
@@ -236,4 +239,37 @@ it("waits for the router URL snapshot before starting the first-area refresh", a
   expect(host.querySelector("textarea[aria-label='Unsaved plan']")).toBe(draft);
   expect(draftMounts).toBe(1);
   expect(draftUnmounts).toBe(0);
+});
+
+// URL filters and server props can commit together while a read is pending.
+it("replaces a discarded first-area read after a same-area query filter restore", async () => {
+  serverDelayMs = 1500;
+  await act(async () => root.render(<ServerBoundary />));
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
+  await act(async () => vi.advanceTimersByTime(250));
+  await act(async () => {
+    window.history.replaceState(null, "", "/?area=decisions&state=pending");
+    root.render(<ServerBoundary />);
+  });
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  await act(async () => vi.advanceTimersByTime(1500));
+  expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+});
+
+it("does not acknowledge a replacement read with server props committed alongside URL restore", async () => {
+  serverDelayMs = 1500;
+  await act(async () => root.render(<ServerBoundary />));
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    // The earlier result reached the router before RESTORE; React batches both state updates.
+    // It belongs to the previous query, not the replacement started by the restore effect.
+    commitServer!(["overview", "decisions"]);
+    window.history.replaceState(null, "", "/?area=decisions&state=pending");
+    root.render(<ServerBoundary />);
+  });
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  await act(async () => requestConsoleRefresh(router, "now"));
+  expect(router.refresh).toHaveBeenCalledTimes(2); // Current replacement should still be busy.
 });
