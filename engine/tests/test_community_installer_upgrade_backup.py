@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import json
+import tarfile
 import shlex
 import subprocess
 import threading
@@ -171,7 +173,7 @@ def install_pair(tmp_path: Path) -> tuple[Path, str, str, dict[str, str], Path]:
     (source / "scripts/install").mkdir(parents=True)
     (source / "scripts/install/community-compose.yml").write_text("services: {}\n")
     (source / "install.sh").write_bytes((REPO / "install.sh").read_bytes())
-    for helper in ("restore_preserved_env.sh", "reconcile_api_credentials.py"):
+    for helper in ("restore_preserved_env.sh", "reconcile_api_credentials.py", "backup_archive.py"):
         (source / "scripts/install" / helper).write_bytes(
             (REPO / "scripts/install" / helper).read_bytes()
         )
@@ -245,18 +247,35 @@ def _stopped_database_backend(tmp: Path, env: dict[str, str]) -> None:
     state.write_text("stopped\n")
     env["BOSS_TEST_DB_STATE"] = str(state)
     env["BOSS_BACKUP_DIR"] = str(tmp / "backups")
+    empty_tar = tmp / "empty.tar"
+    with tarfile.open(empty_tar, "w"):
+        pass
+    env["BOSS_TEST_EMPTY_TAR"] = str(empty_tar)
+    layout = {
+        "services": {
+            "api": {"image": "fixture-api:local", "volumes": [
+                {"type": "volume", "target": "/var/lib/boss/identity", "source": "identity"},
+                {"type": "volume", "target": "/var/lib/boss/artifacts", "source": "artifacts"}]},
+            "db": {"volumes": [{"type": "volume", "target": "/var/lib/postgresql/data", "source": "pg"}]}},
+        "volumes": {name: {"name": "fixture_" + name} for name in ("identity", "artifacts", "pg")},
+    }
+    env["BOSS_TEST_LAYOUT"] = json.dumps(layout)
     (tmp / "bin/docker").write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "if [[ $1 == info ]]; then exit 0; fi\n"
-        "if [[ $1 == image && $2 == inspect ]]; then [[ ${BOSS_TEST_API_IMAGE_MISSING:-0} != 1 ]]; exit; fi\n"
+        "if [[ $1 == image && $2 == inspect ]]; then [[ ${BOSS_TEST_API_IMAGE_MISSING:-0} != 1 ]] || exit 1; echo sha256:" + "a" * 64 + "; exit 0; fi\n"
+        "if [[ $1 == inspect ]]; then echo sha256:" + "b" * 64 + "; exit 0; fi\n"
+        "if [[ $1 == volume && $2 == inspect ]]; then exit 0; fi\n"
         "if [[ $1 == compose && $2 == version ]]; then echo 'Docker Compose test'; exit 0; fi\n"
         "args=$*\n"
         "case \"$args\" in\n"
-        "  *' config --format json') echo '{\"services\":{\"api\":{\"image\":\"fixture-api:local\"}}}' ;;\n"
+        "  *' config --format json') printf '%s\\n' \"$BOSS_TEST_LAYOUT\" ;;\n"
         "  *' ps --status running --services')\n"
         "    [[ $(cat \"$BOSS_TEST_DB_STATE\") != running ]] || echo db\n"
         "    [[ -z ${BOSS_TEST_WORKER_STATE:-} || $(cat \"$BOSS_TEST_WORKER_STATE\") != running ]] || echo worker ;;\n"
+        "  *' ps --all -q api') exit 0 ;;\n"
+        "  *' ps --all -q db') echo fixture-db ;;\n"
         "  *' ps --all --services')\n"
         "    [[ ${BOSS_TEST_CONTAINER_MISSING:-0} == 1 ]] || echo db ;;\n"
         "  *' start db')\n"
@@ -266,9 +285,12 @@ def _stopped_database_backend(tmp: Path, env: dict[str, str]) -> None:
         "  *' exec -T db pg_dump '*)\n"
         "    [[ ${BOSS_TEST_DUMP_FAIL:-0} != 1 ]] || exit 19\n"
         "    printf 'database fixture\\n' ;;\n"
+        "  *' exec -T db psql '*to_regclass*) echo f ;;\n"
         "  *' exec -T db psql '*) exit 0 ;;\n"
+        "  *' exec -T db pg_restore '*) cat >/dev/null ;;\n"
         "  *' run --rm --no-deps --pull never -T --entrypoint tar api '*)\n"
-        "    printf 'artifact fixture\\n' ;;\n"
+        "    if [[ ${BOSS_TEST_INTERRUPT_ARCHIVE:-0} == 1 ]]; then kill -TERM \"$PPID\"; exit 143; fi\n"
+        "    cat \"$BOSS_TEST_EMPTY_TAR\" ;;\n"
         "  *' stop db')\n"
         "    echo stopped > \"$BOSS_TEST_DB_STATE\"; echo stop >> \"$BOSS_TEST_DOCKER_TRACE\" ;;\n"
         "  *' stop') echo stopped > \"$BOSS_TEST_DB_STATE\"; echo stop-all >> \"$BOSS_TEST_DOCKER_TRACE\" ;;\n"
@@ -287,7 +309,8 @@ def _publish_real_backup_helper(tmp: Path) -> str:
     (source / "scripts/install/backup.sh").write_bytes(
         (REPO / "scripts/install/backup.sh").read_bytes()
     )
-    _git("add", "scripts/install/backup.sh", cwd=source)
+    (source / "scripts/install/backup_archive.py").write_bytes((REPO / "scripts/install/backup_archive.py").read_bytes())
+    _git("add", "scripts/install/backup.sh", "scripts/install/backup_archive.py", cwd=source)
     _git("commit", "-m", "backup stopped database", cwd=source)
     new = _git("rev-parse", "HEAD", cwd=source)
     _git("push", "origin", "main", cwd=source)
@@ -585,10 +608,12 @@ def test_real_compose_backup_keeps_stopped_database_image_with_drifted_tag(tmp_p
         f"    image: {api_image}\n"
         "    volumes:\n"
         "      - artifacts:/var/lib/boss/artifacts\n"
+        "      - identity:/var/lib/boss/identity\n"
         "      - claude-home:/home/boss/.claude\n"
         "volumes:\n"
         "  pg: {}\n"
         "  artifacts: {}\n"
+        "  identity: {}\n"
         "  claude-home: {}\n"
     )
     (installed / ".env").write_text("BOSS_DB_PASSWORD=fixture\n")
@@ -713,3 +738,20 @@ def test_real_compose_backup_keeps_stopped_database_image_with_drifted_tag(tmp_p
     finally:
         _run(*compose, "down", "--volumes", "--remove-orphans")
         _run("docker", "image", "rm", api_image)
+
+
+def test_interrupted_snapshot_discards_completion_and_restores_prior_state(install_pair):
+    installed, _, _, env, tmp = install_pair
+    _stopped_database_backend(tmp, env)
+    (tmp / "db-state").write_text("running\n")
+    worker_state = tmp / "worker-state"
+    worker_state.write_text("running\n")
+    env["BOSS_TEST_WORKER_STATE"] = str(worker_state)
+    env["BOSS_TEST_INTERRUPT_ARCHIVE"] = "1"
+    result = _run("bash", REPO / "scripts/install/backup.sh", "--dir", installed,
+                  "--backup-dir", tmp / "backups", cwd=REPO, env=env)
+    assert result.returncode != 0
+    assert worker_state.read_text().strip() == "running"
+    assert (tmp / "db-state").read_text().strip() == "running"
+    assert not list((tmp / "backups").glob("boss-*"))
+    assert "down" not in (tmp / "docker-trace").read_text()

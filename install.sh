@@ -887,18 +887,27 @@ if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
         # the new API may migrate the database as soon as it starts. Always create
         # this run's own snapshot; a prior path could refer to stale data even if
         # its source commit happens to match.
-        _backup_helper="$(mktemp)"
-        if ! git -C "$INSTALL_DIR" show FETCH_HEAD:scripts/install/backup.sh > "$_backup_helper"; then
-          rm -f "$_backup_helper"
+        _backup_bundle="$(mktemp -d)"
+        _backup_helper="$_backup_bundle/backup.sh"
+        if ! git -C "$INSTALL_DIR" show "$_fetched_commit:scripts/install/backup.sh" > "$_backup_helper"; then
+          rm -rf "$_backup_bundle"
           die "The fetched source has no backup helper; existing checkout left unchanged."
+        fi
+        # The fetched backup helper and archive validator are one versioned recovery boundary.
+        # Older targets without the validator keep their self-contained backup helper.
+        if git -C "$INSTALL_DIR" cat-file -e "$_fetched_commit:scripts/install/backup_archive.py" 2>/dev/null; then
+          if ! git -C "$INSTALL_DIR" show "$_fetched_commit:scripts/install/backup_archive.py" > "$_backup_bundle/backup_archive.py"; then
+            rm -rf "$_backup_bundle"
+            die "Could not prepare the fetched recovery validator; existing checkout left unchanged."
+          fi
         fi
         _backup_args=(--dir "$INSTALL_DIR")
         [[ -z "$BACKUP_DIR" ]] || _backup_args+=(--backup-dir "$BACKUP_DIR")
         if ! _recovery_backup="$(bash "$_backup_helper" "${_backup_args[@]}" </dev/null)"; then
-          rm -f "$_backup_helper"
+          rm -rf "$_backup_bundle"
           die "Recovery backup failed; existing source, credentials and volumes were left unchanged. Check the backup error above, start the installed database if needed, then retry."
         fi
-        rm -f "$_backup_helper"
+        rm -rf "$_backup_bundle"
         [[ -s "$_recovery_backup/.env" && -s "$_recovery_backup/boss.dump" &&
            -s "$_recovery_backup/artifacts.tar" &&
            "$(cat "$_recovery_backup/source-commit" 2>/dev/null)" == "$_installed_commit" ]] ||
