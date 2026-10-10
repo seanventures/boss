@@ -2,6 +2,38 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc8]
+
+Friends-and-family preparation. Notes: [docs/community/RELEASE_NOTES_v1.0-rc8.md](docs/community/RELEASE_NOTES_v1.0-rc8.md).
+
+### Changed
+
+- Includes the published RC6.2 setup, deployment planning, automatic build database, CI, metrics and architecture-approval changes; retains the Command Center and sign-in design refresh.
+- First-run guides now follow the actual Owner, model-connection and task paths, with direct troubleshooting and feedback links.
+- Home leads with the next action from current records; the task composer, templates and configured roles remain available.
+- An unavailable sign-in-options read offers Retry. Help panels, focus states and primary controls are easier to use on small screens.
+- Installer readiness has a bounded deadline and attempt count.
+
+### Fixed
+
+- Backups retain matching identity keys and validate archive contents before protected purge or fresh-volume restore.
+- Workload-controlled Git runs below the workload user boundary. Repository readers and writers use confined, bounded file access.
+- Concurrent project-budget admission shares one arbitration boundary; unsettled positive holds survive expiry and period changes. Settlement uses one spend snapshot and idempotent cost evidence.
+- Discovery cancellation fences late work, receipts and retries against the owning run and job lease.
+- Direct-change spec review honors manual-approval policy and retains its gate when settings cannot be read.
+- Home primary buttons retain readable white text across normal and hover gradients.
+- First area navigation preserves already rendered areas and their mounted unsent drafts.
+- Model-connection and Standard Product Delivery guides match the actual proof records and single preview step.
+- Ubuntu installation runs the local node agent with Bash, the shell its script requires.
+- Automatic database detection uses the confined repository reader. Failed database or ledger cleanup stays visibly pending for retry instead of reporting success.
+- Architecture versions commit a budget reservation, job/model leases and a receipt before model submission, and bind approval to the current project's exact PRD.
+- Runtime build contexts exclude application test directories and scratch probes; identity fixtures use reserved example origins.
+
+### Release scope
+
+- Incremental release preserving the published RC6.2 ancestry and RC8 preparation history. Full private-export synchronization is still pending.
+- This candidate does not certify every host, provider or restored-snapshot replay path. Read the release notes before enabling live work.
+
 ## v1.0-rc6.2
 
 First-run setup without help (GitHub links and verification, deploy needs only a machine, automatic build database, step-up everywhere, claim discoverability, README quick start), opt-in CI workflow changes with Wait for CI, app traffic metrics, Architecture approval, and the Captain backoff. See docs/community/RELEASE_NOTES_v1.0-rc6.2.md.

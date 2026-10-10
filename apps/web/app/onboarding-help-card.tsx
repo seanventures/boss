@@ -71,7 +71,11 @@ export function OnboardingHelpCard() {
 
       <p className="detail help-foot">
         Anything BOSS starts is inspectable — every run, its cost, and the evidence behind it.
-        Setup is in <code>docs/community/GETTING_STARTED.md</code>.
+        <a href="https://github.com/seanventures/boss/blob/main/docs/community/GETTING_STARTED.md"
+           target="_blank" rel="noopener noreferrer">Read the getting started guide</a>
+        {" · "}
+        <a href="https://github.com/seanventures/boss/blob/main/docs/community/FEEDBACK_LOOP.md"
+           target="_blank" rel="noopener noreferrer">Get help or report a problem</a>.
       </p>
     </article>
   );
@@ -81,9 +85,11 @@ export function OnboardingHelpCard() {
  * The same help, as three short rows: shown inline under the composer only before the first
  * run (command-center spec §9 row 47), when the empty landing page has the room and the
  * newcomer the question. Each row's old sentence is its tooltip; the limits and the setup
- * document are one press away in the full card (`Getting started ↗`).
+ * document are one press away in the full card (`Getting started`).
  */
-export function OnboardingHelpRows({ onMore }: { onMore?: () => void }) {
+export function OnboardingHelpRows({ onMore, expanded = false, controls }: {
+  onMore?: (opener: HTMLButtonElement) => void; expanded?: boolean; controls?: string;
+}) {
   return (
     <ul className="cc-help-rows" data-testid="console-capabilities-card" aria-label="What you can do here">
       <li title="A panel writes the plan; an agent builds, tests and opens a PR.">
@@ -97,7 +103,9 @@ export function OnboardingHelpRows({ onMore }: { onMore?: () => void }) {
       </li>
       {onMore ? (
         <li>
-          <button type="button" className="ag-link" onClick={onMore}>Getting started ↗</button>
+          <button type="button" className="ag-link" aria-haspopup="dialog" aria-expanded={expanded}
+                  aria-controls={expanded ? controls : undefined}
+                  onClick={(event) => onMore(event.currentTarget)}>Getting started</button>
         </li>
       ) : null}
     </ul>

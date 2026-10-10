@@ -20,6 +20,7 @@ from boss_engine.services.jobs import (
     _RUN_TABLE_FOR_KIND,
     _TERMINAL_RUN_STATES,
     enqueue_job,
+    job_run_id,
     stopped_run_reason,
 )
 
@@ -33,8 +34,8 @@ def conn():
     """
     engine = sa.create_engine("sqlite://")
     with engine.begin() as c:
-        c.execute(sa.text("CREATE TABLE meeting_runs (id TEXT PRIMARY KEY, status TEXT)"))
-        c.execute(sa.text("CREATE TABLE code_task_runs (id TEXT PRIMARY KEY, status TEXT)"))
+        c.execute(sa.text("CREATE TABLE meeting_runs (id TEXT PRIMARY KEY, status TEXT, project_id TEXT DEFAULT 'p1')"))
+        c.execute(sa.text("CREATE TABLE code_task_runs (id TEXT PRIMARY KEY, status TEXT, project_id TEXT DEFAULT 'p1')"))
         c.execute(sa.text(
             "CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT, task_id TEXT,"
             " work_item_id TEXT, tracker_binding_id TEXT, allocation_id TEXT, kind TEXT,"
@@ -50,7 +51,7 @@ def _enqueue(c, kind, run_id):
 
 @pytest.mark.parametrize("state", _TERMINAL_RUN_STATES)
 def test_no_step_is_queued_for_a_stopped_meeting(conn, state):
-    conn.execute(sa.text("INSERT INTO meeting_runs VALUES ('m1', :s)"), {"s": state})
+    conn.execute(sa.text("INSERT INTO meeting_runs (id,status) VALUES ('m1', :s)"), {"s": state})
     out = _enqueue(conn, "meeting.step", "m1")
     assert out["status"] == "skipped"
     assert out["id"] is None
@@ -60,12 +61,12 @@ def test_no_step_is_queued_for_a_stopped_meeting(conn, state):
 def test_a_live_meeting_still_gets_its_next_step(conn):
     """The guard must not stop a meeting that is simply mid-flight — that would be a deadlock,
     not a fix. Asserted on the RULE: the INSERT below it is Postgres-only."""
-    conn.execute(sa.text("INSERT INTO meeting_runs VALUES ('m1', 'running')"))
+    conn.execute(sa.text("INSERT INTO meeting_runs (id,status) VALUES ('m1', 'running')"))
     assert stopped_run_reason(conn, "meeting.step", {"run_id": "m1"}) is None
 
 
 def test_code_tasks_are_covered_by_the_same_rule(conn):
-    conn.execute(sa.text("INSERT INTO code_task_runs VALUES ('c1', 'cancelled')"))
+    conn.execute(sa.text("INSERT INTO code_task_runs (id,status) VALUES ('c1', 'cancelled')"))
     assert stopped_run_reason(conn, "code.task", {"run_id": "c1"})
 
 
@@ -77,7 +78,7 @@ def test_a_run_that_does_not_exist_yet_is_not_blocked(conn):
 
 def test_a_kind_with_no_run_table_is_untouched(conn):
     """Most job kinds have nothing to do with runs; they must not pay for this check."""
-    conn.execute(sa.text("INSERT INTO meeting_runs VALUES ('m1', 'cancelled')"))
+    conn.execute(sa.text("INSERT INTO meeting_runs (id,status) VALUES ('m1', 'cancelled')"))
     assert stopped_run_reason(conn, "canary.noop", {"run_id": "m1"}) is None
 
 
@@ -94,7 +95,7 @@ def test_a_missing_table_does_not_break_enqueue(conn):
 
 def test_the_skip_says_why(conn):
     """A silent no-op is indistinguishable from a lost job."""
-    conn.execute(sa.text("INSERT INTO meeting_runs VALUES ('m1', 'cancelled')"))
+    conn.execute(sa.text("INSERT INTO meeting_runs (id,status) VALUES ('m1', 'cancelled')"))
     out = _enqueue(conn, "meeting.step", "m1")
     assert "cancelled" in out["skipped_reason"] and "m1" in out["skipped_reason"]
 
@@ -102,6 +103,14 @@ def test_the_skip_says_why(conn):
 def test_every_run_driven_kind_is_mapped():
     """A run-driven kind missing from the map is a phase that can still outlive its cancel."""
     assert {"meeting.step", "code.task"} <= set(_RUN_TABLE_FOR_KIND)
+
+
+@pytest.mark.parametrize("field", ["discovery_run_id", "run_id"])
+@pytest.mark.parametrize("invalid", ["", 0, False])
+def test_an_invalid_link_cannot_hide_behind_the_other_valid_link(field, invalid):
+    payload = {"discovery_run_id": "run1", "run_id": "run1", field: invalid}
+    with pytest.raises(ValueError, match="Invalid run reference"):
+        job_run_id("discovery.run", payload)
 
 
 def test_the_guard_runs_before_the_insert():
@@ -121,7 +130,7 @@ def test_create_job_does_not_crash_when_the_run_already_stopped(conn):
     """
     from boss_engine.services.jobs import JobLeaseService
 
-    conn.execute(sa.text("INSERT INTO meeting_runs VALUES ('m1', 'cancelled')"))
+    conn.execute(sa.text("INSERT INTO meeting_runs (id,status) VALUES ('m1', 'cancelled')"))
     svc = JobLeaseService.__new__(JobLeaseService)
     out = svc.create_job(
         conn, "p1", "meeting.step", {"run_id": "m1"}, data_boundary="internal",

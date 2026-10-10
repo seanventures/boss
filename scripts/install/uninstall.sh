@@ -29,7 +29,7 @@ the checkout, private .env, database, artifacts, CLI sessions, and backups.
                explicit noninteractive purge confirmation; --yes alone never purges
 
 Data purge does not remove backups or the source checkout. Without
---skip-backup, the database must be running so it can be backed up first.
+--skip-backup, a complete key/database/artifact backup is required first.
 EOF
 }
 while [[ $# -gt 0 ]]; do
@@ -75,7 +75,7 @@ if [[ "$PURGE_DATA" -eq 1 ]]; then
       echo 'Data purge needs a terminal confirmation or --confirm-purge DELETE-BOSS-DATA; nothing was removed.' >&2
       exit 1
     fi
-    printf 'This removes the BOSS database, artifacts, CLI sessions, and .env. Type DELETE-BOSS-DATA: ' >/dev/tty
+    printf 'This removes the BOSS database, identity keys, artifacts, CLI sessions, and .env. Type DELETE-BOSS-DATA: ' >/dev/tty
     read -r CONFIRM_PURGE </dev/tty || true
     [[ "$CONFIRM_PURGE" == 'DELETE-BOSS-DATA' ]] || { echo 'Confirmation did not match; nothing was removed.' >&2; exit 1; }
   fi
@@ -100,10 +100,13 @@ fi
 export BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-${COMPOSE_PROJECT_NAME:-boss-community}}"
 COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile web --profile secrets)
 if [[ "$PURGE_DATA" -eq 1 && "$SKIP_BACKUP" -eq 0 ]]; then
-  args=(--dir "$INSTALL_DIR")
+  args=(--dir "$INSTALL_DIR" --leave-stopped)
   [[ -n "$BACKUP_DIR" ]] && args+=(--backup-dir "$BACKUP_DIR")
   backup="$(bash "$INSTALL_DIR/scripts/install/backup.sh" "${args[@]}" </dev/null)" || {
     echo 'Backup failed; data purge was cancelled.' >&2; exit 1;
+  }
+  python3 "$(dirname "${BASH_SOURCE[0]}")/backup_archive.py" validate "$backup" || {
+    echo 'Backup is incomplete or invalid; data purge was cancelled.' >&2; exit 1;
   }
   printf 'Private backup: %s\n' "$backup"
 fi

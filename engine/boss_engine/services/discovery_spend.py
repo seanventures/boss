@@ -24,6 +24,8 @@ import hashlib
 import math
 from typing import Any, Callable, Optional
 
+from sqlalchemy import text
+
 from ..config import Settings
 from .core import create_blocking_decision, emit_event
 from .model_failures import is_login_rejected, mark_login, waiting_for
@@ -44,6 +46,14 @@ STAGE_TTL_SECONDS = 3600
 RESEARCH_SOURCE_ID = "anthropic_claude_code"
 # The ceiling reserved before a stage; settlement keeps only what the call actually cost.
 STAGE_ESTIMATE_USD_MICROS = 2_000_000
+
+
+class DiscoveryStopped(RuntimeError):
+    """A terminal run cannot advance; this is not a retryable stage failure."""
+
+    def __init__(self, status: str = "cancelled") -> None:
+        self.status = status
+        super().__init__(f"Discovery is {status}; no further work is allowed.")
 
 
 class DiscoverySpendRefused(RuntimeError):
@@ -118,6 +128,7 @@ class DiscoveryStageSpend:
         identity = f"discovery:{self.run_id}:{stage}"
         # A refusal is RETURNED from inside the transaction and raised after it commits: raised
         # inside, it rolled back the very event and decision that say why the stage stopped.
+        self.commit(self.check_active)
         prior = self.commit(lambda c: self._prior(c, identity, stage))
         if prior.get("replay") is not None:
             return prior["replay"]
@@ -130,6 +141,15 @@ class DiscoveryStageSpend:
                                         transient=bool(authority.get("transient")))
         if authority.get("reconcile"):
             raise DiscoveryReconciliationRequired(authority["reconcile"])
+        from .jobs import LeaseNotFoundError
+        from .model_gateway import ModelGatewayLeaseError
+        try:
+            # Last local check, after authority commits and immediately before submission.
+            # It cannot atomically prevent a provider accepting concurrently with cancellation.
+            self.commit(lambda c: self._ready_to_submit(c, authority))
+        except (DiscoveryStopped, LeaseNotFoundError, ModelGatewayLeaseError) as stopped:
+            self._finish(authority, stage, None, stopped, submitted=False)
+            raise
         try:
             result = call()
         except Exception as error:  # noqa: BLE001 — every outcome is recorded below
@@ -140,9 +160,44 @@ class DiscoveryStageSpend:
                     f"Discovery stage '{stage}' may have been charged without an answer "
                     f"({reason}); reconcile receipt {authority['receipt_id']} before retrying."
                 ) from reason
-            self.commit(lambda c: self._settle(c, authority, stage, None, reason))
+            self._finish(authority, stage, None, reason, submitted=True)
             raise
-        return self.commit(lambda c: self._settle(c, authority, stage, result, None))
+        return self._finish(authority, stage, result, None, submitted=True)
+
+    def check_active(self, connection) -> None:
+        from .jobs import job_run_id
+
+        job = self.gateway.jobs.require_active_lease(
+            connection, self.worker_id, self.job_id, self.job_lease_token)
+        if (job["project_id"] != self.project_id or job["kind"] != JOB_KIND
+                or job_run_id(job["kind"], job["payload"]) != self.run_id):
+            raise DiscoveryStopped("invalid_lineage")
+        row = connection.execute(text(
+            "SELECT status, state->>'job_id' AS job_id FROM discovery_runs "
+            "WHERE id=:id AND project_id=:p FOR UPDATE"),
+            {"id": self.run_id, "p": self.project_id}).mappings().first()
+        if not row or row["status"] != "running" or row["job_id"] != self.job_id:
+            raise DiscoveryStopped(str(row["status"]) if row else "missing")
+
+    def _ready_to_submit(self, connection, authority: dict) -> None:
+        self.check_active(connection)
+        self.gateway._load_lease(connection, self.project_id, authority["lease_id"],
+                                 self.worker_id, authority["lease_token"])
+
+    def _finish(self, authority: dict, stage: str, result, error, *, submitted: bool):
+        from .jobs import LeaseNotFoundError
+        from .model_gateway import ModelGatewayLeaseError
+
+        try:
+            return self.commit(lambda c: self._settle(c, authority, stage, result, error))
+        except (LeaseNotFoundError, ModelGatewayLeaseError) as lost:
+            # The call may have been accepted. Do not release its reservation or retry it.
+            reason = lost
+            self.commit(lambda c: self._reconcile(c, authority, stage, reason,
+                                                  result=result, submitted=submitted))
+            raise DiscoveryReconciliationRequired(
+                f"Discovery stage '{stage}' lost settlement authority; reconcile receipt "
+                f"{authority['receipt_id']} before retrying.") from lost
 
     # -- steps ----------------------------------------------------------------------------------
     def _prior(self, connection, identity: str, stage: str) -> dict:
@@ -174,6 +229,8 @@ class DiscoveryStageSpend:
 
     def _open(self, connection, dedupe: str, stage: str, source_id: Optional[str]) -> dict:
         from .model_gateway import ModelCapacityDeniedError
+
+        self.check_active(connection)
 
         # THE STAGE RESERVES ITS HONEST ESTIMATE. The per-minute burst cap measures actual
         # settled spend, not reservations, so an estimate larger than that cap is still
@@ -283,7 +340,12 @@ class DiscoveryStageSpend:
                     **({} if succeeded else {"message": str(error)[:500]})})
         return result or {}
 
-    def _reconcile(self, connection, authority: dict, stage: str, error: BaseException) -> None:
+    def _reconcile(self, connection, authority: dict, stage: str, error: BaseException,
+                   *, result: Optional[dict] = None, submitted: bool = True) -> None:
+        self.receipts.merge_result(connection, authority["receipt_id"],
+                                   {"stage": stage, "submitted": submitted,
+                                    "unsettled_output": result,
+                                    "reconciliation_reason": str(error)[:500]})
         self._decision(connection, f"Reconcile Discovery {self.run_id} stage {stage}",
                        "discovery_reconciliation",
                        {"stage": stage, "receipt_id": authority["receipt_id"],

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import random
 import time
 from typing import Any, Iterator, Optional, Tuple
@@ -112,10 +114,25 @@ def groq_qwen_context_limits(
     return (requested, 400_000, 20_000)
 
 
+_SINGLE_ATTEMPT: ContextVar[bool] = ContextVar("model_single_attempt", default=False)
+
+
+@contextmanager
+def single_attempt():
+    """A governed invocation cannot resample or hide another SDK request on its receipt."""
+    token = _SINGLE_ATTEMPT.set(True)
+    try:
+        yield
+    finally:
+        _SINGLE_ATTEMPT.reset(token)
+
+
 def _with_retry(call, *, tries: int = 8, base: float = 2.0, stats: Optional[dict] = None):
     """Call an OpenAI request, retrying on 429 / transient errors with exponential backoff +
     jitter. Honours a Retry-After header when the provider supplies one. ``stats`` (when
     given) receives {"retries": n} — how many retries the call needed (0 = first try)."""
+    if _SINGLE_ATTEMPT.get():
+        tries = 1
     for attempt in range(tries):
         if stats is not None:
             stats["retries"] = attempt
@@ -353,6 +370,8 @@ class OpenAIAdapter:
         if kwargs["api_key"]:
             check_outbound(base or "https://api.openai.com/v1",
                            {"Authorization": f"Bearer {kwargs['api_key']}"})
+        if _SINGLE_ATTEMPT.get():
+            kwargs["max_retries"] = 0
         return OpenAI(**kwargs)
 
     def create_text_response(
@@ -370,6 +389,7 @@ class OpenAIAdapter:
                 api_key=self.settings.azure_openai_key,
                 azure_endpoint=self.settings.azure_openai_endpoint,
                 api_version=self.settings.azure_openai_api_version,
+                **({"max_retries": 0} if _SINGLE_ATTEMPT.get() else {}),
             )
             messages: list[dict] = []
             if system_prompt:
@@ -438,6 +458,7 @@ class OpenAIAdapter:
                 api_key=self.settings.azure_openai_key,
                 azure_endpoint=self.settings.azure_openai_endpoint,
                 api_version=self.settings.azure_openai_api_version,
+                **({"max_retries": 0} if _SINGLE_ATTEMPT.get() else {}),
             )
             used_model, base_url = self.settings.azure_openai_deployment or "gpt-4o", ""
         else:
@@ -521,6 +542,7 @@ class OpenAIAdapter:
                 api_key=self.settings.azure_openai_key,
                 azure_endpoint=self.settings.azure_openai_endpoint,
                 api_version=self.settings.azure_openai_api_version,
+                **({"max_retries": 0} if _SINGLE_ATTEMPT.get() else {}),
             )
             model = self.settings.azure_openai_deployment or "gpt-4o"
         elif self._resolved_api_key():

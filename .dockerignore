@@ -23,3 +23,9 @@ packages/*/node_modules
 *.log
 *.zip
 image.png
+
+# Source tests remain in Git/source archives, not in production image copies.
+apps/api/tests
+apps/worker/tests
+apps/web/tests
+**/__probe_tmp

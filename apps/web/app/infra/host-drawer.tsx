@@ -182,9 +182,9 @@ function Setup({ host, actor, refresh }: { host: HostDetail; actor: string; refr
         ) : null}
         {/^ssh\s/.test(shown) ? (
           <>
-            <p className="inf-muted" data-testid="inf-stage-key-note">
+            <div className="inf-muted" data-testid="inf-stage-key-note">
               This uses your laptop&apos;s default SSH key. If another key opens {address}, name its file.
-            </p>
+            </div>
             <label className="inf-inline-field" title="Adds -i <file> to the command below">
               <span>Key file</span>
               <input value={keyFile} onChange={(e) => setKeyFile(e.target.value)} spellCheck={false}

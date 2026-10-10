@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import secrets
-import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -435,3 +434,304 @@ def test_compose_runs_a_separate_server_the_fence_opens_alone():
     entry = (ROOT / "scripts/sandbox/entrypoint.sh").read_text()
     assert 'PORTS="$PORTS,$BSVC_PORT"' in entry and "''|5432) ;;" in entry
     assert "chmod 0400 \"$BOSS_BUILD_SERVICES_PG_PASSWORD_FILE\"" in entry
+
+
+# Unsafe repository reads cannot make the automatic service decision.
+def test_database_detection_reads_healthy_files_and_skips_large_inputs(tmp_path):
+    (tmp_path / "large.py").write_text("postgresql://fixture/db\n" + "x" * bs._SCAN_BYTES)
+    (tmp_path / "package.json").write_text('{"dependencies":{"pg":"8"}}')
+    assert bs.detect_in_code(tmp_path) == ["package.json depends on pg"]
+
+
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_database_detection_refuses_files_borrowed_from_outside(tmp_path, link_kind):
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"dependencies":{"pg":"OWNED_BOUNDARY_MARKER"}}')
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    candidate = repo / "package.json"
+    if link_kind == "symlink":
+        candidate.symlink_to(outside)
+    else:
+        os.link(outside, candidate)
+    with pytest.raises(bs.BuildServicesUnavailable, match="repository database detection") as err:
+        bs.detect_in_code(repo)
+    assert "OWNED_BOUNDARY_MARKER" not in str(err.value)
+    assert str(outside) not in str(err.value)
+
+
+def test_database_detection_refuses_a_file_replaced_after_enumeration(tmp_path, monkeypatch):
+    from boss_engine.services.repo_files import RepoFiles
+
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"dependencies":{"pg":"OWNED_SUBSTITUTION_MARKER"}}')
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text('{"dependencies":{}}')
+    original = RepoFiles.read_text
+
+    def swap(reader, path, **kwargs):
+        (repo / "package.json").unlink()
+        (repo / "package.json").symlink_to(outside)
+        return original(reader, path, **kwargs)
+
+    monkeypatch.setattr(RepoFiles, "read_text", swap)
+    with pytest.raises(bs.BuildServicesUnavailable, match="repository database detection"):
+        bs.detect_in_code(repo)
+
+
+def test_database_detection_keeps_its_pinned_root_after_directory_replacement(tmp_path, monkeypatch):
+    from boss_engine.services.repo_files import RepoFiles
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text('{"dependencies":{"pg":"8"}}')
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "package.json").write_text('{"dependencies":{"postgres":"3"}}')
+    original = RepoFiles.read_text
+
+    def swap(reader, path, **kwargs):
+        repo.rename(tmp_path / "pinned-repo")
+        repo.symlink_to(outside, target_is_directory=True)
+        return original(reader, path, **kwargs)
+
+    monkeypatch.setattr(RepoFiles, "read_text", swap)
+    assert bs.detect_in_code(repo) == ["package.json depends on pg"]
+
+
+@pytest.fixture()
+def cleanup_state(monkeypatch):
+    from boss_engine.services import resource_ledger
+
+    monkeypatch.setattr(bs, "_LEASES", {})
+    monkeypatch.setattr(bs, "_PENDING_CLEANUP", {})
+    monkeypatch.setattr(bs, "_SECRETS", {})
+    released, forgotten = [], []
+    monkeypatch.setattr(resource_ledger, "release", lambda *a, **k: released.append(a))
+    monkeypatch.setattr(bs, "_forget_secret", forgotten.append)
+    return released, forgotten
+
+
+def test_failed_cleanup_retains_retry_without_credentials_or_false_release(cleanup_state, monkeypatch, caplog):
+    released, forgotten = cleanup_state
+    lease = _fake_lease("crun_cleanup_failure")
+    lease.ledger_handle = "pg:fixture/cleanup"
+    caplog.set_level(logging.INFO)
+    statements = []
+
+    class Failed:
+        def execute(self, query):
+            statements.append(query)
+            raise RuntimeError("OWNED_FAILURE_MARKER " + lease.password)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(bs, "server", lambda *_: object())
+    monkeypatch.setattr(bs, "_connect", lambda *_: Failed())
+    assert bs.teardown(lease.run_id) is False
+    assert len(statements) == 2
+    assert bs.lease_for(lease.run_id) is None
+    assert bs.env_for_owner(lease.run_id) == {}
+    assert bs._PENDING_CLEANUP[lease.run_id] is lease
+    assert released == forgotten == []
+    with pytest.raises(bs.BuildServicesUnavailable, match="awaits cleanup"):
+        bs.provision(lease.run_id)
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "cleanup pending" in logged and " dropped " not in logged
+    assert "OWNED_FAILURE_MARKER" not in logged and lease.password not in logged
+
+    class Works(Failed):
+        def execute(self, query):
+            statements.append(query)
+
+    monkeypatch.setattr(bs, "_connect", lambda *_: Works())
+    assert bs.teardown(lease.run_id) is True
+    assert lease.run_id not in bs._PENDING_CLEANUP
+    assert len(released) == 1 and forgotten == [lease.password]
+    assert bs.teardown(lease.run_id) is False
+
+
+def test_partial_cleanup_failure_is_pending_until_both_objects_are_gone(cleanup_state, monkeypatch):
+    released, _ = cleanup_state
+    lease = _fake_lease("crun_partial_cleanup")
+    remaining = {"role", "database"}
+
+    class Partial:
+        deny_role = True
+
+        def execute(self, query):
+            if "DROP DATABASE" in str(query):
+                remaining.discard("database")
+            elif self.deny_role:
+                raise RuntimeError("role deletion refused")
+            else:
+                remaining.discard("role")
+
+        def close(self):
+            pass
+
+    conn = Partial()
+    monkeypatch.setattr(bs, "server", lambda *_: object())
+    monkeypatch.setattr(bs, "_connect", lambda *_: conn)
+    assert bs.teardown(lease.run_id) is False
+    assert remaining == {"role"} and not released
+    conn.deny_role = False
+    assert bs.teardown(lease.run_id) is True
+    assert remaining == set() and len(released) == 1
+
+
+def test_no_configured_cleanup_server_cannot_release_the_resource(cleanup_state, monkeypatch):
+    released, forgotten = cleanup_state
+    lease = _fake_lease("crun_no_cleanup_server")
+    monkeypatch.setattr(bs, "server", lambda *_: None)
+    assert bs.teardown(lease.run_id) is False
+    assert lease.run_id in bs._PENDING_CLEANUP
+    assert released == forgotten == []
+
+
+def test_real_failed_drop_is_reported_and_reaper_retries(pg_server, cleanup_state, monkeypatch):
+    url, _ = pg_server
+    released, _ = cleanup_state
+    lease = bs.provision("crun_readonly_cleanup")
+    connect = bs._connect
+
+    def read_only(srv):
+        conn = connect(srv)
+        conn.execute("SET default_transaction_read_only = on")
+        return conn
+
+    monkeypatch.setattr(bs, "_connect", read_only)
+    assert bs.teardown(lease.run_id) is False
+    assert _exists(url, lease.name) == (True, True)
+    assert released == [] and lease.run_id in bs._PENDING_CLEANUP
+    # Failed retry is visible, never counted as dropped.
+    report = bs.reap(set(), min_age=0)
+    assert report["dropped"] == [] and report["pending"] == [lease.name]
+    assert released == []
+    monkeypatch.setattr(bs, "_connect", connect)
+    report = bs.reap(set(), min_age=0)
+    assert report["dropped"] == [lease.name] and report["pending"] == []
+    assert _exists(url, lease.name) == (False, False)
+    assert lease.run_id not in bs._PENDING_CLEANUP and len(released) == 1
+
+
+def test_failed_creation_retains_the_real_role_until_rollback_retry(
+    pg_server, cleanup_state, monkeypatch,
+):
+    url, _ = pg_server
+    released, forgotten = cleanup_state
+    connect = bs._connect
+
+    class DeniedCreationAndRollback:
+        def __init__(self, srv):
+            self.conn = connect(srv)
+
+        def execute(self, query):
+            if "CREATE DATABASE" in str(query) or "DROP ROLE" in str(query):
+                raise RuntimeError("owned failure injection")
+            return self.conn.execute(query)
+
+        def close(self):
+            self.conn.close()
+
+    monkeypatch.setattr(bs, "_connect", DeniedCreationAndRollback)
+    with pytest.raises(bs.BuildServicesUnavailable, match="cleanup pending"):
+        bs.provision("crun_failed_creation")
+    lease = bs._PENDING_CLEANUP["crun_failed_creation"]
+    assert _exists(url, lease.name) == (False, True)
+    assert bs.lease_for(lease.run_id) is None and bs.env_for_owner(lease.run_id) == {}
+    assert released == forgotten == []
+    monkeypatch.setattr(bs, "_connect", connect)
+    assert bs.teardown(lease.run_id) is True
+    assert _exists(url, lease.name) == (False, False)
+    assert not bs._PENDING_CLEANUP and len(released) == 1
+    assert forgotten == [lease.password]
+
+
+def test_handle_release_strictness_preserves_other_ledger_defaults(monkeypatch):
+    from boss_engine.services import resource_ledger
+
+    class OtherLedger:
+        def release_handle(self, kind, handle, reason):
+            raise RuntimeError("owned ledger fixture failure")
+
+    monkeypatch.setattr(owned_process, "_LEDGER", OtherLedger())
+    resource_ledger.release("fixture", "owned", "ended")  # Existing best-effort contract.
+    with pytest.raises(RuntimeError, match="owned ledger fixture failure"):
+        resource_ledger.release("fixture", "owned", "ended", strict=True)
+    monkeypatch.setattr(owned_process, "_LEDGER", owned_process._NullLedger())
+    resource_ledger.release("fixture", "owned", "ended", strict=True)
+
+
+@pytest.mark.parametrize("via_reaper", [False, True])
+def test_ledger_failure_after_real_deletion_stays_retryable(
+    pg_server, monkeypatch, caplog, via_reaper,
+):
+    """A real read-only ledger transaction fails after real writable DROP succeeds."""
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.exc import DBAPIError
+
+    from boss_engine.services import resource_ledger
+
+    url, _ = pg_server
+    schema = "bsvc_ledger_" + secrets.token_hex(6)
+    sql_url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+    writable = create_engine(sql_url, connect_args={"options": f"-c search_path={schema}"})
+    readonly = create_engine(sql_url, connect_args={
+        "options": f"-c search_path={schema} -c default_transaction_read_only=on",
+    })
+    monkeypatch.setattr(bs, "_LEASES", {})
+    monkeypatch.setattr(bs, "_PENDING_CLEANUP", {})
+    monkeypatch.setattr(bs, "_SECRETS", {})
+    forgotten = []
+    monkeypatch.setattr(bs, "_forget_secret", forgotten.append)
+    caplog.set_level(logging.INFO)
+    try:
+        with writable.begin() as c:
+            c.execute(text(f'CREATE SCHEMA "{schema}"'))
+            c.execute(text("CREATE TABLE owned_resources (resource_kind text, handle text, "
+                           "released_at timestamptz, release_reason text)"))
+        lease = bs.provision("crun_ledger_failure")
+        with writable.begin() as c:
+            c.execute(text("INSERT INTO owned_resources (resource_kind, handle) VALUES (:k, :h)"),
+                      {"k": bs.RESOURCE_KIND, "h": lease.ledger_handle})
+        ledger = resource_ledger.DbLedger(readonly)
+        monkeypatch.setattr(owned_process, "_LEDGER", ledger)
+        # The existing default remains best effort; explicit strict release exposes the
+        # actual PostgreSQL ReadOnlySqlTransaction instead of converting it to zero.
+        assert ledger.release_handle(bs.RESOURCE_KIND, lease.ledger_handle, "default") == 0
+        resource_ledger.release(bs.RESOURCE_KIND, lease.ledger_handle, "default")
+        with pytest.raises(DBAPIError) as err:
+            resource_ledger.release(bs.RESOURCE_KIND, lease.ledger_handle, "strict", strict=True)
+        assert err.value.orig.sqlstate == "25006"
+        if via_reaper:
+            bs._LEASES.pop(lease.run_id)  # Only server ownership comments remain.
+            report = bs.reap(set(), min_age=0)
+            assert report["dropped"] == [] and report["pending"] == [lease.name]
+        else:
+            assert bs.teardown(lease.run_id) is False
+        assert _exists(url, lease.name) == (False, False)
+        assert any(p.ledger_handle == lease.ledger_handle for p in bs._PENDING_CLEANUP.values())
+        assert bs.env_for_owner(lease.run_id) == {} and forgotten == []
+        report = bs.reap(set(), min_age=0)  # A second real failed ledger update stays pending.
+        assert report["dropped"] == [] and report["pending"] == [lease.name]
+        with writable.connect() as c:
+            assert c.execute(text("SELECT released_at FROM owned_resources")).scalar() is None
+        logged = "\n".join(r.getMessage() for r in caplog.records)
+        assert "cleanup pending" in logged and " dropped " not in logged
+        assert lease.password not in logged and url not in logged
+        monkeypatch.setattr(owned_process, "_LEDGER", resource_ledger.DbLedger(writable))
+        report = bs.reap(set(), min_age=0)
+        assert report["dropped"] == [lease.name] and report["pending"] == []
+        assert not bs._PENDING_CLEANUP
+        with writable.connect() as c:
+            row = c.execute(text("SELECT released_at, release_reason FROM owned_resources")).one()
+            assert row[0] is not None and row[1] == "reaped"
+        assert bs.reap(set(), min_age=0) == {"dropped": [], "pending": []}
+    finally:
+        readonly.dispose()
+        with writable.begin() as c:
+            c.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        writable.dispose()

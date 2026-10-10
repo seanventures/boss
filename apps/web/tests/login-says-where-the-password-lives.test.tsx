@@ -29,7 +29,7 @@ describe("the legacy-password claim", () => {
   it("tells you how to find the password on the server, and over SSH", async () => {
     const html = await render("legacy_password");
     expect(html).toContain('data-testid="console-password-hint"');
-    expect(html).toContain("python3 scripts/install/console_password.py show");
+    expect(html).toContain("boss password");
     expect(html).toContain("ssh -t user@your-server");
   });
 
@@ -39,6 +39,6 @@ describe("the legacy-password claim", () => {
   });
 
   it("shows the hint only where a password is asked for", async () => {
-    expect(await render("network_bridge")).not.toContain("console_password.py");
+    expect(await render("network_bridge")).not.toContain('data-testid="console-password-hint"');
   });
 });

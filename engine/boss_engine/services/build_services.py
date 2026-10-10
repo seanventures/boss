@@ -147,6 +147,7 @@ _PLAN_LINE = re.compile(r"^\s*[-*]?\s*database\s*:\s*(postgres(?:ql)?)\b", re.IG
 _SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".next", "vendor"}
 _SCAN_FILES = 3000
 _SCAN_BYTES = 256_000
+_SCAN_TOTAL_BYTES = 4 * 1024 * 1024
 
 
 def _texts(value: Any, depth: int = 0) -> Iterable[str]:
@@ -170,48 +171,53 @@ def detect_in_code(root: Any) -> list[str]:
 
     if not root:
         return []
-    base = Path(str(root))
-    if not base.is_dir():
-        return []
+    from .repo_files import RepoFileRefused, RepoFiles
+
     found: list[str] = []
-    seen = 0
-    for path in sorted(base.rglob("*")):
-        if any(part in _SKIP_DIRS for part in path.relative_to(base).parts[:-1]):
-            continue
-        if not path.is_file():
-            continue
-        seen += 1
-        if seen > _SCAN_FILES or len(found) >= 3:
-            break
-        name = path.name.lower()
-        rel = path.relative_to(base).as_posix()
-        try:
-            if path.stat().st_size > _SCAN_BYTES:
-                continue
-            text_ = path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        if name.startswith("requirements") and name.endswith(".txt") or name in ("pyproject.toml", "pipfile", "setup.py", "setup.cfg"):
-            if _PY_DEPS.search(text_) or re.search(r"[\"'](psycopg2?(?:-binary)?|psycopg|asyncpg)", text_):
-                found.append(f"{rel} depends on a PostgreSQL driver")
-        elif name == "package.json":
-            try:
-                pkg = _json.loads(text_)
-            except ValueError:
-                continue
-            deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
-            hit = [d for d in ("pg", "postgres", "pg-promise", "@neondatabase/serverless", "@vercel/postgres") if d in deps]
-            if hit:
-                found.append(f"{rel} depends on {hit[0]}")
-        elif name == "schema.prisma":
-            if re.search(r'provider\s*=\s*"postgres(?:ql)?"', text_):
-                found.append(f"{rel} uses the postgresql provider")
-        elif name.startswith(("docker-compose", "compose")) and name.endswith((".yml", ".yaml")):
-            if re.search(r"image:\s*['\"]?postgres", text_):
-                found.append(f"{rel} runs a postgres service")
-        elif path.suffix.lower() in (".py", ".ts", ".js", ".mjs", ".cjs", ".env", ".example", ".toml", ".ini", ".yml", ".yaml"):
-            if _PG_URL.search(text_):
-                found.append(f"{rel} has a postgresql:// URL")
+    remaining = _SCAN_TOTAL_BYTES
+    try:
+        with RepoFiles(Path(str(root))) as repo:
+            for seen, rel in enumerate(repo.walk(skip=_SKIP_DIRS), 1):
+                if seen > _SCAN_FILES or len(found) >= 3 or remaining <= 0:
+                    break
+                name = Path(rel).name.lower()
+                if not (name in ("package.json", "schema.prisma", "pyproject.toml", "pipfile",
+                                 "setup.py", "setup.cfg") or
+                        (name.startswith("requirements") and name.endswith(".txt")) or
+                        Path(rel).suffix.lower() in (".py", ".ts", ".js", ".mjs", ".cjs", ".env",
+                                                     ".example", ".toml", ".ini", ".yml", ".yaml")):
+                    continue
+                limit = min(_SCAN_BYTES, remaining)
+                text_ = repo.read_text(rel, max_bytes=limit, truncate=True)
+                remaining -= min(limit, len(text_.encode("utf-8")))
+                if text_.endswith("\n...[truncated: repository read cap]"):
+                    continue
+                if name.startswith("requirements") and name.endswith(".txt") or name in ("pyproject.toml", "pipfile", "setup.py", "setup.cfg"):
+                    if _PY_DEPS.search(text_) or re.search(r"[\"'](psycopg2?(?:-binary)?|psycopg|asyncpg)", text_):
+                        found.append(f"{rel} depends on a PostgreSQL driver")
+                elif name == "package.json":
+                    try:
+                        pkg = _json.loads(text_)
+                    except ValueError:
+                        continue
+                    deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
+                    hit = [d for d in ("pg", "postgres", "pg-promise", "@neondatabase/serverless", "@vercel/postgres") if d in deps]
+                    if hit:
+                        found.append(f"{rel} depends on {hit[0]}")
+                elif name == "schema.prisma":
+                    if re.search(r'provider\s*=\s*"postgres(?:ql)?"', text_):
+                        found.append(f"{rel} uses the postgresql provider")
+                elif name.startswith(("docker-compose", "compose")) and name.endswith((".yml", ".yaml")):
+                    if re.search(r"image:\s*['\"]?postgres", text_):
+                        found.append(f"{rel} runs a postgres service")
+                elif Path(rel).suffix.lower() in (".py", ".ts", ".js", ".mjs", ".cjs", ".env", ".example", ".toml", ".ini", ".yml", ".yaml"):
+                    if _PG_URL.search(text_):
+                        found.append(f"{rel} has a postgresql:// URL")
+    except (OSError, RepoFileRefused):
+        # A replacement, symlink, hardlink or oversized scan is an unavailable decision,
+        # never evidence that the repository needs no database. Do not expose its target.
+        raise BuildServicesUnavailable("repository database detection refused an unsafe or "
+                                       "oversized file; inspect the repository") from None
     return found
 
 
@@ -382,6 +388,8 @@ class PostgresLease:
 
 
 _LEASES: dict[str, PostgresLease] = {}
+# Ended runs stop receiving credentials immediately; failed deletion remains retryable.
+_PENDING_CLEANUP: dict[str, PostgresLease] = {}
 _LOCK = threading.Lock()
 
 
@@ -401,6 +409,9 @@ def provision(run_id: str, *, install: str = "", server_url: Optional[str] = Non
     Raises BuildServicesUnavailable with the reason."""
     with _LOCK:
         existing = _LEASES.get(run_id)
+        if run_id in _PENDING_CLEANUP:
+            raise BuildServicesUnavailable("the run's previous database awaits cleanup; retry "
+                                           "after the resource reaper succeeds")
     if existing is not None:
         return existing
     srv = server(server_url)
@@ -437,12 +448,22 @@ def provision(run_id: str, *, install: str = "", server_url: Optional[str] = Non
                 conn.execute(sql.SQL("COMMENT ON DATABASE {} IS {}").format(
                     ident, sql.Literal(comment)))
             except Exception as exc:  # noqa: BLE001
-                _drop(conn, name)
+                try:
+                    _drop(conn, name)
+                except BuildServicesUnavailable:
+                    with _LOCK:
+                        _PENDING_CLEANUP[run_id] = lease
+                    _log.warning("build-services run=%s creation cleanup pending for %s; "
+                                 "the reaper will retry", run_id, name)
+                    raise
                 raise BuildServicesUnavailable(
                     f"the build-services server refused to create the run's database "
                     f"({type(exc).__name__}: {scrub(str(exc))[:200]})") from None
     except BaseException:
-        _forget_secret(password)
+        with _LOCK:
+            pending = run_id in _PENDING_CLEANUP
+        if not pending:
+            _forget_secret(password)
         raise
     with _LOCK:
         _LEASES[run_id] = lease
@@ -459,34 +480,43 @@ def _drop(conn: Any, name: str) -> None:
     from psycopg import sql
 
     ident = sql.Identifier(name)
-    with contextlib.suppress(Exception):
-        conn.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(ident))
-    with contextlib.suppress(Exception):
-        conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(ident))
+    failures: list[str] = []
+    for statement in ("DROP DATABASE IF EXISTS {} WITH (FORCE)", "DROP ROLE IF EXISTS {}"):
+        try:
+            conn.execute(sql.SQL(statement).format(ident))
+        except Exception as exc:  # noqa: BLE001 — never include server text or credentials
+            failures.append(type(exc).__name__)
+    if failures:
+        raise BuildServicesUnavailable("database cleanup pending (" + ", ".join(failures) + ")")
 
 
 def teardown(run_id: str, *, server_url: Optional[str] = None, reason: str = "run_ended") -> bool:
-    """Drop run `run_id`'s database and role (it is ended, whatever its sessions were doing).
-    True when there was one. Never raises: a teardown that fails is the reaper's to finish."""
+    """Stop handing out a run's credentials and attempt deletion. True only after success.
+    Failed cleanup stays pending for a later teardown/reaper pass; the ledger stays owned."""
     with _LOCK:
-        lease = _LEASES.pop(run_id, None)
+        lease = _LEASES.pop(run_id, None) or _PENDING_CLEANUP.get(run_id)
+        if lease is not None:
+            _PENDING_CLEANUP[run_id] = lease
     if lease is None:
         return False
     try:
         srv = server(server_url)
-        if srv is not None:
-            with contextlib.closing(_connect(srv)) as conn:
-                _drop(conn, lease.name)
-        with contextlib.suppress(Exception):
-            from . import resource_ledger
+        if srv is None:
+            raise BuildServicesUnavailable("database cleanup server is not configured")
+        with contextlib.closing(_connect(srv)) as conn:
+            _drop(conn, lease.name)
+        from . import resource_ledger
 
-            resource_ledger.release(RESOURCE_KIND, lease.ledger_handle, reason)
-        _log.info("build-services run=%s dropped %s", run_id, lease.name)
+        resource_ledger.release(RESOURCE_KIND, lease.ledger_handle, reason, strict=True)
     except Exception as exc:  # noqa: BLE001 — the reaper finishes it
-        _log.warning("build-services run=%s drop of %s failed (%s); the reaper will retry",
+        _log.warning("build-services run=%s cleanup pending for %s (%s); the reaper will retry",
                      run_id, lease.name, type(exc).__name__)
-    finally:
+        return False
+    with _LOCK:
+        _PENDING_CLEANUP.pop(run_id, None)
+    if lease.password:
         _forget_secret(lease.password)
+    _log.info("build-services run=%s dropped %s", run_id, lease.name)
     return True
 
 
@@ -537,6 +567,14 @@ def reap(live_run_ids: Iterable[str], *, install: str = "", server_url: Optional
         mine = {lease.name for lease in _LEASES.values()}
     pre = prefix()
     dropped: list[str] = []
+    failed: list[str] = []
+    with _LOCK:
+        pending = list(_PENDING_CLEANUP.values())
+    for lease in pending:
+        if teardown(lease.run_id, server_url=server_url, reason="reaped"):
+            dropped.append(lease.name)
+        else:
+            failed.append(lease.name)
     now = time.time()
     with contextlib.closing(_connect(srv)) as conn:
         rows = conn.execute(
@@ -549,7 +587,7 @@ def reap(live_run_ids: Iterable[str], *, install: str = "", server_url: Optional
             if comment or name not in seen:
                 seen[name] = comment
         for name, comment in sorted(seen.items()):
-            if name in mine:
+            if name in mine or name in failed:
                 continue
             try:
                 meta = json.loads(comment or "")
@@ -563,15 +601,32 @@ def reap(live_run_ids: Iterable[str], *, install: str = "", server_url: Optional
                 continue
             if now - float(meta.get("created") or now) < min_age:
                 continue
-            _drop(conn, name)
-            dropped.append(name)
-            with contextlib.suppress(Exception):
+            try:
+                _drop(conn, name)
+            except BuildServicesUnavailable:
+                failed.append(name)
+                _log.warning("build-services cleanup pending for %s; the reaper will retry", name)
+                continue
+            handle = f"pg:{srv.host}:{srv.port}/{name}"
+            try:
                 from . import resource_ledger
 
-                resource_ledger.release(RESOURCE_KIND, f"pg:{srv.host}:{srv.port}/{name}", "reaped")
+                resource_ledger.release(RESOURCE_KIND, handle, "reaped", strict=True)
+            except Exception as exc:  # noqa: BLE001 — metadata must not vanish with the DB
+                # Its catalog comments are gone now. Keep the exact ledger handle for
+                # retry, without inventing credentials or handing this ended resource out.
+                with _LOCK:
+                    _PENDING_CLEANUP[handle] = PostgresLease(
+                        run_id=handle, name=name, host=srv.host, port=srv.port,
+                        password="", ledger_handle=handle)
+                failed.append(name)
+                _log.warning("build-services database %s removed; ledger cleanup pending (%s); "
+                             "the reaper will retry", name, type(exc).__name__)
+                continue
+            dropped.append(name)
     if dropped:
         _log.info("build-services reaped %d orphaned database(s): %s", len(dropped), dropped)
-    return {"dropped": dropped}
+    return {"dropped": dropped, "pending": failed}
 
 
 def reap_tick(engine: Any) -> dict[str, Any]:

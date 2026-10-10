@@ -194,7 +194,7 @@ export { ok as stubOk, err as stubErr, notFound as stubNotFound, effective as st
 on("GET", "/v1/auth/options", "public", ({ s, req }) => {
   const path: string | undefined = req.cookies[STUB_CLAIM_COOKIE];
   const claim: AuthOptions["claim"] = path && ["setup_token", "legacy_password", "network_bridge"].includes(path)
-    ? { path: path as "setup_token", origin: path === "network_bridge" ? `https://goldeneye.tail4b2c.ts.net` : null,
+    ? { path: path as "setup_token", origin: path === "network_bridge" ? `https://console.example.test` : null,
         expires_at: path === "setup_token" ? new Date(Date.now() + 52 * 60_000).toISOString() : null,
         seats: ["ceo", "cto", "cao", "vp_agents", "release_manager"] }
     : null;

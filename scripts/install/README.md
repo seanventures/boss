@@ -4,6 +4,8 @@ Install BOSS Community on a machine you administer. This page is the installer r
 
 ## Install
 
+For the RC8 candidate, use the [commit-pinned GitHub checkout](#straight-from-github). You need Git and repository access; use an account with access if GitHub asks you to sign in. The website installer and hosted manual are deployed separately, so source publication alone does not verify their version.
+
 ### One command
 
 ```bash
@@ -22,7 +24,7 @@ Pass installer flags after `bash -s --`:
 
 ```bash
 curl -fsSL https://boss.sean.network/install.sh | bash -s -- --yes
-curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc6.2 --console-origin https://boss.example.com
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc8 --console-origin https://boss.example.com
 ```
 
 `BOSS_REF=main` (or `--ref main`) installs the development branch instead of a release.
@@ -137,25 +139,28 @@ This is the same command as [Install](#install): it installs the newest release 
 
 ### Straight from GitHub
 
-The same install without the website. The download and the Git checkout use the same commit, the installer verifies it, and a failed download stops before anything runs:
+Install the reviewed RC8 source without the website. This uses Git authentication if the repository requires access, resolves the release checkout to a full commit SHA, and installs that same commit:
 
 ```bash
-BOSS_RELEASE_COMMIT=f9ceffc5dc078c5a21be6d8dde8d76be10e2dd2d bash -c 'set -u; [[ $BOSS_RELEASE_COMMIT =~ ^[0-9a-f]{40}$ ]] || { echo "Set the reviewed 40-character release SHA" >&2; exit 2; }; tmp=$(mktemp) || exit; curl -fsSL "https://raw.githubusercontent.com/seanventures/boss/$BOSS_RELEASE_COMMIT/install.sh" -o "$tmp" && BOSS_REPO_REF="$BOSS_RELEASE_COMMIT" bash "$tmp" "$@"; status=$?; rm -f "$tmp"; exit "$status"' _
+(
+  set -e
+  git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git boss-rc8
+  cd boss-rc8
+  BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
+  ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
+)
 ```
 
-> [!WARNING]
-> Do not point the download URL at another host.
-
-The installer uses `~/boss` unless you pass `--dir`. Add installer flags after the final `_`, for example `_ --console-origin https://boss.example.com`.
+The `boss-rc8` directory must not already exist. Read the script in that checkout before running it if you want to inspect it. This records a pinned commit; a later upgrade needs `boss upgrade --to REF`. Add installer flags to the `./install.sh` line, for example `--console-origin https://boss.example.com`.
 
 ### From a local checkout
 
 Clone the release and install it in place:
 
 ```bash
-git clone --branch v1.0-rc6.2 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc6.2
+./install.sh --dir "$PWD" --ref v1.0-rc8
 ```
 
 A checkout at a release tag stays on that release. A checkout on a branch follows `main` unless you pass `--ref`, and the ref is then [recorded](#which-release-and-staying-on-it). From a checkout you already have on the branch you want:
@@ -215,6 +220,13 @@ You can add a key to the private `.env` later. See [model connections](../../doc
 7. Verifies the Community edition and ProviderOps surface.
 8. Reports the model keys and subscriptions it finds on this machine and connects only what you agree to.
 9. Installs the `boss` command and prints a summary card: console address, how to get the password, the release, what was connected, and the next commands.
+
+The health wait allows up to 60 attempts within 180 seconds, including requests
+and retry sleeps. Each request has a 2-second connection limit and at most
+5 seconds total, reduced to the remaining time. On timeout, check the printed
+health URL, API/database logs and whether another service occupies the API port.
+HTTP success alone does not verify that an unrelated listener is BOSS. Log
+collection and other installation phases are outside this wait budget.
 
 ### Reruns
 
@@ -463,7 +475,7 @@ boss upgrade --to v1.1                                      # back up, then move
 boss upgrade --no-rollback                                  # keep a failed release in place to inspect it
 ```
 
-If the new release fails to start after its source is in place, `boss upgrade` puts the previous release back and starts it again, then says **Rolled back**. Data volumes are kept; the new release only adds tables, which the old one ignores. If the rollback cannot start either, restore the backup (below).
+If the new release fails to start after its source is in place, `boss upgrade` puts the previous release back and starts it again, then says **Rolled back**. Data volumes are kept. Source rollback alone does not undo database migrations; compatibility must be verified for the two revisions. If that compatibility is unknown or rollback cannot start, restore the complete backup into a fresh stack (below).
 
 `boss upgrade` runs `scripts/install/upgrade.sh` from the install. Without `--to`, a release install moves to the newest published release tag and never to `main`; see [which release](#which-release-and-staying-on-it). The script works directly too:
 
@@ -485,9 +497,10 @@ Before changing source or containers, an upgrade writes a private backup under `
 - the previous source commit
 - `.env`
 - BOSS and optional Infisical Postgres dumps
-- artifacts
+- artifacts and the identity volume containing the master key needed for Owner TOTP and encrypted connections
+- a versioned completion manifest binding the source revision, database dumps, keys, and artifacts with checksums
 
-The API, worker, web, and Infisical services pause during the snapshot and resume even if it fails. The backup does not contain Codex/Grok CLI sessions; their named volumes are retained during upgrade, and a data-purge recovery requires provider sign-in again.
+All running application writers, including egress, pause during the snapshot and resume even if it fails. CLI session volumes are excluded, and configured Claude/Codex session values are blanked from the archived `.env` and checked against decompressed content as described below. Their named volumes are retained during upgrade, and a data-purge recovery requires provider sign-in again.
 
 > [!WARNING]
 > Keep the backup outside the checkout and protect it like `.env`.
@@ -572,47 +585,28 @@ Both commands print private backup paths. If this install's `boss-community-api`
 
 If a build fails, the backup path is printed. Inspect Compose logs and retry `upgrade.sh` once the cause is fixed. A database migration may already have run, so the script deliberately does not reset source or database behind your back.
 
-To return to the backed-up version, stop app writers, restore the source commit and `.env`, restore the dumps, and rebuild that version. Run this from the install directory, replacing the backup path first:
+Recovery must restore the database **and its matching identity key**. A database-only backup cannot recover encrypted TOTP factors and connections after their key volume is lost. Older archives without a complete recovery manifest are incomplete: preserve the original volumes and obtain a reviewed recovery plan. They cannot authorize a data purge.
+
+Use `restore.sh` from the current recovery tools against a **fresh checkout at the backed-up source revision**, a new Compose project name, and no existing target `.env`, containers or volumes. Keep the existing installation intact until the restored Owner, TOTP, encrypted connections, artifacts and history have been checked. The helper restores only local data; application services remain stopped for inspection.
 
 ```bash
-BACKUP=/absolute/path/from-upgrade
-docker compose -f scripts/install/community-compose.yml --env-file .env --profile web --profile secrets stop worker api web infisical
-git switch --detach "$(cat "$BACKUP/source-commit")"
-cp "$BACKUP/.env" .env && chmod 600 .env
-docker compose -f scripts/install/community-compose.yml --env-file .env up -d db
-for attempt in {1..60}; do
-  docker compose -f scripts/install/community-compose.yml --env-file .env exec -T db pg_isready -U boss -d boss >/dev/null && break
-  sleep 1
-done
-docker compose -f scripts/install/community-compose.yml --env-file .env exec -T db pg_isready -U boss -d boss
-docker compose -f scripts/install/community-compose.yml --env-file .env exec -T db pg_restore -U boss -d boss --clean --if-exists --no-owner < "$BACKUP/boss.dump"
-if [ -f "$BACKUP/infisical.dump" ]; then
-  docker compose -f scripts/install/community-compose.yml --env-file .env exec -T db pg_restore -U boss -d infisical --clean --if-exists --no-owner < "$BACKUP/infisical.dump"
-fi
-docker compose -f scripts/install/community-compose.yml --env-file .env run --rm --no-deps -T --entrypoint tar api -C /var/lib/boss/artifacts -xf - < "$BACKUP/artifacts.tar"
-docker compose -f scripts/install/community-compose.yml --env-file .env --profile web up -d --build
+./scripts/install/restore.sh --backup /absolute/path/to/boss-backup \
+  --dir /absolute/path/to/fresh-checkout --project boss-recovered
 ```
 
-The final command is for the default database-backed install with Mission Control:
+The helper validates the completion manifest, file checksums, safe archive paths, master-key format and database key check value before creating target resources. It uses locally cached immutable database/API image IDs recorded by the backup; it never pulls or builds images. The target source revision must match the archive. It restores the identity and artifact volumes before application startup, restores each database with `pg_restore --exit-on-error --single-transaction`, then checks the restored database/key pairing. On any failure it reports an incomplete recovery, leaves application services stopped, and retains the new target for inspection; it never deletes the original stack.
 
-- Omit `--profile web` if the console was disabled.
-- Add `--profile secrets` only if the previous install used Infisical; wait for its health before restarting the API and worker.
+The restored database uses an ephemeral loopback port so the retained original stack can keep its port. After success, choose a free API port in the target `.env` and use the printed Compose command with the saved image override to start only the archived API image for recovery verification. Keep workers and provider effects disabled during recovery verification; enable the console and workers only after their images and the recovery checks are qualified for the same source revision. Check a real Owner password/MFA sign-in, decrypt a known connection locally, inspect a known artifact and its receipt/history, and check `/health` before returning users to the console. A matching-key boot check alone does not establish a complete restore. Moving to a different source revision, images or schema requires separate migration qualification.
 
-> [!WARNING]
-> Restoring an upgraded database into an older source revision may require a migration-aware recovery plan. Run these commands during a maintenance window and confirm `/health`, the project list, and an artifact before reopening the console.
-
-Notes on what a restore covers:
-
-- The artifact restore overlays its archive. Files created after the backup remain unless removed separately; review the current volume first.
-- BOSS does not archive the Claude CLI's session volume. The backup's `.env` copy blanks `CLAUDE_CODE_OAUTH_TOKEN` and `CODEX_AUTH_JSON`, and those values are removed from the dump and artifact archive if they appear there. A normal upgrade or safe uninstall keeps its named volume; after an explicit volume purge or a move to another machine, run `claude auth login` inside the API container again.
+Backups contain private `.env` and identity keys and must be protected together. The identity key must be a regular file under the Compose identity volume; custom external key locations require a separate reviewed backup procedure and are refused by the automatic backup. CLI session volumes are excluded; the archived `.env` blanks `CLAUDE_CODE_OAUTH_TOKEN` and `CODEX_AUTH_JSON`, including supported single-line quoted, whitespace and `export` forms. Interpolated, multiline or ambiguous session assignments are refused. The scan checks their decoded values and nested Codex token strings in decompressed database text and artifact contents. Encrypted durable BOSS/Infisical connection credentials are retained for recovery; this scan covers configured `.env` session values and does not claim to remove every credential from encrypted records. Unsafe archive members (including symlinks), missing volumes, incompatible keys and excluded CLI session material fail closed. If either excluded value is found in decompressed database or artifact content, backup fails and discards the incomplete archive without changing the original data. Remove the unexpected persisted session material through an appropriate reviewed data procedure, then retry. After moving machines or purging session volumes, sign in through the official provider CLI again.
 
 ### Remote (archive) installs
 
 A remote archive install uses `.boss-shipped-commit` rather than Git.
 
 - **Update:** the local `upgrade.sh` requires a Git checkout, so use `remote.sh update` from your machine instead; it backs up on the VM first.
-- **Recover:** ship the backed-up commit from your own machine with `remote.sh --ref COMMIT install`, then restore the database and artifacts from the backup written on that VM.
-- **Failed update:** the new source is at the install path while the prior source remains at `PATH.prev` until installer/recreation succeeds. A failed build leaves the old containers running; after diagnosing the failure, you can move `PATH.prev` back to `PATH` before retrying. If recreation started, a database migration may have run: inspect the backup on that VM and use the database/artifact recovery steps above instead of only moving source. A failed source swap itself restores the prior source path, and the remote script refuses to discard a leftover `PATH.prev` on a later attempt.
+- **Recover:** prepare a fresh checkout at the backed-up commit on the VM, then use the guarded restore procedure above with the complete database, identity-key and artifact backup written there. Start the archived API only after restore succeeds.
+- **Failed update:** the new source is at the install path while the prior source remains at `PATH.prev` until installer/recreation succeeds. A failed build leaves the old containers running; after diagnosing the failure, you can move `PATH.prev` back to `PATH` before retrying. If recreation started, a database migration may have run: inspect the backup on that VM and use the complete recovery procedure above instead of only moving source. A failed source swap itself restores the prior source path, and the remote script refuses to discard a leftover `PATH.prev` on a later attempt.
 
 `user@your-vm` is a machine you administer:
 
@@ -642,7 +636,7 @@ boss uninstall --purge             # backs up, asks you to type DELETE-BOSS-DATA
 | Mode | Removes | Keeps |
 |---|---|---|
 | Safe uninstall (default) | Stops this Compose stack | Stopped containers and their exact image IDs, source, `.env`, named volumes, images, and backups, so a later upgrade can start the same database image for backup. Rerunning is safe. |
-| `--purge-data` | This stack's named volumes (including Postgres, artifacts, and CLI sessions), then `.env` and the generated shell shim | Backups and the checkout |
+| `--purge-data` | This stack's named volumes (including Postgres, identity keys, artifacts, and CLI sessions), then `.env` and the generated shell shim | Backups and the checkout |
 
 `--purge-data` first requires a successful private backup unless you explicitly add `--skip-backup`. `--yes` alone never authorizes a data purge; for a scripted purge, add `--confirm-purge DELETE-BOSS-DATA`.
 

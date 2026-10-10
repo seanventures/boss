@@ -55,7 +55,7 @@ class TestItStopsRunningWorkAndNotJustQueuedWork:
 
     def test_it_finds_jobs_by_the_id_the_step_parked_against(self):
         source = inspect.getsource(workflows._cancel_work_this_run_started)
-        assert "payload->>'run_id'" in source, (
+        assert "run_job_match_sql" in source, (
             "code task jobs carry payload={'run_id': run_id}; that is the thread from the "
             "awaited handle back to the process actually running"
         )

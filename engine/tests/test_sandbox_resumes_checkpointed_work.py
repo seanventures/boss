@@ -113,7 +113,7 @@ def test_the_token_is_redacted_on_every_remote_call():
 
     src = inspect.getsource(EphemeralSandbox._remote_branch_exists)
     assert "redact=token" in src
-    provision = inspect.getsource(EphemeralSandbox.provision)
+    provision = inspect.getsource(EphemeralSandbox._provision)
     resume = provision[provision.index("RESUME THE WORK BRANCH"):]
     assert "redact=token" in resume
 

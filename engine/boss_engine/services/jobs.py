@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 from uuid import uuid4
 
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, column as sql_column, select, table as sql_table, text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
@@ -79,8 +79,38 @@ _RUN_TABLE_FOR_KIND: dict[str, str] = {
 _TERMINAL_RUN_STATES = ("completed", "failed", "cancelled")
 
 
+def job_run_id(kind: str, payload: dict[str, Any]) -> Optional[str]:
+    """The run named by a supported job; old Discovery payloads remain readable."""
+    if kind not in _RUN_TABLE_FOR_KIND:
+        return None
+    legacy = payload.get("run_id")
+    current = payload.get("discovery_run_id") if kind.startswith("discovery.") else None
+    for value in (current, legacy):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError("Invalid run reference.")
+    if current is not None and legacy is not None and current != legacy:
+        raise ValueError("Conflicting Discovery run references.")
+    return current if current is not None else legacy
+
+
+def run_job_match_sql(table: str, run_ref: str) -> str:
+    """Fixed-kind linkage for internal SQL; callers supply their own project predicate."""
+    kinds = [kind for kind, mapped in _RUN_TABLE_FOR_KIND.items() if mapped == table]
+    if not kinds:
+        return f"j.payload->>'run_id' = {run_ref}"
+    allowed = ",".join("'" + kind + "'" for kind in kinds)
+    reference = "j.payload->>'run_id'"
+    compatible = ""
+    if table == "discovery_runs":
+        reference = "COALESCE(j.payload->>'discovery_run_id', j.payload->>'run_id')"
+        compatible = (" AND (j.payload->>'discovery_run_id' IS NULL OR "
+                      "j.payload->>'run_id' IS NULL OR "
+                      "j.payload->>'discovery_run_id' = j.payload->>'run_id')")
+    return f"j.kind IN ({allowed}) AND {reference} = {run_ref}{compatible}"
+
+
 def stopped_run_reason(
-    connection: Connection, kind: str, payload: dict[str, Any]
+    connection: Connection, kind: str, payload: dict[str, Any], project_id: Optional[str] = None
 ) -> Optional[str]:
     """Why this job must not be queued, or None to proceed.
 
@@ -89,23 +119,31 @@ def stopped_run_reason(
     throwaway SQLite database. A rule that can only be exercised via the one statement that
     needs production infrastructure is a rule that quietly stops being exercised.
 
-    Fails OPEN on every uncertainty — an unmapped kind, an absent run row, a table this edition
-    does not have. Blocking an enqueue we are unsure about would deadlock the ordinary path,
-    which is a worse failure than the one this prevents.
+    Unmapped/legacy kinds retain their historical handling for absent rows/tables.
+    Discovery writes its row first and fails closed on missing or conflicting lineage.
+    Other kinds may create their run row after the first enqueue, so their existing
+    missing-row behavior is preserved.
     """
     table = _RUN_TABLE_FOR_KIND.get(kind)
-    run_id = (payload or {}).get("run_id")
-    if not table or not run_id:
+    run_id = job_run_id(kind, payload or {})
+    if not table:
         return None
+    if not run_id:
+        return "Discovery job is missing its run reference" if table == "discovery_runs" else None
     try:
-        cur = connection.execute(
-            text(f"SELECT status FROM {table} WHERE id = :id"),  # noqa: S608 - fixed map above
-            {"id": run_id},
-        ).first()
+        run_table = sql_table(table, sql_column("id"), sql_column("status"), sql_column("project_id"))
+        query = select(run_table.c.status).where(run_table.c.id == run_id)
+        if project_id:
+            query = query.where(run_table.c.project_id == project_id)
+        cur = connection.execute(query.with_for_update()).first()
     except Exception:  # noqa: BLE001
+        if table == "discovery_runs":
+            raise  # Discovery writes its run first; unavailable lineage cannot authorize work.
         return None
     if cur is None:
-        return None  # the run row is sometimes written after its first job
+        if table == "discovery_runs":
+            return "Discovery run does not exist in this project; not queueing work"
+        return None  # other run kinds may write the row after their first job
     status = str(cur[0] or "")
     if status not in _TERMINAL_RUN_STATES:
         return None
@@ -186,7 +224,7 @@ def enqueue_job(
                 )
 
     # Refuse to queue work for a run that has already stopped. See _RUN_TABLE_FOR_KIND.
-    _skip = stopped_run_reason(connection, kind, job_payload)
+    _skip = stopped_run_reason(connection, kind, job_payload, project_id)
     if _skip:
         return {
             "id": None, "project_id": project_id, "task_id": task_id,
@@ -488,9 +526,11 @@ class JobLeaseService:
         waits. The half-written branch is real; it is chosen deliberately over an operator
         waiting indefinitely, and the caller says so in `reason`.
         """
+        job_table = sql_table("jobs", *(sql_column(name) for name in
+                              ("id", "status", "kind", "payload", "project_id")))
         row = connection.execute(
-            text("SELECT id, status, kind, payload, project_id FROM jobs WHERE id = :id"),
-            {"id": job_id}).mappings().first()
+            select(job_table).where(job_table.c.id == job_id).with_for_update()
+        ).mappings().first()
         if not row:
             return {"ok": False, "error": "no such job"}
         if project_id and row["project_id"] != project_id:
@@ -523,26 +563,16 @@ class JobLeaseService:
             except ValueError:
                 payload = None
         if isinstance(payload, dict):
-            run_id = payload.get("run_id")
+            run_id = job_run_id(row["kind"], payload)
         if run_id:
-            # Both run tables, not just code tasks. Cancelling a meeting.step job closed the
-            # job and left meeting_runs at 'running', so the card read "PANEL SITTING" for a
-            # panel that would never sit — indefinitely, with no terminal state anywhere in
-            # the UI. Fixing this for code_task_runs and not for meeting_runs was the same
-            # miss twice in one file.
-            note = f"cancelled with its job: {reason}"
+            table = _RUN_TABLE_FOR_KIND[row["kind"]]
             connection.execute(
-                text("UPDATE code_task_runs SET status = 'cancelled', "
+                text(f"UPDATE {table} SET status = 'cancelled', "
                      "error = COALESCE(error, :e), updated_at = :now "
-                     "WHERE id = :r AND status NOT IN "
+                     "WHERE id = :r AND project_id = :project AND status NOT IN "
                      "('completed','failed','cancelled')"),
-                {"r": run_id, "now": now_utc(), "e": note})
-            connection.execute(
-                text("UPDATE meeting_runs SET status = 'cancelled', "
-                     "error = COALESCE(error, :e), updated_at = :now "
-                     "WHERE id = :r AND status NOT IN "
-                     "('completed','failed','cancelled')"),
-                {"r": run_id, "now": now_utc(), "e": note})
+                {"r": run_id, "project": row["project_id"], "now": now_utc(),
+                 "e": f"cancelled with its job: {reason}"})
         return {"ok": True, "job_id": job_id, "kind": row["kind"], "status": "cancelled",
                 "run_id": run_id}
 
@@ -1381,7 +1411,7 @@ class JobLeaseService:
         payload = row.get("payload") or {}
         if isinstance(payload, str):
             payload = json.loads(payload)
-        run_id = str(payload.get("discovery_run_id") or "")
+        run_id = job_run_id(row["kind"], payload) or ""
         if not run_id:
             return
         from .model_failures import explain
@@ -1395,10 +1425,10 @@ class JobLeaseService:
                     state = state || jsonb_build_object('failed_by_job', CAST(:job AS text),
                                                         'job_error', CAST(:raw AS text)),
                     updated_at = now()
-                WHERE id = :run_id AND status = 'running' AND state->>'job_id' = :job
+                WHERE id = :run_id AND project_id = :project AND status = 'running' AND state->>'job_id' = :job
                 """
             ),
-            {"run_id": run_id, "job": row["id"], "raw": str(error.get("message", ""))[:1000],
+            {"run_id": run_id, "project": row["project_id"], "job": row["id"], "raw": str(error.get("message", ""))[:1000],
              "error": f"Its worker job stopped. {said['headline']} {said['action']}"[:1000]},
         ).rowcount
         if changed:
