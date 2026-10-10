@@ -29,9 +29,24 @@ WEB_BASE_ENV = "BOSS_GITHUB_WEB_URL"           # github.com; a GitHub Enterprise
 MIGRATED_NAME = "Moved from BOSS_GITHUB_TOKEN"
 ORG_TOKEN_NAME = "Fine-grained token (org)"
 REPO_PREFIX = "repo:"
-#: What the App asks for: write code and PRs, read what a review needs. Never admin, never workflows.
+#: What the App asks for: write code and PRs, read what a review needs. Never admin; never workflows
+#: unless a repository opted in (`app_permissions`).
 APP_PERMISSIONS = {"contents": "write", "pull_requests": "write", "checks": "read", "statuses": "read",
                    "metadata": "read", "issues": "read", "actions": "read"}
+#: Added ONLY when a repository has "Builds may change CI workflows" on (services/ci_gate.py).
+WORKFLOWS_PERMISSION = {"workflows": "write"}
+
+
+def app_permissions(allow_workflows: bool = False) -> dict[str, str]:
+    """The App's permission request: APP_PERMISSIONS, plus workflows: write for the opt-in."""
+    return {**APP_PERMISSIONS, **(WORKFLOWS_PERMISSION if allow_workflows else {})}
+
+
+def workflows_permission_link(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
+    """Where an operator accepts `workflows: write` for an App created before the opt-in."""
+    from ..services import ci_gate
+
+    return ci_gate.permissions_link(app_config(db, org_id), web_base())
 
 
 class GitHubSetupError(Exception):
@@ -159,7 +174,8 @@ def _check_state(state: str, purpose: str, *, db: Any, consume: bool = True) -> 
 
 # ---- (a) the GitHub App, from a manifest -----------------------------------------------------------------
 
-def manifest(*, origin: str, person_id: str, owner: Optional[str] = None) -> dict[str, Any]:
+def manifest(*, origin: str, person_id: str, owner: Optional[str] = None,
+             allow_workflows: bool = False) -> dict[str, Any]:
     """What the console POSTs to GitHub (a form with `manifest` = this JSON) to create the App.
 
     No webhook: BOSS subscribes to no events (default_events is empty), and GitHub refuses a
@@ -179,7 +195,7 @@ def manifest(*, origin: str, person_id: str, owner: Optional[str] = None) -> dic
         "setup_on_update": True,
         "public": False,
         "request_oauth_on_install": False,
-        "default_permissions": dict(APP_PERMISSIONS),
+        "default_permissions": app_permissions(allow_workflows),
         "default_events": [],
     }
     state = _state(person_id, "app-manifest")
