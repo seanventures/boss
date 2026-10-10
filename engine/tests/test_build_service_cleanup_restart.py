@@ -44,6 +44,7 @@ def durable_cleanup(monkeypatch):
     monkeypatch.delenv(bs.RUN_HOST_ENV, raising=False)
     monkeypatch.setattr(bs, "_LEASES", {})
     monkeypatch.setattr(bs, "_PENDING_CLEANUP", {})
+    monkeypatch.setattr(bs, "_LEDGER_SCAN_CURSORS", {})
     monkeypatch.setattr(bs, "_SECRETS", {})
     monkeypatch.setattr(bs, "_forget_secret", lambda _: None)
     monkeypatch.setattr(owned_process, "_LEDGER", resource_ledger.DbLedger(writable))
@@ -219,8 +220,8 @@ def test_row_release_does_not_close_active_duplicate_or_concurrently_added_row(
             resource_kind=bs.RESOURCE_KIND, handle=lease.ledger_handle, meta=old["meta"],
         ))
 
-    def snapshot_then_add(*args):
-        rows = original(*args)
+    def snapshot_then_add(*args, **kwargs):
+        rows = original(*args, **kwargs)
         add_live_row()
         return rows
 
@@ -311,3 +312,78 @@ def test_strict_specific_row_release_checks_kind_handle_and_keeps_write_failure_
         readonly.release_owned_row(row_id, bs.RESOURCE_KIND, lease.ledger_handle, "test")
     assert err.value.orig.sqlstate == "25006"
     assert row(state, lease.ledger_handle)["released_at"] is None
+
+
+def test_bounded_keyset_scan_passes_held_rows_and_eventually_retries_write_failure(
+    durable_cleanup, monkeypatch,
+):
+    state = durable_cleanup
+    monkeypatch.setattr(bs, "_LEDGER_SCAN_BATCH", 2)
+    ledger = owned_process.ledger()
+    first = provision("crun_first_failed")
+    last = provision("crun_last_eligible")
+    with contextlib.closing(bs._connect(bs.server())) as c:
+        bs._drop(c, first.name)
+        bs._drop(c, last.name)
+    bs._LEASES.clear()
+    first_row, last_row = row(state, first.ledger_handle), row(state, last.ledger_handle)
+    ids = [first_row["id"]]
+    for _ in range(3):
+        name = state["prefix"] + secrets.token_hex(8)
+        ids.append(ledger.open(
+            owner=owned_process.Owner("api", "unknown_owner"), resource_kind=bs.RESOURCE_KIND,
+            handle=first.ledger_handle.rsplit("/", 1)[0] + "/" + name,
+            meta={"database": name, "service": "postgres"},
+        ))
+    ids.append(last_row["id"])
+    with state["engine"].begin() as c:
+        for ordinal, row_id in enumerate(ids):
+            c.execute(text("UPDATE owned_resources SET created_at="
+                           "now()-interval '1 hour'+(:n*interval '1 second') WHERE id=:id"),
+                      {"id": row_id, "n": ordinal})
+    page = ledger.open_resources(bs.RESOURCE_KIND, first.ledger_handle.rsplit("/", 1)[0] + "/",
+                                 limit=2)
+    assert [r["id"] for r in page] == ids[:2]
+
+    def forbidden_drop(*_a, **_k):
+        pytest.fail("keyset reconciliation attempted DROP")
+
+    monkeypatch.setattr(bs, "_drop", forbidden_drop)
+    monkeypatch.setattr(owned_process, "_LEDGER", resource_ledger.DbLedger(state["readonly"]))
+    first_pass = bs.reap(set(), install="inst_owned_cleanup", min_age=0)
+    assert first_pass["ledger_scan"] == {"scanned": 2, "limit": 2, "more": True}
+    assert first_pass["pending"] == [first.name]
+    assert row(state, first.ledger_handle)["released_at"] is None
+    monkeypatch.setattr(owned_process, "_LEDGER", ledger)
+    second_pass = bs.reap(set(), install="inst_owned_cleanup", min_age=0)
+    assert second_pass["ledger_scan"] == {"scanned": 2, "limit": 2, "more": True}
+    assert not second_pass.get("reconciled")  # Two held rows do not restart at the oldest row.
+    third_pass = bs.reap(set(), install="inst_owned_cleanup", min_age=0)
+    assert third_pass["ledger_scan"] == {"scanned": 1, "limit": 2, "more": False}
+    assert third_pass["reconciled"] == [last.name]
+    assert not bs._LEDGER_SCAN_CURSORS
+    fourth_pass = bs.reap(set(), install="inst_owned_cleanup", min_age=0)
+    assert fourth_pass["reconciled"] == [first.name]  # Failed row is retried on the next cycle.
+    with state["engine"].connect() as c:
+        held = c.execute(text("SELECT count(*) FROM owned_resources WHERE released_at IS NULL")).scalar()
+    assert held == 3
+
+
+def test_read_failure_does_not_advance_page_cursor(durable_cleanup, monkeypatch):
+    state = durable_cleanup
+    lease = provision()
+    ledger = owned_process.ledger()
+    current = row(state, lease.ledger_handle)
+    scope = (lease.ledger_handle.rsplit("/", 1)[0] + "/" + state["prefix"], "inst_owned_cleanup")
+    cursor = (current["created_at"], current["id"])
+    bs._LEDGER_SCAN_CURSORS[scope] = cursor
+    with state["engine"].begin() as c:
+        c.execute(text("ALTER TABLE owned_resources RENAME TO temporarily_unavailable"))
+    try:
+        report = bs.reap(set(), install="inst_owned_cleanup", min_age=0)
+        assert report["ledger_cleanup_error"] == "ProgrammingError"
+        assert bs._LEDGER_SCAN_CURSORS[scope] == cursor
+    finally:
+        with state["engine"].begin() as c:
+            c.execute(text("ALTER TABLE temporarily_unavailable RENAME TO owned_resources"))
+    assert ledger.open_resources(bs.RESOURCE_KIND, scope[0], after=cursor, limit=2) == []

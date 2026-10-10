@@ -395,6 +395,9 @@ _LEASES: dict[str, PostgresLease] = {}
 # Ended runs stop receiving credentials immediately; failed deletion remains retryable.
 _PENDING_CLEANUP: dict[str, PostgresLease] = {}
 _LOCK = threading.Lock()
+_LEDGER_SCAN_BATCH = 100
+_LEDGER_SCAN_CURSORS: dict[tuple[str, str], tuple[Any, str]] = {}
+_LEDGER_SCAN_ENDPOINTS = 16
 
 
 def _run_endpoint(srv: _Server) -> tuple[str, int]:
@@ -566,11 +569,17 @@ def _reconcile_absent_ledger_entries(conn: Any, srv: _Server, *, live: set[str],
     if not isinstance(ledger, resource_ledger.DbLedger):
         return {}
     endpoint = f"pg:{srv.host}:{srv.port}/"
+    scope = (endpoint + pre, install)
+    with _LOCK:
+        after = _LEDGER_SCAN_CURSORS.get(scope)
     try:
-        rows = ledger.open_resources(RESOURCE_KIND, endpoint + pre)
+        page = ledger.open_resources(RESOURCE_KIND, endpoint + pre,
+                                     limit=_LEDGER_SCAN_BATCH + 1, after=after)
     except Exception as exc:  # noqa: BLE001 — no SQL text, credentials or exception message
         _log.warning("build-services ledger reconciliation pending (%s)", type(exc).__name__)
         return {"ledger_cleanup_error": type(exc).__name__}
+    more = len(page) > _LEDGER_SCAN_BATCH
+    rows = page[:_LEDGER_SCAN_BATCH]
     reconciled: list[str] = []
     pending: list[str] = []
     kept = 0
@@ -621,6 +630,18 @@ def _reconcile_absent_ledger_entries(conn: Any, srv: _Server, *, live: set[str],
             continue
         reconciled.append(name)
     result: dict[str, Any] = {}
+    # Advance past held/failed rows, then wrap after the final page. Durable rows
+    # remain the retry record; losing this bounded in-memory cursor only restarts
+    # the scan. An old live/ambiguous row cannot permanently starve later rows.
+    with _LOCK:
+        if more:
+            if scope not in _LEDGER_SCAN_CURSORS and len(_LEDGER_SCAN_CURSORS) >= _LEDGER_SCAN_ENDPOINTS:
+                _LEDGER_SCAN_CURSORS.pop(next(iter(_LEDGER_SCAN_CURSORS)))
+            _LEDGER_SCAN_CURSORS[scope] = (rows[-1]["created_at"], rows[-1]["id"])
+        else:
+            _LEDGER_SCAN_CURSORS.pop(scope, None)
+    if rows or after is not None:
+        result["ledger_scan"] = {"scanned": len(rows), "limit": _LEDGER_SCAN_BATCH, "more": more}
     if reconciled:
         result["reconciled"] = reconciled
         _log.info("build-services reconciled %d absent database ledger row(s)", len(reconciled))
