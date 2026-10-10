@@ -71,10 +71,16 @@ the `build-services` Postgres (its own container on port 5433, data on tmpfs; ne
 database). Every command the run starts, its tests included, gets `DATABASE_URL`
 (`postgresql://user:pass@host:5433/db`) and `PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE`. The
 database is deleted when the run ends. If deletion fails, cleanup stays pending and is logged;
-the resource reaper retries instead of recording a successful release. A failed ledger update
-also stays pending for retry by the running API. If the API restarts after deletion but before
-that retry succeeds, the unreleased ledger entry may require reconciliation. If the run's process
-dies, the reaper removes its orphaned database after a grace period when the server is reachable.
+the resource reaper retries instead of recording a successful release. If deletion succeeds but
+the ledger update fails, an existing open ledger row can be retried after an API restart. The
+reaper closes that specific row only after confirming that both its database and role are absent
+on the same configured server, its owner and ancestors are no longer live, and the grace period
+has elapsed. It checks bounded pages and resumes on later passes, so older held rows do not
+permanently block later entries. Rows alone never authorize deletion. Uncertain ownership,
+changed server or prefix, unavailable checks and a remaining object stay held. Ledger recording
+is best effort: an unwritten row cannot provide this restart recovery evidence. If the run's
+process dies while its database remains, the separate catalog ownership sweep removes its
+orphan after a grace period when the server is reachable.
 This data is temporary: restarting the build-services container loses it. It is neither the
 application's deployed database nor part of the durable BOSS recovery backup.
 
