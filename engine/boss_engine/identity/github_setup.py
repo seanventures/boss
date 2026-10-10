@@ -139,7 +139,12 @@ def _check_state(state: str, purpose: str, *, db: Any, consume: bool = True) -> 
 # ---- (a) the GitHub App, from a manifest -----------------------------------------------------------------
 
 def manifest(*, origin: str, person_id: str, owner: Optional[str] = None) -> dict[str, Any]:
-    """What the console POSTs to GitHub (a form with `manifest` = this JSON) to create the App."""
+    """What the console POSTs to GitHub (a form with `manifest` = this JSON) to create the App.
+
+    No webhook: BOSS subscribes to no events (default_events is empty), and GitHub refuses a
+    manifest whose hook URL is not reachable from the public internet, so on a laptop or a
+    private install (localhost, a tailnet name, a private IP) even an inactive hook made the
+    App impossible to create."""
     if not origin:
         raise GitHubSetupError("public_url_required", 409,
                                message="Set BOSS_PUBLIC_URL first: GitHub sends you back to it.")
@@ -147,7 +152,6 @@ def manifest(*, origin: str, person_id: str, owner: Optional[str] = None) -> dic
     body = {
         "name": f"BOSS {host}"[:34],
         "url": origin,
-        "hook_attributes": {"url": f"{origin}/v1/webhooks/github", "active": False},
         "redirect_url": f"{origin}/v1/identity/github/app/created",
         "callback_urls": [f"{origin}/v1/identity/me/connections/github/callback"],
         "setup_url": f"{origin}/v1/identity/github/app/installed",
