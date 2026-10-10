@@ -74,6 +74,8 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
     .map((key) => ({ key, at: Number(meter[key] ?? 0) }));
   const forecast = meter.period === "day" ? meter.forecasted_24h_usd_micros : 0;
   const historicalHold = meter.legacy_financial_hold;
+  const providerHold = meter.legacy_provider_hold;
+  const paidWorkHeld = Boolean(historicalHold || providerHold);
   const metaTip = [
     `Reserved ${money(meter.reserved_usd_micros)} · ${holds(meter.active_reservations_count)}`,
     `Burn ${money(meter.burn_rate_usd_micros_per_hour)}/h`,
@@ -86,8 +88,8 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
         <span className="gv-meter-amount" data-testid="gv-meter-amount">
           {money(meter.committed_usd_micros)} <span className="gv-of">of</span> {money(meter.cap_usd_micros)}
         </span>
-        <span className="gv-state" data-state={historicalHold ? "held" : meter.state} data-testid="gv-meter-state">
-          {historicalHold ? "Paid work held" : meter.state_label}
+        <span className="gv-state" data-state={paidWorkHeld ? "held" : meter.state} data-testid="gv-meter-state">
+          {paidWorkHeld ? "Paid work held" : meter.state_label}
         </span>
         <span className="gv-reset">resets {meter.resets_at_label}</span>
         <span className="gv-spacer" />
@@ -102,6 +104,14 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
           actual charge unknown. A cap reset will not clear this hold.</span>
         {historicalHold.decision_id ? <a className="ag-link" href={consoleHref({ area: "decisions", decision: historicalHold.decision_id })}>
           Open decision ↗
+        </a> : null}
+      </div> : null}
+      {providerHold ? <div className="gv-legacy-hold" role="status" data-testid="gv-legacy-provider-hold">
+        <span>An earlier provider action may have been accepted. New paid work is held until that attempt is reconciled.
+          Earlier estimate {money(providerHold.original_estimate_usd_micros)}; actual charge unknown.
+          A cap reset will not clear this hold.</span>
+        {providerHold.decision_id ? <a className="ag-link" href={consoleHref({ area: "decisions", decision: providerHold.decision_id })}>
+          Review provider attempt ↗
         </a> : null}
       </div> : null}
       <Bar cap={meter.cap_usd_micros} actual={meter.actual_usd_micros} reserved={meter.reserved_usd_micros}
