@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 ENGINE = ROOT / "engine"
@@ -80,10 +82,63 @@ def test_runtime_context_excludes_tests_and_scratch_but_retains_runtime_sources(
     # instructions must not carry them into API/worker or Next runtime images.
     ignored = set((ROOT / ".dockerignore").read_text().splitlines())
     for path in ("apps/api/tests", "apps/worker/tests", "apps/web/tests",
-                 "packages/api-client/tests", "tools/tests", "**/__probe_tmp"):
+                 "packages/api-client/tests", "tools/tests", "**/__probe_tmp",
+                 "engine/boss_engine/identity/seed_accounts.py",
+                 "engine/boss_engine/cli/console_test.py",
+                 "engine/boss_engine/services/console_driver.py",
+                 "engine/boss_engine/services/console_test_agent.py",
+                 "engine/boss_engine/services/console_screen_check.py"):
         assert path in ignored
     for path in ("apps/api/app", "apps/worker/boss_worker", "apps/web/app", "apps/web/lib"):
         assert path not in ignored and (ROOT / path).is_dir()
+
+
+def test_identity_cli_refuses_qa_seeding_before_database_access(monkeypatch, capsys, tmp_path) -> None:
+    from boss_engine import db
+    from boss_engine.identity import cli
+
+    def unexpected_database_access():
+        pytest.fail("A rejected QA command must not enter the database transaction")
+
+    monkeypatch.setattr(db, "begin", unexpected_database_access)
+    output = tmp_path / "never-created-qa-secrets.json"
+    with pytest.raises(SystemExit) as refused:
+        cli.main(["seed-test-accounts", "--org", "org_owned_fixture",
+                  "--owner-email", "owner@example.invalid", "--out", str(output), "--i-know"])
+    assert refused.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+    assert not output.exists()
+
+    with pytest.raises(SystemExit) as help_exit:
+        cli.main(["--help"])
+    assert help_exit.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "seed-test-accounts" not in help_text
+    for command in ("recover-owner", "setup-link", "claim-status", "host-key", "mcp-key", "egress-key"):
+        assert command in help_text
+
+
+def test_identity_cli_keeps_the_real_claim_status_command(monkeypatch, capsys) -> None:
+    from contextlib import contextmanager
+
+    from boss_engine import db
+    from boss_engine.identity import cli, migration
+
+    connection = object()
+
+    @contextmanager
+    def owned_transaction():
+        yield connection
+
+    def owned_claim_status(org_id, *, db):
+        assert org_id == "org_owned_fixture" and db is connection
+        return "unclaimed"
+
+    monkeypatch.setattr(db, "begin", owned_transaction)
+    monkeypatch.setattr(migration, "ensure_seeded", lambda db: "org_owned_fixture")
+    monkeypatch.setattr(cli, "claim_status", owned_claim_status)
+    assert cli.main(["claim-status"]) == 0
+    assert capsys.readouterr().out.strip() == "unclaimed"
 
 
 def test_local_entrypoints_include_the_engine_package() -> None:

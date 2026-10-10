@@ -18,11 +18,6 @@
                                              tools"; boss.sh keeps it in .env as BOSS_HOST_API_KEY)
     mcp-key --project P [--permission X]...  mint one project's MCP key (service account "MCP
              [--quiet]                       (P)"; make mcp-setup keeps it as BOSS_MCP_API_KEY)
-    seed-test-accounts --org O --owner-email E --out F [--domain D] [--i-know]
-                                             one person per access role, a custom role and a
-                                             service account, as Owner E; credentials ONLY to F
-                                             (0600). Refused on a production-looking install
-                                             unless --i-know (identity/seed_accounts.py)
 
 HOST SHELL ONLY, by construction: these functions are reached from no HTTP route and no MCP tool
 (test_identity_audit_recovery_is_host_only pins it). Run them where the database is:
@@ -287,12 +282,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     mk.add_argument("--quiet", action="store_true", help="print the key alone (for make mcp-setup)")
     egk = sub.add_parser("egress-key", help="mint the egress service's own boss_sak_ key (shown once)")
     egk.add_argument("--revoke-others", action="store_true", help="end every earlier egress key now")
-    seed = sub.add_parser("seed-test-accounts", help="test accounts, one per role (credentials only to --out)")
-    seed.add_argument("--org", required=True)
-    seed.add_argument("--owner-email", required=True, help="the active Owner the seed runs as")
-    seed.add_argument("--out", required=True, help="where the credentials go (created 0600)")
-    seed.add_argument("--domain", default="example.test")
-    seed.add_argument("--i-know", action="store_true", help="seed even though the install looks like production")
     args = parser.parse_args(argv)
 
     try:
@@ -334,13 +323,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                     what = (f"The MCP key for project {args.project}. It is shown once; keep it in .env "
                             "as BOSS_MCP_API_KEY (make mcp-setup does this for you).")
                 print(created.key if args.quiet else f"{what}\n\n  {created.key}\n")
-            elif args.cmd == "seed-test-accounts":
-                from .seed_accounts import seed_test_accounts
-
-                done = seed_test_accounts(db, org_id=args.org, owner_email=args.owner_email, out=args.out,
-                                          domain=args.domain, i_know=args.i_know)
-                print(f"wrote {done.people} people and {done.service_accounts} service account to {done.out} "
-                      "(0600). Delete it when you are done.")
             elif args.cmd == "migrate":
                 migration.forget_seeded()
                 _print(migration.seed(db, org_id=org_id).as_dict())
@@ -393,13 +375,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                 _print(posture.posture(org_id, db=db))
             elif args.cmd == "claim-status":
                 print(claim_status(org_id, db=db))
-    except Exception as exc:  # noqa: BLE001 — a refusal is one line, never a traceback with values in it
-        from .seed_accounts import SeedRefused
-
-        if not isinstance(exc, (RecoveryError, ValueError, SeedRefused)):
-            raise
-        print(f"refused: {exc}", file=sys.stderr)
-        return 1
     except (RecoveryError, ValueError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 1

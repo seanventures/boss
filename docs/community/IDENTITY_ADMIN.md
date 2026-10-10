@@ -313,7 +313,6 @@ Always pass `-u boss`: the api container starts as root (to fence the build sand
 | `claim-status` | One line: `unclaimed`, or when the install was claimed and when the shared credentials stop. `boss doctor` prints it. |
 | `mcp-key --project P [--permission X]` | Issues one project's MCP key. Prints it, so `boss identity` refuses it: use `make mcp-setup`, which keeps it in `.env`. |
 | `egress-key [--revoke-others]` | Issues the egress service's key. Prints it; run it with the `docker compose … exec -u boss` form. |
-| `seed-test-accounts --org O --owner-email E --out F [--domain D] [--i-know]` | Creates (or refreshes) one person per access role (Owner, Admin, Operator, Viewer, Auditor), the custom role `developer` with a person, and the service account `seed-ci` with a key, all as the Owner E. Passwords, TOTP secrets for roles that need MFA, and the key are written only to F, created with mode 0600; nothing secret is printed. Refused when the install looks like production (no `BOSS_ENVIRONMENT=dev/test/e2e/ci/staging` and a public origin that is not localhost or `.test`/`.local`) unless `--i-know`. Running it again gives the same accounts new credentials. Delete F when you are done. `boss identity` refuses it; use the `docker compose … exec -u boss` form. |
 | `migrate` | Re-runs the mapping of legacy members, keys, grants and SCIM data. It runs by itself at startup, and running it again changes nothing that is already mapped. |
 
 ### What the host tools' key can do without step-up
