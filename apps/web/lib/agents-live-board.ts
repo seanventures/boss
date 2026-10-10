@@ -52,7 +52,9 @@ export function teamOfAgent(roleKey: string): { key: string; label: string; tip?
  *  a person's choice (stability spec §4d). */
 export type AttentionKind = "approval" | "failed_step" | "readiness" | "gate_override" | "budget_refused"
   | "system_health" | "infra";
-export type DecisionKindWire = "workflow_gate" | "deploy_gate" | "pull_request" | "refusal" | "general";
+export type DecisionKindWire = "workflow_gate" | "deploy_gate" | "pull_request" | "refusal" | "general"
+  // Read in Approvals, never decided inline: a person approves the document they read.
+  | "architecture_review";
 
 export type AttentionAction = {
   action: "approve" | "reject" | "revise" | "delegate" | "execute";
