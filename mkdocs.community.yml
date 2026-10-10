@@ -92,6 +92,8 @@ nav:
       - Features: FEATURES.md
       - Control surfaces: CONTROL_SURFACES.md
       - Terminal capability matrix: TERMINAL_CAPABILITY_MATRIX.md
+      - RC9 candidate changes: RELEASE_NOTES_v1.0-rc9.md
+      - RC9 validation in progress: RC9_VALIDATION.md
       - Release notes (v1.0-rc8): RELEASE_NOTES_v1.0-rc8.md
       - RC8 validation: RC8_VALIDATION.md
       - Release notes (v1.0-rc6.2): RELEASE_NOTES_v1.0-rc6.2.md
