@@ -1352,7 +1352,7 @@ else
   # The agent refuses to install with an empty project id. The id is the
   # project this installer just seeded, not a value from the shell environment.
   if BOSS_PROJECT_ID="${_place_project}" \
-      sh "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
+      bash "$INSTALL_DIR/scripts/install/node_agent.sh" --local </dev/null; then
     _place_agent_state="installed"
   else
     ui_warn "Hardware agent did not install. The local machine was not recorded."
