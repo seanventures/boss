@@ -116,7 +116,8 @@ async function idFetchOnce<T>(method: string, path: string, body?: unknown, init
     const payload = body === undefined ? undefined : JSON.stringify(body);
     // A write is one press (lib/api-write.ts): an Idempotency-Key, and a double click sends once.
     res = WRITE.has(method)
-      ? await apiWrite(path, { method: method as WriteMethod, headers, body: payload, credentials: "same-origin", cache: "no-store", signal: init.signal })
+      // useGuardedCall answers step_up_required for identity writes (with its own reason).
+      ? await apiWrite(path, { method: method as WriteMethod, headers, body: payload, credentials: "same-origin", cache: "no-store", signal: init.signal }, { noStepUp: true })
       : await fetch(path, { headers, credentials: "same-origin", cache: "no-store", signal: init.signal });
   } catch {
     throw new IdentityError(0, "identity_unavailable");

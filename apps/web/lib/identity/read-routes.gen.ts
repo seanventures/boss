@@ -64,6 +64,8 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["ai-sre/runbooks", "reliability:read"],
   ["ai-sre/runbooks/runs", "reliability:read"],
   ["approval-rules", "decision:read"],
+  ["architecture-reviews", "workflow:read"],
+  ["architecture-reviews/{}", "workflow:read"],
   ["artifacts", "artifact:read"],
   ["artifacts/{}", "artifact:read"],
   ["artifacts/{}/media", "artifact:read"],
