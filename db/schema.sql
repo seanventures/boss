@@ -8227,12 +8227,27 @@ CREATE TABLE IF NOT EXISTS app_template_applications (
   workflow_run_id   TEXT,
   code_task_run_id  TEXT,
   status            TEXT NOT NULL DEFAULT 'building'
-                    CHECK (status IN ('building', 'pr_open', 'applied', 'failed', 'abandoned')),
+                    CHECK (status IN ('building', 'pr_open', 'applied', 'failed', 'blocked', 'abandoned')),
   created_by        TEXT,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS app_template_applications_app ON app_template_applications (project_id, app_key);
+-- A build a template gate stopped is BLOCKED (not "building" for ever, not "failed"): the reason
+-- and the next step are on the row. Widened in place on an install whose table predates it.
+ALTER TABLE app_template_applications ADD COLUMN IF NOT EXISTS blocked_reason TEXT;
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'app_template_applications_status_check'
+      AND pg_get_constraintdef(oid) NOT LIKE '%blocked%'
+  ) THEN
+    ALTER TABLE app_template_applications DROP CONSTRAINT app_template_applications_status_check;
+    ALTER TABLE app_template_applications
+      ADD CONSTRAINT app_template_applications_status_check
+      CHECK (status IN ('building', 'pr_open', 'applied', 'failed', 'blocked', 'abandoned'));
+  END IF;
+END $$;
 
 -- An app's secret, per environment (§2.4). The value lives in the vault (kind app_secret); this row
 -- holds presence and mode only. `live` is never handed to a build sandbox or a preview.

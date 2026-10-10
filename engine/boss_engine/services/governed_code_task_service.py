@@ -1829,6 +1829,20 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
 # --------------------------------------------------------------------------- #
 #  The governed job handler                                                   #
 # --------------------------------------------------------------------------- #
+def _authority_refused(engine, budget, project_id: str, reservation_id: Optional[str], run_id: str,
+                       exc: BaseException):
+    """The build was refused its authority before anything ran: its budget reservation goes back
+    and the refusal (code_task_service.AuthorityRefused) is what the caller raises."""
+    from .code_task_service import AuthorityRefused
+
+    try:
+        with _transaction(engine) as c:
+            _release(budget, c, project_id, reservation_id, "authority refused", run_id=run_id)
+    except Exception:  # noqa: BLE001 — the refusal is the answer either way
+        pass
+    return AuthorityRefused(getattr(exc, "reason", None) or type(exc).__name__)
+
+
 def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            *, fencing_token: Optional[str] = None) -> dict:
     """One governed attempt, with the MCP servers of the agent it runs as (skills-mcp E6).
@@ -2817,7 +2831,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             engine, task_run_id=run_id, project_id=project_id, owner=owner, repo=repo,
             role_key=identity_runs.code_task_builder(spec, fctx), job_id=job_id)
     except Exception as exc:  # noqa: BLE001 — refused authority fails the build, never widens
-        raise RuntimeError(f"authority refused: {getattr(exc, 'reason', None) or type(exc).__name__}") from exc
+        raise _authority_refused(engine, budget, project_id, reservation_id, run_id, exc) from exc
     egress_access = identity_run[1] if identity_run is not None else None
     if identity_run is not None:
         token = ""
@@ -4925,12 +4939,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     ctx = {**fctx, "pending_diff": pending, "failing_gates": failing,
                            "quality_gate_id": qg_id, "pr_summary": r2.get("summary", "")[:600],
                            **({"sandbox_task_id": guest_vm_ids[-1]} if guest_vm_ids else {})}
+                    # A TEMPLATE GATE CANNOT BE WAIVED (factory_view.UNWAIVABLE_GATES), so a build
+                    # it stopped is not waiting on anybody's waiver: blocked and done, saying why
+                    # and what to do. Parked at awaiting_gate_override, the workflow above it
+                    # waited for a waiver nobody could give.
+                    from ..templates.gate import hold_outcome as _tpl_hold_outcome
+
+                    _held = _tpl_hold_outcome(failing)
+                    if _held is not None:
+                        ctx["template_hold"] = _held
                     c.execute(sql(
-                        "UPDATE code_task_runs SET status='blocked', phase='awaiting_gate_override', "
+                        "UPDATE code_task_runs SET status='blocked', phase=:ph, "
                         "error=:e, finalize_ctx=CAST(:fc AS JSONB), updated_at=now() WHERE id=:id"),
-                        {"e": _blocked_error, "fc": json.dumps(ctx), "id": run_id})
+                        {"e": _held["error"] if _held else _blocked_error,
+                         "ph": "done" if _held else "awaiting_gate_override",
+                         "fc": json.dumps(ctx), "id": run_id})
                 _rescue_pr(_blocked_reason)
-                return {"status": "blocked", "done": True, "awaiting_gate_override": True,
+                return {"status": "blocked", "done": True, "awaiting_gate_override": _held is None,
                         "quality_gate_id": qg_id, "failing_gates": failing}
 
         # GATE PASSED — open the PR via the existing software-factory path.
@@ -4940,9 +4965,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             with _transaction(engine) as c:
                 _release(budget, c, project_id, reservation_id, "template gates did not pass",
                          run_id=run_id)
+                from ..templates.gate import hold_outcome as _tpl_hold_outcome
+
+                _held = _tpl_hold_outcome([g for g in TEMPLATE_GATES
+                                           if (_tpl_gates or {}).get(g) is not True])
                 c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='done', error=:e, "
                               "updated_at=now() WHERE id=:id"),
-                          {"e": template_push_hold(_tpl_applies, _tpl_gates), "id": run_id})
+                          {"e": (_held or {}).get("error") or template_push_hold(_tpl_applies, _tpl_gates),
+                           "id": run_id})
             return {"status": "blocked", "done": True, "failing_gates": [
                 g for g in TEMPLATE_GATES if (_tpl_gates or {}).get(g) is not True]}
         _finish_vms(success=True)

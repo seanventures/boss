@@ -189,6 +189,7 @@ def test_the_importer_cannot_approve_their_own_import_and_another_admin_can(worl
     with as_(world, people["admin"]):
         r = client.post(f"/v1/templates/{tid}/approve")
     assert r.status_code == 403 and r.json()["error"] == "seat_separation"
+    assert "(D3)" not in r.text and "another Owner or Admin" in r.text
     with as_(world, people["viewer"]):
         listed = client.get("/v1/templates").json()["templates"]
     assert tid not in {c["id"] for c in listed if c["status"] == "active"}
@@ -379,7 +380,7 @@ def test_apply_on_a_pending_template_is_refused(world, people, client, engine, t
 def test_apply_starts_a_governed_build_through_the_composer_start_path(world, people, client, engine, monkeypatch):
     started = []
 
-    def fake_start(body):
+    def fake_start(body, connection_in=None):
         started.append(body.payload() if hasattr(body, "payload") else body.model_dump())
         return {"run": {"id": "wfr_test_1"}, "extends": {"run_id": body.input["extends_run_id"]}}
 
@@ -409,7 +410,7 @@ def test_apply_starts_a_governed_build_through_the_composer_start_path(world, pe
 def test_an_imported_templates_injected_brief_cannot_change_the_build(world, people, client, engine, monkeypatch, tmp_path):
     started = []
     monkeypatch.setattr(main, "start_delivery_workflow",
-                        lambda body: started.append(body.model_dump()) or {"run": {"id": "wfr_inj"}})
+                        lambda body, connection_in=None: started.append(body.model_dump()) or {"run": {"id": "wfr_inj"}})
     m = copy.deepcopy(MANIFEST)
     m["id"] = "injected"
     repo, _ = git_repo(tmp_path / "src", manifest=m, files={

@@ -154,6 +154,18 @@ def test_a_placeholder_is_not_a_secret(tmp_path):
     assert report.ok, report.reasons
 
 
+def test_the_aws_documented_example_key_is_a_finding_not_a_placeholder(tmp_path):
+    """AKIAIOSFODNN7EXAMPLE has EXAMPLE in it, which excused it as a placeholder: a template
+    shipping AWS's documented example credentials passed the secret scan."""
+    report = _validate(tmp_path, files={"stacks/node/config.js":
+                                        "const id = 'AKIAIOSFODNN7EXAMPLE';\n"
+                                        "const secret = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';\n"})
+    assert not report.ok
+    assert _has(report, "stacks/node/config.js:1: looks like a committed secret (aws_documented_example_key)")
+    assert _has(report, "stacks/node/config.js:2: looks like a committed secret (aws_documented_example_key)")
+    assert "AKIAIOSFODNN7EXAMPLE" not in repr(report.as_dict())
+
+
 @pytest.mark.parametrize("missing,reason", [
     ("LICENSE", "license: no LICENSE file"),
     ("brief.md", "brief: brief.md is missing"),

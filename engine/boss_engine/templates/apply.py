@@ -83,13 +83,40 @@ def resolve_app(c, project_id: str, *, app_key: Optional[str] = None,
                 break
         if chosen is None:
             raise TemplateError(404, "app_not_found", "no app with that key has a finished build here")
+    return {"app_key": key, "app_name": name, "run_id": chosen["id"],
+            "files": sorted(app_files(c, project_id, key, chosen))}
+
+
+def app_files(c, project_id: str, app_key: str, chosen: Optional[dict] = None) -> set[str]:
+    """Every file path BOSS has seen in this app: what each of its builds wrote (any outcome,
+    not only finished ones) and, when a build's checkout is still on this host, that tree. The
+    stack check reads this; an app whose builds recorded nothing is not "any stack"."""
+    rows = c.execute(text(
+        "SELECT id, project_id, title, spec, finalize_ctx, state FROM code_task_runs "
+        "WHERE project_id = :p ORDER BY created_at DESC LIMIT 500"), {"p": project_id}).mappings().all()
     files: set[str] = set()
-    for r in runs:
-        if _app_key_of(r)[0] == key:
-            state = r.get("state") or {}
-            for field in ("impl_files", "test_files"):
-                files |= {str(p) for p in (state.get(field) or []) if isinstance(p, str)}
-    return {"app_key": key, "app_name": name, "run_id": chosen["id"], "files": sorted(files)}
+    for r in rows:
+        r = dict(r)
+        if _app_key_of(r)[0] != app_key:
+            continue
+        state = r.get("state") or {}
+        for field in ("impl_files", "test_files", "changed_files"):
+            files |= {str(p) for p in (state.get(field) or []) if isinstance(p, str)}
+        for item in ((r.get("finalize_ctx") or {}).get("pending_diff") or []):
+            if isinstance(item, dict) and isinstance(item.get("path"), str):
+                files.add(item["path"])
+    if not files and chosen is not None:
+        try:
+            from ..services.preview_service import find_local_run_workspace
+
+            local = find_local_run_workspace(str(chosen["id"]))
+        except Exception:  # noqa: BLE001 — no checkout here is not an error
+            local = None
+        if local is not None:
+            for path in sorted(local.rglob("*"))[:5000]:
+                if path.is_file() and "node_modules" not in path.parts and ".git" not in path.parts:
+                    files.add(path.relative_to(local).as_posix())
+    return files
 
 
 def _requires_met(c, project_id: str, app_key: str, manifest: TemplateManifest) -> list[str]:
@@ -174,10 +201,11 @@ def build_directive(*, row: dict, manifest: TemplateManifest, stack: str, framew
 
 
 def plan(c, *, org_id: str, project_id: str, template_ref: str, body: dict,
-         actor_id: Optional[str]) -> dict:
-    """Validate an apply and build its start payload. Writes only the test-default secret
-    bindings (generated/stub) the template declares; the application row is written by
-    `record()` once the run has started."""
+         actor_id: Optional[str], write: bool = True) -> dict:
+    """Validate an apply and build its start payload. With `write`, writes the test-default
+    secret bindings (generated/stub) the template declares; with `write=False` it checks
+    everything and writes nothing (the route's preflight). The application row is written by
+    `record()` once the run has started, in the same transaction as these bindings."""
     from ..config import get_settings
     from .gate import microvm_refusal
 
@@ -206,6 +234,13 @@ def plan(c, *, org_id: str, project_id: str, template_ref: str, body: dict,
         raise TemplateError(422, "app_ambiguous", "name either an existing app or new_app, not both")
     if not new_app and not (app_key_in or extends_in):
         raise TemplateError(422, "app_required", "name the app (app_key or extends_run_id) or new_app")
+    if manifest.insecure_by_design and not new_app:
+        # A training app with planted flaws never lands in a real app: it is built as a NEW app,
+        # in its own lab project (templates.lab), so nothing it holds can ship with anything else.
+        raise TemplateError(409, "insecure_needs_new_app",
+                            f"{manifest.name} is insecure by design (a training app with planted "
+                            "flaws). It is applied only as a new app, in its own lab project; "
+                            "choose \"New app\" instead of an existing one.")
     app: dict[str, Any]
     if new_app:
         from ..services.agent_assignment import app_key as key_of
@@ -216,11 +251,7 @@ def plan(c, *, org_id: str, project_id: str, template_ref: str, body: dict,
         app = {"app_key": key_of(name), "app_name": name, "run_id": None, "files": []}
     else:
         app = resolve_app(c, project_id, app_key=app_key_in, extends_run_id=extends_in)
-        has = infer_stacks(app["files"])
-        if has and stack not in has:
-            raise TemplateError(409, "stack_mismatch",
-                                f"{app['app_name']} is a {', '.join(sorted(has))} app; this apply asked for {stack}",
-                                app_stacks=sorted(has))
+        check_stack(app, stack)
     missing = _requires_met(c, project_id, app["app_key"], manifest)
     if missing:
         raise TemplateError(409, "requires_unmet", "apply these templates to the app first: "
@@ -233,7 +264,8 @@ def plan(c, *, org_id: str, project_id: str, template_ref: str, body: dict,
                                 "this template's app talks to " + ", ".join(manifest.egress)
                                 + "; accept them (accept_egress) to start", egress=list(manifest.egress))
     needs = app_secrets.ensure_test_defaults(c, org_id=org_id, project_id=project_id,
-                                             app_key=app["app_key"], manifest=manifest, actor_id=actor_id)
+                                             app_key=app["app_key"], manifest=manifest, actor_id=actor_id,
+                                             dry_run=not write)
     if needs:
         raise TemplateError(409, "secrets_needed", "set a test value for: " + ", ".join(needs),
                             secrets=needs)
@@ -262,6 +294,25 @@ def plan(c, *, org_id: str, project_id: str, template_ref: str, body: dict,
             "application_id": application_id, "run_input": run_input, "workflow_key": workflow_key}
 
 
+def check_stack(app: dict, stack: str) -> None:
+    """EVERY apply onto an existing app: the template's stack must be the app's. An app whose
+    stack BOSS cannot tell is refused too — "unknown" is not "compatible" (a Java template went
+    onto a Node app whose builds had recorded no files)."""
+    has = infer_stacks(app["files"])
+    name = app.get("app_name") or app.get("app_key")
+    if not has:
+        raise TemplateError(409, "stack_unknown",
+                            f"BOSS cannot tell which stack {name} is written in (its builds recorded "
+                            f"no files it recognises), so it cannot check that a {stack} template "
+                            "fits it. Apply the template as a new app instead.")
+    if stack not in has:
+        raise TemplateError(409, "stack_mismatch",
+                            f"{name} is a {', '.join(sorted(has))} app; this template's {stack} "
+                            f"version does not fit it. Choose the {', '.join(sorted(has))} version, "
+                            "or apply it as a new app.",
+                            app_stacks=sorted(has))
+
+
 def record(c, plan_: dict, *, project_id: str, workflow_run_id: Optional[str], actor_id: Optional[str]) -> dict:
     c.execute(text(
         "INSERT INTO app_template_applications (id, project_id, app_key, template_id, version, stack, framework, "
@@ -279,35 +330,53 @@ def refresh_statuses(c, project_id: str, app_key: str) -> None:
     """Bring each in-flight application's status up to its build: `pr_open` once the build opened
     its PR, `applied` once that PR's merge decision executed (§2.3 step 5), `failed` when the
     build ended without one. Derived from the code task the apply's workflow run started."""
+    from .gate import held_run
+
     rows = c.execute(text(
-        "SELECT id, workflow_run_id, status FROM app_template_applications WHERE project_id = :p "
-        "AND app_key = :k AND status IN ('building', 'pr_open') AND workflow_run_id IS NOT NULL"),
+        "SELECT id, workflow_run_id, status, blocked_reason FROM app_template_applications "
+        "WHERE project_id = :p AND app_key = :k AND status IN ('building', 'pr_open', 'blocked') "
+        "AND workflow_run_id IS NOT NULL"),
         {"p": project_id, "k": app_key}).mappings().all()
     for a in rows:
         run = c.execute(text(
-            "SELECT r.id, r.status, r.pull_request_url, d.status AS decision_status FROM code_task_runs r "
-            "LEFT JOIN decisions d ON d.id = r.decision_id WHERE r.project_id = :p "
+            "SELECT r.id, r.status, r.phase, r.error, r.pull_request_url, d.status AS decision_status "
+            "FROM code_task_runs r LEFT JOIN decisions d ON d.id = r.decision_id WHERE r.project_id = :p "
             "AND r.finalize_ctx->>'workflow_run_id' = :w ORDER BY r.created_at DESC LIMIT 1"),
             {"p": project_id, "w": a["workflow_run_id"]}).mappings().first()
         if run is None:
             continue
-        status = a["status"]
+        status, reason = a["status"], None
+        held = held_run(c, run["id"])
         if run["decision_status"] == "executed":
             status = "applied"
         elif run["pull_request_url"]:
             status = "pr_open"
+        elif held is not None and run["status"] not in ("running", "repairing", "queued"):
+            # Stopped by a template gate: BLOCKED with why and what to do, never "building"
+            # for ever (and a repair round still in flight is still building).
+            status, reason = "blocked", held["error"]
+        elif run["status"] == "blocked" and run["phase"] == "done":
+            # Ended blocked (not waiting on a plan approval or a waiver someone can give).
+            status, reason = "blocked", ("Blocked: " + str(run["error"] or "the build was stopped")
+                                         if not str(run["error"] or "").startswith("Blocked")
+                                         else str(run["error"]))
         elif run["status"] in _TERMINAL_FAIL:
             status = "failed"
-        if status != a["status"] or run["id"]:
+        elif run["status"] in ("running", "repairing", "queued"):
+            status = "building"
+        if status != a["status"] or run["id"] or reason != a["blocked_reason"]:
             c.execute(text("UPDATE app_template_applications SET status = :s, code_task_run_id = :r, "
-                           "updated_at = now() WHERE id = :id"), {"s": status, "r": run["id"], "id": a["id"]})
+                           "blocked_reason = :why, updated_at = now() WHERE id = :id"),
+                      {"s": status, "r": run["id"], "why": reason[:1000] if reason else None,
+                       "id": a["id"]})
 
 
 def applications(c, project_id: str, app_key: str) -> list[dict]:
     refresh_statuses(c, project_id, app_key)
     rows = c.execute(text(
         "SELECT a.id, a.template_id, t.template_key, a.version, a.stack, a.framework, a.workflow_run_id, "
-        "a.code_task_run_id, a.status, a.created_by, a.created_at, a.updated_at, t.manifest->>'name' AS name "
+        "a.code_task_run_id, a.status, a.blocked_reason, a.created_by, a.created_at, a.updated_at, "
+        "t.manifest->>'name' AS name "
         "FROM app_template_applications a JOIN app_templates t ON t.id = a.template_id "
         "WHERE a.project_id = :p AND a.app_key = :k ORDER BY a.created_at DESC"),
         {"p": project_id, "k": app_key}).mappings().all()
@@ -338,6 +407,8 @@ def setup_guide(c, *, project_id: str, app_key: str, public_url: str = "",
         if raw is None:
             continue
         base = (preview_url or "").rstrip("/")
+        if base and not base.startswith(("http://", "https://")):
+            base = ""          # a relative gateway path is not an address a provider can call back
         values = {
             "preview_url": base or "(start a preview to get its URL)",
             "public_url": public_url.rstrip("/") or "(BOSS_PUBLIC_URL is not set)",
@@ -354,8 +425,9 @@ def setup_guide(c, *, project_id: str, app_key: str, public_url: str = "",
     return out
 
 
-def preview_url_for(c, project_id: str, app_key: str) -> Optional[str]:
-    """The URL of this app's running preview, if one is up (for the setup guide's placeholders)."""
+def preview_for(c, project_id: str, app_key: str) -> Optional[str]:
+    """The id of this app's running preview, if one is up (for the setup guide's placeholders:
+    the route turns it into the reachable preview-origin URL, never the row's internal url)."""
     rows = c.execute(text(
         "SELECT id, project_id, title, spec, finalize_ctx, state, status FROM code_task_runs "
         "WHERE project_id = :p ORDER BY created_at DESC LIMIT 500"), {"p": project_id}).mappings().all()
@@ -363,5 +435,5 @@ def preview_url_for(c, project_id: str, app_key: str) -> Optional[str]:
     if not ids:
         return None
     return c.execute(text(
-        "SELECT url FROM app_previews WHERE project_id = :p AND status = 'running' AND run_id = ANY(:ids) "
+        "SELECT id FROM app_previews WHERE project_id = :p AND status = 'running' AND run_id = ANY(:ids) "
         "ORDER BY created_at DESC LIMIT 1"), {"p": project_id, "ids": ids}).scalar()

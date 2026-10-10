@@ -12,7 +12,11 @@ The import is a supply-chain boundary. What this module guarantees:
   * the URL is https only, to a public hostname (no IP literals, no local names, no user-info);
     `file://` is allowed only when the install says so (`allow_local`, tests and air-gapped
     mirrors);
-  * the fetch goes through boss-egress's CONNECT proxy when the install has one
+  * a github.com URL is fetched through boss-egress's GITHUB path (`github_access`, the same
+    read-only seam a preview's clone uses: the org's GitHub App or token, judged by egress's
+    GitHub rules; a public repository the org's credential does not cover is read anonymously
+    there). The CONNECT proxy never carries GitHub, by design;
+  * any other host goes through boss-egress's CONNECT proxy when the install has one
     (`BOSS_EGRESS_CONNECT_PROXY`): the template's host must be on the egress allowlist, which is
     the operator's decision, never the template's;
   * limits are enforced while reading: more than MAX_FILES entries, a file over MAX_FILE_BYTES or
@@ -32,7 +36,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, ContextManager, Optional
 from urllib.parse import urlsplit
 
 from .validator import (
@@ -44,6 +48,11 @@ FETCH_TIMEOUT_SECONDS = 120
 _REF = re.compile(r"^(?!-)(?!.*\.\.)[A-Za-z0-9._/\-]{1,200}$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _LOCAL_TLDS = {"localhost", "local", "internal", "lan", "home", "corp", "test", "invalid"}
+_GITHUB_PATH = re.compile(r"^/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/([A-Za-z0-9._-]{1,100}?)(?:\.git)?/?$")
+
+#: `github_access(owner, repo)`: a context manager yielding a `repo_host.GitAccess` (BOSS's own
+#: git: its `boss_environ()` is used). identity.runs.repo_access is the real one.
+GitHubAccess = Callable[[str, str], ContextManager[Any]]
 
 
 class ImportRefused(Exception):
@@ -107,6 +116,15 @@ def check_ref(ref: Optional[str]) -> str:
     return ref
 
 
+def github_repo(url: str) -> Optional[tuple[str, str]]:
+    """(owner, repo) when `url` (already checked) is a github.com repository URL, else None."""
+    parts = urlsplit(url)
+    if parts.scheme != "https" or (parts.hostname or "").lower() != "github.com":
+        return None
+    m = _GITHUB_PATH.match(parts.path or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
 def _git_env(home: Path, *, allow_local: bool, proxy: Optional[str]) -> dict[str, str]:
     env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
@@ -140,10 +158,19 @@ _SAFE_CONFIG = ("core.hooksPath=/dev/null", "core.symlinks=false", "core.fsmonit
 
 def _git(args: list[str], *, cwd: Path, env: dict[str, str], allow_local: bool,
          proxy: Optional[str], input_bytes: Optional[bytes] = None,
-         timeout: int = FETCH_TIMEOUT_SECONDS) -> subprocess.CompletedProcess:
-    """THE one subprocess this module runs. argv[0] is always git."""
+         timeout: int = FETCH_TIMEOUT_SECONDS, egress: bool = False,
+         egress_http: bool = False) -> subprocess.CompletedProcess:
+    """THE one subprocess this module runs. argv[0] is always git.
+
+    `egress`: the fetch goes through boss-egress's GitHub path, whose credential helper is set in
+    the environment (GIT_CONFIG_*, the "own git" helper). `-c credential.helper=` would come
+    AFTER it and erase it, so it is left out here (the environment's own list starts with that
+    reset). `egress_http`: egress is on the compose network as http://egress:…, so http is
+    allowed for that one URL (every URL git is given here is that one)."""
     config: list[str] = []
-    for item in _SAFE_CONFIG + (("protocol.file.allow=always",) if allow_local else ()) \
+    safe = tuple(c for c in _SAFE_CONFIG if not (egress and c == "credential.helper="))
+    for item in safe + (("protocol.file.allow=always",) if allow_local else ()) \
+            + (("protocol.http.allow=always",) if egress_http else ()) \
             + ((f"http.proxy={proxy}",) if proxy else ()):
         config += ["-c", item]
     return subprocess.run(["git", *config, *args], cwd=str(cwd), env=env, input=input_bytes,
@@ -168,27 +195,83 @@ def _short_error(proc: subprocess.CompletedProcess) -> str:
     return re.sub(r"//[^/@\s]+@", "//", line)[:300]
 
 
+def _plain_git_error(proc: subprocess.CompletedProcess, *, url: str) -> str:
+    """What went wrong, in words a person can act on: never git's raw text."""
+    raw = (proc.stderr or b"").decode("utf-8", errors="replace").lower()
+    if "not found" in raw or " 404" in raw or "does not appear to be a git repository" in raw:
+        return f"no repository at {url}, or BOSS's GitHub connection cannot read it"
+    if any(k in raw for k in ("authentication", "could not read username", " 401", " 403",
+                              "forbidden", "terminal prompts disabled")):
+        return (f"BOSS could not read {url}: the repository is private and BOSS's GitHub connection "
+                "does not cover it (Setup ▸ Repo), or it does not exist")
+    if "couldn't find remote ref" in raw or "not our ref" in raw or "unadvertised object" in raw:
+        return "that branch, tag or commit is not in the repository"
+    if "could not resolve host" in raw or "connection refused" in raw or "timed out" in raw \
+            or "failed to connect" in raw or " 502" in raw or " 503" in raw:
+        return f"BOSS could not reach {url}; try again, or check this install's network access"
+    if "fsck" in raw or "bad object" in raw or "invalid" in raw:
+        return "the repository's data did not pass git's integrity check"
+    return f"git could not fetch {url} (exit {proc.returncode})"
+
+
 def fetch(git_url: str, ref: Optional[str] = None, *, allow_local: bool = False,
-          proxy: Optional[str] = None, workdir: Optional[Path] = None) -> Fetched:
+          proxy: Optional[str] = None, workdir: Optional[Path] = None,
+          github_access: Optional[GitHubAccess] = None) -> Fetched:
     """Fetch `ref` of `git_url` into a bare quarantine repository and read its tree from git
-    objects. Removes the quarantine directory before returning."""
+    objects. Removes the quarantine directory before returning.
+
+    A github.com URL with `github_access` goes through it (boss-egress's GitHub path), never the
+    CONNECT proxy (which refuses GitHub by design)."""
     url = check_url(git_url, allow_local=allow_local)
     ref = check_ref(ref)
+    gh = github_repo(url) if github_access is not None else None
+    if gh is not None:
+        try:
+            with github_access(*gh) as access:
+                return _fetch(url, ref, allow_local=allow_local, proxy=None, workdir=workdir, access=access)
+        except ImportRefused:
+            raise
+        except Exception as exc:  # noqa: BLE001 — no authority / egress down: said plainly
+            import logging
+
+            logging.getLogger("boss.templates").warning("template import: GitHub access refused: %s", exc)
+            raise ImportRefused(f"BOSS could not get read access to {url} through its GitHub "
+                                "connection; check Setup ▸ Repo, then import again") from None
     proxy = proxy if proxy is not None else (os.environ.get("BOSS_EGRESS_CONNECT_PROXY") or None)
+    return _fetch(url, ref, allow_local=allow_local, proxy=proxy, workdir=workdir, access=None)
+
+
+def _fetch(url: str, ref: str, *, allow_local: bool, proxy: Optional[str], workdir: Optional[Path],
+           access: Any) -> Fetched:
     base = Path(tempfile.mkdtemp(prefix="boss-template-import-", dir=workdir))
     try:
         repo = base / "q.git"
         home = base / "home"
         home.mkdir()
         env = _git_env(home, allow_local=allow_local, proxy=proxy)
-        kw = {"env": env, "allow_local": allow_local, "proxy": proxy}
+        fetch_url = url
+        kw: dict[str, Any] = {"env": env, "allow_local": allow_local, "proxy": proxy}
+        if access is not None:
+            fetch_url = access.url
+            own = access.boss_environ({})
+            # only git's config (the egress URL rewrite + its credential helper) and the helper's
+            # credential: nothing else of BOSS's environment reaches this git
+            env.update({k: v for k, v in own.items()
+                        if k.startswith("GIT_CONFIG_") or k == "GIT_CONFIG_COUNT" or k == "BOSS_EGR_CREDENTIAL"})
+            egress_http = fetch_url.startswith("http://")
+            if egress_http:
+                env["GIT_ALLOW_PROTOCOL"] = env["GIT_ALLOW_PROTOCOL"] + ":http"
+            kw.update({"egress": access.via == "egress", "egress_http": egress_http})
         init = _git(["init", "-q", "--bare", str(repo)], cwd=base, **kw)
         if init.returncode != 0:
             raise ImportRefused("could not create the quarantine repository")
         got = _git(["fetch", "-q", "--depth", "1", "--no-tags", "--no-recurse-submodules",
-                    "--", url, ref], cwd=repo, **kw)
+                    "--", fetch_url, ref], cwd=repo, **kw)
         if got.returncode != 0:
-            raise ImportRefused(f"git fetch failed: {_short_error(got)}")
+            import logging
+
+            logging.getLogger("boss.templates").info("template import: git fetch failed: %s", _short_error(got))
+            raise ImportRefused(_plain_git_error(got, url=url))
         if _du(repo) > MAX_REPO_BYTES:
             raise ImportRefused(f"the repository is larger than {MAX_REPO_BYTES // (1024 * 1024)} MB")
         head = _git(["rev-parse", "--verify", "FETCH_HEAD^{commit}"], cwd=repo, **kw)

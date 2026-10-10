@@ -269,20 +269,30 @@ def record_import(c, org_id: str, *, actor_id: Optional[str], git_url: str, comm
 
 def import_from_git(c_factory: Callable[[], Any], org_id: str, *, actor_id: Optional[str], git_url: str,
                     ref: Optional[str], may_label_insecure: bool, ack_insecure: bool,
-                    fetcher: Optional[Callable[..., Any]] = None, allow_local: bool = False) -> dict:
+                    fetcher: Optional[Callable[..., Any]] = None, allow_local: bool = False,
+                    github_access: Optional[Callable[..., Any]] = None) -> dict:
     """Fetch (outside any transaction: it may take a while), validate, record. Nothing from the
     template is executed. `c_factory()` opens the transaction the record is written in."""
     from . import importer
 
     fetch = fetcher or importer.fetch
+    kwargs: dict[str, Any] = {"allow_local": allow_local}
+    if github_access is not None:
+        kwargs["github_access"] = github_access
     try:
-        fetched = fetch(git_url, ref, allow_local=allow_local)
+        fetched = fetch(git_url, ref, **kwargs)
     except importer.ImportRefused as exc:
         raise TemplateError(422, "import_refused", exc.reason) from None
+    report = validate_tree(fetched.tree, source="git", builtin_ids=builtin_ids(),
+                           boss_hosts=boss_hosts(), may_label_insecure=may_label_insecure,
+                           ack_insecure=ack_insecure)
+    if report.manifest is None:
+        # No readable manifest: not a template at all. Nothing is stored (there is no name or
+        # version to file it under); the reasons go back to the person who asked.
+        raise TemplateError(422, "invalid_template",
+                            "this repository is not a valid BOSS template: " + "; ".join(report.reasons[:5]),
+                            report=report.as_dict())
     with c_factory() as c:
-        report = validate_tree(fetched.tree, source="git", builtin_ids=builtin_ids(),
-                               boss_hosts=boss_hosts(), may_label_insecure=may_label_insecure,
-                               ack_insecure=ack_insecure)
         return record_import(c, org_id, actor_id=actor_id, git_url=fetched.git_url,
                              commit_sha=fetched.commit_sha, report=report, files=fetched.tree.files())
 
@@ -299,7 +309,7 @@ def approve(c, org_id: str, template_id: str, *, actor_id: Optional[str]) -> dic
         raise TemplateError(401, "unauthenticated", "approving needs a signed-in person")
     if row["imported_by"] and row["imported_by"] == actor_id:
         raise TemplateError(403, "seat_separation",
-                            "the person who imported a template cannot approve it (D3)")
+                            "the person who imported a template cannot approve it; another Owner or Admin approves it")
     if not (row["validation"] or {}).get("ok"):
         raise TemplateError(409, "invalid", "this import did not pass validation")
     c.execute(text("UPDATE app_templates SET status = 'active', approved_by = :a, approved_at = now() "

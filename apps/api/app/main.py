@@ -26193,8 +26193,23 @@ def set_delivery_run_input(run_id: str, payload: WorkflowRunInputBody) -> dict:
 
 @app.post("/v1/delivery-workflows/start")
 @permit(P.WORKFLOW_RUN_START, scope=Scope.project(body="project_id"))
-def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
+def start_delivery_workflow_route(payload: WorkflowStartBody) -> dict:
     """Launch a piece of work on a workflow."""
+    return start_delivery_workflow(payload)
+
+
+def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = None) -> dict:
+    """THE start path behind POST /v1/delivery-workflows/start.
+
+    `connection_in`: run every read and the start itself in the CALLER's transaction (a
+    template apply writes its secret bindings and application row in the same one, so a refusal
+    here — consent, readiness, a 404 — rolls all of it back: a refused apply writes nothing)."""
+    import contextlib as _contextlib
+
+    def _tx():
+        return (_contextlib.nullcontext(connection_in) if connection_in is not None
+                else begin(engine))
+
     payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     work_class = str(payload.get("work_class") or "").strip()
@@ -26202,7 +26217,7 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
     actor = _delivery_workflow_actor(payload)
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
-    with begin(engine) as connection:
+    with _tx() as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
     run_input = payload.get("input") if isinstance(payload.get("input"), dict) else {}
     # ADOPTION IS NOT SOMETHING A CALLER GETS TO ASSERT.
@@ -26268,7 +26283,7 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
         # (review of 0fd6c45).
         from boss_engine.services import workflow_run_actions as _run_actions
 
-        with begin(engine) as connection:
+        with _tx() as connection:
             try:
                 found = _run_actions.research_to_adopt(
                     connection, project_id, from_run=source_run, from_discovery=source_discovery)
@@ -26314,7 +26329,7 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
             catalogue_work_class, sample_for, why_no_sample,
         )
 
-        with begin(engine) as connection:
+        with _tx() as connection:
             wanted = work_class or (
                 catalogue_work_class(workflow_key) if workflow_key else ""
             )
@@ -26341,7 +26356,7 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
         )
         from boss_engine.services.factory_view import app_name
 
-        with begin(engine) as connection:
+        with _tx() as connection:
             parent = load_code_task_run(connection, extends_run_id)
         if not parent or str(parent.get("project_id")) != project_id:
             raise HTTPException(status_code=404, detail="that app is not in this project")
@@ -26357,7 +26372,7 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
     # alongside extends_run_id, and only a preview of this project.
     preview_id = str(run_input.pop("preview_id", None) or "").strip()
     if preview_id and extends_run_id:
-        with begin(engine) as connection:
+        with _tx() as connection:
             seen = connection.execute(
                 text("SELECT id FROM app_previews WHERE id = :i AND project_id = :p"),
                 {"i": preview_id, "p": project_id}).scalar()
@@ -26365,7 +26380,7 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
             raise HTTPException(status_code=404, detail="that preview is not in this project")
         run_input["preview_id"] = preview_id
         extends["preview_id"] = preview_id
-    with begin(engine) as connection:
+    with _tx() as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
         _authorize_delivery_target_input(connection, project_id, actor, run_input)
         version_id = None

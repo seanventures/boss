@@ -157,5 +157,6 @@ def resolve_preview(conn: Any, project_id: str, app_key: str, preview_id: str) -
     if not _loopback(url):
         raise ScopeRefused("preview_not_reachable",
                            "that preview is not served on this BOSS; scanning a preview on another "
-                           "host needs a link to it (F5)", status=409)
+                           "host needs a link to that host (App ▸ Links); scan the app in its own sandbox "
+                           "instead (zap target `sandbox`)", status=409)
     return {"kind": "preview", "preview_id": preview_id, "url": url}

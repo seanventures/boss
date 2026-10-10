@@ -2,8 +2,13 @@
 §3.6: "a hard check in governed_host_deploy.py, not a UI hide").
 
 The insecure banking variant carries planted, catalogued flaws for training: it is previewed, never
-deployed. The check is PER APP (operator decision, 2026-10-09): a lab project may hold the insecure
-app AND ordinary apps (the "Bank attacker" that tests it), and the ordinary ones deploy.
+deployed. The check is PER APP (operator decision, 2026-10-09), with one project-wide rule first:
+
+0. a LAB project (templates.lab: an insecure template is applied only as a new app in a project made
+   for it) deploys nothing, whatever its target is called;
+
+and in any other project (an install that applied one before labs existed) the ordinary apps beside
+an insecure app deploy.
 
 "Per app" must not be sidestepped by naming a target freely, so in a project that holds an insecure
 application (any state but `abandoned`) a deploy is refused unless BOSS can tell it ships an app that
@@ -178,6 +183,13 @@ def deploy_refusal(connection: Any, project_id: Optional[str], *,
         packet = json.loads(release_packet) if isinstance(release_packet, str) else (release_packet or {})
         runs = [str(r) for r in (packet.get("code_task_run_id"), source_run_id) if r]
         with connection.begin_nested():
+            from .lab import lab_of
+
+            lab = lab_of(connection, str(project_id))
+            if lab:
+                return Refusal(f"{lab.get('app_name') or lab.get('app_key') or 'This app'} is in a lab project "
+                               f"for {lab.get('template_key') or 'a template'}, a template that is insecure by "
+                               "design: BOSS never deploys it to a host.")
             found = insecure_applications(connection, str(project_id))
             if not found:
                 return None

@@ -820,6 +820,21 @@ def _task_repos(shim: Shim, db: Any) -> list[str]:
     return list(((raw.get("boss_task") or {}).get("resources") or {}).get("github") or [])
 
 
+def _egress_git_access(access: CloneAccess) -> Any:
+    """A `repo_host.GitAccess` through egress: `environ()` asks the run's shim socket (git as the
+    run's sandbox uid), `boss_environ()` carries the credential in BOSS's own git's environment
+    (the socket never answers the control plane's uid: a scan's clone inside a bound sandbox got
+    no credential at all)."""
+    from ..services.repo_host import GitAccess, git_config_env
+
+    own_env = None
+    if access.own_git is not None:
+        pairs = [(k, v) for k, v in access.git_config if k != "credential.helper"]
+        pairs += list(access.own_git.config)
+        own_env = {**git_config_env(pairs), **dict(access.own_git.env)}
+    return GitAccess(access.clone_url, git_config_env(access.git_config), via="egress", own_env=own_env)
+
+
 @contextlib.contextmanager
 def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Optional[str],
                 token: Any = "", role_key: Optional[str] = None) -> Iterator[Any]:
@@ -834,7 +849,7 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
     URL, argv or the checkout's `.git/config`, so the code that later runs in that directory can
     never read it."""
     from . import lineage
-    from ..services.repo_host import GitAccess, git_access, git_config_env
+    from ..services.repo_host import git_access
 
     acting = lineage.current()
     kind = (host or "github").strip().lower()
@@ -853,7 +868,7 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
         if shim is not None:
             access = egress_access(shim, owner=owner, repo=repo)
             try:
-                yield GitAccess(access.clone_url, git_config_env(access.git_config), via="egress")
+                yield _egress_git_access(access)
             finally:
                 close_shim_socket(shim.run_id)
                 with engine.begin() as db:
@@ -877,7 +892,7 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
             if shim is not None:
                 access = egress_access(shim, owner=owner, repo=repo)
                 try:
-                    yield GitAccess(access.clone_url, git_config_env(access.git_config), via="egress")
+                    yield _egress_git_access(access)
                 finally:
                     close_shim_socket(shim.run_id)
                     with engine.begin() as db:

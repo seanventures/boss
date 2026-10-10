@@ -477,6 +477,32 @@ def _repair_empty_ceiling(db: Any, passport: "Passport", preset_key: str) -> Non
                            actor_id="sys_migration", details={"preset": preset_key, "repaired": True})
 
 
+def _grow_to_preset(db: Any, passport: "Passport") -> bool:
+    """A Passport whose ceiling IS a preset (never `custom`: a ceiling a person set by hand is
+    never touched) gains what that preset gained since it was made: a capability BOSS ships later
+    (the reviewer chairing the security review's panel) reaches the agents that already exist.
+    Additive only, audited; returns whether anything was added."""
+    from sqlalchemy import text
+
+    try:
+        p = _preset(passport.ceiling_preset or "")
+    except PassportError:
+        return False
+    missing = sorted(frozenset(p.permissions) - frozenset(passport.ceiling))
+    if not missing:
+        return False
+    _require_delegable(frozenset(missing))
+    for key in missing:
+        db.execute(text("INSERT INTO identity_agent_ceilings (agent_id, permission_key) VALUES (:a, :k) "
+                        "ON CONFLICT DO NOTHING"), {"a": passport.agent_id, "k": key})
+    db.execute(text("UPDATE identity_agent_passports SET version = version + 1, updated_at = now() "
+                    "WHERE agent_id = :a"), {"a": passport.agent_id})
+    from . import lineage
+    lineage.passport_event(db, get(passport.agent_id, db=db), "agent.passport.ceiling_changed",
+                           actor_id="sys_migration", details={"preset": passport.ceiling_preset, "added": missing})
+    return True
+
+
 def upgrade_from_roles(*, org_id: str, db: Any, default_sponsor: Optional[str] = None) -> dict[str, str]:
     """The Passport upgrade (§7.1, migration M0 calls this): every `roles` row with an `agent_id`
     gets an `agent` principal and a Passport with its preset ceiling. The sponsor is the role's
@@ -501,6 +527,8 @@ def upgrade_from_roles(*, org_id: str, db: Any, default_sponsor: Optional[str] =
             if not existing.ceiling and not existing.ceiling_preset and preset:
                 _repair_empty_ceiling(db, existing, preset)
                 out[r["agent_id"]] = f"ceiling repaired: {preset}"
+            elif existing.ceiling_preset and existing.ceiling_preset == preset and _grow_to_preset(db, existing):
+                out[r["agent_id"]] = f"ceiling grew to its preset: {preset}"
             else:
                 out[r["agent_id"]] = "exists"
             continue

@@ -258,6 +258,22 @@ def preview_origin_for(host_header: Optional[str], scheme: str = "http") -> str:
     return f"{'https' if scheme == 'https' else 'http'}://{hostname}:{port}"
 
 
+def public_preview_url(preview_id: str, host_header: Optional[str] = None, scheme: str = "http",
+                       *, settings: Optional[Settings] = None) -> str:
+    """The ABSOLUTE address a person's browser (or a provider calling back) reaches this
+    preview at — the preview origin, else BOSS_PREVIEW_PUBLIC_BASE — or "" when BOSS cannot
+    say one. Never `app_previews.url`: that is the app's port inside the API container
+    (http://127.0.0.1:19769), reachable from nowhere a browser or a webhook runs."""
+    from urllib.parse import quote
+
+    path = f"/v1/previews/{quote(str(preview_id), safe='')}/web"
+    origin = preview_origin_for(host_header, scheme)
+    if origin:
+        return origin + path
+    base = _preview_public_base(None, settings=settings)
+    return base + path if base else ""
+
+
 def operator_preview_open_url(
     preview_id: str,
     *,
@@ -2297,7 +2313,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                                         owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
             clone_url = _access.url
             clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-                               capture_output=True, text=True, timeout=120, env=_access.environ(),
+                               capture_output=True, text=True, timeout=120, env=_access.boss_environ(),
                                # BOSS's git, writing a tree the preview's uid must be able to edit
                                **({"umask": 0} if ident is not None else {}))
         if clone.returncode != 0:
@@ -2564,7 +2580,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
                                     owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
         clone_url = _access.url
         clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-                           capture_output=True, text=True, timeout=120, env=_access.environ())
+                           capture_output=True, text=True, timeout=120, env=_access.boss_environ())
     if clone.returncode != 0:
         return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
@@ -2755,7 +2771,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             clone_url = _access.url
             clone = owned_process.run(
             ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-            capture_output=True, text=True, timeout=120, env=_access.environ(), sandboxed=False,
+            capture_output=True, text=True, timeout=120, env=_access.boss_environ(), sandboxed=False,
             **({"umask": 0} if ident is not None else {}))
         if clone.returncode != 0:
             _release_preview_sandbox(preview_id)

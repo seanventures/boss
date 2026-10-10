@@ -102,9 +102,12 @@ passport_presets:
   - key: reviewer
     name: Reviewer
     agents: [vera, rook, sentry, weave, muse]
+    # meeting:read/convene: a reviewer CHAIRS review panels (the security review's panel is
+    # convened by the security lens); without them its consent could never be granted.
     permissions: [code_task:read, code_task:steer, repository:read, github:read, preview:read,
                   artifact:read, assurance:read, assurance:run, workflow_run:read, skill:read,
-                  skill:invoke, memory:read, spend:reserve, security_scan:run]
+                  skill:invoke, memory:read, spend:reserve, security_scan:run, meeting:read,
+                  meeting:convene]
     external_ceiling: {github: {contents: read, pull_requests: write}}
   - key: planner
     name: Planner

@@ -5,7 +5,7 @@ is refused (API test)").
 templates.deploy_guard.deploy_refusal is the one check; every deploy planner calls it before it
 records anything, and the governed host apply calls it again. PER APP (operator decision
 2026-10-09): the project's other apps deploy; a deploy BOSS cannot attribute to a non-insecure app
-is refused (fail closed).
+is refused (fail closed); a lab project (templates.lab) deploys nothing, whatever the target is called.
 """
 from __future__ import annotations
 
@@ -242,3 +242,20 @@ def test_the_host_route_deploys_the_other_app(client, world, monkeypatch):
     assert "insecure by design" not in r.text and "cannot tell" not in r.text
     # past the guard (both planners): the seeded target then stops at the next ordinary check
     assert r.status_code < 400 or "has no app port" in r.text, r.text
+
+
+def test_a_lab_project_deploys_nothing_whatever_the_target_is_called(world):
+    """templates.lab: an insecure template is applied as a new app in a project made for it; that
+    project deploys nothing, even a target BOSS could attribute to another app (from fx-secbackend)."""
+    with world.begin() as c:
+        c.execute(text("INSERT INTO project_settings (project_id, key, value) VALUES (:p, 'template_lab', "
+                       "CAST(:v AS JSONB)) ON CONFLICT (project_id, key) DO UPDATE SET value = EXCLUDED.value"),
+                  {"p": HOME, "v": json.dumps({"insecure_by_design": True, "app_name": "Training bank",
+                                               "template_key": "banking-starter-insecure"})})
+        try:
+            for target in (None, {"app_name": "anything-else", "repo": "o/r"}):
+                refused = deploy_guard.deploy_refusal(c, HOME, target=target, commit_ref="main")
+                assert refused and "lab project" in refused and "Training bank" in refused
+        finally:
+            c.execute(text("DELETE FROM project_settings WHERE project_id = :p AND key = 'template_lab'"),
+                      {"p": HOME})
