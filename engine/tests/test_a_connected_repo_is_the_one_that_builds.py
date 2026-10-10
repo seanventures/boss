@@ -62,3 +62,53 @@ def test_both_build_paths_pass_the_project_through():
 def test_nothing_here_names_the_operator_platform():
     """This ships as open source. The engine must not say where anybody's boxes are."""
     assert "reference host" not in inspect.getsource(github_app_adapter).lower()
+
+
+class _Rows:
+    def __init__(self, row):
+        self.row = row
+
+    def mappings(self):
+        return self
+
+    def first(self):
+        return self.row
+
+
+class _Nested:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _Db:
+    def execute(self, *a, **k):
+        return _Rows({"full_name": "acme/api", "role": "source", "connection_id": "ghc_app"})
+
+    def begin_nested(self):
+        return _Nested()
+
+
+def test_a_project_connected_through_the_setup_app_gets_a_token_for_that_one_repository(monkeypatch):
+    """The Setup App's connection resolves to `identity_github:app`, whose secret is a token for
+    EVERY repository the installation reaches. A build of acme/api (one lane of a change across
+    acme/contracts, acme/api, acme/web) wrote its branch and opened its PR with that wide token
+    (found by tests/e2e/multirepo/proof.py on the fake GitHub's log). It must be minted for the
+    one repository instead, and the wide secret never read."""
+    from boss_engine.identity import github_setup
+    from boss_engine.config import get_settings
+
+    service = GitHubConnectionService(get_settings())
+    monkeypatch.setattr(service, "_credential_ref", lambda *a: "identity_github:app")
+    asked = []
+    monkeypatch.setattr(github_setup, "control_plane_token",
+                        lambda db, owner, repo: asked.append(f"{owner}/{repo}") or "ghs_one_repo")
+
+    def wide(*a, **k):
+        raise AssertionError("the all-repositories App token was resolved for a one-repository build")
+
+    monkeypatch.setattr(service, "_resolve_secret", wide)
+    assert service.token_for_repository(_Db(), project_id="p1", owner="acme", repo="api") == "ghs_one_repo"
+    assert asked == ["acme/api"]

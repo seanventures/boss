@@ -1,0 +1,13 @@
+# The multi-repo proof's world (tests/e2e/multirepo/proof.py), layered AFTER build-override.yml
+# and deploy-host.yml: the fake GitHub is the organisation `acme` with three repositories, each
+# with the metadata GitHub's installation listing carries (language, description, id), so the
+# registry shows what an operator would see.
+services:
+  fakegh:
+    environment:
+      FAKEGH_ACCOUNT: acme
+      FAKEGH_REPOS: acme/contracts,acme/api,acme/web
+      FAKEGH_REPO_META: >-
+        {"acme/contracts": {"id": 710001, "language": "Protobuf", "description": "Order and payment contracts (protobuf)"},
+         "acme/api": {"id": 710002, "language": "Go", "description": "Orders API"},
+         "acme/web": {"id": 710003, "language": "TypeScript", "description": "Storefront web app"}}

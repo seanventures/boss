@@ -377,8 +377,12 @@ class GitHubFake:
             if pr["merged"]:
                 return 405, {"message": "Pull Request is not mergeable"}
             head = self._sha_of(bare, f"refs/heads/{pr['head']}")
+            if body.get("sha") and str(body["sha"]) != head:
+                # GitHub's required-SHA merge: the head moved since the caller looked
+                return 409, {"message": "Head branch was modified. Review and try the merge again."}
+            pr["merged_at_sha"] = head
             sha = self._merge(bare, pr["base"], head, str(body.get("commit_title") or pr.get("title") or "merge"))
-            pr.update(merged=True, state="closed", merge_sha=sha)
+            pr.update(merged=True, state="closed", merge_sha=sha, merged_at=time.time())
             return 200, {"merged": True, "sha": sha, "message": "Pull Request successfully merged"}
         if sub == "/merge":
             return (204, "") if pr["merged"] else (404, {"message": "Not merged"})

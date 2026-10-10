@@ -200,6 +200,38 @@ data; `--legacy` signs in the rc5 way (console password + API key).
 `BOSS_E2E_RUN_TIMEOUT` (seconds, default 900) bounds each run. `scripts/e2e.sh down --all` stops
 every stack ever recorded here, and everything each one started.
 
+## The multi-repo proof (`multirepo/proof.py`)
+
+One change across three repositories (`acme/contracts` → `acme/api` → `acme/web`) on ONE
+disposable compose stack (project `bossmr`, ports 53400/58400/55804/58401/58480/58490, images
+built from this checkout under the tag `mr`, fresh secrets in a 0600 `stack.env` in `--dir`),
+every outside service faked: `build-override.yml` + `deploy-host.yml` +
+`multirepo/compose-override.yml` (the fake GitHub as the org `acme`, with each repository's
+language, description and id in the installation listing).
+
+```sh
+cd tests
+python3 -m e2e.multirepo.proof all --build --dir <scratch dir>   # build, up, prove, screenshots, down -v
+python3 -m e2e.multirepo.proof up --build --dir <dir>            # or piece by piece:
+python3 -m e2e.multirepo.proof run --dir <dir>                   #   <dir>/proof.json
+python3 -m e2e.multirepo.proof shots --dir <dir>                 #   docs/product/multirepo/*.png
+python3 -m e2e.multirepo.proof down --dir <dir>                  #   down -v, lists anything left
+```
+
+It connects the GitHub App from Setup through the fake, refreshes the registry and ticks the three
+repositories (the three checks run against the fake), adds them to the project with role hints,
+saves components with `depends_on` and ship targets, gives the Owner the ceo seat (tier-2
+approvals) and a verified stub machine, then starts the change with
+`POST /v1/apps/{app}/change-sets`: the 409's `multirepo.repos` must be exactly the three. The stub
+coding agent writes a module + unittest per lane (rules keyed on the lane brief's "You work ONLY
+in <repo>"); the planner (`BOSS MULTI-REPO PLAN`) and the cross-repo reviewer
+(`BOSS CROSS-REPO CHECK`) are scripted too. It asserts the waves, one-repository tokens for every
+write (the fake logs which token each request used), linked PRs, ONE decision pinned to the head
+SHAs, a push re-asking, the merge in order at the approved SHAs, the deploy plan and `live`; then a
+second change whose `acme/api` tests can never pass must end `blocked` with no decision and
+`acme/web` never started. `shots` starts a third change from the console's "New change" to capture
+the consent sheet, the cockpit, the linked PRs and the approval card with real data.
+
 ## Against a live install (boss-1), with real models
 
 ```sh
