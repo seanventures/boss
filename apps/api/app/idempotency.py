@@ -63,6 +63,9 @@ _STREAMING_CONTENT_TYPES = ("text/event-stream", "application/x-ndjson")
 # app mounts and fails if one is neither covered nor listed here, and fails if an entry here no
 # longer matches any route — an exclusion nobody can point at is a hole waiting for a route.
 EXCLUSIONS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^/v1/delivery-workflows/agreement$"),
+     "This authenticated POST is a deterministic read of the current work agreement; the brief "
+     "stays out of URLs, and every preview must re-read canonical state without creating replay rows."),
     (re.compile(r"^/v1/worker(/|$)"),
      "The worker lease protocol carries its own fencing: a lease id and attempt number make a "
      "heartbeat or completion idempotent already, and replaying a STORED heartbeat would tell a "
