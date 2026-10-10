@@ -23,8 +23,16 @@ ACTIONS = ("connect", "test", "replace", "fix_link", "budget", "default_model")
 
 #: GitHub pages a fix links to. The token list is where a fine-grained token's permissions and
 #: repositories are edited; the org page is where an owner approves a pending token request.
-GITHUB_TOKENS_URL = "https://github.com/settings/personal-access-tokens"
-GITHUB_ORG_REQUESTS_URL = "https://github.com/settings/organizations"
+#: Both come from identity/github_urls (the one builder); the org's requests page needs the
+#: repository's owner, so it is built when the pill is filled (`{repo}`).
+from ..identity import github_urls as _gh
+
+GITHUB_TOKENS_URL = _gh.fine_grained_tokens()
+
+
+def _org_requests(values: dict[str, Any]) -> str:
+    owner = str(values.get("repo") or "").split("/", 1)[0] if "/" in str(values.get("repo") or "") else None
+    return _gh.token_requests(owner)
 
 REPOSITORY: dict[str, dict[str, Any]] = {
     "not_connected": {"label": "Not connected", "tone": "grey",
@@ -54,7 +62,7 @@ REPOSITORY: dict[str, dict[str, Any]] = {
                 "action": "replace"},
     "awaiting_org_approval": {"label": "Awaiting org approval", "tone": "amber",
                               "tip": "Your org must approve this token on GitHub.",
-                              "action": "fix_link", "fix_url": GITHUB_ORG_REQUESTS_URL},
+                              "action": "fix_link", "fix_url": _org_requests},
     "rate_limited": {"label": "GitHub busy · {time}", "tone": "amber",
                      "tip": "GitHub rate limit. Checks resume at {time}."},
     "unreachable": {"label": "Can't reach GitHub", "tone": "amber",
@@ -172,7 +180,9 @@ def pill(kind: str, state: str, **values: Any) -> dict[str, Any]:
     }
     if entry.get("action"):
         out["action"] = entry["action"]
-    fix_url: Optional[str] = values.get("fix_url") or entry.get("fix_url")
+    fix_url = values.get("fix_url") or entry.get("fix_url")
+    if callable(fix_url):
+        fix_url = fix_url(values)
     if fix_url:
         out["fix_url"] = fix_url
     # A TIME IN A PILL IS THE VIEWER'S CLOCK. The label carries the server's HH:MM (UTC in a

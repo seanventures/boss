@@ -2141,11 +2141,15 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "exists, so it cannot help there. Takes the crun_ of a completed run and the "
         "environment name. It will REFUSE if the run did not succeed, or if no active target "
         "exists for that environment, and it tells you which environments DO exist so you can "
-        "offer the operator a real choice. It never creates infrastructure.",
+        "offer the operator a real choice. An app's FIRST deploy creates its target (free port, "
+        "URL and health from the host) on host_id, or the project's one verified host.",
         _obj({"run_id": {"type": "string", "description": "crun_ of a COMPLETED build"},
               "environment": {"type": "string",
-                              "description": "staging | production — must already have a target"},
-              "target_id": {"type": "string", "description": "optional exact deptgt_ to use"}},
+                              "description": "staging | production"},
+              "target_id": {"type": "string", "description": "optional exact deptgt_ to use"},
+              "host_id": {"type": "string",
+                          "description": "optional dh_: where a first deploy goes when the "
+                                         "project has more than one verified host"}},
              required=["run_id", "environment"]),
         kind="write",
         reversibility="safe", permission="deployment:create")
@@ -2157,6 +2161,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             run_id=str(args["run_id"]),
             environment=str(args.get("environment") or "staging"),
             target_id=(str(args["target_id"]) if args.get("target_id") else None),
+            host_id=(str(args["host_id"]) if args.get("host_id") else None),
             actor=actor,
         )
 

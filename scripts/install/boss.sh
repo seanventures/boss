@@ -213,8 +213,14 @@ cmd_open() {
     printf 'Mission Control on this machine: http://127.0.0.1:%s\n' "${port:-3000}"
   fi
   [[ -z "$origin" ]] || printf 'Console origin:                  %s%s\n' "${origin%/}" "$path"
+  # NOT CLAIMED YET: say how, with the command, so nobody has to find the link in a log.
   case "$(identity_cli claim-status 2>/dev/null | tail -n 1 || true)" in
-    unclaimed) printf 'First visit: claim it at /claim. The password from boss password proves it is you.\n' ;;
+    unclaimed)
+      printf '\nNot claimed yet: nobody owns this BOSS. To become its Owner, run\n\n'
+      printf '  boss identity setup-link\n\n'
+      printf 'and open the one-hour link it prints, in the browser you will sign in with.\n'
+      [[ -z "$(env_value BOSS_CONSOLE_PASSWORD)" ]] ||
+        printf 'Or open /claim and prove it is you with the password from: boss password\n' ;;
     *) printf 'Sign in with your own account. Teammates without one yet: boss password, until it stops.\n' ;;
   esac
 }

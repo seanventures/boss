@@ -201,6 +201,7 @@ export function needsYouLabel(item: NeedsYouItem): string {
     case "deploy_gate": return "Deploy gate";
     case "pull_request": return "PR merge";
     case "workflow_gate": return "Approval";
+    case "architecture_review": return "Architecture";
     case "refusal": return "Refused";
     default: return "Approval";
   }

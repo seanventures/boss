@@ -573,6 +573,16 @@ class OwnedPopen(subprocess.Popen):
                 args = self.sandbox.wrap(args, shell=bool(kwargs.pop("shell", False)))
                 kwargs["env"] = self.sandbox.env(kwargs.get("env"))
                 kwargs["cwd"] = self.sandbox.cwd(kwargs.get("cwd"))
+        if sandboxed is not False and self.owner is not None and self.owner.kind in WORKLOAD_KINDS:
+            # THE RUN'S OWN BUILD SERVICES (build_services): its throwaway database's
+            # DATABASE_URL / PG*, added AFTER the agent allow-list (which withholds the control
+            # plane's DATABASE_URL by name) and only for this run's workloads.
+            from . import build_services
+
+            service_env = build_services.env_for_owner(self.owner)
+            if service_env:
+                kwargs["env"] = {**(os.environ if kwargs.get("env") is None else kwargs["env"]),
+                                 **service_env}
         if self.owner is not None and refuse_when_stopped:
             stopped = next((i for i in self.owner.ids() if i in _CANCELLED), None)
             if stopped:

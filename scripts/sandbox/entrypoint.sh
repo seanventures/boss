@@ -32,6 +32,14 @@ SHIM_ROOT="/run/boss-shim"
 PORTS="${BOSS_SANDBOX_ALLOWED_PORTS:-8000,8090,8091}"
 LINK_PORTS="$(echo "${BOSS_LINK_PORTS:-18100-18199}" | tr '-' ':')"
 PREVIEW_PORTS="$(echo "${BOSS_PREVIEW_PORTS:-19000-19999}" | tr '-' ':')"
+# Build services (build_services.py): the per-run Postgres server's port, never the BOSS
+# database's 5432. A run reaches only its own database there (its own role; CONNECT revoked).
+BSVC_PORT="${BOSS_BUILD_SERVICES_SANDBOX_PORT:-}"
+case "$BSVC_PORT" in
+  ''|5432) ;;
+  *[!0-9]*) echo "boss: BOSS_BUILD_SERVICES_SANDBOX_PORT must be a port number; ignored" >&2 ;;
+  *) PORTS="$PORTS,$BSVC_PORT" ;;
+esac
 MODE="${BOSS_SANDBOX_NETWORK:-enforce}"
 
 if [ "$(id -u)" != "0" ]; then
@@ -147,6 +155,20 @@ for d in /var/lib/boss/identity /var/lib/boss/artifacts; do
   fi
 done
 chmod 0700 /var/lib/boss/identity 2>/dev/null || true
+
+# The build-services superuser's password (build_services.py; the build-services container reads
+# it as root). Generated once, here, as root; readable by boss only — never by a sandbox uid.
+if [ -n "${BOSS_BUILD_SERVICES_PG_PASSWORD_FILE:-}" ]; then
+  bsvc_dir=$(dirname "$BOSS_BUILD_SERVICES_PG_PASSWORD_FILE")
+  if [ -d "$bsvc_dir" ] && [ ! -L "$bsvc_dir" ] && [ ! -L "$BOSS_BUILD_SERVICES_PG_PASSWORD_FILE" ]; then
+    if [ ! -s "$BOSS_BUILD_SERVICES_PG_PASSWORD_FILE" ]; then
+      (umask 077; head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 48 \
+        > "$BOSS_BUILD_SERVICES_PG_PASSWORD_FILE")
+    fi
+    chown -h boss:boss "$bsvc_dir" "$BOSS_BUILD_SERVICES_PG_PASSWORD_FILE"
+    chmod 0700 "$bsvc_dir"; chmod 0400 "$BOSS_BUILD_SERVICES_PG_PASSWORD_FILE"
+  fi
+fi
 
 exec setpriv --reuid=boss --regid=boss --init-groups --inh-caps=-all \
   --bounding-set=-all,+setuid,+setgid,+chown,+fowner -- "$@"

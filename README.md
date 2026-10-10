@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc6.1"><img alt="Release v1.0-rc6.1" src="https://img.shields.io/badge/release-v1.0--rc6.1-1aa89a?style=flat-square"></a>
+  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc6.2"><img alt="Release v1.0-rc6.2" src="https://img.shields.io/badge/release-v1.0--rc6.2-1aa89a?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-101820?style=flat-square"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/deploy-self--hosted-101820?style=flat-square">
   <img alt="Interfaces: web, terminal, CLI, MCP" src="https://img.shields.io/badge/interfaces-web%20%C2%B7%20terminal%20%C2%B7%20CLI%20%C2%B7%20MCP-101820?style=flat-square">
@@ -78,9 +78,9 @@ Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to
 Prefer git? Clone the release and install it in place. `--ref` keeps the install on that release instead of moving it to `main`:
 
 ```sh
-git clone --branch v1.0-rc6.1 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc6.2 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc6.1 --console-origin https://boss.example.com
+./install.sh --dir "$PWD" --ref v1.0-rc6.2 --console-origin https://boss.example.com
 ```
 
 The `boss` command works from anywhere: `boss open`, `boss password`, `boss doctor`, `boss upgrade`.
@@ -98,7 +98,7 @@ Everything after `--` goes to the installer on the server, so `--console-origin`
 Later, update or check that install from the same checkout:
 
 ```sh
-scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc6.1 update --with-console
+scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc6.2 update --with-console
 scripts/install/remote.sh --host user@your-server --dir '~/boss' smoke
 scripts/install/remote.sh --host user@your-server --dir '~/boss' tunnel   # console at http://127.0.0.1:3000
 ```
@@ -127,7 +127,23 @@ boss.example.com {
 
 On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once: copy `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` from the server (`ssh user@your-server sudo cat …`) and add it to each device's trusted roots — on a Mac, `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt`. Installed without `--console-origin`? [Add the address to a running install](docs/community/hostname.md#add-a-hostname-to-a-running-install).
 
-**4. Claim and sign in** at your address. The first visit to `/claim` (for example `http://127.0.0.1:3000/claim`) claims the install: the password from `boss password` (or a one-hour link from `boss identity setup-link`) proves you are the operator, then you create your own Owner account with a passkey. `boss doctor` reminds you until it is done. Invite your team in **Identity › People**. BOSS opens on **Repo and models**: paste a GitHub token, connect a model, and open your first PR. Upgrading an existing install? [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) explains the claim and the 30-day window for the shared password.
+**4. Claim it.** Nobody owns a new install until you claim it. On the server, run:
+
+```sh
+boss identity setup-link
+```
+
+It prints a one-hour, single-use link. Open it in the browser you will sign in with, enter your name and email, and create a passkey (on an IP address, where browsers allow no passkeys, choose a password and scan the code with an authenticator app). Save the recovery codes, then press **Continue setup**. `boss open`, `boss doctor` and the sign-in page all say "not claimed yet" with the same command until you do. Upgrading an existing install? [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) explains the claim and the 30-day window for the shared password.
+
+**5. Connect GitHub.** BOSS opens on **Repo and models**. Under **GitHub access › GitHub App**, leave **Organization** blank to use your own GitHub account, or type an organization you own, then press **Create the App on GitHub**. On GitHub press **Create GitHub App**, then **Install** it on the repositories BOSS may work on. Back in BOSS the card says what GitHub actually granted: **Installed on @you**, **All permissions accepted ✓**, and a ✓ for each repository. Anything GitHub has not granted is listed with a link to the GitHub page that grants it. Then, under **Repository**, press **Use the GitHub App**, pick the repository, and **Connect**.
+
+**6. Connect a model.** Under **Model**, add a provider key or a coding subscription (models the installer found are already there; `boss connect` does the same from a terminal). It turns green once it answers a test question.
+
+**7. Open your first pull request.** The header says **Next: open your first PR**. In **Try it**, describe one small change and press **Open a PR**. The first time, BOSS asks you to allow its agents to act for you on that repository; allow it. The pull request appears on GitHub for you to review.
+
+**8. Deploy.** Add the machine apps run on: **Infra › + Add › Host**, its address and SSH user, then **Add host**. In the host's drawer press **Generate key**, copy the command and run it from your own computer (name your key file there if your SSH key is not the default one), then press **I ran it**. Now start a build that ends in a deploy (**+ New build**, e.g. **Standard**). Its deploy step asks only **Where**: your machine, or "Ask me at deploy time". The app's first deploy creates its place on the machine (a free port, its URL and a health check); the approval card shows all of it, with a link to change it, before anything ships.
+
+Optional, when builds should be allowed to change GitHub Actions: on the repository's row turn **CI changes** on, then follow **Accept on GitHub** until the row says **Workflows accepted ✓**. A build that needs a database gets its own PostgreSQL automatically when the brief, its plan or the app's code says so (**Build database: Auto**).
 
 Models found by the installer appear there already; `boss connect` does the same from a terminal. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
@@ -202,7 +218,7 @@ Remote MCP over HTTP requires a bearer token in `BOSS_MCP_HTTP_TOKEN`. The [MCP 
 The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 
 > [!NOTE]
-> **About this release candidate.** `v1.0-rc6.1` is a hotfix on `v1.0-rc6`: a faster console and a working Infra Deploy button ([release notes](docs/community/RELEASE_NOTES_v1.0-rc6.1.md)). `v1.0-rc6` adds **named accounts**: everyone signs in as themselves (passkeys, authenticator codes, Google and other SSO), with roles and permissions on every page and API, and agents that act on your behalf with less than you have. Upgrading from rc5: claim your install as its first Owner; the old console password keeps working as Operator for 30 days ([upgrade guide](docs/community/IDENTITY_UPGRADE.md)). Deploying an app to an SSH host goes through the governed path in **Infra › Deploys**: BOSS plans the deploy, a person approves it, BOSS applies it and writes a receipt, and a failed health check rolls it back. A few capabilities stay paused while their spend, recovery, and effect safeguards are finished: live debugging investigations, direct host changes made outside an approved plan, cloud-account deploy runs, auto-deploy, the agent host shell, and host-backed preview sandboxes. Investigation results and deployment records stay readable. Discovery web research runs as a governed job and needs a connected Claude Code subscription. From `v1.0-rc6` each person signs in with their own account; see the [draft release notes](docs/community/RELEASE_NOTES_v1.0-rc6.md) and [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md).
+> **About this release candidate.** `v1.0-rc6.2` is a hotfix on `v1.0-rc6`: a faster console and a working Infra Deploy button ([release notes](docs/community/RELEASE_NOTES_v1.0-rc6.2.md)). `v1.0-rc6` adds **named accounts**: everyone signs in as themselves (passkeys, authenticator codes, Google and other SSO), with roles and permissions on every page and API, and agents that act on your behalf with less than you have. Upgrading from rc5: claim your install as its first Owner; the old console password keeps working as Operator for 30 days ([upgrade guide](docs/community/IDENTITY_UPGRADE.md)). Deploying an app to an SSH host goes through the governed path in **Infra › Deploys**: BOSS plans the deploy, a person approves it, BOSS applies it and writes a receipt, and a failed health check rolls it back. A few capabilities stay paused while their spend, recovery, and effect safeguards are finished: live debugging investigations, direct host changes made outside an approved plan, cloud-account deploy runs, auto-deploy, the agent host shell, and host-backed preview sandboxes. Investigation results and deployment records stay readable. Discovery web research runs as a governed job and needs a connected Claude Code subscription. From `v1.0-rc6` each person signs in with their own account; see the [draft release notes](docs/community/RELEASE_NOTES_v1.0-rc6.md) and [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md).
 
 ## Documentation
 

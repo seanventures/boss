@@ -253,8 +253,21 @@ def deploy_targets(connection: Connection, project_id: str) -> list[dict[str, An
 
 def deps(connection: Connection, settings: Any, project_id: str) -> dict[str, Any]:
     """What the abilities' `depends_on` names, read once per Kit."""
+    # SOMEWHERE TO DEPLOY is a target OR a verified host: an app's first deploy creates its own
+    # target on the host (delivery_pipeline.deploy_build), so a host is all that is needed up front.
     return {"github": github_state(connection, settings, project_id),
-            "deploy_target": bool(deploy_targets(connection, project_id))}
+            "deploy_target": bool(deploy_targets(connection, project_id))
+            or verified_hosts(connection, project_id) > 0}
+
+
+def verified_hosts(connection: Connection, project_id: str) -> int:
+    try:
+        with connection.begin_nested():
+            return int(connection.execute(
+                text("SELECT count(*) FROM deployment_hosts WHERE project_id = :p "
+                     "AND status IN ('verified', 'ready', 'active')"), {"p": project_id}).scalar() or 0)
+    except Exception:  # noqa: BLE001 — no hosts table: none
+        return 0
 
 
 # --------------------------------------------------------------------------- #

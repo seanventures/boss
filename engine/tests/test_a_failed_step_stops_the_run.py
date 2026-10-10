@@ -284,6 +284,11 @@ def test_awaited_work_that_fails_stops_the_run_at_that_step(eng, project, monkey
     if key == "preview":
         monkeypatch.setattr(runner, "_running_preview", lambda *a, **k: None)
     _security_tool_args(monkeypatch)
+    if key == "architecture":
+        # The architect's document needs an approved PRD; the review it waits on is under test.
+        monkeypatch.setattr(runner, "_architecture_step", lambda *a, **k: {
+            "capability": "architecture", "tool": None, "status": "awaiting",
+            "architecture_review_id": awaited_id})
     # Deploy's "no preview, no deploy" guard is its own test; here the deployment is under test.
     monkeypatch.setattr(runner, "_preview_missing_for_run", lambda *a, **k: None)
     table = runner._AWAIT_TABLES[kind][0]

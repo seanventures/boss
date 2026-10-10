@@ -20,6 +20,8 @@ import socketserver
 import ssl
 import sys
 import threading
+import urllib.error
+import urllib.request
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -45,6 +47,14 @@ class World:
         self.deploys: list[dict[str, Any]] = []
         self.mcp_calls: list[dict[str, Any]] = []
         self.refs: dict[str, str] = {}
+        # What the PRs were told, and the CI the test wants GitHub to report: check runs keyed by
+        # commit sha or branch name ("*" for any commit), set through POST /github/_checks.
+        self.pr_comments: list[dict[str, Any]] = []
+        self.pr_labels: list[dict[str, Any]] = []
+        self.checks: dict[str, list[dict[str, Any]]] = {}
+        # A real app process standing in for what a deploy host runs (POST /_app_backend): the
+        # app's *.e2e.test address, and curl on that host over the ssh stub, reach it.
+        self.app_backends: dict[str, str] = {}
         if state_dir:
             state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -61,6 +71,20 @@ class World:
             (self.state_dir / f"{bucket}.json").write_text(json.dumps(getattr(self, bucket),
                                                                       indent=2, default=str))
         return item
+
+
+def _forward(base: str, method: str, path: str, query: str, raw: bytes) -> tuple[int, Any, str]:
+    """Pass one request to a registered app backend, as the deploy host's port would."""
+    url = base + path + (f"?{query}" if query else "")
+    request = urllib.request.Request(url, data=raw or None, method=method)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=10) as resp:
+            return resp.status, resp.read(), resp.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read(), exc.headers.get("Content-Type", "")
+    except Exception as exc:  # noqa: BLE001 — the app being down is what a probe should see
+        return 502, {"message": f"boss-e2e: the app backend did not answer: {exc}"}, "application/json"
 
 
 # --------------------------------------------------------------------------- SMTP sink
@@ -257,6 +281,9 @@ class Handler(BaseHTTPRequestHandler):
                 ctype = "application/json"
             else:
                 status, payload, ctype = self._github(method, path, body, query)
+        elif route == "app" and host.split(":")[0].lower() in self.world.app_backends:
+            status, payload, ctype = _forward(self.world.app_backends[host.split(":")[0].lower()],
+                                              method, path, query, raw)
         elif route == "app":
             status, payload, ctype = (self._media(path) if path.startswith("/media/")
                                       else self._dispatch(method, "/app" + path, body))
@@ -325,7 +352,26 @@ class Handler(BaseHTTPRequestHandler):
             return 200, {"messages": list(w.mail)}, json_t
         if path == "/_world":
             return 200, {"prs": w.prs, "issues": w.issues, "videos": w.videos,
-                         "deploys": w.deploys, "mail": w.mail}, json_t
+                         "deploys": w.deploys, "mail": w.mail, "pr_comments": w.pr_comments,
+                         "pr_labels": w.pr_labels, "checks": w.checks}, json_t
+        if path == "/_app_backend" and method == "POST" and isinstance(body, dict):
+            host = str(body.get("host") or "").split("@")[-1].split(":")[0].lower()
+            with w.lock:
+                if body.get("url"):
+                    w.app_backends[host] = str(body["url"]).rstrip("/")
+                else:
+                    w.app_backends.pop(host, None)
+            return 200, {"ok": True, "host": host}, json_t
+        if path.startswith("/_app_backend/"):
+            host = path[len("/_app_backend/"):].split("@")[-1].split(":")[0].lower()
+            url = w.app_backends.get(host)
+            return (200, {"url": url}, json_t) if url else (404, {"url": None}, json_t)
+        if path == "/github/_checks" and method == "POST" and isinstance(body, dict):
+            # The test plays GitHub Actions: the check runs a commit (or branch) reports.
+            key = str(body.get("sha") or body.get("branch") or "*")
+            with w.lock:
+                w.checks[key] = [dict(run) for run in body.get("check_runs") or []]
+            return 200, {"ok": True, "key": key}, json_t
         if path.startswith("/github"):
             return self._github(method, path[len("/github"):] or "/", body)
         if path.startswith("/plane"):
@@ -354,6 +400,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.github is None:
             return 503, {"message": "boss-e2e: the GitHub fake needs --state-dir"}, "application/json"
         status, payload = self.github.handle(method, path or "/", query, body)
+        accept = (self.headers.get("Accept") or "") if getattr(self, "headers", None) else ""
+        if ("vnd.github.raw" in accept and status == 200 and isinstance(payload, dict)
+                and payload.get("type") == "file" and payload.get("encoding") == "base64"):
+            # application/vnd.github.raw: GitHub answers a file's bytes, not its JSON envelope.
+            import base64
+            return 200, base64.b64decode(payload.get("content") or ""), "application/vnd.github.raw"
         if status == 204:
             return 204, b"", ""
         return status, payload, "application/json"

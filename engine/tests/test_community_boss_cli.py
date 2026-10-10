@@ -127,6 +127,7 @@ def world(tmp_path: Path) -> dict:
         "  *host.docker.internal*)\n"
         "    [ \"${BOSS_TEST_OLLAMA_UNREACHABLE:-0}\" = 1 ] && exit 1\n"
         "    [ -n \"${BOSS_TEST_STATE:-}\" ] && [ -e \"$BOSS_TEST_STATE/ollama-loopback-only\" ] && exit 1 ;;\n"
+        "  *'identity.cli claim-status'*) [ -n \"${BOSS_TEST_CLAIM:-}\" ] && echo \"$BOSS_TEST_CLAIM\" ;;\n"
         "  *'claude auth login'*) [ -n \"${BOSS_TEST_STATE:-}\" ] && touch \"$BOSS_TEST_STATE/claude\" ;;\n"
         "  *'grok login --device-auth'*) [ -n \"${BOSS_TEST_STATE:-}\" ] && touch \"$BOSS_TEST_STATE/grok\" ;;\n"
         "esac\n"
@@ -321,6 +322,11 @@ def test_boss_open_status_and_logs(world) -> None:
     assert opened.returncode == 0, opened.stderr
     assert "http://127.0.0.1:3000" in opened.stdout
     assert "boss password" in opened.stdout
+
+    # NOT CLAIMED: `boss open` says how, with the command — nobody has to find the link in a log.
+    unclaimed = _run(boss, "open", env={**env, "BOSS_TEST_CLAIM": "unclaimed"})
+    assert unclaimed.returncode == 0, unclaimed.stderr
+    assert "Not claimed yet" in unclaimed.stdout and "  boss identity setup-link" in unclaimed.stdout
 
     status = _run(boss, "status", env=env)
     assert status.returncode == 0, status.stdout + status.stderr

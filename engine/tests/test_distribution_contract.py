@@ -7,9 +7,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ENGINE = ROOT / "engine"
-RELEASE_VERSION = "1.0.0-rc.6.1"
+RELEASE_VERSION = "1.0.0-rc.6.2"
 #: PEP 440 cannot spell a fourth pre-release number: the engine package is the post-release of rc6.
-PYTHON_RELEASE_VERSION = "1.0.0-rc.6.post1"
+PYTHON_RELEASE_VERSION = "1.0.0-rc.6.post2"
 
 
 def _json(path: Path) -> dict[str, object]:

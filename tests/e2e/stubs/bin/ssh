@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
@@ -47,6 +48,36 @@ def _remote_command(argv: list[str]) -> tuple[str, str]:
     return dest, " ".join(positional[1:])
 
 
+def _curl_from_backend(fakes: str, dest: str, command: str):
+    """curl on the host to one of its own ports, when the test registered a real app process for
+    this host (fakes POST /_app_backend): the body and the -w write-out, as curl prints them.
+    None when no app is registered, so the canned answers below still apply."""
+    m = re.search(r"\bcurl\b.*?'?(https?://(?:127\.0\.0\.1|localhost)(?::\d+)?(/[^\s']*)?)", command)
+    if not m:
+        return None
+    host = dest.split("@")[-1].split(":")[0]
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(f"{fakes}/_app_backend/{host}", timeout=5) as resp:
+            backend = json.loads(resp.read() or b"{}").get("url")
+    except Exception:  # noqa: BLE001 — none registered
+        return None
+    if not backend:
+        return None
+    try:
+        with opener.open(backend + (m.group(2) or "/"), timeout=10) as resp:
+            code, body = resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        code, body = exc.code, exc.read().decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 — curl's own word for a refused port
+        code, body = 0, ""
+    write = re.search(r"-w\s+'([^']*)'", command) or re.search(r'-w\s+"([^"]*)"', command)
+    out = "" if re.search(r"-o\s*/dev/null", command) else body
+    if write:
+        out += write.group(1).replace("\\n", "\n").replace("%{http_code}", f"{code:03d}")
+    return out
+
+
 def main() -> int:
     argv = sys.argv[1:]
     if argv[:1] == ["-V"]:
@@ -70,7 +101,14 @@ def main() -> int:
             urllib.request.urlopen(request, timeout=10).read()
         except Exception:  # noqa: BLE001 — the record is best-effort; the answer is not
             pass
-    if "BOSS_SSH_OK" in command:
+    served = _curl_from_backend(url, dest, command) if url else None
+    if served is not None:
+        sys.stdout.write(served)
+    elif "BASE_OK" in command:
+        # The governed host deploy's preflight (governed_host_deploy): the base directory is
+        # writable, the app directory can be made, and docker answers — a prepared host.
+        print("BASE_OK\nAPP_OK\nDOCKER_OK")
+    elif "BOSS_SSH_OK" in command:
         # deployment_fleet._connection_probe: reachable, docker present, the box's arch.
         print("BOSS_SSH_OK\nDOCKER_OK\nx86_64")
     elif re.search(r"curl\b.*http_code", command):

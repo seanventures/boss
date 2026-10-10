@@ -43,6 +43,7 @@ import { get, post } from "./workflows/delivery-api";
 import { NewProjectComposer } from "./workflows/new-project-composer";
 import { DossierCompact } from "./discoveries-ui";
 import { MeetingCompact } from "./meeting-room-ui";
+import { ArchitecturePanel } from "./architecture-ui";
 import { readComposerPrefill } from "../lib/research-panels";
 // The Runs composer moved to app/workflows/; its helpers are re-exported so imports hold.
 export {
@@ -2757,7 +2758,7 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
  * first, live progress while the step runs — with the full view one press away.
  */
 export function stepWorkOf(step: Pick<RunStep, "capability" | "output">):
-  { kind: "discovery" | "meeting"; id: string } | null {
+  { kind: "discovery" | "meeting" | "architecture"; id: string } | null {
   const out = (step.output ?? {}) as Record<string, unknown>;
   const awaited = (out.await as { kind?: string; id?: string } | undefined) ?? {};
   const str = (k: string) => (typeof out[k] === "string" ? (out[k] as string) : "");
@@ -2765,6 +2766,11 @@ export function stepWorkOf(step: Pick<RunStep, "capability" | "output">):
   if (cap === "research" || awaited.kind === "discovery") {
     const id = str("discovery_id") || (awaited.kind === "discovery" ? awaited.id ?? "" : "");
     return id ? { kind: "discovery", id } : null;
+  }
+  if (cap === "architecture" || awaited.kind === "architecture") {
+    const id = str("architecture_review_id")
+      || (awaited.kind === "architecture" ? awaited.id ?? "" : "");
+    return id ? { kind: "architecture", id } : null;
   }
   if (["meeting", "prd_panel", "panel"].includes(cap) || awaited.kind === "meeting") {
     const id = str("meeting_run_id") || (awaited.kind === "meeting" ? awaited.id ?? "" : "");
@@ -2780,7 +2786,7 @@ export function stepWorkOf(step: Pick<RunStep, "capability" | "output">):
  * carries "Open the PR".
  */
 export function visibleStepLinks<L extends { label: string }>(links: L[],
-  work: { kind: "discovery" | "meeting" } | null): L[] {
+  work: { kind: "discovery" | "meeting" | "architecture" } | null): L[] {
   return links.filter((l) => l.label !== "open the preview"
     && !(work?.kind === "discovery" && l.label === "open the research")
     && !(work?.kind === "meeting" && (l.label === "open the panel" || l.label.startsWith("pull request #"))));
@@ -3134,6 +3140,11 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
       ) : work?.kind === "meeting" ? (
         <div className="dw-step-work" data-testid="dw-step-meeting">
           <MeetingCompact meetingId={work.id} projectId={projectId} buildState={panelBuild} />
+        </div>
+      ) : work?.kind === "architecture" ? (
+        <div className="dw-step-work" data-testid="dw-step-architecture">
+          <ArchitecturePanel reviewId={work.id} projectId={projectId} actorId={actor}
+                             stepStatus={`${step.status}:${String(step.output?.architecture_version ?? "")}`} />
         </div>
       ) : null}
 

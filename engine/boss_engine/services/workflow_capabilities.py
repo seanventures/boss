@@ -94,6 +94,10 @@ class Capability:
     #: deploy (Deploying), publish (Publishing), monitor (Monitoring), research (Researching).
     #: Empty = no family, and the verb is plain "Working" — never guessed from the label.
     family: str = ""
+    #: True when the step's own work ends in a PERSON's sign-off of what it produced (the
+    #: architecture document). Not a gate before the step — the step runs, then waits for the
+    #: answer — but a stop an operator plans around all the same, and no agent may give it.
+    reviewed_by_a_person: bool = False
 
 
 def _cap(**kwargs: Any) -> Capability:
@@ -160,6 +164,31 @@ CAPABILITIES: dict[str, Capability] = {
             produces=("decision_id",),
             is_gate=True,
             answered_by="panel",
+        ),
+        _cap(
+            key="architecture",
+            # how it is put together, decided before anybody writes code
+            captain="chief_architect",
+            label="Architecture approval",
+            summary="The architect turns the approved PRD into an architecture document "
+                    "(components, data model, APIs, security, deployment, risks, decisions). "
+                    "A person approves it, asks for changes, or rejects it; builds receive "
+                    "the approved version.",
+            # No tool: the runner writes the document itself (services/architecture_docs.py)
+            # and the step WAITS on the person's answer — the approval lives inside the step,
+            # with the revision loop, so it is one block on the canvas, not two.
+            tool=None,
+            # NOT the risk floor: that would put a "may it run?" gate in front of the
+            # architect. The person's sign-off is the step's own, after the document exists,
+            # and `stops_for_a_person` says so through `reviewed_by_a_person`.
+            risk_tier=1,
+            optional_inputs=("constraints",),
+            produces=("architecture_review_id", "architecture_doc_id", "architecture_version",
+                      "architecture_markdown", "decision_id"),
+            typical_minutes=10,
+            is_async=True,
+            needs_model=True,
+            reviewed_by_a_person=True,
         ),
         _cap(
             key="build",
@@ -388,11 +417,13 @@ CAPABILITIES: dict[str, Capability] = {
             # gets it onto a machine and keeps it there
             captain="deployment_manager",
             label="Deploy",
-            summary="Ship the built app to a bound target.",
+            summary="Ship the built app. Its first deploy creates its target on the chosen machine.",
             tool="deploy_app",
             risk_tier=2,
             required_inputs=("run_id",),
-            optional_inputs=("environment", "target_id"),
+            # WHERE is the only question (host_id: a Fleet machine, or blank = the project's one
+            # verified host / ask at deploy time). The target is created at the first deploy.
+            optional_inputs=("environment", "target_id", "host_id"),
             produces=("deployment_id", "deployed_url"),
             requires_project=("deployment_target",),
             typical_minutes=8,
@@ -509,6 +540,22 @@ CAPABILITIES: dict[str, Capability] = {
             typical_minutes=1,
         ),
         _cap(
+            key="wait_for_ci",
+            # whether the pull request's own CI agrees with BOSS's gate
+            captain="release_manager",
+            label="Wait for CI",
+            summary="Wait for the pull request's GitHub checks to finish. Passed lets the run go "
+                    "on; a failed check or a timeout fails the step, links the check, and blocks "
+                    "the deploy approval.",
+            tool=None,
+            risk_tier=0,
+            optional_inputs=("pull_request_url", "head_sha", "timeout_minutes"),
+            produces=("ci_wait_id", "ci_status", "ci_summary", "failing_check_url"),
+            requires_project=("repository",),
+            typical_minutes=15,
+            is_async=True,
+        ),
+        _cap(
             key="redeploy",
             family="deploy",
             # same hands as the first deploy
@@ -621,6 +668,7 @@ def palette() -> list[dict[str, Any]]:
             "answered_by": c.answered_by,
             "needs_model": c.needs_model,
             "cost_note": c.cost_note,
+            "reviewed_by_a_person": c.reviewed_by_a_person,
         }
         for c in CAPABILITIES.values()
     ]
@@ -657,6 +705,8 @@ def stops_for_a_person(capability_key: str, requested: Optional[str] = None,
     signs the PRD, and this says so (`prd_auto_approve`, read from settings when not given).
     """
     capability = get(capability_key)
+    if capability.reviewed_by_a_person:
+        return True
     if capability.answered_by == "panel":
         auto = prd_auto_approved() if prd_auto_approve is None else bool(prd_auto_approve)
         return not auto

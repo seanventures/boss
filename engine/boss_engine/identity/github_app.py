@@ -28,7 +28,7 @@ from urllib.parse import urlsplit
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from . import jwks
+from . import github_urls, jwks
 from .principal import RunTokenClaims, TaskBinding
 
 log = logging.getLogger(__name__)
@@ -208,6 +208,20 @@ def run_permissions(claims: RunTokenClaims, *, db: Any) -> dict[str, str]:
         p = passports.get(aid, db=db)
         sources.append(((p.external_ceiling if p else {}) or {}).get("github") or {})
     needs = (claims.task.resources or {}).get("github_permissions")
+    if isinstance(needs, Mapping) and needs.get("workflows") == "write":
+        # THE OPT-IN IS THE GRANT (services/ci_gate.py): when every repository of this run has
+        # "Builds may change CI workflows" on (Owner/Admin, step-up) and the identity policy
+        # allows it, the grant and every ceiling in the chain hold workflows: write FOR THIS RUN'S
+        # REPOSITORIES ONLY. Read live, so turning the opt-in off withdraws it at the next mint.
+        from ..services.ci_gate import opt_in_grants
+
+        try:
+            raise_wf = opt_in_grants(db, claims.org_id, claims.task.project_id,
+                                     run_repos(claims.task))
+        except Exception:  # noqa: BLE001 — unreadable: nothing is raised
+            raise_wf = False
+        if raise_wf:
+            sources = [{**s, "workflows": "write"} for s in sources]
     # A run that declared no needs gets READ ONLY, never the grant's full GitHub authority (#M):
     # a build declares what it writes (runs.BUILD_GITHUB_NEEDS); a step that says nothing reads.
     sources.append(needs if isinstance(needs, Mapping) else DEFAULT_NEEDS)
@@ -345,7 +359,7 @@ def _oauth_refresh(refresh_token: str) -> tuple[str, Optional[str], int]:
     if not cid or not secret:
         raise vault.RefreshRejected("client_not_configured")
     body = f"client_id={cid}&client_secret={secret}&grant_type=refresh_token&refresh_token={refresh_token}"
-    resp = TRANSPORT("POST", f"{_web_base()}/login/oauth/access_token",
+    resp = TRANSPORT("POST", github_urls.oauth_access_token(),
                      {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
                      body.encode())
     data = resp.json() if resp.status == 200 else {}
@@ -430,7 +444,7 @@ def authorize_url(person_id: str, redirect_uri: str) -> str:
         raise GitHubRefused("provider_not_configured", 409)
     q = urlencode({"client_id": cid, "redirect_uri": redirect_uri, "state": oauth_state(person_id),
                    "allow_signup": "false"})
-    return f"{_web_base()}/login/oauth/authorize?{q}"
+    return f"{github_urls.oauth_authorize()}?{q}"
 
 
 def complete_oauth(*, person_id: str, org_id: str, code: str, state: str, redirect_uri: str, db: Any) -> str:
@@ -461,7 +475,7 @@ def complete_oauth(*, person_id: str, org_id: str, code: str, state: str, redire
     if not cid or not secret:
         raise GitHubRefused("provider_not_configured", 409)
     body = urlencode({"client_id": cid, "client_secret": secret, "code": code, "redirect_uri": redirect_uri}).encode()
-    resp = TRANSPORT("POST", f"{_web_base()}/login/oauth/access_token",
+    resp = TRANSPORT("POST", github_urls.oauth_access_token(),
                      {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}, body)
     tok = resp.json() if resp.status == 200 else {}
     if not tok or tok.get("error") or not tok.get("access_token"):

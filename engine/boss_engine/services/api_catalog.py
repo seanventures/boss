@@ -84,6 +84,7 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
             "/v1/code-tasks",
             "/v1/github",
             "/v1/delivery",
+            "/v1/architecture-reviews",
             "/v1/previews",
             "/v1/sandboxes",
             "/v1/software-factory",
@@ -290,6 +291,8 @@ RESOURCE_DOMAINS = {
     "verifier-meta-eval": "ops",
     "verifier-ratchet": "ops",
     "mutation-gate": "governance",
+    # GitHub Actions CI, governed (services/ci_gate.py): waits, workflow checks, a decision's gate.
+    "ci": "delivery",
     "repair-policy": "governance",
     "scaffold": "delivery",
     "visual-gate": "ops",

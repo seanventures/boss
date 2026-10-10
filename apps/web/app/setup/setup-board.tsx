@@ -23,11 +23,12 @@ import {
 } from "../../lib/setup-stepper";
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BudgetRow } from "./budget-row";
+import { BuildDatabaseRow } from "./build-database-row";
 import { CapacityRow } from "./capacity-row";
 import { ModelsRow } from "./models-row";
 import { BoardContext, toast } from "./parts";
 import { Dot, localView } from "./pill";
-import { GitHubAccessRow } from "./github-access-row";
+import { GitHubAccessRow, SETUP_TESTED_EVENT } from "./github-access-row";
 import { RepositoryRow } from "./repository-row";
 import { RoutingRow } from "./routing-row";
 import { TryRow } from "./try-row";
@@ -188,6 +189,8 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
     setChecking("all", true);
     try {
       setView(await setupWrite<SetupView>(projectId, "checks", { target: "all" }, { label: "Test all" }));
+      // GitHub access asks GitHub again what the App was granted (github-access-row.tsx).
+      try { window.dispatchEvent(new Event(SETUP_TESTED_EVENT)); } catch { /* no window */ }
     } catch (e) {
       toast((e as SetupFailure).refusal?.headline ?? "Check failed", "error");
     } finally { setChecking("all", false); }
@@ -206,7 +209,19 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
           </span>
           {/* THE SEAM TO SKILLS AND MCP: once the repository and a model work, the next job is
               what the crew can do (the Kit opens on its Essentials). Board and stepper alike. */}
-          {view.ready ? (
+          {/* THE NEXT STEP FOLLOWS THE STEPPER: ready but no first PR yet is "open your first PR"
+              (Try it, at the bottom), never a jump to Skills that skips the first build. */}
+          {view.ready && view.next === "try" ? (
+            <a className="su-link" href="?area=setup&focus=try" data-testid="su-next-try"
+               onClick={(e) => {
+                 const el = refs.current.try;
+                 if (el && typeof el.scrollIntoView === "function") { e.preventDefault(); el.scrollIntoView({ behavior: "smooth", block: "start" }); }
+               }}
+               title="Describe one small change; BOSS opens a pull request on your repository."
+               data-tip="Describe one small change; BOSS opens a pull request on your repository.">
+              Next: open your first PR
+            </a>
+          ) : view.ready ? (
             <a className="su-link" href="?area=skills&setup=1" data-testid="su-next-skills"
                title="Choose what your agents can do: research, tickets, email."
                data-tip="Choose what your agents can do: research, tickets, email.">
@@ -228,6 +243,7 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
         <RepositoryRow ref={ref("repository")} mode={rowMode(view, "repository")}
                        step={stepNumber(view, "repository")} focused={focus === "repository"} />
         <GitHubAccessRow />
+        <BuildDatabaseRow />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}
                    step={stepNumber(view, "models")} focused={focus === "models"}
                    add={params.add} source={params.source}

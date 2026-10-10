@@ -1961,6 +1961,10 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
     rather than retrying forever into the DLQ (W2.5 / W-REL-03).
     """
     r = (reason or "").lower()
+    if "build services unavailable" in r:
+        # The run declared a database BOSS could not give it: an operator starts build-services
+        # (or removes the declaration). Retrying without it would only fail the same way.
+        return "needs_human", "build_services_unavailable"
     if "error_max_turns" in r or "max turns" in r or "max_turns" in r:
         return "recoverable", "max_turns_exhausted"
     # Model capacity / economics — human or capacity change required; not silent requeue.

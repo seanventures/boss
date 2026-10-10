@@ -23,15 +23,29 @@ from contextvars import ContextVar
 from dataclasses import replace
 from typing import Any, Iterable, Optional
 
-from . import audit, github_app, jwks, vault
-
-WEB_BASE_ENV = "BOSS_GITHUB_WEB_URL"           # github.com; a GitHub Enterprise or test host
+from . import audit, github_app, github_urls, jwks, vault
+from .github_urls import WEB_BASE_ENV  # noqa: F401 — re-exported: callers read it here
 MIGRATED_NAME = "Moved from BOSS_GITHUB_TOKEN"
 ORG_TOKEN_NAME = "Fine-grained token (org)"
 REPO_PREFIX = "repo:"
-#: What the App asks for: write code and PRs, read what a review needs. Never admin, never workflows.
+#: What the App asks for: write code and PRs, read what a review needs. Never admin; never workflows
+#: unless a repository opted in (`app_permissions`).
 APP_PERMISSIONS = {"contents": "write", "pull_requests": "write", "checks": "read", "statuses": "read",
                    "metadata": "read", "issues": "read", "actions": "read"}
+#: Added ONLY when a repository has "Builds may change CI workflows" on (services/ci_gate.py).
+WORKFLOWS_PERMISSION = {"workflows": "write"}
+
+
+def app_permissions(allow_workflows: bool = False) -> dict[str, str]:
+    """The App's permission request: APP_PERMISSIONS, plus workflows: write for the opt-in."""
+    return {**APP_PERMISSIONS, **(WORKFLOWS_PERMISSION if allow_workflows else {})}
+
+
+def workflows_permission_link(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
+    """Where an operator accepts `workflows: write` for an App created before the opt-in."""
+    from ..services import ci_gate
+
+    return ci_gate.permissions_link(app_config(db, org_id), web_base())
 
 
 class GitHubSetupError(Exception):
@@ -62,6 +76,27 @@ def may_change_org_credentials(org_id: str, *, db: Any = None) -> bool:
     return authz.check(ctx, P.GITHUB_CONNECT, ResolvedScope.org_level(org_id), db=db).allowed
 
 
+def org_credentials_refusal(org_id: str, *, db: Any = None) -> Optional[str]:
+    """Why this caller may not change the org's GitHub credentials: None (they may), "step_up"
+    (they hold github:connect for the org but have not confirmed their second factor recently),
+    or "org_scope" (they do not hold it for the whole organisation). Same decision as
+    may_change_org_credentials, with the reason a person can act on."""
+    from . import authz, lineage
+    from .authz import DenyReason
+    from .permissions_gen import P
+    from .scope import ResolvedScope
+
+    if not lineage.request_enforced():
+        return None
+    ctx = lineage.current_context()
+    if ctx is None or ctx.principal.org_id != org_id:
+        return "org_scope"
+    decision = authz.check(ctx, P.GITHUB_CONNECT, ResolvedScope.org_level(org_id), db=db)
+    if decision.allowed:
+        return None
+    return "step_up" if getattr(decision, "reason", None) == DenyReason.STEP_UP_REQUIRED else "org_scope"
+
+
 def require_org_credentials_authority(org_id: str, *, db: Any = None) -> None:
     if not may_change_org_credentials(org_id, db=db):
         raise GitHubSetupError(
@@ -77,26 +112,50 @@ def _sql(statement: str):
 
 
 def web_base() -> str:
-    return (os.environ.get(WEB_BASE_ENV) or "https://github.com").rstrip("/")
+    return github_urls.web_base()
 
 
 # ---- the App's configuration (env first: an operator's explicit choice wins) ---------------------------
 
 def app_config(db: Any, org_id: Optional[str] = None) -> dict[str, Optional[str]]:
+    blank = {"slug": None, "html_url": None, "account_login": None, "account_type": None,
+             "owner_login": None, "owner_type": None, "verified": None, "verified_at": None}
     env = {"app_id": os.environ.get(github_app.APP_ID_ENV),
            "installation_id": os.environ.get(github_app.INSTALLATION_ENV),
            "client_id": os.environ.get(github_app.CLIENT_ID_ENV)}
     if env["app_id"]:
-        return {**env, "source": "env", "slug": None, "html_url": None, "account_login": None}
+        return {**blank, **env, "source": "env"}
     row = None
     if db is not None:
-        q = "SELECT app_id, installation_id, client_id, slug, html_url, account_login FROM identity_github_app"
+        q = ("SELECT app_id, installation_id, client_id, slug, html_url, account_login, account_type, "
+             "owner_login, owner_type, verified, verified_at FROM identity_github_app")
         row = (db.execute(_sql(q + " WHERE org_id = :o"), {"o": org_id}).mappings().first() if org_id
                else db.execute(_sql(q + " ORDER BY created_at LIMIT 1")).mappings().first())
     if row is None:
-        return {"app_id": None, "installation_id": None, "client_id": None, "source": None, "slug": None,
-                "html_url": None, "account_login": None}
+        return {**blank, "app_id": None, "installation_id": None, "client_id": None, "source": None}
     return {**dict(row), "source": "setup"}
+
+
+def owner_account(cfg: dict[str, Any]) -> github_urls.Account:
+    """Who owns the App (its settings and permissions pages live in this account's tree)."""
+    return github_urls.Account.of(cfg.get("owner_login"), cfg.get("owner_type"))
+
+
+def install_account(cfg: dict[str, Any]) -> github_urls.Account:
+    """Where the App is installed (the installation's page lives in this account's tree)."""
+    return github_urls.Account.of(cfg.get("account_login"), cfg.get("account_type"))
+
+
+def links(cfg: dict[str, Any]) -> dict[str, Optional[str]]:
+    """Every GitHub page Setup links to for this App, from github_urls (the one builder). A page
+    whose account type is not known yet is None, never a guess."""
+    slug = str(cfg.get("slug") or "")
+    inst = cfg.get("installation_id")
+    return {"app": github_urls.app_public(slug),
+            "app_settings": github_urls.app_settings(slug, owner_account(cfg)),
+            "permissions": github_urls.app_permissions(slug, owner_account(cfg)),
+            "install": github_urls.install_app(slug),
+            "installation": github_urls.installation_settings(inst, install_account(cfg)) if inst else None}
 
 
 def app_ready(db: Any, org_id: Optional[str] = None) -> bool:
@@ -138,28 +197,67 @@ def _check_state(state: str, purpose: str, *, db: Any, consume: bool = True) -> 
 
 # ---- (a) the GitHub App, from a manifest -----------------------------------------------------------------
 
-def manifest(*, origin: str, person_id: str, owner: Optional[str] = None) -> dict[str, Any]:
-    """What the console POSTs to GitHub (a form with `manifest` = this JSON) to create the App."""
+def app_name(host: str) -> str:
+    """A GitHub App's name is unique across ALL of GitHub (34 characters at most). "BOSS
+    localhost:3000" was the same for every laptop install, so the second stranger's App was
+    refused as "already taken". The host says which install it is; a short random tail makes it
+    unique."""
+    tail = secrets.token_hex(2)
+    clean = "".join(c if c.isalnum() or c in "-." else "-" for c in host).strip("-.") or "install"
+    return f"BOSS {clean[:34 - len('BOSS ') - len(tail) - 1]} {tail}"
+
+
+def resolve_owner(owner: Optional[str]) -> github_urls.Account:
+    """The account a new App will belong to. Blank: the signed-in person's own account. A name:
+    GitHub says whether it is a person or an organisation (GET /users/{name}), because the two
+    create Apps on different pages and a personal name on the organisation page is a 404."""
+    login = (owner or "").strip()
+    if not login:
+        return github_urls.Account(None, github_urls.USER)
+    resp = github_app._call("GET", f"/users/{login}", token="", scheme="")  # noqa: SLF001
+    if resp.status == 404:
+        raise GitHubSetupError("github_account_not_found", 422, owner=login,
+                               message=f"GitHub has no account named {login}. Check the spelling, or "
+                                       "leave it blank to create the App on your own account.")
+    if resp.status != 200:
+        raise GitHubSetupError("github_unreachable", 502, status=resp.status,
+                               message="GitHub did not answer. Try again in a minute.")
+    data = resp.json() or {}
+    account = github_urls.Account.of(data.get("login") or login, data.get("type"))
+    if not account.known:
+        raise GitHubSetupError("github_account_kind", 422, owner=login,
+                               message=f"{login} is not a person or an organisation on GitHub.")
+    return account
+
+
+def manifest(*, origin: str, person_id: str, owner: Optional[str] = None,
+             allow_workflows: bool = False, owner_account: Optional[github_urls.Account] = None) -> dict[str, Any]:
+    """What the console POSTs to GitHub (a form with `manifest` = this JSON) to create the App.
+
+    No webhook: BOSS subscribes to no events (default_events is empty), and GitHub refuses a
+    manifest whose hook URL is not reachable from the public internet, so on a laptop or a
+    private install (localhost, a tailnet name, a private IP) even an inactive hook made the
+    App impossible to create."""
     if not origin:
         raise GitHubSetupError("public_url_required", 409,
                                message="Set BOSS_PUBLIC_URL first: GitHub sends you back to it.")
     host = origin.split("//", 1)[-1]
     body = {
-        "name": f"BOSS {host}"[:34],
+        "name": app_name(host),
         "url": origin,
-        "hook_attributes": {"url": f"{origin}/v1/webhooks/github", "active": False},
         "redirect_url": f"{origin}/v1/identity/github/app/created",
         "callback_urls": [f"{origin}/v1/identity/me/connections/github/callback"],
         "setup_url": f"{origin}/v1/identity/github/app/installed",
         "setup_on_update": True,
         "public": False,
         "request_oauth_on_install": False,
-        "default_permissions": dict(APP_PERMISSIONS),
+        "default_permissions": app_permissions(allow_workflows),
         "default_events": [],
     }
     state = _state(person_id, "app-manifest")
-    path = f"/organizations/{owner}/settings/apps/new" if owner else "/settings/apps/new"
-    return {"post_url": f"{web_base()}{path}?state={state}", "manifest": body, "state": state}
+    account = owner_account or resolve_owner(owner)
+    return {"post_url": github_urls.app_new(account, state=state), "manifest": body, "state": state,
+            "owner": {"login": account.login, "type": account.type}}
 
 
 def complete_manifest(*, code: str, state: str, org_id: str, db: Any) -> dict[str, Any]:
@@ -186,18 +284,21 @@ def complete_manifest(*, code: str, state: str, org_id: str, db: Any) -> dict[st
         vault.store(org_id=org_id, owner_principal_id=None, kind=vault.VaultItemKind.OIDC_CLIENT_SECRET,
                     provider="github-app", secret=str(data["client_secret"]), connection_name="GitHub App OAuth client",
                     db=db)
-    owner = (data.get("owner") or {}).get("login")
+    owner = data.get("owner") or {}
     db.execute(_sql(
-        "INSERT INTO identity_github_app (org_id, app_id, slug, html_url, client_id, account_login, created_by) "
-        "VALUES (:o, :a, :s, :h, :c, :l, :by) ON CONFLICT (org_id) DO UPDATE SET app_id = EXCLUDED.app_id, "
-        "slug = EXCLUDED.slug, html_url = EXCLUDED.html_url, client_id = EXCLUDED.client_id, "
-        "account_login = EXCLUDED.account_login, installation_id = NULL, updated_at = now()"),
+        "INSERT INTO identity_github_app (org_id, app_id, slug, html_url, client_id, account_login, owner_login, "
+        "owner_type, created_by) VALUES (:o, :a, :s, :h, :c, :l, :l, :t, :by) ON CONFLICT (org_id) DO UPDATE "
+        "SET app_id = EXCLUDED.app_id, slug = EXCLUDED.slug, html_url = EXCLUDED.html_url, "
+        "client_id = EXCLUDED.client_id, account_login = EXCLUDED.account_login, owner_login = EXCLUDED.owner_login, "
+        "owner_type = EXCLUDED.owner_type, account_type = NULL, installation_id = NULL, verified = NULL, "
+        "verified_at = NULL, updated_at = now()"),
         {"o": org_id, "a": app_id, "s": data.get("slug"), "h": data.get("html_url"),
-         "c": data.get("client_id"), "l": owner, "by": person})
+         "c": data.get("client_id"), "l": owner.get("login"), "t": github_urls.account_type(owner.get("type")),
+         "by": person})
     _event(db, org_id, person, "github_app", app_id, {"how": "app", "step": "created", "slug": data.get("slug"),
                                                      "key_item": key_item})
     slug = data.get("slug") or app_id
-    install = f"{web_base()}/apps/{slug}/installations/new?state={_state(person, 'app-install')}"
+    install = github_urls.install_app(slug, state=_state(person, "app-install"))
     return {"app_id": app_id, "slug": slug, "install_url": install}
 
 
@@ -215,6 +316,7 @@ def installations(*, db: Any, org_id: str) -> list[dict[str, Any]]:
     if resp.status != 200:
         raise GitHubSetupError("installations_unavailable", 502, status=resp.status)
     return [{"id": str(i.get("id")), "account": (i.get("account") or {}).get("login"),
+             "account_type": github_urls.account_type((i.get("account") or {}).get("type")),
              "repository_selection": i.get("repository_selection")} for i in (resp.json() or [])]
 
 
@@ -226,10 +328,13 @@ def select_installation(*, installation_id: str, org_id: str, db: Any, by: str) 
     resp = github_app._call("GET", f"/app/installations/{installation_id}", token=github_app.app_jwt(db))  # noqa: SLF001
     if resp.status != 200:
         raise GitHubSetupError("not_this_apps_installation", 403)
-    account = ((resp.json() or {}).get("account") or {}).get("login")
+    data = resp.json() or {}
+    account = (data.get("account") or {}).get("login")
+    kind = github_urls.account_type((data.get("account") or {}).get("type"))
     db.execute(_sql("UPDATE identity_github_app SET installation_id = :i, account_login = coalesce(:l, "
-                    "account_login), updated_at = now() WHERE org_id = :o"),
-               {"i": installation_id, "l": account, "o": org_id})
+                    "account_login), account_type = :t, verified = NULL, verified_at = NULL, updated_at = now() "
+                    "WHERE org_id = :o"),
+               {"i": installation_id, "l": account, "t": kind, "o": org_id})
     _event(db, org_id, by, "github_app", installation_id, {"how": "app", "step": "installed", "account": account})
     return {"installation_id": installation_id, "account": account}
 
@@ -488,6 +593,114 @@ def installation_repositories(db: Any) -> list[dict[str, Any]]:
     return out
 
 
+# ---- verify, don't trust: what GitHub actually granted ------------------------------------------------------
+
+_LEVELS = {"none": 0, "read": 1, "write": 2, "admin": 3}
+
+
+def _level(value: object) -> int:
+    return _LEVELS.get(str(value or "none").lower(), 0)
+
+
+def _registered_repos(db: Any) -> list[str]:
+    nested = getattr(db, "begin_nested", None)
+    point = nested() if callable(nested) else None
+    try:
+        rows = db.execute(_sql("SELECT DISTINCT lower(full_name) AS r FROM github_repository_bindings "
+                               "WHERE status = 'active' AND full_name LIKE '%/%' ORDER BY 1")).scalars().all()
+    except Exception:  # noqa: BLE001 — an older schema: nothing registered
+        if point is not None:
+            point.rollback()
+        return []
+    if point is not None:
+        point.commit()
+    return [str(r) for r in rows]
+
+
+def verify(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
+    """Ask GitHub what the App's installation was ACTUALLY granted, instead of trusting what BOSS
+    asked for: the installation's accepted permissions (GET /app/installations/{id}) against what
+    the App needs now, and the repositories it was installed on against the ones registered here.
+    Each gap names the GitHub page that closes it (github_urls). Kept on the row (`verified`) so
+    the console shows it without asking GitHub on every page load; refreshed on return from
+    GitHub, by Refresh and by Test all."""
+    from ..services import ci_gate
+
+    org_id = org_id or (db.execute(_sql("SELECT org_id FROM identity_github_app ORDER BY created_at LIMIT 1"))
+                        .scalar() if db is not None else None)
+    cfg = app_config(db, org_id)
+    if cfg["source"] != "setup" or not cfg["app_id"]:
+        return {"state": "no_app"}
+    out: dict[str, Any] = {"state": "ok", "checked_at": int(time.time())}
+    jwt = github_app.app_jwt(db)
+    me = github_app._call("GET", "/app", token=jwt)  # noqa: SLF001
+    app_perms: dict[str, str] = {}
+    if me.status == 200:
+        owner = (me.json() or {}).get("owner") or {}
+        app_perms = dict((me.json() or {}).get("permissions") or {})
+        kind = github_urls.account_type(owner.get("type"))
+        if kind and (kind != cfg.get("owner_type") or owner.get("login") != cfg.get("owner_login")):
+            db.execute(_sql("UPDATE identity_github_app SET owner_login = :l, owner_type = :t WHERE org_id = :o"),
+                       {"l": owner.get("login"), "t": kind, "o": org_id})
+            cfg.update(owner_login=owner.get("login"), owner_type=kind)
+    elif me.status in (401, 404):
+        out["state"] = "app_gone"
+    else:
+        out["state"] = "unreachable"
+    inst = cfg.get("installation_id")
+    granted: dict[str, str] = {}
+    if out["state"] == "ok" and not inst:
+        out["state"] = "not_installed"
+    elif out["state"] == "ok":
+        resp = github_app._call("GET", f"/app/installations/{inst}", token=jwt)  # noqa: SLF001
+        if resp.status == 404:
+            out["state"] = "installation_gone"
+        elif resp.status != 200:
+            out["state"] = "unreachable"
+        else:
+            data = resp.json() or {}
+            account = data.get("account") or {}
+            kind = github_urls.account_type(account.get("type"))
+            if kind and (kind != cfg.get("account_type") or account.get("login") != cfg.get("account_login")):
+                db.execute(_sql("UPDATE identity_github_app SET account_login = :l, account_type = :t "
+                                "WHERE org_id = :o"), {"l": account.get("login"), "t": kind, "o": org_id})
+                cfg.update(account_login=account.get("login"), account_type=kind)
+            granted = dict(data.get("permissions") or {})
+            out["repository_selection"] = data.get("repository_selection")
+    page = links(cfg)
+    needed = app_permissions(ci_gate.any_repo_allows_workflows(db))
+    perms = []
+    for name, want in sorted(needed.items()):
+        has = granted.get(name)
+        if _level(has) >= _level(want):
+            state, fix = "accepted", None
+        elif app_perms and _level(app_perms.get(name)) < _level(want):
+            state, fix = "app_lacks", page["permissions"]          # the App itself must ask first
+        else:
+            state, fix = "waiting", page["installation"]           # accept on the installation
+        perms.append({"name": name, "wanted": want, "granted": has, "state": state, "fix_url": fix})
+    out["permissions"] = perms if granted or out["state"] == "ok" else []
+    repos: list[dict[str, Any]] = []
+    if out["state"] == "ok":
+        try:
+            reachable = {r["full_name"].lower() for r in installation_repositories(db)}
+        except (GitHubSetupError, github_app.GitHubRefused):
+            reachable = None
+        for full in _registered_repos(db):
+            ok = None if reachable is None else full in reachable
+            repos.append({"full_name": full, "installed": ok, "fix_url": None if ok else page["installation"]})
+        out["installed_on"] = sorted(reachable) if reachable is not None else None
+    out["repos"] = repos
+    out["account"] = {"login": cfg.get("account_login"), "type": cfg.get("account_type")}
+    out["owner"] = {"login": cfg.get("owner_login"), "type": cfg.get("owner_type")}
+    out["links"] = page
+    out["ok"] = (out["state"] == "ok" and all(p["state"] == "accepted" for p in perms)
+                 and all(r["installed"] is not False for r in repos))
+    db.execute(_sql("UPDATE identity_github_app SET verified = CAST(:v AS jsonb), verified_at = now() "
+                    "WHERE org_id = :o"), {"v": json.dumps(out), "o": org_id})
+    return out
+
+
 # ---- what egress uses, and what posture says ----------------------------------------------------------------
 
 def mode(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
@@ -500,18 +713,39 @@ def mode(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
     env_token = bool((get_settings().github_token or "").strip())
     active = "app" if app_ready(db, org_id) else ("token" if token else ("as_me" if people else "none"))
     read_by_builds = env_token and (get_settings().authz_mode or "enforce") != "enforce"
-    return {"mode": active, "verdict": _verdict(active, cfg["account_login"], read_by_builds),
+    return {"mode": active, "verdict": _verdict(active, cfg["account_login"], read_by_builds, _verified(cfg)),
             "app": {"configured": bool(cfg["app_id"]), "installed": bool(cfg["installation_id"]),
                     "slug": cfg["slug"], "html_url": cfg["html_url"], "account": cfg["account_login"],
-                    "source": cfg["source"]},
+                    "account_type": cfg.get("account_type"), "owner": cfg.get("owner_login"),
+                    "owner_type": cfg.get("owner_type"), "source": cfg["source"],
+                    "links": links(cfg) if cfg["source"] == "setup" else {},
+                    "verified": _verified(cfg)},
             "token": ({"repos": token["repos"], "login": token["login"], "migrated": token["migrated"]}
                       if token else None),
             "people_connected": people,
             "env_token": {"present": env_token, "read_by_builds": read_by_builds}}
 
 
-def _verdict(active: str, account: Optional[str], env_read: bool) -> dict[str, str]:
-    """The Setup row's one pill, decided here (the console never maps a state to a colour)."""
+def _verified(cfg: dict[str, Any]) -> Optional[dict[str, Any]]:
+    raw = cfg.get("verified")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raw = None
+    return raw if isinstance(raw, dict) else None
+
+
+def _verdict(active: str, account: Optional[str], env_read: bool,
+             verified: Optional[dict[str, Any]] = None) -> dict[str, str]:
+    """The Setup row's one pill, decided here (the console never maps a state to a colour). For
+    the App it is what GitHub last SAID (verify), not what BOSS asked for."""
+    if active == "app" and verified and verified.get("state") in ("app_gone", "installation_gone"):
+        return {"tone": "red", "label": "GitHub App gone",
+                "tip": "GitHub no longer has this App or its installation. See below."}
+    if active == "app" and verified and verified.get("ok") is False and verified.get("state") == "ok":
+        return {"tone": "amber", "label": "GitHub App · needs you",
+                "tip": "GitHub has not granted everything builds need. See below."}
     if active == "app":
         return {"tone": "green", "label": "GitHub App" + (f" · @{account}" if account else ""),
                 "tip": "Each build gets a short-lived token for its own repos."}

@@ -10921,6 +10921,79 @@ def assert_run_is_deployable(run: dict) -> None:
                     "built and reviewed for it yet."))
 
 
+def assign_app_slot(target_id: str, host: dict, *, wanted_port: Any = None) -> dict:
+    """Give a host target its port and the domain that names it, so its first deploy can plan.
+
+    setup-deployment used to call bootstrap_deployment_target(target_id, {"apply_port": True}).
+    That never assigned anything: the call carried no actor (so it answered "actor is
+    required"), and with one it would answer 409, because a direct host bootstrap is disabled
+    without a governed ChangeSet. The app was then left with no port and no domain, and its
+    first deploy was refused with `app_port_missing`. Choosing a port is a database fact (the
+    promised ports, plus a probe of the machine), so it is done here, and the answer is words.
+    """
+    from boss_engine.services.deployment_connectors import _app_port, domain_with_port
+    from boss_engine.services.deployment_fleet import _first_free_port, _ports_assigned_on
+
+    address = str(host.get("address") or "").strip()
+    name = str(host.get("name") or address or "the host")
+    if not address:
+        return {"ok": False, "message": f"{name} has no address, so no port could be chosen.",
+                "next": "Set the host's address in Infra, then press Set target again."}
+    with begin(engine) as connection:
+        target = connection.execute(
+            text("SELECT app_name, required_resources, domains FROM deployment_targets "
+                 "WHERE id = :i FOR UPDATE"), {"i": target_id}).mappings().first()
+        if not target:
+            return {"ok": False, "message": "The target was not found after it was created.",
+                    "next": "Press Set target again."}
+        target = dict(target)
+        taken = {p: a for p, a in _ports_assigned_on(connection, address).items()
+                 if a != str(target.get("app_name") or "")}
+        port = _app_port(target, default=0)
+        if not port and wanted_port not in (None, ""):
+            try:
+                port = int(str(wanted_port).strip())
+            except ValueError:
+                return {"ok": False, "message": f"{wanted_port!r} is not a port number.",
+                        "next": "Give a number such as 3000, or leave the port empty."}
+        if port and port in taken:
+            return {"ok": False,
+                    "message": f"Port {port} on {name} is already promised to {taken[port]!r}.",
+                    "next": "Leave the port empty and BOSS will choose a free one."}
+        if not port:
+            port = _first_free_port(connection, address)
+        if not port:
+            return {"ok": False, "message": f"No free port was found on {name}.",
+                    "next": "Free a port on the machine or set one on the target in Infra."}
+        domains = [d for d in (target.get("domains") or []) if d]
+        fixed = domain_with_port(domains[0] if domains else None, address, port)
+        if fixed:
+            domains = [fixed] + domains[1:]
+        connection.execute(
+            text("UPDATE deployment_targets SET required_resources = CAST(:rr AS JSONB), "
+                 "domains = CAST(:d AS JSONB), updated_at = now() WHERE id = :i"),
+            {"rr": json.dumps(merge_target_resources(target.get("required_resources"),
+                                                     {"app_port": port})),
+             "d": json.dumps(domains), "i": target_id})
+    return {"ok": True, "port": port, "domain": domains[0] if domains else f"{address}:{port}",
+            "message": f"The app will listen on port {port} of {name}."}
+
+
+def _app_slot_report(target_id: str, host: dict, wanted_port: Any = None) -> dict:
+    """assign_app_slot, never raising: a target that exists without a port is recoverable from
+    Infra; losing the target because a port probe failed is not. Every answer is words."""
+    try:
+        return assign_app_slot(target_id, host, wanted_port=wanted_port)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else "the port could not be chosen"
+        return {"ok": False, "message": f"No port was set: {detail}",
+                "next": "Set the app's port on its target in Infra, then deploy."}
+    except Exception:  # noqa: BLE001
+        LOGGER.warning("assigning the app slot for %s failed", target_id, exc_info=True)
+        return {"ok": False, "message": "No port was set: choosing one failed on the server.",
+                "next": "Set the app's port on its target in Infra, then deploy."}
+
+
 @app.post("/v1/code-tasks/{run_id}/setup-deployment")
 @permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("code_task", path="run_id"))
 def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.CodeTaskSetupDeploymentBody):
@@ -11075,22 +11148,30 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.Co
                     connection.execute(
                         text("UPDATE deployment_targets SET auto_deploy = true, "
                              "updated_at = now() WHERE id = :i"), {"i": existing["id"]})
-                return {"target_id": existing["id"], "host_id": host_id,
+                early = {"target_id": existing["id"], "host_id": host_id,
                         "adopted_existing_target": True, "revived": revived,
                         "message": f"Bound the existing {environment} target for {app_name!r} "
                                    f"to {host['name']!r}."
                                    + (" It was retired; it is active again." if revived else "")}
-            if existing["host_id"] == host_id:
-                return {"target_id": existing["id"], "host_id": host_id,
+            elif existing["host_id"] == host_id:
+                early = {"target_id": existing["id"], "host_id": host_id,
                         "already_bound": True, "revived": revived,
                         "message": (f"{app_name!r} is active again on {host['name']!r}."
                                     if revived
                                     else f"{app_name!r} is already deploying to "
                                          f"{host['name']!r}.")}
-            raise HTTPException(
-                status_code=409,
-                detail=f"{app_name!r} already has a {environment} target bound to a different "
-                       f"host ({existing['host_id']}). Retarget or retire that one first.")
+            else:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{app_name!r} already has a {environment} target bound to a "
+                           f"different host ({existing['host_id']}). Retarget or retire that "
+                           "one first.")
+
+    # An adopted or already-bound target gets its port too, AFTER the transaction above has
+    # committed: assign_app_slot locks the same row from its own connection.
+    if existing:
+        early["bootstrap"] = _app_slot_report(early["target_id"], host, payload.get("app_port"))
+        return early
 
     # DECLARE THE HEALTH CHECK, and its scheme.
     #
@@ -11138,13 +11219,7 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.Co
     #
     # Best-effort: a target that exists but has not been bootstrapped is recoverable from the
     # CI/CD screen, whereas losing the target because a port scan timed out is not.
-    bootstrap_report = None
-    try:
-        bootstrap_report = bootstrap_deployment_target(target_id, {"apply_port": True})
-    except HTTPException as exc:
-        bootstrap_report = {"error": str(exc.detail)[:200]}
-    except Exception as exc:  # noqa: BLE001
-        bootstrap_report = {"error": f"{type(exc).__name__}: {exc}"[:200]}
+    bootstrap_report = _app_slot_report(target_id, host, payload.get("app_port"))
 
     return {"run_id": run_id, "target_id": target_id, "app_name": app_name,
             "bootstrap": bootstrap_report,
@@ -17577,6 +17652,17 @@ app.include_router(build_setup_router(
     require_reader=require_project_reader,
 ))
 
+# GitHub Actions CI, governed: the per-repo "Builds may change CI workflows" opt-in, workflow
+# static checks, waiting for CI, and a decision's CI gates (services/ci_gate.py).
+from .routers.ci import build_ci_router  # noqa: E402
+
+app.include_router(build_ci_router(
+    engine=engine,
+    get_settings=lambda: settings,
+    require_actor=require_project_actor,
+    principal=lambda: current_api_principal.get(),
+))
+
 
 def _deprecated(response: Response, successor: str) -> None:
     response.headers["Deprecation"] = "true"
@@ -23253,6 +23339,9 @@ def approve_decision_in(connection, decision_id: str, payload: DecisionActionReq
             delegate_to=payload.delegate_to,
             external_ref=payload.external_ref,
             content_hash=payload.content_hash,
+            # A person overriding the merge gate (CI failed or could not be read), with the
+            # note transition() requires. Never a deploy: ci_gate refuses a forced deploy.
+            force=payload.force,
         )
     except DecisionNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -25701,7 +25790,9 @@ def _editor_problems(problems: list) -> list[dict]:
              # A warning (an ability not set up yet) is said on the step and does not block Save;
              # `ability` is what the Studio links to (?area=skills&ability=<key>).
              **({"severity": p["severity"]} if p.get("severity") else {}),
-             **({"ability": p["ability"]} if p.get("ability") else {})}
+             **({"ability": p["ability"]} if p.get("ability") else {}),
+             # Where the gap is closed (kit.setup_fix): the editor shows it as a button.
+             **({"fix_label": p["fix_label"], "fix_href": p["fix_href"]} if p.get("fix_href") else {})}
             for p in problems]
 
 
@@ -30277,6 +30368,11 @@ app.include_router(build_improve_router(
     actor_of=signed_in_actor,
     require_worker=require_worker_principal,
 ))
+# ARCHITECTURE APPROVAL: a run's architecture documents (routers/architecture.py).
+from .routers.architecture import build_architecture_router
+
+app.include_router(build_architecture_router(engine=engine,
+                                             require_reader=require_project_reader))
 from .hardware_api import mount_hardware_routes
 
 mount_hardware_routes(app, require_project_actor, require_project_reader)

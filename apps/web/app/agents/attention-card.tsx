@@ -53,7 +53,7 @@ export function kindWord(item: Pick<AttentionItem, "kind" | "decisionKind"> & { 
   if (item.kind === "infra") {
     // What the card is about, not which screen raised it: on Observability an app that is down
     // is a health card, on Infra a failed deploy is a deploy card.
-    return ({ app_down: "Health", deploy_failed: "Deploy", host_unreachable: "Machine" } as Record<string, string>)[
+    return ({ app_down: "Health", app_errors: "Errors", deploy_failed: "Deploy", host_unreachable: "Machine" } as Record<string, string>)[
       item.infraKind ?? ""] ?? "Infra";
   }
   return KIND_WORD[item.decisionKind ?? ""] ?? "Decision";

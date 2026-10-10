@@ -175,9 +175,26 @@ export function FleetTab({ projectId, actor, url, go, query, fleet }: InfraTabPr
 
 // ── `+ Add ▾` ───────────────────────────────────────────────────────────────────────────────
 
-export function InfraAddMenu({ projectId, actor, go, fleet }: InfraTabProps & { fleet: Polled<Fleet> }) {
+const ADD_ITEMS: readonly AddItem[] = ["host", "enroll", "target", "secret", "hwaccount"];
+
+/** `?add=target` asks for an App target; with no machine to place it on, the Host sheet comes first. */
+export function addFromUrl(add: string | null | undefined, hostCount: number): AddItem | null {
+  if (!add || !(ADD_ITEMS as readonly string[]).includes(add)) return null;
+  return add === "target" && hostCount === 0 ? "host" : (add as AddItem);
+}
+
+export function InfraAddMenu({ projectId, actor, go, fleet, url }: InfraTabProps & { fleet: Polled<Fleet> }) {
   const [open, setOpen] = useState<{ item: AddItem; hostId: string | null } | null>(null);
   const pre = fleet.data?.preconditions;
+  // A LINK THAT SAYS WHAT TO ADD opens it (the workflow editor's "Set up where it deploys"),
+  // once, then drops `add` from the address so Back does not reopen it.
+  const wanted = url?.add ?? null;
+  useEffect(() => {
+    if (!wanted || !fleet.data) return;
+    const item = addFromUrl(wanted, fleet.data.racks.length);
+    if (item && pre?.canWrite) setOpen({ item, hostId: null });
+    go({ add: null }, "replace");
+  }, [wanted, fleet.data, pre?.canWrite, go]);
   useEffect(() => {
     const on = (e: Event) => {
       const d = (e as CustomEvent<{ item: AddItem; hostId: string | null }>).detail;

@@ -79,6 +79,7 @@ const WORDS: Record<string, [string, string]> = {
   meeting: ["Panel", "Agents debate it and write the spec"],
   spec_review: ["Approve the spec", "You read the spec before any code"],
   "spec_review@auto": ["Spec sign-off", "The panel's decision approves it"],
+  architecture: ["Architecture", "The architect designs it; you approve the design"],
   build: ["Build", "Branch, code and tests"],
   preview: ["Preview", "A running copy you can click"],
   plrr: ["Launch check", "Production-readiness review"],
