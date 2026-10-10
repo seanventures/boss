@@ -194,11 +194,11 @@ describe("a template's sheet", () => {
     const w = writes();
     expect(w[0]).toMatchObject({ method: "POST", path: "/v1/templates/tpl_stripe/apply",
       body: { project_id: "p1", stack: "node", new_app: { name: "Shop" }, accept_egress: ["api.stripe.com"] } });
-    // secrets_needed: the typed key is stored under the app's key, build and preview, then the same apply.
-    expect(w.slice(1, 3).map((c) => [c.method, c.path, c.body?.env, c.body?.mode])).toEqual([
-      ["PUT", "/v1/apps/shop/secrets/STRIPE_SECRET_KEY", "build", "test"],
-      ["PUT", "/v1/apps/shop/secrets/STRIPE_SECRET_KEY", "preview", "test"]]);
-    expect(w[3].path).toBe("/v1/templates/tpl_stripe/apply");
+    // secrets_needed: the typed key is stored under the app's key ONCE, for build and preview
+    // together (tester N8: it was two PUTs), then the same apply.
+    expect(w.slice(1, 2).map((c) => [c.method, c.path, c.body?.envs, c.body?.mode])).toEqual([
+      ["PUT", "/v1/apps/shop/secrets/STRIPE_SECRET_KEY", ["build", "preview"], "test"]]);
+    expect(w[2].path).toBe("/v1/templates/tpl_stripe/apply");
     expect(started).toHaveBeenCalledWith("wfr_9");
   });
 
@@ -270,7 +270,7 @@ describe("App ▸ Setup", () => {
     await press('[data-testid="tpl-set-test-STRIPE_SECRET_KEY"]');
     await type('[data-testid="tpl-secret-value-STRIPE_SECRET_KEY"]', "sk_test_zzz999");
     await press('[data-testid="tpl-secret-save-STRIPE_SECRET_KEY"]');
-    expect(writes().map((c) => [c.method, c.body?.env, c.body?.mode])).toEqual([["PUT", "build", "test"], ["PUT", "preview", "test"]]);
+    expect(writes().map((c) => [c.method, c.body?.envs, c.body?.mode])).toEqual([["PUT", ["build", "preview"], "test"]]);
     expect(document.body.innerHTML).not.toContain("sk_test_zzz999");
     expect($('[data-testid="tpl-setup-note"]').textContent).toContain("stored for builds and previews");
   });

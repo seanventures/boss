@@ -63,7 +63,9 @@ class ApplyBody(_Body):
 
 class SecretBody(_Body):
     project_id: str = Field(min_length=1, max_length=120)
-    env: str = Field(min_length=1, max_length=20)
+    env: Optional[str] = Field(default=None, min_length=1, max_length=20)
+    #: every env this value is for (a test key is for build AND preview): ONE write, not one per env
+    envs: Optional[list[str]] = Field(default=None, max_length=3)
     mode: str = Field(default="test", max_length=20)
     #: write-only: never echoed, logged or returned
     value: Optional[str] = Field(default=None, max_length=8192, repr=False)
@@ -333,12 +335,21 @@ def build_templates_router() -> APIRouter:
                             status_code=201)
 
     # ---- one app's templates, secrets and setup guide --------------------------------------------
+    # EVERY HANDLE NAMES THE SAME APP. One app went by its display name, its slug and its stable
+    # app id, and this lookup was case-sensitive on the display name ("Member portal" found
+    # nothing filed under "member portal"). Resolved once, here, to the key its records use.
+    def _app(db, project_id: str, raw: str) -> str:
+        from boss_engine.app_links.service import canonical_app_key
+
+        return canonical_app_key(db, project_id, raw)
+
     @router.get("/v1/apps/{app_key}/templates")
     @permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
     def app_templates(request: Request, app_key: str, project_id: str) -> dict:
         ctx = _ctx(request)
         with begin() as db:
             _project_in_org(db, project_id, ctx.principal.org_id)
+            app_key = _app(db, project_id, app_key)
             return {"app_key": app_key, "templates": apply_service.applications(db, project_id, app_key)}
 
     # Presence, mode and a shape verdict only; never a value, hash, prefix or length (§2.4).
@@ -348,6 +359,7 @@ def build_templates_router() -> APIRouter:
         ctx = _ctx(request)
         with begin() as db:
             _project_in_org(db, project_id, ctx.principal.org_id)
+            app_key = _app(db, project_id, app_key)
             bound = secrets_service.list_bindings(db, project_id=project_id, app_key=app_key)
             declared = _declared(db, project_id, app_key, None, ctx.principal.org_id)
         names = {b["name"] for b in bound}
@@ -367,16 +379,27 @@ def build_templates_router() -> APIRouter:
         try:
             with begin() as db:
                 _project_in_org(db, body.project_id, ctx.principal.org_id)
+                app_key = _app(db, body.project_id, app_key)
                 spec = secrets_service.declared_secret(
                     _declared(db, body.project_id, app_key, body.template_id, ctx.principal.org_id), name)
                 if spec is None:
                     raise TemplateError(404, "secret_not_declared",
                                         f"no template of this app declares {name}; an app holds only "
                                         "the secrets its templates declare")
-                return secrets_service.put(
+                envs = list(dict.fromkeys(body.envs or ([body.env] if body.env else [])))
+                if not envs:
+                    raise TemplateError(422, "env_required", "name the env (or envs) this value is for")
+                # One request, one transaction, every env: a test key typed once is written once
+                # (it was two PUTs, build then preview, each its own write and step-up).
+                results = [secrets_service.put(
                     db, org_id=ctx.principal.org_id, project_id=body.project_id, app_key=app_key,
-                    name=name, env=body.env, mode=body.mode, value=body.value, actor_id=ctx.principal.id,
-                    spec=spec, may_live=may_live)
+                    name=name, env=env, mode=body.mode, value=body.value, actor_id=ctx.principal.id,
+                    spec=spec, may_live=may_live) for env in envs]
+                if len(results) == 1:
+                    return results[0]
+                decision = next((r.get("live_decision_id") for r in results if r.get("live_decision_id")), None)
+                return {**results[0], "env": None, "envs": envs,
+                        **({"live_decision_id": decision} if decision else {})}
         except TemplateError as exc:
             return _refused(exc)
 
@@ -387,6 +410,7 @@ def build_templates_router() -> APIRouter:
         try:
             with begin() as db:
                 _project_in_org(db, project_id, ctx.principal.org_id)
+                app_key = _app(db, project_id, app_key)
                 return secrets_service.delete(db, project_id=project_id, app_key=app_key, name=name, env=env)
         except TemplateError as exc:
             return _refused(exc)
@@ -399,6 +423,7 @@ def build_templates_router() -> APIRouter:
 
         with begin() as db:
             _project_in_org(db, project_id, ctx.principal.org_id)
+            app_key = _app(db, project_id, app_key)
             preview_id = apply_service.preview_for(db, project_id, app_key)
             # The address the person's browser and the provider's callback REACH: the preview
             # origin for the host this request came in on, never the app's port inside BOSS.

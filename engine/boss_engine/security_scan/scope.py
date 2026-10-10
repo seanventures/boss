@@ -84,6 +84,13 @@ def resolve_app(conn: Any, project_id: str, app_key: str, ref: Optional[str], se
         "WHERE project_id = :p AND finalize_ctx->>'app_id' = :a "
         "ORDER BY created_at DESC LIMIT 1"), {"p": project_id, "a": app_key}).mappings().first()
     if row is None:
+        # Named by another of its handles (its name in any case, its slug, a run id): the scan
+        # is filed under the app's stable id, whichever one the person held.
+        from ..app_links.service import resolve_app_id
+
+        resolved = resolve_app_id(conn, project_id, app_key)
+        if resolved and resolved != app_key:
+            return resolve_app(conn, project_id, resolved, ref, settings)
         raise ScopeRefused("app_not_found", f"no app {app_key} in this project", status=404)
     spec = row["spec"] or {}
     fctx = row["finalize_ctx"] or {}

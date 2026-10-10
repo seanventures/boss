@@ -119,10 +119,9 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
     if (missing.length) { setError(`Paste a test key for ${missing.join(", ")}, then Start again.`); return false; }
     if (!secretGate.allowed) { setError(secretGate.reason); return false; }
     for (const n of names) {
-      for (const env of ["build", "preview"]) {
-        await guarded(`Store the test key ${n}.`, () => templatesApi.putSecret(projectId, appKey, n, {
-          env, mode: "test", value: typed[n].trim(), template_id: card.id }));
-      }
+      // ONE write per key, for build and preview together.
+      await guarded(`Store the test key ${n}.`, () => templatesApi.putSecret(projectId, appKey, n, {
+        envs: ["build", "preview"], mode: "test", value: typed[n].trim(), template_id: card.id }));
     }
     setStored((s) => new Set([...s, ...names]));
     setTyped((t) => Object.fromEntries(Object.entries(t).filter(([k]) => !names.includes(k))));

@@ -109,11 +109,17 @@ def app_index(db: Any, project_id: str) -> tuple[dict[str, str], dict[str, str]]
         names.setdefault(key, name)
         for run in group:
             by_run[str(run["id"])] = key
+            # The app's STABLE id (naming.stable_app_id, finalize_ctx.app_id) names it too.
+            fctx = run.get("finalize_ctx") if isinstance(run.get("finalize_ctx"), dict) else {}
+            if fctx.get("app_id"):
+                by_run.setdefault(str(fctx["app_id"]), key)
     return by_run, names
 
 
 def resolve_app_key(db: Any, project_id: str, raw: str) -> Optional[str]:
-    """An app of THIS project named by its key, any of its run ids, or its name; else None."""
+    """An app of THIS project named by ANY of its handles — its stable app id, any of its run
+    ids, its key, its display name or its slug, in any case — else None. One app had three keys
+    (display name, slug, app id) and each surface understood one of them."""
     from ..services.agent_assignment import app_key
 
     by_run, names = app_index(db, project_id)
@@ -124,6 +130,41 @@ def resolve_app_key(db: Any, project_id: str, raw: str) -> Optional[str]:
         return raw
     key = app_key(raw)
     return key if key in names else None
+
+
+def resolve_app_id(db: Any, project_id: str, raw: str) -> Optional[str]:
+    """The STABLE app id (finalize_ctx.app_id) of the app any handle names — the id itself, a
+    run id, its key, display name or slug in any case — else None. Security scans and reports
+    are filed under it; a person or a link may hold any of the others."""
+    from ..services.code_task_service import list_code_task_runs
+    from ..services.factory_view import FLOOR_RUNS, group_into_apps
+
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    key = resolve_app_key(db, project_id, raw)
+    runs = list_code_task_runs(db, project_id, FLOOR_RUNS, exclude_internal=True)
+    from ..services.agent_assignment import app_key
+    from ..services.factory_view import app_name
+
+    for group in group_into_apps(runs):
+        ids = [str((r.get("finalize_ctx") or {}).get("app_id") or "") for r in group
+               if isinstance(r.get("finalize_ctx"), dict)]
+        ids = [i for i in ids if i]
+        if not ids:
+            continue
+        if raw in ids or (key is not None and app_key(app_name(group[0])) == key):
+            return ids[0]
+    return None
+
+
+def canonical_app_key(db: Any, project_id: str, raw: str) -> str:
+    """The key an app's records are filed under, from any handle (resolve_app_key); for an app
+    with no build yet (a new app's secrets are set before its first build), the handle's
+    normalised key, so "Member portal", "member-portal" and "MEMBER PORTAL" are one app."""
+    from ..services.agent_assignment import app_key
+
+    return resolve_app_key(db, project_id, raw) or app_key(raw)
 
 
 def project_org(db: Any, project_id: str) -> Optional[str]:

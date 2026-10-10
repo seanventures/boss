@@ -17,7 +17,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { GatedButton, useGate } from "../../../components/gated";
 import {
   NO_FILTER, SEVERITIES, STATUS_LABEL, STEP_LABEL, STEP_TIP, TOOLS, TOOL_LABEL, TOOL_TIP,
-  filterFindings, reportScans, reviewWord, securityApi, shortSha, stepWord, whereOf,
+  filterFindings, groupFindings, reportScans, reviewWord, securityApi, shortSha, stepWord, whereOf,
   type Finding, type FindingFilter, type Review, type Scan,
 } from "../../../lib/security-review";
 import { ReviewChecklist } from "./review-checklist";
@@ -164,10 +164,17 @@ export function AppSecurity({ projectId, appKey, appName }: AppSecurityProps) {
           </div>
           {visible.length ? (
             <ul className="sec-list">
-              {visible.map((f) => (
-                <FindingRow key={f.id} f={f} open={open === f.id} projectId={projectId}
-                            onToggle={() => setOpen(open === f.id ? "" : f.id)}
-                            onTriaged={(next) => setFindings(findings.map((x) => (x.id === next.id ? next : x)))} />
+              {/* ONE ROW PER PROBLEM: a header the server sends on every route was a row per
+                  route ("Server leaks version via Server header" x3). Triage covers the group. */}
+              {groupFindings(visible).map((g) => (
+                <FindingRow key={g.key} f={g.first} members={g.members} open={open === g.key} projectId={projectId}
+                            onToggle={() => setOpen(open === g.key ? "" : g.key)}
+                            onTriaged={(next) => {
+                              const ids = new Set(g.members.filter((m) => m.status === "open").map((m) => m.id));
+                              ids.add(next.id);
+                              setFindings(findings.map((x) => (ids.has(x.id)
+                                ? { ...x, status: next.status, triageReason: next.triageReason } : x)));
+                            }} />
               ))}
             </ul>
           ) : <p className="sec-muted" data-testid="sec-none">{findings.length ? "None match." : "Nothing found."}</p>}
@@ -239,9 +246,10 @@ function ScanSummary({ scan, scans, onPick, now }: { scan: Scan; scans: Scan[]; 
   );
 }
 
-function FindingRow({ f, open, projectId, onToggle, onTriaged }: {
-  f: Finding; open: boolean; projectId: string; onToggle: () => void; onTriaged: (f: Finding) => void;
+function FindingRow({ f, members = [f], open, projectId, onToggle, onTriaged }: {
+  f: Finding; members?: Finding[]; open: boolean; projectId: string; onToggle: () => void; onTriaged: (f: Finding) => void;
 }) {
+  const many = members.length > 1;
   const [reason, setReason] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -252,7 +260,7 @@ function FindingRow({ f, open, projectId, onToggle, onTriaged }: {
     if (!reasoned) { setErr(NEEDS_REASON); return; }
     setBusy(true);
     try {
-      await securityApi.triage(f.id, status, reason.trim());
+      await securityApi.triage(f.id, status, reason.trim(), many);
       onTriaged({ ...f, status, triageReason: reason.trim() });
       setErr("");
     } catch (e) { setErr(errorWords(e)); }
@@ -265,7 +273,7 @@ function FindingRow({ f, open, projectId, onToggle, onTriaged }: {
       <button type="button" className="sec-finding-row" aria-expanded={open} onClick={onToggle}>
         <SevPill severity={f.severity} />
         <span className="sec-finding-title" data-user-text>{f.title}</span>
-        <span className="sec-where" data-user-text>{whereOf(f)}</span>
+        <span className="sec-where" data-user-text>{many ? `${members.length} places` : whereOf(f)}</span>
         <span className="sec-tool" title={TOOL_TIP[f.tool]}>{TOOL_LABEL[f.tool] ?? f.tool}</span>
         <span className="sec-status" data-status={f.status}>{STATUS_LABEL[f.status] ?? f.status}</span>
       </button>
@@ -277,6 +285,11 @@ function FindingRow({ f, open, projectId, onToggle, onTriaged }: {
             {f.owasp ? <><dt>OWASP</dt><dd>{f.owasp}</dd></> : null}
             {f.confidence ? <><dt>Confidence</dt><dd>{f.confidence}</dd></> : null}
           </dl>
+          {many ? (
+            <ul className="sec-places" data-testid={`sec-places-${f.id}`}>
+              {members.map((m) => <li key={m.id} data-user-text>{whereOf(m)}</li>)}
+            </ul>
+          ) : null}
           {snippet ? <pre className="sec-evidence" data-user-text title="Redacted before it was stored">{snippet}</pre> : null}
           {f.status === "accepted" || f.status === "false_positive" ? (
             <p className="sec-muted">{STATUS_LABEL[f.status]}{f.triagedBy ? ` by ${f.triagedBy}` : ""}: <span data-user-text>{f.triageReason}</span></p>

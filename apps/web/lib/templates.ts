@@ -202,11 +202,21 @@ export function refusalWords(e: unknown): string {
   return e instanceof Error ? plainSentence(e.message) : String(e);
 }
 
-/** Drop spec references ("(D3)", "(§2.4)") and capitalise: the person never needs the spec. */
+/** Drop spec references ("(D3)", "(§2.4)") and capitalise a sentence that starts with a word:
+ *  the person never needs the spec. A sentence that starts with a KEY ("acme-greet-gh 1.0.0 is
+ *  already waiting for review", "stripe-checkout …") keeps it exactly as written: a key is a
+ *  name, and "Acme-greet-gh" is not one. */
 export function plainSentence(s: string): string {
   const t = s.replace(/\s*\((?:D\d+|§[\d.]+[^)]*)\)/g, "")
     .replace(/\bpending_review\b/g, "waiting for review").replace(/\s+/g, " ").trim();
-  return t ? t[0].toUpperCase() + t.slice(1) : t;
+  return t && startsWithAWord(t) ? t[0].toUpperCase() + t.slice(1) : t;
+}
+
+/** A plain lowercase word first (not a key: no `-`, `_`, `.`, digit, and no version after it). */
+function startsWithAWord(t: string): boolean {
+  const m = /^(\S+)(?:\s+(\S+))?/.exec(t);
+  if (!m || !/^[a-z]+[,:;]?$/.test(m[1])) return false;
+  return !(m[2] && /^v?\d+(\.\d+)+/.test(m[2]));
 }
 
 /** The code of a refusal (`secrets_needed`, `stack_mismatch` …), or "". */
@@ -253,7 +263,8 @@ export const templatesApi = {
     parseSecretsView(await idGet(`/v1/apps/${enc(appKey)}/secrets?${q({ project_id: projectId })}`)),
   guides: async (projectId: string, appKey: string) =>
     parseGuides(await idGet(`/v1/apps/${enc(appKey)}/setup-guide?${q({ project_id: projectId })}`)),
-  putSecret: (projectId: string, appKey: string, name: string, b: { env: string; mode: string; value?: string; template_id?: string }) =>
+  /** One write for every env named (`envs`), so a test key typed once is stored once. */
+  putSecret: (projectId: string, appKey: string, name: string, b: { env?: string; envs?: string[]; mode: string; value?: string; template_id?: string }) =>
     idPut<O>(`/v1/apps/${enc(appKey)}/secrets/${enc(name)}`, { project_id: projectId, ...b }),
   deleteSecret: (projectId: string, appKey: string, name: string, env: string) =>
     idDelete<O>(`/v1/apps/${enc(appKey)}/secrets/${enc(name)}?${q({ project_id: projectId, env })}`),

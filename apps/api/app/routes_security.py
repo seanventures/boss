@@ -176,6 +176,10 @@ def build_security_router() -> APIRouter:
         engine, _ = _engine_settings()
         try:
             with engine.begin() as conn:
+                from boss_engine.app_links.service import resolve_app_id
+
+                # Any handle of the app (name in any case, slug, run id) names its reports.
+                app_key = resolve_app_id(conn, project_id, app_key) or app_key
                 rep = report.build_report(conn, project_id, app_key, before=before, after=after)
         except report.ReportError as exc:
             return _refused(exc)

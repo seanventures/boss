@@ -113,7 +113,8 @@ function ImportSheet({ onClose, onDone }: { onClose: () => void; onDone: () => v
   const [done, setDone] = useState("");
   const gate = useGate("template:import");
   const canApprove = useGate("template:approve").allowed;
-  const valid = /^(https:\/\/|file:\/\/)\S{4,}$/.test(url.trim());
+  const urlWhy = importUrlProblem(url);
+  const valid = !urlWhy;
   async function go() {
     if (!valid || busy) return;
     if (!gate.allowed) { setError(gate.reason); return; }
@@ -133,10 +134,10 @@ function ImportSheet({ onClose, onDone }: { onClose: () => void; onDone: () => v
     <><span className="tpl-push" /><button type="button" className="ag-btn ag-btn-primary" data-testid="tpl-import-done" onClick={onDone}>Done</button></>
   ) : (
     <>
-      {!valid ? <span className="tpl-why">An https git URL.</span> : <span className="tpl-push" />}
+      {!valid ? <span className="tpl-why" data-testid="tpl-import-why">{urlWhy}</span> : <span className="tpl-push" />}
       <button type="button" className="ag-btn" onClick={onClose}>Cancel</button>
       <GatedButton permission="template:import" type="button" className="ag-btn ag-btn-primary" data-testid="tpl-import-go"
-                   disabled={!valid || busy} aria-busy={busy || undefined} title="Fetch and check it. Nothing in it runs."
+                   disabled={!valid || busy} aria-busy={busy || undefined} title={urlWhy || "Fetch and check it. Nothing in it runs."}
                    onClick={() => void go()}>{busy ? "Checking…" : "Import"}</GatedButton>
     </>
   );
@@ -320,4 +321,15 @@ function ReviewSheet({ card, installed, onClose, onChanged }: {
       ) : null}
     </SideSheet>
   );
+}
+
+/** Why Import is off for this URL, in words ("" when it may be imported). An http:// URL used to
+ *  grey the button with only the generic tooltip; it now says to use https. */
+export function importUrlProblem(raw: string): string {
+  const url = raw.trim();
+  if (!url) return "Paste the template's https:// git URL.";
+  if (/^http:\/\//i.test(url)) return "Use an https:// URL: BOSS does not fetch templates over plain http.";
+  if (/^(https:\/\/|file:\/\/)\S{4,}$/.test(url)) return "";
+  if (/^(git@|ssh:\/\/|git:\/\/)/i.test(url)) return "Use an https:// URL: BOSS fetches templates over https only.";
+  return "Use an https:// git URL, like https://github.com/acme/boss-template-health.";
 }

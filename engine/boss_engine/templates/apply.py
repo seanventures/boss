@@ -66,6 +66,11 @@ def resolve_app(c, project_id: str, *, app_key: Optional[str] = None,
         {"p": project_id}).mappings().all()
     runs = [dict(r) for r in rows]
     chosen = None
+    if app_key:
+        # Any handle of the app (its id, a run id, its name in any case, its slug): one app.
+        from ..app_links.service import canonical_app_key
+
+        app_key = canonical_app_key(c, project_id, app_key)
     if extends_run_id:
         chosen = next((r for r in runs if r["id"] == extends_run_id), None)
         if chosen is None:
@@ -84,7 +89,19 @@ def resolve_app(c, project_id: str, *, app_key: Optional[str] = None,
         if chosen is None:
             raise TemplateError(404, "app_not_found", "no app with that key has a finished build here")
     return {"app_key": key, "app_name": name, "run_id": chosen["id"],
-            "files": sorted(app_files(c, project_id, key, chosen))}
+            "files": sorted(app_files(c, project_id, key, chosen)),
+            "stacks": sorted(recorded_stacks(c, project_id, key))}
+
+
+def recorded_stacks(c, project_id: str, app_key: str) -> set[str]:
+    """The stacks the APP'S OWN RECORD says it is: the stack of every template applied to it
+    (a new app made from a template IS that template's stack, before any build wrote a file).
+    Read before any file is: files can come from a repository several apps share, and a Node
+    app made from login-oauth was refused a Node template as "a python app" because the shared
+    checkout held another app's Python."""
+    return {str(r[0]) for r in c.execute(text(
+        "SELECT DISTINCT stack FROM app_template_applications WHERE project_id = :p AND app_key = :a "
+        "AND status <> 'abandoned' AND stack IS NOT NULL"), {"p": project_id, "a": app_key}).all()}
 
 
 def app_files(c, project_id: str, app_key: str, chosen: Optional[dict] = None) -> set[str]:
@@ -252,6 +269,7 @@ def plan(c, *, org_id: str, project_id: str, template_ref: str, body: dict,
     else:
         app = resolve_app(c, project_id, app_key=app_key_in, extends_run_id=extends_in)
         check_stack(app, stack)
+        check_not_building(c, project_id, app)
     missing = _requires_met(c, project_id, app["app_key"], manifest)
     if missing:
         raise TemplateError(409, "requires_unmet", "apply these templates to the app first: "
@@ -300,7 +318,7 @@ def check_stack(app: dict, stack: str) -> None:
     """EVERY apply onto an existing app: the template's stack must be the app's. An app whose
     stack BOSS cannot tell is refused too — "unknown" is not "compatible" (a Java template went
     onto a Node app whose builds had recorded no files)."""
-    has = infer_stacks(app["files"])
+    has = set(app.get("stacks") or ()) or infer_stacks(app["files"])
     name = app.get("app_name") or app.get("app_key")
     if not has:
         raise TemplateError(409, "stack_unknown",
@@ -313,6 +331,38 @@ def check_stack(app: dict, stack: str) -> None:
                             f"version does not fit it. Choose the {', '.join(sorted(has))} version, "
                             "or apply it as a new app.",
                             app_stacks=sorted(has))
+
+
+def check_not_building(c, project_id: str, app: dict) -> None:
+    """ONE BUILD AT A TIME ON AN APP. Two template builds ran on one app's branch at once
+    (stripe-checkout started while catalog-cart was still building), each on top of a tree the
+    other was still changing. Refused, in words, while any build of the app is still going."""
+    refresh_statuses(c, project_id, app["app_key"])
+    name = app.get("app_name") or app["app_key"]
+    busy = c.execute(text(
+        "SELECT t.manifest->>'name' AS template, t.template_key FROM app_template_applications a "
+        "JOIN app_templates t ON t.id = a.template_id "
+        # Only while its workflow run is live: an application whose run ended (or never had one)
+        # must not hold the app for ever.
+        "JOIN workflow_runs w ON w.id = a.workflow_run_id AND w.status NOT IN ('cancelled', 'completed', "
+        "'compensated', 'failed', 'deadlettered') "
+        "WHERE a.project_id = :p AND a.app_key = :k "
+        "AND a.status = 'building' ORDER BY a.created_at DESC LIMIT 1"),
+        {"p": project_id, "k": app["app_key"]}).mappings().first()
+    if busy is not None:
+        what = busy["template"] or busy["template_key"]
+        raise TemplateError(409, "app_building",
+                            f"Wait for {what} to finish building on {name}, or cancel that build, "
+                            "then apply this template.", building=busy["template_key"])
+    rows = c.execute(text(
+        "SELECT id, project_id, title, spec, finalize_ctx, state, status FROM code_task_runs "
+        "WHERE project_id = :p AND status IN ('queued', 'running', 'repairing') "
+        "ORDER BY created_at DESC LIMIT 200"), {"p": project_id}).mappings().all()
+    for r in rows:
+        if _app_key_of(dict(r))[0] == app["app_key"]:
+            raise TemplateError(409, "app_building",
+                                f"Wait for the build of {name} that is running now to finish, or cancel "
+                                "it, then apply this template.", building_run_id=r["id"])
 
 
 def record(c, plan_: dict, *, project_id: str, workflow_run_id: Optional[str], actor_id: Optional[str]) -> dict:

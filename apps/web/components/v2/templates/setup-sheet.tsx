@@ -103,12 +103,10 @@ export function AppSetup({ projectId, appKey }: { projectId: string; appKey: str
     setBusy(true); setError(""); setNote("");
     const envs = editing.kind === "live" ? ["deploy"] : ["build", "preview"];
     try {
-      let decision = false;
-      for (const env of envs) {
-        const r = await guarded(`Store ${editing.name}.`, () => templatesApi.putSecret(projectId, appKey, editing.name,
-          { env, mode: editing.kind, value: value.trim() }));
-        if ((r as { live_decision_id?: unknown }).live_decision_id) decision = true;
-      }
+      // ONE write for every env the value is for (it was one PUT per env: each key twice).
+      const r = await guarded(`Store ${editing.name}.`, () => templatesApi.putSecret(projectId, appKey, editing.name,
+        { envs, mode: editing.kind, value: value.trim() }));
+      const decision = Boolean((r as { live_decision_id?: unknown }).live_decision_id);
       setNote(decision ? `${editing.name} stored. A deploy uses it only after a person approves it in Approvals.`
         : `${editing.name} stored for builds and previews.`);
       setEditing(null);

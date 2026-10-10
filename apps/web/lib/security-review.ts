@@ -41,7 +41,25 @@ export type Finding = {
   id: string; fingerprint: string; tool: string; ruleId: string; title: string; severity: Severity;
   confidence: string; cwe: string; owasp: string; location: O; evidence: O; status: string;
   triagedBy: string; triageReason: string; firstSeenScanId: string;
+  /** The server's grouping (security_scan.service.group_key): the SAME problem, e.g. one header
+   *  the server sends on every route. "" from an older API: then each finding is its own group. */
+  groupKey: string;
 };
+
+/** One row per problem: the findings sharing a group key, in first-seen order. */
+export type FindingGroup = { key: string; first: Finding; members: Finding[] };
+
+export function groupFindings(list: Finding[]): FindingGroup[] {
+  const out: FindingGroup[] = [];
+  const at = new Map<string, FindingGroup>();
+  for (const f of list) {
+    const key = f.groupKey || `id:${f.id}`;
+    const g = at.get(key);
+    if (g) g.members.push(f);
+    else { const n = { key, first: f, members: [f] }; at.set(key, n); out.push(n); }
+  }
+  return out;
+}
 
 function sevCounts(v: unknown): Record<Severity, number> {
   const o = obj(v);
@@ -75,6 +93,7 @@ export function parseFinding(v: unknown): Finding {
     severity: sev(o.severity), confidence: str(o.confidence), cwe: str(o.cwe), owasp: str(o.owasp),
     location: obj(o.location), evidence: obj(o.evidence), status: str(o.status) || "open",
     triagedBy: str(o.triaged_by), triageReason: str(o.triage_reason), firstSeenScanId: str(o.first_seen_scan_id),
+    groupKey: str(o.group_key),
   };
 }
 
@@ -296,8 +315,10 @@ export const securityApi = {
       try { return await start(); } catch (again) { return flatten(again); }
     }
   },
-  triage: (findingId: string, status: "accepted" | "false_positive", reason: string) =>
-    idPost(`/v1/security/findings/${encodeURIComponent(findingId)}/triage`, { status, reason }),
+  /** `wholeGroup`: every open finding of the same problem in that scan, in one write. */
+  triage: (findingId: string, status: "accepted" | "false_positive", reason: string, wholeGroup = false) =>
+    idPost(`/v1/security/findings/${encodeURIComponent(findingId)}/triage`,
+           { status, reason, ...(wholeGroup ? { whole_group: true } : {}) }),
   choose: (runId: string, selected: string[], accept: { finding_id: string; reason: string }[] = []) =>
     idPost(`/v1/security/reviews/${encodeURIComponent(runId)}/selection`, { selected, accept }),
   /** "Fix selected": record the ticks AND approve the review's gate as ONE server action. The

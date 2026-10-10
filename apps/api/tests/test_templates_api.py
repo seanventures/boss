@@ -469,11 +469,11 @@ def test_a_secret_round_trip_returns_presence_and_never_the_value(world, people,
     assert row["shape"] == "matches_test_pattern" and row["mode"] == "test"
     # the vault holds it, bound to this app and env; the engine reader gets it, nothing else does
     with engine.begin() as db:
-        values, _ = secrets_service.values_for_env(db, org_id=world.org, project_id=p, app_key="pay-app",
+        values, _ = secrets_service.values_for_env(db, org_id=world.org, project_id=p, app_key="pay app",
                                                    env="build")
         assert values == {"PAY_KEY": value}
         item = db.execute(text("SELECT vault_item_id FROM app_secret_bindings WHERE project_id = :p "
-                               "AND app_key = 'pay-app' AND env = 'build'"), {"p": p}).scalar()
+                               "AND app_key = 'pay app' AND env = 'build'"), {"p": p}).scalar()
         with pytest.raises(vault.VaultForbidden):
             vault.read_app_secret(item, org_id=world.org, project_id=p, app_key="other-app", env="build",
                                   name="PAY_KEY", db=db)
@@ -526,14 +526,14 @@ def test_a_live_key_needs_app_secret_live_deploy_and_a_decision(world, people, c
         assert row["mode"] == "live" and row["live_approved"] is False
     with engine.begin() as db:
         values, withheld = secrets_service.values_for_env(db, org_id=world.org, project_id=p,
-                                                          app_key="pay-app3", env="deploy")
+                                                          app_key="pay app3", env="deploy")
         assert values == {} and withheld == ["PAY_KEY: live key not approved for deploy"]
         db.execute(text("UPDATE decisions SET status = 'approved' WHERE id = :d"), {"d": decision})
         values, _ = secrets_service.values_for_env(db, org_id=world.org, project_id=p,
-                                                   app_key="pay-app3", env="deploy")
+                                                   app_key="pay app3", env="deploy")
         assert values == {"PAY_KEY": live}
         for env in ("build", "preview"):
-            assert secrets_service.values_for_env(db, org_id=world.org, project_id=p, app_key="pay-app3",
+            assert secrets_service.values_for_env(db, org_id=world.org, project_id=p, app_key="pay app3",
                                                   env=env)[0] == {}
 
 
@@ -545,3 +545,25 @@ def test_no_response_or_log_line_carries_a_secret_value(world, people, client, t
             "project_id": world.project_a, "env": "build", "value": value, "template_id": tid})
     assert r.status_code == 200
     assert value not in caplog.text and not re.search(r"qwertyuiop", caplog.text)
+
+
+def test_a_test_key_for_build_and_preview_is_one_write(world, people, client, tmp_path, engine):
+    """N8 (tester round 2): Setup's "Set test key" wrote each key twice, one PUT per env. One PUT
+    names every env (`envs`) and writes them together, in one transaction."""
+    tid = _keyed_template(client, world, people, tmp_path, "pay-template-envs")
+    p = world.project_a
+    with as_(world, people["operator"]):
+        r = client.put("/v1/apps/Pay Envs/secrets/PAY_KEY", json={
+            "project_id": p, "envs": ["build", "preview"], "value": "pk_test_abcdef123456789",
+            "template_id": tid})
+        assert r.status_code == 200, r.text
+        assert r.json()["envs"] == ["build", "preview"]
+        # neither env nor envs: refused in words
+        r = client.put("/v1/apps/Pay Envs/secrets/PAY_KEY", json={
+            "project_id": p, "value": "pk_test_abcdef123456789", "template_id": tid})
+        assert r.status_code == 422 and r.json()["error"] == "env_required"
+    with engine.begin() as db:
+        envs = sorted(r[0] for r in db.execute(text(
+            "SELECT env FROM app_secret_bindings WHERE project_id = :p AND app_key = 'pay envs' "
+            "AND name = 'PAY_KEY'"), {"p": p}).all())
+    assert envs == ["build", "preview"]                    # filed under the app's one key (N5)

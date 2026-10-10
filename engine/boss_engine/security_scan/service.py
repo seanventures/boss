@@ -360,6 +360,19 @@ def route_class(path: str) -> str:
     return "page"
 
 
+def server_wide_value(f: dict[str, Any]) -> str:
+    """The value a passive DAST finding saw in a response HEADER the server sends (e.g. the
+    `Server: nginx/1.25` it leaks), or "". Such a finding is the same on every route. A missing
+    header has no value (and stays per route class: an asset needs no CSP), and an attack's
+    evidence is about the route it hit."""
+    title = str(f.get("title") or "").lower()
+    ev = f.get("evidence") if isinstance(f.get("evidence"), dict) else {}
+    value = str(ev.get("evidence") or "").strip()
+    if not value or str(ev.get("attack") or "").strip() or "header" not in title:
+        return ""
+    return value.lower()[:200]
+
+
 def group_key(f: dict[str, Any]) -> str:
     """Findings that are the SAME problem: one rule, on one route class (DAST) or one file /
     lockfile (code, dependencies). A finding of its own is a group of one."""
@@ -368,6 +381,12 @@ def group_key(f: dict[str, Any]) -> str:
     loc = f.get("location") or {}
     if f.get("tool") == "zap":
         where = "zap:" + route_class(str(loc.get("path") or ""))
+        leaked = server_wide_value(f)
+        if leaked:
+            # A HEADER THE SERVER SENDS ON EVERY RESPONSE is one problem whatever the route:
+            # "Server leaks version via Server header" was three rows (/, /robots.txt,
+            # /sitemap.xml) because a page and an asset are different route classes.
+            where = "zap:header:" + leaked
     else:
         where = str(loc.get("file") or loc.get("lockfile") or "")
         if not where:
@@ -390,7 +409,8 @@ def group_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
             g = groups[key] = {
                 "group_key": key, "tool": f.get("tool"), "rule_id": f.get("rule_id"), "title": f.get("title"),
                 "severity": f.get("severity"), "cwe": f.get("cwe"),
-                "route_class": route_class(str(loc.get("path") or "")) if f.get("tool") == "zap" else None,
+                "route_class": (("every route" if server_wide_value(f) else route_class(str(loc.get("path") or "")))
+                                if f.get("tool") == "zap" else None),
                 "count": 0, "finding_ids": [], "where": [], "statuses": {}}
         g["count"] += 1
         g["finding_ids"].append(f.get("id"))
