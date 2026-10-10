@@ -566,3 +566,17 @@ def test_the_app_manifest_asks_for_no_webhook_so_a_private_install_can_create_it
     for origin in ("http://localhost:3000", "https://boss-1.tail18604a.ts.net", "https://10.0.0.5"):
         body = github_setup.manifest(origin=origin, person_id=env.alice)["manifest"]
         assert "hook_attributes" not in body and body["default_events"] == []
+
+
+def test_the_pill_says_what_github_last_said_not_what_boss_asked(env):
+    _connect_app(env)
+    env.hub.installs = {}
+    with env.db() as c:
+        github_setup.verify(c, "org_boss")
+        assert github_setup.mode(c, "org_boss")["verdict"]["label"] == "GitHub App gone"
+    env.hub.installs = {"4242": "acme"}
+    env.hub.granted = {k: v for k, v in github_setup.APP_PERMISSIONS.items() if k != "contents"}
+    with env.db() as c:
+        github_setup.verify(c, "org_boss")
+        v = github_setup.mode(c, "org_boss")["verdict"]
+    assert v["tone"] == "amber" and v["label"] == "GitHub App · needs you"

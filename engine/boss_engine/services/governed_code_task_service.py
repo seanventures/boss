@@ -1809,7 +1809,8 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
 
 def _provision_build_services(engine, settings: Settings, run_id: str, project_id: str,
                               pinned: Any, *, use_microvm: bool = False, spec: Any = None,
-                              title: str = "", root: Any = None) -> Any:
+                              title: str = "", root: Any = None,
+                              decided: Optional[dict[str, Any]] = None) -> Any:
     """The run's build-services lease, or None when it needs none (build_services.decide: the
     brief, a template, the plan or the app's own code says PostgreSQL; or the project's
     Always; never under Never). The decision is kept on the run (`state.build_database`) so the
@@ -1835,6 +1836,9 @@ def _provision_build_services(engine, settings: Settings, run_id: str, project_i
         design = None
     decision = build_services.decide(declared, setting, spec=spec, title=title, root=root, design=design)
     wanted = decision["services"]
+    if decided is not None:       # the caller keeps it in the run's final state too
+        decided.update({"postgres": "postgres" in wanted, "mode": decision["mode"],
+                        "why": decision["why"][:5]})
     try:
         with _transaction(engine) as c:
             c.execute(sql("UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) || "
@@ -1919,6 +1923,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             *, fencing_token: Optional[str] = None, mcp: Any = None) -> dict:
     from .run_fencing import RunFenced, assert_owner, claim_run, hash_token  # noqa: F401
     _fence = hash_token(fencing_token)
+    _build_database: dict[str, Any] = {}      # filled by _provision_build_services
     with _transaction(engine) as c:
         run = load_code_task_run(c, run_id)
         if run is not None and _fence:
@@ -2886,7 +2891,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # asked and cannot have it fails here, saying why — its tests never run without it.
         _services_lease = _provision_build_services(
             engine, settings, run_id, project_id, _pinned_manifest, use_microvm=use_microvm,
-            spec=spec, title=title, root=root)
+            spec=spec, title=title, root=root, decided=_build_database)
         if _services_lease is not None:
             from .build_services import brief as _services_brief
 
@@ -4417,6 +4422,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "engine": stage_routes.get("implement", {}).get("engine", build_engine),
             "build_engine": build_engine,
             "review_engine": review_engine,
+            # The build's database decision (build_services.decide), shown on the build page.
+            **({"build_database": dict(_build_database)} if _build_database else {}),
             "model": r2.get("model") or r2.get("usage", {}).get("model"),
             "review_model": (r3.get("model") or r3.get("usage", {}).get("model")
                              or r4.get("model") or r6.get("model")),

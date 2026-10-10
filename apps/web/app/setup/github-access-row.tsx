@@ -329,7 +329,7 @@ function AppCard({ status, reload, back = false, repos = [] }: {
   } else {
     body = (
       <>
-        <span className="su-line"><Dot tone="green" />Connected{app.account ? <span className="su-mono" data-user-text>@{app.account}</span> : null}</span>
+        <span className="su-line"><Dot tone={verified && verified.state !== "ok" ? "red" : verified?.ok === false ? "amber" : "green"} />Connected{app.account ? <span className="su-mono" data-user-text>@{app.account}</span> : null}</span>
         {app.source === "setup" ? <VerifiedLines v={verified} links={links} checking={checking} onCheck={() => void verify()} /> : null}
         <div className="su-line">
           {links.installation || links.app || app.html_url ? (
