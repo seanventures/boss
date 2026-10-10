@@ -242,6 +242,37 @@ describe("the preview says where it runs, how far it got, and what a press reall
     expect(ledger).toContain("Build · vite: not found");
   });
 
+  it("a running preview whose first ways were passed over reads as running, with Open (tester P1-4)", async () => {
+    stubFetch(withPreview({ id: "prev_j", status: "running", word: "Live ↗", steps_done: 1, steps_total: 3, substrate: "host process",
+      error: "rootfs: no retained image",
+      steps: [{ label: "Run from the retained rootfs", status: "failed", log: "no retained image" },
+              { label: "Build and run a container", status: "failed", log: "docker is not available" },
+              { label: "Run as a managed host process", status: "ok" }] }));
+    await mount(view());
+    await open("preview");
+    const body = text('[data-testid="fx-out-body-preview"]');
+    expect($('[data-testid="fx-preview-open"]')).not.toBeNull();
+    expect($('[data-testid="fx-preview-starting"]')).toBeNull();
+    expect(body).not.toContain("1 of 3");
+    expect(body).not.toContain("Failed");
+    expect(text('[data-testid="fx-preview-steps"]')).toContain("Running · Run as a managed host process");
+    await click($('[data-testid="fx-preview-steps"]'));
+    const ledger = text('[data-testid="fx-preview-ledger"]');
+    expect(ledger).toContain("Build and run a container · passed over");
+    expect(ledger).not.toContain("✗");
+  });
+
+  it("a build with no PR cannot run a preview, and says why", async () => {
+    const board = withPreview(null);
+    stubFetch({ ...board, state: { ...((board as W).state as W), state: "done_no_pr", word: "Done · no PR" } });
+    await mount(view());
+    await open("preview");
+    const run = $('[data-testid="fx-preview-run"]') as HTMLButtonElement;
+    expect(run.disabled).toBe(true);
+    expect(run.title).toBe("This build opened no PR, so there is no branch to preview");
+    expect(text('[data-testid="fx-preview-why"]')).toBe("No PR to preview");
+  });
+
   it("a library build's press says its tests passed; a console timeout is not a failure", async () => {
     stubFetch(withPreview(null));
     await mount(view());

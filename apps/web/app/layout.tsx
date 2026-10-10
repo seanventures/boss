@@ -20,6 +20,7 @@ import "./skills/kit.css";
 import "./factory/factory.css";
 import "./factory/cockpit.css";
 import "./factory/security/security.css";
+import "../components/v2/templates/templates.css";
 import "./activity/log.css";
 import "./govern/govern.css";
 // Identity: the identity screens, My account and the sign-in sheet (idn- classes).

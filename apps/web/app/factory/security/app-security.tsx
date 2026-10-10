@@ -14,7 +14,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
-import { GatedButton } from "../../../components/gated";
+import { GatedButton, useGate } from "../../../components/gated";
 import {
   NO_FILTER, SEVERITIES, STATUS_LABEL, STEP_LABEL, STEP_TIP, TOOLS, TOOL_LABEL, TOOL_TIP,
   filterFindings, reportScans, reviewWord, securityApi, shortSha, stepWord, whereOf,
@@ -26,6 +26,8 @@ import { ago, localTime, useNow } from "../../agents/live-util";
 import { SevPill, errorWords } from "./security-bits";
 
 const POLL_MS = 8000;
+/** Why Accept and False positive are disabled before a reason is typed. */
+export const NEEDS_REASON = "Say why first: a few words, kept on the finding";
 const SEV_SHORT: Record<string, string> = { critical: "Crit", high: "High", medium: "Med", low: "Low", info: "Info" };
 
 export type AppSecurityProps = { projectId: string; appKey: string; appName?: string };
@@ -243,8 +245,11 @@ function FindingRow({ f, open, projectId, onToggle, onTriaged }: {
   const [reason, setReason] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const gate = useGate("security_finding:triage", projectId);
+  /** Accept and False positive need a reason: they stay disabled, and say so, until there is one. */
+  const reasoned = reason.trim().length >= 3;
   async function triage(status: "accepted" | "false_positive") {
-    if (reason.trim().length < 3) { setErr("Say why (a few words)"); return; }
+    if (!reasoned) { setErr(NEEDS_REASON); return; }
     setBusy(true);
     try {
       await securityApi.triage(f.id, status, reason.trim());
@@ -276,15 +281,19 @@ function FindingRow({ f, open, projectId, onToggle, onTriaged }: {
           {f.status === "accepted" || f.status === "false_positive" ? (
             <p className="sec-muted">{STATUS_LABEL[f.status]}{f.triagedBy ? ` by ${f.triagedBy}` : ""}: <span data-user-text>{f.triageReason}</span></p>
           ) : (
-            <div className="sec-triage">
-              <input className="cap-input" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={2000}
-                     placeholder="Why (required)" aria-label="Why" data-testid={`sec-reason-${f.id}`} />
-              <GatedButton permission="security_finding:triage" projectId={projectId} className="ag-btn" disabled={busy}
-                           title="Keep it, knowingly: it stays listed as accepted" data-testid={`sec-accept-${f.id}`}
+            <div className="sec-triage" data-can={gate.allowed ? "yes" : "no"}>
+              {/* GREYED WITH THE REASON for a viewer or auditor, like Scan now (tester P2): the
+                  field and both buttons are there, disabled, and say why. */}
+              <input className="cap-input" value={reason} onChange={(e) => { setReason(e.target.value); setErr(""); }} maxLength={2000}
+                     placeholder="Why (required)" aria-label="Why" data-testid={`sec-reason-${f.id}`}
+                     disabled={!gate.allowed} title={gate.allowed ? "Say why, in a few words: it stays on the finding" : gate.reason} />
+              <GatedButton permission="security_finding:triage" projectId={projectId} className="ag-btn" disabled={busy || !reasoned}
+                           title={reasoned ? "Keep it, knowingly: it stays listed as accepted" : NEEDS_REASON} data-testid={`sec-accept-${f.id}`}
                            onClick={() => void triage("accepted")}>Accept</GatedButton>
-              <GatedButton permission="security_finding:triage" projectId={projectId} className="ag-btn" disabled={busy}
-                           title="Not a real flaw: it stays listed, marked false positive" data-testid={`sec-fp-${f.id}`}
+              <GatedButton permission="security_finding:triage" projectId={projectId} className="ag-btn" disabled={busy || !reasoned}
+                           title={reasoned ? "Not a real flaw: it stays listed, marked false positive" : NEEDS_REASON} data-testid={`sec-fp-${f.id}`}
                            onClick={() => void triage("false_positive")}>False positive</GatedButton>
+              {gate.allowed && !reasoned ? <span className="sec-muted" role="status" data-testid={`sec-reason-why-${f.id}`}>{NEEDS_REASON}</span> : null}
             </div>
           )}
           {err ? <p className="sec-error" role="alert">{err}</p> : null}

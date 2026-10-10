@@ -790,9 +790,12 @@ def preview_flag(preview: Optional[Mapping[str, Any]], now: Optional[datetime] =
         return None
     # LIVE ONLY WHEN IT ANSWERS (D10): the row says `running` while its steps still boot the
     # app; until every step is done it is starting, and nobody is offered a link to it.
+    # A FAILED STEP IS NOT A BOOTING ONE (tester P1-4): `auto` tries substrates in order, and a
+    # substrate that crashed is recorded `failed` before the next one serves. Counting it as
+    # unfinished held a serving Java preview at "Starting… 1 of 3" forever, with no Open link.
     steps = [x for x in _j(preview.get("steps"), []) or [] if isinstance(x, dict)]
     if status == "running" and steps and any(
-            x.get("status") not in ("ok", "skipped") for x in steps):
+            x.get("status") not in ("ok", "skipped", "failed") for x in steps):
         status = "starting"
     return {"status": status, "url": preview.get("url") if status == "running" else None}
 
@@ -2604,6 +2607,8 @@ class AppRow(TypedDict, total=False):
     app: str
     builders: list[str]            # role keys of every agent that built it, newest first
     run_id: str                    # its newest build (the cockpit `↗` opens)
+    app_id: Optional[str]          # finalize_ctx.app_id: App › Security addresses this
+    app_key: str                   # the name's identity key: templates, secrets, links
     state: str                     # BuildStateKey of that build
     word: str
     preview: Optional[PreviewFlag]
@@ -2665,6 +2670,12 @@ def _pr_state(run: Optional[Mapping[str, Any]], facts: Facts) -> Optional[str]:
         return "closed"
     # `withdrawn`: a newer attempt asks about the same PR (run_decisions) — the PR is still open.
     return "open"
+
+
+def _app_key_of_name(name: str) -> str:
+    from .agent_assignment import app_key
+
+    return app_key(name)
 
 
 def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
@@ -2731,8 +2742,11 @@ def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
         # THE APP'S ID (the one builds stamp: finalize_ctx.app_id), so an app-level surface —
         # App › Security — can address the app, not one of its builds.
         app_id = str((_j(head.get("finalize_ctx"), {}) or {}).get("app_id") or "") or None
+        # AND ITS KEY (the name's identity key): what the app-level APIs keyed by app —
+        # templates, secrets, setup guide, links — address. One row carries all three of the
+        # app's handles (its newest run, its id, its key) so no surface has to guess another.
         rows.append({"key": rid, "app": app_name(head), "builders": roles, "run_id": rid,
-                     "app_id": app_id,
+                     "app_id": app_id, "app_key": _app_key_of_name(app_name(head)),
                      "pr_number": _pr_number(with_pr) if with_pr else None,
                      "pr_url": (with_pr or {}).get("pull_request_url"),
                      "pr_state": _pr_state(with_pr, facts),

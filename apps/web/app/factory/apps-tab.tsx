@@ -31,6 +31,7 @@ import { NEW_BUILD_TIP } from "../../lib/compose-links";
 import { LINKS_TIP, LinksSheet } from "./links-sheet";
 import { SecuritySheet, readSecurityParam, writeSecurityParam } from "./security/security-sheet";
 import { SIGN_IN_TIP, SignInSheet } from "./sign-in-sheet";
+import { AppSetupSheet } from "../../components/v2/templates/setup-sheet";
 
 /** Where "＋ Add a feature" goes: New project, in add mode, with this app chosen. */
 export function addFeatureHref(appKey: string, previewId?: string | null): string {
@@ -59,6 +60,8 @@ export type AppRow = {
   repo?: string; brief?: string; at?: string;
   /** The app's id (finalize_ctx.app_id): what app-level surfaces — App › Security — address. */
   appId?: string;
+  /** The app's key (its name's identity key): what templates, secrets, Setup and links address. */
+  appKey?: string;
 };
 
 const BUILT = new Set(["pr_open", "merged", "deployed", "done_no_pr"]);
@@ -134,7 +137,7 @@ export function parseApps(w: unknown): AppRow[] {
       rank: rankOf(word),
       prNumber: numOrU(o.pr_number), prUrl: opt(o.pr_url), prState: prStateOf(o.pr_state),
       costUsd: num(o.cost_usd), included: o.included === true, repo: opt(o.repo), brief: opt(o.brief),
-      at: opt(o.at), appId: opt(o.app_id),
+      at: opt(o.at), appId: opt(o.app_id), appKey: opt(o.app_key),
     };
   });
 }
@@ -259,6 +262,8 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
   const [linksOf, setLinksOf] = useState<AppRow | null>(null);
   /** App ▸ Sign-in (F6): the app whose Sign in with BOSS sheet is open. */
   const [signInOf, setSignInOf] = useState<AppRow | null>(null);
+  /** App ▸ Setup (F2): the app whose templates, secrets and guide are open. */
+  const [setupOf, setSetupOf] = useState<AppRow | null>(null);
   /** App › Security: the app id it is open on (`?security=<app id>`, so it can be linked). */
   const [security, setSecurity] = useState<string | null>(() => readSecurityParam());
   const openSecurity = (appId: string | null) => { setSecurity(appId); writeSecurityParam(appId); };
@@ -355,6 +360,9 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
                             e.stopPropagation(); setMenu(null);
                             onOpen(opens, (e.currentTarget as HTMLElement).closest("li"));
                           }}>Open its build</button>
+                          <button type="button" role="menuitem" title="Its templates, secrets and setup guide"
+                                  data-testid={`fx-app-menu-setup-${a.key}`}
+                                  onClick={(e) => { e.stopPropagation(); setMenu(null); setSetupOf(a); }}>Setup</button>
                           <button type="button" role="menuitem" title={LINKS_TIP} data-testid={`fx-app-menu-links-${a.key}`}
                                   onClick={(e) => { e.stopPropagation(); setMenu(null); setLinksOf(a); }}>Links</button>
                           <button type="button" role="menuitem" title={SIGN_IN_TIP} data-testid={`fx-app-menu-signin-${a.key}`}
@@ -433,6 +441,10 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
       ) : null}
       {signInOf ? (
         <SignInSheet projectId={projectId} appKey={signInOf.key} app={signInOf.app} onClose={() => setSignInOf(null)} />
+      ) : null}
+      {setupOf ? (
+        <AppSetupSheet projectId={projectId} appKey={setupOf.appKey ?? null} runId={builtBuild(setupOf.builds)?.runId ?? setupOf.key}
+                       appName={setupOf.app} onClose={() => setSetupOf(null)} />
       ) : null}
       {security ? (
         <SecuritySheet projectId={projectId} appKey={security}

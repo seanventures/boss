@@ -137,6 +137,14 @@ describe("consent, from the API's 409", () => {
     expect(consentFromBody({ error: "consent_required needs you", consent: SCHEDULE_409 })?.scope).toBe("schedule");
   });
 
+  it("reads a consent request FastAPI wrapped in `detail` (tester P0-4: no top-level code, no sheet)", () => {
+    // idFetch derives the code from a top-level `error`; a detail-wrapped body has none.
+    const e = new IdentityError(409, "error", { body: { detail: BUILD_409 } });
+    expect(consentFromError(e)?.task_run_id).toBe("pending:Ab12Cd34Ef56");
+    expect(consentFromError(new IdentityError(409, "error", { body: { detail: "busy" } }))).toBeNull();
+    expect(consentFromError(new IdentityError(403, "forbidden", { body: { detail: BUILD_409 } }))).toBeNull();
+  });
+
   it("a schedule offers only the standing grant, and creates exactly that", async () => {
     const calls = wire(() => ({ status: 201, body: { id: "dlg_new" } }));
     const decided: (string | null)[] = [];

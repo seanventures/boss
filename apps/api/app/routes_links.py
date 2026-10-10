@@ -88,8 +88,8 @@ def build_links_router() -> APIRouter:
                        details={"consumer": row["consumer_app_key"], "provider": row["provider_app_key"],
                                 "alias": row["alias"], "env": row["env"], "gives": row["credentials"],
                                 "gateway_port": row["gateway_port"]})
-                shown = next(r for r in links.list_links(db, project_id, row["consumer_app_key"])
-                             if r["id"] == row["id"])
+                shown = next((r for r in links.list_links(db, project_id, row["consumer_app_key"])
+                              if r["id"] == row["id"]), {"id": row["id"], "alias": row["alias"]})
         except links.LinkError as exc:
             return _refuse(exc.status, exc.code, exc.detail)
         return JSONResponse(shown, status_code=201)

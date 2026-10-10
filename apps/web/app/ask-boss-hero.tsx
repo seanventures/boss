@@ -39,6 +39,7 @@ import { linkTo, navigate, plainClick } from "./agents/live-util";
 
 import { callAction } from "../lib/call-action";
 import { GatedButton, useGate } from "../components/gated";
+import { useIdentity } from "../components/identity/identity-provider";
 const NORMAL_SECONDS = 20;
 // The same bound the dock uses. A deep turn is genuinely longer since the answering agent
 // moved to Opus — 192s for 27 lookups, measured — and 120 handed control back in the middle of
@@ -965,7 +966,7 @@ async function postBounded(
  * Writes through the `apply` action that already exists — the same one the Workflows area
  * uses — so there is one way a mapping gets created, not two that can disagree.
  */
-function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
+export function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
   const [items, setItems] = useState<Array<{
     id: string; name: string; workflow_key: string; is_catalogue?: boolean }>>([]);
   const [current, setCurrent] = useState("");
@@ -973,6 +974,7 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
   const [note, setNote] = useState<{ text: string; title: string; bad: boolean } | null>(null);
   // The default workflow is applied to new work (POST /v1/delivery-workflows/apply: workflow:publish).
   const applyGate = useGate("workflow:publish");
+  const { stepUp } = useIdentity();
 
   useEffect(() => {
     let alive = true;
@@ -992,7 +994,7 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
     setSaving(true);
     setNote(null);
     try {
-      const res = await apiWrite("/api/delivery-workflows", {
+      const send = () => apiWrite("/api/delivery-workflows", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // `project.new` is the work class the catalogue gives Standard Product Delivery, and
@@ -1000,6 +1002,20 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
         body: JSON.stringify({ action: "apply", project_id: projectId,
                                workflow_key: key, work_class: "project.new" }),
       });
+      let res = await send();
+      // CONFIRM IT'S YOU, NOT A CODE (tester P2): workflow:publish wants a fresh second factor,
+      // and the refusal came back as the words "step_up_required" under the picker. The step-up
+      // sheet opens, and on success the same choice is sent once more.
+      if (res.status === 401) {
+        const said = await res.clone().json().catch(() => ({}));
+        if ((said as { error?: unknown })?.error === "step_up_required") {
+          if (!(await stepUp("Set the workflow every new project follows."))) {
+            setNote({ text: "Not saved: you cancelled the check", title: "", bad: true });
+            return;
+          }
+          res = await send();
+        }
+      }
       // SAY WHICH WAY IT WENT, AND WHY.
       //
       // `failed (500)` was the whole message for a fault the API could describe exactly — an

@@ -21,7 +21,8 @@ import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract
 import { ROLE_PERMISSIONS } from "../lib/identity/permissions.gen";
 import { needsWords } from "../lib/identity/words";
 import { parseReport, parseReview, reportScans, stepWord, targetRows } from "../lib/security-review";
-import { CONSENT_EVENT } from "../lib/identity/consent";
+import { NEEDS_REASON } from "../app/factory/security/app-security";
+import { CONSENT_EVENT, type ConsentRequest } from "../lib/identity/consent";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -180,6 +181,67 @@ describe("App › Security", () => {
     expect(accept.getAttribute("aria-disabled")).toBe("true");
     expect(accept.getAttribute("title")).toBe(needsWords("security_finding:triage"));
     expect(writes()).toEqual([]);
+  });
+
+  it("Accept and False positive stay disabled until a reason is typed, and say so", async () => {
+    await mount(<AppSecurity projectId="p1" appKey="vulnapp" />, "operator");
+    await act(async () => ($('[data-testid="sec-finding-sf_csp"] button') as HTMLButtonElement).click());
+    for (const id of ["sec-accept-sf_csp", "sec-fp-sf_csp"]) {
+      expect(($(`[data-testid="${id}"]`) as HTMLButtonElement).disabled).toBe(true);
+      expect($(`[data-testid="${id}"]`).getAttribute("title")).toBe(NEEDS_REASON);
+    }
+    expect($('[data-testid="sec-reason-why-sf_csp"]').textContent).toBe(NEEDS_REASON);
+    const reason = $('[data-testid="sec-reason-sf_csp"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(reason, "behind the VPN");
+      reason.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(($('[data-testid="sec-fp-sf_csp"]') as HTMLButtonElement).disabled).toBe(false);
+    expect($('[data-testid="sec-reason-why-sf_csp"]')).toBeNull();
+  });
+
+  it("a viewer or auditor sees triage greyed with the reason, like Scan now, not hidden", async () => {
+    for (const role of ["viewer", "auditor"] as const) {
+      await mount(<AppSecurity projectId="p1" appKey="vulnapp" />, role);
+      await act(async () => ($('[data-testid="sec-finding-sf_csp"] button') as HTMLButtonElement).click());
+      const input = $('[data-testid="sec-reason-sf_csp"]') as HTMLInputElement;
+      expect(input.disabled).toBe(true);
+      expect(input.title).toBe(needsWords("security_finding:triage"));
+      for (const id of ["sec-accept-sf_csp", "sec-fp-sf_csp"]) {
+        expect($(`[data-testid="${id}"]`).getAttribute("data-can")).toBe("no");
+        expect($(`[data-testid="${id}"]`).getAttribute("title")).toBe(needsWords("security_finding:triage"));
+      }
+      expect($('[data-testid="sec-scan-now"]').getAttribute("data-can")).toBe("no");
+      act(() => root?.unmount()); host?.remove();
+    }
+    expect(writes()).toEqual([]);
+  });
+
+  it("Security review that needs consent opens the consent sheet and starts once granted", async () => {
+    let first = true;
+    const base = (globalThis.fetch as unknown as (i: RequestInfo | URL, n?: RequestInit) => Promise<Response>);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input).replace(/^https?:\/\/[^/]+/, "");
+      if (path === "/v1/delivery-workflows/start" && first) {
+        first = false;
+        calls.push({ method: "POST", path, body: JSON.parse(String(init?.body)) });
+        return json({ detail: { error: "consent_required", task: "Security review", task_run_id: "pending:s1",
+                                agents: [{ id: "agt_s", name: "Sable", role_key: "security_reviewer" }],
+                                permissions: ["security_scan:run"], projects: ["p1"], durations: [{ kind: "task", label: "For this run only" }] } }, 409);
+      }
+      if (path.startsWith("/v1/identity/me/delegations")) return json({ id: "grant_s" }, 201);
+      return base(input, init);
+    }));
+    const asked: ConsentRequest[] = [];
+    const on = (e: Event) => { const d = (e as CustomEvent<ConsentRequest>).detail; asked.push(d); d.onDecided?.("grant_s"); };
+    window.addEventListener(CONSENT_EVENT, on);
+    await mount(<AppSecurity projectId="p1" appKey="vulnapp" />, "operator");
+    await act(async () => $('[data-testid="sec-review-start"]').click());
+    await settle();
+    window.removeEventListener(CONSENT_EVENT, on);
+    expect(asked.map((a) => a.task)).toEqual(["Security review"]);
+    expect(calls.filter((c) => c.path === "/v1/delivery-workflows/start")).toHaveLength(2);
+    expect($('[data-testid="sec-error"]')).toBeNull();
   });
 
   it("an operator starts a scan and a security review", async () => {

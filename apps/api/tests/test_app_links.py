@@ -284,3 +284,13 @@ def test_the_build_and_the_preview_get_the_link_environment_and_nothing_else_doe
     assert "BOSS_TEST_USERS" in provider and not any(k.startswith("BOSS_LINK_") for k in provider)
     assert 19000 <= preview_service.app_preview_port() <= 19999
     _revoke(client, world, link["id"])
+
+
+def test_a_link_is_made_only_for_an_app_that_exists(client, world, engine):
+    """A NEW app's links travel with its start (input.app_links -> app_link_requests) and its first
+    build makes them under the key it really has (test_start_requests_app_links.py). There is no
+    second door: POST /v1/apps/{app}/links never files a link under a name nothing was built as,
+    whatever the body claims."""
+    for body in ({}, {"new_app": True}):
+        refused = _create(client, world, app="Bank attacker v2", alias="BANKNEW", **body)
+        assert refused.status_code == 404 and refused.json()["error"] == "unknown_app", refused.text

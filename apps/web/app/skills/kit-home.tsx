@@ -29,6 +29,7 @@ import { readKitParams, writeKitParams, type KitParams, type KitTab } from "./ki
 import { Library } from "./library";
 import { TestCrewModal } from "./test-crew-modal";
 import { WhoCan } from "./who-can";
+import { KitTemplates } from "../../components/v2/templates/kit-templates";
 
 export function KitHome({ projectId, actor }: { projectId: string; actor: string }) {
   useTips();
@@ -141,10 +142,11 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
     <div className="kit-home" data-testid="kit-home" data-drawer={opened && tab === "kit" ? "open" : undefined}>
       <div className="kit-head">
         <div className="kit-tabs" role="tablist" aria-label="Skills & MCP">
-          {(["kit", "who", "library"] as const).map((t) => (
+          {(["kit", "who", "library", "templates"] as const).map((t) => (
             <button key={t} type="button" role="tab" aria-selected={tab === t} className="kit-tab"
-                    data-testid={`kit-tab-${t}`} onClick={() => switchTab(t)}>
-              {t === "kit" ? "Kit" : t === "who" ? "Who can" : "Library"}
+                    data-testid={`kit-tab-${t}`} onClick={() => switchTab(t)}
+                    title={t === "templates" ? "App templates: import, review, approve, trial, hide" : undefined}>
+              {t === "kit" ? "Kit" : t === "who" ? "Who can" : t === "library" ? "Library" : "Templates"}
             </button>
           ))}
         </div>
@@ -175,7 +177,7 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
         ) : null}
       </div>
 
-      {error && !kit ? (
+      {error && !kit && tab !== "templates" ? (
         <ReadFailure problem={{ text: error, status: errorStatus }} onRetry={() => void load()} testId="kit-api-error" />
       ) : null}
 
@@ -239,6 +241,8 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
         <Library projectId={projectId} actor={actor} kit={kit} crew={crew} initial={initial}
                  onKitChanged={() => void load("none")} />
       ) : null}
+
+      {tab === "templates" ? <KitTemplates projectId={projectId} /> : null}
 
       {crewOpen && kit ? (
         <TestCrewModal projectId={projectId} actor={actor} abilities={kit.abilities}
