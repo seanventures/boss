@@ -691,11 +691,14 @@ def test_ledger_failure_after_real_deletion_stays_retryable(
     try:
         with writable.begin() as c:
             c.execute(text(f'CREATE SCHEMA "{schema}"'))
-            c.execute(text("CREATE TABLE owned_resources (resource_kind text, handle text, "
-                           "released_at timestamptz, release_reason text)"))
+            ddl = (ROOT / "db/schema.sql").read_text()
+            table = ddl.split("CREATE TABLE IF NOT EXISTS owned_resources (", 1)[1].split(";", 1)[0]
+            c.execute(text("CREATE TABLE owned_resources (" + table))
         lease = bs.provision("crun_ledger_failure")
         with writable.begin() as c:
-            c.execute(text("INSERT INTO owned_resources (resource_kind, handle) VALUES (:k, :h)"),
+            c.execute(text("INSERT INTO owned_resources "
+                           "(id, owner_kind, owner_id, resource_kind, handle) "
+                           "VALUES ('own_cleanup_fixture', 'code_run', 'crun_ledger_failure', :k, :h)"),
                       {"k": bs.RESOURCE_KIND, "h": lease.ledger_handle})
         ledger = resource_ledger.DbLedger(readonly)
         monkeypatch.setattr(owned_process, "_LEDGER", ledger)
