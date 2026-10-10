@@ -2,6 +2,31 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc7]
+
+Friends-and-family preparation. Notes: [docs/community/RELEASE_NOTES_v1.0-rc7.md](docs/community/RELEASE_NOTES_v1.0-rc7.md).
+
+### Changed
+
+- First-run guides now follow the actual Owner, model-connection and task paths, with direct troubleshooting and feedback links.
+- Home leads with the next action from current records; the task composer, templates and configured roles remain available.
+- An unavailable sign-in-options read offers Retry. Help panels, focus states and primary controls are easier to use on small screens.
+- Installer readiness has a bounded deadline and attempt count.
+
+### Fixed
+
+- Backups retain matching identity keys and validate archive contents before protected purge or fresh-volume restore.
+- Workload-controlled Git runs below the workload user boundary. Repository readers and writers use confined, bounded file access.
+- Concurrent project-budget admission shares one arbitration boundary; unsettled positive holds survive expiry and period changes. Settlement uses one spend snapshot and idempotent cost evidence.
+- Discovery cancellation fences late work, receipts and retries against the owning run and job lease.
+- Direct-change spec review honors manual-approval policy and retains its gate when settings cannot be read.
+- Home primary buttons retain readable white text across normal and hover gradients.
+
+### Release scope
+
+- Incremental release on public RC6.1 ancestry; existing public contributor history is preserved. Full private-export synchronization is still pending.
+- This candidate does not certify every host, provider or restored-snapshot replay path. Read the release notes before enabling live work.
+
 ## [v1.0-rc6.1]
 
 Hotfix on v1.0-rc6. Notes: [docs/community/RELEASE_NOTES_v1.0-rc6.1.md](docs/community/RELEASE_NOTES_v1.0-rc6.1.md).

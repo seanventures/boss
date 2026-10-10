@@ -87,6 +87,8 @@ nav:
       - Features: FEATURES.md
       - Control surfaces: CONTROL_SURFACES.md
       - Terminal capability matrix: TERMINAL_CAPABILITY_MATRIX.md
+      - Release notes (v1.0-rc7): RELEASE_NOTES_v1.0-rc7.md
+      - RC7 validation: RC7_VALIDATION.md
       - Release notes (v1.0-rc6.1): RELEASE_NOTES_v1.0-rc6.1.md
       - Release notes (v1.0-rc6): RELEASE_NOTES_v1.0-rc6.md
       - Release notes (v1.0-rc5): RELEASE_NOTES_v1.0-rc5.md

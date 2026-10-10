@@ -18,8 +18,12 @@ The `Docs site` workflow in `.github/workflows/pages.yml` only verifies the buil
 
 ## Installer pin
 
-The commit-pinned GitHub command in the installer guide names one release commit. Update that pin when a new release is cut.
+The release-pinned GitHub command in the installer guide selects one release tag. The installer resolves and records its commit. Update the tag when a new release is cut; use the recorded full SHA when comparing an installed checkout with validation evidence.
 
 ## Changes pushed to `main`
 
-A release replaces the repository's tree with an export from the BOSS source. Commits pushed to `main` between releases are imported into that source first, with their authors kept, and the release refuses to run while any are missing. Each release commit names its source with a `Private-source:` trailer.
+RC7 is an incremental release on the existing public RC6.1 history. Reviewed product changes and public guides are added as focused commits, preserving contributor ancestry. Reconstructed changes name their reviewed preparation commit with a `Prepared-from:` trailer; this is not a claim that the whole private source was exported.
+
+A future full private-source export must first import all public contributor changes, retaining authors and `Imported-from:` provenance, and pass the export guard. That historical synchronization is still pending. A wholesale export that replaces the public tree remains refused until the guard passes; RC7 does not waive that requirement. Only a qualified full-export sync uses a `Private-source:` trailer.
+
+The published candidate's source archive and checksum come from its public commit. Local builds, release publication and deployment of the hosted website are separate checks.
