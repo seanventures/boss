@@ -1173,7 +1173,38 @@ templates mount: the built-ins come from the image.
 
 | # | Step | Commit | State |
 |---|---|---|---|
-| R2.1 | Merge feat/app-platform-finish (ecfeefe9): clean. Deploy guard 20 + Sign in with BOSS 16 + templates 46 + start requests 11 = 93; MCP tools 8 (alone; it errors only after the templates suite in one session); tool gate/declared/microVM 25; web 13 | (this merge) | done |
+| R2.1 | Merge feat/app-platform-finish (ecfeefe9): clean. Deploy guard 20 + Sign in with BOSS 16 + templates 46 + start requests 11 = 93; MCP tools 8 (alone; it errors only after the templates suite in one session); tool gate/declared/microVM 25; web 13 | f5c41cbe | done |
+| R2.2 | Merge fix/fx-secbackend (c3fff737): ONE deploy guard (finish's per-app attribution) + secbackend's lab rule first (a lab project deploys nothing); union of both test sets; apply keeps the micro-VM refusal AND the write=False preflight; secrets keeps bind_issued and the one-card live decision. Engine 277 (+67 skip), API 102, web 11 | fb49972a | done |
+| R2.3 | Feature: a preview keeps ITS OWN cookies (tagged `bp<sha>_`, Path `/v1/previews/<id>/`, no Domain); BOSS cookies and other previews' never pass; Set-Cookie naming a BOSS cookie or another preview's path dropped; the preview origin re-checks both ways. Node login stack's callback keeps APP_BASE_URL's path (mutation-checked: old code 400) | 86684b8f | done, operator to review |
+| R2.4 | Merge fix/fx-oidc (8aea470d): catalogue/permissions/seed/matrix/route fixtures REGENERATED. Identity 46; OIDC flow/admin/adversarial/customers/reauth/oidc:read + engine oidc 212; web 29 | 9d5e44e3 | done |
+| R2.5 | Merge fix/fx-templateui (03fdce68): ONE "Talks to" (finish's: a new app's links travel with its start; templateui's second door, POST /links with new_app filed under a title's key, removed + a test it stays shut); routes_templates keeps secbackend's atomic apply + lab; review consent keeps secbackend's flow; App menu has Setup AND Sign-in. tsc clean; web 126 | 6e3ba9f2 | done |
+| R2.6 | Merge origin/main = v1.0-rc6.1 (964c8b22: latency 966f50e4 + deploy button + bump): main.py approve_decision_card over approve_decision_in; start route keeps main's name, start_delivery_workflow keeps connection_in. Latency/feed-cache/live-proof web 335 | f8fb9597 | done |
+| R2.7 | In-preview sign-in e2e (`test_sign_in_with_boss.py::..._inside_a_preview`): real Node app, real OIDC, real preview gateway, browser holding the console session. Found: every loopback redirect was glued under the preview prefix, so BOSS's own authorize URL on a local install broke; BOSS's /oidc/ at its public origin now passes | 6949226e | done |
+
+| R2.8 | Found by the combined session: the link gateway's LISTEN connection went back into the pool in autocommit, so the next engine.begin() had no transaction (deploy guard refused everything, requested links never made, after the gateway suite). Invalidated, not pooled; mutation-checked | e70a9d1e | done |
+
+**Round-2 gates** (`boss_test_integ2`, dropped; 39 stale `boss_test_*`/`boss_*_test` DBs older than a day dropped first):
+tsc clean; full vitest 5984 passed (1 skipped); identity 46; OIDC (flow/admin/adversarial/customers/
+reauth/oidc:read/hosted forms + engine oidc) 212; API (templates, deploy guard, apply promises,
+links, gateway, start requests, security scan/review, preview cookies + origin, Sign in with BOSS
+incl. the in-preview e2e, request budget, deploy button, feature-onto-app, host changeset) 204 + the
+gateway-ordered rerun 107, all green; engine (templates, previews sandbox, F1 sandbox, link rules/
+fence, security, name-twice, redirect, route-handler, catalogue) 427 + 55 skipped.
+`engine/tests/test_distribution_contract.py` fails 4 on origin/main too (it reads deploy/helm,
+engine/Dockerfile, Dockerfile: not in this repository).
+
+**Round-2 compose proof** (project `bossint2`, image 6949226e, `down -v` after): hello apply -> governed
+build -> template_tests + no_committed_secrets passed -> PR on the fake GitHub: PASS. The in-preview
+sign-in ran as `test_sign_in_with_boss.py::..._inside_a_preview` (real Node app, real OIDC, the real
+preview gateway), not on the compose stack. `scripts/e2e.sh perf --seed`: every budget met but one,
+`overview: duplicate_calls 1 > 0` (GET /v1/identity/me twice in one render); origin/main (rc6.1)
+measured on the same data with `--root` fails the same budget the same way: pre-existing.
+
+**Decisions for the operator (round 2)**: (1) preview cookies (R2.3) are on by default: the app's
+own cookies only, tagged and path-scoped; a fetch() from the sandboxed (opaque-origin) page still
+sends no cookie, so server-rendered sign-in works in a preview and an SPA's credentialed fetch does
+not (that needs per-app preview origins). (2) One "Talks to" (finish's); templateui's new_app door
+removed. (3) A lab project deploys nothing (secbackend) on top of the per-app guard (finish).
 
 ### Resume (integration)
 
