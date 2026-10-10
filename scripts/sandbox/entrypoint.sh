@@ -37,6 +37,40 @@ if [ "$(id -u)" != "0" ]; then
   exec "$@"
 fi
 
+ipv6_unavailable() {
+  # Missing rules are safe only when the kernel cannot create an IPv6 socket.
+  # An empty address list or disabled interface is not proof: another interface may appear.
+  python3 - <<'PY'
+import errno
+import socket
+import sys
+try:
+    sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+except OSError as exc:
+    sys.exit(0 if exc.errno in (errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT) else 1)
+else:
+    sock.close()
+    sys.exit(1)
+PY
+}
+
+fence_ipv6() {
+  if ipv6_unavailable; then
+    return 0
+  fi
+  command -v ip6tables >/dev/null 2>&1 || return 1
+  ip6tables -L >/dev/null 2>&1 || return 1
+  ip6tables -N BOSS_SANDBOX 2>/dev/null || ip6tables -F BOSS_SANDBOX || return 1
+  ip6tables -D OUTPUT -m owner --uid-owner "$UID_RANGE" -j BOSS_SANDBOX 2>/dev/null || true
+  ip6tables -A BOSS_SANDBOX -o lo -d ::1/128 -j ACCEPT || return 1
+  ip6tables -A BOSS_SANDBOX -j REJECT || return 1
+  ip6tables -A OUTPUT -m owner --uid-owner "$UID_RANGE" -j BOSS_SANDBOX || return 1
+  # Do not issue the fenced marker unless the required rules can also be read back.
+  ip6tables -C BOSS_SANDBOX -o lo -d ::1/128 -j ACCEPT || return 1
+  ip6tables -C BOSS_SANDBOX -j REJECT || return 1
+  ip6tables -C OUTPUT -m owner --uid-owner "$UID_RANGE" -j BOSS_SANDBOX || return 1
+}
+
 fence_network() {
   command -v iptables >/dev/null 2>&1 || return 1
   iptables -N BOSS_SANDBOX 2>/dev/null || iptables -F BOSS_SANDBOX || return 1
@@ -63,13 +97,7 @@ PY
   done
   iptables -A BOSS_SANDBOX -j REJECT || return 1
   iptables -A OUTPUT -m owner --uid-owner "$UID_RANGE" -j BOSS_SANDBOX || return 1
-  if command -v ip6tables >/dev/null 2>&1 && ip6tables -L >/dev/null 2>&1; then
-    ip6tables -N BOSS_SANDBOX 2>/dev/null || ip6tables -F BOSS_SANDBOX
-    ip6tables -A BOSS_SANDBOX -o lo -d ::1/128 -j ACCEPT
-    ip6tables -A BOSS_SANDBOX -j REJECT
-    ip6tables -A OUTPUT -m owner --uid-owner "$UID_RANGE" -j BOSS_SANDBOX
-  fi
-  return 0
+  fence_ipv6 || return 1
 }
 
 mkdir -p "$SHIM_ROOT"
@@ -79,7 +107,8 @@ case "$MODE" in
   *)
     if ! fence_network; then
       echo "boss: ************************************************************************" >&2
-      echo "boss: could not install the sandbox network rules (needs iptables with the owner" >&2
+      echo "boss: could not install the sandbox network rules (needs IPv4 and usable IPv6" >&2
+      echo "boss: iptables with the owner" >&2
       echo "boss: match, and cap_add NET_ADMIN). Rootless Docker, gVisor and some WSL2 and VPS" >&2
       echo "boss: kernels cannot do this." >&2
       if [ "$MODE" = "required" ]; then
@@ -91,7 +120,7 @@ case "$MODE" in
       echo "boss: builds reaching this container's networks. See docs/community/SANDBOX.md." >&2
       echo "boss: ************************************************************************" >&2
       # Read by the API (sandbox_identity.network_problem) and boss doctor: why builds are held.
-      echo "iptables owner-match rules could not be installed" > "$SHIM_ROOT/.network-unfenced"
+      echo "IPv4/IPv6 owner-match rules could not be installed" > "$SHIM_ROOT/.network-unfenced"
       chmod 0444 "$SHIM_ROOT/.network-unfenced"
     else
     # The API refuses to start an isolated build without this marker (sandbox_identity.available).
