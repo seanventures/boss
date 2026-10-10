@@ -1222,12 +1222,30 @@ def run_checks(connection: Connection, settings: Any, project_id: str, target: s
     else:
         raise SetupActionError(422, "failed", "Unknown check",
                                "all, repository, repository:<id> or model:<id>.")
+    if target == "all":
+        _verify_github_app(connection)
     for kind, item in todo:
         if kind == "repository":
             check_repository(connection, settings, project_id, item, actor=actor, http=http)
         else:
             check_model(connection, settings, project_id, item, actor=actor, http=model_http,
                         prove_with=prove_with)
+
+
+def _verify_github_app(connection: Connection) -> None:
+    """Test all also asks GitHub what the Setup-created App's installation actually accepted
+    (identity/github_setup.verify): its answer is what GitHub access shows. Best effort: no App,
+    no identity tables or GitHub down leaves the last answer standing."""
+    from ..identity import github_setup
+
+    point = connection.begin_nested()
+    try:
+        cfg = github_setup.app_config(connection)
+        if cfg.get("source") == "setup" and cfg.get("app_id"):
+            github_setup.verify(connection)
+        point.commit()
+    except Exception:  # noqa: BLE001
+        point.rollback()
 
 
 # ── Try it ────────────────────────────────────────────────────────────────────────────────────

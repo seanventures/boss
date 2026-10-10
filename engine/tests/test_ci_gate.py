@@ -342,11 +342,26 @@ def test_the_merge_effect_refuses_an_approval_that_was_not_a_persons():
 # ---- the opt-in link and the workflow step ------------------------------------------------------
 
 def test_the_permissions_link_names_the_apps_own_page():
-    org = ci_gate.permissions_link({"slug": "boss-x", "account_login": "acme",
-                                    "installation_id": "42"}, "https://github.com")
+    """The App's page is in its OWNER's tree, the installation's in the INSTALLED account's tree,
+    each by the type GitHub reported (identity/github_urls.py)."""
+    org = ci_gate.permissions_link({"slug": "boss-x", "owner_login": "acme", "owner_type": "Organization",
+                                    "account_login": "acme", "account_type": "Organization",
+                                    "installation_id": "42"})
     assert org["permissions_url"] == "https://github.com/organizations/acme/settings/apps/boss-x/permissions"
-    assert org["permissions_url_personal"] == "https://github.com/settings/apps/boss-x/permissions"
     assert org["installation_url"] == "https://github.com/organizations/acme/settings/installations/42"
+    personal = ci_gate.permissions_link({"slug": "boss-x", "owner_login": "paramg", "owner_type": "User",
+                                         "account_login": "paramg", "account_type": "User",
+                                         "installation_id": "42"})
+    assert personal["permissions_url"] == "https://github.com/settings/apps/boss-x/permissions"
+    assert personal["installation_url"] == "https://github.com/settings/installations/42"
+    mixed = ci_gate.permissions_link({"slug": "boss-x", "owner_login": "paramg", "owner_type": "User",
+                                      "account_login": "acme", "account_type": "Organization",
+                                      "installation_id": "42"})
+    assert mixed["permissions_url"] == "https://github.com/settings/apps/boss-x/permissions"
+    assert mixed["installation_url"] == "https://github.com/organizations/acme/settings/installations/42"
+    unknown = ci_gate.permissions_link({"slug": "boss-x", "account_login": "paramg", "installation_id": "42"})
+    assert unknown["permissions_url"] == "https://github.com/apps/boss-x"      # public page, never a guess
+    assert unknown["installation_url"] is None and "person or an organisation" in unknown["note"]
     none = ci_gate.permissions_link({}, "https://github.com")
     assert none["permissions_url"] is None and "Workflows" in none["note"]
 

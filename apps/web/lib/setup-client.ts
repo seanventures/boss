@@ -55,11 +55,16 @@ export type CiWorkflows = {
   binding_id: string; repository: string; label: string; help: string; enabled: boolean;
   requires: string; permissions_url?: string | null; installation_url?: string | null;
   note?: string;
+  /** What GitHub last said about `workflows` on the installation — never what BOSS asked for. */
+  workflows?: { state: "accepted" | "waiting" | "app_lacks" | "unknown"; fix_url: string | null;
+                checked_at?: number | null };
 };
 
-export async function fetchCiWorkflows(projectId: string, bindingId: string): Promise<CiWorkflows> {
+export async function fetchCiWorkflows(projectId: string, bindingId: string,
+                                       recheck = false): Promise<CiWorkflows> {
   const r = await fetch(`/api/setup?project_id=${encodeURIComponent(projectId)}`
-                        + `&ci_workflows=${encodeURIComponent(bindingId)}`, { cache: "no-store" });
+                        + `&ci_workflows=${encodeURIComponent(bindingId)}${recheck ? "&recheck=1" : ""}`,
+                        { cache: "no-store" });
   return read<CiWorkflows>(r);
 }
 

@@ -25,17 +25,35 @@ import { toast, useBoard } from "./parts";
 import { Dot, Out, Tip } from "./pill";
 
 export type GitHubMode = "app" | "token" | "as_me" | "none";
+type AccountType = "User" | "Organization" | null;
+/** Every GitHub page for the App, built on the server from the account type GitHub reported. */
+export type AppLinks = { app?: string | null; app_settings?: string | null; permissions?: string | null;
+                         install?: string | null; installation?: string | null };
+/** What GitHub last said the installation was ACTUALLY granted (POST /v1/identity/github/app/verify). */
+export type Verified = {
+  state: "ok" | "not_installed" | "installation_gone" | "app_gone" | "unreachable" | "no_app";
+  ok?: boolean; checked_at?: number;
+  account?: { login: string | null; type: AccountType };
+  permissions?: { name: string; wanted: string; granted: string | null;
+                  state: "accepted" | "waiting" | "app_lacks"; fix_url: string | null }[];
+  repos?: { full_name: string; installed: boolean | null; fix_url: string | null }[];
+  installed_on?: string[] | null; repository_selection?: string | null;
+  links?: AppLinks;
+};
 export type GitHubStatus = {
   mode: GitHubMode;
   /** The row's pill, decided by the server. */
   verdict: { tone: Tone; label: string; tip: string };
   app: { configured: boolean; installed: boolean; slug: string | null; html_url: string | null;
-         account: string | null; source: "env" | "setup" | null };
+         account: string | null; source: "env" | "setup" | null;
+         account_type?: AccountType; owner?: string | null; owner_type?: AccountType;
+         links?: AppLinks; verified?: Verified | null };
   token: { repos: string[]; login: string | null; migrated: boolean } | null;
   people_connected: number;
   env_token: { present: boolean; read_by_builds: boolean };
 };
-type Installation = { id: string; account: string | null; repository_selection: string | null };
+type Installation = { id: string; account: string | null; account_type?: AccountType;
+                      repository_selection: string | null };
 type Tone = "green" | "amber" | "red" | "grey";
 
 const SANDBOX_TIP = "Egress adds the credential to each request. The build's sandbox never holds it.";
@@ -45,7 +63,93 @@ const FAILED_WORDS: Record<string, string> = {
   state_replayed: "That link was already used.",
   manifest_conversion_failed: "GitHub did not hand over the App. Start again.",
   not_this_apps_installation: "That installation belongs to another App.",
+  github_account_not_found: "GitHub has no account by that name. Leave it blank for your own account.",
 };
+
+/** Said after "Test all" so the row asks GitHub again (setup-board.tsx dispatches it). */
+export const SETUP_TESTED_EVENT = "boss:setup-tested";
+
+const PERMISSION_WORDS: Record<string, string> = {
+  contents: "Contents", pull_requests: "Pull requests", workflows: "Workflows", checks: "Checks",
+  statuses: "Commit statuses", metadata: "Metadata", issues: "Issues", actions: "Actions",
+};
+const GONE_WORDS: Record<string, string> = {
+  installation_gone: "The App was uninstalled on GitHub. Install it again.",
+  app_gone: "GitHub no longer knows this App. Disconnect it and create a new one.",
+  unreachable: "GitHub did not answer. Check again in a minute.",
+  not_installed: "Not installed on any account yet.",
+};
+const kindWord = (t: AccountType | undefined) => (t === "User" ? "personal" : t === "Organization" ? "organization" : "");
+
+/** "Verify, don't trust": what GitHub granted, each gap with the page that closes it. */
+function VerifiedLines({ v, links, checking, onCheck }: {
+  v: Verified | null | undefined; links: AppLinks; checking: boolean; onCheck: () => void;
+}) {
+  const again = (
+    <button type="button" className="su-link" onClick={onCheck} disabled={checking} data-testid="gh-app-verify"
+            title="Ask GitHub again what the App was granted." data-tip="Ask GitHub again what the App was granted.">
+      {checking ? <CircleNotch className="su-spin" size={12} aria-hidden /> : null}Check again
+    </button>
+  );
+  if (!v) {
+    return <span className="su-line su-faint" data-testid="gh-app-verified" data-state="unknown">
+      {checking ? "Asking GitHub what it granted…" : "Not checked with GitHub yet."} {again}</span>;
+  }
+  if (v.state !== "ok") {
+    const fix = v.state === "installation_gone" || v.state === "not_installed" ? links.install : null;
+    return (
+      <span className="su-line" data-testid="gh-app-verified" data-state={v.state}>
+        <Dot tone="red" />{GONE_WORDS[v.state] ?? "GitHub did not confirm the App."}
+        {fix ? <Out href={fix} testid="gh-app-reinstall">Install on GitHub</Out> : null}{again}
+      </span>
+    );
+  }
+  const perms = v.permissions ?? [];
+  const gaps = perms.filter((p) => p.state !== "accepted");
+  const workflows = perms.find((p) => p.name === "workflows");
+  const shown = workflows && workflows.state === "accepted" ? [...gaps, workflows] : gaps;
+  const where = v.account?.login ? `@${v.account.login}` : "";
+  return (
+    <div className="su-stack" data-testid="gh-app-verified" data-state={v.ok ? "ok" : "gaps"}>
+      <span className="su-line">
+        <Dot tone={v.ok ? "green" : "amber"} />Installed on <span className="su-mono" data-user-text>{where}</span>
+        {kindWord(v.account?.type) ? <span className="su-faint">{kindWord(v.account?.type)}</span> : null}
+        {v.repository_selection === "all" ? <span className="su-faint">· all repositories</span> : null}
+        {again}
+      </span>
+      {gaps.length === 0 ? (
+        <span className="su-line" data-testid="gh-perm-all"><Dot tone="green" />Permissions: all accepted ✓</span>
+      ) : null}
+      {shown.map((p) => (
+        <span key={p.name} className="su-line" data-testid={`gh-perm-${p.name}`} data-state={p.state}>
+          <Dot tone={p.state === "accepted" ? "green" : "amber"} />
+          {PERMISSION_WORDS[p.name] ?? p.name}: {p.state === "accepted" ? "accepted ✓"
+            : p.state === "waiting" ? "waiting for you to accept" : "the App does not ask for it yet"}
+          {p.state !== "accepted" && p.fix_url ? (
+            <Out href={p.fix_url} testid={`gh-perm-${p.name}-fix`}
+                 tip={p.state === "waiting" ? "On the installation's page, press “Review request”, then Accept new permissions. Then Check again."
+                      : `On the App's page, set ${PERMISSION_WORDS[p.name] ?? p.name} to “${p.wanted === "write" ? "Read and write" : "Read-only"}” and save. Then accept it on the installation.`}>
+              {p.state === "waiting" ? "Accept on GitHub" : "Add on GitHub"}
+            </Out>
+          ) : null}
+        </span>
+      ))}
+      {(v.repos ?? []).map((r) => (
+        <span key={r.full_name} className="su-line" data-testid="gh-repo-verified" data-installed={String(r.installed)}>
+          <Dot tone={r.installed ? "green" : r.installed === false ? "red" : "grey"} />
+          <span className="su-mono" data-user-text>{r.full_name}</span>
+          {r.installed ? "✓" : r.installed === false ? "the App is not installed on it" : "not confirmed"}
+          {r.installed === false && r.fix_url ? (
+            <Out href={r.fix_url} testid="gh-repo-verified-fix"
+                 tip="On the installation's page, add this repository under Repository access, save, then Check again.">
+              Add it on GitHub
+            </Out>
+          ) : null}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 /** Only a whole answer renders; anything else (an older API, a proxy page) reads as "Not reported". */
 export function statusOf(raw: unknown): GitHubStatus | null {
@@ -77,13 +181,50 @@ function postManifest(postUrl: string, manifest: unknown): void {
   window.location.assign(HANDOFF_PATH);
 }
 
-function AppCard({ status, reload }: { status: GitHubStatus; reload: () => void }) {
+function AppCard({ status, reload, back = false }: { status: GitHubStatus; reload: () => void; back?: boolean }) {
   const guarded = useGuardedCall();
   const [owner, setOwner] = useState("");
   const [busy, setBusy] = useState(false);
   const [picker, setPicker] = useState<Installation[] | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [verified, setVerified] = useState<Verified | null>(status.app.verified ?? null);
   const app = status.app;
+  const links: AppLinks = { ...(app.links ?? {}), ...(verified?.links ?? {}) };
+  useEffect(() => { setVerified(status.app.verified ?? null); }, [status.app.verified]);
+
+  const verify = useCallback(async () => {
+    setChecking(true);
+    try {
+      setVerified(await idPost<Verified>("/v1/identity/github/app/verify", {}));
+    } catch (error) {
+      toast(sentence(error), "error");
+    } finally { setChecking(false); }
+  }, []);
+  // ASKED AGAIN when GitHub sends the person back, when Test all runs, and once when the App is
+  // installed but GitHub was never asked — never trusted from what BOSS requested.
+  const installed = app.installed && app.source === "setup";
+  useEffect(() => {
+    if (!installed) return;
+    if (back || !status.app.verified) void verify();
+    const again = () => { void verify(); };
+    window.addEventListener(SETUP_TESTED_EVENT, again);
+    return () => window.removeEventListener(SETUP_TESTED_EVENT, again);
+  }, [installed, verify, status.app.verified, back]);
+  // A GAP IS FIXED ON GITHUB, in another tab: coming back to this one asks again (at most every 10s).
+  const gap = installed && verified !== null && verified.ok === false;
+  useEffect(() => {
+    if (!gap) return;
+    let last = Date.now();
+    const onFocus = () => {
+      if (document.visibilityState !== "visible" || Date.now() - last < 10_000) return;
+      last = Date.now();
+      void verify();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => { window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onFocus); };
+  }, [gap, verify]);
 
   const create = async () => {
     setBusy(true);
@@ -133,9 +274,10 @@ function AppCard({ status, reload }: { status: GitHubStatus; reload: () => void 
     body = (
       <>
         <label className="su-field">
-          <span className="su-field-label">GitHub org (blank for your account)</span>
+          <Tip tip="Blank creates the App on your own GitHub account. Type an organization's name to create it there (you must be an owner of it)."
+               className="su-field-label">Organization (optional)</Tip>
           <input value={owner} onChange={(e) => setOwner(e.target.value.replace(/[^A-Za-z0-9-]/g, ""))}
-                 placeholder="acme" aria-label="GitHub org" data-testid="gh-app-owner" maxLength={100} />
+                 placeholder="blank = your account" aria-label="GitHub organization" data-testid="gh-app-owner" maxLength={100} />
         </label>
         <GatedButton permission="github:connect" type="button" className="su-btn su-btn-primary" onClick={create} disabled={busy}
                 data-testid="gh-app-create" title="Opens GitHub with the App's permissions filled in."
@@ -150,7 +292,7 @@ function AppCard({ status, reload }: { status: GitHubStatus; reload: () => void 
       <>
         <span className="su-line"><Dot tone="amber" />Created{app.slug ? <span className="su-mono" data-user-text>{app.slug}</span> : null} · not installed</span>
         <div className="su-line">
-          {app.html_url ? <Out href={`${app.html_url}/installations/new`} testid="gh-app-install"
+          {links.install ? <Out href={links.install} testid="gh-app-install"
                                tip="Pick the repos it may touch.">Install on GitHub</Out> : null}
           <button type="button" className="su-btn su-btn-sm" onClick={loadPicker} disabled={busy}
                   data-testid="gh-app-pick">Pick installation</button>
@@ -161,8 +303,12 @@ function AppCard({ status, reload }: { status: GitHubStatus; reload: () => void 
     body = (
       <>
         <span className="su-line"><Dot tone="green" />Connected{app.account ? <span className="su-mono" data-user-text>@{app.account}</span> : null}</span>
+        {app.source === "setup" ? <VerifiedLines v={verified} links={links} checking={checking} onCheck={() => void verify()} /> : null}
         <div className="su-line">
-          {app.html_url ? <Out href={app.html_url} tip="Change its repos on GitHub.">Manage on GitHub</Out> : null}
+          {links.installation || links.app || app.html_url ? (
+            <Out href={(links.installation ?? links.app ?? app.html_url) as string} testid="gh-app-manage"
+                 tip="Change which repositories it may reach, on GitHub.">Manage on GitHub</Out>
+          ) : null}
           {app.source === "env" ? <Tip tip="Set by BOSS_GITHUB_APP_ID in the server's environment." className="su-chip">From install</Tip>
             : <button type="button" className="su-link" onClick={() => setConfirming(true)} data-testid="gh-app-disconnect">Disconnect</button>}
         </div>
@@ -180,6 +326,7 @@ function AppCard({ status, reload }: { status: GitHubStatus; reload: () => void 
             <li key={i.id}>
               <button type="button" className="su-option" onClick={() => choose(i.id)} disabled={busy}>
                 <span className="su-mono" data-user-text>@{i.account ?? i.id}</span>
+                {kindWord(i.account_type) ? <span className="su-faint">{kindWord(i.account_type)}</span> : null}
                 <span className="su-faint">{i.repository_selection === "all" ? "all repos" : "selected repos"}</span>
               </button>
             </li>
@@ -281,6 +428,7 @@ export function GitHubAccessRow({ initial = null }: { initial?: GitHubStatus | n
   const { view } = useBoard();
   const [status, setStatus] = useState<GitHubStatus | null>(initial);
   const [failed, setFailed] = useState<string | null>(null);
+  const [back, setBack] = useState(false);
   const repos = view.repository.repos.map((r) => r.full_name);
 
   const reload = useCallback(() => {
@@ -299,7 +447,7 @@ export function GitHubAccessRow({ initial = null }: { initial?: GitHubStatus | n
       const params = new URLSearchParams(window.location.search);
       const said = params.get("github");
       if (!said) return;
-      if (said === "app_connected") toast("GitHub App connected");
+      if (said === "app_connected") { toast("GitHub App connected"); setBack(true); }
       else toast(FAILED_WORDS[params.get("reason") ?? ""] ?? "GitHub App not connected", "error");
       params.delete("github"); params.delete("reason");
       window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
@@ -323,7 +471,7 @@ export function GitHubAccessRow({ initial = null }: { initial?: GitHubStatus | n
             </span>
             {status.env_token.present ? <MoveEnvToken repos={repos} reload={reload} /> : null}
             <div className="su-ways">
-              <AppCard status={status} reload={reload} />
+              <AppCard status={status} reload={reload} back={back} />
               <AsMeCard status={status} />
               <TokenCard status={status} reload={reload} />
             </div>

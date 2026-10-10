@@ -67,7 +67,8 @@ describe("GitHub access", () => {
 
   it("a created App offers Install and the picker, and choosing posts the installation", async () => {
     const api = fakeApi(board());
-    const created = { ...NONE, app: { ...NONE.app, configured: true, slug: "boss-x", html_url: "https://github.com/apps/boss-x", source: "setup" } };
+    const created = { ...NONE, app: { ...NONE.app, configured: true, slug: "boss-x", html_url: "https://github.com/apps/boss-x", source: "setup",
+                                      links: { install: "https://github.com/apps/boss-x/installations/new" } } };
     withGitHub(api, created, (url) => url.endsWith("/app/installations")
       ? { installations: [{ id: "42", account: "acme", repository_selection: "selected" }] } : null);
     mounted = await mountBoard(board());
@@ -123,5 +124,51 @@ describe("GitHub access", () => {
     expect(api.calls.some((c) => c.op === "repo_app")).toBe(true);
     expect(document.querySelector('[data-testid="su-token-found"]')!.textContent).toContain("GitHub App on");
     expect(document.body.textContent).toContain("acme/web");
+  });
+
+  // VERIFY, DON'T TRUST: what GitHub says the installation was granted, each gap with its page.
+  const PERSONAL_LINKS = { app: "https://github.com/apps/boss-x", install: "https://github.com/apps/boss-x/installations/new",
+                           permissions: "https://github.com/settings/apps/boss-x/permissions",
+                           installation: "https://github.com/settings/installations/42" };
+  const installedPersonal = (verified: unknown) => ({ ...NONE, mode: "app",
+    verdict: { tone: "green", label: "GitHub App · @paramg", tip: "t" },
+    app: { configured: true, installed: true, slug: "boss-x", html_url: "https://github.com/apps/boss-x", account: "paramg",
+           account_type: "User", owner: "paramg", owner_type: "User", source: "setup", links: PERSONAL_LINKS, verified } });
+
+  it("shows what GitHub accepted: Workflows waiting with the installation's page, a repo the App is not on", async () => {
+    const api = fakeApi(board());
+    const verified = { state: "ok", ok: false, account: { login: "paramg", type: "User" }, repository_selection: "selected",
+      permissions: [{ name: "contents", wanted: "write", granted: "write", state: "accepted", fix_url: null },
+                    { name: "workflows", wanted: "write", granted: null, state: "waiting", fix_url: PERSONAL_LINKS.installation }],
+      repos: [{ full_name: "paramg/boss-sandbox", installed: true, fix_url: null },
+              { full_name: "paramg/other", installed: false, fix_url: PERSONAL_LINKS.installation }],
+      links: PERSONAL_LINKS };
+    withGitHub(api, installedPersonal(verified));
+    mounted = await mountBoard(board());
+    const wf = document.querySelector('[data-testid="gh-perm-workflows"]')!;
+    expect(wf.getAttribute("data-state")).toBe("waiting");
+    expect(wf.textContent).toContain("Workflows: waiting for you to accept");
+    expect(document.querySelector('[data-testid="gh-perm-workflows-fix"]')!.getAttribute("href"))
+      .toBe("https://github.com/settings/installations/42");
+    const repos = [...document.querySelectorAll('[data-testid="gh-repo-verified"]')];
+    expect(repos.map((r) => r.getAttribute("data-installed"))).toEqual(["true", "false"]);
+    expect(repos[0].textContent).toContain("paramg/boss-sandbox✓");
+    expect(document.querySelector('[data-testid="gh-app-manage"]')!.getAttribute("href"))
+      .toBe("https://github.com/settings/installations/42");
+    expect(document.body.innerHTML).not.toContain("/organizations/paramg");
+  });
+
+  it("asks GitHub when it was never asked, and Check again asks again", async () => {
+    const api = fakeApi(board());
+    const answer = { state: "ok", ok: true, account: { login: "paramg", type: "User" },
+      permissions: [{ name: "workflows", wanted: "write", granted: "write", state: "accepted", fix_url: null }],
+      repos: [], links: PERSONAL_LINKS };
+    withGitHub(api, installedPersonal(null), (url, method) => (method === "POST" && url.endsWith("/app/verify") ? answer : null));
+    mounted = await mountBoard(board());
+    await flush();
+    expect(api.calls.filter((c) => c.url.endsWith("/app/verify")).length).toBe(1);
+    expect(document.querySelector('[data-testid="gh-perm-workflows"]')!.textContent).toContain("Workflows: accepted ✓");
+    await click(document.querySelector('[data-testid="gh-app-verify"]'));
+    expect(api.calls.filter((c) => c.url.endsWith("/app/verify")).length).toBe(2);
   });
 });

@@ -68,6 +68,7 @@ export async function GET(req: Request) {
   const ciWorkflows = url.searchParams.get("ci_workflows");
   const path = ciWorkflows
     ? `/v1/setup/repository/${enc(ciWorkflows)}/ci-workflows?project_id=${enc(projectId)}`
+      + (url.searchParams.get("recheck") === "1" ? "&recheck=true" : "")
     : repos
     ? `/v1/setup/repository/repos?project_id=${enc(projectId)}&connection_id=${enc(repos)}`
     : catalogue

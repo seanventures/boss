@@ -6,6 +6,7 @@
   GET    /v1/identity/github/app/installed          GitHub's redirect after the App is installed (state-bound)
   GET    /v1/identity/github/app/installations      the installation picker
   POST   /v1/identity/github/app/installation       choose one
+  POST   /v1/identity/github/app/verify             what GitHub actually granted (permissions, repositories)
   DELETE /v1/identity/github/app                    forget the App
   POST   /v1/identity/github/token                  the fallback: a fine-grained token for named repos
   DELETE /v1/identity/github/token
@@ -91,9 +92,13 @@ def build_identity_github_router() -> APIRouter:
 
                 # workflows: write only when a repository opted in ("Builds may change CI
                 # workflows", Owner/Admin + step-up); otherwise the App never asks for it.
+                # A person or an organisation? GitHub says (GET /users/{owner}); the two create
+                # Apps on different pages (identity/github_urls.py).
+                account = github_setup.resolve_owner(body.owner or None)
                 return github_setup.manifest(origin=public_origin(db, ctx.principal.org_id) or "",
                                              person_id=ctx.principal.id, owner=body.owner or None,
-                                             allow_workflows=ci_gate.any_repo_allows_workflows(db))
+                                             allow_workflows=ci_gate.any_repo_allows_workflows(db),
+                                             owner_account=account)
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
 
@@ -130,6 +135,18 @@ def build_identity_github_router() -> APIRouter:
             with begin() as db:
                 ctx = current_context(request, db)
                 return {"installations": github_setup.installations(db=db, org_id=ctx.principal.org_id)}
+        except Exception as exc:  # noqa: BLE001
+            return _err(exc)
+
+    @router.post("/v1/identity/github/app/verify")
+    @permit(P.GITHUB_READ, scope=Scope.org())     # asks GitHub, keeps its answer; changes no credential
+    def app_verify(request: Request):
+        """What GitHub actually granted the installation: permissions accepted or waiting, and
+        the repositories it was installed on, each gap with the GitHub page that closes it."""
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                return github_setup.verify(db, ctx.principal.org_id)
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
 

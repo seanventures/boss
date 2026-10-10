@@ -27,6 +27,7 @@ from urllib.parse import urlencode
 
 from sqlalchemy import text
 
+from . import github_urls
 from . import http as safe_http
 from . import vault
 from .authn import PREAUTH_COOKIE
@@ -55,8 +56,8 @@ PRESETS: dict[str, dict[str, Any]] = {
     "microsoft": {"protocol": "oidc", "issuer_template": "https://login.microsoftonline.com/{tenant}/v2.0"},
     "apple": {"protocol": "oidc", "issuer": "https://appleid.apple.com", "response_mode": "form_post"},
     "github": {"protocol": "oauth2", "issuer": GITHUB_ISSUER,
-               "authorization_endpoint": "https://github.com/login/oauth/authorize",
-               "token_endpoint": "https://github.com/login/oauth/access_token",
+               "authorization_endpoint": github_urls.OAUTH_AUTHORIZE_PUBLIC,
+               "token_endpoint": github_urls.OAUTH_TOKEN_PUBLIC,
                "user_endpoint": "https://api.github.com/user",
                "emails_endpoint": "https://api.github.com/user/emails",
                "scopes": ["read:user", "user:email"]},

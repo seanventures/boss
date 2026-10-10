@@ -18,6 +18,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Literal, Optional
 
+from ..identity import github_urls
+
 IdpStatus = Literal["available", "planned"]
 Protocol = Literal["oidc", "saml", "scim"]
 
@@ -296,7 +298,7 @@ IDENTITY_PROVIDER_CATALOG: list[dict[str, Any]] = [
             "Create an OAuth App or GitHub App under Organization settings.",
             "Set Authorization callback URL to BOSS callback.",
             "Copy Client ID; store Client Secret as secret_ref.",
-            "Issuer for GitHub user OIDC tokens is https://github.com/login/oauth "
+            f"Issuer for GitHub user OIDC tokens is {github_urls.OAUTH_ISSUER_PUBLIC} "
             "(or use device/user flows via API).",
             "Prefer organization membership checks for access control.",
             "Register in BOSS as OIDC metadata-only first, then auth_allowed.",
@@ -312,8 +314,8 @@ IDENTITY_PROVIDER_CATALOG: list[dict[str, Any]] = [
             "issuer": "https://token.actions.githubusercontent.com",
             "oidc_discovery": "https://token.actions.githubusercontent.com/.well-known/openid-configuration",
             "jwks_url": "https://token.actions.githubusercontent.com/.well-known/jwks",
-            "authorize_url": "https://github.com/login/oauth/authorize",
-            "token_url": "https://github.com/login/oauth/access_token",
+            "authorize_url": github_urls.OAUTH_AUTHORIZE_PUBLIC,
+            "token_url": github_urls.OAUTH_TOKEN_PUBLIC,
         },
         docs_url="https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps",
         config_fields=[

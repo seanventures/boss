@@ -27,7 +27,7 @@ import { CapacityRow } from "./capacity-row";
 import { ModelsRow } from "./models-row";
 import { BoardContext, toast } from "./parts";
 import { Dot, localView } from "./pill";
-import { GitHubAccessRow } from "./github-access-row";
+import { GitHubAccessRow, SETUP_TESTED_EVENT } from "./github-access-row";
 import { RepositoryRow } from "./repository-row";
 import { RoutingRow } from "./routing-row";
 import { TryRow } from "./try-row";
@@ -187,6 +187,8 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
     setChecking("all", true);
     try {
       setView(await setupWrite<SetupView>(projectId, "checks", { target: "all" }, { label: "Test all" }));
+      // GitHub access asks GitHub again what the App was granted (github-access-row.tsx).
+      try { window.dispatchEvent(new Event(SETUP_TESTED_EVENT)); } catch { /* no window */ }
     } catch (e) {
       toast((e as SetupFailure).refusal?.headline ?? "Check failed", "error");
     } finally { setChecking("all", false); }

@@ -9,6 +9,7 @@ import React, { forwardRef, useEffect, useRef, useState } from "react";
 import { CircleNotch, Plus } from "@phosphor-icons/react";
 
 import { idGet } from "../../lib/identity/api";
+import { newFineGrainedTokenUrl } from "../../lib/github-urls";
 import { fetchRepos, fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import { ageLabel, daysUntil } from "../../lib/setup-stepper";
 import type { CheckResult, RepoEntry, SetupRefusal, SetupView, TokenFound } from "../../lib/setup-types";
@@ -31,7 +32,7 @@ const EXPIRY_SHOWN_DAYS = 365;
 
 /** GitHub's new-token page with the two permissions BOSS needs filled in (spec §6.4). */
 export function createTokenUrl(host: string): string {
-  const params = new URLSearchParams({
+  return newFineGrainedTokenUrl({
     name: `BOSS (${host})`.slice(0, 40),
     description: "BOSS writes branches and opens pull requests",
     expires_in: "90",
@@ -39,7 +40,6 @@ export function createTokenUrl(host: string): string {
     pull_requests: "write",
     metadata: "read",
   });
-  return `https://github.com/settings/personal-access-tokens/new?${params.toString()}`;
 }
 
 function refusalOf(error: unknown): SetupRefusal {

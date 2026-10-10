@@ -11,7 +11,37 @@ import React, { useEffect, useState } from "react";
 import { GatedButton } from "../../components/gated";
 import { fetchCiWorkflows, setupWrite, type CiWorkflows } from "../../lib/setup-client";
 import { toast, useBoard } from "./parts";
-import { Out, Tip } from "./pill";
+import { Dot, Out, Tip } from "./pill";
+
+/** VERIFIED, NOT ASSUMED: what GitHub says about `workflows` on the installation, and the one
+ *  page that closes the gap (the App's permissions page, or the installation's review). */
+function WorkflowsAtGitHub({ state, busy, onRecheck }: { state: CiWorkflows; busy: boolean; onRecheck: () => void }) {
+  const w = state.workflows ?? { state: "unknown" as const, fix_url: null };
+  const again = (
+    <button type="button" className="su-link" onClick={onRecheck} disabled={busy} data-testid="su-ci-workflows-recheck">
+      Check again
+    </button>
+  );
+  if (w.state === "accepted") {
+    return <span className="su-line" data-testid="su-ci-workflows-state" data-state="accepted">
+      <Dot tone="green" />GitHub: Workflows accepted ✓</span>;
+  }
+  const fix = w.fix_url ?? (w.state === "waiting" ? state.installation_url : state.permissions_url) ?? null;
+  const words = w.state === "waiting" ? "GitHub: waiting for you to accept Workflows"
+    : w.state === "app_lacks" ? "GitHub: the App does not ask for Workflows yet"
+    : "GitHub: not confirmed yet";
+  return (
+    <span className="su-line" data-testid="su-ci-workflows-state" data-state={w.state}>
+      <Dot tone="amber" />{words}
+      {fix ? (
+        <Out href={fix} tip={state.note} testid="su-ci-workflows-accept">
+          {w.state === "waiting" ? "Accept on GitHub" : "Open on GitHub"}
+        </Out>
+      ) : null}
+      {again}
+    </span>
+  );
+}
 
 export function CiWorkflowsToggle({ bindingId }: { bindingId: string }) {
   const { projectId } = useBoard();
@@ -25,6 +55,12 @@ export function CiWorkflowsToggle({ bindingId }: { bindingId: string }) {
     return () => { live = false; };
   }, [projectId, bindingId]);
   if (!state) return null;
+  const recheck = async () => {
+    setBusy(true);
+    try { setState(await fetchCiWorkflows(projectId, bindingId, true)); }
+    catch { toast("GitHub did not answer. Try again in a minute.", "error"); }
+    finally { setBusy(false); }
+  };
   const flip = async () => {
     setBusy(true);
     try {
@@ -46,15 +82,7 @@ export function CiWorkflowsToggle({ bindingId }: { bindingId: string }) {
                    data-testid="su-ci-workflows-toggle">
         {state.enabled ? "Allowed" : "Off"}
       </GatedButton>
-      {state.enabled && state.permissions_url ? (
-        <Out href={state.permissions_url} tip={state.note} testid="su-ci-workflows-accept">
-          Accept on GitHub
-        </Out>
-      ) : null}
-      {state.enabled && state.installation_url ? (
-        <Out href={state.installation_url} tip="Then accept the new permission on the installation."
-             testid="su-ci-workflows-install">Installation</Out>
-      ) : null}
+      {state.enabled ? <WorkflowsAtGitHub state={state} busy={busy} onRecheck={recheck} /> : null}
     </div>
   );
 }
