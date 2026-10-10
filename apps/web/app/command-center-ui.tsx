@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
   TZ_COOKIE,
@@ -22,6 +22,7 @@ import { PulseRow } from "./command-center/pulse";
 import { AppsShelf, TemplatesShelf } from "./command-center/rails";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { OnboardingHelpRows } from "./onboarding-help-card";
+import { HelpPopover } from "./command-center/help-popover";
 import { announcePainted } from "../lib/area-painted";
 
 /**
@@ -188,16 +189,10 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
     if (status.key !== lastKey.current) { lastKey.current = status.key; setSaid(status.text); }
   }, [status.key, status.text]);
 
-  const [helpOpen, setHelpOpen] = useState(false);
-  const helpRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!helpOpen) return undefined;
-    const outside = (e: PointerEvent) => { if (!helpRef.current?.contains(e.target as Node)) setHelpOpen(false); };
-    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") setHelpOpen(false); };
-    document.addEventListener("pointerdown", outside);
-    document.addEventListener("keydown", escape);
-    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
-  }, [helpOpen]);
+  const [helpOpener, setHelpOpener] = useState<HTMLElement | null>(null);
+  const helpOpen = helpOpener !== null;
+  const helpId = useId();
+  const closeHelp = useCallback(() => setHelpOpener(null), []);
 
   const [gone, setGone] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -264,11 +259,12 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
             ) : null}
             <span className="ag-sr" role="status" aria-live="polite">{said}</span>
             {help ? (
-              <div className="cc-help" ref={helpRef}>
+              <div className="cc-help">
                 <button type="button" className="cc-help-btn" aria-expanded={helpOpen} aria-haspopup="dialog"
+                        aria-controls={helpOpen ? helpId : undefined}
                         aria-label="What you can do here" title="What you can do here" data-testid="cc-help"
-                        onClick={() => setHelpOpen((v) => !v)}>?</button>
-                {helpOpen ? <div className="cc-help-pop" role="dialog" aria-label="What you can do here">{help}</div> : null}
+                        onClick={(event) => setHelpOpener(helpOpen ? null : event.currentTarget)}>?</button>
+                {helpOpener ? <HelpPopover id={helpId} opener={helpOpener} onClose={closeHelp}>{help}</HelpPopover> : null}
               </div>
             ) : null}
           </div>
@@ -276,7 +272,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
           <div className="cc-compose" id="cc-compose">
             {/* Keyed: it is an element the server page made, rendered here among siblings. */}
             <React.Fragment key="composer">{composer}</React.Fragment>
-            {firstRun ? <OnboardingHelpRows onMore={() => setHelpOpen(true)} /> : null}
+            {firstRun ? <OnboardingHelpRows onMore={(opener) => setHelpOpener(opener)} expanded={helpOpen} controls={helpId} /> : null}
           </div>
           <Proof n={proof} orgId={orgId} />
         </div>
