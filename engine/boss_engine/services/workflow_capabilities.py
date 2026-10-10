@@ -423,6 +423,22 @@ CAPABILITIES: dict[str, Capability] = {
             typical_minutes=1,
         ),
         _cap(
+            key="wait_for_ci",
+            # whether the pull request's own CI agrees with BOSS's gate
+            captain="release_manager",
+            label="Wait for CI",
+            summary="Wait for the pull request's GitHub checks to finish. Passed lets the run go "
+                    "on; a failed check or a timeout fails the step, links the check, and blocks "
+                    "the deploy approval.",
+            tool=None,
+            risk_tier=0,
+            optional_inputs=("pull_request_url", "head_sha", "timeout_minutes"),
+            produces=("ci_wait_id", "ci_status", "ci_summary", "failing_check_url"),
+            requires_project=("repository",),
+            typical_minutes=15,
+            is_async=True,
+        ),
+        _cap(
             key="redeploy",
             family="deploy",
             # same hands as the first deploy

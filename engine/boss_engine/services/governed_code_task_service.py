@@ -35,7 +35,7 @@ from typing import Any, Optional
 from ..config import Settings
 from ..ports import sql
 from ..schemas import FileChange
-from . import agent_acts, design_prompts, plane_sync, review_comments, verification_target
+from . import agent_acts, ci_gate, design_prompts, plane_sync, review_comments, verification_target
 from .bakeoff import (
     fixture_for_run as bakeoff_fixture_for_run,
     stage_fixture as stage_bakeoff_fixture,
@@ -1104,6 +1104,57 @@ def _post_review_comments_to_pr(sf, proposal: dict, evidence: dict, engine, proj
         return {"posted": False, "reason": f"{type(exc).__name__}: {exc}"[:200]}
 
 
+def _with_ci_static(rr: dict, files) -> dict:
+    """A review result with BOSS's deterministic workflow findings appended (ci_gate), so the
+    gate, the PR comments and the review in BOSS read them even from a scripted model."""
+    try:
+        block = ci_gate.findings_block(ci_gate.static_review(files))
+    except Exception:  # noqa: BLE001
+        block = ""
+    return {**(rr or {}), "summary": ((rr or {}).get("summary") or "") + block} if block else rr
+
+
+def _wait_for_ci(engine, settings, sf, proposal: dict, project_id: str, run_id: str,
+                 repository: str, *, sleep=time.sleep) -> dict:
+    """Wait for the pull request head's checks (ci_gate). Never raises: the step's result is
+    words — "CI passed: 3 checks", "CI failed: 'unit-tests' failed — <url>", "CI did not finish
+    in 30 min" — and the gate on merge/deploy is the recorded wait, not this return value."""
+    number = proposal.get("pull_request_number")
+    url = proposal.get("pull_request_url")
+    if not number:
+        return {"status": "skipped", "summary": "No pull request to wait for CI on."}
+    try:
+        reader = ci_gate.AdapterCiReader(sf.github)
+        sha = sf.github.pull_request_snapshot(int(number)).get("head_sha") or ""
+        if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha)):
+            return {"status": "skipped", "summary": "The pull request's head commit is unknown, "
+                                                    "so BOSS could not wait for its CI."}
+        has_ci = ci_gate._safe_has_workflows(reader, sha)  # noqa: SLF001
+        if not has_ci and not ci_gate.workflow_paths(
+                (proposal.get("files_changed") or [])):
+            out = {"status": "no_ci", "summary": f"No CI is configured for {repository} (no "
+                                                 ".github/workflows), so BOSS did not wait."}
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.ci_waited", "boss", "code_task_run",
+                           run_id, {"pull_request_url": url, **out})
+            return out
+        with _transaction(engine) as c:
+            wait = ci_gate.start_wait(
+                c, project_id=project_id, repository=repository, head_sha=sha,
+                pull_request_url=url, has_ci=True, code_task_run_id=run_id,
+                timeout_seconds=int(settings.ci_wait_timeout_seconds))
+        got = ci_gate.run_blocking(lambda: _transaction(engine), wait["id"], reader, sleep=sleep)
+        out = {"id": got["id"], "status": got["status"], "summary": got["summary"],
+               "failing_url": got.get("failing_url")}
+    except Exception as exc:  # noqa: BLE001 — never lose the PR to a CI read
+        out = {"status": "error", "summary": f"Could not wait for CI: {type(exc).__name__}: "
+                                             f"{str(exc)[:200]}"}
+    with _transaction(engine) as c:
+        emit_event(c, project_id, "code_task.ci_waited", "boss", "code_task_run", run_id,
+                   {"pull_request_url": url, **out})
+    return out
+
+
 def _anchored_findings(summary: str, root, *, stage: str, header: str) -> str:
     """A review pass as line-anchored instructions, with the code quoted at each place.
 
@@ -1215,6 +1266,7 @@ def _review_prompt(title, criteria, *, instructions="", ui=False, change=""):
         "for a REAL correctness or edge-case failure (invalid inputs, empty/boundary values, case "
         "sensitivity, error handling, off-by-one).\n\n"
         + _change_clause(change)
+        + ci_gate.review_clause_for(change)
         + "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
         "— a feature that was not asked for, or a spec stricter than what was agreed — is NOT a "
         "defect; note it but do not fail the change for it.\n\n"
@@ -3688,6 +3740,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         mutation_caught = None
         regressions_ok = None
         panel_parallel = False
+        # A CHANGE TO CI IS ALWAYS REVIEWED, whatever the risk tier (services/ci_gate.py): the
+        # adversarial reviewer gets the workflow checklist, the security seat sits, and BOSS's own
+        # deterministic workflow checks are added to the review's findings.
+        try:
+            _ci_files = ci_gate.workflow_changes(
+                accumulated if use_microvm else {fc.path: fc.content for fc in sandbox.diff()})
+        except Exception:  # noqa: BLE001 — an unreadable diff is reviewed as tiered
+            _ci_files = {}
+        _ci_static = ci_gate.findings_block(ci_gate.static_review(_ci_files)) if _ci_files else ""
+        if _ci_files and not do_review:
+            do_review = True
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.ci_change_reviewed", "boss", "code_task_run",
+                           run_id, {"files": list(_ci_files), "risk_tier": risk_tier,
+                                    "reason": "a change to .github/workflows/ is always reviewed"})
         if do_review:
             with _transaction(engine) as c:
                 _phase(c, "review_panel")
@@ -3812,6 +3879,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             enabled_seats = set(
                 _ALL_PANEL_SEATS if risk_tier >= 2
                 else (profile.get("panel_checks") or _ALL_PANEL_SEATS))
+            if _ci_files:
+                enabled_seats |= {"review_code", "security_check"}
             checks = []
             if "review_code" in enabled_seats:
                 checks += review_checks
@@ -3939,6 +4008,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # normalize to an empty result so the check just reads as "not_run" (still gated).
             _empty = {"cost_usd_micros": 0, "summary": "", "model": None}
             r3 = r3 or _empty
+            if _ci_static:
+                r3 = {**r3, "summary": (r3.get("summary") or "") + _ci_static}
             r4 = r4 or _empty
             r6 = r6 or _empty
             regressions_ok = panel["full"]
@@ -4485,6 +4556,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                            ui=ui_task, change=change_block),
                             review_root, read_only=True, model=review_model)
                         cost += int(rr.get("cost_usd_micros") or 0)
+                        rr = _with_ci_static(rr, accumulated if use_microvm else sandbox.diff())
                         verdict = _parse_verdict(rr.get("summary", ""))
                         r3 = rr
                         review_confidence = 1.0 if verdict == "survived" else 0.0
@@ -4601,6 +4673,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             review_root, read_only=True, model=review_model,
                             max_turns=escalated)
                         cost += int(rr.get("cost_usd_micros") or 0)
+                        rr = _with_ci_static(rr, accumulated if use_microvm else sandbox.diff())
                         verdict = _parse_verdict(rr.get("summary", ""))
                         r3 = rr
                         _rev_pass, _blocking, _deferred = _review_gate_from_findings(
@@ -4962,6 +5035,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # The findings go ON the pull request, at the lines they are about.
         evidence["review_comments_posted"] = _post_review_comments_to_pr(
             sf, proposal, evidence, engine, project_id, run_id)
+
+        # WAIT FOR CI before the deploy approval (services/ci_gate.py). Blocking and bounded
+        # (BOSS_CI_WAIT_TIMEOUT_SECONDS), each look in its own short transaction. A failure or a
+        # timeout is recorded against the pull request, and the merge and deploy approvals
+        # refuse until CI passes; a repository with no CI is said so and not waited on.
+        if int(getattr(settings, "ci_wait_timeout_seconds", 0) or 0) > 0:
+            with _transaction(engine) as c:
+                _phase(c, "waiting_for_ci")
+            evidence["ci_wait"] = _wait_for_ci(engine, settings, sf, proposal, project_id,
+                                               run_id, f"{owner}/{repo}")
 
         # Bank `opening_pr` before the terminal write erases the clock it was measured
         # by — in its OWN transaction, committed first, never nested inside the one the

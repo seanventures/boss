@@ -1234,6 +1234,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_github_repository_binding_primary
   ON github_repository_bindings(project_id)
   WHERE role = 'primary' AND status = 'active';
 
+-- Waiting for CI (services/ci_gate.py): one row per wait on a commit's check runs and statuses.
+-- A deploy (and an unforced merge) of the pull request / commit is refused until the latest
+-- wait is passed or no_ci. The per-repo "Builds may change CI workflows" opt-in lives in
+-- github_repository_bindings.metadata->'ci_workflows_write'.
+CREATE TABLE IF NOT EXISTS ci_waits (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository TEXT NOT NULL,
+  head_sha TEXT NOT NULL,
+  pull_request_url TEXT,
+  code_task_run_id TEXT,
+  workflow_run_id TEXT,
+  status TEXT NOT NULL DEFAULT 'waiting',
+  has_ci BOOLEAN NOT NULL DEFAULT true,
+  summary TEXT NOT NULL DEFAULT '',
+  checks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  failing_url TEXT,
+  timeout_seconds INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  deadline_at TIMESTAMPTZ NOT NULL,
+  next_poll_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (status IN ('waiting', 'passed', 'failed', 'timed_out', 'no_ci', 'cancelled'))
+);
+CREATE INDEX IF NOT EXISTS idx_ci_waits_project_pr
+  ON ci_waits(project_id, pull_request_url, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ci_waits_project_sha
+  ON ci_waits(project_id, head_sha, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS github_branch_policies (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

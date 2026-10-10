@@ -17637,6 +17637,17 @@ app.include_router(build_setup_router(
     require_reader=require_project_reader,
 ))
 
+# GitHub Actions CI, governed: the per-repo "Builds may change CI workflows" opt-in, workflow
+# static checks, waiting for CI, and a decision's CI gates (services/ci_gate.py).
+from .routers.ci import build_ci_router  # noqa: E402
+
+app.include_router(build_ci_router(
+    engine=engine,
+    get_settings=lambda: settings,
+    require_actor=require_project_actor,
+    principal=lambda: current_api_principal.get(),
+))
+
 
 def _deprecated(response: Response, successor: str) -> None:
     response.headers["Deprecation"] = "true"

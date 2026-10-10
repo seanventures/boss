@@ -12,6 +12,7 @@ import { idGet } from "../../lib/identity/api";
 import { fetchRepos, fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import { ageLabel, daysUntil } from "../../lib/setup-stepper";
 import type { CheckResult, RepoEntry, SetupRefusal, SetupView, TokenFound } from "../../lib/setup-types";
+import { CiWorkflowsToggle } from "./ci-workflows-toggle";
 import { Drawer } from "./drawer";
 import { statusOf } from "./github-access-row";
 import { AskBoss, CONSENT_REFUSAL, Consent, RowMenu, toast, useBoard } from "./parts";
@@ -276,6 +277,7 @@ function RepoLine({ repo, onReplace }: { repo: RepoEntry; onReplace: () => void 
           </Tip>
         ) : null}
       </div>
+      {repo.binding_id ? <CiWorkflowsToggle bindingId={repo.binding_id} /> : null}
       {red || pill.tone === "amber" ? (
         <div className="su-line su-fix">
           {repo.pill.action === "fix_link" && repo.pill.fix_url ? (

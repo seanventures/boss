@@ -12,6 +12,7 @@ import { apiErrorText } from "../../../lib/api-error";
  * GET  ?project_id=                        -> GET /v1/setup (the whole view)
  * GET  ?project_id=&repos=<connection_id>  -> what the stored token can see (+ Add repo)
  * GET  ?project_id=&catalogue=<provider>   -> the provider's model list (stored key)
+ * GET  ?project_id=&ci_workflows=<binding>  -> "Builds may change CI workflows" for a repo
  * POST {op, ...}                           -> one of OPS below
  */
 export const dynamic = "force-dynamic";
@@ -30,6 +31,8 @@ const OPS: Record<string, Op> = {
                   query: ["project_id"] },
   repo_remove: { method: "DELETE", path: (b) => `/v1/setup/repository/${enc(b.binding_id)}`,
                  query: ["project_id"] },
+  ci_workflows: { method: "PUT",
+                  path: (b) => `/v1/setup/repository/${enc(b.binding_id)}/ci-workflows` },
   models: { method: "POST", path: () => "/v1/setup/models" },
   model_catalogue: { method: "POST", path: (b) => `/v1/setup/models/${enc(b.provider)}/catalogue` },
   source_model: { method: "POST", path: (b) => `/v1/setup/models/${enc(b.source_id)}/model` },
@@ -62,7 +65,10 @@ export async function GET(req: Request) {
   const projectId = (url.searchParams.get("project_id") ?? "").trim();
   const repos = url.searchParams.get("repos");
   const catalogue = url.searchParams.get("catalogue");
-  const path = repos
+  const ciWorkflows = url.searchParams.get("ci_workflows");
+  const path = ciWorkflows
+    ? `/v1/setup/repository/${enc(ciWorkflows)}/ci-workflows?project_id=${enc(projectId)}`
+    : repos
     ? `/v1/setup/repository/repos?project_id=${enc(projectId)}&connection_id=${enc(repos)}`
     : catalogue
     ? `/v1/setup/models/${enc(catalogue)}/catalogue?project_id=${enc(projectId)}`

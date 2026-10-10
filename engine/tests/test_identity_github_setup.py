@@ -139,6 +139,27 @@ def test_the_manifest_asks_for_least_privilege_and_returns_to_this_boss(env):
     assert e.value.code == "public_url_required"
 
 
+def test_the_manifest_asks_for_workflows_only_when_a_repository_opted_in(env):
+    """CI capability: "Builds may change CI workflows" is opt-in per repository. Off (the
+    default, above) the App never asks for workflows; with the opt-in it asks for write, and an
+    App created earlier is sent to its own permissions page to accept it."""
+    m = github_setup.manifest(origin="https://boss.acme.test", person_id=env.alice, owner="acme",
+                              allow_workflows=True)
+    perms = m["manifest"]["default_permissions"]
+    assert perms["workflows"] == "write"
+    assert {k: v for k, v in perms.items() if k != "workflows"} == github_setup.APP_PERMISSIONS
+    assert "workflows" not in github_setup.APP_PERMISSIONS
+    assert "workflows" not in github_setup.app_permissions(False)
+    _connect_app(env)
+    with env.db() as c:
+        link = github_setup.workflows_permission_link(c, "org_boss")
+    assert link["permissions_url"] == (
+        "https://github.test/organizations/acme/settings/apps/boss-test/permissions")
+    assert link["installation_url"] == (
+        "https://github.test/organizations/acme/settings/installations/4242")
+    assert "Accept new permissions" in link["note"]
+
+
 def test_a_github_app_from_a_manifest_mints_per_run_tokens_through_egress(env):
     _connect_app(env)
     with env.db() as c:

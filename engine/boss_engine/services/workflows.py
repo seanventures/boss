@@ -5648,6 +5648,8 @@ _WORK_TABLES: dict[str, str] = {
     # the common case, and cancelling the record is what stops somebody applying it later
     # believing the workflow still wants it.
     "deployment": "deployment_runs",
+    # Waiting for CI (ci_gate): cancelling the run stops the looking; the wait no longer gates.
+    "ci_wait": "ci_waits",
 }
 
 _WORK_TERMINAL: frozenset[str] = frozenset(
@@ -5666,6 +5668,7 @@ _AWAIT_LABELS: dict[str, str] = {
     "code_task": "the build to finish",
     "preview": "the preview to come up",
     "deployment": "the deployment to finish",
+    "ci_wait": "CI to finish",
     "agent_run": "the agent's approved run to finish",
 }
 

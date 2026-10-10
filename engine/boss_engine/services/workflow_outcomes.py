@@ -214,6 +214,7 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "video_edit": commissions_nothing,
     "social_publish": commissions_nothing,
     "smoke_test": smoke_test,
+    "wait_for_ci": awaited_work,
     "teardown_preview": finished_tool,
     "cost_check": finished_tool,
 }
