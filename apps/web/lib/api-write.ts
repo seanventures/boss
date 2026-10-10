@@ -40,6 +40,7 @@
  * one press legitimately makes never collide. With no intent to derive from, nothing is added and
  * the request behaves exactly as before.
  */
+import { currentMirror } from "./identity/mirror";
 
 export const IDEMPOTENCY_HEADER = "Idempotency-Key";
 /** The form field SubmitButton renders, and the request header middleware.ts lifts it into. */
@@ -56,6 +57,8 @@ export type WriteOptions = {
   press?: Press;
   /** Reuse a key the caller already holds for this intent (e.g. a retried press). */
   key?: string;
+  /** The caller handles 401 step_up_required itself (useGuardedCall does): no second sheet. */
+  noStepUp?: boolean;
 };
 
 /** What the operator is told when the API is still running the same press and this copy has
@@ -180,6 +183,36 @@ export async function apiWrite(
   const url = String(input);
   const has = new Headers(init.headers).has(IDEMPOTENCY_HEADER);
   if (isBrowser()) {
+    const first = await pressed(url, init, options, has);
+    // EVERY WRITE GETS THE STEP-UP SHEET, not a raw "step_up_required": a write the API refuses
+    // for a stale second factor (401 step_up_required) opens "Confirm it's you" and is sent once
+    // more with a fresh key (the refused key would replay the refusal). One place, so no action
+    // path (Infra's sheets, Setup, the workflow builder) can show the code instead.
+    if (first.status === 401 && !options.noStepUp && await isStepUp(first)) {
+      const mirror = currentMirror();
+      if (mirror && await mirror.stepUp("Confirm it's you to continue.")) {
+        return pressed(url, init, { ...options, key: undefined }, has);
+      }
+    }
+    return first;
+  }
+  if (has) return sendKeyed(url, init, options.press?.label);
+  const intent = options.key ?? (await serverIntent());
+  if (!intent) return fetch(url, init);
+  const key = await deriveKey(intent, init.method, url, init.body);
+  return sendKeyed(url, { ...init, headers: withKey(init.headers, key) }, options.press?.label);
+}
+
+/** Whether a refusal is the API asking for a fresh second factor, in any proxy's wrapping. */
+export async function isStepUp(response: Response): Promise<boolean> {
+  const body = await response.clone().json().catch(() => null) as Record<string, unknown> | null;
+  const said = (v: unknown): boolean => v === "step_up_required"
+    || (!!v && typeof v === "object" && ["error", "code", "detail"].some((k) => said((v as Record<string, unknown>)[k])));
+  return said(body);
+}
+
+function pressed(url: string, init: WriteInit, options: WriteOptions, has: boolean): Promise<Response> {
+  {
     return runPress<Response>({
       press: options.press,
       fingerprint: fingerprintOf(url, init),
@@ -190,11 +223,6 @@ export async function apiWrite(
     }, (key) => sendKeyed(url, has ? init : { ...init, headers: withKey(init.headers, key) },
                           options.press?.label));
   }
-  if (has) return sendKeyed(url, init, options.press?.label);
-  const intent = options.key ?? (await serverIntent());
-  if (!intent) return fetch(url, init);
-  const key = await deriveKey(intent, init.method, url, init.body);
-  return sendKeyed(url, { ...init, headers: withKey(init.headers, key) }, options.press?.label);
 }
 
 /** How long a duplicate waits for the original press's answer before giving up and showing the
