@@ -18,7 +18,9 @@ from typing import Any, Optional
 MODES = {
     "sk-stub-ok": (200, {}, {"id": "chatcmpl-stub", "choices": [
         {"message": {"role": "assistant", "content": "OK"}}],
-        "usage": {"prompt_tokens": 9, "completion_tokens": 1}}),
+        # A scripted provider invoice value; stub/small has no real pricing table.
+        # Paid authority tests must not invent a price or confuse unknown with zero.
+        "usage": {"prompt_tokens": 9, "completion_tokens": 1, "cost_usd_micros": 1000}}),
     "sk-stub-401": (401, {}, {"error": {"message": "Incorrect API key provided"}}),
     "sk-stub-402": (402, {}, {"error": {"message": "Insufficient credits. Add more at billing."}}),
     "sk-stub-404": (404, {}, {"error": {"message": "The model does not exist",

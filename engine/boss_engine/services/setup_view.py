@@ -530,6 +530,8 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
         source_id = str(row["source_id"])
         provider = _provider_of(source_id, by_entitlement)
         metadata = _obj(row["connection_metadata"])
+        if metadata.get("proof_only"):
+            continue
         capacity = _obj(row["observed_capacity"])
         connected = row["connection_status"] == "connected"
         if provider in SUBSCRIPTIONS and (row["cost_mode"] == "subscription" or connected) \

@@ -17731,40 +17731,26 @@ def setup_coding_agents(response: Response, project_id: str = "") -> dict:
 @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def setup_store_coding_agent_credential(payload: open_bodies.CodingAgentCredentialBody,
                                         response: Response) -> dict:
-    """DEPRECATED: POST /v1/setup/models with `credential` (stores and proves in one press).
-    Stores a subscription's credential in whatever store this installation has."""
+    """DEPRECATED: supplied subscription import awaits candidate-isolated proof.
+
+    Existing authenticated CLI sessions can connect through POST /v1/setup/models.
+    """
     payload = payload.payload()
-    from .services.setup_service import (
-        SecretFallbackNotAccepted,
-        SetupError,
-        store_coding_agent_credential,
-    )
+    from .services.setup_actions import subscription_import_refusal
 
     _deprecated(response, "/v1/setup/models")
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "").strip() or (
         current_api_principal.get() or "ceo")
     provider = str(payload.get("provider") or "").strip().lower()
-    credential = str(payload.get("credential") or "")
-    accept = bool(payload.get("accept_database_fallback"))
     if not project_id or not provider:
         raise HTTPException(status_code=400, detail="project_id and provider are required")
     with begin() as connection:
         require_project_actor(connection, project_id, actor, "entitlement_manage")
-        try:
-            return store_coding_agent_credential(
-                connection, get_settings(), project_id, provider, credential, actor=actor,
-                accept_database_fallback=accept)
-        except SecretFallbackNotAccepted as exc:
-            # 409, not 422: what is missing is a decision, named so a client can ask for it.
-            raise HTTPException(status_code=409, detail={
-                "error": "secret_store_fallback_not_accepted",
-                "message": str(exc),
-                "backend": exc.backend,
-                "resend_with": {"accept_database_fallback": True},
-            }) from exc
-        except SetupError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        refusal = subscription_import_refusal()
+        raise HTTPException(status_code=refusal.status, detail=refusal.detail,
+                            headers={"Deprecation": "true",
+                                     "Link": '</v1/setup/models>; rel="successor-version"'})
 
 
 @app.get("/v1/setup/decision-model")
