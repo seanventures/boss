@@ -155,7 +155,8 @@ def planned_reason(planned: Any) -> str:
 def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                  environment: str = "staging", target_id: Optional[str] = None,
                  actor: str = "operator", expected_cost_usd_micros: int = 0,
-                 reservation_id: Optional[str] = None) -> dict[str, Any]:
+                 reservation_id: Optional[str] = None, host_id: Optional[str] = None,
+                 ) -> dict[str, Any]:
     """Plan a finished build's first deployment through Resource Plane.
 
     BOSS could create hosts and targets and could REDEPLOY, and had no way to perform a
@@ -191,6 +192,7 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                 "decision_id": planned.get("decision_id"), "commit": planned.get("commit"),
                 "reason": planned.get("note")}
 
+    auto_target: Optional[dict[str, Any]] = None
     with begin(engine) as c:
         run = c.execute(
             # finalize_ctx WAS NEVER SELECTED, so the app-name lookup below silently fell
@@ -198,7 +200,7 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
             # directive ("Build a change calendar. Who it is for: a team that keeps deploying…"),
             # not a name. The matching that was supposed to prevent a wrong deployment was
             # therefore comparing target names against a paragraph.
-            sql("SELECT id, project_id, status, title, spec, finalize_ctx FROM code_task_runs "
+            sql("SELECT id, project_id, status, title, spec, finalize_ctx, state FROM code_task_runs "
                 "WHERE id = :i AND project_id = :p"),
             {"i": run_id, "p": project_id}).mappings().first()
         if not run:
@@ -264,6 +266,30 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                          "domains": t.get("domains")} for t in named
                     ],
                 }
+            if target is None and not named and app_name:
+                # THE FIRST DEPLOY OF AN APP CREATES ITS TARGET (deployment_fleet.
+                # create_deployment_target): the app's name and environment, a free port on the
+                # host, a public URL and health check derived from the host, the host's
+                # credential. Nothing is asked up front; the plan shows what was chosen, and
+                # Infra's target drawer edits it. Only the HOST can be a real question: the
+                # step's choice, else the project's one verified host, else the deploy stops
+                # and asks (the release gate's host picker).
+                from .deployment_fleet import create_deployment_target
+
+                made = create_deployment_target(
+                    c, project_id=project_id, app_name=app_name, environment=environment,
+                    repo=repo or None, host_id=host_id or None, actor=actor)
+                if not made.get("ok"):
+                    return {"status": "failed", "missing": "deployment_host",
+                            "reason": f"'{app_name}' has never been deployed, and BOSS could not "
+                                      f"give it a {environment} target: {made.get('error')}",
+                            "hosts": made.get("hosts") or [], "app_name": app_name}
+                target = dict(c.execute(
+                    sql("SELECT * FROM deployment_targets WHERE id = :i"),
+                    {"i": made["target_id"]}).mappings().first() or {}) or None
+                auto_target = {k: made.get(k) for k in ("target_id", "app_name", "environment", "host",
+                                                        "address", "port", "domain", "health_check",
+                                                        "adopted_existing")}
             elif target is None and candidates and wanted:
                 # NOT AMBIGUOUS. MISSING.
                 #
@@ -360,10 +386,11 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                     "reason": planned.get("failure_reason") or "Deployment policy blocked this run"}
         c.execute(sql("UPDATE deployment_runs SET trigger = 'operator' WHERE id = :i"),
                   {"i": deployment_run_id})
+        plan_view = deploy_plan_view(target, auto_target, run)
         emit_event(c, project_id, "delivery.requested", actor, "code_task_run", run_id,
                    {"deployment_run_id": deployment_run_id, "target": target["id"],
                     "environment": target["environment"],
-                    "changeset_id": planned.get("changeset_id")})
+                    "changeset_id": planned.get("changeset_id"), "plan": plan_view})
 
     if not planned.get("changeset_id"):
         return {"status": "blocked", "deployment_run_id": deployment_run_id,
@@ -372,10 +399,45 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
     return {"status": "planned", "deployment_run_id": deployment_run_id,
             "target_id": target["id"], "app_name": target.get("app_name"),
             "environment": target["environment"],
+            # WHAT WILL HAPPEN, for the person approving: where, on which port, at which URL,
+            # checked how, with which database — and where to change it.
+            "plan": plan_view, "target_created": bool(auto_target and not auto_target.get("adopted_existing")),
             "changeset_id": planned["changeset_id"],
             "next_action": ("approve_decision" if governed
                             else "approve_and_apply_changeset"),
             **governed}
+
+
+def deploy_plan_view(target: Any, auto_target: Optional[dict[str, Any]], run: Any) -> dict[str, Any]:
+    """The deploy's details as the approver reads them: every value BOSS chose (or the target
+    already had), and the Infra page that edits them. Nothing here was required up front."""
+    t = dict(target or {})
+    domains = [str(d) for d in (t.get("domains") or [])]
+    domain = domains[0] if domains else (auto_target or {}).get("domain")
+    checks = t.get("health_checks") or []
+    first = checks[0] if isinstance(checks, list) and checks and isinstance(checks[0], dict) else {}
+    scheme = str(first.get("scheme") or "http")
+    state = dict(run).get("state") if run is not None else None
+    if isinstance(state, str):
+        try:
+            state = json.loads(state)
+        except ValueError:
+            state = None
+    database = None
+    if isinstance(state, dict) and isinstance(state.get("build_database"), dict):
+        database = "Postgres" if state["build_database"].get("postgres") else None
+    return {
+        "app": t.get("app_name"), "environment": t.get("environment"),
+        "host": (auto_target or {}).get("host") or t.get("host_id"),
+        "port": int(str(domain).rpartition(":")[2]) if domain and str(domain).rpartition(":")[2].isdigit() else None,
+        "url": f"{scheme}://{domain}/" if domain else None,
+        "health": (f"{scheme}://{domain}{first.get('path') or '/'} expecting {first.get('expect_status') or 200}"
+                   if domain else None),
+        "credential": "the host's own key",
+        "database": database,
+        "created_now": bool(auto_target and not auto_target.get("adopted_existing")),
+        "edit_href": f"/?area=infra&view=fleet&target={t.get('id')}" if t.get("id") else None,
+    }
 
 
 def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_id: str,

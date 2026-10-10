@@ -169,6 +169,10 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
         </Section>
       ) : null}
 
+      {step.binding?.capability === "deploy" ? (
+        <DeployWhere step={step} projectId={projectId} onPatch={patch} />
+      ) : null}
+
       {shows.approval ? (
         <ApprovalSection step={step} palette={palette} problems={problems} onPatch={patch} />
       ) : null}
@@ -453,6 +457,51 @@ function ApprovalSection({ step, palette, problems, onPatch }: {
             </span>
           </label>
         </div>
+      ) : null}
+    </Section>
+  );
+}
+
+type FleetHost = { id: string; name: string; address?: string; status?: string };
+const ASK = "";
+
+/**
+ * A DEPLOY STEP ASKS ONLY WHERE: a machine from the Fleet, or "ask me at deploy time". No target,
+ * manifest, port or URL — the app's first deploy creates its target on that machine (a free port,
+ * a URL and health check from the host), and the deploy plan shows them with an Edit.
+ */
+export function DeployWhere({ step, projectId, onPatch }: {
+  step: SpecStep; projectId: string; onPatch(p: StepPatch): void;
+}) {
+  const [hosts, setHosts] = useState<FleetHost[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetch(`/v1/deployment-hosts?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (!live) return;
+        const rows = Array.isArray(body) ? body : Array.isArray(body?.hosts) ? body.hosts : [];
+        setHosts(rows.filter((h: FleetHost) => h && h.id && h.status !== "retired"));
+      })
+      .catch(() => { if (live) setHosts([]); });
+    return () => { live = false; };
+  }, [projectId]);
+  const src = sourceOf(step, "host_id");
+  const chosen = src && "value" in src ? String(src.value ?? "") : ASK;
+  const verified = (hosts ?? []).filter((h) => ["verified", "ready", "active"].includes(String(h.status)));
+  const tip = "The app's first deploy creates its place on this machine: a free port, its URL and a health check. "
+    + "The plan shows them before anything ships.";
+  return (
+    <Section label="Where" tip={tip} testId="wf-sec-deploy-where">
+      <select className="wf-input" value={chosen} data-testid="wf-deploy-where" aria-label="Where it deploys"
+              onChange={(e) => onPatch({ input: { name: "host_id", source: e.target.value === ASK ? null : { value: e.target.value } } })}>
+        <option value={ASK}>{verified.length === 1 ? `${verified[0].name} (the only machine)` : "Ask me at deploy time"}</option>
+        {verified.map((h) => <option key={h.id} value={h.id}>{h.name}{h.address ? ` · ${h.address}` : ""}</option>)}
+      </select>
+      {hosts && !verified.length ? (
+        <span className="wf-faint" data-testid="wf-deploy-where-none">
+          No machine yet. <a href="/?area=infra&view=fleet&add=host" target="_blank" rel="noreferrer">Add one in Infra</a>; it can be added before this step runs.
+        </span>
       ) : null}
     </Section>
   );

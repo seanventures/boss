@@ -60,7 +60,12 @@ export function AppTargetSheet({ projectId, actor, racks, hostId, onClose, onCre
     const v = (k: string) => String(f.get(k) ?? "").trim();
     setError(null);
     if (kind === "machine") {
-      const input = { hostId: v("host_id"), name: v("name"), environment: v("environment"), repository: v("repository"),
+      // ONLY THE VM IS REQUIRED: the name defaults to the repository's, the environment to
+      // staging, the manifest to boss.deploy.yaml (which the build writes); port, URL and health
+      // are chosen at the first deploy. Everything here is an override.
+      const repository = v("repository") || initialRepo;
+      const input = { hostId: v("host_id"), name: v("name") || defaultStackName(repository),
+                      environment: v("environment") || "staging", repository,
                       publicUrl: v("public_url"), manifestPath: v("manifest_path") || DEFAULT_MANIFEST_PATH };
       const problem = targetFormProblem(input);
       if (problem) { setError(problem); return; }
@@ -125,7 +130,7 @@ export function AppTargetSheet({ projectId, actor, racks, hostId, onClose, onCre
                 ) : <span className="inf-muted" title="A stack runs on a verified machine">No ready machine</span>}
               </label>
               <label className="inf-field" title="Lowercase letters, digits and dashes"><span>Name</span>
-                <input name="name" placeholder="invoice" autoComplete="off" spellCheck={false} data-testid="inf-target-name" /></label>
+                <input name="name" placeholder="optional · from the repository" autoComplete="off" spellCheck={false} data-testid="inf-target-name" /></label>
               <label className="inf-field"><span>Environment</span>
                 <input name="environment" defaultValue="production" autoComplete="off" data-testid="inf-target-env" /></label>
             </div>
@@ -206,4 +211,10 @@ export function AppTargetSheet({ projectId, actor, racks, hostId, onClose, onCre
       </form>
     </Sheet>
   );
+}
+
+/** A stack's default name: the repository's name, lower-case with dashes ("Shift_Swap" → "shift-swap"). */
+export function defaultStackName(repository: string): string {
+  const base = (repository.split("/").pop() ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return base || "app";
 }

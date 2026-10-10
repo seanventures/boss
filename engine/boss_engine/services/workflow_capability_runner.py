@@ -315,7 +315,24 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
         "step_index": len(rows),
         "objective": str(spec.get("objective") or ""),
         "workflow_name": str(spec.get("workflow_name") or (row or {}).get("workflow_name") or ""),
+        # Whether this run ends in a deploy: the build is then told to write the app's
+        # deploy manifest itself (DEPLOY_MANIFEST_BRIEF), so nobody writes one by hand.
+        "deploys": any(isinstance(s, dict) and (s.get("binding") or {}).get("capability") == "deploy"
+                       for s in (spec.get("steps") or [])),
     }
+
+
+#: Said to a build whose workflow deploys it. The app's own manifest is how BOSS deploys it
+#: without anybody filling a "manifest path" or a start command in by hand.
+DEPLOY_MANIFEST_BRIEF = (
+    "THIS APP WILL BE DEPLOYED by BOSS after review. If the repository has no boss.deploy.yaml "
+    "at its root, write one, so the app says how it runs instead of anyone filling it in:\n"
+    "  version: 1\n  name: <the app's short name, lower-case-with-dashes>\n  kind: commands\n"
+    "  install: [<the commands that install dependencies and start the app in the background on "
+    "port $PORT>]\n  health: [{url: \"{target.public_url}\", expect: 200}]\n"
+    "  open: {url: \"{target.public_url}\"}\n"
+    "Use compose (kind: compose, compose: {file: docker-compose.yml}) when the app already runs "
+    "with docker compose. Keep it in the same pull request.")
 
 
 def _tool_registry():
@@ -2404,6 +2421,8 @@ def _perform_capability(
     # described — an API, no screen — because no screen had been asked for anywhere it could
     # see. Folded in here rather than in the catalogue because a binding carries a value and
     # this needs two of them joined; `instructions` stays the field create_code_task owns.
+    if key == "build" and context.get("deploys") and "boss.deploy.yaml" not in str(inputs.get("instructions") or ""):
+        inputs = {**inputs, "instructions": f"{str(inputs.get('instructions') or '').strip()}\n\n{DEPLOY_MANIFEST_BRIEF}"}
     if key == "build":
         spec = str(inputs.get("spec_markdown") or "").strip()
         inputs = {k: v for k, v in inputs.items() if k != "spec_markdown"}

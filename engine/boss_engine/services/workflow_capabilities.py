@@ -331,11 +331,13 @@ CAPABILITIES: dict[str, Capability] = {
             # gets it onto a machine and keeps it there
             captain="deployment_manager",
             label="Deploy",
-            summary="Ship the built app to a bound target.",
+            summary="Ship the built app. Its first deploy creates its target on the chosen machine.",
             tool="deploy_app",
             risk_tier=2,
             required_inputs=("run_id",),
-            optional_inputs=("environment", "target_id"),
+            # WHERE is the only question (host_id: a Fleet machine, or blank = the project's one
+            # verified host / ask at deploy time). The target is created at the first deploy.
+            optional_inputs=("environment", "target_id", "host_id"),
             produces=("deployment_id", "deployed_url"),
             requires_project=("deployment_target",),
             typical_minutes=8,
