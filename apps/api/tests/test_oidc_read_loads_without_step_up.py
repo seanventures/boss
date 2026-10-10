@@ -30,7 +30,8 @@ def test_every_admin_get_reads_with_it_and_every_write_keeps_step_up():
     ops = list(_oidc_admin_ops())
     gets = [(p, perm) for m, p, perm in ops if m == "GET"]
     writes = [(m, p, perm) for m, p, perm in ops if m != "GET"]
-    assert gets and all(perm == "oidc:read" for _, perm in gets), gets
+    # reads are oidc:read (org-wide) or oidc_client:read (a project's clients, P1-6); neither steps up
+    assert gets and all(perm in ("oidc:read", "oidc_client:read") and not meta[perm].step_up for _, perm in gets), gets
     assert writes and all(meta[perm].step_up for _, _, perm in writes), writes
 
 

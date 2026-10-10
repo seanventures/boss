@@ -38,9 +38,9 @@ def test_the_built_in_roles_are_the_reviewed_sizes():
     # security_scan:run, security_finding:triage, oidc:admin, oidc_client:manage,
     # oidc_pool_user:manage, oidc_app:sign_in. +1 app_link:manage (S5: operators link apps, §5.1).
     # +1 oidc:read (Owner/Admin/Auditor, no step-up: the App sign-in console's reads; integration).
-    assert len(Permission) == 194
+    assert len(Permission) == 195
     sizes = {role: len(perms) for role, perms in ROLE_PERMISSIONS.items()}
-    assert sizes == {"owner": 189, "admin": 180, "operator": 92, "viewer": 48, "auditor": 61,
+    assert sizes == {"owner": 190, "admin": 181, "operator": 93, "viewer": 48, "auditor": 62,
                      "system_worker": 3, "system_collector": 1, "system_scim": 1}
 
 
@@ -104,4 +104,4 @@ def test_a_catalogue_that_breaks_a_rule_is_refused(mutate, message):
 
 
 def test_the_source_loads():
-    assert len(load().permissions) == 194
+    assert len(load().permissions) == 195

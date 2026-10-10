@@ -410,6 +410,12 @@ categories:
         roles: [owner, admin, operator]
         scope: project
         flags: [step_up]
+      - key: oidc_client:read
+        title: "See an app's sign-in client"
+        description: "See the app sign-in clients of a project (return addresses, scopes, roles; never a secret) and the pools they can use."
+        roles: [owner, admin, operator, auditor]
+        scope: project
+        flags: []
       - key: oidc_pool_user:manage
         title: "Manage app sign-in users"
         description: "Invite, disable and reset the MFA of the users of an app sign-in pool."

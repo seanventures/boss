@@ -1,3 +1,7 @@
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+
+import { NextRequest } from "next/server";
 import { describe, expect, it } from "vitest";
 
 import { forwardOidc, isOidcPath, oidcRequestHeaders, sessionCookieOnly } from "../lib/oidc-proxy";
@@ -56,5 +60,33 @@ describe("the OIDC provider on the public origin (F6)", () => {
     const big = new Request("https://boss.test/oidc/o/token", { method: "POST", body: "x".repeat(70 * 1024) });
     expect((await forwardOidc(big, { apiUrl: "http://api", fetchImpl })).status).toBe(413);
     expect(called).toBe(false);
+  });
+
+  it("forwards a 127.0.0.1 redirect_uri exactly as the app sent it (P1-1)", async () => {
+    // NextRequest.url rewrites the first loopback address in the URL to `localhost`; when the host
+    // is not localhost (a container name, a proxied host) that first match is the redirect_uri.
+    const sent = "http://web:3000/oidc/o/authorize?client_id=c&redirect_uri=http%3A%2F%2F127.0.0.1%3A59999%2Fcb&x=%5B%3A%3A1%5D";
+    const req = new NextRequest(sent);
+    expect(req.url).not.toBe(sent);                  // the normalisation this guards against
+    let upstream = "";
+    const fetchImpl = (async (u: string) => { upstream = u; return new Response(null, { status: 200 }); }) as unknown as typeof fetch;
+    await forwardOidc(req, { apiUrl: "http://api", fetchImpl });
+    expect(upstream).toBe("http://api/oidc/o/authorize?client_id=c&redirect_uri=http%3A%2F%2F127.0.0.1%3A59999%2Fcb&x=%5B%3A%3A1%5D");
+  });
+
+  it("no server handler reads its URL through NextRequest's normalised url", () => {
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) { if (name !== "node_modules") walk(path); continue; }
+        if (!/\.(ts|tsx)$/.test(name)) continue;
+        const server = /route\.tsx?$/.test(name) || /(proxy|forward)\.ts$/.test(name);
+        if (server && /new URL\((req|request)\.url\)/.test(readFileSync(path, "utf8"))) offenders.push(path);
+      }
+    };
+    walk(join(__dirname, "..", "app"));
+    walk(join(__dirname, "..", "lib"));
+    expect(offenders).toEqual([]);
   });
 });

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * Deployment state for MANY runs in one call.
@@ -120,7 +121,7 @@ async function lookupDeployment(
 }
 
 export async function GET(req: Request) {
-  const url = new URL(req.url);
+  const url = rawRequestUrl(req);
   const raw = (url.searchParams.get("run_ids") ?? "").trim();
   const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
   // Names are repeated parameters, positional against `run_ids`. A comma is valid in an app

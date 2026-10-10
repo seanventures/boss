@@ -18,6 +18,7 @@
  * through; middleware.ts adds no console CSP here.
  */
 import { clientHop, proxyHops } from "./client-hop";
+import { rawRequestUrl } from "./raw-request-url";
 
 export const OIDC_BODY_CAP = 64 * 1024;
 const OIDC = /^\/oidc\/[A-Za-z0-9_-]{1,100}\/(?:\.well-known\/openid-configuration|jwks|authorize|resume|consent|token|userinfo|revocation|end_session|account|hosted\/[a-z-]{2,40})$/;
@@ -82,7 +83,8 @@ function answer(status: number, error: string): Response {
 }
 
 export async function forwardOidc(req: Request, opts: { apiUrl: string; fetchImpl?: typeof fetch }): Promise<Response> {
-  const url = new URL(req.url);
+  // Exactly as sent: NextRequest.url rewrites a 127.0.0.1 redirect_uri in the query (P1-1).
+  const url = rawRequestUrl(req);
   if (!isOidcPath(url.pathname)) return answer(404, "not_found");
   if (!opts.apiUrl) return answer(503, "BOSS_API_URL is not set on the web server");
   const method = req.method.toUpperCase();

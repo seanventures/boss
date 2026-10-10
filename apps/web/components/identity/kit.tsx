@@ -122,8 +122,10 @@ export function Pill({ tone, children, tip }: { tone: "ok" | "warn" | "bad" | "i
  * A dialog: aria-modal, labelled by its heading, Escape closes (unless `locked`), focus moves in
  * on open, stays inside while open, and returns to the opener on close.
  */
-export function Sheet({ title, icon, onClose, wide = false, locked = false, children, testId }: {
-  title: ReactNode; icon?: ReactNode; onClose: () => void; wide?: boolean; locked?: boolean; children: ReactNode; testId?: string;
+/** A dialog for one job: centred, or `side` (docked to the right, full height: a list's row
+ * opens it and the list stays in view beside it). */
+export function Sheet({ title, icon, onClose, wide = false, side = false, locked = false, children, testId }: {
+  title: ReactNode; icon?: ReactNode; onClose: () => void; wide?: boolean; side?: boolean; locked?: boolean; children: ReactNode; testId?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -147,8 +149,8 @@ export function Sheet({ title, icon, onClose, wide = false, locked = false, chil
     return () => { document.removeEventListener("keydown", onKey); opener?.focus?.(); };
   }, [onClose, locked]);
   return (
-    <div className="idn-sheet-wrap" onMouseDown={(e) => { if (e.target === e.currentTarget && !locked) onClose(); }}>
-      <div ref={ref} className={`idn-sheet${wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid={testId}>
+    <div className={`idn-sheet-wrap${side ? " side" : ""}`} onMouseDown={(e) => { if (e.target === e.currentTarget && !locked) onClose(); }}>
+      <div ref={ref} className={`idn-sheet${wide ? " wide" : ""}${side ? " side" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid={testId}>
         <h2 id={titleId}>{icon}{title}</h2>
         {children}
       </div>

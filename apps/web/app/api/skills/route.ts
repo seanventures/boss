@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { describeApiError } from "../../../lib/api-error";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite, type WriteMethod } from "../../../lib/api-write";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * The skills area's reads and writes — skills, who holds them, and the MCP servers they reach.
@@ -41,7 +42,7 @@ async function forward(path: string, init: { method: "GET" | WriteMethod; body?:
 const q = encodeURIComponent;
 
 export async function GET(req: Request) {
-  const url = new URL(req.url);
+  const url = rawRequestUrl(req);
   const projectId = (url.searchParams.get("project_id") ?? "").trim();
   // TWO CATALOGUES, AND A PROJECT HAS BOTH. `/v1/skills` is what BOSS SHIPS — GitHub PRs,
   // Mattermost posts, model calls, provider cost sync. `/v1/skill-definitions` is what this

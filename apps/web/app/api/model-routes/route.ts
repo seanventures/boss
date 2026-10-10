@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiErrorText } from "../../../lib/api-error";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * "Why this model" for one run, thread or meeting: GET /v1/model-routes (the model router's
@@ -10,7 +11,7 @@ import { apiErrorText } from "../../../lib/api-error";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const url = new URL(req.url);
+  const url = rawRequestUrl(req);
   const projectId = (url.searchParams.get("project_id") ?? "").trim();
   const unitId = (url.searchParams.get("unit_id") ?? "").trim();
   if (!projectId || !unitId) {

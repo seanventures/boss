@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
 import { apiErrorText } from "../../../lib/api-error";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * Retire a deployment target — the "unbind" the console never had.
@@ -29,7 +30,7 @@ export const dynamic = "force-dynamic";
  * verified and ready. One missing handler, and the symptom appeared somewhere else entirely.
  */
 export async function GET(req: Request) {
-  const projectId = new URL(req.url).searchParams.get("project_id")?.trim();
+  const projectId = rawRequestUrl(req).searchParams.get("project_id")?.trim();
   if (!projectId) {
     return NextResponse.json({ error: "missing project_id" }, { status: 400 });
   }
@@ -50,7 +51,7 @@ export async function GET(req: Request) {
 
 
 export async function DELETE(req: Request) {
-  const url = new URL(req.url);
+  const url = rawRequestUrl(req);
   const targetId = url.searchParams.get("target_id")?.trim();
   const actor = url.searchParams.get("actor")?.trim();
   if (!targetId) {

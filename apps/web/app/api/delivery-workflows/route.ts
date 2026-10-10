@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
 import { refusalFrom } from "../../../lib/start-refusal";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * Everything the delivery-workflow screen reads and does, in one place.
@@ -67,7 +68,7 @@ function readinessPath(project: string, key: string, input: string | null): stri
 }
 
 export async function GET(req: Request) {
-  const params = new URL(req.url).searchParams;
+  const params = rawRequestUrl(req).searchParams;
   const view = params.get("view") ?? "runs";
   const project = params.get("project_id")?.trim() ?? "";
   if (view === "spec" || view === "plan" || view === "readiness") {
@@ -312,7 +313,7 @@ export async function PATCH(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const params = new URL(req.url).searchParams;
+  const params = rawRequestUrl(req).searchParams;
   const project = params.get("project_id")?.trim() ?? "";
   const key = params.get("step_key")?.trim() ?? "";
   const actor = params.get("actor")?.trim() || "operator";

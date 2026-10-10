@@ -334,8 +334,9 @@ def _proceed(db: Any, org_id: str, issuer: str, origin: str, client: Mapping[str
                 return fail("login_required" if who is None or stale else "interaction_required",
                             "the user must sign in")
             raw = _new_interaction(db, org_id, client["id"], req)
-            return hosted.signin_page(db, org_id=org_id, pool=pool, client=client, interaction=raw,
-                                      origin=origin, mfa_needed=need_mfa)
+            with hosted.request(db, org_id, browser):
+                return hosted.signin_page(db, org_id=org_id, pool=pool, client=client, interaction=raw,
+                                          origin=origin, mfa_needed=need_mfa)
     else:
         status, found = _workforce_session(db, browser.session_cookie)
         if status == "unusable":
@@ -364,8 +365,9 @@ def _proceed(db: Any, org_id: str, issuer: str, origin: str, client: Mapping[str
             if "none" in prompt:
                 return fail("login_required" if stale else "interaction_required", "a fresh sign-in is required")
             raw = _new_interaction(db, org_id, client["id"], req)
-            return hosted.workforce_reauth_page(db, org_id=org_id, client=client, interaction=raw,
-                                                principal=principal, mfa_needed=need_mfa)
+            with hosted.request(db, org_id, browser):
+                return hosted.workforce_reauth_page(db, org_id=org_id, client=client, interaction=raw,
+                                                    principal=principal, mfa_needed=need_mfa)
         if not pools.workforce_may_sign_in(db, principal=principal, client=client, session=row.ref()):
             audit(db, org_id=org_id, event_type="oidc.signin", outcome="denied", actor_principal_id=principal.id,
                   actor_kind="user", target_type="oidc_client", target_id=client["id"], session_ref=row.id,
@@ -380,7 +382,7 @@ def _proceed(db: Any, org_id: str, issuer: str, origin: str, client: Mapping[str
         body, headers = pages.consent_page(
             app_name=client["name"], user_label=who.label, scopes=scopes,
             action=f"/oidc/{org_id}/consent", interaction=raw, csrf=consent.csrf_token(who.session_id, raw),
-            redirect_uri=redirect_uri)
+            redirect_uri=redirect_uri, workforce=who.kind == "workforce")
         return Reply(200, body, headers)
     return _issue(db, org_id, issuer, client, pool, req, who, browser)
 
@@ -430,10 +432,25 @@ def resume(db: Any, org_slug: str, pairs: Iterable[tuple[str, str]], browser: Br
 
 
 def same_origin_post(browser: Browser, origin: str) -> bool:
+    """Did this POST come from a page of BOSS's own origin? The ONE header check every hosted
+    form and the consent form make (each also checks its own signed, browser-bound token).
+
+    - Sec-Fetch-Site, when the browser sends it, must be `same-origin`: `cross-site`,
+      `same-site` and `none` are refused.
+    - Origin, when it is a real origin, must be BOSS's public origin. `Origin: null` is what a
+      browser sends when the page's Referrer-Policy hides the referrer, so it is no evidence
+      either way; it never passes on its own.
+    - At least one of the two must positively say same-origin: a POST carrying neither is refused.
+    """
     from ..identity.authn_support import origin_of
 
-    return origin_of(browser.origin or "") == origin and \
-        (browser.sec_fetch_site is None or browser.sec_fetch_site.lower() == "same-origin")
+    site = (browser.sec_fetch_site or "").strip().lower()
+    if site and site != "same-origin":
+        return False
+    sent = (browser.origin or "").strip()
+    if sent and sent.lower() != "null":
+        return origin_of(sent) == origin
+    return site == "same-origin"
 
 
 def consent_submit(db: Any, org_slug: str, pairs: Iterable[tuple[str, str]], browser: Browser) -> Reply:
@@ -689,5 +706,5 @@ def end_session(db: Any, org_slug: str, pairs: Iterable[tuple[str, str]], browse
                   target_id=client["id"], ip=browser.ip, details={"grant_id": grant["id"]})
     if target is not None:
         return _redirect(target, {"state": params.get("state")})
-    body, headers = pages.signed_out_page()
+    body, headers = pages.signed_out_page(client["name"] if client is not None else None)
     return Reply(200, body, headers)

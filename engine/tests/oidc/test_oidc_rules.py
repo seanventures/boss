@@ -86,3 +86,76 @@ def test_the_consent_page_escapes_everything_and_forbids_framing_and_scripts():
 def test_error_pages_escape_and_are_never_cached():
     body, headers = pages.error_page("<x>", "<y>")
     assert "<x>" not in body and "&lt;y&gt;" in body and headers["Cache-Control"] == "no-store"
+
+
+# ---- P0-1: the hosted forms' CSRF headers, as real browsers send them ---------------------------------
+
+ORIGIN = "https://boss.example.test"
+
+
+@pytest.mark.parametrize("origin, site, ok", [
+    (ORIGIN, "same-origin", True),
+    (ORIGIN, None, True),                       # an older browser: no Fetch Metadata, a real Origin
+    ("null", "same-origin", True),              # Chrome under a no-referrer policy: Origin null, but SFS says same-origin
+    (None, "same-origin", True),
+    ("null", None, False),                      # no positive evidence at all
+    (None, None, False),
+    ("https://evil.test", "same-origin", False),
+    (ORIGIN, "cross-site", False),
+    (ORIGIN, "same-site", False),
+    ("null", "cross-site", False),
+    (None, "none", False),
+    ("https://boss.example.test.evil.test", None, False),
+])
+def test_same_origin_post_reads_origin_and_fetch_metadata_together(origin, site, ok):
+    from boss_engine.oidc_provider.protocol import Browser, same_origin_post
+
+    assert same_origin_post(Browser(origin=origin, sec_fetch_site=site), ORIGIN) is ok
+
+
+def test_hosted_pages_send_a_referrer_policy_that_keeps_the_origin_header():
+    """`no-referrer` makes Chrome post a form with `Origin: null` (P0-1). The policy must keep the
+    origin for BOSS's own posts and still send the app nothing."""
+    assert pages.REFERRER_POLICY == "same-origin"
+    for page in (pages.error_page("t", "m"), pages.signed_out_page("Bank"),
+                 pages.consent_page(app_name="Bank", user_label="c", scopes=["openid"], action="/x", interaction="i",
+                                    csrf="t", redirect_uri="https://app.example.test/cb"),
+                 pages.hosted_page(title="t", intro="i", action="/x", step="s", hidden={}, inputs=[], submit="Go",
+                                   csrf="tok")):
+        assert page[1]["Referrer-Policy"] == "same-origin"
+
+
+def test_a_hosted_form_cannot_be_drawn_without_its_token():
+    with pytest.raises(ValueError):
+        pages.hosted_page(title="t", intro="i", action="/x", step="s", hidden={}, inputs=[], submit="Go")
+    with pytest.raises(ValueError):
+        pages.hosted_page(title="t", intro="i", action="", step="s", hidden={}, inputs=[], submit="",
+                          passkey={"base": "/oidc/o", "purpose": "login"})
+    body, _ = pages.hosted_page(title="t", intro="i", action="/x", step="s", hidden={}, inputs=[], submit="Go",
+                                csrf="tok", passkey={"base": "/oidc/o", "purpose": "login"})
+    assert 'name="csrf" value="tok"' in body and 'data-csrf="tok"' in body
+
+
+def test_a_hosted_page_of_an_interaction_allows_the_return_origin_in_form_action():
+    """P0-2: a sign-in step's POST answers with a redirect to the app; Chrome checks that redirect
+    against form-action, so the validated return origin must be in it (and nothing else)."""
+    _, headers = pages.hosted_page(title="t", intro="i", action="/x", step="s", hidden={}, inputs=[], submit="Go",
+                                   csrf="tok", return_to="http://127.0.0.1:59999/cb?x=1")
+    assert "form-action 'self' http://127.0.0.1:59999;" in headers["Content-Security-Policy"]
+    _, headers = pages.hosted_page(title="t", intro="i", action="/x", step="s", hidden={}, inputs=[], submit="Go",
+                                   csrf="tok")
+    assert "form-action 'self';" in headers["Content-Security-Policy"]
+
+
+def test_the_customer_consent_page_never_mentions_a_boss_account():
+    body, _ = pages.consent_page(app_name="Bank", user_label="cara@example.test", scopes=["openid"], action="/x",
+                                 interaction="i", csrf="t", redirect_uri="https://app.example.test/cb", workforce=False)
+    assert "BOSS" not in body.split("</div>", 1)[1] and "Signed in as cara@example.test" in body
+    body, _ = pages.consent_page(app_name="Bank", user_label="Ada", scopes=["openid"], action="/x",
+                                 interaction="i", csrf="t", redirect_uri="https://app.example.test/cb")
+    assert "Signed in to BOSS as Ada" in body
+
+
+def test_the_signed_out_page_is_branded_as_the_app():
+    body, _ = pages.signed_out_page("Bank")
+    assert '<i></i>Bank</div>' in body and "signed out of Bank" in body

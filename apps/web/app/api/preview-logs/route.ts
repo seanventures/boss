@@ -1,4 +1,5 @@
 import { API_URL, authHeaders } from "../../../lib/client";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * Startup logs for a preview, streamed through the server.
@@ -37,7 +38,7 @@ function errorStream(message: string): Response {
 }
 
 export async function GET(req: Request) {
-  const previewId = new URL(req.url).searchParams.get("preview_id")?.trim();
+  const previewId = rawRequestUrl(req).searchParams.get("preview_id")?.trim();
   if (!previewId) return errorStream("Cannot stream logs: no preview id was given.");
 
   let upstream: Response;

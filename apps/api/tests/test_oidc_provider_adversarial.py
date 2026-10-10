@@ -454,7 +454,10 @@ def test_a11_the_consent_post_needs_the_origin_the_session_and_its_token(w):
     client, _ = w.client()
     page, _ = w.authorize(client["id"], who=alice)
     assert page.status_code == 200
-    for kw in ({"origin": None}, {"origin": "https://evil.test"}, {"fetch_site": "cross-site"},
+    # No positive same-origin evidence (no Origin and no Fetch Metadata, or `Origin: null` alone),
+    # another origin, a cross-site fetch, or a forged token: refused.
+    for kw in ({"origin": None, "fetch_site": None}, {"origin": "null", "fetch_site": None},
+               {"origin": "https://evil.test"}, {"fetch_site": "cross-site"}, {"fetch_site": "same-site"},
                {"csrf": "forged"}):
         r = w.consent(page, alice, **kw)
         assert r.status_code == 403 and "location" not in r.headers, kw
@@ -464,7 +467,9 @@ def test_a11_the_consent_post_needs_the_origin_the_session_and_its_token(w):
 
     m_csrf = re.search(r'name="csrf" value="([^"]+)"', m_page.text).group(1)
     assert w.consent(page, alice, csrf=m_csrf).status_code == 403
-    ok = w.consent(page, alice)
+    # what Chrome sends from a page whose policy hides the referrer: Origin null, Sec-Fetch-Site
+    # same-origin. Same-origin by the browser's own word, so the token decides (P0-1).
+    ok = w.consent(page, alice, origin="null")
     assert ok.status_code == 303
     assert w.consent(page, alice).status_code == 400          # an interaction is single use
 
@@ -639,7 +644,8 @@ def test_a14_require_mfa_refuses_a_session_without_a_second_factor(w):
     weak = w.person("weak", mfa=False, methods=("password",))
     client, _ = w.client(require_mfa=True)
     r, _ = w.authorize(client["id"], who=weak)
-    assert r.status_code == 200 and "Confirm it" in r.text and "location" not in r.headers   # step-up, no code
+    # no code; and since they hold no second factor, they are told to add one rather than asked for one
+    assert r.status_code == 403 and "Add a second factor" in r.text and "location" not in r.headers
     r, _ = w.authorize(client["id"], who=weak, extra={"prompt": "none"})
     assert query_of(r.headers["location"])["error"] == "interaction_required"
 

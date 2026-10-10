@@ -24,6 +24,7 @@
  */
 import { clientHop, proxyHops } from "../client-hop";
 import { identityCookieHeader, normalisePath } from "./forward";
+import { rawRequestUrl } from "../raw-request-url";
 
 export const SAML_METADATA_PATH = "/saml/v2/metadata";
 export const SAML_ACS_PATH = "/saml/v2/acs";
@@ -90,7 +91,7 @@ function answer(status: number, detail: string): Response {
 }
 
 export async function forwardProtocol(req: Request, opts: { apiUrl: string; fetchImpl?: typeof directFetch }): Promise<Response> {
-  const url = new URL(req.url);
+  const url = rawRequestUrl(req);   // the query exactly as sent (NextRequest rewrites 127.0.0.1)
   const kind = protocolKind(req.method, url.pathname);
   if (!kind) return answer(404, "not_found");
   if (kind === "scim" && !machineRequest(req.headers)) return answer(403, "scim_is_server_to_server");

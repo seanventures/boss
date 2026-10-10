@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const projectId = new URL(request.url).searchParams.get("project_id")?.trim();
+  const projectId = rawRequestUrl(request).searchParams.get("project_id")?.trim();
   if (!projectId) return NextResponse.json({ error: "missing project_id" }, { status: 400 });
 
   try {

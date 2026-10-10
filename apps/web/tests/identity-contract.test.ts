@@ -36,14 +36,14 @@ function tsFields(iface: string): string[] {
 }
 
 describe("the generated permission union", () => {
-  it("is the 194-entry catalogue with the reviewed role sizes", () => {
-    expect(PERMISSIONS.length).toBe(194);
-    expect(new Set(PERMISSIONS).size).toBe(194);
-    expect(ROLE_PERMISSIONS.owner.length).toBe(189);
-    expect(ROLE_PERMISSIONS.admin.length).toBe(180);
-    expect(ROLE_PERMISSIONS.operator.length).toBe(92);
+  it("is the 195-entry catalogue with the reviewed role sizes", () => {
+    expect(PERMISSIONS.length).toBe(195);
+    expect(new Set(PERMISSIONS).size).toBe(195);
+    expect(ROLE_PERMISSIONS.owner.length).toBe(190);
+    expect(ROLE_PERMISSIONS.admin.length).toBe(181);
+    expect(ROLE_PERMISSIONS.operator.length).toBe(93);
     expect(ROLE_PERMISSIONS.viewer.length).toBe(48);
-    expect(ROLE_PERMISSIONS.auditor.length).toBe(61);
+    expect(ROLE_PERMISSIONS.auditor.length).toBe(62);
   });
 
   it("is closed: anything outside the catalogue is not a Permission", () => {

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
 import { apiErrorText } from "../../../lib/api-error";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * The channels area's reads and writes.
@@ -13,7 +14,7 @@ import { apiErrorText } from "../../../lib/api-error";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const url = new URL(req.url);
+  const url = rawRequestUrl(req);
   const projectId = (url.searchParams.get("project_id") ?? "").trim();
   const path = url.searchParams.get("view") === "client"
     ? `/v1/channels/youtube/client?project_id=${encodeURIComponent(projectId)}`

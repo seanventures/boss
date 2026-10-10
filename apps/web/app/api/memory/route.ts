@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
 import { apiErrorText } from "../../../lib/api-error";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /** What this project knows, and the rules waiting to be allowed to bind.
  *
@@ -10,7 +11,7 @@ import { apiErrorText } from "../../../lib/api-error";
  *  flagged rather than living behind a second endpoint nobody opens.
  */
 export async function GET(req: Request) {
-  const params = new URL(req.url).searchParams;
+  const params = rawRequestUrl(req).searchParams;
   const project = params.get("project_id")?.trim() ?? "";
   const actor = params.get("actor")?.trim() ?? "";
   if (!project) {
