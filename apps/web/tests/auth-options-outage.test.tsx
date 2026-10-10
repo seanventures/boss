@@ -104,7 +104,8 @@ describe("claim, login and SSO landing do not infer identity state from an outag
     expect(renderToStaticMarkup(await ClaimPage())).toContain("check whether this BOSS has an Owner");
     const recovered = renderToStaticMarkup(await ClaimPage());
     expect(recovered).toContain("Claim this BOSS");
-    expect(recovered).toContain("Open the setup link");
+    expect(recovered).toContain("Claiming needs a one-hour link from the server");
+    expect(recovered).toContain("boss identity setup-link");
     expect(recovered).not.toContain("Already claimed");
   });
   it("keeps the healthy login and claim door", async () => {
