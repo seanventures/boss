@@ -2,7 +2,7 @@
    gv- classes only; design-system tokens only. A 1120px column like Factory. Motion only on a
    real change (the meter's fill, a saved value, a focused row), each with a reduced-motion still. */
 
-.gv { display: flex; flex-direction: column; gap: 14px; width: 100%; max-width: 1120px; margin: 0 auto; min-width: 0; }
+.gv { display: flex; flex-direction: column; gap: 14px; width: 100%; max-width: var(--page-max-compact); margin: 0 auto; min-width: 0; }
 .gv-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; min-width: 0; }
 .gv-title { margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--ink); }
 .gv-tabs { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); max-width: 100%; overflow-x: auto; }
@@ -36,7 +36,7 @@
 }
 .gv-tick { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--ink-soft); opacity: 0.55; border-radius: 1px; }
 .gv-forecast { position: absolute; top: -5px; bottom: -5px; width: 0; margin-left: -1px; border-left: 2px dashed var(--muted); }
-.gv-meter-other { display: grid; grid-template-columns: 90px auto minmax(0, 1fr); align-items: center; gap: 10px; font-size: 0.8rem; color: var(--muted); }
+.gv-meter-other { display: grid; grid-template-columns: 4.73684rem auto minmax(0, 1fr); align-items: center; gap: 10px; font-size: 0.8rem; color: var(--muted); }
 .gv-other-amount { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .gv-included { align-self: flex-start; padding-top: 4px; border-top: 1px dotted var(--border-strong); font-size: 0.78rem; color: var(--faint); }
 .gv-unreachable { display: inline-flex; align-items: center; gap: 10px; color: var(--muted); }
@@ -51,7 +51,7 @@
 .gv-badge { padding: 1px 8px; border-radius: 999px; background: var(--surface-3); color: var(--muted); font-size: 0.7rem; letter-spacing: 0; font-weight: 650; }
 .gv-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
 .gv-row {
-  position: relative; display: grid; grid-template-columns: minmax(130px, 1.1fr) minmax(120px, 1fr) minmax(110px, 0.9fr) minmax(100px, 0.8fr) minmax(110px, 0.9fr) 40px;
+  position: relative; display: grid; grid-template-columns: minmax(6.84211rem, 1.1fr) minmax(6.31579rem, 1fr) minmax(5.78947rem, 0.9fr) minmax(5.26316rem, 0.8fr) minmax(5.78947rem, 0.9fr) 2.10526rem;
   align-items: center; gap: 10px; min-height: 48px; padding: 6px 14px; border-bottom: 1px solid var(--border); font-size: 0.86rem;
 }
 .gv-row:last-child { border-bottom: 0; }
@@ -116,8 +116,8 @@
 .gv-spend-total { font-size: 0.9rem; color: var(--ink); font-variant-numeric: tabular-nums; }
 .gv-card { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
 .gv-models-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; font-size: 0.88rem; color: var(--ink); }
-.gv-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
-.gv-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.gv-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(12.63158rem, 1fr)); gap: 14px; }
+.gv-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(15.78947rem, 1fr)); gap: 14px; }
 .gv-spend-rows li > :not(:first-child) { flex: 0 0 72px; text-align: right; font-variant-numeric: tabular-nums; }
 .gv-spend-head { min-height: 24px !important; font-size: 0.72rem !important; color: var(--faint) !important; text-transform: uppercase; letter-spacing: 0.04em; }
 .gv-tile { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); font-size: 0.84rem; color: var(--ink-soft); }
@@ -136,7 +136,7 @@
 .gv-muted { color: var(--faint); font-size: 0.8rem; }
 .gv-tree { list-style: none; margin: 0; padding: 0 0 0 16px; display: flex; flex-direction: column; gap: 4px; }
 .gv-tree[data-depth="0"] { padding-left: 0; }
-.gv-alloc-line { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(80px, 160px) auto auto auto; align-items: center; gap: 10px; font-size: 0.84rem; }
+.gv-alloc-line { display: grid; grid-template-columns: minmax(7.36842rem, 1fr) minmax(4.21053rem, 8.42105rem) auto auto auto; align-items: center; gap: 10px; font-size: 0.84rem; }
 .gv-init { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
 .gv-init label { display: flex; flex-direction: column; gap: 4px; font-size: 0.76rem; color: var(--muted); }
 .gv-rule { font-size: 0.78rem; color: var(--faint); }
@@ -151,7 +151,7 @@
 /* 720-1023: Evidence stacks under Enforced (D10: it was dropped — what a limit stopped is the
    point of the row), Source is a word. */
 @media (max-width: 1023px) {
-  .gv-row { grid-template-columns: minmax(120px, 1fr) minmax(110px, 1fr) minmax(90px, 0.8fr) minmax(90px, 0.8fr) 40px; }
+  .gv-row { grid-template-columns: minmax(6.31579rem, 1fr) minmax(5.78947rem, 1fr) minmax(4.73684rem, 0.8fr) minmax(4.73684rem, 0.8fr) 2.10526rem; }
   .gv-evidence { grid-column: 4; grid-row: 2; }
   .gv-act { grid-column: 5; grid-row: 1; }
 }

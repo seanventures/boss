@@ -122,7 +122,9 @@ describe("(a) the roster uses the width it is given", () => {
         </div></main>
         <main class="bx-content" data-active="decisions" data-testid="reading-area"><div class="frame"><section></section></div></main>`;
       expect(getComputedStyle($('[data-testid="roster-area"]')!).maxWidth).toBe("none");
-      expect(getComputedStyle($('[data-testid="reading-area"]')!).maxWidth).toBe("1440px");
+      // The reading column is the shell's --shell-max (layout-scale.css): 1440px up to a 1440px
+      // screen, wider beyond it — still a cap, where the roster has none.
+      expect(getComputedStyle($('[data-testid="reading-area"]')!).maxWidth).toMatch(/^calc\(1440px \+ /);
     } finally {
       style.remove();
     }

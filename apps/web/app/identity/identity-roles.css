@@ -1,15 +1,15 @@
 /* Identity › Access roles, the role editor, Service accounts and keys (mockups c and f).
    Tokens only: every colour is a var() from design-system.css or identity.css's token block. */
 
-.idn-h1 { font: 600 22px var(--display); margin: 0; }
-.idn-small { font-size: 12.5px; }
+.idn-h1 { font: 600 1.15789rem var(--display); margin: 0; }
+.idn-small { font-size: 0.65789rem; }
 .idn-mt { margin-top: 12px; }
 .idn-nowrap { flex-wrap: nowrap; }
-.idn-tipline { font-size: 12px; color: var(--faint); line-height: 1.45; margin: 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.idn-tipline { font-size: 0.63158rem; color: var(--faint); line-height: 1.45; margin: 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
 /* the editor header */
 .idn-rh-t { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.idn-rh .idn-tag { font-size: 11px; }
+.idn-rh .idn-tag { font-size: 0.57895rem; }
 
 /* left column */
 .idn-segs-2 { display: grid; grid-template-columns: 1fr 1fr; }
@@ -20,7 +20,7 @@
 
 /* the matrix */
 .idn-search { flex: 1; min-width: 160px; display: flex; align-items: center; gap: 8px; color: var(--faint); border: 1px solid var(--border-strong); border-radius: 9px; padding: 0 10px; background: var(--idn-well); }
-.idn-search input { flex: 1; min-width: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 13px; padding: 7px 0; }
+.idn-search input { flex: 1; min-width: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 0.68421rem; padding: 7px 0; }
 .idn-search input:focus { outline: none; }
 .idn-mx-top .idn-segs button { padding: 5px 10px; min-height: 30px; }
 .idn-lg { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
@@ -28,7 +28,7 @@
 .idn-lg.crit { background: var(--red); }
 .idn-lg.add { border-radius: 2px; border: 1.5px solid var(--green); background: none; }
 .idn-lg.rm { border-radius: 2px; border: 1.5px solid var(--red); background: none; }
-.idn-mx-ro { display: flex; align-items: center; gap: 8px; margin: 10px 16px 0; padding: 8px 10px; border-radius: 9px; font-size: 12.5px; color: var(--idn-ink-warn); background: var(--amber-soft); }
+.idn-mx-ro { display: flex; align-items: center; gap: 8px; margin: 10px 16px 0; padding: 8px 10px; border-radius: 9px; font-size: 0.65789rem; color: var(--idn-ink-warn); background: var(--amber-soft); }
 .idn-mx-group + .idn-mx-group { border-top: 1px solid var(--border); }
 button.idn-mx-cat { width: 100%; text-align: left; cursor: pointer; }
 button.idn-mx-cat:hover { color: var(--idn-mint); }
@@ -37,16 +37,16 @@ button.idn-mx-cat:hover { color: var(--idn-mint); }
 .idn-tg[aria-disabled="true"] { cursor: not-allowed; }
 .idn-tg[data-error="true"] { box-shadow: 0 0 0 2px var(--red); }
 .idn-tg svg { flex: none; }
-.idn-cell-err { grid-column: 1 / -1; font-size: 12px; color: var(--idn-ink-bad); }
+.idn-cell-err { grid-column: 1 / -1; font-size: 0.63158rem; color: var(--idn-ink-bad); }
 .idn-mx-closed { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 14px 16px; border-top: 1px solid var(--border); }
-.idn-mx-closed button { display: inline-flex; align-items: center; gap: 6px; font: 500 10px var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); cursor: pointer; min-height: 28px; }
+.idn-mx-closed button { display: inline-flex; align-items: center; gap: 6px; font: 500 0.52632rem var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); cursor: pointer; min-height: 28px; }
 .idn-mx-closed button:hover { color: var(--teal); }
 .idn-mx-closed .idn-n { letter-spacing: 0.04em; color: var(--muted); }
 
 /* impact */
 .idn-imp .idn-eyebrow { letter-spacing: 0.24em; }
 .idn-imp-people { margin: 10px 0 2px; }
-.idn-gl-sub { display: block; font-size: 11px; color: var(--faint); }
+.idn-gl-sub { display: block; font-size: 0.57895rem; color: var(--faint); }
 .idn-imp .idn-note { margin-top: 12px; }
 .idn-dl .idn-tag { margin-left: auto; }
 
@@ -59,18 +59,18 @@ button.idn-mx-cat:hover { color: var(--idn-mint); }
 .idn-keys td { vertical-align: top; }
 .idn-keys tr[data-selected="true"] td { background: color-mix(in srgb, var(--teal) 6%, transparent); }
 .idn-keys tr[data-selected="true"] td:first-child { box-shadow: inset 3px 0 0 var(--teal); }
-.idn-kname { display: block; font-size: 13px; color: var(--ink-soft); }
+.idn-kname { display: block; font-size: 0.68421rem; color: var(--ink-soft); }
 .idn-scopes-edit { gap: 6px; }
 .idn-scope { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; border-radius: 6px; color: var(--faint); }
 .idn-scope:hover .idn-perm { border-color: color-mix(in srgb, var(--red) 45%, transparent); }
-.idn-add-scope select { appearance: none; border: 1px dashed var(--border-strong); border-radius: 999px; padding: 4px 12px; background: none; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; min-height: 30px; }
+.idn-add-scope select { appearance: none; border: 1px dashed var(--border-strong); border-radius: 999px; padding: 4px 12px; background: none; color: var(--muted); font: inherit; font-size: 0.65789rem; cursor: pointer; min-height: 30px; }
 .idn-add-scope select:disabled { opacity: 0.45; cursor: not-allowed; }
 .idn-add-scope select option { background: var(--surface-2); color: var(--ink); }
 
 @media (max-width: 560px) {
-  .idn-rh h1 { font-size: 20px; }
+  .idn-rh h1 { font-size: 1.05263rem; }
   .idn-rh > .idn-btn { flex: 1 1 auto; }
-  .idn-dh2 h2 { font-size: 19px; }
+  .idn-dh2 h2 { font-size: 1rem; }
   .idn-mx-top { gap: 8px; }
   .idn-gl { grid-template-columns: 1fr 1fr; }
   .idn-secret { flex-direction: column; align-items: stretch; }

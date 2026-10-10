@@ -62,7 +62,7 @@ ol.cloud-list > li { display: list-item; }
 .cloud-bar-fill { fill: var(--accent-text); }
 
 /* + Account: the provider catalog. */
-.cloud-catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.cloud-catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.94737rem, 1fr)); gap: 8px; }
 .cloud-cat {
   display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-height: 64px; padding: 8px 10px; min-width: 0;
   border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); color: var(--ink);

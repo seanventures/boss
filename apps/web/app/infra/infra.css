@@ -4,7 +4,7 @@
    the two areas read as the same product as Factory and Agents. Motion only on a real state
    change, with a still for reduced motion and for Paused. */
 
-.inf { display: flex; flex-direction: column; gap: 16px; width: 100%; max-width: 1180px; margin: 0 auto; min-width: 0; }
+.inf { display: flex; flex-direction: column; gap: 16px; width: 100%; max-width: var(--page-max); margin: 0 auto; min-width: 0; }
 .bx-content[data-active="infra"]:has(.inf), .bx-content[data-active="observability"]:has(.inf) { max-width: none; }
 
 /* Header: one row. */
@@ -60,7 +60,7 @@
 
 /* NEEDS YOU, partial data, empty lines. */
 .inf-needs { display: flex; flex-direction: column; gap: 8px; }
-.inf-needs-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.inf-needs-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(15.78947rem, 1fr)); gap: 10px; }
 .inf-partial { font-size: 0.8rem; color: var(--amber); }
 .inf-empty { padding: 10px 2px; color: var(--muted); font-size: 0.84rem; }
 .inf-zone-head { margin-top: 4px; }
@@ -118,7 +118,7 @@
 .inf-sheet-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .inf-sheet-head h2 { margin: 0; flex: 1; font-size: 1rem; }
 .inf-form { display: flex; flex-direction: column; gap: 10px; }
-.inf-form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.inf-form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.42105rem, 1fr)); gap: 10px; }
 .inf-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 0.8rem; color: var(--muted); }
 .inf-field input, .inf-field select, .inf-field textarea {
   min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);

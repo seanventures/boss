@@ -124,4 +124,4 @@
 .sec .cap-input::placeholder { color: var(--faint); }
 
 /* A group's places (one problem, several routes or files). */
-.sec-places { margin: 0 0 8px; padding-left: 18px; font-size: 12px; overflow-wrap: anywhere; }
+.sec-places { margin: 0 0 8px; padding-left: 18px; font-size: 0.63158rem; overflow-wrap: anywhere; }

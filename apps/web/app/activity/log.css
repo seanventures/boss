@@ -70,7 +70,7 @@
 .lx-view:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
 
 /* Body: rail · main · drawer overlay. */
-.lx-body { position: relative; display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 14px; min-width: 0; height: calc(100vh - 230px); min-height: 420px; }
+.lx-body { position: relative; display: grid; grid-template-columns: 12.21053rem minmax(0, 1fr); gap: 14px; min-width: 0; height: calc(100vh - 230px); min-height: 420px; }
 .lx-main { position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
 
 /* Rail. */
@@ -123,7 +123,7 @@
 .lx-runhead { height: 28px; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 20px; font-size: 0.78rem; color: var(--ink-soft); background: var(--surface); border-bottom: 1px dashed var(--border); }
 .lx-runhead-n { color: var(--faint); font-size: 0.74rem; }
 .lx-row {
-  height: 32px; display: grid; grid-template-columns: 66px 76px 26px minmax(0, 1fr) auto; align-items: center; gap: 8px;
+  height: 32px; display: grid; grid-template-columns: 3.47368rem 4rem 1.36842rem minmax(0, 1fr) auto; align-items: center; gap: 8px;
   padding: 0 12px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); cursor: pointer; font-size: 0.82rem;
 }
 .lx-row:hover { background: var(--surface-2); }
@@ -181,7 +181,7 @@
 .lx-fact-acts button { display: inline-flex; padding: 3px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); color: var(--muted); cursor: pointer; }
 .lx-links { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.82rem; }
 .lx-around-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; }
-.lx-around-row .lx-row { position: static; transform: none !important; grid-template-columns: 60px 66px 22px minmax(0, 1fr); }
+.lx-around-row .lx-row { position: static; transform: none !important; grid-template-columns: 3.15789rem 3.47368rem 1.15789rem minmax(0, 1fr); }
 .lx-around-row .lx-right { display: none; }
 .lx-around-row[data-anchor] .lx-row { box-shadow: inset 0 0 0 1px var(--accent-line); }
 .lx-clip { display: inline-block; margin-bottom: 6px; font-size: 0.76rem; color: var(--amber); }
@@ -191,7 +191,7 @@
 
 /* 1024-1279: a narrower rail, no first-line preview. */
 @media (max-width: 1279px) {
-  .lx-body { grid-template-columns: 200px minmax(0, 1fr); }
+  .lx-body { grid-template-columns: 10.52632rem minmax(0, 1fr); }
   .lx-preview { display: none; }
 }
 /* 720-1023: the rail is a sheet behind `Filters (n)`. */

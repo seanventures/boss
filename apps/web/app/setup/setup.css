@@ -4,7 +4,7 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-width: 960px;
+  max-width: var(--page-max-mid);
   width: 100%;
   margin: 0 auto;
   min-width: 0;
@@ -30,7 +30,7 @@
 /* ── Rows ───────────────────────────────────────────────────────────────────────── */
 .su-row {
   display: grid;
-  grid-template-columns: 160px minmax(0, 1fr) auto;
+  grid-template-columns: 8.42105rem minmax(0, 1fr) auto;
   gap: 12px;
   align-items: start;
   padding: 14px 16px;
@@ -131,7 +131,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-mono { font-family: var(--mono); font-size: 0.8125rem; }
 .su-strong { font-weight: 700; }
 .su-faint { color: var(--faint); }
-.su-builds-warn { margin: 6px 0 0; color: var(--amber); font-size: 12.5px; }
+.su-builds-warn { margin: 6px 0 0; color: var(--amber); font-size: 0.65789rem; }
 .su-tipped { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
 .su-checks { display: inline-flex; gap: 10px; flex-wrap: wrap; }
 .su-check { color: var(--muted); font-size: 0.8125rem; cursor: help; }
@@ -352,7 +352,7 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-jobs { display: flex; flex-direction: column; gap: 8px; }
 .su-job {
   display: grid;
-  grid-template-columns: 120px minmax(0, 320px) auto;
+  grid-template-columns: 6.31579rem minmax(0, 16.84211rem) auto;
   gap: 10px;
   align-items: center;
 }

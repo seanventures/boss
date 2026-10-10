@@ -2,9 +2,9 @@
 .idn-app-signin tr.idn-click { cursor: pointer; }
 .idn-app-signin tr.idn-click:hover td { background: color-mix(in srgb, var(--teal) 5%, transparent); }
 .idn-app-signin .idn-tabs { margin: 0 0 16px; }
-.idn-app-signin code { font: 500 12px var(--mono); word-break: break-all; }
+.idn-app-signin code { font: 500 0.63158rem var(--mono); word-break: break-all; }
 .idn-sheet [data-testid="client-secret"] .idn-row { margin: 8px 0; }
-.idn-sheet [data-testid="client-secret"] .idn-label { min-width: 110px; font: 500 10px var(--mono); letter-spacing: 0.16em; color: var(--faint); text-transform: uppercase; }
+.idn-sheet [data-testid="client-secret"] .idn-label { min-width: 110px; font: 500 0.52632rem var(--mono); letter-spacing: 0.16em; color: var(--faint); text-transform: uppercase; }
 /* At phone width the tables keep the columns that identify a row (the sheet has the rest). */
 @media (max-width: 560px) {
   .idn-app-signin .idn-narrow-hide { display: none; }

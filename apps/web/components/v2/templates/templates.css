@@ -60,7 +60,7 @@ details.tpl-fold[open] > summary { margin-bottom: 6px; }
 /* ── Gallery ────────────────────────────────────────────────────────────────────────────── */
 .tpl-gallery { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .tpl-gallery-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.57895rem, 1fr)); gap: 10px; }
 .tpl-card {
   display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px; text-align: left; font: inherit;
   border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--bg-tint); color: var(--ink); cursor: pointer;
