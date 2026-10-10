@@ -31,7 +31,7 @@ class _Agent:
         self.fail_at = None
         self.fail_with = None
 
-    def run_research(self, prompt: str) -> dict:
+    def run_research(self, prompt: str, *, model: str | None = None) -> dict:
         # Each stage's prompt opens with its own role.
         name = ("synthesize" if prompt.startswith("You are a market analyst")
                 else "vet" if prompt.startswith("You are a sharp, skeptical venture investor")
@@ -383,7 +383,7 @@ def test_a_rejected_login_stops_at_once_and_says_what_to_do(engine, governed):
         "a rejected login does not fix itself; retrying it only hid the reason")
     attention = _attention(engine, run_id)
     assert attention["kind"] == "login_rejected" and attention["state"] == "stopped"
-    assert "Setup" in attention["action"] and "sk-ant-" in attention["action"]
+    assert "Repo and models" in attention["action"] and "sk-ant-" in attention["action"]
     with engine.connect() as connection:
         state = connection.execute(text(
             "SELECT observed_capacity->>'credential_state' FROM entitlement_sources "
@@ -391,12 +391,17 @@ def test_a_rejected_login_stops_at_once_and_says_what_to_do(engine, governed):
     assert state == "rejected", "Setup must be able to show the source as broken"
 
 
+@pytest.mark.parametrize("field", ["discovery_run_id", "run_id"])
 def test_a_deadlettered_job_fails_the_run_with_a_reason_and_a_requeue_resumes_it(
-    engine, governed,
+    engine, governed, field,
 ):
     run_id = _start()
     lease = _lease(engine, run_id)
     with engine.begin() as connection:  # the worker was refused before the endpoint ran
+        connection.execute(text(
+            "UPDATE jobs SET payload=(payload - 'discovery_run_id') || "
+            "jsonb_build_object(CAST(:field AS text),CAST(:r AS text)) WHERE id=:j"),
+            {"field": field, "r": run_id, "j": lease["job_id"]})
         JobLeaseService(api_main.settings).fail(
             connection, lease["worker_id"], lease["job_id"], lease["lease_token"],
             {"message": "Client error '409 Conflict' for url 'http://api:8000/v1/discoveries/x/execute'"},
@@ -413,6 +418,12 @@ def test_a_deadlettered_job_fails_the_run_with_a_reason_and_a_requeue_resumes_it
         requeued = api_main.deadletter_remediation.requeue_job_deadletter(
             connection, deadletter_id=deadletter, actor="ceo", reason="fixed", run_after_seconds=0)
         job_id = requeued.get("requeued_job_id") or requeued["deadletter"]["requeued_job_id"]
+        repeated = api_main.deadletter_remediation.requeue_job_deadletter(
+            connection, deadletter_id=deadletter, actor="ceo", reason="again", run_after_seconds=0)
+        assert repeated["requeued_job_id"] == job_id
+        assert connection.execute(text(
+            "SELECT count(*) FROM jobs WHERE payload->'requeue'->>'source_deadletter_id'=:d"),
+            {"d": deadletter}).scalar_one() == 1
         lease = JobLeaseService(api_main.settings).lease_owned_job(
             connection, project_id=PROJECT, job_id=job_id, worker_id="worker-test",
             lease_ttl_seconds=600)
@@ -420,6 +431,7 @@ def test_a_deadlettered_job_fails_the_run_with_a_reason_and_a_requeue_resumes_it
                                "lease_token": lease["lease_token"]})
     assert result == {"status": "completed", "retry": False}
     assert _attention(engine, run_id) is None
+    assert _events(engine, run_id, "discovery.resumed") == 1
 
 
 def test_a_run_waiting_for_the_per_minute_budget_says_so(engine, governed, budget_policy):

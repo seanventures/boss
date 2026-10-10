@@ -15,7 +15,7 @@ from .core import (
     make_id,
     now_utc,
 )
-from .jobs import JobLeaseService
+from .jobs import JobLeaseService, job_run_id
 
 
 class DeadletterRemediationBlocked(ValueError):
@@ -864,6 +864,27 @@ class DeadletterRemediationService:
             "requested_by": actor,
             "reason": reason,
         }
+        discovery_run_id = None
+        if job["kind"] == "discovery.run":
+            discovery_run_id = job_run_id(job["kind"], payload)
+            run = connection.execute(
+                text("SELECT status, state FROM discovery_runs "
+                     "WHERE id=:id AND project_id=:p FOR UPDATE"),
+                {"id": discovery_run_id, "p": job["project_id"]},
+            ).mappings().first()
+            state = (run or {}).get("state") or {}
+            if (not run or run["status"] != "failed"
+                    or state.get("job_id") != job["id"]
+                    or state.get("failed_by_job") != job["id"]):
+                raise DeadletterRemediationBlocked(
+                    "Discovery is not failed under this deadletter's owning job; cannot requeue.")
+            # The source job and run are locked. Reopen, enqueue and transfer ownership
+            # in this transaction, so ordinary terminal guards remain strict everywhere else.
+            connection.execute(
+                text("UPDATE discovery_runs SET status='running', error=NULL, updated_at=now() "
+                     "WHERE id=:id AND project_id=:p"),
+                {"id": discovery_run_id, "p": job["project_id"]},
+            )
         new_job = self.jobs.create_job(
             connection,
             job["project_id"],
@@ -878,6 +899,19 @@ class DeadletterRemediationService:
             # whose source only serves owner_sandbox found no eligible model on its retry.
             workload_class=job["workload_class"] or "general",
         )
+        if discovery_run_id:
+            if not new_job.get("id"):
+                raise DeadletterRemediationBlocked("Discovery retry did not create a job.")
+            connection.execute(
+                text("UPDATE discovery_runs SET state=(state - 'failed_by_job' - 'job_error') "
+                     "|| jsonb_build_object('job_id', CAST(:new AS text)), updated_at=now() "
+                     "WHERE id=:id AND project_id=:p"),
+                {"id": discovery_run_id, "p": job["project_id"], "new": new_job["id"]},
+            )
+            emit_event(connection, job["project_id"], "discovery.resumed", actor,
+                       "discovery_run", discovery_run_id,
+                       {"reason": "its deadlettered job was requeued", "job_id": new_job["id"],
+                        "source_job_id": job["id"]})
         resolved_at = now_utc()
         connection.execute(
             text(
