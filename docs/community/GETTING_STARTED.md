@@ -270,6 +270,16 @@ Open the run on the **Workflow** page. Runs are grouped as **Needs you**, **Runn
 
 Every step is recorded in **Activity log**, and a step that fails says why on the run.
 
+Stopping a workflow also cancels its Discovery research. Once cancellation is
+observed, Discovery starts no later research stage, and a late answer cannot
+turn the cancelled run into a completed run. A request already submitted to a
+model may still finish and report usage; cancellation does not promise zero
+charge. If its receipt cannot be settled safely, BOSS records a **Reconcile
+Discovery … stage …** decision and preserves the receipt and observed usage.
+Its budget reservation may remain held, including when cancellation invalidated
+the lease just before submission. Review that evidence before retrying; do not
+blindly restart research or assume the held budget has been released.
+
 !!! note "Verify this part on your own repository"
     For this guide, Build was run on a Community install with the local `qwen2.5-coder:1.5b` model: research was skipped, the meeting (about 7 minutes) and spec_review steps ran, and the build step was run up to the missing-repository stop shown in step 4. The pipeline stages after cloning, and the pull request, need a connected GitHub repository; the stage names above are the ones Factory shows.
 

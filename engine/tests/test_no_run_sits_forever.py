@@ -76,8 +76,9 @@ def test_cancelling_a_job_closes_both_kinds_of_run():
     """The narrower half of the same rule, applied at the moment of cancellation."""
     from boss_engine.services import jobs
     src = inspect.getsource(jobs.JobLeaseService.cancel_queued_job)
-    assert "UPDATE code_task_runs" in src
-    assert "UPDATE meeting_runs" in src
+    from boss_engine.services.jobs import _RUN_TABLE_FOR_KIND
+    assert "_RUN_TABLE_FOR_KIND" in src
+    assert {"code_task_runs", "meeting_runs", "discovery_runs"} <= set(_RUN_TABLE_FOR_KIND.values())
 
 
 def test_a_finished_run_is_closed_as_completed_not_cancelled():
