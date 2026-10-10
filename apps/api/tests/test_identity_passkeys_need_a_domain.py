@@ -1,4 +1,4 @@
-"""Round 3 (boss-1 at https://100.64.0.20): a passkey needs a DOMAIN on a secure context.
+"""An installation at a documentation-only IP address: a passkey needs a DOMAIN on a secure context.
 
 WebAuthn forbids an IP literal as the RP ID: every browser refuses before the authenticator runs,
 so the claim's "Create your passkey" failed with a bare "That didn't work". BOSS now says so
@@ -23,21 +23,21 @@ from apps.api.tests.identity_s1_world import (  # noqa: F401  (world is a fixtur
 from boss_engine.config import get_settings
 from boss_engine.identity import webauthn
 
-IP_ORIGIN = "https://100.64.0.20"
+IP_ORIGIN = "https://192.0.2.20"
 
 
 @pytest.mark.parametrize("origin, reason", [
-    ("https://100.64.0.20", "needs_domain"),
-    ("https://100.64.0.20:8443", "needs_domain"),
+    ("https://192.0.2.20", "needs_domain"),
+    ("https://192.0.2.20:8443", "needs_domain"),
     ("http://127.0.0.1:3000", "needs_domain"),
-    ("https://[fd7a:115c:a1e0::1]", "needs_domain"),
+    ("https://[2001:db8::1]", "needs_domain"),
     ("http://[::1]:3000", "needs_domain"),
     ("http://boss.lan", "needs_https"),
-    ("http://shared-server.tail4b2c.ts.net", "needs_https"),
+    ("http://console.example.test", "needs_https"),
     (None, "unavailable"),
     ("", "unavailable"),
     ("https://boss.example.test", None),
-    ("https://shared-server.tail4b2c.ts.net", None),
+    ("https://console.example.test", None),
     ("http://localhost:3000", None),
     ("http://boss.localhost:3000", None),
 ])
@@ -45,7 +45,7 @@ def test_the_blocker_judges_the_origin(origin, reason):
     assert webauthn.passkey_blocker(origin) == reason
 
 
-@pytest.mark.parametrize("origin", [IP_ORIGIN, "https://[fd7a:115c:a1e0::1]", "http://boss.lan"])
+@pytest.mark.parametrize("origin", [IP_ORIGIN, "https://[2001:db8::1]", "http://boss.lan"])
 def test_no_webauthn_options_for_an_origin_a_browser_refuses(origin):
     with pytest.raises(webauthn.PasskeyError) as exc:
         webauthn.rp_for(origin)

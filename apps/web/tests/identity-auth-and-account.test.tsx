@@ -171,7 +171,7 @@ describe("Claim this BOSS", () => {
       "POST /v1/identity/me/passkeys": { status: 201, body: { ok: true } },
       "POST /v1/identity/me/recovery-codes": { body: { codes: CODES } },
     });
-    const origin = "https://shared-server.tail4b2c.ts.net";
+    const origin = "https://console.example.test";
     const el = await mount(<ClaimFlow options={options({ path: "network_bridge", origin, expires_at: null, seats: SEATS })} />);
     expect(el.querySelector("[data-testid='claim-origin']")?.textContent).toContain(origin);
     type(el.querySelector("#claim-name"), "Param Gnanaguru");

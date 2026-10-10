@@ -52,22 +52,31 @@ Nothing ever runs unfenced unless you choose `off`.
 
 ## A database for a build's tests
 
-The sandbox has Node, Python and Playwright, but no database server. A build whose tests need a
-real PostgreSQL asks for one:
+The sandbox has Node, Python and Playwright. By default, Build database is **Auto**: BOSS gives
+an individual build a temporary PostgreSQL database when its brief, approved plan, template,
+repository dependencies or verification manifest indicate PostgreSQL. A repository can declare
+that requirement explicitly:
 
 ```yaml
 # boss.verify.yaml at the repo root
 services: [postgres]
 ```
 
-or, for a whole project, Govern › setting `build_services` = `postgres`.
+In Repo and models, choose **Always** to give every build a database, or **Never** to disable
+it for the project, including when the repository declares it. The project setting is
+`build_services`: `auto` (default), `always` or `never`; the older `postgres` value means Always.
 
 At run start, before any agent runs, BOSS creates a role and an empty database for that run on
 the `build-services` Postgres (its own container on port 5433, data on tmpfs; never the BOSS
 database). Every command the run starts, its tests included, gets `DATABASE_URL`
 (`postgresql://user:pass@host:5433/db`) and `PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE`. The
-database is dropped when the run ends. If the run's process dies, the reaper drops it within a
-few minutes.
+database is deleted when the run ends. If deletion fails, cleanup stays pending and is logged;
+the resource reaper retries instead of recording a successful release. A failed ledger update
+also stays pending for retry by the running API. If the API restarts after deletion but before
+that retry succeeds, the unreleased ledger entry may require reconciliation. If the run's process
+dies, the reaper removes its orphaned database after a grace period when the server is reachable.
+This data is temporary: restarting the build-services container loses it. It is neither the
+application's deployed database nor part of the durable BOSS recovery backup.
 
 What keeps one run out of another's database:
 
@@ -82,7 +91,9 @@ What keeps one run out of another's database:
 
 The password never appears in run logs, events or activity. If the run asked for Postgres and the
 server is not running, the run stops with `Build services unavailable: <why>`. It does not run
-the tests without the database. `BOSS_BUILD_SERVICES_PG_URL` points BOSS at another server (a
+the tests without the database. Automatic repository detection refuses unsafe symlink, hardlink
+or replacement reads; it never follows them outside the repository. `BOSS_BUILD_SERVICES_PG_URL`
+points BOSS at another server (a
 superuser URL; it is never passed to a build).
 
 ## Upgrades
