@@ -293,7 +293,7 @@ blindly restart research or assume the held budget has been released.
 
 ## 7. Review the pull request and run the software
 
-When the build step finishes, Factory shows the task as done with a link to the pull request, and a merge approval appears in **Approvals**: "Approve code change: <title> (PR #N)". BOSS does not merge on its own.
+When the build step finishes, Factory shows the task as done with a link to the pull request, and a merge approval appears in **Approvals**: `Approve code change: <title> (PR #N)`. BOSS does not merge on its own.
 
 Before you approve, review:
 
