@@ -208,7 +208,19 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
           </span>
           {/* THE SEAM TO SKILLS AND MCP: once the repository and a model work, the next job is
               what the crew can do (the Kit opens on its Essentials). Board and stepper alike. */}
-          {view.ready ? (
+          {/* THE NEXT STEP FOLLOWS THE STEPPER: ready but no first PR yet is "open your first PR"
+              (Try it, at the bottom), never a jump to Skills that skips the first build. */}
+          {view.ready && view.next === "try" ? (
+            <a className="su-link" href="?area=setup&focus=try" data-testid="su-next-try"
+               onClick={(e) => {
+                 const el = refs.current.try;
+                 if (el && typeof el.scrollIntoView === "function") { e.preventDefault(); el.scrollIntoView({ behavior: "smooth", block: "start" }); }
+               }}
+               title="Describe one small change; BOSS opens a pull request on your repository."
+               data-tip="Describe one small change; BOSS opens a pull request on your repository.">
+              Next: open your first PR
+            </a>
+          ) : view.ready ? (
             <a className="su-link" href="?area=skills&setup=1" data-testid="su-next-skills"
                title="Choose what your agents can do: research, tickets, email."
                data-tip="Choose what your agents can do: research, tickets, email.">
