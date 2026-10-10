@@ -11438,17 +11438,24 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.", headers=isolation)
     from .services.preview_service import proxy_preview
+    from boss_engine.services.preview_cookies import inbound_cookie_header
     body = await request.body()
+    # The app's OWN cookies only (tagged for this preview); never BOSS's, never another preview's.
     status, ctype, data, headers = proxy_preview(
         engine, preview_id, path, request.method, request.url.query,
         body or None, request.headers.get("content-type"), settings.sandbox_token,
         incoming_headers=dict(request.headers),
+        app_cookie_header=inbound_cookie_header(preview_id, request.headers.get("cookie")),
     )
+    set_cookies = list((headers or {}).pop("Set-Cookie", None) or [])
     # The previewed app's own CSP / CORS answers never replace the isolation.
     headers = {k: v for k, v in (headers or {}).items()
                if k.lower() not in {"content-security-policy", "access-control-allow-origin",
-                                    "access-control-allow-credentials"}}
-    return Response(content=data, status_code=status, media_type=ctype, headers={**headers, **isolation})
+                                    "access-control-allow-credentials", "set-cookie"}}
+    answer = Response(content=data, status_code=status, media_type=ctype, headers={**headers, **isolation})
+    for cookie in set_cookies:   # already tagged and scoped by preview_cookies.outbound_set_cookie
+        answer.headers.append("set-cookie", cookie)
+    return answer
 
 
 @app.websocket("/v1/previews/{preview_id}/web/")

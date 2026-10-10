@@ -262,3 +262,45 @@ test("an unknown provider is a 404", async () => {
   assert.equal((await b.get("/auth/login/facebook")).status, 404);
   assert.equal((await b.get("/auth/callback/facebook?code=x&state=y")).status, 404);
 });
+
+test("an app served under a base path (a BOSS preview) signs in: the callback keeps the path", async () => {
+  // A preview serves the app at <origin>/v1/previews/<id>/web and strips that prefix before the
+  // app sees the request, so req.originalUrl is /auth/callback/boss?... while the redirect_uri the
+  // code was issued for carries the prefix. The code exchange must name that same URI.
+  const base = "https://previews.example.test/v1/previews/prv_1/web";
+  const app = express();
+  app.set("trust proxy", "loopback");
+  app.use(createAuth({ ...config(), baseUrl: base }).router);
+  const own = app.listen(0, "127.0.0.1");
+  await new Promise((r) => own.once("listening", r));
+  try {
+    const at = `http://127.0.0.1:${own.address().port}`;
+    const jar = new Map();
+    const get = async (path) => {
+      const headers = { "X-Forwarded-Proto": "https" };
+      if (jar.size) headers.Cookie = [...jar].map(([k, v]) => `${k}=${v}`).join("; ");
+      const res = await fetch(at + path, { headers, redirect: "manual" });
+      for (const raw of res.headers.getSetCookie()) {
+        const [pair] = raw.split(";");
+        const [name, value] = pair.split("=");
+        jar.set(name.trim(), value);
+      }
+      return res;
+    };
+    const start = await get("/auth/login/boss");
+    assert.equal(start.status, 302);
+    const authorize = new URL(start.headers.get("location"));
+    assert.equal(authorize.searchParams.get("redirect_uri"), `${base}/auth/callback/boss`);
+    const atIdp = await fetch(authorize, { redirect: "manual" });
+    const back = new URL(atIdp.headers.get("location"));
+    assert.equal(back.origin + back.pathname, `${base}/auth/callback/boss`);
+    const done = await get(back.pathname.slice("/v1/previews/prv_1/web".length) + back.search);
+    assert.equal(done.status, 302, "the code exchange names the redirect_uri the code was issued for");
+    const me = await get("/api/me");
+    assert.equal(me.status, 200);
+    assert.equal((await me.json()).email, "ada@example.com");
+  } finally {
+    own.closeAllConnections();
+    await new Promise((r) => own.close(r));
+  }
+});

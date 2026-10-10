@@ -3246,10 +3246,17 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                   query_string: str = "", body: Optional[bytes] = None,
                   content_type: Optional[str] = None,
                   sandbox_token: str = "",
-                  incoming_headers: Optional[dict] = None):
-    """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes).
-    Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's own
-    (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim."""
+                  incoming_headers: Optional[dict] = None,
+                  app_cookie_header: Optional[str] = None):
+    """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes,
+    headers). Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's
+    own (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim.
+
+    Cookies (preview_cookies): `app_cookie_header` is the app's OWN cookies, already filtered and
+    untagged by the caller (the incoming Cookie header is never forwarded); the app's Set-Cookie
+    answers come back under headers["Set-Cookie"] as a LIST, each tagged and scoped to this
+    preview's path, the ones naming a BOSS cookie or another path dropped."""
+    from .preview_cookies import outbound_set_cookie
     import urllib.error
     with begin(engine) as c:
         row = c.execute(text("SELECT url,status,mode FROM app_previews WHERE id=:id"),
@@ -3273,9 +3280,18 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         incoming_headers, content_type=content_type
     ).items():
         req.add_header(header_name, header_value)
+    if app_cookie_header:
+        req.add_header("Cookie", app_cookie_header)
     if row["mode"] == "rootfs" and sandbox_token:
         req.add_header("X-Sandbox-Token", sandbox_token)
-    response_headers: dict[str, str] = {}
+    response_headers: dict = {}
+
+    def _cookies_of(message) -> None:
+        made = [c for c in (outbound_set_cookie(preview_id, v) for v in (message.get_all("Set-Cookie") or []))
+                if c]
+        if made:
+            response_headers["Set-Cookie"] = made
+
     try:
         resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=25)
         status = resp.status
@@ -3283,10 +3299,12 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         data = resp.read()
         if resp.headers.get("Location"):
             response_headers["Location"] = resp.headers["Location"]
+        _cookies_of(resp.headers)
     except urllib.error.HTTPError as e:
         status, ctype, data = e.code, e.headers.get("Content-Type", "text/plain"), e.read()
         if e.headers.get("Location"):
             response_headers["Location"] = e.headers["Location"]
+        _cookies_of(e.headers)
     except Exception as e:  # noqa: BLE001 — process gone (e.g. after an api restart): self-heal
         try:
             with begin(engine) as c2:

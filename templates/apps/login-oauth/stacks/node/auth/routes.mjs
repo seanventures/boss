@@ -127,7 +127,10 @@ export function createAuth(config, { store = new UserStore({ adminEmails: config
     let profile;
     try {
       const configuration = await providers.get(id);
-      const callbackUrl = new URL(req.originalUrl, config.baseUrl);
+      // The URL the provider redirected to, on APP_BASE_URL with its path: new URL(path, base)
+      // would replace a base path (a preview's /v1/previews/<id>/web) and the code exchange would
+      // name a redirect_uri the provider never issued the code for.
+      const callbackUrl = new URL(`${config.baseUrl}${req.originalUrl}`);
       const tokens = await oidc.authorizationCodeGrant(configuration, callbackUrl, {
         pkceCodeVerifier: pending.codeVerifier,
         expectedState: pending.state,
