@@ -209,6 +209,7 @@ The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 | [Sign-in setup](docs/community/SIGN_IN_SETUP.md) | Email, single sign-on, social sign-in, SCIM |
 | [Agents and access](docs/community/AGENTS_AND_ACCESS.md) | What agents may do, acting for a person, GitHub access |
 | [Build sandbox](docs/community/SANDBOX.md) | How builds are isolated, and hosts that cannot fence them |
+| [Architecture approval](docs/community/ARCHITECTURE_GOVERNANCE.md) | Approved PRDs, model spending, revisions and reconciliation |
 | [Identity administration](docs/community/IDENTITY_ADMIN.md) | The security audit log, posture, policy, and the move to enforcement |
 | [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) | Moving an existing install off the shared password |
 
