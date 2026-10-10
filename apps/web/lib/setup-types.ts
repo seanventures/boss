@@ -180,7 +180,7 @@ export type SetupView = {
   budget: Budget;
   try: { workflow_key: string; last_run: TryRun | null; done?: boolean };
   /** "Give builds a database (Postgres)" — the project setting build_services. Absent on an older API. */
-  build_database?: { key: string; enabled: boolean; source: "project" | "default"; configured: boolean;
+  build_database?: { key: string; mode?: "auto" | "always" | "never"; enabled: boolean; source: "project" | "default"; configured: boolean;
                      permission: string } | null;
   /** A background probe (signed-in CLIs, the secret store) is on its way: ask again soon. */
   detecting?: boolean;

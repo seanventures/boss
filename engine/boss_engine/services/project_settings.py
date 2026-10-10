@@ -188,11 +188,12 @@ KNOBS: dict[str, dict[str, Any]] = {
     # `services: [postgres]` in boss.verify.yaml, for a project whose repo does not declare it.
     "build_services": {
         "attr": "build_services",
-        "label": "Build services",
-        "help": "postgres gives every build of this project its own empty PostgreSQL database "
-                "(DATABASE_URL in the build's environment), dropped when the build ends. off "
-                "leaves it to the repo's boss.verify.yaml.",
-        "kind": "choice", "choices": ("off", "postgres"),
+        "label": "Build database",
+        "help": "auto (the default) gives a build its own empty PostgreSQL database (DATABASE_URL), "
+                "dropped when the build ends, whenever BOSS detects the app needs one: the brief, "
+                "a template, the plan or the app's code says PostgreSQL. always gives every build "
+                "one; never gives none.",
+        "kind": "choice", "choices": ("auto", "always", "never"),
     },
     "decision_model": {
         "attr": "decision_model",

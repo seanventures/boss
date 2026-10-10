@@ -115,12 +115,160 @@ def parse_services(value: Any, where: str = "services") -> tuple[str, ...]:
 
 
 def requested(manifest_services: Iterable[str] = (), project_setting: Any = None) -> tuple[str, ...]:
-    """What this run asked for: the repo's declaration plus the project's setting."""
+    """What this run asked for EXPLICITLY: the repo's declaration plus the project's override
+    (Always). `decide` adds what BOSS detects and applies Never."""
     out = list(manifest_services or ())
-    setting = str(project_setting or "").strip().lower()
-    if setting and setting not in ("off", "none", "0") and setting in SUPPORTED and setting not in out:
-        out.append(setting)
-    return tuple(out)
+    if mode_of(project_setting) == ALWAYS and "postgres" not in out:
+        out.append("postgres")
+    return tuple(out) if mode_of(project_setting) != NEVER else ()
+
+
+# --------------------------------------------------------------------------------- detection
+#: The project's override (setting `build_services`): Auto (default) gives a build its database
+#: when BOSS detects the app needs one; Always gives every build one; Never gives none, even
+#: when the repo declares it. Older values read as: "postgres" = Always, "off" = Auto.
+AUTO, ALWAYS, NEVER = "auto", "always", "never"
+MODES = (AUTO, ALWAYS, NEVER)
+
+
+def mode_of(setting: Any) -> str:
+    value = str(setting or "").strip().lower()
+    if value in ("always", "postgres", "on", "1", "true"):
+        return ALWAYS
+    if value in ("never", "none", "false", "0"):
+        return NEVER
+    return AUTO
+
+
+_PG_WORDS = re.compile(r"\b(postgres(?:ql)?|psql)\b", re.IGNORECASE)
+_PG_URL = re.compile(r"postgres(?:ql)?(?:\+\w+)?://", re.IGNORECASE)
+_PY_DEPS = re.compile(r"^\s*(psycopg2?(?:-binary)?|psycopg\[?|asyncpg|pg8000)\b", re.IGNORECASE | re.MULTILINE)
+_PLAN_LINE = re.compile(r"^\s*[-*]?\s*database\s*:\s*(postgres(?:ql)?)\b", re.IGNORECASE | re.MULTILINE)
+_SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".next", "vendor"}
+_SCAN_FILES = 3000
+_SCAN_BYTES = 256_000
+
+
+def _texts(value: Any, depth: int = 0) -> Iterable[str]:
+    if depth > 4:
+        return
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            if str(k) not in ("instructions", "token", "secret"):
+                yield from _texts(v, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for v in value[:200]:
+            yield from _texts(v, depth + 1)
+
+
+def detect_in_code(root: Any) -> list[str]:
+    """Where the app's own code says it uses PostgreSQL (bounded scan; never reads secrets out)."""
+    import json as _json
+    from pathlib import Path
+
+    if not root:
+        return []
+    base = Path(str(root))
+    if not base.is_dir():
+        return []
+    found: list[str] = []
+    seen = 0
+    for path in sorted(base.rglob("*")):
+        if any(part in _SKIP_DIRS for part in path.relative_to(base).parts[:-1]):
+            continue
+        if not path.is_file():
+            continue
+        seen += 1
+        if seen > _SCAN_FILES or len(found) >= 3:
+            break
+        name = path.name.lower()
+        rel = path.relative_to(base).as_posix()
+        try:
+            if path.stat().st_size > _SCAN_BYTES:
+                continue
+            text_ = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if name.startswith("requirements") and name.endswith(".txt") or name in ("pyproject.toml", "pipfile", "setup.py", "setup.cfg"):
+            if _PY_DEPS.search(text_) or re.search(r"[\"'](psycopg2?(?:-binary)?|psycopg|asyncpg)", text_):
+                found.append(f"{rel} depends on a PostgreSQL driver")
+        elif name == "package.json":
+            try:
+                pkg = _json.loads(text_)
+            except ValueError:
+                continue
+            deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
+            hit = [d for d in ("pg", "postgres", "pg-promise", "@neondatabase/serverless", "@vercel/postgres") if d in deps]
+            if hit:
+                found.append(f"{rel} depends on {hit[0]}")
+        elif name == "schema.prisma":
+            if re.search(r'provider\s*=\s*"postgres(?:ql)?"', text_):
+                found.append(f"{rel} uses the postgresql provider")
+        elif name.startswith(("docker-compose", "compose")) and name.endswith((".yml", ".yaml")):
+            if re.search(r"image:\s*['\"]?postgres", text_):
+                found.append(f"{rel} runs a postgres service")
+        elif path.suffix.lower() in (".py", ".ts", ".js", ".mjs", ".cjs", ".env", ".example", ".toml", ".ini", ".yml", ".yaml"):
+            if _PG_URL.search(text_):
+                found.append(f"{rel} has a postgresql:// URL")
+    return found
+
+
+def detect(spec: Any = None, title: str = "", root: Any = None, design: Any = None) -> list[str]:
+    """Why this build needs a PostgreSQL database, from every signal BOSS has before the
+    database is created; empty when nothing says so.
+
+      the brief or PRD names PostgreSQL;
+      a template the build applies needs it (`services` / `needs` naming postgres);
+      the planner or architect recorded `database: postgres` (spec.plan / the run's design);
+      the app's existing code declares it (drivers, Prisma, compose, connection URLs)."""
+    reasons: list[str] = []
+    spec = spec if isinstance(spec, dict) else {}
+    brief = " ".join([title or "", *[t for k, v in spec.items()
+                                     if k not in ("template", "plan", "services", "instructions")
+                                     for t in _texts(v)]])
+    if _PG_WORDS.search(brief):
+        reasons.append("the brief names PostgreSQL")
+    template = spec.get("template") if isinstance(spec.get("template"), dict) else {}
+    for key in ("services", "needs"):
+        wanted = [str(x).lower() for x in (template.get(key) or spec.get(key) or [])] \
+            if isinstance(template.get(key) or spec.get(key), (list, tuple)) else []
+        if "postgres" in wanted or "postgresql" in wanted or "database:postgres" in wanted:
+            reasons.append(f"the template {template.get('key') or ''} needs it".replace("  ", " "))
+            break
+    plans = [spec.get("plan"), spec.get("database"), design]
+    for plan in plans:
+        if isinstance(plan, dict) and str(plan.get("database") or "").lower().startswith("postgres"):
+            reasons.append("the plan says database: postgres")
+            break
+        if isinstance(plan, str) and (plan.strip().lower().startswith("postgres") or _PLAN_LINE.search(plan)):
+            reasons.append("the plan says database: postgres")
+            break
+        if isinstance(plan, dict) and isinstance(plan.get("plan"), str) and _PLAN_LINE.search(plan["plan"]):
+            reasons.append("the plan says database: postgres")
+            break
+    reasons.extend(detect_in_code(root))
+    return reasons
+
+
+def decide(manifest_services: Iterable[str] = (), setting: Any = None, *, spec: Any = None,
+           title: str = "", root: Any = None, design: Any = None) -> dict[str, Any]:
+    """The build's database decision, made BEFORE the database is created: {"services": (...),
+    "mode": auto|always|never, "why": [...]}. Never wins over everything, the repo's own
+    `services: [postgres]` included; Always needs no reason; Auto needs one."""
+    mode = mode_of(setting)
+    declared = tuple(manifest_services or ())
+    if mode == NEVER:
+        return {"services": (), "mode": mode, "why": ["Never, in this project's settings"]}
+    why: list[str] = []
+    if "postgres" in declared:
+        why.append("boss.verify.yaml declares services: [postgres]")
+    if mode == ALWAYS:
+        why.append("Always, in this project's settings")
+    if not why:
+        why = detect(spec, title, root, design)
+    return {"services": ("postgres",) if why else (), "mode": mode, "why": why}
 
 
 # --------------------------------------------------------------------------------- server

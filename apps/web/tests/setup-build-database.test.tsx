@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 /**
- * "Give builds a database (Postgres)" — the project setting build_services, which had no console
- * control (only an MCP tool or a repo's boss.verify.yaml). Setup shows it, says what it does, and
- * one press sets it through PUT /v1/settings/build_services.
+ * Build database is an OVERRIDE (Auto / Always / Never, default Auto): BOSS gives a build its own
+ * Postgres when it detects the app needs one. Setup shows the three, says what Auto does, and a
+ * press sets the project setting build_services through PUT /v1/settings/build_services.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,28 +12,25 @@ import { board } from "./_helpers/setup-fixtures";
 let mounted: Mounted | null = null;
 afterEach(() => { mounted?.unmount(); mounted = null; vi.restoreAllMocks(); });
 
-const OFF = { key: "build_services", enabled: false, source: "default" as const, configured: true, permission: "settings:update" };
+const AUTO = { key: "build_services", mode: "auto" as const, enabled: true, source: "default" as const,
+               configured: true, permission: "settings:update" };
 
 describe("Build database", () => {
-  it("is visible, explains itself, and one press asks for a Postgres per build", async () => {
-    const view = { ...board(), build_database: OFF };
+  it("defaults to Auto, explains it, and Never is one press", async () => {
+    const view = { ...board(), build_database: AUTO };
     const api = fakeApi(view);
     mounted = await mountBoard(view);
-    const toggle = document.querySelector('[data-testid="su-build-database-toggle"]')!;
-    expect(toggle.textContent).toBe("Off");
-    expect(toggle.getAttribute("title")).toContain("dropped when the build ends");
+    expect(document.querySelector('[data-testid="su-build-database-auto"]')!.getAttribute("aria-checked")).toBe("true");
     expect(document.querySelector('[data-testid="su-row-build-database"]')!.textContent)
-      .toContain("Give builds a database (Postgres)");
-    await click(toggle);
-    const write = api.calls.find((c) => c.op === "build_database");
-    expect(write?.body).toMatchObject({ key: "build_services", value: "postgres" });
+      .toContain("Postgres per build when the app needs one");
+    await click(document.querySelector('[data-testid="su-build-database-never"]'));
+    expect(api.calls.find((c) => c.op === "build_database")?.body).toMatchObject({ key: "build_services", value: "never" });
   });
 
   it("says so when the server has no build database service", async () => {
-    const view = { ...board(), build_database: { ...OFF, enabled: true, source: "project" as const, configured: false } };
+    const view = { ...board(), build_database: { ...AUTO, configured: false } };
     fakeApi(view);
     mounted = await mountBoard(view);
-    expect(document.querySelector('[data-testid="su-build-database-toggle"]')!.textContent).toBe("On");
     expect(document.querySelector('[data-testid="su-build-database-unconfigured"]')).not.toBeNull();
   });
 

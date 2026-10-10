@@ -1596,7 +1596,10 @@ def _plan_prompt(title, spec):
     return (
         "You are a software architect. Given the spec, write a short technical plan: the files to "
         "add/change, the function signatures, and the key edge cases to handle. Do NOT edit any "
-        f"files.\n\nTASK: {title}\n\nSPEC:\n{spec}"
+        "files. If the app needs a relational database, end the plan with the line "
+        "`database: postgres` (BOSS then gives every build its own PostgreSQL database, "
+        "DATABASE_URL in the environment); otherwise end with `database: none`."
+        f"\n\nTASK: {title}\n\nSPEC:\n{spec}"
     )
 
 
@@ -1805,8 +1808,12 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
 
 
 def _provision_build_services(engine, settings: Settings, run_id: str, project_id: str,
-                              pinned: Any, *, use_microvm: bool = False) -> Any:
-    """The run's build-services lease, or None when it asked for none (build_services)."""
+                              pinned: Any, *, use_microvm: bool = False, spec: Any = None,
+                              title: str = "", root: Any = None) -> Any:
+    """The run's build-services lease, or None when it needs none (build_services.decide: the
+    brief, a template, the plan or the app's own code says PostgreSQL; or the project's
+    Always; never under Never). The decision is kept on the run (`state.build_database`) so the
+    build page and the deploy plan say "Database: Postgres for this build", and why."""
     from . import build_services
     from .project_settings import effective as _effective_setting
 
@@ -1817,7 +1824,25 @@ def _provision_build_services(engine, settings: Settings, run_id: str, project_i
             setting = _effective_setting(c, project_id, settings, build_services.SETTING_KEY)
     except Exception:  # noqa: BLE001 — the repo's declaration still stands
         setting = None
-    wanted = build_services.requested(declared, setting)
+    design = None
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql("SELECT state FROM code_task_runs WHERE id = :id"), {"id": run_id}).first()
+        state = (row[0] if row else None) or {}
+        state = json.loads(state) if isinstance(state, str) else state
+        design = (state or {}).get("design") if isinstance(state, dict) else None
+    except Exception:  # noqa: BLE001 — no plan yet: the other signals decide
+        design = None
+    decision = build_services.decide(declared, setting, spec=spec, title=title, root=root, design=design)
+    wanted = decision["services"]
+    try:
+        with _transaction(engine) as c:
+            c.execute(sql("UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) || "
+                          "jsonb_build_object('build_database', CAST(:d AS jsonb)) WHERE id = :id"),
+                      {"d": json.dumps({"postgres": "postgres" in wanted, "mode": decision["mode"],
+                                        "why": decision["why"][:5]}), "id": run_id})
+    except Exception:  # noqa: BLE001 — the record is for display; the build goes on
+        logger.debug("build_database decision not recorded", exc_info=True)
     if "postgres" not in wanted:
         return None
     if use_microvm:
@@ -2860,7 +2885,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # before any agent, so the agents and every verify command see DATABASE_URL; a run that
         # asked and cannot have it fails here, saying why — its tests never run without it.
         _services_lease = _provision_build_services(
-            engine, settings, run_id, project_id, _pinned_manifest, use_microvm=use_microvm)
+            engine, settings, run_id, project_id, _pinned_manifest, use_microvm=use_microvm,
+            spec=spec, title=title, root=root)
         if _services_lease is not None:
             from .build_services import brief as _services_brief
 
