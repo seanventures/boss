@@ -80,7 +80,8 @@ def _origin(db: Any, org_id: str, explicit: Optional[str]) -> str:
     env = os.environ.get("BOSS_PUBLIC_URL", "").strip()
     if env:
         return env.rstrip("/")
-    return (get_policy(org_id, db=db).public_origin or "http://localhost:3000").rstrip("/")
+    from .authn_support import local_console_origin
+    return (get_policy(org_id, db=db).public_origin or local_console_origin()).rstrip("/")
 
 
 def recover_owner(email: str, *, db: Any, origin: Optional[str] = None,

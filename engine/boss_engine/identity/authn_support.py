@@ -260,6 +260,17 @@ def secure_origin_ok(origin: Optional[str]) -> bool:
 
 # ---- org, policy, events ------------------------------------------------------------------------
 
+def local_console_origin() -> str:
+    """The console on this machine, for a link printed on the host shell before any public origin
+    is known (a laptop install with no --console-origin): its REAL port (BOSS_WEB_PORT, which
+    compose passes to the api), never an assumed 3000 — an install that moved the port printed a
+    claim link to nothing."""
+    import os
+
+    port = (os.environ.get("BOSS_WEB_PORT") or "").strip()
+    return f"http://localhost:{port if port.isdigit() else '3000'}"
+
+
 def default_org_id(db: Any) -> Optional[str]:
     """One org per install in v1 (D24): the first one created."""
     row = db.execute(text("SELECT id FROM orgs ORDER BY created_at, id LIMIT 1")).first()

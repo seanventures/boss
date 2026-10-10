@@ -182,6 +182,9 @@ services:
       # be able to check it. The public origin binds cookies, passkeys and every emailed link.
       BOSS_CONSOLE_PASSWORD: ${BOSS_CONSOLE_PASSWORD:-}
       BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
+      # The console's real port, for links printed before any public origin is bound (the claim
+      # link of a laptop install): identity/authn_support.local_console_origin.
+      BOSS_WEB_PORT: ${BOSS_WEB_PORT:-3000}
       BOSS_REQUIRE_API_AUTH: ${BOSS_REQUIRE_API_AUTH:-true}
       BOSS_API_KEY: ${BOSS_API_KEY}
       # The installer preserves operator-added keys and binds the dedicated
@@ -424,6 +427,9 @@ services:
       BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
       BOSS_IDENTITY_SERVER_KEY: ${BOSS_IDENTITY_SERVER_KEY:-}
       BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
+      # The console's real port, for links printed before any public origin is bound (the claim
+      # link of a laptop install): identity/authn_support.local_console_origin.
+      BOSS_WEB_PORT: ${BOSS_WEB_PORT:-3000}
       BOSS_AUTHZ_MODE: ${BOSS_AUTHZ_MODE:-enforce}
       BOSS_AUTHZ_ROUTER_MODES: ${BOSS_AUTHZ_ROUTER_MODES:-}
       BOSS_AUTHZ_COVERAGE: ${BOSS_AUTHZ_COVERAGE:-}
@@ -541,6 +547,9 @@ services:
       DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD (install.sh generates it; never the old default)}@db:5432/boss
       BOSS_EDITION: community
       BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
+      # The console's real port, for links printed before any public origin is bound (the claim
+      # link of a laptop install): identity/authn_support.local_console_origin.
+      BOSS_WEB_PORT: ${BOSS_WEB_PORT:-3000}
       BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
       BOSS_EGRESS_SERVICE_KEY_FILE: /var/lib/boss/identity/egress-service.key
       BOSS_EGRESS_PORT: "8090"

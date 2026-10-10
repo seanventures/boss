@@ -197,6 +197,16 @@ def _check_state(state: str, purpose: str, *, db: Any, consume: bool = True) -> 
 
 # ---- (a) the GitHub App, from a manifest -----------------------------------------------------------------
 
+def app_name(host: str) -> str:
+    """A GitHub App's name is unique across ALL of GitHub (34 characters at most). "BOSS
+    localhost:3000" was the same for every laptop install, so the second stranger's App was
+    refused as "already taken". The host says which install it is; a short random tail makes it
+    unique."""
+    tail = secrets.token_hex(2)
+    clean = "".join(c if c.isalnum() or c in "-." else "-" for c in host).strip("-.") or "install"
+    return f"BOSS {clean[:34 - len('BOSS ') - len(tail) - 1]} {tail}"
+
+
 def resolve_owner(owner: Optional[str]) -> github_urls.Account:
     """The account a new App will belong to. Blank: the signed-in person's own account. A name:
     GitHub says whether it is a person or an organisation (GET /users/{name}), because the two
@@ -233,7 +243,7 @@ def manifest(*, origin: str, person_id: str, owner: Optional[str] = None,
                                message="Set BOSS_PUBLIC_URL first: GitHub sends you back to it.")
     host = origin.split("//", 1)[-1]
     body = {
-        "name": f"BOSS {host}"[:34],
+        "name": app_name(host),
         "url": origin,
         "redirect_url": f"{origin}/v1/identity/github/app/created",
         "callback_urls": [f"{origin}/v1/identity/me/connections/github/callback"],
