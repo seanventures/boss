@@ -55,8 +55,9 @@ def test_the_first_deploy_creates_the_target_on_a_free_port_and_the_plan_shows_i
                        "'staging', 'ssh', 'deploy@203.0.113.77:22', :h, 'active', CAST(:d AS jsonb), 'ceo')"),
                   {"i": f"deptgt_{uuid4().hex[:10]}", "p": HOME, "h": host["id"],
                    "d": json.dumps(["203.0.113.77:8000"])})
-    monkeypatch.setattr(deployment_fleet, "_first_free_port",
-                        lambda c, address: 8001)   # the scan of the live host is not this test's
+    asked = {}
+    monkeypatch.setattr(deployment_fleet, "_first_free_port",   # the live host's scan is not this test's
+                        lambda c, address, **kw: asked.update(kw) or 8001)
     planned = {}
 
     class Plane:
@@ -79,9 +80,12 @@ def test_the_first_deploy_creates_the_target_on_a_free_port_and_the_plan_shows_i
     assert plan["health"] == "http://203.0.113.77:8001/ expecting 200"
     assert plan["database"] == "Postgres" and plan["edit_href"].endswith(out["target_id"])
     with engine.begin() as c:
-        row = c.execute(text("SELECT app_name, host_id, domains FROM deployment_targets WHERE id = :i"),
-                        {"i": out["target_id"]}).mappings().one()
+        row = c.execute(text("SELECT app_name, host_id, domains, required_resources FROM deployment_targets "
+                             "WHERE id = :i"), {"i": out["target_id"]}).mappings().one()
     assert row["app_name"] == "Shift Swap Board" and row["host_id"] == host["id"]
+    # The governed plan needs the app port declared (governed_host_deploy.plan_problem).
+    assert {"kind": "app_port", "name": "8001"} in row["required_resources"]
+    assert asked == {"start": 8000, "end": 8999}          # the host's own port range
     assert row["domains"] == ["203.0.113.77:8001"]
     again = delivery_pipeline.deploy_build(api_main.engine, api_main.settings, project_id=HOME, run_id=run_id,
                                            environment="staging", actor="ceo")
