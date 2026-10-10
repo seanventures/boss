@@ -12,6 +12,7 @@ import { GatedButton } from "../../components/gated";
 import { fetchCiWorkflows, setupWrite, type CiWorkflows } from "../../lib/setup-client";
 import { toast, useBoard } from "./parts";
 import { Dot, Out, Tip } from "./pill";
+import { GITHUB_VERIFIED_EVENT, sayVerified } from "./github-access-row";
 
 /** VERIFIED, NOT ASSUMED: what GitHub says about `workflows` on the installation, and the one
  *  page that closes the gap (the App's permissions page, or the installation's review). */
@@ -49,15 +50,19 @@ export function CiWorkflowsToggle({ bindingId }: { bindingId: string }) {
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let live = true;
-    fetchCiWorkflows(projectId, bindingId)
+    const read = () => fetchCiWorkflows(projectId, bindingId)
       .then((v) => { if (live && typeof v?.enabled === "boolean") setState(v); })
       .catch(() => { /* a viewer without github:read sees nothing here */ });
-    return () => { live = false; };
+    void read();
+    // GitHub access asked GitHub: show the same stored answer, never an older one.
+    const other = (e: Event) => { if ((e as CustomEvent<{ from?: string }>).detail?.from !== "ci") void read(); };
+    window.addEventListener(GITHUB_VERIFIED_EVENT, other);
+    return () => { live = false; window.removeEventListener(GITHUB_VERIFIED_EVENT, other); };
   }, [projectId, bindingId]);
   if (!state) return null;
   const recheck = async () => {
     setBusy(true);
-    try { setState(await fetchCiWorkflows(projectId, bindingId, true)); }
+    try { setState(await fetchCiWorkflows(projectId, bindingId, true)); sayVerified("ci"); }
     catch { toast("GitHub did not answer. Try again in a minute.", "error"); }
     finally { setBusy(false); }
   };
@@ -67,6 +72,7 @@ export function CiWorkflowsToggle({ bindingId }: { bindingId: string }) {
       setState(await setupWrite<CiWorkflows>(projectId, "ci_workflows",
         { binding_id: bindingId, enabled: !state.enabled },
         { label: state.enabled ? "Turn off CI changes" : "Allow CI changes" }));
+      sayVerified("ci");
     } catch (error) {
       toast(error instanceof Error ? error.message : "Could not change it", "error");
     } finally {

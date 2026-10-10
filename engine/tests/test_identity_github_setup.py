@@ -229,6 +229,13 @@ def test_the_manifest_and_install_states_are_signed_single_use_and_purpose_bound
 
 # ---- the account type decides every settings link (identity/github_urls) ------------------------------------
 
+def test_the_apps_name_is_unique_per_install_and_fits_githubs_limit():
+    a, b = github_setup.app_name("localhost:3000"), github_setup.app_name("localhost:3000")
+    assert a != b and a.startswith("BOSS localhost-3000 ") and len(a) <= 34
+    long = github_setup.app_name("a-very-long-hostname.example.internal.corp:8443")
+    assert len(long) <= 34 and long.startswith("BOSS a-very-long")
+
+
 def test_a_personal_owner_creates_the_app_on_the_personal_page_never_an_organizations_one(env):
     """paramg is a person: /organizations/paramg/... is a 404 at GitHub. GitHub says which it is."""
     personal = github_setup.manifest(origin="https://boss.acme.test", person_id=env.alice, owner="paramg")

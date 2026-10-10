@@ -14,7 +14,7 @@
  * GitHub's redirects land back here with `?github=app_connected|app_failed`.
  */
 import { GatedButton } from "../../components/gated";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { CircleNotch, GithubLogo } from "@phosphor-icons/react";
 
 import { IdentityError, idDelete, idGet, idPost } from "../../lib/identity/api";
@@ -68,6 +68,14 @@ const FAILED_WORDS: Record<string, string> = {
 
 /** Said after "Test all" so the row asks GitHub again (setup-board.tsx dispatches it). */
 export const SETUP_TESTED_EVENT = "boss:setup-tested";
+/** Said by whichever control just asked GitHub (this row, the CI switch), so every other control
+ *  re-reads the ONE stored answer instead of showing an older one. detail.from names the sayer. */
+export const GITHUB_VERIFIED_EVENT = "boss:github-verified";
+export function sayVerified(from: string): void {
+  try { window.dispatchEvent(new CustomEvent(GITHUB_VERIFIED_EVENT, { detail: { from } })); } catch { /* no window */ }
+}
+/** A stored answer older than this is asked again when the page opens. */
+const VERIFY_STALE_S = 600;
 
 const PERMISSION_WORDS: Record<string, string> = {
   contents: "Contents", pull_requests: "Pull requests", workflows: "Workflows", checks: "Checks",
@@ -118,13 +126,13 @@ function VerifiedLines({ v, links, checking, onCheck }: {
         {again}
       </span>
       {gaps.length === 0 ? (
-        <span className="su-line" data-testid="gh-perm-all"><Dot tone="green" />Permissions: all accepted ✓</span>
+        <span className="su-line" data-testid="gh-perm-all"><Dot tone="green" /><span>All permissions accepted ✓</span></span>
       ) : null}
       {shown.map((p) => (
         <span key={p.name} className="su-line" data-testid={`gh-perm-${p.name}`} data-state={p.state}>
           <Dot tone={p.state === "accepted" ? "green" : "amber"} />
-          {PERMISSION_WORDS[p.name] ?? p.name}: {p.state === "accepted" ? "accepted ✓"
-            : p.state === "waiting" ? "waiting for you to accept" : "the App does not ask for it yet"}
+          <span>{PERMISSION_WORDS[p.name] ?? p.name}: {p.state === "accepted" ? "accepted ✓"
+            : p.state === "waiting" ? "waiting for you to accept" : "the App does not ask for it yet"}</span>
           {p.state !== "accepted" && p.fix_url ? (
             <Out href={p.fix_url} testid={`gh-perm-${p.name}-fix`}
                  tip={p.state === "waiting" ? "On the installation's page, press “Review request”, then Accept new permissions. Then Check again."
@@ -137,8 +145,8 @@ function VerifiedLines({ v, links, checking, onCheck }: {
       {(v.repos ?? []).map((r) => (
         <span key={r.full_name} className="su-line" data-testid="gh-repo-verified" data-installed={String(r.installed)}>
           <Dot tone={r.installed ? "green" : r.installed === false ? "red" : "grey"} />
-          <span className="su-mono" data-user-text>{r.full_name}</span>
-          {r.installed ? "✓" : r.installed === false ? "the App is not installed on it" : "not confirmed"}
+          <span><span className="su-mono" data-user-text>{r.full_name}</span>{" "}
+          {r.installed ? "✓" : r.installed === false ? "the App is not installed on it" : "not confirmed"}</span>
           {r.installed === false && r.fix_url ? (
             <Out href={r.fix_url} testid="gh-repo-verified-fix"
                  tip="On the installation's page, add this repository under Repository access, save, then Check again.">
@@ -181,7 +189,9 @@ function postManifest(postUrl: string, manifest: unknown): void {
   window.location.assign(HANDOFF_PATH);
 }
 
-function AppCard({ status, reload, back = false }: { status: GitHubStatus; reload: () => void; back?: boolean }) {
+function AppCard({ status, reload, back = false, repos = [] }: {
+  status: GitHubStatus; reload: () => void; back?: boolean; repos?: string[];
+}) {
   const guarded = useGuardedCall();
   const [owner, setOwner] = useState("");
   const [busy, setBusy] = useState(false);
@@ -197,6 +207,7 @@ function AppCard({ status, reload, back = false }: { status: GitHubStatus; reloa
     setChecking(true);
     try {
       setVerified(await idPost<Verified>("/v1/identity/github/app/verify", {}));
+      sayVerified("access");
     } catch (error) {
       toast(sentence(error), "error");
     } finally { setChecking(false); }
@@ -204,13 +215,29 @@ function AppCard({ status, reload, back = false }: { status: GitHubStatus; reloa
   // ASKED AGAIN when GitHub sends the person back, when Test all runs, and once when the App is
   // installed but GitHub was never asked — never trusted from what BOSS requested.
   const installed = app.installed && app.source === "setup";
+  // Asked on open when GitHub was never asked, when the stored answer has a gap (it may have been
+  // closed on GitHub since) or is older than VERIFY_STALE_S — never shown stale as if current.
+  const stored = status.app.verified;
+  const needsAsking = !stored || stored.ok === false
+    || !stored.checked_at || Date.now() / 1000 - stored.checked_at > VERIFY_STALE_S;
+  const asked = useRef(false);
   useEffect(() => {
     if (!installed) return;
-    if (back || !status.app.verified) void verify();
+    if (back || (needsAsking && !asked.current)) { asked.current = true; void verify(); }
     const again = () => { void verify(); };
+    const other = (e: Event) => { if ((e as CustomEvent<{ from?: string }>).detail?.from !== "access") reload(); };
     window.addEventListener(SETUP_TESTED_EVENT, again);
-    return () => window.removeEventListener(SETUP_TESTED_EVENT, again);
-  }, [installed, verify, status.app.verified, back]);
+    window.addEventListener(GITHUB_VERIFIED_EVENT, other);
+    return () => { window.removeEventListener(SETUP_TESTED_EVENT, again); window.removeEventListener(GITHUB_VERIFIED_EVENT, other); };
+  }, [installed, verify, needsAsking, back, reload]);
+  // A REPOSITORY REGISTERED OR REMOVED: whether the App is installed on it is asked at once.
+  const repoKey = repos.join(",");
+  const lastRepos = useRef(repoKey);
+  useEffect(() => {
+    if (!installed || lastRepos.current === repoKey) return;
+    lastRepos.current = repoKey;
+    void verify();
+  }, [installed, repoKey, verify]);
   // A GAP IS FIXED ON GITHUB, in another tab: coming back to this one asks again (at most every 10s).
   const gap = installed && verified !== null && verified.ok === false;
   useEffect(() => {
@@ -471,7 +498,7 @@ export function GitHubAccessRow({ initial = null }: { initial?: GitHubStatus | n
             </span>
             {status.env_token.present ? <MoveEnvToken repos={repos} reload={reload} /> : null}
             <div className="su-ways">
-              <AppCard status={status} reload={reload} back={back} />
+              <AppCard status={status} reload={reload} back={back} repos={repos} />
               <AsMeCard status={status} />
               <TokenCard status={status} reload={reload} />
             </div>

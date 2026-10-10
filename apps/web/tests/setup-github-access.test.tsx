@@ -143,8 +143,10 @@ describe("GitHub access", () => {
       repos: [{ full_name: "paramg/boss-sandbox", installed: true, fix_url: null },
               { full_name: "paramg/other", installed: false, fix_url: PERSONAL_LINKS.installation }],
       links: PERSONAL_LINKS };
-    withGitHub(api, installedPersonal(verified));
+    // A stored answer with a gap is asked again on open; GitHub still says the same.
+    withGitHub(api, installedPersonal(verified), (url, method) => (method === "POST" && url.endsWith("/app/verify") ? verified : null));
     mounted = await mountBoard(board());
+    expect(api.calls.some((c) => c.url.endsWith("/app/verify"))).toBe(true);
     const wf = document.querySelector('[data-testid="gh-perm-workflows"]')!;
     expect(wf.getAttribute("data-state")).toBe("waiting");
     expect(wf.textContent).toContain("Workflows: waiting for you to accept");
@@ -152,7 +154,7 @@ describe("GitHub access", () => {
       .toBe("https://github.com/settings/installations/42");
     const repos = [...document.querySelectorAll('[data-testid="gh-repo-verified"]')];
     expect(repos.map((r) => r.getAttribute("data-installed"))).toEqual(["true", "false"]);
-    expect(repos[0].textContent).toContain("paramg/boss-sandbox✓");
+    expect(repos[0].textContent).toContain("paramg/boss-sandbox ✓");
     expect(document.querySelector('[data-testid="gh-app-manage"]')!.getAttribute("href"))
       .toBe("https://github.com/settings/installations/42");
     expect(document.body.innerHTML).not.toContain("/organizations/paramg");
