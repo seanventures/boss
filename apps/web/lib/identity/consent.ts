@@ -12,8 +12,12 @@
  * The console shows the consent sheet, creates the grant the person picks with
  * POST /v1/identity/me/delegations, and re-sends the ORIGINAL start request unchanged: a task
  * grant's `pending:` run id is claimed by the new run, a standing grant simply covers it.
+ * A multi-repo app's first build adds `multirepo` (engine multirepo/grants.py consent_details):
+ * the exact repositories and access for the run, the ones it cannot reach, and how the token
+ * works. The sheet then asks "Which repositories may the agents touch?"; without it, it is as before.
  * Pure functions here; the sheet (components/identity/consent-sheet.tsx) is the UI.
  */
+import { multirepoConsentFrom, type MultiRepoConsent } from "../multirepo";
 export type ConsentDuration = { kind: "task" | "standing"; label: string; days: number | null };
 
 export type ConsentGithub = {
@@ -37,6 +41,8 @@ export type ConsentRequest = {
   github: ConsentGithub | null;
   durations: ConsentDuration[];
   max_days: number | null;
+  /** A multi-repo app's repositories for this run, when the API sent them. */
+  multirepo?: MultiRepoConsent | null;
   /** Called with the new grant id, or null when the person cancels. */
   onDecided?: (grantId: string | null) => void;
 };
@@ -100,6 +106,7 @@ export function consentFromBody(raw: unknown): ConsentRequest | null {
     // A task grant needs a run id to be claimed by; without one, only the standing choice works.
     durations: durations.filter((d) => d.kind === "standing" || taskRunId),
     max_days: typeof b.max_days === "number" ? b.max_days : null,
+    ...(b.multirepo ? { multirepo: multirepoConsentFrom(b.multirepo) } : {}),
   };
 }
 

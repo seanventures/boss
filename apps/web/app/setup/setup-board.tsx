@@ -9,7 +9,7 @@
  * server decides every pill. While setup is unfinished the board runs as a stepper —
  * 1 Repository, 2 Model, 3 Try it — and after the first pull request it is a board.
  *
- * Deep links: `?area=setup&focus=repository|models|jobs|routing|budget|try` (routing = jobs), `&add=<provider>` opens Add a
+ * Deep links: `?area=setup&focus=repository|repositories|models|jobs|routing|budget|try` (routing = jobs), `&add=<provider>` opens Add a
  * model on that provider, `&source=<id>` opens that model's menu, legacy `step=github|model` maps
  * to focus. Rows whose last check is over a day old are re-checked in the background on open.
  */
@@ -30,6 +30,7 @@ import { BoardContext, toast } from "./parts";
 import { Dot, localView } from "./pill";
 import { GitHubAccessRow, SETUP_TESTED_EVENT } from "./github-access-row";
 import { RepositoryRow } from "./repository-row";
+import { RepositoryRegistry } from "../multirepo/registry";
 import { RoutingRow } from "./routing-row";
 import { TryRow } from "./try-row";
 import { PublicUrlRow } from "./public-url-row";
@@ -243,6 +244,9 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
         <RepositoryRow ref={ref("repository")} mode={rowMode(view, "repository")}
                        step={stepNumber(view, "repository")} focused={focus === "repository"} />
         <GitHubAccessRow />
+        {/* The org's registry: which repositories BOSS may use at all (multi-repo screen 1).
+            `focus=repositories` lands on it; it hides itself on an API without it. */}
+        <RepositoryRegistry projectId={projectId} />
         <BuildDatabaseRow />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}
                    step={stepNumber(view, "models")} focused={focus === "models"}
