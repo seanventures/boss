@@ -9,7 +9,7 @@
   <g font-family="SFMono-Regular, ui-monospace, Menlo, monospace" font-size="16">
     <rect x="264" y="266" width="168" height="36" rx="18" fill="#1a2633"/>
     <circle cx="286" cy="284" r="5" fill="#3ddec8"/>
-    <text x="302" y="289" fill="#d5e2ec">v1.0-rc6.1</text>
+    <text x="302" y="289" fill="#d5e2ec">v1.0-rc7</text>
     <rect x="448" y="266" width="196" height="36" rx="18" fill="#1a2633"/>
     <text x="468" y="289" fill="#d5e2ec">Apache 2.0</text>
   </g>

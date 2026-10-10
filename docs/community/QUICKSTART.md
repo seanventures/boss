@@ -27,9 +27,9 @@ Models are part of the install. After the stack is healthy, the installer looks 
 Prefer git? Clone the release and install it in place:
 
 ```bash
-git clone --branch v1.0-rc6.1 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc7 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc6.1
+./install.sh --dir "$PWD" --ref v1.0-rc7
 ```
 
 Either way, the installer records the release in `.boss-release`, and reruns and upgrades stay on it instead of moving to `main`. Run the rest of this guide from the install directory.
@@ -121,10 +121,10 @@ Now run the task command a second time. The API rejects the repeated `dedupe_key
 
 ## Install without git
 
-On a machine without a checkout, the website installer does the same thing in one command. It selects the newest published release candidate on a fresh install and keeps reruns on the recorded release. To select `v1.0-rc6.1` explicitly:
+On a machine without a checkout, the website installer does the same thing in one command. It selects the newest published release candidate on a fresh install and keeps reruns on the recorded release. To select `v1.0-rc7` explicitly:
 
 ```bash
-curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc6.1
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc7
 ```
 
 Pass installer flags after `bash -s --`, for example `| bash -s -- --skip-model-key`.
