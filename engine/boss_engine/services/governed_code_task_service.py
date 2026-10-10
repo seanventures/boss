@@ -1730,6 +1730,47 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
     return {"status": "blocked", "done": True, "awaiting_plan_approval": True, "decision_id": dec_id}
 
 
+def _provision_build_services(engine, settings: Settings, run_id: str, project_id: str,
+                              pinned: Any, *, use_microvm: bool = False) -> Any:
+    """The run's build-services lease, or None when it asked for none (build_services)."""
+    from . import build_services
+    from .project_settings import effective as _effective_setting
+
+    manifest = getattr(pinned, "manifest", None)
+    declared = tuple(getattr(manifest, "services", ()) or ())
+    try:
+        with _transaction(engine) as c:
+            setting = _effective_setting(c, project_id, settings, build_services.SETTING_KEY)
+    except Exception:  # noqa: BLE001 — the repo's declaration still stands
+        setting = None
+    wanted = build_services.requested(declared, setting)
+    if "postgres" not in wanted:
+        return None
+    if use_microvm:
+        raise build_services.BuildServicesUnavailable(
+            "this run executes in a microVM, which cannot reach the build-services server. "
+            "Run it on the container sandbox, or remove services: [postgres]")
+    if str(getattr(settings, "sandbox_command_runtime", "subprocess")).lower() == "docker":
+        raise build_services.BuildServicesUnavailable(
+            "the docker command runtime runs build commands with no network, so they cannot "
+            "reach the run's database. Use the subprocess runtime, or remove services: [postgres]")
+    install = ""
+    try:
+        from .resource_ledger import install_id
+
+        with _transaction(engine) as c:
+            install = install_id(c)
+    except Exception:  # noqa: BLE001 — an unlabelled lease is still reaped by its run tag
+        install = ""
+    lease = build_services.provision(run_id, install=install)
+    with _transaction(engine) as c:
+        emit_event(c, project_id, "code_task.build_services_ready", "boss", "code_task_run",
+                   run_id, {"services": list(wanted), "database": lease.name,
+                            "host": lease.host, "port": lease.port,
+                            "env": list(build_services.ENV_NAMES)})
+    return lease
+
+
 # --------------------------------------------------------------------------- #
 #  The governed job handler                                                   #
 # --------------------------------------------------------------------------- #
@@ -1769,6 +1810,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # Whatever is still running under this build's name ends with it (a background child
         # an exception unwound past, a seat the panel deadline gave up on).
         owned_process.terminate_owner(run_id, reason="run_ended", grace=2.0)
+        # Its throwaway database ends with it too (after its processes: nothing still writes).
+        from .build_services import teardown as _services_teardown
+
+        _services_teardown(run_id)
 
 
 def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
@@ -2736,6 +2781,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _pinned_manifest = verification_target.pin_verify_manifest(root)
         _gate_plan0 = verification_target.resolve_gate_plan(
             spec, title, root, app_id=_app_id, pinned=_pinned_manifest)
+        # BUILD SERVICES (build_services): the run's own throwaway Postgres when the repo
+        # declares `services: [postgres]` or the project's setting asks for it. Provisioned
+        # before any agent, so the agents and every verify command see DATABASE_URL; a run that
+        # asked and cannot have it fails here, saying why — its tests never run without it.
+        _services_lease = _provision_build_services(
+            engine, settings, run_id, project_id, _pinned_manifest, use_microvm=use_microvm)
+        if _services_lease is not None:
+            from .build_services import brief as _services_brief
+
+            instructions = f"{instructions}\n\n{_services_brief(_services_lease)}"
         if _gate_plan0.source != "task":
             verify_commands = list(_gate_plan0.commands)
             test_cmd = ((verification_target.manifest_display(root, _pinned_manifest)

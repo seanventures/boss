@@ -184,6 +184,16 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "again when Jev is unsure. Each call is budgeted and receipted.",
         "kind": "choice", "choices": ("claude", "typesafe"),
     },
+    # A THROWAWAY DATABASE PER BUILD (build_services). The same opt-in a repo makes with
+    # `services: [postgres]` in boss.verify.yaml, for a project whose repo does not declare it.
+    "build_services": {
+        "attr": "build_services",
+        "label": "Build services",
+        "help": "postgres gives every build of this project its own empty PostgreSQL database "
+                "(DATABASE_URL in the build's environment), dropped when the build ends. off "
+                "leaves it to the repo's boss.verify.yaml.",
+        "kind": "choice", "choices": ("off", "postgres"),
+    },
     "decision_model": {
         "attr": "decision_model",
         "label": "Claude model for decisions",
