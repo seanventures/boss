@@ -345,8 +345,9 @@ def build_multirepo_router() -> APIRouter:
     def list_change_sets(project_id: str, state: Optional[str] = None, mode: Optional[str] = "multi") -> Any:
         with begin() as db:
             rows = db.execute(_sql(
-                "SELECT id FROM repo_change_sets WHERE project_id = :p AND (:m IS NULL OR mode = :m) "
-                "AND (:s IS NULL OR state = ANY(string_to_array(:s, ','))) ORDER BY created_at DESC LIMIT 50"),
+                "SELECT id FROM repo_change_sets WHERE project_id = :p AND (CAST(:m AS TEXT) IS NULL OR mode = :m) "
+                "AND (CAST(:s AS TEXT) IS NULL OR state = ANY(string_to_array(CAST(:s AS TEXT), ','))) "
+                "ORDER BY created_at DESC LIMIT 50"),
                 {"p": project_id, "m": mode or None, "s": state or None}).scalars().all()
             return {"items": [change_sets.view(db, str(r)) for r in rows]}
 

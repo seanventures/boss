@@ -544,3 +544,30 @@ def test_a_deploy_plan_refuses_to_start_when_a_component_has_nowhere_to_ship(eng
         with pytest.raises(MultiRepoError) as err:
             release.start(db, get_settings(), cs_id, actor="t")
         assert err.value.code == "plan_not_ready"
+
+
+def test_a_person_without_a_covering_grant_gets_the_consent_sheet_with_exactly_the_apps_repositories(
+        eng, gh, model, builds, monkeypatch):
+    from boss_engine.identity import consent
+
+    world = make_world(eng)
+    app = _setup_app(eng, world)
+    asked: dict[str, Any] = {}
+
+    def require_authority(**kw):
+        asked.update(kw)
+        raise consent.ConsentRequired({"error": "consent_required", "github": {"repos": kw["repos"]}})
+
+    monkeypatch.setattr(consent, "require_authority", require_authority)
+    with pytest.raises(consent.ConsentRequired) as err:
+        with eng.begin() as db:
+            change_sets.start(db, get_settings(), Jobs(), project_id=app["pid"], app_key="storefront",
+                              title="Storefront: Add saved carts", instructions="x")
+    assert sorted(asked["repos"]) == ["acme/api", "acme/contracts", "acme/infra", "acme/web"]
+    assert asked["run_id"].startswith("run_cs:")
+    body = err.value.body["multirepo"]
+    assert [r["full_name"] for r in body["repos"] if r["access"] == "write"] == ["acme/api", "acme/contracts", "acme/web"]
+    assert set(body["unreachable"]) == {"acme/mobile", "acme/legacy-admin"}
+    with eng.begin() as db:                                      # nothing was started
+        assert db.execute(text("SELECT count(*) FROM repo_change_sets WHERE project_id = :p"),
+                          {"p": app["pid"]}).scalar() == 0
