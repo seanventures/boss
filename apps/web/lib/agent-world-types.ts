@@ -87,7 +87,9 @@ export type ConversationTurn = {
   kind: TurnKind; content: string; status: "streaming" | "complete" | "error";
   proposal?: StartProposal; summary?: RoomSummary; error?: ModelFailure;
   actId?: string; citedActs: string[];
-  tokensIn: number; tokensOut: number; costUsd: number; receiptId?: string; createdAt: string;
+  tokensIn: number; tokensOut: number;
+  /** Recorded cash cost; null means unsettled or unknown, not confirmed zero. */
+  costUsd: number | null; receiptId?: string; createdAt: string;
 };
 /** One step's agent in a proposal. null = Auto (BOSS picks). */
 export type ProposedStepAgent = { stepId: string; stepLabel: string; roleKey: string | null };
@@ -141,7 +143,8 @@ export type ConverseEvent =
   | { type: "proposal"; turnId: string; proposal: StartProposal }
   | { type: "summary"; turnId: string; summary: RoomSummary }
   | { type: "turn_end"; turnId: string; status: "complete" | "error"; tokensIn: number; tokensOut: number;
-      costUsd: number; receiptId?: string; citedActs: string[] }
+      /** Recorded cash cost; null means unsettled or unknown, not confirmed zero. */
+      costUsd: number | null; receiptId?: string; citedActs: string[] }
   | { type: "error"; turnId?: string; error: ModelFailure }
   | { type: "done"; conversation: ConversationSummary };
 
