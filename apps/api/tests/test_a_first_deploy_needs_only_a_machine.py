@@ -79,6 +79,7 @@ def test_the_first_deploy_creates_the_target_on_a_free_port_and_the_plan_shows_i
     assert plan["port"] == 8001 and plan["url"] == "http://203.0.113.77:8001/"
     assert plan["health"] == "http://203.0.113.77:8001/ expecting 200"
     assert plan["database"] == "Postgres" and plan["edit_href"].endswith(out["target_id"])
+    assert plan["host"] == host["name"]                      # the machine's name, never its id
     with engine.begin() as c:
         row = c.execute(text("SELECT app_name, host_id, domains, required_resources FROM deployment_targets "
                              "WHERE id = :i"), {"i": out["target_id"]}).mappings().one()
