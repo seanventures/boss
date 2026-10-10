@@ -93,8 +93,36 @@ def _is_authority_block(row: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def captain_launch_gate(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
+#: The project setting that lets the Captain start its own improve passes (project_settings).
+AUTO_IMPROVE_KNOB = "captain_auto_improve"
+AUTO_IMPROVE_OFF_MESSAGE = (
+    "The Captain's own improve passes are off for this project, so it proposed this instead of "
+    "starting it. Turn on 'Captain self-improves' in Govern to let it start them (each spends "
+    "model budget)."
+)
+
+
+def captain_auto_improve_on(connection: Connection, project_id: str, settings: Any = None) -> bool:
+    """May the Captain start an improve pass nobody asked for on this project? Off unless set.
+
+    Reads the same knob Govern shows (project_settings.effective). Unreadable means off: an
+    autonomous build that spends money is the thing that must not happen by accident."""
+    from .project_settings import effective
+
+    try:
+        with connection.begin_nested():
+            return bool(int(effective(connection, project_id, settings, AUTO_IMPROVE_KNOB) or 0))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def captain_launch_gate(connection: Connection, project_id: str, *, settings: Any = None,
+                        asked: bool = True) -> Optional[dict[str, Any]]:
     """Whether the Captain may start another build now: None, or the refusal in words.
+
+    `asked=False` is a pass the Captain decided on itself (an overwatch tick, a drive with no
+    directive): it starts only when the project turned `captain_auto_improve` on (Govern), and
+    is otherwise held with that said — the first-run walk's unasked "QUALITY IMPROVE PASS".
 
     Every tick used to start a new improve pass whenever nothing was `running` — and a pass that
     ended blocked or failed is not running, so the next tick started the same pass again, with
@@ -105,6 +133,8 @@ def captain_launch_gate(connection: Connection, project_id: str) -> Optional[dic
       (a person approves, retries or cancels it) — retrying cannot grant a permission;
     - any other block or failure backs off exponentially from when it stopped, capped.
     """
+    if not asked and not captain_auto_improve_on(connection, project_id, settings):
+        return {"reason": "captain_auto_improve_off", "message": AUTO_IMPROVE_OFF_MESSAGE}
     try:
         with connection.begin_nested():
             rows = [dict(r) for r in connection.execute(text(
@@ -1666,7 +1696,10 @@ class MetatronCaptain:
                 "error": None if ok else preview.get("error"),
             }
         if kind == "launch_factory_job":
-            held = captain_launch_gate(connection, project_id)
+            # ASKED: an operator's directive, or a focused agent's (someone created that duty
+            # with this power). A pass the Captain found on its own needs the project's opt-in.
+            held = captain_launch_gate(connection, project_id, settings=self.settings,
+                                       asked=bool(directive))
             if held:
                 return {"status": "rejected", "error": held["message"], "held": held}
             from .code_task_service import start_code_task

@@ -6079,6 +6079,29 @@ CREATE TABLE IF NOT EXISTS project_settings (
   PRIMARY KEY (project_id, key)
 );
 
+-- ONE-TIME DATA STEPS, each run on the first apply that knows it and never again (the key is
+-- recorded in the same statement). A schema re-applied on every deploy cannot otherwise tell
+-- "an install that existed before this change" from "a project created since".
+CREATE TABLE IF NOT EXISTS schema_once (
+  key TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- THE CAPTAIN'S OWN IMPROVE PASSES ARE OPT-IN (first-run walk, 2026-10-10; Settings
+-- .captain_auto_improve defaults to 0). Every project that already existed when this first ran
+-- had them on, so it keeps them on: an upgrade changes nothing. A new install has no projects at
+-- this point, records the key, and its projects start with the passes off (Govern turns them on).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_once WHERE key = 'captain_auto_improve_kept_for_existing') THEN
+    INSERT INTO project_settings (project_id, key, value, updated_by)
+    SELECT id, 'captain_auto_improve', '1'::jsonb, 'upgrade' FROM projects
+    ON CONFLICT (project_id, key) DO NOTHING;
+    INSERT INTO schema_once (key) VALUES ('captain_auto_improve_kept_for_existing')
+    ON CONFLICT (key) DO NOTHING;
+  END IF;
+END $$;
+
 -- workflow_custom_steps.knowledge, for databases created before it existed. The CREATE above
 -- covers a fresh install; this covers every deployment that already has the table.
 ALTER TABLE workflow_custom_steps ADD COLUMN IF NOT EXISTS knowledge TEXT;

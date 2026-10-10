@@ -32,6 +32,7 @@ const HELP: Record<string, string> = {
   code_agent_max_turns: "Steps one agent may take before it hands back",
   code_review_inrun_max_rounds: "Times reviewers and coder go back and forth",
   captain_leads_projects: "Adds the Engineering Captain's panel to every build",
+  captain_auto_improve: "Off: the Captain only proposes improve builds. On: it starts them, spending budget.",
   max_concurrent_jobs: "Seeded into job slots when the project starts",
   max_workers_total: "Upper bound for autoscaling",
 };
@@ -44,6 +45,7 @@ const ENFORCED_TIP: Record<string, string> = {
   each_agent: "Each agent stops at this many steps",
   review_loop: "Rounds of review before a colder path",
   every_build: "Applied when each build starts",
+  captain_own_builds: "Checked before the Captain starts a build nobody asked for",
   job_queue: "Job slots seeded at project start",
   scaling: "Autoscaling never goes past this",
   advisory: "Shapes alerts and tips. Doesn't stop model calls.",
@@ -108,6 +110,7 @@ export const SPEND_ROWS: [string, string][] = [
 export const AGENT_ROWS: [string, string][] = [
   ["code_agent_max_concurrency", "Review lanes"], ["code_agent_max_turns", "Turn budget"],
   ["code_review_inrun_max_rounds", "Review rounds"], ["captain_leads_projects", "Captain leads"],
+  ["captain_auto_improve", "Captain self-improves"],
   ["max_concurrent_jobs", "Jobs at once"], ["max_workers_total", "Workers"]];
 const ROW_NAMES: Record<string, string> = Object.fromEntries([...SPEND_ROWS, ...AGENT_ROWS]);
 
@@ -273,7 +276,7 @@ function ControlRow({ keyName, control: c, projectId, actor, disabled, editing, 
             <MonthlyCapEditor control={c} projectId={projectId} busy={busy}
                               onSave={(usd) => void write("monthly_cap", { monthly_cap_usd: usd }, `${name} saved`)}
                               onCancel={() => onEdit(false)} />
-          ) : keyName === "captain_leads_projects" ? (
+          ) : c.unit === "switch" ? (
             <SwitchEditor control={c} busy={busy}
                           onSave={(on) => void write("setting", { key: keyName, value: on ? "1" : "0" }, `${name} saved`)}
                           onCancel={() => onEdit(false)} />

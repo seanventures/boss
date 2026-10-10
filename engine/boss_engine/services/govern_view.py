@@ -45,11 +45,15 @@ ENFORCED: dict[str, tuple[str, str]] = {
     "code_agent_max_turns": ("Each agent", "each_agent"),
     "code_review_inrun_max_rounds": ("Review loop", "review_loop"),
     "captain_leads_projects": ("Every build", "every_build"),
+    "captain_auto_improve": ("Captain's own builds", "captain_own_builds"),
     "max_concurrent_jobs": ("Job queue", "job_queue"),
     "max_workers_total": ("Scaling", "scaling"),
     "token_default": ("Advisory", "advisory"),
     "token_per_step": ("Advisory", "advisory"),
 }
+
+#: The on/off controls (0 or 1), drawn as a switch.
+SWITCHES = frozenset({"captain_leads_projects", "captain_auto_improve"})
 
 #: The four thresholds, as the screen names them (key, label, budget_policies column).
 THRESHOLDS = (
@@ -149,7 +153,7 @@ def _knob_control(connection: Connection, settings: Any, project_id: str, key: s
         effective = ps.effective_review_rounds(raw)
         if is_set and int(raw or 0) == 0:
             note = {"kind": "reads_as", "stored": 0, "reads_as": effective}
-    elif key == "captain_leads_projects":
+    elif key in SWITCHES:
         effective = 1 if int(raw or 0) else 0
     else:
         effective = int(raw) if raw not in (None, "") else None
@@ -165,7 +169,7 @@ def _knob_control(connection: Connection, settings: Any, project_id: str, key: s
         "value_stored": stored,
         "default": default,
         "source": "set" if key in chosen else "default",
-        "unit": "switch" if key == "captain_leads_projects" else "count",
+        "unit": "switch" if key in SWITCHES else "count",
         "bounds": {"min": spec.get("min"), "max": spec.get("max"), "step": 1},
         "editable_by": "self",
         "write": {"method": "PUT", "path": f"/v1/settings/{key}"},
@@ -239,7 +243,7 @@ def build(connection: Connection, settings: Any, project_id: str, *,
     ]
     chosen = ps.get_all(connection, project_id)
     for key in ("code_agent_max_concurrency", "code_agent_max_turns",
-                "code_review_inrun_max_rounds", "captain_leads_projects"):
+                "code_review_inrun_max_rounds", "captain_leads_projects", "captain_auto_improve"):
         controls.append(_knob_control(connection, settings, project_id, key, chosen, counts))
     for key, name in (("max_concurrent_jobs", "Jobs at once"), ("max_workers_total", "Workers")):
         word, effect = ENFORCED[key]
