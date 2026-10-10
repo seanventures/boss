@@ -91,7 +91,9 @@ describe("the inline form, before the first run (command-center spec §9 row 47)
     expect(rows).toContain('data-testid="console-capabilities-card"');
     for (const name of ["Build", "Talk to BOSS", "Approvals"]) expect(rows).toContain(`<b>${name}</b>`);
     expect((rows.match(/<li title="/g) ?? []).length).toBe(3);
-    expect(rows).toContain("Getting started ↗");
+    expect(rows).toContain("Getting started");
+    expect(rows).not.toContain("Getting started ↗");
+    expect(rows).toContain('aria-haspopup="dialog"');
   });
 
   it("names only areas an operator can find in the rail", () => {
@@ -100,4 +102,3 @@ describe("the inline form, before the first run (command-center spec §9 row 47)
     }
   });
 });
-

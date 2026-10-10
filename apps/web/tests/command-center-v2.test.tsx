@@ -5,7 +5,7 @@
  * may move at all. Replaces command-center-bridge.test.tsx (the Floor / Today / day strip /
  * week page it tested is gone).
  */
-import React from "react";
+import React, { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { overBudget } from "./_helpers/copy-budget";
@@ -70,6 +70,51 @@ afterEach(() => {
 });
 
 describe("the hero", () => {
+  it("opens help outside the console container and Close returns to the question button", async () => {
+    await mount(page(V(view()), { help: <p>Real help content</p> }));
+    const opener = tid("cc-help")!;
+    await click(opener);
+    const dialog = $('[role="dialog"][aria-label="What you can do here"]')!;
+    expect(dialog.parentElement).toBe(document.body);
+    expect(opener.getAttribute("aria-expanded")).toBe("true");
+    expect(opener.getAttribute("aria-controls")).toBe(dialog.id);
+    const close = dialog.querySelector<HTMLButtonElement>(".cc-help-close")!;
+    expect(document.activeElement).toBe(close);
+    await click(close);
+    expect($('.cc-help-pop')).toBeNull();
+    expect(document.activeElement).toBe(opener);
+    expect(opener.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("Escape returns to the actual Getting started opener", async () => {
+    await mount(page(V(freshView()), { help: <p>Real help content</p> }));
+    const opener = $('.cc-help-rows .ag-link')!;
+    expect(opener.textContent).toBe("Getting started");
+    expect(opener.getAttribute("aria-haspopup")).toBe("dialog");
+    await click(opener);
+    expect($('.cc-help-pop')).not.toBeNull();
+    expect(opener.getAttribute("aria-expanded")).toBe("true");
+    expect(opener.getAttribute("aria-controls")).toBe($('.cc-help-pop')!.id);
+    await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect($('.cc-help-pop')).toBeNull();
+    expect(document.activeElement).toBe(opener);
+    expect(opener.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("keeps inside interactions open and dismisses outside without stealing focus", async () => {
+    await mount(page(V(view()), { help: <button type="button" data-testid="help-inner">Read more</button> }));
+    await click(tid("cc-help"));
+    const inner = tid("help-inner")!;
+    await act(async () => inner.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect($('.cc-help-pop')).not.toBeNull();
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+    await act(async () => outside.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect($('.cc-help-pop')).toBeNull();
+    expect(document.activeElement).toBe(outside);
+  });
+
   it("asks the one question, with the systems word and when work last happened", async () => {
     await mount(page(V(view())));
     expect(text(".cc-headline")).toBe("What should your team build next?");
