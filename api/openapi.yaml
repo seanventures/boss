@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: BOSS Control Plane
-  version: 1.0.0-rc.7
+  version: 1.0.0-rc.8
   description: BOSS Community self-hosted HTTP API. Generated from the routes mounted with BOSS_EDITION=community.
     API-key transport can be enabled by the self-hosted operator.
 paths:

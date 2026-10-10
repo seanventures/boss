@@ -12,7 +12,7 @@ This guide walks through installation and a small governed build. Follow the che
 
 Plan on an hour or more. The install takes several minutes. On a machine without a GPU, a local model needs tens of minutes for the panel alone.
 
-The command output and messages quoted below were recorded on a fresh Ubuntu 24.04 install (8 CPUs, 16 GB of RAM, no GPU) with a local Ollama model and no paid API key. Steps 4, 6, and 7 depend on GitHub. The notes in those steps say which parts you will see for the first time on your own repository. This historical transcript proves installation and the recorded local-model stages; it is not an end-to-end RC7 qualification or a promise that every repository and model will complete a build.
+The command output and messages quoted below were recorded on a fresh Ubuntu 24.04 install (8 CPUs, 16 GB of RAM, no GPU) with a local Ollama model and no paid API key. Steps 4, 6, and 7 depend on GitHub. The notes in those steps say which parts you will see for the first time on your own repository. This historical transcript proves installation and the recorded local-model stages; it is not an end-to-end RC8 qualification or a promise that every repository and model will complete a build.
 
 ## What you need
 
