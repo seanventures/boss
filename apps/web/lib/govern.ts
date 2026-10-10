@@ -44,6 +44,12 @@ export type LegacyFinancialHold = {
   original_reservation_status: "expired" | "released"; original_estimate_usd_micros: number;
   decision_id: string | null; message: string;
 };
+/** One unresolved historical provider attempt; its estimate is not a charge or a total. */
+export type LegacyProviderHold = {
+  reservation_id: string; changeset_id: string; operation_id: string; resource_receipt_id: string; receipt_id: string;
+  original_reservation_status: "expired" | "released"; original_estimate_usd_micros: number;
+  decision_id: string | null; message: string;
+};
 export type Meter = {
   period: string; state: string; state_label: string; cap_usd_micros: number; actual_usd_micros: number;
   reserved_usd_micros: number; committed_usd_micros: number; available_usd_micros: number;
@@ -54,6 +60,7 @@ export type Meter = {
   tier2_frozen: boolean; top_cost_drivers: { skill_or_model_id: string; amount_usd_micros: number }[];
   periods: Period[];
   legacy_financial_hold?: LegacyFinancialHold | null;
+  legacy_provider_hold?: LegacyProviderHold | null;
 };
 export type TokenPolicy = {
   stage: string; max_total_tokens_per_call: number | null; max_tokens_per_day: number | null;
