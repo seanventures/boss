@@ -561,6 +561,7 @@ function ConsoleShellInner({
     return () => { unregister(); refreshCoordinator.dispose(); };
   }, [refreshCoordinator]);
   const committedQuery = useRef(queryString);
+  const canceledInThisCommit = useRef(false);
   useEffect(() => {
     if (committedQuery.current === queryString) return;
     committedQuery.current = queryString;
@@ -570,6 +571,7 @@ function ConsoleShellInner({
     // current area. Previously loaded areas still need the discarded read replaced.
     if (!refreshCoordinator.busy()) return;
     refreshCoordinator.cancel();
+    canceledInThisCommit.current = true;
     setAreaLoadAsked(null);
     const requested = new URLSearchParams(queryString).get("area");
     if (requested && loadedRef.current?.includes(requested)) refreshCoordinator.request("now");
@@ -581,11 +583,13 @@ function ConsoleShellInner({
   // shell state changes keep their references and cannot release the coordinator.
   const serverSnapshot = useRef({ status, loadedAreas });
   useEffect(() => {
+    const canceled = canceledInThisCommit.current;
+    canceledInThisCommit.current = false;
     const previous = serverSnapshot.current;
     if (previous.status === status && previous.loadedAreas === loadedAreas) return;
     serverSnapshot.current = { status, loadedAreas };
-    refreshCoordinator.landed();
-  }, [status, loadedAreas, refreshCoordinator]);
+    if (!canceled) refreshCoordinator.landed();
+  }, [status, loadedAreas, refreshCoordinator, queryString]);
   useEffect(() => {
     if (!live) return;
     let cancelled = false;
