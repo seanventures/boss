@@ -365,3 +365,38 @@ def advance_all(engine: Any, settings: Any) -> dict[str, Any]:
             log.warning("change set %s release did not advance: %s: %s", cs_id, type(error).__name__, error)
             out[cs_id] = {"error": type(error).__name__}
     return out
+
+
+def component_status(db: Any, project_id: str, app_key: str) -> dict[str, dict[str, Any]]:
+    """What is live per component (App › Components): the newest merged commit of the app's sets,
+    where it ships, and how its last deploy went."""
+    from . import components
+
+    app = components.get(db, project_id, app_key)
+    out: dict[str, dict[str, Any]] = {}
+    rows = db.execute(sql(
+        "SELECT p.components, p.merged_sha, p.merged_at, s.state, s.release FROM change_set_prs p "
+        "JOIN repo_change_sets s ON s.id = p.change_set_id WHERE s.project_id = :p AND s.app_key = :a "
+        "AND p.merged_sha IS NOT NULL ORDER BY p.merged_at DESC"), {"p": project_id, "a": app_key}).mappings().all()
+    for c in app["components"]:
+        ship = c.get("ship_target") or {}
+        merged = next((r for r in rows if c["name"] in (r["components"] or []) and r["state"] in ("merged", "deploying",
+                                                                                                 "live")), None)
+        target = _target(db, project_id, ship, f"{app['app_name']} {c['name']}") if ship.get("kind", "host") == "host" \
+            else None
+        last = _last_good(db, target["id"]) if target else None
+        ships_to = (ship.get("label") or ship.get("package") or (target or {}).get("public_url")
+                    or ", ".join((target or {}).get("domains") or []) or None)
+        if ship.get("kind") == "none":
+            ships_to = ships_to or "with the merge"
+        health = None
+        if target:
+            st = db.execute(sql("SELECT status FROM deployment_runs WHERE deployment_target_id = :t ORDER BY "
+                                "created_at DESC LIMIT 1"), {"t": target["id"]}).scalar()
+            health = "healthy" if st in OK else ("failing" if st in BAD else ("deploying" if st else None))
+        elif merged:
+            health = "published"
+        out[c["name"]] = {"live": _short((last or {}).get("commit_ref") or (merged or {}).get("merged_sha"))
+                          if (last or merged) else None,
+                          "ships_to": ships_to, "health": health, "target_id": (target or {}).get("id")}
+    return out

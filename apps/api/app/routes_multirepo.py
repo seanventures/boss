@@ -237,6 +237,15 @@ def build_multirepo_router() -> APIRouter:
             key = _app_key(db, project_id, app_key) or components.app_key_of(app_key)
             out = components.get(db, project_id, key)
             out["change_sets"] = _recent_change_sets(db, project_id, key)
+            try:
+                from boss_engine.multirepo import release as _release
+
+                with db.begin_nested():
+                    status = _release.component_status(db, project_id, key)
+            except Exception:  # noqa: BLE001 — what is live is extra, never a reason to fail
+                status = {}
+            for c in out["components"]:
+                c["status"] = status.get(c["name"]) or {}
             return out
 
     @router.put("/v1/apps/{app_key}/components")

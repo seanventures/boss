@@ -381,8 +381,14 @@ def acting_for_lane(db: Any, cs_id: str) -> Any:
     from ..identity.lineage import Acting
 
     cs = _row(db, cs_id)
+    if cs.get("workflow_run_id"):
+        # A set a workflow's build step started: its lanes run under the workflow run's recorded
+        # grant (whose consent named exactly the app's repositories) as run_wf:<run>/ct:<build>.
+        from ..identity import consent
+
+        return consent.acting_for_workflow_run(db, cs["workflow_run_id"])
     data = jload(cs.get("acting"), None)
-    if not data or cs.get("workflow_run_id"):
+    if not data:
         return None
     try:
         return Acting.from_json(data)
