@@ -3489,6 +3489,22 @@ CREATE TABLE IF NOT EXISTS code_task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_code_task_runs_project ON code_task_runs(project_id, status, updated_at DESC);
 
+-- Append-only human usefulness reviews of a recorded delivery. No execution authority.
+CREATE TABLE IF NOT EXISTS deliverable_reviews (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  run_id TEXT NOT NULL REFERENCES code_task_runs(id) ON DELETE CASCADE,
+  actor TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('accepted', 'changes_requested')),
+  note TEXT NOT NULL DEFAULT '',
+  snapshot_hash TEXT NOT NULL,
+  snapshot JSONB NOT NULL,
+  submission_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, run_id, submission_id)
+);
+CREATE INDEX IF NOT EXISTS idx_deliverable_reviews_run ON deliverable_reviews(project_id, run_id, created_at DESC);
+
 -- Durable, versioned measurements derived from terminal QA benchmark runs.  These are
 -- analysis snapshots only: a low score may trigger a visible recommendation, but cannot
 -- alter a routing/workflow baseline or create an applied change by itself.
