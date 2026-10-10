@@ -104,6 +104,10 @@ def main() -> int:
     served = _curl_from_backend(url, dest, command) if url else None
     if served is not None:
         sys.stdout.write(served)
+    elif "BASE_OK" in command:
+        # The governed host deploy's preflight (governed_host_deploy): the base directory is
+        # writable, the app directory can be made, and docker answers — a prepared host.
+        print("BASE_OK\nAPP_OK\nDOCKER_OK")
     elif "BOSS_SSH_OK" in command:
         # deployment_fleet._connection_probe: reachable, docker present, the box's arch.
         print("BOSS_SSH_OK\nDOCKER_OK\nx86_64")

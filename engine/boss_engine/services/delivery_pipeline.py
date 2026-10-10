@@ -386,7 +386,9 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                     "reason": planned.get("failure_reason") or "Deployment policy blocked this run"}
         c.execute(sql("UPDATE deployment_runs SET trigger = 'operator' WHERE id = :i"),
                   {"i": deployment_run_id})
-        plan_view = deploy_plan_view(target, auto_target, run)
+        host_name = c.execute(sql("SELECT name FROM deployment_hosts WHERE id = :h"),
+                              {"h": target.get("host_id")}).scalar() if target.get("host_id") else None
+        plan_view = deploy_plan_view(target, auto_target, run, host_name=host_name)
         if planned.get("decision_id"):
             # THE APPROVER READS WHAT WILL HAPPEN, on the card itself (Approvals shows
             # recommendation.plan): where, which port and URL, how it is checked, the database.
@@ -415,7 +417,8 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
             **governed}
 
 
-def deploy_plan_view(target: Any, auto_target: Optional[dict[str, Any]], run: Any) -> dict[str, Any]:
+def deploy_plan_view(target: Any, auto_target: Optional[dict[str, Any]], run: Any, *,
+                     host_name: Optional[str] = None) -> dict[str, Any]:
     """The deploy's details as the approver reads them: every value BOSS chose (or the target
     already had), and the Infra page that edits them. Nothing here was required up front."""
     t = dict(target or {})
@@ -435,7 +438,7 @@ def deploy_plan_view(target: Any, auto_target: Optional[dict[str, Any]], run: An
         database = "Postgres" if state["build_database"].get("postgres") else None
     return {
         "app": t.get("app_name"), "environment": t.get("environment"),
-        "host": (auto_target or {}).get("host") or t.get("host_id"),
+        "host": host_name or (auto_target or {}).get("host") or t.get("host_id"),
         "port": int(str(domain).rpartition(":")[2]) if domain and str(domain).rpartition(":")[2].isdigit() else None,
         "url": f"{scheme}://{domain}/" if domain else None,
         "health": (f"{scheme}://{domain}{first.get('path') or '/'} expecting {first.get('expect_status') or 200}"
