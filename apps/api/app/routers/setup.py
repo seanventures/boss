@@ -162,20 +162,22 @@ def build_setup_router(
     def post_models(body: ModelConnectBody) -> dict[str, Any]:
         """Store a model credential and prove it: one budgeted, receipted question."""
         actor = actor_for(body.actor)
-        if setup_actions.first_press(body.project_id, body.idempotency_key):
-            with begin(engine) as connection:
-                require_actor(connection, body.project_id, actor, "entitlement_manage")
-                try:
-                    setup_actions.connect_model(
-                        connection, get_settings(), body.project_id, provider=body.provider,
-                        kind=body.kind, api_key=body.api_key or "",
-                        credential=body.credential or "",
-                        credential_file=body.credential_file or "",
-                        base_url=body.base_url or "", model=body.model or "",
-                        accept_database_fallback=body.accept_database_fallback, actor=actor,
-                        replace_source_id=body.source_id or "")
-                except setup_actions.SetupActionError as error:
-                    fail(error)
+        # The committed proof receipt decides replay across processes/restarts.
+        # A short in-process cache must not hide a refused or changed request.
+        with begin(engine) as connection:
+            require_actor(connection, body.project_id, actor, "entitlement_manage")
+            try:
+                setup_actions.connect_model(
+                    connection, get_settings(), body.project_id, provider=body.provider,
+                    kind=body.kind, api_key=body.api_key or "",
+                    credential=body.credential or "",
+                    credential_file=body.credential_file or "",
+                    base_url=body.base_url or "", model=body.model or "",
+                    accept_database_fallback=body.accept_database_fallback, actor=actor,
+                    replace_source_id=body.source_id or "",
+                    intent=body.idempotency_key or "")
+            except setup_actions.SetupActionError as error:
+                fail(error)
         return fresh_view(body.project_id)
 
     @router.post("/v1/setup/models/{source_id}/model", response_model=SetupView,

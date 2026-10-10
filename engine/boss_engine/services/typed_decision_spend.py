@@ -478,6 +478,7 @@ class TypedDecisionSpend:
             )
         except ModelCapacityDeniedError as denied:
             self.budget.release(connection, self.project_id, reservation_id, str(denied))
+            self._capacity_refused(connection, job["id"], leased["lease_token"], denied)
             # Every lease held by other work is a queue, not something a person decides: the
             # step waits (workflow_capability_runner._as_wait reads the same classification).
             from .model_failures import waiting_for
@@ -552,6 +553,9 @@ class TypedDecisionSpend:
             invocation_dedupe=dedupe,
             role=role,
         )
+
+    def _capacity_refused(self, connection, job_id, job_lease_token, error) -> None:
+        """Optional no-contact cleanup; ordinary typed-decision behavior is unchanged."""
 
     def _existing(self, connection, identity: str, dedupe: str) -> Optional[_Authority]:
         scope = self._scope(connection)

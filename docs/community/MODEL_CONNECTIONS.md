@@ -14,7 +14,7 @@ The step ends with one row per source (API keys, Codex, Claude Code, Grok Build,
 
 ## Connect from the console
 
-Open **Mission Control → Settings → Repo and models**. **+ Add model** offers three kinds: **Subscription** (Claude Code, Codex, Grok Build, Cursor), **API key** (OpenRouter, OpenAI, Anthropic, Gemini, xAI, or any OpenAI-compatible endpoint as **Other**), and **Local** (Ollama, or any local OpenAI-compatible URL). **Connect** stores the credential and asks the model one tiny question — reserved against the budget and receipted, in every edition — so a row only says **Working** after the model has answered. A key the provider refuses is not kept.
+Open **Mission Control → Settings → Repo and models**. **+ Add model** offers three kinds: **Subscription** (Claude Code, Codex, Grok Build, Cursor), **API key** (OpenRouter, OpenAI, Anthropic, Gemini, xAI, or any OpenAI-compatible endpoint as **Other**), and **Local** (Ollama, or any local OpenAI-compatible URL). **Connect** asks an API-key, local model, or already authenticated coding CLI one tiny governed question. An API key is saved only after the outcome is known; a row says **Working** after an answer, not merely after a login. In RC9 source, pasted subscription tokens and auth files are held before storage or a model call: sign the CLI in as the BOSS service user, then Connect without pasted credential material. Candidate-isolated subscription import is still pending.
 
 **Who does what** on the same page assigns models to jobs: **Build**, **Review**, **Chat**, **Decisions**, and under **More jobs**, **Hard problems** and **Routine work**. Each job defaults to **Auto**, which picks your choice, else a working subscription, else a local model, else a metered key, else a key in the install's settings file.
 
@@ -27,7 +27,7 @@ The same setup is available through the API:
 | `POST /v1/setup/checks` | Re-check the repository and models now (`target`: `all`, `repository`, `model:<source_id>`). |
 | `PUT /v1/setup/jobs/{job}` | Choose the engine and model for one job, or `null` for Auto. |
 
-The older `/v1/setup/status`, `/v1/setup/model`, `/v1/setup/model-providers` and `/v1/setup/coding-agents*` routes still answer for one release and say so with a `Deprecation` header.
+The older `/v1/setup/status`, `/v1/setup/model`, `/v1/setup/model-providers` and `/v1/setup/coding-agents*` routes retain compatibility responses with a `Deprecation` header. In RC9 source, the deprecated HTTP credential-import route refuses supplied material; use an existing authenticated CLI session instead.
 
 ## Supported providers
 
@@ -42,9 +42,9 @@ The table lists every model path BOSS currently supports, with its present limit
 | xAI Grok API | **API key → xAI**, or `XAI_API_KEY` in the install environment | Console **Connect** runs a governed proof. This API-key connection is separate from a Grok Build subscription. |
 | OpenAI-compatible API | **API key → Other** with a reachable base URL, model and key | Console **Connect** runs a governed proof. For an unauthenticated local server, use **Local** instead. |
 | Ollama or a local compatible model | **Local** in the console; `boss connect ollama` for a running Ollama; `boss connect --install-ollama` to install one | Console **Connect** runs a governed proof. The CLI Ollama path checks reachability and model presence without a completion. Its local endpoint is priced at zero, and fallback role assignment is described below. |
-| Codex ChatGPT subscription | **Subscription → Codex** in the console, or `boss connect codex` / `--connect-codex` | Explicit import stores the CLI auth file in the selected secret backend, then one governed test turn proves the connection. |
+| Codex ChatGPT subscription | **Subscription → Codex** for an existing authenticated CLI session, or `boss connect codex` / `--connect-codex` | RC9 console Connect does not import an auth file. Explicit terminal import remains an intentional storage/replacement action; the subsequent governed test turn verifies the recorded session. |
 | Claude Code subscription, local CLI login | `boss connect claude` at a terminal, or `--connect-claude-local` after signing in inside the container | Claude Code owns its session in the shared API/worker config volume. BOSS proves the login with one governed turn before recording it as connected. |
-| Claude Code subscription, setup-token import | **Subscription → Claude Code**, `--connect-claude`, or `store_subscription_token.py claude_code --stdin` | The storage helper alone makes no model call. Connecting runs the governed proof. Database credential storage requires the explicit fallback acceptance described below. |
+| Claude Code subscription, setup-token import | `--connect-claude`, or `store_subscription_token.py claude_code --stdin` | Terminal storage is an intentional authentication replacement and alone makes no model call. Connecting runs a separate governed proof. RC9 console/HTTP import is held; console Connect uses an existing authenticated session. Database credential storage requires the explicit fallback acceptance described below. |
 | Grok Build subscription | `boss connect grok` at a terminal, then `--connect-grok-local`; see [Grok CLI](GROK_CLI.md) | BOSS does not copy `auth.json`. Recording the container login runs one governed test turn; a missing login is an error. |
 
 **What research needs.** Discovery web research, including the research step that opens Build's default workflow, runs on the Claude Code subscription: the Claude CLI does the web search, and each research stage is a governed call with its own budget reservation, model lease, and receipt. A local Ollama model or an API key cannot stand in. Without a usable Claude Code subscription, Build's research step is recorded as skipped with the reason, and the run goes on to the panel. See [Getting started](GETTING_STARTED.md#6-follow-the-governed-path).
@@ -63,7 +63,7 @@ To see what BOSS has recorded, use the setup screen or `GET /v1/setup/coding-age
 Credentials are stored on the install machine. A hosted provider receives authentication and the prompt or repository context needed for the call; connect only accounts and repositories you intend BOSS to use. Local persistence means:
 
 - The generated `.env` has mode `0600`. It is never uploaded; do not commit it.
-- Keys you save in the setup screen go to the secret backend you selected for this install. Imported subscription credentials are stored there too, and are never written to git or printed by the installer.
+- Keys you save in the setup screen go to the secret backend you selected for this install. Explicit terminal subscription imports use that backend too; RC9 console/HTTP subscription import is held. Neither is written to git or printed by the installer.
 - The local Claude Code session lives in a volume owned by the CLI. BOSS backups do not include it.
 - The Grok CLI session stays in the service user's Grok home. BOSS does not copy `auth.json`.
 
@@ -73,13 +73,25 @@ For a dedicated local secret store, choose `--secret-store infisical` during ins
 
 The connection method determines when BOSS calls the model:
 
-- **Console Connect** makes one small governed call for API keys, subscriptions and local models in every edition. It reserves budget and records a receipt before the call. A refused budget makes no call. **Working** means that check received an answer; it does not prove a larger build can finish.
+- **Console Connect** makes one small governed call for API keys, existing authenticated CLI sessions and local models in every edition. It reserves budget and records a receipt before the call. A refused budget makes no call. **Working** means that check received an answer; it does not prove a larger build can finish.
 - **Environment key import**, including `boss connect keys`, stores a key without a completion. A later governed check or job tests it. A saved or detected source is not the same as a working model.
 - **Subscription recording** through the installer, `boss connect`, or `remote.sh subscription` runs one trivial governed turn (`BOSS_OK`). A failed proof reports why rather than declaring it working.
 - **CLI Ollama setup** checks reachability and installed models without asking for a completion. Use the console check or a small governed job to verify an answer.
-- A rejected credential is not kept by **Connect**. A provider that is temporarily busy or unreachable can leave a saved source with that status; read the row before starting work. A failed replacement does not overwrite a previously working credential.
+- A rejected credential is not made available to jobs by **Connect**. An explicit rate-limit rejection can leave a saved source with that status. An unknown provider outcome or unknown paid cost requires reconciliation rather than declaring a new connection working. A failed or uncertain replacement does not overwrite a previously working credential.
 
-A proof's receipt records success or failure. Its reservation settles at the actual recorded cost or is released. API keys and coding subscriptions remain distinct sources. The console's **Re-check** also calls models: use it when you are ready for a small test, and inspect the resulting status and receipt.
+A proof's receipt records what is known. A successful paid proof settles from typed cost or priced usage evidence. A known rejection or cancellation before contact releases its unused reservation; an uncertain submission or cost retains its financial hold for reconciliation. A quote controls BOSS admission, not the provider's eventual invoice. API keys and coding subscriptions remain distinct sources. The console's **Re-check** also calls models: use it when you are ready for a small test, and inspect the resulting status and receipt.
+
+### RC9 source: durable proof authority
+
+The RC9 source commits a worker job lease, model lease, reservation and receipt before a connection proof reaches the provider. It heartbeats both leases during the proof, pins the actual source, and pins the candidate API credential or allowlisted environment reference. An official CLI continues to own its existing authenticated session; this does not freeze its OAuth material or prove internal CLI retry behavior. A refused budget or capacity makes no model call. The proof shares capacity with ordinary work using that connection; it does not create an extra concurrent slot.
+
+An encrypted candidate credential is restricted to its proof. It cannot serve ordinary jobs or count as a ready model. Environment-key checks use an allowlisted environment reference without copying the value into the database. After the proof, its temporary credential binding is revoked; a successful connection is recorded through the chosen store. Receipt and cost history remain. Unknown outcomes keep their hold and a visible reconciliation decision, while the previous working connection stays available.
+
+The Connect request's `idempotency_key` binds the same actor, candidate and receipt across API processes and restarts. Repeating the same intent replays its saved result and original proof timestamp without another model call. It cannot restore a credential after a later replacement. Changing its credential or scope requires a new explicit intent. An unresolved intent is held for receipt review. A deliberate Re-check is a new small proof, not a free retry of an unknown outcome.
+
+Modern Connect and the deprecated HTTP credential-import route refuse supplied subscription material without changing the working store. Existing authenticated CLI-session Connect remains available. The legacy terminal credential-import/storage helpers remain intentional configuration actions for installer compatibility: they store or replace authentication material and do not validate a connection. They are separate from this candidate-isolation boundary; candidate-only OAuth import/replacement is still unresolved.
+
+This describes RC9 source behavior, not a published RC9 qualification or a successful useful build. Provider responses, supported-host lifecycle and real useful-task acceptance require their own evidence.
 
 ## Coding CLIs
 

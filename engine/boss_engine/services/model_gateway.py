@@ -133,7 +133,7 @@ class ModelGatewayService:
                        entitlement_kind, owner_type, owner_id,
                        multi_tenant_allowed, auth_method, credential_ref,
                        credential_secret_ref_id, connection_ref, connection_status,
-                       cost_mode, limit_shape, observed_capacity, runtime_supported
+                       cost_mode, limit_shape, observed_capacity, runtime_supported, connection_metadata
                 FROM entitlement_sources
                 WHERE project_id = :project_id AND source_id = :source_id
                 FOR UPDATE
@@ -528,18 +528,35 @@ class ModelGatewayService:
         self._expire_source_leases(
             connection, project_id, source["id"], actor=worker_id
         )
-        max_concurrent = max(1, int((source.get("limit_shape") or {}).get("max_concurrent", 1)))
-        active_count = int(
-            connection.execute(
-                text(
-                    """
-                    SELECT count(*) FROM model_gateway_leases
-                    WHERE entitlement_source_id=:source_id AND status='active' AND expires_at > now()
-                    """
-                ),
-                {"source_id": source["id"]},
-            ).scalar_one()
-        )
+        metadata = source.get("connection_metadata") or {}
+        group = str(metadata.get("capacity_group") or source["source_id"])
+        grouped = connection.execute(text(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended(:k, 0))"),
+            {"k": f"model-capacity:{project_id}:{group}"}).scalar_one()
+        if not grouped:
+            raise ModelCapacityDeniedError("Selected model capacity admission is busy; retry shortly.")
+        source_limit = max(1, int((source.get("limit_shape") or {}).get("max_concurrent", 1)))
+        source_count = int(connection.execute(text(
+            "SELECT count(*) FROM model_gateway_leases WHERE entitlement_source_id=:s "
+            "AND status='active' AND expires_at > now()"), {"s": source["id"]}).scalar_one())
+        if source_count >= source_limit:
+            raise ModelCapacityDeniedError("Selected model source has no concurrent lease capacity.")
+        # A temporary proof candidate shares the original connection's capacity,
+        # rather than manufacturing a second slot. Normal ungrouped sources keep
+        # their existing source identity and limit. Never wait while holding budget locks.
+        canonical_limit = connection.execute(text(
+            "SELECT limit_shape FROM entitlement_sources WHERE project_id=:p "
+            "AND COALESCE(connection_metadata->>'capacity_group',source_id)=:g "
+            "AND COALESCE(connection_metadata->>'proof_only','false') <> 'true' "
+            "ORDER BY created_at LIMIT 1"), {"p": project_id, "g": group}).scalar()
+        limits = canonical_limit if isinstance(canonical_limit, dict) else source.get("limit_shape") or {}
+        max_concurrent = max(1, int(limits.get("max_concurrent", 1)))
+        active_count = int(connection.execute(text(
+            "SELECT count(*) FROM model_gateway_leases l "
+            "JOIN entitlement_sources s ON s.id=l.entitlement_source_id "
+            "WHERE l.project_id=:p AND l.status='active' AND l.expires_at > now() "
+            "AND COALESCE(s.connection_metadata->>'capacity_group',s.source_id)=:g"),
+            {"p": project_id, "g": group}).scalar_one())
         if active_count >= max_concurrent:
             raise ModelCapacityDeniedError("Selected model source has no concurrent lease capacity.")
 
