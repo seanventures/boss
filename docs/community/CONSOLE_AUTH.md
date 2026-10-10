@@ -8,6 +8,12 @@ Each person signs in as themselves and holds an access role (Owner, Admin, Opera
 
 The first person to open a new or upgraded install **claims** it at `/claim` and becomes the first Owner. The sign-in page shows **This BOSS has no Owner yet. Claim it** until then. [Upgrade to named accounts](IDENTITY_UPGRADE.md) walks through the claim.
 
+If the sign-in or claim page says **Sign-in unavailable**, BOSS could not load
+the sign-in options. It cannot tell whether an Owner exists yet. Restore the
+API connection, then choose **Retry**; it reloads the current page and keeps
+your return destination or setup-link fragment. A failed read never counts as
+an Owner claim or a successful sign-in.
+
 ## Ways to sign in
 
 | Method | Needs |
