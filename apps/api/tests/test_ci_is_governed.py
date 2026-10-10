@@ -283,7 +283,8 @@ def test_ci_that_never_finishes_times_out_in_words_and_blocks(client, engine, mo
                                              "timeout_minutes": 1}).json()
     assert wait["status"] == "waiting" and "waiting on 'e2e'" in wait["summary"]
     with engine.begin() as c:                                    # a minute and a bit later
-        c.execute(text("UPDATE ci_waits SET created_at = created_at - interval '70 seconds' "
+        c.execute(text("UPDATE ci_waits SET created_at = created_at - interval '70 seconds', "
+                       "deadline_at = deadline_at - interval '70 seconds' "
                        "WHERE id = :i"), {"i": wait["id"]})
     polled = client.post(f"/v1/ci/waits/{wait['id']}/poll", json={"project_id": PROJECT}).json()
     assert polled["status"] == "timed_out"
@@ -372,7 +373,8 @@ def test_ci_that_cannot_be_read_blocks_merge_and_deploy_unless_a_person_forces_t
                                              "timeout_minutes": 1}).json()
     assert wait["status"] == "waiting"
     with engine.begin() as c:
-        c.execute(text("UPDATE ci_waits SET created_at = created_at - interval '70 seconds' "
+        c.execute(text("UPDATE ci_waits SET created_at = created_at - interval '70 seconds', "
+                       "deadline_at = deadline_at - interval '70 seconds' "
                        "WHERE id = :i"), {"i": wait["id"]})
     polled = client.post(f"/v1/ci/waits/{wait['id']}/poll", json={"project_id": PROJECT}).json()
     assert polled["status"] == "unreadable" and polled["blocks_deploy"] is True
@@ -391,3 +393,53 @@ def test_ci_that_cannot_be_read_blocks_merge_and_deploy_unless_a_person_forces_t
     forced = client.post(f"/v1/decisions/{merge}/approve",
                          json={"actor": "ceo", "note": "CI is down; reviewed by hand", "force": True})
     assert forced.status_code == 200, forced.text
+
+
+def test_a_red_ci_read_again_after_a_rerun_clears_or_rearms_and_never_opens_on_an_error(
+        client, engine, monkeypatch):
+    """A person re-runs the failed job on GitHub (same commit). Pressing Approve reads CI again:
+    green lets the approval through. An explicit look re-arms a wait whose re-run is still in
+    progress with a fresh deadline. A read that fails keeps the refusal — the gate never opens on
+    an error."""
+    _fake_github(monkeypatch, FAILING)
+    url = f"https://github.com/acme/web/pull/{uuid4().int % 10000}"
+    wait = client.post("/v1/ci/waits", json={"project_id": PROJECT, "pull_request_url": url}).json()
+    assert wait["status"] == "failed"
+    deploy = _decision(engine, {"action": "review_deployment", "pull_request_url": url,
+                                "environment": api_main.settings.sandbox_deploy_environment})
+
+    # GitHub unreachable at approval time: still refused, still the failing check.
+    def broken(*a, **k):
+        raise RuntimeError("GitHub is down")
+    monkeypatch.setattr(ci_gate, "reader_for_project", broken)
+    refused = client.post(f"/v1/decisions/{deploy}/approve", json={"actor": "ceo", "note": "x"})
+    assert refused.status_code == 409 and "runs/7" in refused.text
+
+    # The re-run is in progress: an explicit look re-arms the wait, the approval still waits.
+    _fake_github(monkeypatch, PENDING)
+    polled = client.post(f"/v1/ci/waits/{wait['id']}/poll", json={"project_id": PROJECT}).json()
+    assert polled["status"] == "waiting" and polled["summary"].startswith("CI is running again")
+    assert polled["blocks_deploy"] is True
+    refused = client.post(f"/v1/decisions/{deploy}/approve", json={"actor": "ceo", "note": "x"})
+    assert refused.status_code == 409 and "still running" in refused.text
+
+    # It goes green: one more look passes, and the approval goes through.
+    _fake_github(monkeypatch, PASSING)
+    polled = client.post(f"/v1/ci/waits/{wait['id']}/poll", json={"project_id": PROJECT}).json()
+    assert polled["status"] == "passed" and polled["summary"] == "CI passed: 3 checks"
+    assert client.post(f"/v1/decisions/{deploy}/approve",
+                       json={"actor": "ceo", "note": "ship"}).status_code == 200
+
+
+def test_pressing_approve_after_a_rerun_went_green_reads_ci_again(client, engine, monkeypatch):
+    _fake_github(monkeypatch, FAILING)
+    url = f"https://github.com/acme/web/pull/{uuid4().int % 10000}"
+    wait = client.post("/v1/ci/waits", json={"project_id": PROJECT, "pull_request_url": url}).json()
+    assert wait["status"] == "failed"
+    deploy = _decision(engine, {"action": "review_deployment", "pull_request_url": url,
+                                "environment": api_main.settings.sandbox_deploy_environment})
+    _fake_github(monkeypatch, PASSING)
+    assert client.post(f"/v1/decisions/{deploy}/approve",
+                       json={"actor": "ceo", "note": "ship"}).status_code == 200
+    got = client.get(f"/v1/ci/waits/{wait['id']}", params={"project_id": PROJECT}).json()
+    assert got["status"] == "passed"

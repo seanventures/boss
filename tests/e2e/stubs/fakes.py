@@ -400,6 +400,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.github is None:
             return 503, {"message": "boss-e2e: the GitHub fake needs --state-dir"}, "application/json"
         status, payload = self.github.handle(method, path or "/", query, body)
+        accept = (self.headers.get("Accept") or "") if getattr(self, "headers", None) else ""
+        if ("vnd.github.raw" in accept and status == 200 and isinstance(payload, dict)
+                and payload.get("type") == "file" and payload.get("encoding") == "base64"):
+            # application/vnd.github.raw: GitHub answers a file's bytes, not its JSON envelope.
+            import base64
+            return 200, base64.b64decode(payload.get("content") or ""), "application/vnd.github.raw"
         if status == 204:
             return 204, b"", ""
         return status, payload, "application/json"

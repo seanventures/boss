@@ -32,6 +32,7 @@ the suite. The choice is per wait (`has_ci`), decided once when the wait starts.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -55,10 +56,13 @@ MAX_POLL_SECONDS = 120
 #: How long a repository with no CI configured is given for an external CI to report a status.
 NO_CI_GRACE_SECONDS = 60
 
+_log = logging.getLogger("boss.ci_gate")
 TERMINAL = frozenset({"passed", "failed", "timed_out", "no_ci", "unreadable", "cancelled"})
 #: Statuses a deploy (and, unforced, a merge) may go ahead on. FAIL CLOSED: only CI that passed,
 #: or a repository with explicitly no CI configured. CI that could not be read is NOT cleared.
 CLEARED = frozenset({"passed", "no_ci"})
+#: Finished without passing, and worth reading again on an explicit look (a re-run on GitHub).
+RECHECKABLE = frozenset({"failed", "timed_out", "unreadable"})
 UNREADABLE_PREFIX = "CI could not be read: "
 
 
@@ -870,7 +874,7 @@ def get_wait(connection: Any, wait_id: str) -> dict[str, Any]:
 
 
 def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = False,
-              now: Optional[datetime] = None) -> dict[str, Any]:
+              now: Optional[datetime] = None, rearm: bool = True) -> dict[str, Any]:
     """One look at CI for a recorded wait, when it is due (or `force`). Never blocks."""
     from .core import emit_event
 
@@ -878,18 +882,42 @@ def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = 
                              {"i": wait_id}).mappings().first()
     if row is None:
         raise CiSettingError("ci_wait_not_found", 404, "No such CI wait.")
-    if row["status"] in TERMINAL:
-        return get_wait(connection, wait_id)
     now = now or _now()
-    if not force and row["next_poll_at"] and row["next_poll_at"] > now:
+    rerun = False
+    if row["status"] in TERMINAL:
+        # A RED OR UNREAD RESULT IS NOT FOREVER. A person re-runs the failed job on GitHub (same
+        # commit), or GitHub comes back: an explicit look (`force`) reads CI again. Green clears
+        # the gate; a re-run still in progress re-arms the wait with a fresh deadline; still red
+        # stays red with the newest failing check. A pass or a cancel is never reopened.
+        if not (force and row["status"] in RECHECKABLE and row["head_sha"]):
+            return get_wait(connection, wait_id)
+        rerun = True
+    elif not force and row["next_poll_at"] and row["next_poll_at"] > now:
         return get_wait(connection, wait_id)
     try:
         outcome = look(reader, row["head_sha"])
     except Exception as error:  # noqa: BLE001
         outcome = CiOutcome("waiting", unreadable_words(error), [])
+    if rerun and not outcome.terminal:
+        if not rearm or outcome.summary.startswith(UNREADABLE_PREFIX) or not outcome.checks:
+            return get_wait(connection, wait_id)     # nothing new to say: keep the refusal
+        connection.execute(text(
+            "UPDATE ci_waits SET status = 'waiting', summary = :su, checks = CAST(:c AS JSONB), "
+            "failing_url = NULL, finished_at = NULL, attempts = 0, deadline_at = :d, "
+            "next_poll_at = :now, updated_at = :now WHERE id = :i"),
+            {"su": ("CI is running again: " + outcome.summary)[:1000],
+             "c": json.dumps(outcome.checks), "d": now + timedelta(seconds=int(
+                 row["timeout_seconds"] or DEFAULT_TIMEOUT_SECONDS)), "now": now, "i": wait_id})
+        emit_event(connection, row["project_id"], "ci.rerun", "boss", "ci_wait", wait_id,
+                   {"head_sha": row["head_sha"], "was": row["status"]})
+        return get_wait(connection, wait_id)
     has_ci = bool(row["has_ci"] or outcome.checks)
-    elapsed = (now - row["created_at"]).total_seconds()
-    outcome = settle(outcome, elapsed=elapsed, timeout=float(row["timeout_seconds"]),
+    # Time is measured against the wait's own deadline, so a re-armed wait gets a full timeout.
+    timeout = float(row["timeout_seconds"])
+    deadline = row.get("deadline_at") if hasattr(row, "get") else row["deadline_at"]
+    elapsed = (timeout - (deadline - now).total_seconds()) if deadline else \
+        (now - row["created_at"]).total_seconds()
+    outcome = settle(outcome, elapsed=elapsed, timeout=timeout,
                      has_ci=has_ci, repository=row["repository"])
     attempts = int(row["attempts"] or 0) + 1
     connection.execute(text(
@@ -1060,6 +1088,8 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
         return
     wait = latest_wait(connection, project_id, pull_request_url=rec.get("pull_request_url"),
                        shas=_shas(rec))
+    if wait is not None and wait["status"] in RECHECKABLE:
+        wait = recheck(connection, project_id, wait)
     if wait is None or wait["status"] in CLEARED:
         return
     if action in MERGE_ACTIONS and force:
@@ -1071,6 +1101,28 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
         msg = f"{wait['summary']}. The {what} cannot be approved until CI passes."
     raise CiGateRefused("ci_not_passed", msg.replace("..", "."), ci_wait_id=wait["id"],
                         ci_status=wait["status"], failing_url=wait.get("failing_url"))
+
+
+def recheck(connection: Any, project_id: str, wait: dict[str, Any]) -> dict[str, Any]:
+    """Read CI once more for a red or unread wait before refusing on it, so pressing Approve after
+    re-running the failed job on GitHub is enough. Any failure to read keeps the old answer:
+    the gate stays closed (fail closed), it never opens on an error."""
+    try:
+        from ..config import get_settings
+
+        point = connection.begin_nested()
+        try:
+            reader = reader_for_project(connection, get_settings(), project_id,
+                                        wait.get("repository"))
+            got = poll_wait(connection, wait["id"], reader, force=True, rearm=False)
+        except Exception:
+            point.rollback()
+            raise
+        point.commit()
+        return got
+    except Exception:  # noqa: BLE001 — unreadable now is the same refusal as before
+        _log.info("CI recheck for %s did not read; keeping %s", wait.get("id"), wait.get("status"))
+        return wait
 
 
 def refuse_effect(connection: Any, project_id: str, row: Mapping[str, Any]) -> None:
