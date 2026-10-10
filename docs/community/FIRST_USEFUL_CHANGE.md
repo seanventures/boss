@@ -92,9 +92,11 @@ git checkout --detach "$DELIVERED_COMMIT"
 # Run the acceptance commands you declared for this repository.
 ```
 
-Record whether the result solves the need, what you checked and the revision. Keep that note with the repository review or your work record; this guide does not imply a dedicated BOSS acceptance button exists. A merge or deployment remains its own authorized action.
+RC9 source adds **Review the result** in the Factory cockpit. Where that card is available, inspect its recorded delivery, evidence and costs, then choose **Accept as useful** to record your assessment of that revision. Acceptance records usefulness; it does not pass a technical check, waive a failed gate, approve a merge or deployment, release a reservation or start more work. [Review a result](RESULT_REVIEW.md) explains the permissions, evidence labels and saved review history.
 
-If the result needs revision, state only the gap and keep the original scope/checks. Use a linked follow-up with a fresh allowance where needed; do not assume a dedicated linked-revision flow is already available.
+If the result needs revision, state only the gap and keep the original scope/checks. **Request a change** saves the review first, then opens the existing **Change it** sheet with the recorded revision and your note. Edit the bounded follow-up, choose **Propose**, inspect its proposal and choose **Start** only when you intend to run it. Saving a review does not automatically propose, dispatch or spend on another build. The branch may have moved since the reviewed commit.
+
+The RC8 screenshots and published RC8 release predate these controls. On an earlier install, record whether the result solves the need, what you checked and the revision with your repository review or work record. Keep any follow-up bounded and separately authorized. A merge or deployment always remains its own decision.
 
 ## If work stops or the outcome is uncertain
 
