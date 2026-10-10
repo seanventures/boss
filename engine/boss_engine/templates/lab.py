@@ -131,3 +131,16 @@ def ensure_lab(c, settings: Any, *, source_project_id: str, app_key: str, app_na
     emit_event(c, source_project_id, "template.lab_created", actor_id or "system", "project", project_id,
                {"name": name, "app_key": app_key, "template_key": template_key})
     return {"project_id": project_id, "name": name, "created": True}
+
+
+def labs_of(c, source_project_id: str) -> list[dict]:
+    """The lab projects made from `source_project_id`, newest first: where each insecure
+    template app is built, so the source project's console can link to them."""
+    rows = c.execute(text(
+        "SELECT s.project_id, p.name, s.value, s.updated_at FROM project_settings s "
+        "JOIN projects p ON p.id = s.project_id WHERE s.key = :k "
+        "AND s.value->>'source_project_id' = :src ORDER BY s.updated_at DESC LIMIT 50"),
+        {"k": LAB_SETTING, "src": source_project_id}).mappings().all()
+    return [{"project_id": r["project_id"], "name": r["name"],
+             "app_name": (r["value"] or {}).get("app_name"),
+             "template_key": (r["value"] or {}).get("template_key")} for r in rows]

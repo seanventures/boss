@@ -32,6 +32,7 @@ import { LINKS_TIP, LinksSheet } from "./links-sheet";
 import { SecuritySheet, readSecurityParam, writeSecurityParam } from "./security/security-sheet";
 import { SIGN_IN_TIP, SignInSheet } from "./sign-in-sheet";
 import { AppSetupSheet } from "../../components/v2/templates/setup-sheet";
+import { LabLinks } from "./lab-links";
 
 /** Where "＋ Add a feature" goes: New project, in add mode, with this app chosen. */
 export function addFeatureHref(appKey: string, previewId?: string | null): string {
@@ -280,6 +281,7 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
   if (!apps.length) {
     return (
       <div className="fx-apps" data-testid="fx-apps">
+        <LabLinks projectId={projectId} />
         <div className="ag-empty fx-empty" data-testid="fx-no-apps">
           <span>No apps yet</span>
           <GatedButton permission="workflow_run:start" type="button" className="ag-btn ag-btn-primary" onClick={onNew}
@@ -296,6 +298,8 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
     </span>
   );
   return (
+    <>
+    <LabLinks projectId={projectId} />
     <div className="fx-apps" data-testid="fx-apps" role="table" aria-label="Apps">
       <div className="fx-apps-head fx-app-grid" role="row">
         <span className="fx-apps-th fx-c-chev" role="columnheader" aria-label="Builds of the app" />
@@ -452,5 +456,6 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
                        onClose={() => openSecurity(null)} />
       ) : null}
     </div>
+    </>
   );
 }

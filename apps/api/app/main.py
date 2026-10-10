@@ -26652,18 +26652,34 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     ctx = EngineContext.create()
+    worker_id = str(payload.get("worker_id") or "capability-runner")
     with begin(engine) as connection:
-        advanced = workflow_capability_runner.tick(
-            connection, ctx, project_id=project_id,
-            worker_id=str(payload.get("worker_id") or "capability-runner"),
-        )
-        # Same tick: a gate whose SLA has run out is as much "work that is ready" as a step
-        # waiting to execute, and running it on a separate schedule would mean two places to
-        # look when a workflow is not moving.
-        timeouts = workflow_capability_runner.sweep_gate_timeouts(
-            connection, project_id=project_id
-        )
-    return {**advanced, "gate_timeouts": timeouts}
+        projects = workflow_capability_runner.projects_with_work(connection, project_id)
+    advanced: dict[str, Any] = {}
+    timeouts: Any = None
+    others: dict[str, Any] = {}
+    # EVERY PROJECT WITH LIVE WORK, not only the one the worker is configured for: a template's
+    # lab project is a project of its own, and its build sat `ready` for ever. Each project in
+    # its own transaction, so one that cannot advance never stops the rest.
+    for pid in projects:
+        try:
+            with begin(engine) as connection:
+                result = workflow_capability_runner.tick(connection, ctx, project_id=pid,
+                                                         worker_id=worker_id)
+                # Same tick: a gate whose SLA has run out is as much "work that is ready" as a
+                # step waiting to execute, and running it on a separate schedule would mean two
+                # places to look when a workflow is not moving.
+                swept = workflow_capability_runner.sweep_gate_timeouts(connection, project_id=pid)
+        except Exception as error:  # noqa: BLE001
+            if pid == project_id:
+                raise
+            others[pid] = {"error": type(error).__name__}
+            continue
+        if pid == project_id:
+            advanced, timeouts = result, swept
+        else:
+            others[pid] = {**result, "gate_timeouts": swept}
+    return {**advanced, "gate_timeouts": timeouts, **({"other_projects": others} if others else {})}
 
 
 @app.get("/v1/workflows", response_model=WorkflowDefinitionListResponse)

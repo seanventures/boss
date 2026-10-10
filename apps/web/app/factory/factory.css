@@ -316,3 +316,7 @@
 .fx-signin-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .fx-signin-uris { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .fx-signin-note { margin: 0; font-size: 0.78rem; }
+
+/* Lab projects (insecure-template apps are built apart): a link to each one's own Factory. */
+.fx-labs { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 0 0 10px; font-size: 13px; }
+.fx-labs-k { color: var(--muted, #6b7280); }

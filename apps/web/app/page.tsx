@@ -1,4 +1,5 @@
 
+import { ProjectAway } from "./project-away";
 import { networkTrustedConsole } from "../lib/console-session";
 import { accessForArea } from "../lib/identity/area-access";
 import { checkWith } from "../lib/identity/check";
@@ -588,7 +589,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   }
   const activeOrgId = selectedOrg.org_id;
   const activeOrgName = selectedOrg.org_name;
-  const activeProjectId = selectedOrg.project_id;
+  // ANOTHER PROJECT OF THIS ORG, BY LINK (?project_id=). A template's lab project (an
+  // insecure-by-design training app, built apart from real apps) is a project of its own; with
+  // only the org's own project reachable, its run was in no Workflows or Factory anyone could
+  // open. Honoured only for a project the person can list in this org; anything else is the
+  // org's own project, as before.
+  const askedProjectId = getParam(resolvedSearchParams?.project_id)?.trim() || null;
+  const otherProjectFeed = askedProjectId && askedProjectId !== selectedOrg.project_id
+    ? await fetchProjectFeed(askedProjectId) : null;
+  const otherProject = otherProjectFeed?.items.find(
+    (p) => p.id === askedProjectId && p.orgId === selectedOrg.org_id) ?? null;
+  const activeProjectId = otherProject ? otherProject.id : selectedOrg.project_id;
   // FIRST SIGN-IN LANDS WHERE THE WORK IS. With no `area` asked for and setup not ready, the
   // console opens on Repo and models; once ready the default is the Command Center as before.
   // The same read feeds the rail badge, so the two cannot disagree.
@@ -673,7 +684,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // No Infra pack: Infra › Cloud reads GET /v1/infra/cloud itself (infra-observability spec §6.6),
   // which replaced the 17-call ProviderOps fan-out this page made for System Configuration.
   const assuranceP = loadAssuranceAreaData({ projectId: activeProjectId, active: assuranceActive });
-  const projectsP = fetchProjectFeed(activeProjectId);
+  const projectsP = otherProjectFeed
+    ? Promise.resolve({ ...otherProjectFeed, activeProjectId })
+    : fetchProjectFeed(activeProjectId);
   // Behind the 66-feed wave for no reason: these need the project id and nothing that wave
   // produces, so they were a whole round trip spent waiting.
   const ccZone = (() => {
@@ -969,6 +982,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       loadedAreas={[...loadedAreas]}
     >
       <div className="frame">
+        {otherProject ? (
+          <ProjectAway name={otherProject.name}
+                       homeName={otherProjectFeed?.items.find((p) => p.id === selectedOrg.project_id)?.name
+                                 ?? selectedOrg.org_name}
+                       lab={/lab \(insecure by design\)$/.test(otherProject.name)} />
+        ) : null}
         {/* ONE AGENT SURFACE.
             There were three: this chat area, a Metatron Captain page, and the Task Shepherd
             autopilot. The operator used one of them and did not like it — "I never used

@@ -8670,3 +8670,9 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   .wm-step { grid-column: 1 / -1; }
   .wm-why-btn { min-height: 44px; min-width: 44px; }
 }
+
+/* Another project of the org is open (?project_id=, e.g. a template lab): say which, and the way back. */
+.project-away { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between;
+  margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--border, #d0d4dc); border-radius: 8px;
+  background: var(--surface-warn, #fff8e6); font-size: 13px; }
+.project-away a { white-space: nowrap; }

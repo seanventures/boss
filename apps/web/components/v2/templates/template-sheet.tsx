@@ -29,6 +29,7 @@ import {
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../../../app/workflow-readiness-ui";
 import { LabelChips, stackTip, useInstalledStacks } from "./gallery";
 import { SideSheet } from "./side-sheet";
+import { consoleHref } from "../../../app/console-href";
 
 /** Where the template goes: a new app (named here), or an app that exists. */
 export type ApplyTarget =
@@ -145,6 +146,12 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
         const names = Array.isArray(b.secrets) ? b.secrets.map(String) : needs;
         if (!appKey || !(await storeKeys(appKey, names))) return;
         started = await apply();
+      }
+      if (started?.lab?.project_id) {
+        // AN INSECURE TEMPLATE IS BUILT IN ITS OWN LAB PROJECT: open its run THERE. Opening it in
+        // this project's Workflows found nothing, and the lab run was nowhere to be seen.
+        window.location.assign(labRunHref(started.lab.project_id, started.workflow_run_id ?? null));
+        return;
       }
       onStarted(started?.workflow_run_id ?? null);
     } catch (e) {
@@ -296,4 +303,10 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
       {error ? <p className="tpl-err" role="alert" data-testid="tpl-error" data-user-text>{error}</p> : null}
     </SideSheet>
   );
+}
+
+/** Where an apply that made a lab project goes next: that project's Workflows, on the run. */
+export function labRunHref(labProjectId: string, workflowRunId: string | null): string {
+  return consoleHref({ project_id: labProjectId, area: "delivery_workflows",
+                       ...(workflowRunId ? { wfr: workflowRunId } : {}) });
 }

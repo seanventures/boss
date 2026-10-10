@@ -178,6 +178,18 @@ def build_templates_router() -> APIRouter:
             return _refused(exc)
         return JSONResponse(result, status_code=201 if result["status"] == "pending_review" else 422)
 
+    @router.get("/v1/templates/labs")
+    @permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
+    def template_labs(request: Request, project_id: str) -> dict:
+        """The lab projects this project's insecure-template apps are built in (templates.lab):
+        the console links to each, since a lab's runs live in that project, not this one."""
+        from boss_engine.templates import lab as lab_service
+
+        ctx = _ctx(request)
+        with begin() as db:
+            _project_in_org(db, project_id, ctx.principal.org_id)
+            return {"project_id": project_id, "labs": lab_service.labs_of(db, project_id)}
+
     @router.get("/v1/templates/{template_id}")
     @permit(P.TEMPLATE_READ, scope=Scope.org())
     def describe_template(request: Request, template_id: str) -> Any:

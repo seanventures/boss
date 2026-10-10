@@ -4087,6 +4087,35 @@ def _resume_answered_gates(
     return acted
 
 
+def projects_with_work(connection: Connection, asked: str) -> list[str]:
+    """`asked` first, then every other project with a product workflow run to advance.
+
+    The worker ticks the project it is configured for. A template LAB is a project of its own
+    (templates.lab), so its workflow sat at `build: ready` for ever: nothing ever ticked that
+    project. Every project with live work is advanced, whichever one the worker names.
+    """
+    others = [str(r[0]) for r in connection.execute(
+        text(
+            """
+            SELECT DISTINCT r.project_id
+            FROM workflow_runs r
+            JOIN workflow_definitions d ON d.id = r.workflow_definition_id
+            WHERE r.project_id <> :asked
+              AND COALESCE(d.namespace, 'system') = 'product'
+              AND (r.status IN ('running', 'waiting')
+                   OR (r.status = 'failed' AND EXISTS (
+                         SELECT 1 FROM workflow_step_runs s
+                         WHERE s.workflow_run_id = r.id AND s.status = 'failed'
+                           AND s.output->'await'->>'kind' = 'code_task')))
+            ORDER BY r.project_id
+            LIMIT 50
+            """
+        ),
+        {"asked": asked},
+    ).all()]
+    return [asked, *others]
+
+
 def tick(
     connection: Connection,
     ctx: Any,

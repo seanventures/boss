@@ -223,7 +223,8 @@ export type ApplyBody = {
   project_id: string; stack: string; app_key?: string; extends_run_id?: string; new_app?: { name: string };
   framework?: string; note?: string; accept_egress?: boolean | string[]; start_anyway?: string[]; dedupe_key?: string;
 };
-export type Applied201 = { workflow_run_id: string | null; application_id: string; app_key: string };
+export type Applied201 = { workflow_run_id: string | null; application_id: string; app_key: string;
+  project_id?: string; lab?: { project_id: string; name: string; why?: string } };
 
 export const templatesApi = {
   list: async (filter: { stack?: string; status?: string } = {}) =>
@@ -238,6 +239,13 @@ export const templatesApi = {
   hide: (id: string) => idDelete<O>(`/v1/templates/${enc(id)}?hide=true`),
   remove: (id: string) => idDelete<O>(`/v1/templates/${enc(id)}`),
   apply: (id: string, body: ApplyBody) => idPost<Applied201>(`/v1/templates/${enc(id)}/apply`, body),
+  /** The lab projects this project's insecure-template apps are built in (each its own project). */
+  labs: async (projectId: string) =>
+    arr(obj(await idGet(`/v1/templates/labs?${q({ project_id: projectId })}`)).labs).map((l) => {
+      const o = obj(l);
+      return { projectId: String(o.project_id ?? ""), name: String(o.name ?? ""),
+               appName: o.app_name == null ? null : String(o.app_name) };
+    }).filter((l) => l.projectId),
   // An app's side. `appKey` is the app's key (the factory row's `app_key`).
   applied: async (projectId: string, appKey: string) =>
     parseApplied(await idGet(`/v1/apps/${enc(appKey)}/templates?${q({ project_id: projectId })}`)),
