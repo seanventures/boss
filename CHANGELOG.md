@@ -8,6 +8,7 @@ Friends-and-family preparation. Notes: [docs/community/RELEASE_NOTES_v1.0-rc8.md
 
 ### Changed
 
+- Includes the published RC6.2 setup, deployment planning, automatic build database, CI, metrics and architecture-approval changes; retains the Command Center and sign-in design refresh.
 - First-run guides now follow the actual Owner, model-connection and task paths, with direct troubleshooting and feedback links.
 - Home leads with the next action from current records; the task composer, templates and configured roles remain available.
 - An unavailable sign-in-options read offers Retry. Help panels, focus states and primary controls are easier to use on small screens.
@@ -21,10 +22,14 @@ Friends-and-family preparation. Notes: [docs/community/RELEASE_NOTES_v1.0-rc8.md
 - Discovery cancellation fences late work, receipts and retries against the owning run and job lease.
 - Direct-change spec review honors manual-approval policy and retains its gate when settings cannot be read.
 - Home primary buttons retain readable white text across normal and hover gradients.
+- Ubuntu installation runs the local node agent with Bash, the shell its script requires.
+- Automatic database detection uses the confined repository reader. Failed database or ledger cleanup stays visibly pending for retry instead of reporting success.
+- Architecture versions commit a budget reservation, job/model leases and a receipt before model submission, and bind approval to the current project's exact PRD.
+- Runtime build contexts exclude application test directories and scratch probes; identity fixtures use reserved example origins.
 
 ### Release scope
 
-- Incremental release on public RC6.1 ancestry; existing public contributor history is preserved. Full private-export synchronization is still pending.
+- Incremental release preserving the published RC6.2 ancestry and RC8 preparation history. Full private-export synchronization is still pending.
 - This candidate does not certify every host, provider or restored-snapshot replay path. Read the release notes before enabling live work.
 
 ## v1.0-rc6.2

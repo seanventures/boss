@@ -1,13 +1,17 @@
 # BOSS Community 1.0.0-rc.8
 
-RC8 prepares BOSS for friends-and-family testing. It builds on public RC6.1 and preserves the existing contributor history.
+RC8 prepares BOSS for friends-and-family testing. It includes the published RC6.2 candidate and preserves the existing contributor history, including the Command Center design refresh and redesigned sign-in.
 
 ## What changed
+
+- **All published RC6.2 improvements.** GitHub setup verifies granted permissions and uses account-aware links; first deployment selects a machine and shows an editable plan. Builds can receive an isolated temporary PostgreSQL database automatically. CI workflow changes require an opt-in and human review, with a Wait for CI step. App metrics appear in Observability, architecture documents have an approval step, writes request fresh authentication when needed, and the Captain backs off after a blocked pass. See the [RC6.2 notes](RELEASE_NOTES_v1.0-rc6.2.md) for that release's changes and limitations.
 
 - **A clearer first run.** The guides follow installation, claiming an Owner account, connecting a model and choosing one useful task. Sign-in uses a passkey or a password with a second factor. A stored model credential is distinguished from a successful governed model call. Help includes direct troubleshooting and feedback links.
 - **One next action on Home.** Current decisions, setup needs, stopped work, active runs and results lead with their actual destination. The existing task composer remains available; templates and configured roles open below current work. Missing evidence stays unknown.
 - **Recoverable sign-in failures.** An unavailable sign-in-options read shows Retry instead of assuming that the install has no Owner. Primary controls have clearer contrast and focus states; help stays usable on small screens.
 - **Bounded installer waiting.** Readiness checks have a deadline and attempt limit, so a service that cannot start produces a visible failure.
+- **Contained build services.** Automatic database detection uses confined repository reads. Failed database or ledger deletion stays visibly pending until retry succeeds. Application test directories and scratch probes are excluded from runtime build contexts. The Ubuntu local-agent installation uses Bash, as its script requires.
+- **Governed Architecture drafts.** Each version reserves its estimated spend and commits job/model leases and a receipt before submission. Approval must match the current project's exact PRD; an unknown provider outcome retains its hold for reconciliation. See [Architecture approval and spending](ARCHITECTURE_GOVERNANCE.md).
 - **Safer backup and restore.** Complete archives include the matching identity key, database and artifacts. Archives and image/source compatibility are checked before protected purge or restore into fresh volumes. Restore starts only the database; application and external-effect workers remain stopped until the operator verifies recovery.
 - **Stronger repository boundaries.** Workload-controlled Git runs under the workload identity without control-plane credentials. Repository access is confined to opened directories, rejects links and nonregular files, and bounds retained content.
 - **Corrected financial admission.** Concurrent callers share project-budget arbitration. Outstanding positive holds remain counted across expiry and daily/monthly boundaries. Cost and held spend are read together, and duplicate settlement must agree with the recorded evidence. Temporary admission contention and an unresolved provider outcome have distinct visible states.
@@ -38,14 +42,14 @@ This correction does not reconstruct exposure that an older release already disc
 
 The release changes have targeted source tests and independent review. Recovery tests used disposable Docker databases and fresh volumes with a real Owner, authenticator sign-in and vault decryption. Repository isolation tests used the actual Linux UID helper against owned markers. Financial tests used real Postgres concurrency and restart schedules. These checks have different scopes; they are not proof of every live provider or host.
 
-The production API and worker were also exercised in a disposable Docker installation: canonical Owner sign-in, tenant and worker authority, audit verification, a harmless job, cancellation, heartbeat, crash/reclaim fencing and clean restart passed. Browser checks covered actual sign-in, the Home next action and responsive task composition. See the [validation record](RC8_VALIDATION.md) for the final scope.
+Before the RC6.2 integration, the production API and worker were also exercised in a disposable Docker installation: canonical Owner sign-in, tenant and worker authority, audit verification, a harmless job, cancellation, heartbeat, crash/reclaim fencing and clean restart passed. Browser checks covered actual sign-in, the Home next action and responsive task composition. The integrated RC8 candidate is being requalified; see the [validation record](RC8_VALIDATION.md) for the scope and status.
 
-Supported-host clean installation, a genuine useful provider result, restored-snapshot effect reconciliation and uncoached human testing remain open. First-use area navigation also stalled in the browser fixture until a full reload; this remains an invitation blocker. The worker stops its heartbeat before sending its completion acknowledgment; delayed completion remains a qualification limit. RC8 publication alone does not qualify invitations or deploy the hosted website.
+Supported-host clean installation, a genuine useful provider result, restored-snapshot effect reconciliation and uncoached human testing remain open. First-use area navigation stalled in an earlier fixture; a fresh integrated fixture eventually loaded Approvals and setup without reload, but remained slow despite fast server responses. This remains an invitation qualification issue. The worker stops its heartbeat before sending its completion acknowledgment; delayed completion remains a qualification limit. RC8 publication alone does not qualify invitations or deploy the hosted website.
 
 Several capabilities remain held behind their existing safeguards: live debugging investigations, direct host changes outside an approved plan, cloud-account deploy runs, auto-deploy, the agent host shell and host-backed preview sandboxes. Readable records do not imply these execution paths are enabled.
 
 ## Source publication
 
-This is an incremental public release, rather than a wholesale private-source export. Reviewed public changes preserve RC6.1 ancestry and use preparation provenance. Historical private/public synchronization remains pending; the full-export guard has not been waived. See [Publishing](publishing.md).
+This is an incremental public release, rather than a wholesale private-source export. Reviewed changes preserve both the published RC6.2 history and the RC8 preparation provenance. Historical private/public synchronization remains pending; the full-export guard has not been waived. See [Publishing](publishing.md).
 
 The release download is source code, with a checksum for the attached source bundle. It is not a prebuilt container image. The installer program retains its independent version; the application reports `1.0.0-rc.8`, and the Python engine package reports `1.0.0rc8`.
