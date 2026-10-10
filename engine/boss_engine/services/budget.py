@@ -241,6 +241,62 @@ class BudgetGovernor:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def legacy_model_reconciliation(self, connection: Connection, project_id: str) -> Optional[dict]:
+        """Fence identifiable discarded liability without reviving expired authority.
+
+        Only one unresolved example is needed to stop paid admission. The original
+        estimate is evidence, never an invoice or a newly active reservation.
+        Decision writes participate in the caller's transaction; the row predicate
+        remains authoritative even if a refusing caller rolls that transaction back.
+        """
+        query = text(
+            "SELECT r.id AS reservation_id,r.status AS original_reservation_status,r.amount_usd_micros AS original_estimate_usd_micros,"
+            "l.id AS lease_id,i.id AS invocation_id,i.receipt_id "
+            "FROM budget_reservations r JOIN model_gateway_leases l ON l.budget_reservation_id=r.id AND l.project_id=r.project_id "
+            "JOIN model_gateway_invocations i ON i.model_gateway_lease_id=l.id AND i.project_id=r.project_id "
+            "JOIN receipts receipt ON receipt.id=i.receipt_id AND receipt.project_id=r.project_id "
+            "WHERE r.project_id=:p AND r.status IN ('expired','released') AND r.amount_usd_micros>0 "
+            "AND i.status='in_progress' AND NOT EXISTS (SELECT 1 FROM cost_receipts c "
+            "WHERE c.project_id=r.project_id AND c.reservation_id=r.id AND c.receipt_id=i.receipt_id) LIMIT 1")
+        row = connection.execute(query, {"p": project_id}).mappings().first()
+        if not row:
+            return None
+        locked = connection.execute(text(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended('boss-budget:' || :p, 0))"),
+            {"p": project_id}).scalar_one()
+        if not locked:
+            return {"status": "denied", "refusal": "admission_busy", "transient": True,
+                    "retry_after_seconds": 1, "decision_id": None, "budget_state": "unknown",
+                    "message": ADMISSION_BUSY_MESSAGE, "legacy_exposure": dict(row)}
+        # A settlement may have committed while the admission lock was acquired.
+        row = connection.execute(query, {"p": project_id}).mappings().first()
+        if not row:
+            return None
+        evidence = dict(row)
+        decision = connection.execute(text(
+            "SELECT id,status FROM decisions WHERE project_id=:p "
+            "AND recommendation->>'action'='reconcile_legacy_model_exposure' "
+            "AND recommendation->>'invocation_id'=:i LIMIT 1"),
+            {"p": project_id, "i": row['invocation_id']}).mappings().first()
+        if decision:
+            decision_id = decision['id']
+            if decision['status'] != 'pending':
+                connection.execute(text("UPDATE decisions SET status='pending',resolution_note=NULL,updated_at=now() WHERE id=:id"),
+                                   {"id": decision_id})
+                emit_event(connection, project_id, 'budget.legacy_reconciliation_reopened', 'budget_governor',
+                           'decision', decision_id, {"invocation_id": row['invocation_id']})
+        else:
+            decision_id = create_blocking_decision(
+                connection, project_id, None, "Reconcile historical unresolved model exposure before paid work",
+                {"action": "reconcile_legacy_model_exposure", **evidence},
+                {"original_estimate_usd_micros": int(row['original_estimate_usd_micros']), "actual_cost_known": False},
+                "legacy_model_outcome_unknown")
+            emit_event(connection, project_id, 'budget.legacy_reconciliation_required', 'budget_governor',
+                       'budget_reservation', row['reservation_id'], {"decision_id": decision_id, **evidence})
+        return {"status": "denied", "refusal": "legacy_reconciliation_required", "transient": False,
+                "decision_id": decision_id, "budget_state": "unknown", "legacy_exposure": evidence,
+                "message": "Paid work is held for historical unresolved model exposure. Reconcile the recorded attempt; raising a cap or resolving this decision alone does not authorize new spend."}
+
     def expire_stale_reservations(
         self, connection: Connection, project_id: Optional[str] = None
     ) -> list[str]:
@@ -322,6 +378,10 @@ class BudgetGovernor:
         `periods` carries both. `now` is injectable so a test can stand on either side of a
         reset."""
         now = now or now_utc()
+        legacy_hold = self.legacy_model_reconciliation(connection, project_id)
+        legacy_summary = ({**legacy_hold['legacy_exposure'], 'decision_id': legacy_hold['decision_id'],
+                           'message': "Paid work is held for historical unresolved model exposure. The original estimate is not an invoice; reconcile the recorded attempt."}
+                          if legacy_hold else None)
         self.expire_stale_reservations(connection, project_id)
         policy_row = connection.execute(
             text(
@@ -369,6 +429,7 @@ class BudgetGovernor:
                 "resets_at_label": day["resets_at_label"],
                 "budget_timezone": BUDGET_TIMEZONE,
                 "periods": {},
+                "legacy_financial_hold": legacy_summary,
             }
 
         soft = float(policy_row["soft_cap_pct"])
@@ -524,6 +585,7 @@ class BudgetGovernor:
             "resets_in_seconds": binding["resets_in_seconds"],
             "budget_timezone": BUDGET_TIMEZONE,
             "periods": periods,
+            "legacy_financial_hold": legacy_summary,
         }
 
     def cap_refusal(self, snapshot: dict, amount_usd_micros: int) -> Optional[dict[str, Any]]:
@@ -923,6 +985,14 @@ class BudgetGovernor:
             return refused
         self.expire_stale_reservations(connection, project_id)
         snapshot = self.status_for_project(connection, project_id)
+        if amount_usd_micros > 0 and snapshot.get('legacy_financial_hold'):
+            hold = snapshot['legacy_financial_hold']
+            refused = {"status": "denied", "refusal": "legacy_reconciliation_required", "transient": False,
+                       "decision_id": hold['decision_id'], "budget_state": snapshot['budget_state'],
+                       "message": hold['message']}
+            record_refusal(connection, project_id, refused, category=category, reason=reason,
+                           amount_usd_micros=amount_usd_micros, snapshot=snapshot)
+            return refused
 
         # BOSS-280: freeze_tier2_pct, actually enforced. Past the threshold, HIGH-RISK work
         # (tier >= 2) is refused even while cheaper/lower-risk work still fits under the cap —
@@ -1544,6 +1614,8 @@ class BudgetGovernor:
         ).mappings().first()
 
         if not row or row["status"] != "active" or row["expires_at"] <= now_utc():
+            return None
+        if row['amount_usd_micros'] > 0 and self.legacy_model_reconciliation(connection, project_id):
             return None
         return dict(row)
 
