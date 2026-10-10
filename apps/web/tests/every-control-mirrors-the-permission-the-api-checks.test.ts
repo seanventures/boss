@@ -45,6 +45,9 @@ const onlyDeclared = (name: string): string | null => {
 
 function sources(dir: string): string[] {
   return readdirSync(join(WEB, dir)).flatMap((name) => {
+    // Other scanner tests create and remove __probe_tmp concurrently. Their fixtures
+    // are not shipped controls; scan the stable product tree, as identity-mirroring does.
+    if (name.startsWith("__") || name.startsWith(".")) return [];
     const path = join(dir, name);
     if (statSync(join(WEB, path)).isDirectory()) return sources(path);
     return /\.tsx?$/.test(name) && !/\.test\./.test(name) ? [path] : [];
