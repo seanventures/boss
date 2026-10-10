@@ -10,7 +10,8 @@
  * in process by the stub, with the same cookies, so server components render against it too.
  */
 import { identityStubEnabled, isIdentityPath } from "./stub/enabled";
-import { parseIdentityCookies, withForwardedIdentity } from "./forward";
+import { keepCsrf, parseIdentityCookies, SESSION_COOKIE, withForwardedIdentity } from "./forward";
+import { ME_PATH } from "./contract";
 import { isNoReuse, noReuse } from "../feed-cache";
 
 export function installIdentityFetch(apiUrl: string): void {
@@ -38,7 +39,16 @@ export function installIdentityFetch(apiUrl: string): void {
       return inner(new Request(input, { ...init, headers }), isNoReuse(init) ? noReuse({}) : undefined);
     }
     const next: RequestInit = { ...init, headers };
-    return inner(url, isNoReuse(init) ? noReuse(next) : next);
+    const res = await inner(url, isNoReuse(init) ? noReuse(next) : next);
+    // This render's own /me carries the session's CSRF token: kept, so a write later in the
+    // render needs no second /me (forward.ts sessionCsrf).
+    if (method === "GET" && path === ME_PATH && res.ok) {
+      const session = parseIdentityCookies(headers.get("cookie"))[SESSION_COOKIE];
+      if (session) {
+        try { keepCsrf(session, ((await res.clone().json()) as { csrf_token?: unknown }).csrf_token); } catch { /* not JSON: nothing to keep */ }
+      }
+    }
+    return res;
   }) as typeof fetch;
 }
 
