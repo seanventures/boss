@@ -384,6 +384,10 @@ export const RepositoryRow = forwardRef<HTMLElement, {
         ]} />
       </div>
     );
+    // The CI setting stays reachable on a finished row: it is chosen after setup, not during it.
+    if (first.binding_id) {
+      body = <div className="su-stack">{body}<CiWorkflowsToggle bindingId={first.binding_id} /></div>;
+    }
   } else if (mode === "waiting") {
     body = <span className="su-faint">Not connected</span>;
   } else if (repos.length === 0) {
