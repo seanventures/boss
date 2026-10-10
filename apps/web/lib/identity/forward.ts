@@ -164,14 +164,49 @@ export function consoleOriginOf(headers: Headers): string | null {
  * (`none` + `navigate`: a typed URL, a reload). Then the console speaks for its own origin. A
  * cross-site GET (a link on another site, an image tag) gets no origin, so its write is refused
  * exactly as before. tests/a-writing-get-carries-its-csrf.test.ts.
+ *
+ * A PAGE OPENED FROM A LINK STILL RENDERS (first-run, 2026-10-10: Approvals said "Decision API
+ * unavailable · API returned 403" for the Owner while the browser's own call answered 200). A
+ * page's server render READS through writing GETs' twins (the decision inbox, the kit, the
+ * status), and the person opens pages from links: a PR on GitHub, the preview on its own port
+ * (same-site), an email, or a console reached over plain http, where a browser sends no fetch
+ * metadata at all. Each of those navigations left the render's twin with no Origin, so the page
+ * drew "API unavailable" for every role. `pageRead` is that case and nothing wider: the incoming
+ * request is a PAGE (middleware's path header, never /api or /v1) opened as a top-level document
+ * (`Sec-Fetch-Mode: navigate`, or no metadata and an HTML/RSC Accept), and the call is a writing
+ * GET's twin (a read that does its own upkeep), never an ordinary write. A cross-site image,
+ * script or fetch is still refused; so is a route handler (/api/kit) reached by a navigation.
+ * tests/a-page-opened-from-a-link-reads-its-data.test.ts.
  */
-export function forwardedWriteOrigin(incoming: Headers): string | null {
+export function forwardedWriteOrigin(incoming: Headers, opts: { pageRead?: boolean } = {}): string | null {
   const origin = (incoming.get("origin") ?? "").trim();
   if (origin) return origin.toLowerCase() === "null" ? null : origin;
   const site = (incoming.get("sec-fetch-site") ?? "").trim().toLowerCase();
   const mode = (incoming.get("sec-fetch-mode") ?? "").trim().toLowerCase();
   if (site === "same-origin" || (site === "none" && mode === "navigate")) return consoleOriginOf(incoming);
+  if (opts.pageRead && isDocumentNavigation(incoming)) return consoleOriginOf(incoming);
   return null;
+}
+
+/** A top-level document load (any site), or — where the browser sent no fetch metadata (plain
+ *  http) — a request that asked for a page (HTML) or a client navigation's payload (RSC). */
+export function isDocumentNavigation(incoming: Headers): boolean {
+  const mode = (incoming.get("sec-fetch-mode") ?? "").trim().toLowerCase();
+  if (mode) return mode === "navigate";
+  if (incoming.get("sec-fetch-site") || incoming.get("sec-fetch-dest")) return false;
+  const accept = (incoming.get("accept") ?? "").toLowerCase();
+  return accept.includes("text/html") || accept.includes("text/x-component");
+}
+
+/** The middleware path header names a console PAGE (not the /api handlers, not the /v1 proxy). */
+export function isPagePath(path: string | null | undefined): boolean {
+  if (!path || !path.startsWith("/")) return false;
+  return !/^\/(api|v1)(\/|$)/.test(path);
+}
+
+/** A call to a writing GET's POST twin (lib/writing-get.ts): `<path>/load`. */
+export function isWritingGetTwin(path: string | null | undefined): boolean {
+  return Boolean(path && /\/load\/?$/.test(path.split("?")[0]));
 }
 
 /** Only the identity cookies, re-serialised. Any other cookie on the console's origin stays home. */
@@ -232,7 +267,9 @@ export function forwardedHostHeaders(origin: string | null | undefined): { host:
   }
 }
 
-export type IdentityResolver = (write: boolean) => Promise<ForwardedIdentity | null>;
+/** `target` is the API path being called (server-fetch.ts passes it), so a resolver can tell a
+ *  writing GET's twin from an ordinary write (forwardedWriteOrigin's pageRead). */
+export type IdentityResolver = (write: boolean, target?: { path: string }) => Promise<ForwardedIdentity | null>;
 
 const KEY = "__bossIdentityResolver";
 
@@ -240,11 +277,11 @@ export function installIdentityResolver(resolver: IdentityResolver): void {
   (globalThis as Record<string, unknown>)[KEY] = resolver;
 }
 
-export async function resolveForwardedIdentity(write: boolean): Promise<ForwardedIdentity | null> {
+export async function resolveForwardedIdentity(write: boolean, target?: { path: string }): Promise<ForwardedIdentity | null> {
   const resolver = (globalThis as Record<string, unknown>)[KEY] as IdentityResolver | undefined;
   if (!resolver) return null;
   try {
-    return await resolver(write);
+    return await resolver(write, target);
   } catch {
     return null; // outside a request (a background render): nobody to forward
   }
@@ -265,7 +302,7 @@ export const SPEAKS_FOR_NOBODY_HEADER = "x-boss-speaks-for-nobody";
  * Headers for a server-side call to the API: the caller's own, minus anything that could name a
  * principal, plus the signed-in person's cookie (and CSRF on writes).
  */
-export async function withForwardedIdentity(method: string, given: HeadersInit | undefined): Promise<Headers> {
+export async function withForwardedIdentity(method: string, given: HeadersInit | undefined, path?: string): Promise<Headers> {
   const out = new Headers();
   const asked = new Headers(given);
   asked.forEach((value, name) => {
@@ -278,7 +315,7 @@ export async function withForwardedIdentity(method: string, given: HeadersInit |
   const marker = consoleAuthMarker();
   if (marker) out.set(CONSOLE_AUTH_HEADER_LC, marker);
   const write = WRITES.has(method.toUpperCase());
-  const who = await resolveForwardedIdentity(write);
+  const who = await resolveForwardedIdentity(write, path ? { path } : undefined);
   if (who?.cookie) out.set("cookie", who.cookie);
   if (who && who.clientHop !== undefined) {
     // THE CLIENT'S ADDRESS, NOT ANYONE'S CLAIM: never a forwarded chain from the caller, only

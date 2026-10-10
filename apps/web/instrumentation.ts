@@ -11,12 +11,13 @@
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
-  const [{ headers }, write, forward, { API_URL }, hops] = await Promise.all([
+  const [{ headers }, write, forward, { API_URL }, hops, { PATH_HEADER }] = await Promise.all([
     import("next/headers"),
     import("./lib/api-write"),
     import("./lib/identity/forward"),
     import("./lib/client"),
     import("./lib/client-hop"),
+    import("./lib/identity/pages"),
   ]);
   write.installServerIntentResolver(async () => {
     const incoming = await headers();
@@ -28,7 +29,7 @@ export async function register(): Promise<void> {
   // browser's origin. The token is read from /v1/identity/me once per session and kept briefly
   // (it is an HMAC of the session id, so it cannot change while the session lives).
   const csrfBySession = new Map<string, { token: string; at: number }>();
-  forward.installIdentityResolver(async (writing) => {
+  forward.installIdentityResolver(async (writing, target) => {
     const incoming = await headers();
     // The client's address through the trusted-proxy rule (B2): every server-side call carries it.
     const clientHop = hops.clientHop(incoming.get("x-forwarded-for"), hops.proxyHops());
@@ -39,7 +40,11 @@ export async function register(): Promise<void> {
     const cookie = forward.identityCookieHeader(incoming.get("cookie"), { stub });
     // A browser GET that needs a writing GET's POST twin carries no Origin: derived from its
     // same-origin proof, or none (lib/identity/forward.ts forwardedWriteOrigin).
-    const origin = forward.forwardedWriteOrigin(incoming);
+    // A PAGE opened from a link (any site, or plain http with no metadata) still reads its data
+    // through a writing GET's twin; nothing else is widened (forwardedWriteOrigin's pageRead).
+    const pageRead = writing && forward.isWritingGetTwin(target?.path)
+      && forward.isPagePath(incoming.get(PATH_HEADER));
+    const origin = forward.forwardedWriteOrigin(incoming, { pageRead });
     let csrf = incoming.get(forward.CSRF_HEADER_LC);
     const session = forward.parseIdentityCookies(cookie)[forward.SESSION_COOKIE];
     if (writing && !csrf && session && API_URL) {
