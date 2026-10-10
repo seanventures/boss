@@ -4,6 +4,8 @@ Install BOSS Community on a machine you administer. This page is the installer r
 
 ## Install
 
+For the RC8 candidate, use the [commit-pinned GitHub checkout](#straight-from-github). You need Git and repository access; use an account with access if GitHub asks you to sign in. The website installer and hosted manual are deployed separately, so source publication alone does not verify their version.
+
 ### One command
 
 ```bash
