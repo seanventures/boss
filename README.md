@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc6.1"><img alt="Release v1.0-rc6.1" src="https://img.shields.io/badge/release-v1.0--rc6.1-1aa89a?style=flat-square"></a>
+  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc6.2"><img alt="Release v1.0-rc6.2" src="https://img.shields.io/badge/release-v1.0--rc6.2-1aa89a?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-101820?style=flat-square"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/deploy-self--hosted-101820?style=flat-square">
   <img alt="Interfaces: web, terminal, CLI, MCP" src="https://img.shields.io/badge/interfaces-web%20%C2%B7%20terminal%20%C2%B7%20CLI%20%C2%B7%20MCP-101820?style=flat-square">
@@ -78,9 +78,9 @@ Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to
 Prefer git? Clone the release and install it in place. `--ref` keeps the install on that release instead of moving it to `main`:
 
 ```sh
-git clone --branch v1.0-rc6.1 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc6.2 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc6.1 --console-origin https://boss.example.com
+./install.sh --dir "$PWD" --ref v1.0-rc6.2 --console-origin https://boss.example.com
 ```
 
 The `boss` command works from anywhere: `boss open`, `boss password`, `boss doctor`, `boss upgrade`.
@@ -98,7 +98,7 @@ Everything after `--` goes to the installer on the server, so `--console-origin`
 Later, update or check that install from the same checkout:
 
 ```sh
-scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc6.1 update --with-console
+scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc6.2 update --with-console
 scripts/install/remote.sh --host user@your-server --dir '~/boss' smoke
 scripts/install/remote.sh --host user@your-server --dir '~/boss' tunnel   # console at http://127.0.0.1:3000
 ```
@@ -218,7 +218,7 @@ Remote MCP over HTTP requires a bearer token in `BOSS_MCP_HTTP_TOKEN`. The [MCP 
 The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 
 > [!NOTE]
-> **About this release candidate.** `v1.0-rc6.1` is a hotfix on `v1.0-rc6`: a faster console and a working Infra Deploy button ([release notes](docs/community/RELEASE_NOTES_v1.0-rc6.1.md)). `v1.0-rc6` adds **named accounts**: everyone signs in as themselves (passkeys, authenticator codes, Google and other SSO), with roles and permissions on every page and API, and agents that act on your behalf with less than you have. Upgrading from rc5: claim your install as its first Owner; the old console password keeps working as Operator for 30 days ([upgrade guide](docs/community/IDENTITY_UPGRADE.md)). Deploying an app to an SSH host goes through the governed path in **Infra › Deploys**: BOSS plans the deploy, a person approves it, BOSS applies it and writes a receipt, and a failed health check rolls it back. A few capabilities stay paused while their spend, recovery, and effect safeguards are finished: live debugging investigations, direct host changes made outside an approved plan, cloud-account deploy runs, auto-deploy, the agent host shell, and host-backed preview sandboxes. Investigation results and deployment records stay readable. Discovery web research runs as a governed job and needs a connected Claude Code subscription. From `v1.0-rc6` each person signs in with their own account; see the [draft release notes](docs/community/RELEASE_NOTES_v1.0-rc6.md) and [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md).
+> **About this release candidate.** `v1.0-rc6.2` is a hotfix on `v1.0-rc6`: a faster console and a working Infra Deploy button ([release notes](docs/community/RELEASE_NOTES_v1.0-rc6.2.md)). `v1.0-rc6` adds **named accounts**: everyone signs in as themselves (passkeys, authenticator codes, Google and other SSO), with roles and permissions on every page and API, and agents that act on your behalf with less than you have. Upgrading from rc5: claim your install as its first Owner; the old console password keeps working as Operator for 30 days ([upgrade guide](docs/community/IDENTITY_UPGRADE.md)). Deploying an app to an SSH host goes through the governed path in **Infra › Deploys**: BOSS plans the deploy, a person approves it, BOSS applies it and writes a receipt, and a failed health check rolls it back. A few capabilities stay paused while their spend, recovery, and effect safeguards are finished: live debugging investigations, direct host changes made outside an approved plan, cloud-account deploy runs, auto-deploy, the agent host shell, and host-backed preview sandboxes. Investigation results and deployment records stay readable. Discovery web research runs as a governed job and needs a connected Claude Code subscription. From `v1.0-rc6` each person signs in with their own account; see the [draft release notes](docs/community/RELEASE_NOTES_v1.0-rc6.md) and [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md).
 
 ## Documentation
 

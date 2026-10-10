@@ -1,6 +1,6 @@
 # Interfaces
 
-BOSS Community gives you four ways to work with a running install: the installer CLI that sets it up, the Mission Control console, the Metatron terminal, and the authenticated HTTP API, plus MCP for a single trusted client. This page explains what each one is for and how they fit together. It describes release `v1.0-rc6.1`, a release candidate.
+BOSS Community gives you four ways to work with a running install: the installer CLI that sets it up, the Mission Control console, the Metatron terminal, and the authenticated HTTP API, plus MCP for a single trusted client. This page explains what each one is for and how they fit together. It describes release `v1.0-rc6.2`, a release candidate.
 
 | Interface | Use it to | Reference |
 | --- | --- | --- |
