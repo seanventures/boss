@@ -30324,6 +30324,12 @@ from .routers.work_agreement import build_work_agreement_router
 app.include_router(build_work_agreement_router(
     engine=engine, settings=lambda: settings, require_reader=require_project_reader,
     actor_of=_delivery_workflow_actor))
+from .routers.acceptance_templates import build_acceptance_templates_router
+
+app.include_router(build_acceptance_templates_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor,
+))
 from .hardware_api import mount_hardware_routes
 
 mount_hardware_routes(app, require_project_actor, require_project_reader)
