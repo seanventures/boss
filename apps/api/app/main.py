@@ -25135,7 +25135,7 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
         runs = connection.execute(
             text(
                 """
-                SELECT r.id, r.status, r.actor, r.input, r.blocked_reason, r.error,
+                SELECT r.id, r.project_id, r.dedupe_key, r.status, r.actor, r.input, r.blocked_reason, r.error,
                        r.created_at, r.updated_at, r.completed_at,
                        d.workflow_key, d.name AS workflow_name, v.version, v.spec
                 FROM workflow_runs r
@@ -25421,6 +25421,8 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
         )
         out.append({
             "id": run["id"],
+            "project_id": run["project_id"],
+            "dedupe_key": run["dedupe_key"],
             "status": run["status"],
             "workflow_key": run["workflow_key"],
             "workflow_name": run["workflow_name"],
@@ -26339,6 +26341,19 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
     actor = _delivery_workflow_actor(payload)
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
+    if payload.get("agreement_content_hash") or payload.get("agreement_binding_token"):
+        if any(payload.get(key) for key in ("from_run", "from_discovery", "replaces_run", "rerun_of", "sample")):
+            raise HTTPException(409, "This agreement is for new work. Review a separate intent before adopting or replacing work.")
+        # A first-work agreement cannot acquire hidden adoption/extension fields through
+        # the existing start handler's input normalization.
+        from boss_engine.services.work_agreement import first_input
+        original_input = payload.get("input")
+        try:
+            canonical_input = first_input(str((original_input or {}).get("directive") or "")) if isinstance(original_input, dict) else None
+        except ValueError:
+            canonical_input = None
+        if canonical_input is None or original_input != canonical_input:
+            raise HTTPException(409, "The supplied brief changed. Review the current agreement before starting.")
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
     run_input = payload.get("input") if isinstance(payload.get("input"), dict) else {}
@@ -26487,6 +26502,23 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
         require_project_actor(connection, project_id, actor, "workflow_execute")
         _authorize_delivery_target_input(connection, project_id, actor, run_input)
         version_id = None
+        agreement_hash = payload.get("agreement_content_hash")
+        agreement_token = payload.get("agreement_binding_token")
+        if agreement_hash or agreement_token:
+            if not agreement_hash or not agreement_token:
+                raise HTTPException(409, "Review the work again; both agreement binding fields are required.")
+            from boss_engine.services import work_agreement
+            from .routers.work_agreement import principal_binding
+            try:
+                version_id = work_agreement.validate(
+                    connection, settings, project_id=project_id, principal=principal_binding(actor),
+                    run_input=run_input, work_class=work_class, workflow_key=workflow_key,
+                    start_anyway=payload.get("start_anyway") or [],
+                    content_hash=agreement_hash, binding_token=agreement_token)
+            except work_agreement.AgreementConflict as error:
+                raise HTTPException(409, str(error)) from error
+            # A confirmation replay is one intent, independent of its HTTP press key.
+            payload["dedupe_key"] = work_agreement.intent_key(agreement_token)
         if workflow_key:
             # THE VERSION THAT RUNS. version DESC is the abandoned spec after a revert:
             # re-saving an earlier configuration reactivates it without a new number, and
@@ -30287,6 +30319,11 @@ app.include_router(build_deliverable_review_router(
     engine=engine, require_reader=require_code_task_reader,
     require_write_actor=require_project_write_actor,
 ))
+from .routers.work_agreement import build_work_agreement_router
+
+app.include_router(build_work_agreement_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    actor_of=_delivery_workflow_actor))
 from .hardware_api import mount_hardware_routes
 
 mount_hardware_routes(app, require_project_actor, require_project_reader)

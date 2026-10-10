@@ -21,6 +21,7 @@ from apps.api.app.main import app  # noqa: E402
 # Exactly what the exclusion list is allowed to take out, by route template. Adding a route
 # here is a design decision about that route; write the reason into idempotency.EXCLUSIONS.
 EXPECTED_EXCLUDED = {
+    ("POST", "/v1/delivery-workflows/agreement"),  # authenticated read; no replay DB write
     ("POST", "/v1/worker/poll"), ("POST", "/v1/worker/heartbeat"),
     ("POST", "/v1/worker/complete"), ("POST", "/v1/worker/fail"),
     *{(m, p) for m in ("POST", "PUT", "PATCH", "DELETE")

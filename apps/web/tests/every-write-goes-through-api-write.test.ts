@@ -30,6 +30,9 @@ const ROOT = process.cwd();
 
 /** The only places a raw fetch may write, and why. Each must still exist and still fetch. */
 const ALLOWED: Record<string, string> = {
+  "app/api/builds/preview/route.ts":
+    "authenticated read-only agreement POST keeps the private brief out of URLs and forwards "
+    + "no press key; direct API regression proves no work or replay rows are created",
   "lib/api-write.ts": "the helper itself — the one place that sends the write",
   "app/v1/[...path]/route.ts":
     "the transparent same-origin proxy: it forwards the browser's own Idempotency-Key unchanged "
@@ -185,7 +188,8 @@ describe("the key travels the whole way to the API", () => {
     // Every handler that writes reaches the API through apiWrite/writeAwareFetch or the typed
     // client; the scan above proves no raw write remains, and instrumentation.ts gives the
     // server side the incoming Idempotency-Key to derive from.
-    const routes = FILES.filter((f) => f.startsWith("app/api/") && f.endsWith("route.ts"));
+    const routes = FILES.filter((f) => f.startsWith("app/api/") && f.endsWith("route.ts")
+      && f !== "app/api/builds/preview/route.ts"); // authenticated read; fresh snapshot, no replay rows
     expect(routes.length).toBeGreaterThan(30);
     for (const route of routes) expect(writeCapableFetches(route), route).toEqual([]);
   });

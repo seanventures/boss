@@ -62,6 +62,8 @@ Set a budget allowance you can afford, and keep provider-side limits appropriate
 
 Open **Command Center** and choose **Build** for the task. The default path is **Standard Product Delivery**. Do not assume a faster workflow is suitable: for example, a workflow for an existing BOSS app may require an app you have already shipped.
 
+RC9 source changes the Command Center entry to **Review build**. Read the server-issued work agreement, including the exact brief, selected workflow, current repository suggestion, planned paths and explicit unknowns. **Cancel** retains your draft; **Confirm and start workflow** is the separate start action. A failed or expired preview needs a fresh review. The [work agreement guide](WORK_AGREEMENT.md) explains the binding and financial labels. The published RC8 entry predates this sheet.
+
 Follow the actual run in **Workflows**. The standard sequence includes research, a panel/PRD, specification review, build, preview/readiness, reporting and a deployment gate. Its default does not include a separate Architecture step. The [Getting started workflow section](GETTING_STARTED.md#6-follow-the-governed-path) gives the current sequence and prerequisites.
 
 On an enforced install, PRD automatic approval is off by default. Read the drafted PRD in **Approvals** and check that it preserves your scope and acceptance criteria. If the Owner explicitly enables automatic approval, the record says **AUTO-APPROVED**; a recorded automatic decision is not evidence that you reviewed it.

@@ -22,6 +22,8 @@ import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 
+import { WorkAgreementDialog } from "../components/work-agreement";
+import { readWorkAgreement, type WorkAgreement } from "../lib/work-agreement";
 import { landingAnswerArrived } from "../lib/chat-landing";
 import { Markdown } from "./markdown";
 import { notifyChanged } from "./changed";
@@ -39,6 +41,7 @@ import { linkTo, navigate, plainClick } from "./agents/live-util";
 
 import { callAction } from "../lib/call-action";
 import { GatedButton, useGate } from "../components/gated";
+import { useIdentity } from "../components/identity/identity-provider";
 const NORMAL_SECONDS = 20;
 // The same bound the dock uses. A deep turn is genuinely longer since the answering agent
 // moved to Opus — 192s for 27 lookups, measured — and 120 handed control back in the middle of
@@ -919,7 +922,7 @@ export function openTemplate(title: string): void {
 async function postBounded(
   url: string,
   body: Record<string, unknown>,
-): Promise<{ ok: boolean; data?: any; error?: string; readiness?: unknown }> {
+): Promise<{ ok: boolean; data?: any; error?: string; readiness?: unknown; status?: number }> {
   const stalled = Symbol("stalled");
   try {
     const r = await Promise.race([
@@ -943,7 +946,7 @@ async function postBounded(
       // `error` as text, and one route that forgot would crash the hero again — as Build did
       // when the checklist arrived as `error` (review of the readiness change).
       const said = data?.error;
-      return { ok: false,
+      return { ok: false, status: (r as Response).status,
                error: typeof said === "string" && said ? said : `HTTP ${(r as Response).status}`,
                ...(data?.readiness ? { readiness: data.readiness } : {}) };
     }
@@ -1081,6 +1084,36 @@ export function AskBossHero({
   deploymentAvailable?: boolean;
 }) {
   const [input, setInput] = useState("");
+  const [buildIntent, setBuildIntent] = useState<{ directive: string; startAnyway: string[] } | null>(null);
+  const [agreement, setAgreement] = useState<WorkAgreement | null>(null);
+  const [agreementLoading, setAgreementLoading] = useState(false);
+  const [agreementError, setAgreementError] = useState("");
+  const agreementEpoch = useRef(0);
+  const confirming = useRef(false);
+  const [pendingStartKey, setPendingStartKey] = useState<string | null>(null);
+  const [checkingStart, setCheckingStart] = useState(false);
+  const identity = useIdentity();
+  const startStorageKey = identity.me
+    ? `boss.first-work-start:${identity.me.org.id}:${projectId}:${identity.me.principal_id}` : null;
+  useEffect(() => {
+    agreementEpoch.current += 1;
+    setBuildIntent(null); setAgreement(null); setAgreementLoading(false); setAgreementError(""); setCheckingStart(false);
+    let pending: string | null = null;
+    try { if (startStorageKey) pending = window.sessionStorage.getItem(startStorageKey); } catch {}
+    if (pending && /^agreement:[a-f0-9]{64}$/.test(pending)) {
+      setPendingStartKey(pending); setBuildIntent({ directive: "", startAnyway: [] });
+      setAgreementError("The previous start outcome is unconfirmed. Check the recorded run before starting another intent.");
+    } else setPendingStartKey(null);
+  }, [startStorageKey]);
+  const rememberStart = useCallback((key: string | null) => {
+    setPendingStartKey(key);
+    try {
+      if (!startStorageKey) return;
+      if (key) window.sessionStorage.setItem(startStorageKey, key);
+      else window.sessionStorage.removeItem(startStorageKey);
+    } catch { /* a blocked session store leaves the hold in this mounted attempt */ }
+  }, [startStorageKey]);
+
   const [reply, setReply] = useState("");
   const [proposed, setProposed] = useState<ProposedAction[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -1339,51 +1372,140 @@ export function AskBossHero({
   // discovery. Both are pre-greyed for a viewer who cannot (components/gated.tsx).
   const buildGate = useGate("workflow_run:start");
   const researchGate = useGate("discovery:create");
+  const cancelAgreement = useCallback(() => {
+    if (confirming.current) return;
+    agreementEpoch.current += 1;
+    setBuildIntent(null); setAgreement(null); setAgreementLoading(false); setAgreementError("");
+  }, []);
   const assign = useCallback((text: string, startAnyway: string[] = []) => {
     const directive = text.trim();
-    if (!directive || busy) return;
+    if (!directive || busy || confirming.current || !buildGate.allowed) return;
+    if (pendingStartKey) {
+      setBuildIntent({ directive, startAnyway });
+      setAgreementError("The original start is unconfirmed. Check its recorded result before starting another intent.");
+      return;
+    }
+    const epoch = ++agreementEpoch.current;
     setError(""); setReply(""); setProposed([]); setRefusal(null);
+    setBuildIntent({ directive, startAnyway }); setAgreement(null); setAgreementError(""); setAgreementLoading(true);
+    // Read-only preview. Leaving this sheet invalidates the local response, not a running job.
+    void (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const response = await Promise.race([
+          apiWrite("/api/builds/preview", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ project_id: projectId, directive, start_anyway: startAnyway }), cache: "no-store" }),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("The preview did not respond. Review again when the API is available.")), 20_000); }),
+        ]);
+        const data: unknown = await response.json();
+        if (epoch !== agreementEpoch.current) return;
+        if (!response.ok) {
+          const failure = data as { error?: unknown };
+          throw new Error(typeof failure?.error === "string" ? failure.error : "Could not read the work agreement.");
+        }
+        const read = readWorkAgreement(data, projectId, directive);
+        if (!read) throw new Error("The API returned an incomplete work agreement. Review again before starting.");
+        setAgreement(read);
+      } catch (e) {
+        if (epoch === agreementEpoch.current) setAgreementError(String((e as Error)?.message ?? e));
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (epoch === agreementEpoch.current) setAgreementLoading(false);
+      }
+    })();
+  }, [busy, projectId, actor, buildGate.allowed, pendingStartKey]);
+
+  const confirmBuild = useCallback(() => {
+    if (pendingStartKey || !agreement || agreementLoading || agreementError || busy || confirming.current || !buildGate.allowed) return;
+    if (agreement.expires_at_unix <= Math.floor(Date.now() / 1000)) {
+      setAgreementError("This agreement expired. Review again before starting."); return;
+    }
+    const accepted = agreement;
+    const directive = accepted.input.directive;
+    const epoch = agreementEpoch.current;
+    confirming.current = true;
+    rememberStart(accepted.start_intent_key);
     startTransition(async () => {
-      const r = await postBounded("/api/builds",
-                                  { project_id: projectId, directive, actor,
-                                    ...(startAnyway.length ? { start_anyway: startAnyway } : {}) });
-      const d = r.data as Record<string, unknown> | undefined;
-      if (!r.ok) {
-        // CANNOT RUN HERE YET — the checklist, and Build anyway. A project with GitHub and a
-        // model but no deployment host used to Build to a PR and a preview; the readiness
-        // check refused it with no way past, and the refusal crashed the hero (review of the
-        // readiness change). The operator sees what is missing and can still build.
-        const readiness = asReadiness(r.readiness);
-        if (readiness) {
-          setRefusal({ label: "Build", message: r.error ?? "", readiness,
-                       retry: (keys) => assign(directive, keys) });
+      try {
+        const r = await postBounded("/api/builds", {
+          project_id: projectId, directive, start_anyway: accepted.start_anyway,
+          agreement_content_hash: accepted.content_hash, agreement_binding_token: accepted.binding_token,
+        });
+        if (epoch !== agreementEpoch.current) return;
+        const d = r.data as Record<string, unknown> | undefined;
+        if (!r.ok) {
+          // A lost/5xx answer can hide a committed run. Keep its original intent; a new
+          // preview must not become a blind second start.
+          if (r.status === undefined || r.status >= 500 || r.status === 408) {
+            setAgreementError((r.error ?? "The start response was lost.") + " Check the original start result; no fresh intent was sent.");
+            return;
+          }
+          rememberStart(null);
+          const readiness = asReadiness(r.readiness);
+          if (readiness) {
+            setBuildIntent(null); setAgreement(null);
+            setRefusal({ label: "Build", message: r.error ?? "", readiness,
+                         retry: (keys) => assign(directive, keys) });
+          } else setAgreementError(r.error ?? "Could not start the build. Review the current agreement before trying again.");
           return;
         }
-        // Build used to swallow this entirely: the action returned void, so a failure and a
-        // success looked identical — "Working", then nothing, forever.
-        setError(r.error ?? "Could not start the build.");
-        return;
-      }
-      // SAY WHAT STARTED. This announced a panel, because that is what used to happen; the
-      // press now starts the workflow run, and the run is the thing to go and watch.
-      const runId = String((d?.run as Record<string, unknown> | undefined)?.id ?? d?.id ?? "");
-      setInput("");
-      setReply(
-        `**Started.** Taking you to the workflow…\n\n` +
-        // NAMED, NEVER AN ID (independent test): the run as the operator called it, linked.
-        (runId ? `[${namedRun(directive)} run ↗](${linkTo({ area: "delivery_workflows", wfr: runId }, orgId)})` : ""),
-      );
-      // GO WHERE THE WORK IS. Telling somebody to "open Workflow" after they pressed Build is
-      // asking them to do the navigation the press already implied — and they had no way to
-      // know the run had appeared, because the page they were on does not show runs.
-      const url = new URL(window.location.href);
-      url.searchParams.set("area", "delivery_workflows");
-      if (runId) url.searchParams.set("wfr", runId);
-      window.history.pushState({}, "", url.toString());
-      window.dispatchEvent(new PopStateEvent("popstate"));
-      window.dispatchEvent(new CustomEvent("boss:navigate"));
+        const run = d?.run as { id?: unknown; project_id?: unknown; dedupe_key?: unknown } | undefined;
+        if (!run || typeof run.id !== "string" || !run.id || run.project_id !== projectId || run.dedupe_key !== accepted.start_intent_key) {
+          setAgreementError("The response did not identify this intent's recorded run. Check the original start result before another attempt.");
+          return;
+        }
+        const runId = run.id;
+        rememberStart(null);
+        setBuildIntent(null); setAgreement(null);
+        setInput("");
+        setReply(`**Started.** Taking you to the workflow…\n\n` +
+          (runId ? `[${namedRun(directive)} run ↗](${linkTo({ area: "delivery_workflows", wfr: runId }, orgId)})` : ""));
+        const url = new URL(window.location.href);
+        url.searchParams.set("area", "delivery_workflows");
+        if (runId) url.searchParams.set("wfr", runId);
+        window.history.pushState({}, "", url.toString());
+        window.dispatchEvent(new PopStateEvent("popstate"));
+        window.dispatchEvent(new CustomEvent("boss:navigate"));
+      } finally { confirming.current = false; }
     });
-  }, [busy, projectId, actor, orgId]);
+  }, [agreement, agreementLoading, agreementError, busy, buildGate.allowed, projectId, actor, orgId, assign, pendingStartKey, rememberStart]);
+
+  const checkStart = useCallback(() => {
+    if (!pendingStartKey || checkingStart || confirming.current) return;
+    const epoch = agreementEpoch.current;
+    setCheckingStart(true);
+    void (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const response = await Promise.race([
+          fetch(`/api/delivery-workflows?view=runs&project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" }),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("The run check did not respond.")), 20_000); }),
+        ]);
+        const data = await response.json() as { project_id?: unknown; runs?: unknown };
+        if (epoch !== agreementEpoch.current) return;
+        if (!response.ok || data.project_id !== projectId || !Array.isArray(data.runs)) throw new Error("Could not read this project's recorded runs.");
+        const found = data.runs.find((value: unknown) => {
+          const run = value as { project_id?: unknown; dedupe_key?: unknown; id?: unknown } | null;
+          return run && run.project_id === projectId && run.dedupe_key === pendingStartKey && typeof run.id === "string" && run.id;
+        }) as { id: string } | undefined;
+        if (!found) {
+          setAgreementError("No matching recorded run was found in the recent list. The original outcome remains unknown; check again or inspect Workflows. A new start remains held.");
+          return;
+        }
+        rememberStart(null); setBuildIntent(null); setAgreement(null); setAgreementError("");
+        setReply("**Start found.** Opening the recorded workflow run.");
+        const url = new URL(window.location.href);
+        url.searchParams.set("area", "delivery_workflows"); url.searchParams.set("wfr", found.id);
+        window.history.pushState({}, "", url.toString());
+        window.dispatchEvent(new PopStateEvent("popstate")); window.dispatchEvent(new CustomEvent("boss:navigate"));
+      } catch (e) {
+        if (epoch === agreementEpoch.current) setAgreementError(String((e as Error)?.message ?? e) + " The original outcome remains unknown.");
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (epoch === agreementEpoch.current) setCheckingStart(false);
+      }
+    })();
+  }, [pendingStartKey, checkingStart, projectId, rememberStart]);
 
   /**
    * Put a brief in the composer. Deliberately does NOT build.
@@ -1678,8 +1800,8 @@ export function AskBossHero({
                 busy={busy}
                 disabled={busy || !input.trim()}
                 primary={{
-                  id: "build", label: "Build →", onRun: () => assign(input), refused: buildGate.reason || undefined,
-                  hint: "Down the governed path — a panel, a PRD you approve, then code",
+                  id: "build", label: "Review build →", onRun: () => assign(input), refused: buildGate.reason || undefined,
+                  hint: "Read your brief, the selected workflow and its bounds before starting",
                 }}
                 others={[
                   ...(layout === "hero" ? [] : [
@@ -2130,6 +2252,14 @@ export function AskBossHero({
              ref={(node) => node?.scrollIntoView({ block: "nearest", behavior: "smooth" })}>
             ⚠ {error}
           </p>
+        ) : null}
+
+        {buildIntent ? createPortal(
+          <WorkAgreementDialog agreement={agreement} loading={agreementLoading} error={agreementError}
+            busy={busy} projectId={projectId} pendingStart={!!pendingStartKey} checkingStart={checkingStart}
+            onCheckStart={checkStart} onCancel={cancelAgreement}
+            onRetry={() => assign(buildIntent.directive, buildIntent.startAnyway)} onConfirm={confirmBuild} />,
+          document.body,
         ) : null}
 
         {refusal ? (
