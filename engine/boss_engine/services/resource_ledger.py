@@ -4,9 +4,9 @@ Written BEFORE the resource exists and closed when it is gone, so the reaper can
 "whose is this, and is its owner still alive?" — from the row to the host (an open row whose
 owner ended) and from the host back to the row (a labelled container with no open row).
 
-Best effort by construction. A ledger that could fail a build would make the backstop the
-outage; every write here swallows its error and logs it, and the reaper's substrate sweep (by
-label and name prefix) still finds what an unwritten row would have named.
+Best effort by default. The reaper's substrate sweep (by label and name prefix) still finds
+what an unwritten row would have named. Cleanup owners that must retain retry state until a
+release is recorded can opt into strict handle release; its failure propagates to the owner.
 """
 from __future__ import annotations
 
@@ -89,8 +89,9 @@ class DbLedger:
         except Exception:  # noqa: BLE001
             _log.debug("owned_resources release failed", exc_info=True)
 
-    def release_handle(self, resource_kind: str, handle: str, reason: str) -> int:
-        """Close every open row for a handle (a container removed, a dir deleted)."""
+    def release_handle(self, resource_kind: str, handle: str, reason: str, *,
+                       strict: bool = False) -> int:
+        """Close open rows for a handle; strict callers retain their own retry state."""
         try:
             with self.engine.begin() as c:
                 return int(c.execute(text(
@@ -98,6 +99,8 @@ class DbLedger:
                     "WHERE resource_kind = :k AND handle = :h AND released_at IS NULL"),
                     {"k": resource_kind, "h": handle, "r": (reason or "")[:200]}).rowcount or 0)
         except Exception:  # noqa: BLE001
+            if strict:
+                raise
             _log.debug("owned_resources release_handle failed", exc_info=True)
             return 0
 
@@ -115,16 +118,21 @@ def record(resource_kind: str, handle: str, *, owner: Any = None, expires_at: An
         return None
 
 
-def release(resource_kind: str, handle: str, reason: str) -> None:
+def release(resource_kind: str, handle: str, reason: str, *, strict: bool = False) -> None:
+    """Release a handle, optionally reporting failure to a cleanup owner for retry."""
     from . import owned_process
 
     led = owned_process.ledger()
     fn = getattr(led, "release_handle", None)
     if fn is not None:
         try:
-            fn(resource_kind, handle, reason)
+            if strict and isinstance(led, DbLedger):
+                fn(resource_kind, handle, reason, strict=True)
+            else:
+                fn(resource_kind, handle, reason)
         except Exception:  # noqa: BLE001
-            pass
+            if strict:
+                raise
 
 
 def install_id(connection: Any) -> str:
