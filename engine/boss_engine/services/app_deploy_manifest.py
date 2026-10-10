@@ -22,6 +22,7 @@ So the application declares it, at the root of its repository:
     open:    {url: "{target.public_url}"}
     teardown: ["docker compose down"]
     requires: {sudo: false, docker: true}
+    metrics: {path: /metrics}          # optional: BOSS scrapes it after deploy (app_metrics)
 
 This module only PARSES and RENDERS. It never touches a host: `stack_deploy` does that, and
 only inside an approved Resource Plane ChangeSet. Every error is a sentence an operator can act
@@ -103,6 +104,7 @@ class DeployManifest:
     requires_docker: bool = False
     compose_file: Optional[str] = None
     compose_project: Optional[str] = None
+    metrics: Optional[dict[str, Any]] = None
     source_text: str = field(default="", repr=False, compare=False)
 
     def env_keys(self) -> list[str]:
@@ -129,6 +131,9 @@ class DeployManifest:
                         "timeout_seconds": h.timeout_seconds} for h in self.health],
             "open_url": self.open_url,
             "requires": {"sudo": self.requires_sudo, "docker": self.requires_docker},
+            # The scrape declaration travels on the deploy record (stack_deployments.manifest),
+            # which is where the monitor reads it: the HEALTHY deploy's declaration counts.
+            "metrics": dict(self.metrics) if self.metrics else None,
         }
 
 
@@ -270,9 +275,88 @@ def _bool(raw: Any, where: str) -> bool:
     raise ManifestError(f"{where} must be true or false.")
 
 
+#: Which route the scrape takes: the health probe's public origin, the host channel, or both in turn.
+METRICS_VIAS = ("auto", "public", "host")
+
+
+def _metrics(raw: Any) -> Optional[dict[str, Any]]:
+    """`metrics: {path: /metrics, interval: 60, via: auto, alert: {...}}`, validated.
+
+    The path is a PATH: no scheme, no host. BOSS scrapes the app's own origin — the one its
+    health probe already asks — so a manifest cannot point the monitor at another machine.
+    """
+    from .app_metrics import DEFAULT_ALERT, MAX_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS
+
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        raw = {"path": raw}
+    if not isinstance(raw, dict):
+        raise ManifestError("metrics must be {path: /metrics} (optionally interval, via, alert).")
+    unknown = set(raw) - {"path", "interval", "via", "alert"}
+    if unknown:
+        raise ManifestError(f"metrics has unknown field(s) {sorted(unknown)}; known: alert, "
+                            "interval, path, via.")
+    path = str(raw.get("path") or "").strip()
+    if not path.startswith("/") or path.startswith("//") or "://" in path:
+        raise ManifestError(
+            f"metrics.path {path!r} must be a path on the app starting with '/', such as "
+            "/metrics — no scheme or host: BOSS scrapes the app where its health probe reaches "
+            "it.")
+    if not re.match(r"^/[A-Za-z0-9._~/%-]*$", path) or ".." in path.split("/"):
+        raise ManifestError(
+            f"metrics.path {path!r} may hold only letters, digits and . _ ~ / % - (no query, "
+            "spaces or '..').")
+    interval = raw.get("interval")
+    out: dict[str, Any] = {"path": path}
+    if interval is not None:
+        try:
+            interval = int(interval)
+        except (TypeError, ValueError):
+            raise ManifestError(f"metrics.interval must be whole seconds, not {interval!r}.")
+        if not MIN_INTERVAL_SECONDS <= interval <= MAX_INTERVAL_SECONDS:
+            raise ManifestError(
+                f"metrics.interval must be between {MIN_INTERVAL_SECONDS} and "
+                f"{MAX_INTERVAL_SECONDS} seconds, not {interval}.")
+        out["interval_seconds"] = interval
+    via = str(raw.get("via") or "auto").strip()
+    if via not in METRICS_VIAS:
+        raise ManifestError(f"metrics.via must be one of {list(METRICS_VIAS)}, not {via!r}.")
+    out["via"] = via
+    alert = raw.get("alert")
+    if alert is not None:
+        if alert is False:
+            alert = {"enabled": False}
+        if not isinstance(alert, dict):
+            raise ManifestError("metrics.alert must be {error_rate_percent, window_minutes, "
+                                "min_requests, enabled}.")
+        unknown = set(alert) - set(DEFAULT_ALERT)
+        if unknown:
+            raise ManifestError(f"metrics.alert has unknown field(s) {sorted(unknown)}; known: "
+                                f"{', '.join(sorted(DEFAULT_ALERT))}.")
+        rule: dict[str, Any] = {}
+        bounds = {"error_rate_percent": (0.1, 100.0, float), "window_minutes": (1, 60, int),
+                  "min_requests": (1, 1_000_000, int)}
+        for key, (lo, hi, kind) in bounds.items():
+            if key in alert:
+                try:
+                    value = kind(alert[key])
+                except (TypeError, ValueError):
+                    raise ManifestError(f"metrics.alert.{key} must be a number, not "
+                                        f"{alert[key]!r}.")
+                if not lo <= value <= hi:
+                    raise ManifestError(f"metrics.alert.{key} must be between {lo} and {hi}, "
+                                        f"not {value}.")
+                rule[key] = value
+        if "enabled" in alert:
+            rule["enabled"] = _bool(alert["enabled"], "metrics.alert.enabled")
+        out["alert"] = rule
+    return out
+
+
 _TOP_LEVEL = frozenset({
     "version", "name", "kind", "compose", "env", "install", "update", "health", "open",
-    "teardown", "requires", "dir",
+    "teardown", "requires", "dir", "metrics",
 })
 
 
@@ -366,7 +450,8 @@ def parse_manifest(data: Any, *, source_text: str = "") -> DeployManifest:
         install=install, update=update, health=_health(data.get("health")),
         open_url=open_url, teardown=teardown, requires_sudo=requires_sudo,
         requires_docker=requires_docker, compose_file=compose_file,
-        compose_project=compose_project, source_text=source_text,
+        compose_project=compose_project, metrics=_metrics(data.get("metrics")),
+        source_text=source_text,
     )
 
 

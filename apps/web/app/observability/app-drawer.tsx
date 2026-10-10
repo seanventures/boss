@@ -6,6 +6,8 @@
  *   api · prod  ● Down  since 1h 4m                                         ⋯  ×
  *   Uptime 24h 91.3%  Uptime 7d 98.7%  p95 240 ms  Last probe 2m  Build a1b2c3d [Serving 9f1e2d3]  Host ↗
  *   <latency chart>
+ *   TRAFFIC  Requests 42/min · Errors 1.2% · p50 18 ms · p95 240 ms · Alert Within limit
+ *            Metrics: scraped 20s ago   (or the failure in words: "Metrics endpoint returned 404")
  *   INCIDENTS  start · duration (Ongoing) · first error · deploy before it ↗
  *   [Probe now] Open app ↗  Dashboard ↗  Logs ↗  [Ask BOSS]
  *
@@ -18,7 +20,7 @@ import React, { useState } from "react";
 
 import { openDockAbout } from "../../lib/dock-subject";
 import { deployHref, hostHref, logsHref } from "../../lib/infra-view";
-import { ms, pct, useAppDetail, type PulseRow } from "../../lib/obs-view";
+import { ms, pct, useAppDetail, type AppMetrics, type PulseRow } from "../../lib/obs-view";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
 import { ago, plainClick, useNow } from "../agents/live-util";
@@ -35,6 +37,59 @@ function Fact({ label, children, tip }: { label: string; children: React.ReactNo
       <span className="obs-fact-k">{label}</span>
       <span className="obs-fact-v inf-num">{children}</span>
     </span>
+  );
+}
+
+/** "20s ago" / "4m ago": a scrape runs every minute or two, so minutes are too coarse. */
+function agoShort(iso: string | null, now: number | null): string {
+  if (!iso || now === null) return "";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const s = Math.max(0, Math.floor((now - t) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+/** The app's own request metrics (app_metrics): what users saw, not what the probe saw. */
+export function TrafficSection({ m, now }: { m: AppMetrics; now: number | null }) {
+  if (!m.declared) {
+    return (
+      <DrawerSection label="TRAFFIC" testId="obs-app-traffic">
+        <span className="inf-empty" data-testid="obs-metrics-word" title={m.tip ?? undefined}>Metrics not declared</span>
+      </DrawerSection>
+    );
+  }
+  const word = m.state === "ok" ? `Metrics: scraped ${agoShort(m.lastScrapeAt, now) || "just now"}` : m.word;
+  const tone = m.state === "failing" ? "red" : m.state === "ok" ? undefined : "amber";
+  const win = m.windowMinutes ?? 5;
+  const a = m.alert;
+  const ruleTip = a ? (a.rule.enabled
+    ? `Alerts when more than ${a.rule.errorRatePercent}% of requests fail (5xx) over ${a.rule.windowMinutes} min, once ${a.rule.minRequests}+ requests were seen. Set metrics.alert in boss.deploy.yaml.`
+    : "Alert switched off in boss.deploy.yaml") : undefined;
+  return (
+    <DrawerSection label="TRAFFIC" testId="obs-app-traffic">
+      <div className="obs-facts" data-testid="obs-app-metrics">
+        <Fact label="Requests" tip={`Requests per minute over the last ${win} min, from the app's ${m.path ?? "/metrics"}`}>
+          {m.ratePerMin === null ? "—" : `${m.ratePerMin.toLocaleString("en-US")}/min`}
+        </Fact>
+        <Fact label="Errors" tip={m.errorRate === null ? "No error rate: no requests yet, or no status label on the counter" : `5xx share of ${m.requests ?? 0} requests over ${win} min`}>
+          {pct(m.errorRate, 1)}
+        </Fact>
+        <Fact label="p50" tip={`Median request latency over ${win} min, from the app's histogram`}>{ms(m.p50Ms)}</Fact>
+        <Fact label="p95" tip={`95th percentile request latency over ${win} min`}>{ms(m.p95Ms)}</Fact>
+        {a ? (
+          <span className="obs-chip" data-tone={a.state === "firing" ? "red" : undefined} data-testid="obs-metrics-alert" title={ruleTip}>
+            {a.word}
+          </span>
+        ) : null}
+      </div>
+      <span className="inf-faint" data-testid="obs-metrics-word" data-tone={tone}
+            title={[m.url, m.route ? `via ${m.route}` : null, m.naming ? `names: ${m.naming}` : null].filter(Boolean).join(" · ") || undefined}>
+        {word}
+      </span>
+    </DrawerSection>
   );
 }
 
@@ -113,6 +168,8 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
           </div>
 
           <LatencyChart series={d.series} pins={d.pins} incidents={d.incidents} fromIso={d.window.from} toIso={d.window.to} label={name} />
+
+          <TrafficSection m={d.metrics} now={now} />
 
           <DrawerSection label="INCIDENTS" testId="obs-app-incidents">
             {d.incidents.length === 0 ? <span className="inf-empty">No incidents</span> : (
