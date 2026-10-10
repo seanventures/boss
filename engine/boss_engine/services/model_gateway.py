@@ -958,6 +958,8 @@ class ModelGatewayService:
         worker_id: str,
         invocation_id: str,
         reason: str,
+        lease_token: Optional[str] = None,
+        job_lease_token: Optional[str] = None,
     ) -> dict[str, Any]:
         """Close a lease that expired before the provider was contacted.
 
@@ -980,7 +982,24 @@ class ModelGatewayService:
         lease = dict(row)
         if lease["worker_id"] != worker_id:
             raise ModelGatewayLeaseError("Model capacity lease is owned by another worker.")
-        if lease["status"] == "active" and lease["expires_at"] > now_utc():
+        expired_job = False
+        fenced = lease_token is not None or job_lease_token is not None
+        if fenced:
+            # The internal pre-submission Architecture caller knows no send occurred.
+            # Both original tokens still need to own these locked rows: a reclaimed
+            # job or replaced model lease cannot be cleaned up by the old caller.
+            if not lease_token or not job_lease_token or not compare_digest(
+                lease["lease_token_hash"], self._hash_token(lease_token),
+            ):
+                raise ModelGatewayLeaseError("Model capacity lease token is invalid.")
+            job = self.jobs._load_leased_job_for_update(
+                connection, worker_id, lease["job_id"], job_lease_token,
+                allow_expired=True,
+            )
+            if job["project_id"] != project_id or lease["status"] not in ("active", "expired"):
+                raise ModelGatewayLeaseError("Unused model authority no longer matches.")
+            expired_job = job["lease_expires_at"] <= now_utc()
+        if lease["status"] == "active" and lease["expires_at"] > now_utc() and not expired_job:
             raise ModelGatewayLeaseError("Model capacity lease is still active.")
         if lease["status"] == "active":
             connection.execute(
@@ -1005,6 +1024,8 @@ class ModelGatewayService:
             ),
             {"id": invocation_id, "project_id": project_id, "lease_id": lease_id},
         ).mappings().first()
+        if fenced and (not invocation or invocation["status"] != "in_progress"):
+            raise ModelGatewayLeaseError("Unused invocation is no longer in progress.")
         if invocation and invocation["status"] == "in_progress":
             self.receipts.mark_failed(
                 connection, invocation["receipt_id"], {"reason": reason},
