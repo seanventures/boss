@@ -526,6 +526,10 @@ function ConsoleShellInner({
   const paletteInput = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
+  const queryString = searchParams.toString();
+  const loadedRef = useRef<string[] | undefined>(loadedAreas);
+  loadedRef.current = loadedAreas;
+  const [areaLoadAsked, setAreaLoadAsked] = useState<{ id: string; at: number } | null>(null);
 
   // Live auto-refresh: re-fetch server data on an interval so async worker
   // changes (new decisions, budget moves, events) appear without manual reload.
@@ -556,6 +560,20 @@ function ConsoleShellInner({
     const unregister = registerConsoleRefresh(refreshCoordinator);
     return () => { unregister(); refreshCoordinator.dispose(); };
   }, [refreshCoordinator]);
+  const committedQuery = useRef(queryString);
+  useEffect(() => {
+    if (committedQuery.current === queryString) return;
+    committedQuery.current = queryString;
+    // Next prioritizes a URL restore over a pending refresh and discards its response.
+    // That response cannot acknowledge our coordinator, even if the server finishes it.
+    // Release its logical bookkeeping only after the new URL commits, then load the
+    // current area. Previously loaded areas still need the discarded read replaced.
+    if (!refreshCoordinator.busy()) return;
+    refreshCoordinator.cancel();
+    setAreaLoadAsked(null);
+    const requested = new URLSearchParams(queryString).get("area");
+    if (requested && loadedRef.current?.includes(requested)) refreshCoordinator.request("now");
+  }, [queryString, refreshCoordinator]);
   // Dispatching router.refresh() can finish this shell's transition before Next delivers
   // its server response. A transition ending is not an acknowledgment: retrying then queues
   // another refresh while the first response is still arriving. Only newly committed server
@@ -616,7 +634,6 @@ function ConsoleShellInner({
   // Depend on the query STRING (stable across router.refresh(), changes on real
   // navigation) so the area syncs from the URL on deep links like "View in Work →"
   // without the 7s auto-refresh snapping the user back.
-  const queryString = searchParams.toString();
   useEffect(() => {
     // A RETIRED SURFACE IS REWRITTEN BEFORE ANYTHING READS IT. The server redirects these too;
     // this covers the URL changing under a mounted console (Back, a pushState from a panel).
@@ -646,9 +663,6 @@ function ConsoleShellInner({
   // (lib/area-loading.ts). One that is not in the DOM yet is added to the session cookie and
   // the page refreshes; the areas already on screen keep their tree positions, so they update
   // rather than remount. Every later click on it is the pure reveal below.
-  const loadedRef = useRef<string[] | undefined>(loadedAreas);
-  loadedRef.current = loadedAreas;
-  const [areaLoadAsked, setAreaLoadAsked] = useState<{ id: string; at: number } | null>(null);
   const ensureLoaded = useCallback((id: string) => {
     const loaded = loadedRef.current;
     if (!loaded || loaded.includes(id)) return;

@@ -43,6 +43,8 @@ let draftMounts: number;
 let draftUnmounts: number;
 let serverDelayMs: number;
 let omitNextArea: boolean;
+let discardRestoredResponse: boolean;
+const fixtureStatus = { apiReachable: true, budgetState: "green", deadletters: 0, pendingDecisions: 0 };
 
 function Draft() {
   const [draft, setDraft] = useState("");
@@ -65,15 +67,21 @@ function ServerBoundary() {
     const cookie = loadedAreasCookieValue(document.cookie);
     const omitted = omitNextArea;
     omitNextArea = false;
-    const deliver = () => setLoaded(omitted ? ["overview"] : [...areasToRender({
-      requested, cookie, fullDocument: false,
-    })]);
+    const url = window.location.search;
+    const deliver = () => {
+      // Next's ACTION_RESTORE drops an older pending refresh, including a successful
+      // response. A discarded response must never update this server-prop boundary.
+      if (discardRestoredResponse && window.location.search !== url) return;
+      setLoaded(omitted ? ["overview"] : [...areasToRender({
+        requested, cookie, fullDocument: false,
+      })]);
+    };
     if (serverDelayMs) window.setTimeout(deliver, serverDelayMs);
     else deliver();
   });
   return <ConsoleShell initialArea="overview" loadedAreas={loaded}
     scope={{ project: "owned-navigation-fixture", actor: "owned-fixture" }}
-    status={{ apiReachable: true, budgetState: "green", deadletters: 0, pendingDecisions: 0 }}>
+    status={fixtureStatus}>
     {loaded.map((area) => <section key={area} data-area={area}>
       {area === "overview" ? <Draft /> : <span>{area}</span>}
     </section>)}
@@ -90,6 +98,7 @@ beforeEach(() => {
   draftUnmounts = 0;
   serverDelayMs = 0;
   omitNextArea = false;
+  discardRestoredResponse = true;
   window.localStorage.clear();
   window.history.replaceState(null, "", "/?area=overview");
   document.cookie = loadedAreasCookie("");
@@ -158,20 +167,36 @@ it("waits for server data before retrying an unloaded area", async () => {
   expect(draftUnmounts).toBe(0);
 });
 
-it("coalesces a second area until the first server response commits", async () => {
+it("loads a second area when the router discards the first area's response", async () => {
   serverDelayMs = 1500;
   await act(async () => root.render(<ServerBoundary />));
   const draft = host.querySelector<HTMLTextAreaElement>("textarea[aria-label='Unsaved plan']")!;
   await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
   await act(async () => vi.advanceTimersByTime(250));
   await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "setup" })));
-  expect(router.refresh).toHaveBeenCalledTimes(1);
+  expect(router.refresh).toHaveBeenCalledTimes(2);
   await act(async () => vi.advanceTimersByTime(1250));
   expect(host.querySelector("[data-testid='area-loading']")).not.toBeNull();
   expect(router.refresh).toHaveBeenCalledTimes(2);
   await act(async () => vi.advanceTimersByTime(1500));
   expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
   expect(host.querySelector("[data-testid='console-area']")?.getAttribute("data-active")).toBe("setup");
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  expect(host.querySelector("textarea[aria-label='Unsaved plan']")).toBe(draft);
+  expect(draftMounts).toBe(1);
+  expect(draftUnmounts).toBe(0);
+});
+
+it("replaces a discarded read when returning to an already mounted area", async () => {
+  serverDelayMs = 1500;
+  await act(async () => root.render(<ServerBoundary />));
+  const draft = host.querySelector<HTMLTextAreaElement>("textarea[aria-label='Unsaved plan']")!;
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
+  await act(async () => vi.advanceTimersByTime(250));
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "overview" })));
+  expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  await act(async () => vi.advanceTimersByTime(1500));
   expect(router.refresh).toHaveBeenCalledTimes(2);
   expect(host.querySelector("textarea[aria-label='Unsaved plan']")).toBe(draft);
   expect(draftMounts).toBe(1);
