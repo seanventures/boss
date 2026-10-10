@@ -38,6 +38,12 @@ export type Period = {
   committed_usd_micros: number; utilization_ratio: number; budget_state: string; resets_at: string;
   resets_at_label: string; state_label: string;
 };
+/** One unresolved historical call. Its old estimate is not a settled charge or a total. */
+export type LegacyFinancialHold = {
+  reservation_id: string; lease_id: string; invocation_id: string; receipt_id: string;
+  original_reservation_status: "expired" | "released"; original_estimate_usd_micros: number;
+  decision_id: string | null; message: string;
+};
 export type Meter = {
   period: string; state: string; state_label: string; cap_usd_micros: number; actual_usd_micros: number;
   reserved_usd_micros: number; committed_usd_micros: number; available_usd_micros: number;
@@ -47,6 +53,7 @@ export type Meter = {
   soft_cap_pct: number; auto_lite_mode_pct: number; freeze_provisioning_pct: number; freeze_tier2_pct: number;
   tier2_frozen: boolean; top_cost_drivers: { skill_or_model_id: string; amount_usd_micros: number }[];
   periods: Period[];
+  legacy_financial_hold?: LegacyFinancialHold | null;
 };
 export type TokenPolicy = {
   stage: string; max_total_tokens_per_call: number | null; max_tokens_per_day: number | null;
