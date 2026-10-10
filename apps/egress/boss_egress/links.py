@@ -254,6 +254,13 @@ def run(engine: Any, stop: threading.Event, *, host: str = "0.0.0.0", gateway: O
             delay = min(delay * 2, 30.0)
         finally:
             if raw is not None:
+                # NEVER BACK INTO THE POOL: this connection is autocommit and LISTENing. Pooled, the
+                # next engine.begin() on it ran without a transaction (no rollback, and every
+                # SAVEPOINT failed: NoActiveSqlTransaction), so it is discarded instead.
+                try:
+                    raw.invalidate()
+                except Exception:  # noqa: BLE001
+                    pass
                 try:
                     raw.close()
                 except Exception:  # noqa: BLE001

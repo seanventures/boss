@@ -347,3 +347,29 @@ def test_zz_revoking_the_link_cuts_b_off_within_5_seconds(env, engine):
         time.sleep(0.05)
     else:
         raise AssertionError("the revoked link's port is still open")
+
+
+def test_the_listen_connection_never_goes_back_into_the_pool(engine):
+    """gateway_mod.run LISTENs on an autocommit connection; returned to the pool as it was, the next
+    engine.begin() on it had no transaction (a SAVEPOINT failed with NoActiveSqlTransaction, seen as
+    the deploy guard refusing every deploy after this suite)."""
+    from sqlalchemy import create_engine
+
+    one = create_engine(engine.url, pool_size=2, max_overflow=0)   # the LISTEN one + the gateway's
+    try:
+        stop = threading.Event()
+        loop = threading.Thread(target=gateway_mod.run, args=(one, stop),
+                                kwargs={"listeners": gateway_mod.LinkListeners(gateway_mod.LinkGateway(one), "127.0.0.1")},
+                                daemon=True)
+        loop.start()
+        time.sleep(1.5)
+        stop.set()
+        loop.join(timeout=10)
+        assert not loop.is_alive()
+        with one.begin() as c, one.begin() as d:      # every connection the pool now holds
+            for conn in (c, d):
+                assert conn.connection.driver_connection.autocommit is False
+                with conn.begin_nested():
+                    assert conn.execute(text("SELECT 1")).scalar() == 1
+    finally:
+        one.dispose()
