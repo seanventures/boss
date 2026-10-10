@@ -50,6 +50,29 @@ class GitHubFake:
         self.world = world              # fakes.World (prs live in world.prs)
 
     # ------------------------------------------------------------------ helpers
+    def _check_runs(self, bare: Path, full: str, ref: str) -> list[dict[str, Any]]:
+        """The check runs the test told the fakes this commit reports (POST /github/_checks),
+        by sha, then by any branch whose head is that sha, then "*". None set: no CI."""
+        checks = getattr(self.world, "checks", {}) or {}
+        sha = self._sha_of(bare, ref) or ref
+        runs = checks.get(sha) or checks.get(ref)
+        if runs is None:
+            for key, value in checks.items():
+                if key != "*" and self._sha_of(bare, f"refs/heads/{key}") == sha:
+                    runs = value
+                    break
+        if runs is None:
+            runs = checks.get("*") or []
+        out = []
+        for i, run in enumerate(runs):
+            item = {"id": 9000 + i, "name": "ci", "status": "completed", "conclusion": "success",
+                    "head_sha": sha, **run}
+            item.setdefault("html_url", f"https://github.com/{full}/actions/runs/{item['id']}")
+            item.setdefault("details_url", item["html_url"])
+            out.append(item)
+        return out
+
+
     def _sha_of(self, bare: Path, ref: str) -> Optional[str]:
         try:
             return _git(bare, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
@@ -235,7 +258,8 @@ class GitHubFake:
             if m.group(2) == "/status":
                 return 200, {"state": "success", "statuses": [], "total_count": 0}
             if m.group(2) in ("/check-runs",):
-                return 200, {"total_count": 0, "check_runs": []}
+                runs = self._check_runs(bare, full, m.group(1))
+                return 200, {"total_count": len(runs), "check_runs": runs}
             if m.group(2) == "/statuses":
                 return 200, []
             sha = self._sha_of(bare, m.group(1)) or self._sha_of(bare, f"refs/heads/{m.group(1)}")
@@ -292,8 +316,23 @@ class GitHubFake:
             return 201, self._commit(bare, sha, full)
         if rest.startswith("/pulls"):
             return self._pulls(bare, full, method, rest, q, body)
-        if re.match(r"^/issues/\d+/comments$", rest):
-            return (201, {"id": 1, "body": body.get("body")}) if method == "POST" else (200, [])
+        m = re.match(r"^/issues/(\d+)/(comments|labels)$", rest)
+        if m:
+            bucket = "pr_comments" if m.group(2) == "comments" else "pr_labels"
+            if method == "POST":
+                entry = {"repo": full, "issue": int(m.group(1)),
+                         **({"body": str(body.get("body") or "")[:8000]} if bucket == "pr_comments"
+                            else {"labels": [str(x.get("name") if isinstance(x, dict) else x)
+                                             for x in (body.get("labels") or [])]})}
+                self.world.add(bucket, entry)
+                if bucket == "pr_labels":
+                    return 200, [{"name": n} for n in entry["labels"]]
+                return 201, {"id": len(self.world.pr_comments), "body": entry["body"]}
+            items = [e for e in getattr(self.world, bucket)
+                     if e["repo"] == full and e["issue"] == int(m.group(1))]
+            if bucket == "pr_labels":
+                return 200, [{"name": n} for e in items for n in e["labels"]]
+            return 200, [{"id": i + 1, "body": e["body"]} for i, e in enumerate(items)]
         if rest.startswith("/issues"):
             return (201, {"id": 1, "number": 1}) if method == "POST" else (200, [])
         if rest == "/deployments":
