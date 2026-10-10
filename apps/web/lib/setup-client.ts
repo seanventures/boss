@@ -50,6 +50,19 @@ export async function fetchModelList(projectId: string, provider: string,
   return (await read<{ models: string[] }>(r)).models ?? [];
 }
 
+/** "Builds may change CI workflows" for one bound repository (services/ci_gate.py). */
+export type CiWorkflows = {
+  binding_id: string; repository: string; label: string; help: string; enabled: boolean;
+  requires: string; permissions_url?: string | null; installation_url?: string | null;
+  note?: string;
+};
+
+export async function fetchCiWorkflows(projectId: string, bindingId: string): Promise<CiWorkflows> {
+  const r = await fetch(`/api/setup?project_id=${encodeURIComponent(projectId)}`
+                        + `&ci_workflows=${encodeURIComponent(bindingId)}`, { cache: "no-store" });
+  return read<CiWorkflows>(r);
+}
+
 /** A write. `label` is the button's own words (the press registry quotes it on a refusal);
  *  a background write (an automatic re-check) passes `background` and takes no press scope. */
 export async function setupWrite<T = SetupView>(

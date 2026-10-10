@@ -448,6 +448,16 @@ class DecisionService:
                 )
 
         if action == "approve":
+            # CI GATES (services/ci_gate.py): a build that changed .github/workflows/ needs a
+            # PERSON — never a policy, an agent, an API key or a run token — and a deploy (or an
+            # unforced merge) waits for CI to pass. Before anything is recorded.
+            from . import ci_gate
+
+            try:
+                ci_gate.refuse_approval(connection, row, actor, identity_ctx=identity_ctx,
+                                        system_policy=system_policy, force=force)
+            except ci_gate.CiGateRefused as refused:
+                raise InvalidDecisionTransitionError(refused.message) from refused
             # AN APPROVAL OF WHAT THE APPROVER SAW. A gated step's decision carries a preview of
             # what it will send and a hash of that content; the console sends back the hash it
             # showed. If the preview has moved on since (an upstream step was re-run), this
@@ -2166,6 +2176,15 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
         return False
     tier = int(row["risk_tier"] or 0)
     if _approvals.seats_for_tier(tier) or tier in _approvals.TWO_PERSON_TIERS:
+        return False
+    # A CI change, or CI not passed, is never approved by a setting (services/ci_gate.py).
+    from . import ci_gate
+
+    full = connection.execute(text("SELECT * FROM decisions WHERE id = :id"),
+                              {"id": decision_id}).mappings().first()
+    try:
+        ci_gate.refuse_approval(connection, dict(full), actor, system_policy=True)
+    except ci_gate.CiGateRefused:
         return False
     done = connection.execute(text(
         "UPDATE decisions SET status = 'approved', approved_by = :actor, approved_at = now(), "

@@ -87,8 +87,13 @@ def build_identity_github_router() -> APIRouter:
         try:
             with begin() as db:
                 ctx = current_context(request, db)
+                from boss_engine.services import ci_gate
+
+                # workflows: write only when a repository opted in ("Builds may change CI
+                # workflows", Owner/Admin + step-up); otherwise the App never asks for it.
                 return github_setup.manifest(origin=public_origin(db, ctx.principal.org_id) or "",
-                                             person_id=ctx.principal.id, owner=body.owner or None)
+                                             person_id=ctx.principal.id, owner=body.owner or None,
+                                             allow_workflows=ci_gate.any_repo_allows_workflows(db))
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
 

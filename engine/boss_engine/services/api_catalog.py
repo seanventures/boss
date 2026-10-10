@@ -290,6 +290,8 @@ RESOURCE_DOMAINS = {
     "verifier-meta-eval": "ops",
     "verifier-ratchet": "ops",
     "mutation-gate": "governance",
+    # GitHub Actions CI, governed (services/ci_gate.py): waits, workflow checks, a decision's gate.
+    "ci": "delivery",
     "repair-policy": "governance",
     "scaffold": "delivery",
     "visual-gate": "ops",

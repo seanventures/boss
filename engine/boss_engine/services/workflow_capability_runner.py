@@ -2008,6 +2008,67 @@ def _notify(
             "receipt": receipt, "subject": subject}
 
 
+def _start_ci_wait(connection: Connection, project_id: str, context: dict[str, Any],
+                   inputs: dict[str, Any]) -> dict[str, Any]:
+    """`wait_for_ci`: record a wait on the pull request head's checks and park on it.
+
+    The pull request is the step's input, else the build's (`pull_request_url` from the step
+    that produced one). Its head commit is read from GitHub unless `head_sha` is given."""
+    from ..config import get_settings
+    from . import ci_gate
+
+    settings = get_settings()
+    url = str(inputs.get("pull_request_url") or _from_any_step(context, "pull_request_url") or "")
+    sha = str(inputs.get("head_sha") or "").strip()
+    parsed = ci_gate.parse_pr_url(url)
+    repository = parsed[0] if parsed else ""
+    try:
+        reader = ci_gate.reader_for_project(connection, settings, project_id, repository or None)
+        repository = repository or reader.repository
+        if not sha and parsed:
+            sha = str(((reader.pull_request(parsed[1]) or {}).get("head") or {}).get("sha") or "")
+        if not sha:
+            return {"capability": "wait_for_ci", "status": "failed",
+                    "error": "There is no pull request or commit to wait for CI on: give the "
+                             "step a pull_request_url, or put it after the build."}
+        minutes = inputs.get("timeout_minutes")
+        timeout = (int(float(minutes) * 60) if minutes not in (None, "")
+                   else int(getattr(settings, "ci_wait_timeout_seconds", 0) or 0)
+                   or ci_gate.DEFAULT_TIMEOUT_SECONDS)
+        wait = ci_gate.start_wait(connection, project_id=project_id, repository=repository,
+                                  head_sha=sha, pull_request_url=url or None,
+                                  timeout_seconds=timeout, reader=reader,
+                                  workflow_run_id=str(context.get("run_id") or "") or None,
+                                  actor="workflow")
+        wait = ci_gate.poll_wait(connection, wait["id"], reader, force=True)
+    except ci_gate.CiSettingError as error:
+        return {"capability": "wait_for_ci", "status": "failed", "error": error.message}
+    return {"capability": "wait_for_ci", "tool": None, "status": "awaiting",
+            "await": {"kind": "ci_wait", "id": wait["id"]}, "ci_wait_id": wait["id"],
+            "ci_status": wait["status"], "note": wait["summary"] or "waiting for CI"}
+
+
+def _look_at_ci(connection: Connection, project_id: str, wait_id: str) -> None:
+    """One look at a parked CI wait, when due. Its own savepoint: a failed read never poisons
+    the tick's transaction."""
+    from ..config import get_settings
+    from . import ci_gate
+
+    point = connection.begin_nested()
+    try:
+        repo = connection.execute(text("SELECT repository FROM ci_waits WHERE id = :i"),
+                                  {"i": wait_id}).scalar()
+        try:
+            reader = ci_gate.reader_for_project(connection, get_settings(), project_id, repo)
+        except Exception as error:  # noqa: BLE001 — GitHub unreachable: the deadline still holds
+            reader = ci_gate.UnreadableCi(str(error))
+        ci_gate.poll_wait(connection, wait_id, reader)
+        point.commit()
+    except Exception as error:  # noqa: BLE001 — looked at again next tick; the deadline holds
+        point.rollback()
+        log.warning("cannot look at CI wait %s: %s", wait_id, error)
+
+
 def _existing_app_note(connection: Connection, project_id: str, run_id: str) -> str:
     """What a panel must know when the run builds onto an existing app; "" when it does not."""
     if not run_id:
@@ -2068,6 +2129,9 @@ def _perform_capability(
             return _write_the_record(connection, project_id, context, inputs)
         if key == "notify":
             return _notify(connection, ctx, project_id, step, context, inputs)
+        if key == "wait_for_ci":
+            return _settle_started_work(
+                capability, key, _start_ci_wait(connection, project_id, context, inputs))
         # Same shape as `document`: no tool because it commissions nothing — it READS what the
         # run has already recorded and leaves a document behind.
         if key == "report":
@@ -2394,6 +2458,9 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     # {"run_id": <the new attempt>}}` the moment the attempt is queued; the step waits on that
     # attempt as `build` waits on the first.
     "retry_build": ("code_task", ("code_task_run_id", "run_id", "id")),
+    # WAITING FOR CI IS WAITING. The step records a ci_waits row and parks on it; every tick
+    # takes one look at GitHub (with backoff) until the checks finish or the wait times out.
+    "wait_for_ci": ("ci_wait", ("ci_wait_id", "id")),
 }
 
 #: Envelopes a capability's tool nests its handle in, beyond the ones named after the kind and
@@ -2622,10 +2689,15 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     "stack_deployment": ("stack_deployments",
                          frozenset({"healthy"}),
                          frozenset({"failed", "rejected"})),
+    # CI (services/ci_gate.py): passed, or no CI configured at all, lets the run go on; a failed
+    # check or a timeout fails the step with the words and the failing check's link.
+    "ci_wait": ("ci_waits",
+                frozenset({"passed", "no_ci"}),
+                frozenset({"failed", "timed_out", "cancelled"})),
 }
 
 #: Where a table keeps the reason its run ended, when it is not a column called `error`.
-_REASON_COLUMN: dict[str, str] = {"deployment_runs": "failure_reason",
+_REASON_COLUMN: dict[str, str] = {"ci_waits": "summary", "deployment_runs": "failure_reason",
                                   "stack_deployments": "failure_reason"}
 
 
@@ -2722,6 +2794,15 @@ def _terminal_evidence(
             if first:
                 evidence["deployed_url"] = first if "://" in first else f"http://{first}"
             return evidence
+        if kind == "ci_wait":
+            row = connection.execute(
+                text("SELECT status, summary, failing_url, pull_request_url FROM ci_waits "
+                     "WHERE id = :r"), {"r": awaited_id}).mappings().first()
+            if not row:
+                return {}
+            return {"ci_wait_id": awaited_id, "ci_status": row["status"],
+                    "ci_summary": row["summary"], "failing_check_url": row["failing_url"],
+                    "note": row["summary"]}
         if kind == "stack_deployment":
             row = connection.execute(
                 text("SELECT status, open_url, commit_sha FROM stack_deployments WHERE id = :r"),
@@ -2914,6 +2995,8 @@ def resume_awaited(
             # resumption paths and must not be touched here.
             continue
         table, ok_states, bad_states = table_spec
+        if kind == "ci_wait":
+            _look_at_ci(connection, project_id, awaited_id)
         try:
             row = connection.execute(
                 text(f"SELECT status FROM {table} WHERE id = :id"),  # noqa: S608 - fixed set

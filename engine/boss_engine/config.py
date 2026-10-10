@@ -835,6 +835,11 @@ class Settings(BaseSettings):
     sandbox_ci_poll_interval_seconds: int = Field(
         default=5, alias="BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS"
     )
+    # WAIT FOR CI (services/ci_gate.py): how long a build waits for its pull request's checks
+    # before the deploy approval. A failure or a timeout blocks the deploy; 0 turns the wait off.
+    ci_wait_timeout_seconds: int = Field(
+        default=1800, alias="BOSS_CI_WAIT_TIMEOUT_SECONDS"
+    )
     pipeline_provider: str = Field(
         default="github_actions", alias="BOSS_PIPELINE_PROVIDER"
     )
