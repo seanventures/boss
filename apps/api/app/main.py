@@ -30295,6 +30295,12 @@ from .routers.architecture import build_architecture_router
 
 app.include_router(build_architecture_router(engine=engine,
                                              require_reader=require_project_reader))
+from .routers.deliverable_review import build_deliverable_review_router
+
+app.include_router(build_deliverable_review_router(
+    engine=engine, require_reader=require_code_task_reader,
+    require_write_actor=require_project_write_actor,
+))
 from .hardware_api import mount_hardware_routes
 
 mount_hardware_routes(app, require_project_actor, require_project_reader)
