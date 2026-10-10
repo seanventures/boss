@@ -80,7 +80,7 @@ def test_runtime_context_excludes_tests_and_scratch_but_retains_runtime_sources(
     # instructions must not carry them into API/worker or Next runtime images.
     ignored = set((ROOT / ".dockerignore").read_text().splitlines())
     for path in ("apps/api/tests", "apps/worker/tests", "apps/web/tests",
-                 "packages/api-client/tests", "**/__probe_tmp"):
+                 "packages/api-client/tests", "tools/tests", "**/__probe_tmp"):
         assert path in ignored
     for path in ("apps/api/app", "apps/worker/boss_worker", "apps/web/app", "apps/web/lib"):
         assert path not in ignored and (ROOT / path).is_dir()

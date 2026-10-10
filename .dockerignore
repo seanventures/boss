@@ -29,4 +29,5 @@ apps/api/tests
 apps/worker/tests
 apps/web/tests
 packages/api-client/tests
+tools/tests
 **/__probe_tmp
