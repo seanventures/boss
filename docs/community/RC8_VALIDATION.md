@@ -27,6 +27,8 @@ The following qualification remains open:
 - Uncoached first-run testing by people outside the build team.
 - Verification that the hosted website serves this candidate's installer and guides.
 
+A first-use navigation from Home to Approvals remained on its loading state in the browser fixture, although the decision API answered promptly. A full reload displayed the actual decisions. This observation remains a navigation qualification blocker; a complete first-run journey has not passed.
+
 The worker currently stops its heartbeat before sending the completion acknowledgment. Crash/reclaim fencing passed, but a delayed completion acknowledgment remains a qualification limit. Protect an uncertain attempt from duplicate effects and reconcile its outcome before retrying.
 
 The release download contains source code and a checksum, rather than prebuilt container images. Check the pinned release instructions in the [release notes](RELEASE_NOTES_v1.0-rc8.md).

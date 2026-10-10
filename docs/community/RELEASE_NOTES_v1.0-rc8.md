@@ -40,7 +40,7 @@ The release changes have targeted source tests and independent review. Recovery 
 
 The production API and worker were also exercised in a disposable Docker installation: canonical Owner sign-in, tenant and worker authority, audit verification, a harmless job, cancellation, heartbeat, crash/reclaim fencing and clean restart passed. Browser checks covered actual sign-in, the Home next action and responsive task composition. See the [validation record](RC8_VALIDATION.md) for the final scope.
 
-Supported-host clean installation, a genuine useful provider result, restored-snapshot effect reconciliation and uncoached human testing remain open. The worker stops its heartbeat before sending its completion acknowledgment; delayed completion remains a qualification limit. RC8 publication alone does not qualify invitations or deploy the hosted website.
+Supported-host clean installation, a genuine useful provider result, restored-snapshot effect reconciliation and uncoached human testing remain open. First-use area navigation also stalled in the browser fixture until a full reload; this remains an invitation blocker. The worker stops its heartbeat before sending its completion acknowledgment; delayed completion remains a qualification limit. RC8 publication alone does not qualify invitations or deploy the hosted website.
 
 Several capabilities remain held behind their existing safeguards: live debugging investigations, direct host changes outside an approved plan, cloud-account deploy runs, auto-deploy, the agent host shell and host-backed preview sandboxes. Readable records do not imply these execution paths are enabled.
 
