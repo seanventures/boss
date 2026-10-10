@@ -773,7 +773,8 @@ class SSHContainerConnector:
 
     def apply(self, engine, settings: Settings, target: dict, run_id: str,
               plan: dict, ref: Optional[str] = None, *,
-              governance: Optional[dict] = None) -> dict:
+              governance: Optional[dict] = None,
+              app_env: Optional[dict] = None) -> dict:
         """Place the artifact. Refuses if validate() is unhappy — a plan built on a broken
         target is not worth executing, and finding out mid-transfer is worse.
 
@@ -836,7 +837,7 @@ class SSHContainerConnector:
                             app_entry=_app_entry(target),
                             app_port=_app_port(target), name=target.get("app_name"), ref=ref,
                             key_material=key_material, source=source,
-                            governance=governance)
+                            governance=governance, app_env=app_env)
         result["connector"] = self.kind
         return result
 

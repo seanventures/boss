@@ -312,6 +312,52 @@ def values_for_env(c, *, org_id: str, project_id: str, app_key: str, env: str) -
     return values, withheld
 
 
+def declared_names(c, *, project_id: str, app_key: str) -> list[str]:
+    """The secrets the app's templates declare (any application not abandoned): names only."""
+    rows = c.execute(text(
+        "SELECT t.manifest -> 'secrets' AS secrets FROM app_template_applications a "
+        "JOIN app_templates t ON t.id = a.template_id WHERE a.project_id = :p AND a.app_key = :a "
+        "AND a.status <> 'abandoned' ORDER BY a.created_at"),
+        {"p": project_id, "a": app_key}).mappings().all()
+    names: list[str] = []
+    for r in rows:
+        raw = r["secrets"]
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        for spec in raw or []:
+            name = spec.get("name") if isinstance(spec, dict) else None
+            if name and name not in names:
+                names.append(str(name))
+    return names
+
+
+def deploy_secrets(c, *, project_id: str, app_key: str) -> tuple[list[dict], list[str]]:
+    """What a deploy of this app passes, BY NAME, and the words for each required secret it
+    cannot pass. Never a value: this is what a plan, a ChangeSet and a decision may carry.
+
+    Required = every secret the app's templates declare. It is missing when it has no `deploy`
+    binding, or its deploy binding is a live key a person has not approved (the decision
+    `put` raised). Undeclared deploy bindings (an issued sign-in client, F6) are passed too."""
+    rows = c.execute(text(
+        "SELECT name, mode, vault_item_id, live_decision_id FROM app_secret_bindings "
+        "WHERE project_id = :p AND app_key = :a AND env = 'deploy' ORDER BY name"),
+        {"p": project_id, "a": app_key}).mappings().all()
+    bound = {r["name"]: r for r in rows}
+    passed: list[dict] = []
+    missing: list[str] = []
+    for name in sorted(set(bound) | set(declared_names(c, project_id=project_id, app_key=app_key))):
+        r = bound.get(name)
+        if r is None or (r["mode"] != "stub" and not r["vault_item_id"]):
+            missing.append(f"{name} has no deploy value")
+            continue
+        if r["mode"] == "live" and not _live_approved(c, r["live_decision_id"]):
+            missing.append(f"{name} is a live key a person has not approved yet"
+                           + (f" (decision {r['live_decision_id']})" if r["live_decision_id"] else ""))
+            continue
+        passed.append({"name": name, "mode": r["mode"], "source": "app_secret", "env": "deploy"})
+    return passed, missing
+
+
 def ensure_test_defaults(c, *, org_id: str, project_id: str, app_key: str, manifest: TemplateManifest,
                          actor_id: Optional[str], dry_run: bool = False) -> list[str]:
     """At apply: a secret with test_default generated/stub gets its build and preview bindings
