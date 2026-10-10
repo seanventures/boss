@@ -33,6 +33,7 @@ tools/tests
 **/__probe_tmp
 
 # Contributor QA utilities remain in source archives, outside production runtimes.
+scripts/seed_demo.py
 engine/boss_engine/identity/seed_accounts.py
 engine/boss_engine/cli/console_test.py
 engine/boss_engine/services/console_driver.py
