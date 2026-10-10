@@ -186,7 +186,8 @@ def test_invalid_binding_refuses_before_effects(client, engine, agreement_world,
     if kind == "expired":
         monkeypatch.setattr(work_agreement.time, "time", lambda: agreement["expires_at_unix"])
     elif kind == "signature":
-        parts = agreement["binding_token"].split("."); parts[3] = "0" * 64
+        parts = agreement["binding_token"].split(".")
+        parts[3] = "0" * 64
         agreement["binding_token"] = ".".join(parts)
     elif kind == "content":
         agreement["content_hash"] = "0" * 64
@@ -225,7 +226,8 @@ def test_authority_revoked_after_preview_still_refuses(client, engine, agreement
 
 def test_viewer_can_read_but_binding_does_not_grant_start(client, engine, agreement_world):
     world, _, *_ = agreement_world
-    viewer = world.person("agreement-viewer"); world.bind(viewer, "viewer", project=world.project_a)
+    viewer = world.person("agreement-viewer")
+    world.bind(viewer, "viewer", project=world.project_a)
     agreement = preview(client, world, viewer)
     before = effects(engine)
     response = start(client, world, viewer, agreement)
