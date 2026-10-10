@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { GatedButton } from "../../components/gated";
 import { postJson } from "./cockpit-actions";
+import { SavedChecks } from "./saved-checks";
 
 type Review = {
   id: string; actor: string; outcome: "accepted" | "changes_requested"; note: string;
@@ -12,6 +13,7 @@ type Review = {
 export type ResultReviewData = {
   snapshot_hash: string; reviewable: boolean; unavailable_reason: string | null;
   snapshot: {
+    project_id?: string;
     delivered_head: string | null; pull_request_url: string | null; receipt_id: string | null;
     receipt_status?: string | null; effect_kind?: string | null;
     criteria: string[];
@@ -120,6 +122,9 @@ export function ResultReview({ runId, onChangeRequested }: {
           {review.outcome === "changes_requested" ? <button type="button" className="ag-link" onClick={() => onChangeRequested(`Review of ${runId} at ${review.snapshot.delivered_head}:\n${review.note}`)}>Prepare this change</button> : null}
         </li>)}
       </ol></details> : null}
+      {snapshot.project_id ? <SavedChecks key={`${snapshot.project_id}:${runId}`} projectId={snapshot.project_id} runId={runId}
+        snapshotHash={data!.snapshot_hash} criteria={snapshot.criteria}
+        acceptedReviewId={data!.reviewable && data!.history[0]?.outcome === "accepted" && data!.history[0].snapshot_hash === data!.snapshot_hash ? data!.history[0].id : null} /> : null}
     </> : null}
   </section>;
 }
