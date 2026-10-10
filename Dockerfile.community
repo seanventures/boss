@@ -55,10 +55,13 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # A sandbox uid (61000-61999) is never in the boss group, so it cannot run it.
 COPY --from=sandbox-helper /tmp/boss-sandbox-exec /usr/local/libexec/boss/boss-sandbox-exec
 COPY scripts/sandbox/entrypoint.sh /usr/local/bin/boss-entrypoint
+COPY scripts/install/recovery_guard.py /usr/local/libexec/boss/recovery_guard.py
 RUN chown root:boss /usr/local/libexec/boss/boss-sandbox-exec \
     && chmod 0750 /usr/local/libexec/boss/boss-sandbox-exec \
     && setcap cap_setuid,cap_setgid,cap_chown,cap_fowner+ep /usr/local/libexec/boss/boss-sandbox-exec \
-    && chmod 0755 /usr/local/bin/boss-entrypoint
+    && chmod 0755 /usr/local/bin/boss-entrypoint /usr/local/libexec/boss/recovery_guard.py
+# Separate from identity/key state; Compose mounts this root read-only in every backend role.
+RUN mkdir -p /var/lib/boss/recovery && chmod 0755 /var/lib/boss/recovery
 
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 COPY apps/worker/requirements.txt /tmp/worker-requirements.txt
@@ -97,6 +100,8 @@ COPY docs/product/TRACEABILITY.md ./docs/product/TRACEABILITY.md
 
 ARG BOSS_SOURCE_SHA=unknown
 ARG BOSS_BUILT_AT=unknown
+LABEL io.boss.recovery-guard="boss-recovery-hold/v1" \
+    org.opencontainers.image.revision=$BOSS_SOURCE_SHA
 ENV BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA \
     BOSS_BUILT_AT=$BOSS_BUILT_AT
 RUN chown -R boss:boss /app /var/lib/boss/artifacts /var/lib/boss/identity
@@ -106,6 +111,9 @@ USER boss
 # Fail the build if the installed browser cannot launch as the runtime user.
 RUN python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); b.close(); p.stop()'
 RUN grok --version >/dev/null
+
+# Non-API roles check the common hold before importing any application code.
+ENTRYPOINT ["python3", "/usr/local/libexec/boss/recovery_guard.py"]
 
 FROM python-runtime AS api
 EXPOSE 8000

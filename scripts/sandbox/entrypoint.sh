@@ -19,6 +19,9 @@
 #      need; nothing else can ever be regained.
 set -eu
 
+# Refuse restored state before privileged initialization or any application import.
+python3 /usr/local/libexec/boss/recovery_guard.py --check
+
 UID_RANGE="61000-61999"
 RUN_ROOT="${BOSS_SANDBOX_RUN_ROOT:-/var/lib/boss/sandboxes}"
 SHIM_ROOT="/run/boss-shim"
