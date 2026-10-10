@@ -289,6 +289,7 @@ services:
       BOSS_CODE_REPAIR_MAX_RETRIES: ${BOSS_CODE_REPAIR_MAX_RETRIES:-0}
       BOSS_SANDBOX_CI_TIMEOUT_SECONDS: ${BOSS_SANDBOX_CI_TIMEOUT_SECONDS:-120}
       BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS: ${BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS:-5}
+      BOSS_CI_WAIT_TIMEOUT_SECONDS: ${BOSS_CI_WAIT_TIMEOUT_SECONDS:-1800}
       # Mirror config.py's default, never empty: an unset compose variable still SETS the
       # variable to "", which would override the real default with nothing.
       BOSS_CODE_AGENT_ENGINE: ${BOSS_CODE_AGENT_ENGINE:-claude_code}
@@ -449,6 +450,7 @@ services:
       BOSS_CODE_REPAIR_MAX_RETRIES: ${BOSS_CODE_REPAIR_MAX_RETRIES:-0}
       BOSS_SANDBOX_CI_TIMEOUT_SECONDS: ${BOSS_SANDBOX_CI_TIMEOUT_SECONDS:-120}
       BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS: ${BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS:-5}
+      BOSS_CI_WAIT_TIMEOUT_SECONDS: ${BOSS_CI_WAIT_TIMEOUT_SECONDS:-1800}
       # Mirror config.py's default, never empty: an unset compose variable still SETS the
       # variable to "", which would override the real default with nothing.
       BOSS_CODE_AGENT_ENGINE: ${BOSS_CODE_AGENT_ENGINE:-claude_code}

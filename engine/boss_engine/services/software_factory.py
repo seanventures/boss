@@ -1202,7 +1202,7 @@ class SoftwareFactoryService:
         row = connection.execute(
             sql(
                 """
-                SELECT status, recommendation
+                SELECT status, recommendation, approved_by
                 FROM decisions
                 WHERE id = :decision_id AND project_id = :project_id
                 FOR UPDATE
@@ -1218,6 +1218,14 @@ class SoftwareFactoryService:
         for key, value in expected.items():
             if recommendation.get(key) != value:
                 raise ValueError(f"The approved decision does not match {key}.")
+        # CI: a CI change needs a person's approval, and a deploy needs CI cleared — checked
+        # again here, at the effect, whatever path the decision reached `approved` by.
+        from . import ci_gate
+
+        try:
+            ci_gate.refuse_effect(connection, project_id, dict(row))
+        except ci_gate.CiGateRefused as refused:
+            raise ValueError(refused.message) from refused
         if action == "review_deployment" and expected.get("environment", "").lower().startswith("prod"):
             rollback_plan = recommendation.get("rollback_plan")
             if not isinstance(rollback_plan, str) or not rollback_plan.strip():
@@ -1892,6 +1900,16 @@ class SoftwareFactoryService:
         branch_head_sha = commit_shas[-1] if commit_shas else self.github.ensure_branch(
             branch_name
         )
+        # CI CHANGED (services/ci_gate.py): a change under .github/workflows/ is flagged on the
+        # pull request and in BOSS's review, gets deterministic static checks, and needs a
+        # PERSON's approval before merge or deploy (ci_gate.refuse_approval).
+        from . import ci_gate
+
+        ci_changed = ci_gate.ci_changed_evidence(files)
+        if ci_changed:
+            ci_changed["head_sha"] = branch_head_sha
+            self._flag_ci_changed(connection, project_id, pr.number, pr.url, ci_changed,
+                                  pr_receipt["id"])
         try:
             validation = self.pipeline.wait_for_verdict(
                 branch_head_sha,
@@ -2077,6 +2095,9 @@ class SoftwareFactoryService:
                     validation_status
                 ),
                 "github_commits": commit_shas,
+                "ci_changed": bool(ci_changed),
+                "ci_changed_files": ci_changed.get("ci_changed_files") or [],
+                "ci_findings": ci_changed.get("ci_findings") or [],
                 "openai_response_id": review_provider_ref,
                 "routing_log_id": route["route_decision_log_id"],
                 "agent_module": self._module_descriptor(module_spec),
@@ -2100,7 +2121,14 @@ class SoftwareFactoryService:
                     f"Automated checks: {validation_status}"
                     + (f" — {validation_summary}" if validation_summary else "")
                     + ". Review the diff on GitHub, then approve to merge or reject to send back."
+                    + (f" {ci_changed['ci_changed_note']}" if ci_changed else "")
                 ),
+                "head_sha": branch_head_sha,
+                # What ci_gate.refuse_approval reads: a CI change needs a PERSON's approval.
+                "ci_changed": bool(ci_changed),
+                "ci_changed_files": ci_changed.get("ci_changed_files") or [],
+                "ci_findings": ci_changed.get("ci_findings") or [],
+                "requires_person_approval": bool(ci_changed),
                 "artifact_id": artifact_id,
                 "diff_artifact_id": diff_artifact_id,
                 "test_report_artifact_id": test_report_artifact_id,
@@ -2200,6 +2228,32 @@ class SoftwareFactoryService:
             "local_validation_receipt_id": local_validation_receipt_id,
             **plane_fields,
         }
+
+    def _flag_ci_changed(self, connection: Any, project_id: str, number: int, url: str,
+                         ci_changed: dict, receipt_id: str) -> None:
+        """Say "CI changed" ON the pull request (a label and a comment with the static checks)
+        and in BOSS's events. Best effort at GitHub: the gate itself is BOSS's, not the label."""
+        from . import ci_gate
+
+        posted: dict[str, Any] = {}
+        findings = [ci_gate.Finding(**f) for f in ci_changed.get("ci_findings") or []]
+        try:
+            self.github.create_issue_comment(
+                number, ci_gate.ci_changed_comment(ci_changed["ci_changed_files"], findings))
+            posted["comment"] = True
+        except Exception as error:  # noqa: BLE001
+            posted["comment_error"] = f"{type(error).__name__}: {error}"[:200]
+        try:
+            self.github._request(  # noqa: SLF001 — the adapter's one HTTP edge
+                "POST", f"/repos/{self.github.repository_full_name}/issues/{number}/labels",
+                {"labels": ["CI changed"]})
+            posted["label"] = True
+        except Exception as error:  # noqa: BLE001
+            posted["label_error"] = f"{type(error).__name__}: {error}"[:200]
+        self.events.emit(connection, project_id, "software_factory.ci_changed", "coding_worker",
+                         "receipt", receipt_id,
+                         {"pull_request_url": url, "files": ci_changed["ci_changed_files"],
+                          "findings": len(findings), **posted})
 
     def merge_pull_request(
         self,

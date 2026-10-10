@@ -5651,6 +5651,8 @@ _WORK_TABLES: dict[str, str] = {
     # An architecture waiting for a person: cancelling the run closes the review, and the
     # run's decision is no longer answerable (run_decisions.refusal_to_answer).
     "architecture": "architecture_reviews",
+    # Waiting for CI (ci_gate): cancelling the run stops the looking; the wait no longer gates.
+    "ci_wait": "ci_waits",
 }
 
 _WORK_TERMINAL: frozenset[str] = frozenset(
@@ -5671,6 +5673,7 @@ _AWAIT_LABELS: dict[str, str] = {
     "code_task": "the build to finish",
     "preview": "the preview to come up",
     "deployment": "the deployment to finish",
+    "ci_wait": "CI to finish",
     "agent_run": "the agent's approved run to finish",
     "architecture": "a person to approve the architecture",
 }

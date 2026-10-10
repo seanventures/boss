@@ -208,6 +208,20 @@ def run_permissions(claims: RunTokenClaims, *, db: Any) -> dict[str, str]:
         p = passports.get(aid, db=db)
         sources.append(((p.external_ceiling if p else {}) or {}).get("github") or {})
     needs = (claims.task.resources or {}).get("github_permissions")
+    if isinstance(needs, Mapping) and needs.get("workflows") == "write":
+        # THE OPT-IN IS THE GRANT (services/ci_gate.py): when every repository of this run has
+        # "Builds may change CI workflows" on (Owner/Admin, step-up) and the identity policy
+        # allows it, the grant and every ceiling in the chain hold workflows: write FOR THIS RUN'S
+        # REPOSITORIES ONLY. Read live, so turning the opt-in off withdraws it at the next mint.
+        from ..services.ci_gate import opt_in_grants
+
+        try:
+            raise_wf = opt_in_grants(db, claims.org_id, claims.task.project_id,
+                                     run_repos(claims.task))
+        except Exception:  # noqa: BLE001 — unreadable: nothing is raised
+            raise_wf = False
+        if raise_wf:
+            sources = [{**s, "workflows": "write"} for s in sources]
     # A run that declared no needs gets READ ONLY, never the grant's full GitHub authority (#M):
     # a build declares what it writes (runs.BUILD_GITHUB_NEEDS); a step that says nothing reads.
     sources.append(needs if isinstance(needs, Mapping) else DEFAULT_NEEDS)
