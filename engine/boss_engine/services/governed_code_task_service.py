@@ -1123,12 +1123,14 @@ def _wait_for_ci(engine, settings, sf, proposal: dict, project_id: str, run_id: 
     url = proposal.get("pull_request_url")
     if not number:
         return {"status": "skipped", "summary": "No pull request to wait for CI on."}
+    sha = ""
     try:
         reader = ci_gate.AdapterCiReader(sf.github)
         sha = sf.github.pull_request_snapshot(int(number)).get("head_sha") or ""
         if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha)):
-            return {"status": "skipped", "summary": "The pull request's head commit is unknown, "
-                                                    "so BOSS could not wait for its CI."}
+            sha = ""
+            return _ci_unreadable(engine, project_id, run_id, repository, url, "",
+                                  "the pull request's head commit is unknown")
         has_ci = ci_gate._safe_has_workflows(reader, sha)  # noqa: SLF001
         if not has_ci and not ci_gate.workflow_paths(
                 (proposal.get("files_changed") or [])):
@@ -1146,12 +1148,32 @@ def _wait_for_ci(engine, settings, sf, proposal: dict, project_id: str, run_id: 
         got = ci_gate.run_blocking(lambda: _transaction(engine), wait["id"], reader, sleep=sleep)
         out = {"id": got["id"], "status": got["status"], "summary": got["summary"],
                "failing_url": got.get("failing_url")}
-    except Exception as exc:  # noqa: BLE001 — never lose the PR to a CI read
-        out = {"status": "error", "summary": f"Could not wait for CI: {type(exc).__name__}: "
-                                             f"{str(exc)[:200]}"}
+    except Exception as exc:  # noqa: BLE001 — never lose the PR to a CI read; FAIL CLOSED
+        return _ci_unreadable(engine, project_id, run_id, repository, url,
+                              sha if isinstance(sha, str) else "",
+                              f"{type(exc).__name__}: {str(exc)[:200]}")
     with _transaction(engine) as c:
         emit_event(c, project_id, "code_task.ci_waited", "boss", "code_task_run", run_id,
                    {"pull_request_url": url, **out})
+    return out
+
+
+def _ci_unreadable(engine, project_id: str, run_id: str, repository: str, url, sha: str,
+                   why: str) -> dict:
+    """FAIL CLOSED: CI that could not be read is recorded against the PR as `unreadable`, so the
+    merge and the deploy approval say "CI could not be read: <why>" until it is read again (or a
+    person forces the merge with a note). Only an explicit no-CI repository passes unread."""
+    out = {"status": "unreadable", "summary": ci_gate.unreadable_words(why)}
+    try:
+        with _transaction(engine) as c:
+            wait = ci_gate.record_unreadable(c, project_id=project_id, repository=repository,
+                                             why=why, head_sha=sha, pull_request_url=url,
+                                             code_task_run_id=run_id)
+            out["id"] = wait["id"]
+            emit_event(c, project_id, "code_task.ci_waited", "boss", "code_task_run", run_id,
+                       {"pull_request_url": url, **out})
+    except Exception:  # noqa: BLE001 — recording must never sink the finished PR
+        logger.warning("could not record unreadable CI for %s", run_id, exc_info=True)
     return out
 
 

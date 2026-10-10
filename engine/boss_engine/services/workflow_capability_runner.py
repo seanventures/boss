@@ -2693,7 +2693,7 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     # check or a timeout fails the step with the words and the failing check's link.
     "ci_wait": ("ci_waits",
                 frozenset({"passed", "no_ci"}),
-                frozenset({"failed", "timed_out", "cancelled"})),
+                frozenset({"failed", "timed_out", "unreadable", "cancelled"})),
 }
 
 #: Where a table keeps the reason its run ended, when it is not a column called `error`.
