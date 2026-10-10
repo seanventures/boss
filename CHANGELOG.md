@@ -22,6 +22,8 @@ Friends-and-family preparation. Notes: [docs/community/RELEASE_NOTES_v1.0-rc8.md
 - Discovery cancellation fences late work, receipts and retries against the owning run and job lease.
 - Direct-change spec review honors manual-approval policy and retains its gate when settings cannot be read.
 - Home primary buttons retain readable white text across normal and hover gradients.
+- First area navigation preserves already rendered areas and their mounted unsent drafts.
+- Model-connection and Standard Product Delivery guides match the actual proof records and single preview step.
 - Ubuntu installation runs the local node agent with Bash, the shell its script requires.
 - Automatic database detection uses the confined repository reader. Failed database or ledger cleanup stays visibly pending for retry instead of reporting success.
 - Architecture versions commit a budget reservation, job/model leases and a receipt before model submission, and bind approval to the current project's exact PRD.
