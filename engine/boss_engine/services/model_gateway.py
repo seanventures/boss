@@ -18,7 +18,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .budget import BudgetGovernor
-from .core import emit_event, make_id, now_utc
+from .core import create_blocking_decision, emit_event, make_id, now_utc
 from .entitlements import EntitlementBrokerService
 from .included_spend import source_is_included, split
 from .jobs import JobLeaseService
@@ -319,7 +319,21 @@ class ModelGatewayService:
                 ),
                 {"id": row["id"]},
             )
-            if row["budget_reservation_id"]:
+            unresolved = connection.execute(text(
+                "SELECT id FROM model_gateway_invocations WHERE model_gateway_lease_id=:id "
+                "AND status='in_progress' LIMIT 1"), {"id": row['id']}).first()
+            if unresolved:
+                decision_id = create_blocking_decision(
+                    connection, project_id, None,
+                    f"Reconcile expired model invocation {unresolved[0]}",
+                    {"action": "verify_provider_outcome_before_retry", "lease_id": row['id']},
+                    {"budget_reservation_id": row['budget_reservation_id']},
+                    'model_outcome_unknown',
+                )
+                emit_event(connection, project_id, 'model_gateway.reconciliation_required', actor,
+                           'model_gateway_lease', row['id'],
+                           {"decision_id": decision_id, "budget_reservation_id": row['budget_reservation_id']})
+            elif row["budget_reservation_id"]:
                 self.budget.release(
                     connection,
                     project_id,
@@ -900,6 +914,9 @@ class ModelGatewayService:
                    "model_gateway_invocation", invocation_id,
                    {"lease_id": lease_id, "receipt_id": invocation["receipt_id"],
                     "provider_ref": provider_ref})
+        if reservation_id:
+            self.budget._resolve_reconciliation(connection, project_id, reservation_id,
+                                                 'Model invocation outcome recorded.')
         return self._serialize_invocation(dict(row))
 
     @staticmethod
@@ -973,8 +990,6 @@ class ModelGatewayService:
                 ),
                 {"id": lease_id},
             )
-            if lease.get("budget_reservation_id"):
-                self.budget.release(connection, project_id, lease["budget_reservation_id"], reason)
             emit_event(
                 connection, project_id, "model_gateway.lease_expired", worker_id,
                 "model_gateway_lease", lease_id,
@@ -1009,6 +1024,10 @@ class ModelGatewayService:
                 "model_gateway_invocation", invocation_id,
                 {"lease_id": lease_id, "receipt_id": invocation["receipt_id"], "reason": reason},
             )
+        # The pre-dispatch caller has positively established that no provider call occurred.
+        # This remains valid when the generic reaper already marked the lease expired.
+        if lease.get("budget_reservation_id"):
+            self.budget.release(connection, project_id, lease["budget_reservation_id"], reason)
         return {"lease_id": lease_id, "status": "expired"}
 
     def resolve_execution_binding(
