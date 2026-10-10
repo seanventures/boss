@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc8"><img alt="Release v1.0-rc8" src="https://img.shields.io/badge/release-v1.0--rc7-1aa89a?style=flat-square"></a>
+  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc8"><img alt="Release v1.0-rc8" src="https://img.shields.io/badge/release-v1.0--rc8-1aa89a?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-101820?style=flat-square"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/deploy-self--hosted-101820?style=flat-square">
   <img alt="Interfaces: web, terminal, CLI, MCP" src="https://img.shields.io/badge/interfaces-web%20%C2%B7%20terminal%20%C2%B7%20CLI%20%C2%B7%20MCP-101820?style=flat-square">
