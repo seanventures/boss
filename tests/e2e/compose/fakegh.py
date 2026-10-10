@@ -4,6 +4,14 @@ It IS the harness's fakes (tests/e2e/stubs: the intercepting proxy, the git-back
 git http-backend on bare repos, the blocked-egress log) plus the half of GitHub a real install
 reaches only through a person's browser and the App's own JWT:
 
+  ACCOUNT TYPE: FAKEGH_ACCOUNT_TYPE (User | Organization; POST /_github_account switches it, with
+  a fresh App world). Every account-settings page exists ONLY in that type's tree, as at GitHub:
+  a personal account's /settings/..., an organisation's /organizations/<org>/settings/...; the
+  other tree answers 404 (a BOSS that built the wrong link fails here as it did for paramg).
+  The App's permissions and the installation's ACCEPTED permissions are kept apart: adding
+  Workflows on the App's permissions page leaves the installation waiting until "Accept new
+  permissions" on the installation's page, and tokens are minted against what was accepted.
+
   browser   POST github.com/settings/apps/new?state=      the manifest form -> a "Create GitHub App"
                                                            page -> back to the manifest's
                                                            redirect_url with ?code=&state=
@@ -64,6 +72,7 @@ CA_OUT = Path(os.environ.get("FAKEGH_CA_OUT", "/e2e-ca"))
 OWNER = os.environ.get("FAKEGH_ACCOUNT", "fxd-org")
 REPOS = [r for r in os.environ.get("FAKEGH_REPOS", "fxd-org/fxd-build-app").split(",") if r]
 INSTALLATION_ID = int(os.environ.get("FAKEGH_INSTALLATION_ID", "7301"))
+ACCOUNT_TYPE = "User" if os.environ.get("FAKEGH_ACCOUNT_TYPE", "Organization").lower() == "user" else "Organization"
 USER_LOGIN = os.environ.get("FAKEGH_USER_LOGIN", "fxd-owner")
 _LOCAL = threading.local()
 
@@ -158,12 +167,34 @@ def _verify_app_jwt(auth: str) -> Optional[str]:
     return None
 
 
+def settings_root() -> str:
+    """The account's settings tree, as GitHub has it for this account type."""
+    return "/settings" if ACCOUNT_TYPE == "User" else f"/organizations/{OWNER}/settings"
+
+
+def _accepted() -> dict[str, str]:
+    """What the installation ACCEPTED (differs from the App's permissions until accepted)."""
+    acc = APPS.data.get("accepted")
+    return dict(acc) if isinstance(acc, dict) else dict((APPS.data.get("app") or {}).get("permissions", {}))
+
+
 def _installation() -> dict[str, Any]:
-    return {"id": INSTALLATION_ID, "account": {"login": OWNER, "type": "Organization"},
+    return {"id": INSTALLATION_ID, "account": {"login": OWNER, "type": ACCOUNT_TYPE},
             "repository_selection": "selected", "app_id": (APPS.data.get("app") or {}).get("id"),
             "app_slug": (APPS.data.get("app") or {}).get("slug"),
-            "permissions": (APPS.data.get("app") or {}).get("permissions", {}),
-            "html_url": f"https://github.com/organizations/{OWNER}/settings/installations/{INSTALLATION_ID}"}
+            "permissions": _accepted(),
+            "html_url": f"https://github.com{settings_root()}/installations/{INSTALLATION_ID}"}
+
+
+def configure(account: str, kind: str, repos: list[str]) -> None:
+    """Switch the fake to another account (a person or an organisation) with a fresh App world."""
+    global OWNER, ACCOUNT_TYPE, REPOS
+    OWNER = account
+    ACCOUNT_TYPE = "User" if kind.lower() == "user" else "Organization"
+    REPOS = repos or [f"{account}/boss-sandbox"]
+    with APPS.lock:
+        APPS.data = {"manifests": {}, "app": None, "installed": False, "tokens": {}}
+        APPS.save()
 
 
 def _token_of(auth: str) -> Optional[dict[str, Any]]:
@@ -188,7 +219,7 @@ def app_api(method: str, path: str, auth: str, body: Any) -> Optional[tuple[int,
                                     serialization.NoEncryption()).decode()
             slug = "".join(c if c.isalnum() else "-" for c in str(manifest.get("name") or "boss").lower()).strip("-")
             app = {"id": 900000 + secrets.randbelow(99999), "slug": slug, "name": manifest.get("name"),
-                   "node_id": "A_fxd", "owner": {"login": OWNER, "type": "Organization"},
+                   "node_id": "A_fxd", "owner": {"login": OWNER, "type": ACCOUNT_TYPE},
                    "html_url": f"https://github.com/apps/{slug}", "client_id": "Iv1.fxd" + secrets.token_hex(6),
                    "client_secret": secrets.token_hex(20), "webhook_secret": None, "pem": pem,
                    "public_pem": key.public_key().public_bytes(
@@ -196,7 +227,7 @@ def app_api(method: str, path: str, auth: str, body: Any) -> Optional[tuple[int,
                    "permissions": manifest.get("default_permissions") or {}, "events": [],
                    "setup_url": manifest.get("setup_url"), "redirect_url": manifest.get("redirect_url"),
                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ")}
-            APPS.data.update(app=app, installed=False)
+            APPS.data.update(app=app, installed=False, accepted=None)
             APPS.save()
         out = {k: v for k, v in app.items() if k not in ("public_pem", "setup_url", "redirect_url")}
         return 201, out
@@ -213,7 +244,7 @@ def app_api(method: str, path: str, auth: str, body: Any) -> Optional[tuple[int,
             return 200, _installation()
         if m == f"/app/installations/{INSTALLATION_ID}/access_tokens" and method == "POST" and APPS.data["installed"]:
             body = body if isinstance(body, dict) else {}
-            granted = app.get("permissions") or {}
+            granted = _accepted()
             asked = body.get("permissions") or dict(granted)
             levels = {"none": 0, "read": 1, "write": 2}
             for name, level in asked.items():
@@ -235,6 +266,13 @@ def app_api(method: str, path: str, auth: str, body: Any) -> Optional[tuple[int,
                          "permissions": asked, "repository_selection": "selected",
                          "repositories": [{"full_name": r, "name": r.split("/")[1]} for r in tok["repositories"]]}
         return 404, {"message": "Not Found"}
+    if m.startswith("/users/") and method == "GET" and m.count("/") == 2:
+        login = m.split("/")[2]
+        if login.lower() == OWNER.lower():
+            return 200, {"login": OWNER, "type": ACCOUNT_TYPE}
+        if login.lower() == USER_LOGIN.lower():
+            return 200, {"login": USER_LOGIN, "type": "User"}
+        return 404, {"message": "Not Found"}
     if m == "/user" and auth.startswith("Bearer ghu_"):
         raw = auth[7:].strip()
         if any(secrets.compare_digest(u["value"], raw) for u in APPS.data.get("user_tokens", [])):
@@ -253,7 +291,7 @@ def app_api(method: str, path: str, auth: str, body: Any) -> Optional[tuple[int,
                 APPS.save()
             return 204, b""
         repos = [{"full_name": r, "name": r.split("/")[1], "private": True, "default_branch": "main",
-                  "owner": {"login": r.split("/")[0], "type": "Organization"}} for r in tok["repositories"]]
+                  "owner": {"login": r.split("/")[0], "type": ACCOUNT_TYPE}} for r in tok["repositories"]]
         return 200, {"total_count": len(repos), "repositories": repos}
     return None
 
@@ -275,6 +313,44 @@ def browser_page(method: str, path: str, query: str, raw: bytes) -> Optional[tup
     q = {k: v[0] for k, v in parse_qs(query).items()}
     form = {k: v[0] for k, v in parse_qs(raw.decode(errors="replace")).items()} if raw else {}
     html = "text/html; charset=utf-8"
+    root = settings_root()
+    if ("/settings/apps/" in path or "/settings/installations/" in path or path.endswith("/settings/apps/new")) \
+            and not path.startswith(root + "/"):
+        # The other account type's tree: GitHub answers 404 (the defect this fake exists to catch).
+        return 404, _page("Page not found", f"<h2 data-testid=fake-gh-404>404 — not found</h2><p><code>{escape(path)}</code> "
+                          f"is not a page for <b>{escape(OWNER)}</b> ({escape(ACCOUNT_TYPE)}).</p>"), html, {}
+    app_now = APPS.data.get("app") or {}
+    if app_now and path in (f"{root}/apps/{app_now['slug']}/permissions", f"{root}/apps/{app_now['slug']}"):
+        if method == "POST":
+            with APPS.lock:
+                if APPS.data.get("accepted") is None:
+                    APPS.data["accepted"] = dict(app_now.get("permissions") or {})
+                APPS.data["app"]["permissions"] = {**(app_now.get("permissions") or {}), form.get("name", "workflows"):
+                                                   form.get("level", "write")}
+                APPS.save()
+            return 302, b"", "", {"Location": path}
+        perms = "".join(f"<li><code>{escape(k)}</code>: {escape(str(v))}</li>"
+                        for k, v in sorted((app_now.get("permissions") or {}).items()))
+        inner = (f"<h2>{escape(str(app_now['name']))} · Permissions &amp; events</h2><ul>{perms}</ul>"
+                 f"<form method=post action='{escape(root)}/apps/{escape(app_now['slug'])}/permissions'>"
+                 "<input type=hidden name=name value=workflows><input type=hidden name=level value=write>"
+                 "<button data-testid=fake-gh-add-workflows type=submit>Workflows: Read and write · Save changes</button></form>")
+        return 200, _page("App permissions", inner), html, {}
+    if app_now and path == f"{root}/installations/{INSTALLATION_ID}" and APPS.data.get("installed"):
+        pending = {k: v for k, v in (app_now.get("permissions") or {}).items() if _accepted().get(k) != v}
+        if method == "POST":
+            with APPS.lock:
+                APPS.data["accepted"] = dict(app_now.get("permissions") or {})
+                APPS.save()
+            return 302, b"", "", {"Location": path}
+        repos = "".join(f"<li><code>{escape(r)}</code></li>" for r in REPOS)
+        ask = ("".join(f"<li><code>{escape(k)}</code>: {escape(str(v))}</li>" for k, v in sorted(pending.items()))
+               if pending else "")
+        inner = (f"<h2>{escape(str(app_now['name']))} on {escape(OWNER)}</h2><p>Repository access:</p><ul>{repos}</ul>"
+                 + (f"<p>The App asks for new permissions:</p><ul>{ask}</ul><form method=post action='{escape(path)}'>"
+                    "<button data-testid=fake-gh-accept type=submit>Accept new permissions</button></form>"
+                    if pending else "<p data-testid=fake-gh-no-pending>No pending permission requests.</p>"))
+        return 200, _page("Installation", inner), html, {}
     if path.endswith("/settings/apps/new") and method == "POST":
         try:
             manifest = json.loads(form.get("manifest") or "{}")
@@ -285,7 +361,7 @@ def browser_page(method: str, path: str, query: str, raw: bytes) -> Optional[tup
         inner = (f"<h2>Create GitHub App for {escape(OWNER)}</h2><p>Name: <b data-testid=fake-gh-app-name>"
                  f"{escape(str(manifest.get('name')))}</b></p><p>Permissions:</p><ul>{perms}</ul>"
                  f"<p>Redirect: <code>{escape(str(manifest.get('redirect_url')))}</code></p>"
-                 f"<form method=post action='/settings/apps/new/confirm?{escape(urlencode({'state': q.get('state', '')}))}'>"
+                 f"<form method=post action='{escape(root)}/apps/new/confirm?{escape(urlencode({'state': q.get('state', '')}))}'>"
                  f"<input type=hidden name=manifest value='{escape(json.dumps(manifest), quote=True)}'>"
                  "<button data-testid=fake-gh-create type=submit>Create GitHub App for "
                  f"{escape(OWNER)}</button></form>")
@@ -387,7 +463,16 @@ class Handler(Base):
 
     def _dispatch(self, method: str, path: str, body: Any) -> tuple[int, Any, str]:
         if path == "/_github_app":
-            return 200, APPS.public_view(), "application/json"
+            return 200, {**APPS.public_view(), "account": {"login": OWNER, "type": ACCOUNT_TYPE}, "repos": REPOS,
+                         "accepted": _accepted() if APPS.data.get("app") else None}, "application/json"
+        if path == "/_github_account" and method == "POST":
+            b = body if isinstance(body, dict) else {}
+            configure(str(b.get("login") or OWNER), str(b.get("type") or "Organization"),
+                      [str(r) for r in (b.get("repos") or [])])
+            bound = type(self)
+            for full in REPOS:
+                bound.git.ensure(*full.split("/"))
+            return 200, {"account": {"login": OWNER, "type": ACCOUNT_TYPE}, "repos": REPOS}, "application/json"
         return super()._dispatch(method, path, body)
 
     def _egress(self, method: str, host: str, path: str, query: str, raw: bytes) -> None:
