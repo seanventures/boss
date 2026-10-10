@@ -25,6 +25,7 @@ import { OnboardingHelpRows } from "./onboarding-help-card";
 import { HelpPopover } from "./command-center/help-popover";
 import { nextAction } from "./command-center/next-action";
 import { announcePainted } from "../lib/area-painted";
+import { ReturningBrief } from "./command-center/returning-brief";
 
 /**
  * Existing Command Center records lead with the next useful action. The same composer stays
@@ -280,6 +281,8 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
         </div>
       </section>
 
+      <ReturningBrief view={view} projectId={projectId} orgId={orgId} viewer={viewer ?? actor}
+                      reachable={reachable} visible={visible} container={rootRef} />
       {nowCards}
       <AppsShelf apps={appRows} attention={attention} orgId={orgId} />
       <details className="cc-secondary" data-testid="cc-template-details">
