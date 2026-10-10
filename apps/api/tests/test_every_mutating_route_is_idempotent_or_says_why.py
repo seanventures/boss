@@ -69,14 +69,22 @@ def test_no_mutating_route_outside_v1_except_foreign_protocols():
     assert not strays, f"a write outside /v1/ is outside the idempotency contract: {strays}"
 
 
-def test_a_streaming_write_is_excluded_rather_than_buffered():
-    """A stream cannot be stored to be replayed; buffering one would hang the request."""
+def test_a_streaming_write_has_a_durable_live_replay_contract_or_explicit_exclusion():
+    """A stream that can spend is fenced through completion, not exempted at headers.
+
+    The named contract yields live and stores only a bounded, fully drained response;
+    actual HTTP/PG duplicate and unknown-outcome proofs live in test_agent_voice_stream_intent.
+    A new write stream cannot silently inherit this route-specific policy.
+    """
+    from apps.api.app import stream_intent
     for method, route in _mutating_routes():
         streams = (route.response_class is StreamingResponse
                    or "StreamingResponse(" in inspect.getsource(route.endpoint))
         if streams and route.path.startswith("/v1/"):
-            assert idempotency.exclusion_reason(method, route.path), (method, route.path)
+            assert (stream_intent.governs(method, route.path)
+                    or idempotency.exclusion_reason(method, route.path)), (method, route.path)
     assert idempotency.is_streaming("text/event-stream; charset=utf-8")
+    assert not idempotency.exclusion_reason("POST", "/v1/agents/qa/test")
 
 
 def test_the_middleware_is_installed_inside_authentication():
@@ -130,7 +138,13 @@ def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_doe
             continue
         concrete = _re.sub(r"\{[^}:]+(?::path)?\}", "zzparam", route.path)
         reached.clear()
-        response = client.request(method, concrete, json={},
+        # Governed voice replays check current project permission before the claim.
+        # Use the actual seeded scope; do not mock away that new admission boundary.
+        from apps.api.app import stream_intent
+        probe_body = ({"project_id": "boss-dogfood", "actor": "ceo",
+                       "probe": "intro", "field": "mission"}
+                      if stream_intent.governs(method, concrete) else {})
+        response = client.request(method, concrete, json=probe_body,
                                   headers={idempotency.HEADER: "route-probe-1"})
         excluded = idempotency.exclusion_reason(method, route.path)
         if excluded:

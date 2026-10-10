@@ -6491,6 +6491,10 @@ CREATE TABLE IF NOT EXISTS api_idempotency_keys (
 );
 ALTER TABLE api_idempotency_keys
   ADD COLUMN IF NOT EXISTS response_headers JSONB NOT NULL DEFAULT '[]'::jsonb;
+-- A committed voice model intent stays fenced even after a disconnect or API restart.
+-- Expiry of generic HTTP bookkeeping cannot prove an accepted provider call did not run.
+ALTER TABLE api_idempotency_keys
+  ADD COLUMN IF NOT EXISTS durable_effect BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS idx_api_idempotency_keys_expiry
   ON api_idempotency_keys (expires_at);
 

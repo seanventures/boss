@@ -1969,7 +1969,42 @@ async def one_effect_per_idempotency_key(request: Request, call_next):
     body = await request.body()
     fingerprint = idempotency.request_fingerprint(
         request.method, route_path, request.url.query, body)
+    from . import stream_intent
+    voice_intent = stream_intent.governs(request.method, route_path)
+    if voice_intent:
+        # A stored provider outcome cannot lend permission. Re-evaluate the existing
+        # route declaration and legacy project admission even for a completed replay.
+        from starlette.routing import Match
+        for route in app.routes:
+            matched, child = route.matches(request.scope)
+            if matched == Match.FULL:
+                request.scope.update(child)
+                request.scope["route"] = route
+                break
+        try:
+            await identity_guard.enforce_access(request)
+            data = await request.json()
+            with begin(engine) as connection:
+                require_project_write_actor(connection, str(data.get("project_id") or ""),
+                                            str(data.get("actor") or ""), "role_review")
+        except identity_guard.AccessRefused as error:
+            return JSONResponse(status_code=error.outcome.status,
+                                content=error.outcome.error_body())
+        except HTTPException as error:
+            return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
+        except (ValueError, TypeError, AttributeError):
+            return JSONResponse(status_code=422, content={"detail": "Invalid voice request."})
+        ctx = getattr(request.state, "identity", None)
+        if ctx is not None:
+            principal = str(ctx.principal.id)
     owner = {"principal": principal, "key": key}
+    if voice_intent:
+        request.state.voice_intent = stream_intent.intent_id(principal, key)
+        request.state.voice_intent_owner = owner
+        request.state.voice_intent_fingerprint = fingerprint
+        # BaseHTTPMiddleware can exhaust its outer iterator before re-raising a
+        # producer failure. Only the actual voice producer may certify completion.
+        request.state.voice_stream_completed = False
     claim = await run_in_threadpool(
         _idempotency_claim, method=request.method, path=route_path,
         fingerprint=fingerprint, **owner)
@@ -1991,12 +2026,25 @@ async def one_effect_per_idempotency_key(request: Request, call_next):
     try:
         response = await call_next(request)
     except BaseException:
-        # A handler that raised has decided nothing; the same press must be able to try again.
+        # Only an uncommitted generic intent is released. A voice provider outcome may
+        # already be unknown, so release preserves its durable domain commitment.
         await run_in_threadpool(_idempotency_release, **owner)
         raise
     content_type = response.headers.get("content-type", "")
+    if voice_intent and idempotency.is_streaming(content_type):
+        async def finish(payload):
+            if not getattr(request.state, "voice_stream_completed", False):
+                return
+            await run_in_threadpool(
+                _idempotency_complete, status_code=response.status_code, body=payload,
+                content_type=content_type or None,
+                headers=idempotency.replayable_headers(response.raw_headers), **owner)
+        response.body_iterator = stream_intent.record_live(
+            response.body_iterator, limit=idempotency.MAX_STORED_BODY_BYTES, finish=finish)
+        return response
     if (not idempotency.remembers(response.status_code)
             or idempotency.is_streaming(content_type)):
+        # release refuses a durable intent: a provider error is not proof of no effect.
         await run_in_threadpool(_idempotency_release, **owner)
         return response
     chunks: list[bytes] = []
@@ -29553,7 +29601,7 @@ def _agent_voice_row(connection, project_id: str, role_key: str) -> dict[str, An
 
 
 def _agent_voice_gate(project_id: str, role_key: str, actor: Optional[str],
-                      persona: Optional[dict[str, Any]], effect: str, reason: str):
+                      persona: Optional[dict[str, Any]], effect: str, reason: str, request: Optional[Request] = None):
     """Everything checked before a voice call spends anything: who, which agent, a model, the
     budget. Returns (actor, role row with any unsaved persona, the request's VoiceSpend —
     which the caller must close(), in a finally, so the spend is settled or released)."""
@@ -29568,8 +29616,29 @@ def _agent_voice_gate(project_id: str, role_key: str, actor: Optional[str],
         if not agent_voice.model_ready(connection, settings, project_id):
             raise HTTPException(status_code=409, detail=agent_voice.NEEDS_MODEL)
         try:
+            ctx = identity_guard.REQUEST_IDENTITY.get()
+            principal = str(ctx.principal.id) if ctx is not None else who
+            intent = getattr(request.state, "voice_intent", None) if request else None
+            owner = getattr(request.state, "voice_intent_owner", None) if request else None
+            fingerprint = getattr(request.state, "voice_intent_fingerprint", None) if request else None
+            enforced = identity_guard.identity_enforced()
+            def check_voice_permission():
+                if ctx is not None and enforced:
+                    from boss_engine.identity import authz, request_memo
+                    from boss_engine.identity.scope import ResolvedScope
+                    # A second call in a long stream must not borrow the first call's
+                    # cached permission after the principal or its binding was revoked.
+                    request_memo.clear()
+                    permission = P.AGENT_TEST if effect == "model.agent_voice_test" else P.AGENT_CREATE
+                    decision = authz.check(ctx, permission,
+                        ResolvedScope.in_project(ctx.principal.org_id, project_id))
+                    if not decision.allowed:
+                        raise RuntimeError("Voice request permission is no longer granted.")
             spend = agent_voice.open_spend(connection, engine, settings, project_id, effect,
-                                           reason, {"role_key": role_key, "actor": who})
+                reason, {"role_key": role_key, "actor": principal,
+                         "agent_id": str(row.get("agent_id") or role_key)}, intent=intent,
+                protect=(lambda c: idempotency.protect(c, fingerprint=fingerprint, **owner)) if owner else None,
+                check_work=check_voice_permission)
         except agent_voice.VoiceError as refused:
             raise HTTPException(status_code=409, detail=refused.payload) from refused
     return who, agent_voice.voiced_role(row, persona), spend
@@ -29666,7 +29735,7 @@ def agent_card_endpoint(role_key: str, project_id: str):
 
 @app.post("/v1/agents/{role_key}/persona/draft")
 @permit(P.AGENT_CREATE, scope=Scope.project(body="project_id"))
-def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody):
+def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody, request: Request = None):
     """`Draft it`: one model call in the agent's own composed voice. Saves nothing."""
     from boss_engine.services import agent_voice
     from boss_engine.services.agent_persona import lint_persona
@@ -29675,15 +29744,19 @@ def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody):
 
     who, row, spend = _agent_voice_gate(
         body.project_id, role_key, body.actor, body.persona, "model.agent_persona_draft",
-        f"Draft {body.field} for {role_key}")
+        f"Draft {body.field} for {role_key}", request)
     try:
         raw, usage = spend.ask(system=agent_voice.system_prompt(
                                    row, _instructions_for(body.project_id, role_key, "chat")),
                                prompt=agent_voice.draft_prompt(body.field))
     except Exception as error:  # noqa: BLE001 — explained, never a bare 500
         spend.close(error=str(error))
+        explanation = explain(error.__cause__ or error)
+        if spend.uncertain:
+            explanation = {**explanation, "retry": False,
+                           "headline": "The model outcome is unknown. Reconcile its recorded receipt before retrying."}
         raise HTTPException(status_code=502, detail={"code": "model_failed",
-                                                     "error": explain(error)}) from error
+                                                     "error": explanation}) from error
     finally:
         spend.close()
     draft = agent_voice.clip_draft(body.field, raw)
@@ -29699,7 +29772,7 @@ def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody):
 
 @app.post("/v1/agents/{role_key}/test")
 @permit(P.AGENT_TEST, scope=Scope.project(body="project_id"))
-def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
+def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody, request: Request = None):
     """`Test`: a probe, answered through the agent's exact composed prompt, streamed as SSE.
 
     Events: `token` {text}* then `result` {voice 0-5, in_remit, says_ai, fingerprint, …};
@@ -29712,15 +29785,19 @@ def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
 
     who, row, spend = _agent_voice_gate(
         body.project_id, role_key, body.actor, body.persona, "model.agent_voice_test",
-        f"Test {body.probe} for {role_key}")
+        f"Test {body.probe} for {role_key}", request)
 
     def sse(event: str, data: dict[str, Any]) -> str:
         return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
     def stream():
-        # A finally, not a trailing call: a client that drops mid-stream closes this generator
-        # at a yield, and the spend must still be settled (or the hold released) right then.
+        completed = False
+        # An observed generator interruption still closes the spend bookkeeping.
+        # Network disconnect alone does not prove cancellation or provider rejection.
         try:
+            # Standard SSE comment: no model result or authority claim. Starlette's
+            # compression layer releases headers on the first body chunk even for SSE.
+            yield ": voice intent admitted\n\n"
             try:
                 reply, usage = spend.ask(system=agent_voice.system_prompt(
                                              row, _instructions_for(body.project_id, role_key,
@@ -29728,7 +29805,16 @@ def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
                                          prompt=agent_voice.PROBES[body.probe]["prompt"])
             except Exception as error:  # noqa: BLE001
                 spend.close(error=str(error))
-                yield sse("error", {"error": explain(error)})
+                explanation = explain(error.__cause__ or error)
+                if spend.uncertain:
+                    explanation = {**explanation, "retry": False,
+                                   "headline": "The model outcome is unknown. Reconcile its recorded receipt before retrying.",
+                                   "action": "Reconcile the recorded invocation receipts before retrying."}
+                yield sse("error", {"error": explanation,
+                                    "receipt_id": spend.receipt_id,
+                                    "receipt_ids": spend.receipt_ids,
+                                    "spend_status": "needs_reconciliation" if spend.uncertain else "refused"})
+                completed = True
                 return
             for piece in agent_voice.chunks(reply):
                 yield sse("token", {"text": piece})
@@ -29743,7 +29829,9 @@ def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
             result = {**agent_voice.score(row, body.probe, reply, judgement),
                       "probe": body.probe, "fingerprint": row.get("fingerprint") or "",
                       "version": int(row.get("identity_version") or 1),
-                      "draft": body.persona is not None, "receipt_id": spend.receipt_id}
+                      "draft": body.persona is not None, "receipt_id": spend.receipt_id,
+                      "receipt_ids": spend.receipt_ids,
+                      "spend_status": "needs_reconciliation" if spend.uncertain else "settled"}
             try:
                 with begin(engine) as connection:
                     emit_event(connection, body.project_id, "agent.tested", who, "agent",
@@ -29755,8 +29843,21 @@ def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
             except Exception:  # noqa: BLE001 — the operator still gets the result
                 logging.getLogger(__name__).warning("agent.tested not recorded", exc_info=True)
             yield sse("result", result)
+            if spend.uncertain:
+                # Preserve the usable reply/score, then expose the unsettled judgement
+                # through the existing client's visible error channel as well.
+                yield sse("error", {"error": {
+                    "kind": "outcome_unknown", "retry": False,
+                    "headline": "The judgement outcome is unknown. Reconcile its recorded receipt before retrying."},
+                    "receipt_id": spend.receipt_id, "receipt_ids": spend.receipt_ids,
+                    "spend_status": "needs_reconciliation"})
+            completed = True
         finally:
             spend.close()
+            if completed and request is not None:
+                # Shared scope state reaches the outer recorder. Set it only after
+                # the actual terminal yield was consumed and final close succeeded.
+                request.state.voice_stream_completed = True
 
     # The background close covers a stream that was never started at all (idempotent).
     return StreamingResponse(stream(), media_type="text/event-stream",
