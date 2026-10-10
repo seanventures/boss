@@ -53,6 +53,7 @@ JOB_KIND_PERMISSIONS: dict[str, str] = {
     "docs.update": P.GITHUB_MANAGE,
     "software_factory.propose_pr": P.CODE_TASK_CREATE,   # opens a PR from a build's boss/* branch
     "github.pull_request.merge": P.GITHUB_MERGE,
+    "change_set.merge": P.GITHUB_MERGE,             # a multi-repo change, merged as a set
     "github.deployment.create": P.DEPLOYMENT_CREATE,
     "github.triage": P.GITHUB_MANAGE,
     "github.pr_review": P.GITHUB_MANAGE,

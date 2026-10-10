@@ -803,8 +803,10 @@ def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner
                 return None
             shim.egress_credential = issue_egress_credential(shim, sandbox_id=sandbox_network_id(), db=db)
         else:
-            if acting.run_id and acting.run_id.startswith("run_wf:"):
-                rid = f"{acting.run_id}/ct:{task_run_id}"        # a build inside a workflow run
+            if acting.run_id and acting.run_id.startswith(("run_wf:", "run_cs:")):
+                # a build inside a workflow run, or one lane of a multi-repo change set
+                # (multirepo/change_sets.py): a child of the run its grant was claimed for
+                rid = f"{acting.run_id}/ct:{task_run_id}"
             elif acting.run_id and acting.run_id.startswith("run_ct:"):
                 rid = acting.run_id
             else:

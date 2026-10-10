@@ -121,7 +121,18 @@ def _halt_agent_run(entity: str, reason: str, db: Any) -> None:
                         "AND status IN ('running','waiting','queued')"), {"id": entity})
 
 
-HALTERS.update({"ct": _halt_code_task, "wf": _halt_workflow_run, "ag": _halt_agent_run})
+def _halt_change_set(entity: str, reason: str, db: Any) -> None:
+    """A multi-repo change set (multirepo/change_sets.py): stopped, every running lane with it."""
+    if _table_exists(db, "repo_change_sets"):
+        from ..multirepo import change_sets
+
+        try:
+            change_sets.halt(db, entity, reason)
+        except Exception:  # noqa: BLE001 — an unknown set has nothing to halt
+            pass
+
+
+HALTERS.update({"ct": _halt_code_task, "wf": _halt_workflow_run, "ag": _halt_agent_run, "cs": _halt_change_set})
 
 
 # ---- the cascade -----------------------------------------------------------------------------------------

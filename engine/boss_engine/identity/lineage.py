@@ -319,6 +319,7 @@ SYSTEM_ACTING = Acting(principal_id=SYSTEM_PRINCIPAL, org_id="", system=True)
 #: principal fails closed at enqueue under enforcement, and is never quietly stamped sys_worker
 #: (#8). Other kinds (sweeps, deliveries) are BOSS's own work.
 DELEGATED_JOB_KINDS = frozenset({"code.task", "software_factory.propose_pr", "github.pull_request.merge",
+                                 "change_set.merge",
                                  "github.repository.reconcile", "agent.resume", "agent.studio.execute",
                                  "agent.orchestrator.next_move", "skill.execute"})
 

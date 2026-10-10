@@ -237,6 +237,16 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def merge_change_set(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST /v1/change-sets/{id}/merge: a refusal (409, a sentence) is the answer, not a crash."""
+        response = self._client.post(f"/v1/change-sets/{payload['change_set_id']}/merge",
+                                     json={"project_id": payload["project_id"]})
+        if response.status_code in (404, 409, 422):
+            body = response.json() if response.content else {}
+            return {"status": "refused", **(body if isinstance(body, dict) else {})}
+        response.raise_for_status()
+        return response.json()
+
     def create_deployment(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/software-factory/deployments", json=payload)
         response.raise_for_status()

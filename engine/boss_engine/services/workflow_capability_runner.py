@@ -1942,6 +1942,10 @@ def _execute_step(
             f"'{capability.label}' waits for a person and is not executable work."
         )
 
+    owned = _owned_by_change_set(key, context)
+    if owned:
+        return workflow_outcomes.apply(key, owned, {})
+
     inputs = _resolve_inputs(binding.get("inputs") or {}, context,
                              optional=frozenset(capability.optional_inputs or ()))
     inputs = _fill_optional_from_run_input(capability, inputs, context)
@@ -1959,6 +1963,27 @@ def _execute_step(
                             context=context, key=key, capability=capability, inputs=inputs),
         inputs,
     )
+
+
+#: What a multi-repo change set does itself, for every repository at once (multirepo/
+#: change_sets.py): preview and readiness repairs per build, the deploy with its one rollback. A
+#: run whose build was a change set does not do them again per build — there is no single build.
+_SET_OWNED = frozenset({"preview", "plrr", "deploy", "redeploy", "retry_build"})
+
+
+def _owned_by_change_set(key: str, context: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    if key not in _SET_OWNED or not context:
+        return None
+    cs = _from_any_step(context, "change_set_id")
+    if not cs:
+        return None
+    words = {"deploy": "deployed together by the change set, in dependency order, with one rollback",
+             "redeploy": "deployed together by the change set",
+             "preview": "reviewed as a set: linked pull requests and the cross-repo check",
+             "plrr": "checked per repository by each lane's own gates",
+             "retry_build": "retried per repository from the change set's lanes"}[key]
+    return {"capability": key, "tool": None, "status": "not_applicable", "change_set_id": cs,
+            "note": f"A change across several repositories: {words}."}
 
 
 def _notification_text(context: dict[str, Any], message: Any) -> tuple[str, str]:
@@ -2697,6 +2722,10 @@ def _awaited_handle(key: str, output: dict[str, Any]) -> Optional[dict[str, Any]
     nested `run_id` would have found request_meeting's `task_id` sibling just as happily, and
     parked the step against the wrong object.
     """
+    if key in ("build", "retry_build") and isinstance(output.get("change_set_id"), str) \
+            and output["change_set_id"].strip():
+        # A build of an app with several repositories is ONE change set (multirepo).
+        return {"kind": "change_set", "id": output["change_set_id"].strip()}
     spec = _AWAIT_KINDS.get(key)
     if not spec:
         return None
@@ -2827,11 +2856,21 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     "ci_wait": ("ci_waits",
                 frozenset({"passed", "no_ci"}),
                 frozenset({"failed", "timed_out", "unreadable", "cancelled"})),
+    # A multi-repo change set (multirepo/change_sets.py) is done when every repository merged
+    # and every component is live (or ships with the merge). `blocked` is not failed: a lane is
+    # being retried or a person is deciding; `merged` waits for its deploy.
+    "change_set": ("repo_change_sets",
+                   frozenset({"live"}),
+                   frozenset({"failed", "rejected", "cancelled", "rolled_back"})),
 }
+
+#: The column a table keeps its status in, when it is not `status`.
+_STATUS_COLUMN: dict[str, str] = {"repo_change_sets": "state"}
 
 #: Where a table keeps the reason its run ended, when it is not a column called `error`.
 _REASON_COLUMN: dict[str, str] = {"ci_waits": "summary", "deployment_runs": "failure_reason",
                                   "stack_deployments": "failure_reason",
+                                  "repo_change_sets": "COALESCE(error, blocked_reason)",
                                   "security_scans": "counts->>'error'"}
 
 
@@ -2849,6 +2888,13 @@ def _terminal_evidence(
             from . import architecture_docs
 
             return architecture_docs.evidence(connection, awaited_id)
+        if kind == "change_set":
+            rows = connection.execute(
+                text("SELECT full_name, pr_number, pr_url, merged_sha FROM change_set_prs "
+                     "WHERE change_set_id = :c AND pr_number IS NOT NULL ORDER BY wave"),
+                {"c": awaited_id}).mappings().all()
+            return {"change_set_id": awaited_id,
+                    "pull_requests": [dict(r) for r in rows]}
         if kind == "code_task":
             row = connection.execute(
                 text("SELECT pull_request_url, pull_request_number FROM code_task_runs "
@@ -3152,7 +3198,8 @@ def resume_awaited(
             _look_at_ci(connection, project_id, awaited_id)
         try:
             row = connection.execute(
-                text(f"SELECT status FROM {table} WHERE id = :id"),  # noqa: S608 - fixed set
+                text(f"SELECT {_STATUS_COLUMN.get(table, 'status')} AS status FROM {table} "  # noqa: S608
+                     "WHERE id = :id"),  # fixed set
                 {"id": awaited_id},
             ).mappings().first()
         except Exception as error:  # noqa: BLE001 — a missing optional table is not fatal
@@ -3745,6 +3792,10 @@ def _gate_subject(
     binding = spec_step.get("binding") or {}
     approval = spec_step.get("approval") or {}
     requested = str(approval.get("mode") or "").lower() or None
+
+    if _owned_by_change_set(str(binding.get("capability") or ""), context):
+        # The change set's ONE approval covers it (approve and ship all); no second gate.
+        return None
 
     if binding.get("agent_work"):
         # MANUAL MEANS A PERSON SAYS GO FIRST, on an agent step as on any other. The builder

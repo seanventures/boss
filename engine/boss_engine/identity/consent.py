@@ -198,10 +198,34 @@ def strip_identity(data: Any) -> Any:
     return data
 
 
+def _multirepo_app(db: Any, project_id: str, input_data: Any) -> Optional[str]:
+    """The app key of a run whose app is built from several repositories (multirepo): the
+    composer's `repo_layout`, or an `app_key` whose app has several components."""
+    data = input_data if isinstance(input_data, dict) else {}
+    try:
+        from ..multirepo import components
+
+        layout = data.get("repo_layout") if isinstance(data.get("repo_layout"), dict) else {}
+        for name in (layout.get("app_name"), data.get("app_key")):
+            if name:
+                key = components.app_key_of(str(name)) if name == layout.get("app_name") else str(name)
+                if components.is_multi(db, project_id, key):
+                    return key
+    except Exception:  # noqa: BLE001 — no components: the single-repo rules below apply
+        return None
+    return None
+
+
 def _repos_for(db: Any, project_id: str, input_data: Any) -> list[str]:
     from sqlalchemy import text
 
     data = input_data if isinstance(input_data, dict) else {}
+    multi = _multirepo_app(db, project_id, input_data)
+    if multi:
+        # EXACTLY THE APP'S REPOSITORIES (multirepo/grants.py): never the project's or the org's.
+        from ..multirepo import grants as repo_grants
+
+        return sorted(r["full_name"] for r in repo_grants.required_repos(db, project_id, multi))
     for key in ("repository", "repo", "github_repo"):
         value = str(data.get(key) or "").strip()
         if value.count("/") == 1:
@@ -444,10 +468,18 @@ def require_for_workflow(db: Any, *, project_id: str, spec: Any, input_data: Any
         grant = grants.find_covering(ctx.principal.id, agent_ids=agent_ids, permissions=needed, project_id=project_id,
                                      repos=repos, run_id=wf_run, db=db)
         if grant is None:
-            raise ConsentRequired(_consent_body(db, ctx_person=ctx.principal.id, org_id=ctx.principal.org_id,
-                                                agents=agents, needed=needed, project_id=project_id, repos=repos,
-                                                task=title or "this workflow run", scope="workflow_run",
-                                                standing_only=False))
+            body = _consent_body(db, ctx_person=ctx.principal.id, org_id=ctx.principal.org_id,
+                                 agents=agents, needed=needed, project_id=project_id, repos=repos,
+                                 task=title or "this workflow run", scope="workflow_run",
+                                 standing_only=False)
+            multi = _multirepo_app(db, project_id, input_data)
+            if multi:
+                # The consent sheet's multi-repo layout: which repositories, with which access,
+                # which it cannot reach, and how long the access lasts.
+                from ..multirepo import grants as repo_grants
+
+                body["multirepo"] = repo_grants.consent_details(db, project_id, multi, run_label=title or None)
+            raise ConsentRequired(body)
         return Acting(principal_id=ctx.principal.id, org_id=ctx.principal.org_id, grant_id=grant.id, run_id=wf_run)
     # A schedule firing (or a job) under a stored standing grant: it must still cover, standing only.
     g = grants.load(ambient.grant_id, db=db)

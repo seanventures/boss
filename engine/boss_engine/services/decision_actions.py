@@ -90,6 +90,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Approving an architecture records it on its review; the waiting step then succeeds and
     # every later build receives the approved document (architecture_docs.on_decision_answered).
     "review_architecture",
+    # Approving a multi-repo change set pins its head SHAs and merges the whole set
+    # (multirepo/change_sets.on_decision); a later push re-asks.
+    "approve_change_set",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on
@@ -102,6 +105,8 @@ REVISE_CONSUMED = frozenset({
     "role.autonomy_change",
     # The architect writes the next version from the note (architecture_docs.revise_sent_back).
     "review_architecture",
+    # "Send back": every PR of the set gets a fix build from the note (change_sets._send_back).
+    "approve_change_set",
 })
 
 #: A workflow decision step (workflows.py) writes this action and no run id. The runner reads
@@ -165,7 +170,7 @@ KNOWN_ACTIONS = (REFUSAL_REASONS | CARRIED_OUT_ON_APPROVAL | WORKFLOW_GATE_ACTIO
                  | RECORDED_ON_APPROVAL)
 
 KINDS = ("refusal", "deploy_gate", "workflow_gate", "architecture_review", "pull_request",
-         "general")
+         "change_set", "general")
 
 _OPEN = frozenset({"pending", "delegated"})
 #: An expired hold-default decision can still be answered: see DecisionService.transition.
@@ -223,6 +228,8 @@ def kind_of(decision: Mapping[str, Any]) -> str:
         return "workflow_gate"
     if action == "review_pull_request":
         return "pull_request"
+    if action == "approve_change_set":
+        return "change_set"
     return "general"
 
 
@@ -388,6 +395,20 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
             _action("reject", "Reject", "reject",
                     "Nothing is deployed and the host is not contacted."),
             _delegate(),
+        ]
+    if kind == "change_set":
+        # ONE DECISION FOR EVERY PR OF A MULTI-REPO CHANGE: no per-PR approval exists, so there
+        # is no Delegate either — the set is approved as one by someone who may approve it.
+        n = len(_rec(decision).get("pull_requests") or [])
+        return [
+            _action("approve", f"Approve and ship all {n}" if n else "Approve and ship", "approve",
+                    "Merges every pull request of the set at the reviewed commits, in dependency order, "
+                    "then deploys them together. A failed merge reverts the ones that landed."),
+            _action("revise", "Send back", "neutral",
+                    "Every pull request gets a fix build from your note; the set is reviewed and asked "
+                    "again.", needs="note"),
+            _action("reject", "Reject", "reject",
+                    "Nothing is merged or deployed. The pull requests stay open."),
         ]
     if kind == "pull_request":
         # No "Request changes" either. Nothing reads a PR review's revision_requested, and the

@@ -276,6 +276,197 @@ def build_multirepo_router() -> APIRouter:
             key = _app_key(db, project_id, app_key) or components.app_key_of(app_key)
             return grants.consent_details(db, project_id, key)
 
+    # ── change sets ───────────────────────────────────────────────────────────────────────────
+
+    from boss_engine.multirepo import change_sets, merge, release
+
+    def _mine(db: Any, cs_id: str, project_id: str) -> dict[str, Any]:
+        """The set, only when it belongs to the project the request was authorised for (no
+        existence leak across projects: 404 either way)."""
+        row = db.execute(_sql("SELECT project_id FROM repo_change_sets WHERE id = :i"), {"i": cs_id}).scalar()
+        if row is None or str(row) != str(project_id):
+            raise MultiRepoError(404, "unknown_change_set", "No such change in this project.")
+        return change_sets.view(db, cs_id)
+
+    @router.get("/v1/change-sets/{cs_id}")
+    @permit(P.CODE_TASK_READ, scope=Scope.project(query="project_id"))
+    def get_change_set(cs_id: str, project_id: str) -> Any:
+        try:
+            with begin() as db:
+                return _mine(db, cs_id, project_id)
+        except MultiRepoError as exc:
+            return _refuse(exc)
+
+    @router.get("/v1/runs/{run_id}/change-set")
+    @permit(P.CODE_TASK_READ, scope=Scope.project(query="project_id"))
+    def change_set_of_run(run_id: str, project_id: str) -> Any:
+        try:
+            with begin() as db:
+                cs_id = change_sets.for_run(db, run_id) or change_sets.member_change_set(db, run_id)
+                if not cs_id:
+                    raise MultiRepoError(404, "no_change_set", "This build is not part of a change.")
+                return _mine(db, cs_id, project_id)
+        except MultiRepoError as exc:
+            return _refuse(exc)
+
+    @router.get("/v1/change-sets/{cs_id}/prs")
+    @permit(P.CODE_TASK_READ, scope=Scope.project(query="project_id"))
+    def change_set_prs(cs_id: str, project_id: str) -> Any:
+        try:
+            with begin() as db:
+                v = _mine(db, cs_id, project_id)
+                return {"change_set_id": cs_id, "state": v["state"], "blocked_reason": v["blocked_reason"],
+                        "lanes": v["lanes"], "cross_check": v["cross_check"], "decision": v["decision"]}
+        except MultiRepoError as exc:
+            return _refuse(exc)
+
+    @router.get("/v1/change-sets/{cs_id}/grant")
+    @permit(P.REPOSITORY_READ, scope=Scope.project(query="project_id"))
+    def change_set_grant(cs_id: str, project_id: str) -> Any:
+        try:
+            with begin() as db:
+                v = _mine(db, cs_id, project_id)
+                details = grants.consent_details(db, project_id, v["app_key"], run_label=v["title"])
+                return {"grant": v["grant"], "consent": details}
+        except MultiRepoError as exc:
+            return _refuse(exc)
+
+    @router.get("/v1/projects/{project_id}/change-sets")
+    @permit(P.CODE_TASK_READ, scope=Scope.project(path="project_id"))
+    def list_change_sets(project_id: str, state: Optional[str] = None, mode: Optional[str] = "multi") -> Any:
+        with begin() as db:
+            rows = db.execute(_sql(
+                "SELECT id FROM repo_change_sets WHERE project_id = :p AND (:m IS NULL OR mode = :m) "
+                "AND (:s IS NULL OR state = ANY(string_to_array(:s, ','))) ORDER BY created_at DESC LIMIT 50"),
+                {"p": project_id, "m": mode or None, "s": state or None}).scalars().all()
+            return {"items": [change_sets.view(db, str(r)) for r in rows]}
+
+    @router.post("/v1/apps/{app_key}/change-sets")
+    @permit(P.CODE_TASK_CREATE, scope=Scope.project(body="project_id"))
+    def start_change_set(app_key: str, request: Request, payload: dict = Body(...)) -> Any:
+        """"New change" on a multi-repo app. A person without a grant covering exactly the app's
+        repositories gets 409 consent_required with the `multirepo` details (the consent sheet)."""
+        from boss_engine.context import EngineContext
+
+        project_id = str(payload.get("project_id") or "")
+        title = str(payload.get("title") or "").strip()
+        if not title:
+            return JSONResponse({"error": "bad_request", "message": "Say what should change."}, status_code=422)
+        ctx = EngineContext.create()
+        try:
+            with begin() as db:
+                key = _app_key(db, project_id, app_key)
+                if not key:
+                    raise MultiRepoError(404, "unknown_app", "No such app in this project.")
+                name = components.get(db, project_id, key)["app_name"]
+                full_title = title if title.lower().startswith(str(name).lower()) else f"{name}: {title}"
+                out = change_sets.start(
+                    db, ctx.settings, ctx.jobs, project_id=project_id, app_key=key, title=full_title,
+                    instructions=str(payload.get("instructions") or title),
+                    acceptance_criteria=[str(a) for a in payload.get("acceptance_criteria") or []][:20],
+                    actor=_actor(request), remember=bool(payload.get("remember")))
+                _audit(request, db, "repo_grant.recorded", target_type="change_set", target_id=out["id"],
+                       permission=P.CODE_TASK_CREATE.value, project_id=project_id,
+                       details={"repositories": [r["full_name"] for r in (out.get("grant") or {}).get("repos") or []],
+                                "remember": bool(payload.get("remember"))})
+                return JSONResponse(out, status_code=201)
+        except MultiRepoError as exc:
+            return _refuse(exc)
+
+    @router.post("/v1/change-sets/{cs_id}/cross-check")
+    @permit(P.CODE_TASK_STEER, scope=Scope.project(body="project_id"))
+    def rerun_cross_check(cs_id: str, request: Request, payload: dict = Body(...)) -> Any:
+        from boss_engine.multirepo import cross_check
+
+        project_id = str(payload.get("project_id") or "")
+        try:
+            with begin() as db:
+                v = _mine(db, cs_id, project_id)
+                touched = [lane for lane in change_sets._lanes(db, cs_id) if lane["lane_state"] != "unchanged"]  # noqa: SLF001
+                if not touched or any(lane["lane_state"] != "ready" for lane in touched):
+                    raise MultiRepoError(409, "not_ready", "Every repository must have its PR open first.")
+                if v["state"] not in ("building", "blocked", "in_review"):
+                    raise MultiRepoError(409, "not_reviewable", f"This change is {v['state']}.")
+                cs = change_sets._row(db, cs_id, lock=True)  # noqa: SLF001
+                cross_check.run(db, _settings(), cs, touched)
+                return change_sets.view(db, cs_id)
+        except MultiRepoError as exc:
+            return _refuse(exc)
+
+    @router.post("/v1/change-sets/{cs_id}/stop")
+    @permit(P.CODE_TASK_STEER, scope=Scope.project(body="project_id"))
+    def stop_change_set(cs_id: str, request: Request, payload: dict = Body(...)) -> Any:
+        project_id = str(payload.get("project_id") or "")
+        try:
+            with begin() as db:
+                v = _mine(db, cs_id, project_id)
+                if v["state"] in ("merging", "deploying"):
+                    raise MultiRepoError(409, "too_late", "It is merging or deploying now; roll it back instead.")
+                change_sets.halt(db, cs_id, f"Stopped by {_actor(request)}.")
+                return change_sets.view(db, cs_id)
+        except MultiRepoError as exc:
+            return _refuse(exc)
+
+    @router.post("/v1/change-sets/{cs_id}/merge")
+    @permit(P.GITHUB_MERGE, scope=Scope.project(body="project_id"))
+    def merge_change_set(cs_id: str, request: Request, payload: dict = Body(...)) -> Any:
+        """The `change_set.merge` job (the worker hands it here after the one approval)."""
+        project_id = str(payload.get("project_id") or "")
+        try:
+            with begin() as db:
+                _mine(db, cs_id, project_id)
+                out = merge.merge_set(db, _settings(), cs_id, actor=_actor(request, "boss"))
+                if out.get("status") == "merged":
+                    _audit(request, db, "change_set.merged", target_type="change_set", target_id=cs_id,
+                           permission=P.GITHUB_MERGE.value, project_id=project_id,
+                           details={"repositories": sorted((out.get("merged") or {}).keys())})
+                elif out.get("reverted"):
+                    _audit(request, db, "change_set.reverted", target_type="change_set", target_id=cs_id,
+                           permission=P.GITHUB_MERGE.value, project_id=project_id,
+                           details={"failed": out.get("failed"), "reverted": out.get("reverted")})
+                return out
+        except MultiRepoError as exc:
+            return _refuse(exc)
+
+    @router.get("/v1/change-sets/{cs_id}/deploy-plan")
+    @permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
+    def deploy_plan(cs_id: str, project_id: str) -> Any:
+        try:
+            with begin() as db:
+                v = _mine(db, cs_id, project_id)
+                return {**release.plan(db, cs_id), "title": v["title"], "app_name": v["app_name"],
+                        "app_key": v["app_key"]}
+        except MultiRepoError as exc:
+            return _refuse(exc)
+
+    @router.post("/v1/change-sets/{cs_id}/deploy")
+    @permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
+    def deploy_change_set(cs_id: str, request: Request, payload: dict = Body(...)) -> Any:
+        """"Deploy all": a merged set whose plan was waiting for somewhere to ship."""
+        project_id = str(payload.get("project_id") or "")
+        try:
+            with begin() as db:
+                _mine(db, cs_id, project_id)
+                release.start(db, _settings(), cs_id, actor=_actor(request))
+                return release.plan(db, cs_id)
+        except MultiRepoError as exc:
+            return _refuse(exc)
+
+    @router.post("/v1/change-sets/{cs_id}/rollback")
+    @permit(P.DEPLOYMENT_ROLLBACK, scope=Scope.project(body="project_id"))
+    def rollback_change_set(cs_id: str, request: Request, payload: dict = Body(...)) -> Any:
+        """"Roll back all": every component of the release back to its previous release."""
+        project_id = str(payload.get("project_id") or "")
+        try:
+            with begin() as db:
+                _mine(db, cs_id, project_id)
+                release.roll_back_all(db, cs_id, actor=_actor(request))
+                _audit(request, db, "change_set.rolled_back", target_type="change_set", target_id=cs_id,
+                       permission=P.DEPLOYMENT_ROLLBACK.value, project_id=project_id, details={})
+                return release.plan(db, cs_id)
+        except MultiRepoError as exc:
+            return _refuse(exc)
+
     return router
 
 
