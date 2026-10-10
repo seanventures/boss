@@ -426,6 +426,11 @@ export const RepositoryRow = forwardRef<HTMLElement, {
               done={mode === "done"} focused={focused}
               tip="Where BOSS writes code and opens pull requests.">
       {body}
+      {connection?.builds && connection.builds.ok === false ? (
+        <p className="su-builds-warn" data-testid="su-repo-builds" role="status">
+          {connection.builds.message}{connection.builds.next ? ` ${connection.builds.next}` : ""}
+        </p>
+      ) : null}
       {drawer && mode !== "current" ? (
         <Drawer title="Connect GitHub" onClose={close} testid="su-github-drawer">
           <TokenForm connectionId={drawer === "replace" ? replaceId : null} onDone={close} />

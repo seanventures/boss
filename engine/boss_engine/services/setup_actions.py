@@ -182,6 +182,12 @@ def repository_token(connection: Connection, settings: Any, project_id: str, tok
             check_repository(connection, settings, project_id, str(binding_id), actor=actor,
                              http=http)
             rechecked.append(str(binding_id))
+    if rechecked:
+        # A REPLACED TOKEN REACHES BUILDS TOO. Only select_repository mirrored, so a token pasted
+        # over a connection whose repo was already bound (the installer binds it; Replace token
+        # re-points it) was rechecked green here and never reached the vault: Setup said the repo
+        # worked while GitHub access said "Builds can't reach GitHub".
+        _mirror_token_into_vault(connection, service, project_id, current["id"], actor)
     return {"account_login": found["account_login"], "expires_at": found["expires_at"],
             "repos": found["repos"], "connection_id": current["id"], "rechecked": rechecked}
 
@@ -330,16 +336,26 @@ def _mirror_token_into_vault(connection: Connection, service: Any, project_id: s
     org_of_project = connection.execute(
         text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
              "WHERE p.id = :p"), {"p": project_id}).scalar()
-    if org_of_project and not github_setup.may_change_org_credentials(str(org_of_project), db=connection):
-        from .core import emit_event
+    from .core import emit_event
 
+    def unchanged(reason: str, message: str) -> None:
         emit_event(connection, project_id, "github.org_token_unchanged", actor, "github_connection",
-                   connection_id, {
-                       "reason": "org_scope_required",
-                       "message": ("This token was kept for this project only. The organisation's GitHub "
-                                   "token, which builds use, was not changed: that needs github:connect "
-                                   "for the whole organisation. Ask an Owner or org Admin to add this "
-                                   "repository under Identity › GitHub.")})
+                   connection_id, {"reason": reason, "message": message})
+
+    refusal = (github_setup.org_credentials_refusal(str(org_of_project), db=connection)
+               if org_of_project else None)
+    if refusal == "step_up":
+        unchanged("step_up_required", (
+            "Builds can't use this token yet: changing the organisation's GitHub token needs you to "
+            "confirm it's you with your second factor. Confirm, then press Replace token and paste "
+            "it again."))
+        return
+    if refusal:
+        unchanged("org_scope_required", (
+            "This token was kept for this project only. The organisation's GitHub token, which "
+            "builds use, was not changed: that needs the Connect GitHub permission for the whole "
+            "organisation. Ask an Owner or org Admin to add this repository under Identity › "
+            "GitHub."))
         return
     try:
         ref = service.secret_refs.require_usable(
@@ -368,6 +384,11 @@ def _mirror_token_into_vault(connection: Connection, service: Any, project_id: s
 
         logging.getLogger(__name__).warning("setup: the GitHub token was not kept as the org connection (%s: %s)",
                                             type(exc).__name__, getattr(exc, "code", ""))
+        # SAID, NOT ONLY LOGGED: a warning in the API log is invisible to the person on the page.
+        unchanged("store_failed", (
+            "Builds can't use this token yet: BOSS could not keep it as the organisation's GitHub "
+            f"token ({getattr(exc, 'code', '') or type(exc).__name__}). Paste it under Identity › "
+            "GitHub, or run `boss doctor` on the server."))
 
 
 def remove_repository(connection: Connection, project_id: str, binding_id: str,
