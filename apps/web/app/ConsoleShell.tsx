@@ -556,12 +556,18 @@ function ConsoleShellInner({
     const unregister = registerConsoleRefresh(refreshCoordinator);
     return () => { unregister(); refreshCoordinator.dispose(); };
   }, [refreshCoordinator]);
-  // The transition settling IS the refresh landing: React committed what it fetched.
-  const refreshWasPending = useRef(false);
+  // Dispatching router.refresh() can finish this shell's transition before Next delivers
+  // its server response. A transition ending is not an acknowledgment: retrying then queues
+  // another refresh while the first response is still arriving. Only newly committed server
+  // props acknowledge the refresh. Both objects come from the page's server render; local
+  // shell state changes keep their references and cannot release the coordinator.
+  const serverSnapshot = useRef({ status, loadedAreas });
   useEffect(() => {
-    if (refreshWasPending.current && !refreshPending) refreshCoordinator.landed();
-    refreshWasPending.current = refreshPending;
-  }, [refreshPending, refreshCoordinator]);
+    const previous = serverSnapshot.current;
+    if (previous.status === status && previous.loadedAreas === loadedAreas) return;
+    serverSnapshot.current = { status, loadedAreas };
+    refreshCoordinator.landed();
+  }, [status, loadedAreas, refreshCoordinator]);
   useEffect(() => {
     if (!live) return;
     let cancelled = false;
@@ -689,7 +695,7 @@ function ConsoleShellInner({
       setAreaLoadAsked(null);  // the effect above sees an area not yet asked for, and asks
     }, 250);
     return () => window.clearTimeout(t);
-  }, [activeLoading, refreshPending, refreshCoordinator, areaLoadAsked, active]);
+  }, [activeLoading, refreshPending, refreshCoordinator, areaLoadAsked, active, status, loadedAreas]);
   const [loadSlow, setLoadSlow] = useState(false);
   useEffect(() => {
     setLoadSlow(false);
