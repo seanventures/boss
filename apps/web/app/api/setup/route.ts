@@ -53,10 +53,14 @@ async function forward(r: Response) {
   if (!r.ok) {
     // A refusal is a pill's worth — {state, headline, fix} — kept whole for the console.
     const detail = (data as { detail?: unknown })?.detail;
+    // A start that needs the person's consent keeps the API's whole body under `consent`, so the
+    // console shows the consent sheet and re-sends (lib/setup-client.ts setupWrite).
+    const consent = r.status === 409 && (data as { error?: unknown })?.error === "consent_required"
+      ? { consent: data } : {};
     return NextResponse.json(
       typeof detail === "object" && detail !== null
-        ? { error: apiErrorText(data, r.status), refusal: detail }
-        : { error: apiErrorText(data, r.status) },
+        ? { error: apiErrorText(data, r.status), refusal: detail, ...consent }
+        : { error: apiErrorText(data, r.status), ...consent },
       { status: r.status });
   }
   return NextResponse.json(data);
