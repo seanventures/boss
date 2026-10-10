@@ -93,6 +93,10 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "audit.checkpoint",
     # cross-app links (APP_TEMPLATES_AND_SECURITY_LOOP.md §5.6, D9; stream S5 of the app platform)
     "app_link.created", "app_link.revoked", "app_link.test_users_revealed",
+    # multi-repo apps (docs/product/MULTIREPO.md): the registry tick, an app's repositories, the
+    # grant a change set runs under, its one approval, its merge as a set and its rollback
+    "repository.allowed", "repository.disallowed", "app.components_set", "repo_grant.recorded",
+    "change_set.approved", "change_set.merged", "change_set.reverted", "change_set.rolled_back",
     # BOSS as an OIDC provider for the apps it builds (APP_TEMPLATES_AND_SECURITY_LOOP.md §6.6
     # S6.8; amendment AP-4). Never logged: codes, tokens, secrets, passwords.
     "oidc.signin", "oidc.consent.granted", "oidc.consent.revoked", "oidc.token.issued",

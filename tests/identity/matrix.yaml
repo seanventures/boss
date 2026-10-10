@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1464 operations.
+# 1478 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -168,6 +168,9 @@
 "POST /v1/ai-sre/runbooks/{runbook_id}/runs": ["permit reliability:respond @ project(body=project_id)", "OAP"]
 "POST /v1/anomalies/scan": ["permit system:operate @ project(body=project_id)", "OA"]
 "GET /v1/approval-rules": ["permit decision:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/apps/{app_key}/components": ["permit repository:read @ project(query=project_id)", "OAPVU"]
+"PUT /v1/apps/{app_key}/components": ["permit repository:manage @ project(body=project_id)", "OA"]
+"GET /v1/apps/{app_key}/consent": ["permit repository:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/apps/{app_key}/links": ["permit project:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/apps/{app_key}/links": ["permit app_link:manage @ project(body=project_id)", "OAP"]
 "DELETE /v1/apps/{app_key}/links/{link_id}": ["permit app_link:manage @ app_link(path=link_id)", "OAP"]
@@ -643,6 +646,12 @@
 "POST /v1/github/reconciliation-runs/{run_id}/execute": ["permit worker:lease @ org", "-"]
 "POST /v1/github/reconciliation-runs/{run_id}/repair": ["permit github:sync @ project(body=project_id)", "OAP"]
 "GET /v1/github/reconciliation-signals": ["permit github:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/github/repos": ["permit repository:read @ project(query=project_id)", "OAPVU"]
+"PUT /v1/github/repos/allowed": ["permit repository:register @ project(body=project_id)", "OA"]
+"POST /v1/github/repos/recheck": ["permit repository:register @ project(body=project_id)", "OA"]
+"POST /v1/github/repos/refresh": ["permit repository:register @ project(body=project_id)", "OA"]
+"PATCH /v1/github/repos/{repo_id}": ["permit repository:register @ project(body=project_id)", "OA"]
+"POST /v1/github/repos/{repo_id}/check": ["permit repository:register @ project(body=project_id)", "OA"]
 "GET /v1/github/repository-activity": ["permit github:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/github/repository-bindings": ["permit github:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/github/repository-bindings": ["permit repository:register @ project(body=project_id)", "OA"]
@@ -1127,8 +1136,13 @@
 "POST /v1/projects/{project_id}/agents": ["permit work_item:manage @ project(path=project_id)", "OAP"]
 "GET /v1/projects/{project_id}/host-advice": ["permit system:read @ project(path=project_id)", "OAPVU"]
 "GET /v1/projects/{project_id}/preflight": ["permit project:read @ project(path=project_id)", "OAPVU"]
+"PUT /v1/projects/{project_id}/repo-mode": ["permit repository:manage @ project(path=project_id)", "OA"]
+"GET /v1/projects/{project_id}/repos": ["permit repository:read @ project(path=project_id)", "OAPVU"]
+"DELETE /v1/projects/{project_id}/repos/{repo_id}": ["permit repository:manage @ project(path=project_id)", "OA"]
+"PUT /v1/projects/{project_id}/repos/{repo_id}": ["permit repository:manage @ project(path=project_id)", "OA"]
 "GET /v1/projects/{project_id}/repositories": ["permit repository:read @ project(path=project_id)", "OAPVU"]
 "PUT /v1/projects/{project_id}/settings/builds_at_once": ["permit project:update @ org", "OA"]
+"POST /v1/projects/{project_id}/suggest-components": ["permit repository:read @ project(path=project_id)", "OAPVU"]
 "GET /v1/provider-conformance": ["permit infra:read @ org", "OAPVU"]
 "GET /v1/provider-definitions": ["permit model_provider:read @ org", "OAPVU"]
 "GET /v1/provider-health": ["permit model_provider:read @ project(query=project_id)", "OAPVU"]

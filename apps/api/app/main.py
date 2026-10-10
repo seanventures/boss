@@ -30663,6 +30663,9 @@ app.include_router(build_templates_router())
 app.include_router(build_security_router())
 app.include_router(build_links_router())
 app.include_router(build_oidc_router())
+from .routes_multirepo import build_multirepo_router  # noqa: E402  (multi-repo apps)
+
+app.include_router(build_multirepo_router())
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)
