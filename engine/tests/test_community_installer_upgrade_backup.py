@@ -173,6 +173,7 @@ def install_pair(tmp_path: Path) -> tuple[Path, str, str, dict[str, str], Path]:
     (source / "scripts/install").mkdir(parents=True)
     (source / "scripts/install/community-compose.yml").write_text("services: {}\n")
     (source / "install.sh").write_bytes((REPO / "install.sh").read_bytes())
+    (source / "install.sh").chmod(0o755)
     for helper in ("restore_preserved_env.sh", "reconcile_api_credentials.py", "backup_archive.py"):
         (source / "scripts/install" / helper).write_bytes(
             (REPO / "scripts/install" / helper).read_bytes()
@@ -517,62 +518,64 @@ def test_safe_uninstall_keeps_stopped_container_for_a_later_backup(install_pair)
     assert " down" not in (tmp / "docker-trace").read_text()
 
 
-@pytest.mark.parametrize("download_fails", [False, True])
-def test_published_one_liner_uses_one_commit_and_propagates_download_failure(
-    install_pair, download_fails,
+def _published_git_checkout_command():
+    section = (REPO / "scripts/install/README.md").read_text().split(
+        "### Straight from GitHub", 1)[1].split("### From a local checkout", 1)[0]
+    return section.split("```bash\n", 1)[1].split("```", 1)[0]
+
+
+@pytest.mark.parametrize("clone_fails", [False, True])
+def test_published_git_checkout_pins_its_commit_and_stops_on_clone_failure(
+    install_pair, clone_fails,
 ):
     _, _, new, env, tmp = install_pair
-    fresh = tmp / "pasted-install"
-    curl = tmp / "bin/curl"
-    curl.write_text(
-        "#!/usr/bin/env bash\n"
-        "printf '%s\\n' \"$*\" >> \"$BOSS_TEST_CURL_TRACE\"\n"
-        "[[ ${BOSS_TEST_CURL_FAIL:-0} != 1 ]] || exit 22\n"
-        "while [[ $# -gt 0 ]]; do\n"
-        "  if [[ $1 == -o ]]; then cp \"$BOSS_TEST_CURL_SOURCE\" \"$2\"; exit; fi\n"
-        "  shift\n"
-        "done\n"
-        "exit 2\n"
-    )
-    curl.chmod(0o755)
-    env["BOSS_TEST_CURL_SOURCE"] = str(REPO / "install.sh")
-    env["BOSS_TEST_CURL_TRACE"] = str(tmp / "curl-trace")
-    if download_fails:
-        env["BOSS_TEST_CURL_FAIL"] = "1"
-    line = next(line for line in (REPO / "scripts/install/README.md").read_text().splitlines()
-                if line.startswith("BOSS_RELEASE_COMMIT="))
-    pinned = line.split()[0].split("=", 1)[1]
-    line = line.replace(pinned, new)
-    command = " ".join((line, "--dir", shlex.quote(str(fresh)), "--yes",
-                        "--skip-model-key", "--no-install-deps"))
+    source = tmp / "source"
+    origin = tmp / "origin.git"
+    _git("tag", "v1.0-rc8", new, cwd=source)
+    _git("push", "origin", "refs/tags/v1.0-rc8", cwd=source)
+    checkout = tmp / "boss-rc8"
+    remote = tmp / "missing-origin.git" if clone_fails else origin
+    command = _published_git_checkout_command().replace(
+        "https://github.com/seanventures/boss.git", shlex.quote(str(remote)))
+    command = command.replace(
+        './install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"',
+        './install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT" '
+        '--yes --skip-model-key --no-install-deps')
 
-    result = _run("bash", "-c", command, cwd=REPO, env=env)
+    result = _run("bash", "-c", command, cwd=tmp, env=env)
 
-    assert new in (tmp / "curl-trace").read_text()
-    if download_fails:
-        assert result.returncode == 22
-        assert not fresh.exists()
+    if clone_fails:
+        assert result.returncode == 128, result.stderr
+        assert not checkout.exists()
         assert not (tmp / "docker-trace").exists()
     else:
         assert result.returncode == 86, result.stderr + result.stdout
-        assert _git("rev-parse", "HEAD", cwd=fresh) == new
+        assert _git("rev-parse", "HEAD", cwd=checkout) == new
+        record = dict(line.split("=", 1) for line in
+                      (checkout / ".boss-release").read_text().splitlines() if "=" in line)
+        assert record["BOSS_RELEASE_CHANNEL"] == "pinned"
+        assert record["BOSS_RELEASE_REF"] == new
 
 
-def test_a_non_sha_pin_stops_before_download(install_pair):
-    _, _, _, env, tmp = install_pair
-    line = next(line for line in (REPO / "scripts/install/README.md").read_text().splitlines()
-                if line.startswith("BOSS_RELEASE_COMMIT="))
-    pinned = line.split()[0].split("=", 1)[1]
-    assert len(pinned) == 40 and all(c in "0123456789abcdef" for c in pinned)
-    line = line.replace(
-        pinned,
-        "REPLACE_WITH_REVIEWED_40_CHARACTER_SHA",
-    )
+def test_published_git_checkout_never_runs_an_existing_directory(install_pair):
+    _, _, new, env, tmp = install_pair
+    source = tmp / "source"
+    _git("tag", "v1.0-rc8", new, cwd=source)
+    _git("push", "origin", "refs/tags/v1.0-rc8", cwd=source)
+    checkout = tmp / "boss-rc8"
+    checkout.mkdir()
+    marker = tmp / "unexpected-install"
+    stale = checkout / "install.sh"
+    stale.write_text("#!/usr/bin/env bash\ntouch " + shlex.quote(str(marker)) + "\n")
+    stale.chmod(0o755)
+    command = _published_git_checkout_command().replace(
+        "https://github.com/seanventures/boss.git", shlex.quote(str(tmp / "origin.git")))
 
-    result = _run("bash", "-c", line, cwd=REPO, env=env)
+    result = _run("bash", "-c", command, cwd=tmp, env=env)
 
-    assert result.returncode == 2
-    assert "reviewed 40-character release SHA" in result.stderr
+    assert result.returncode == 128, result.stderr
+    assert not marker.exists()
+    assert stale.exists()
     assert not (tmp / "docker-trace").exists()
 
 
