@@ -140,6 +140,18 @@ def pick_deploy_target(candidates: list[dict], app_name: str) -> Optional[dict]:
     return named[0] if len(named) == 1 else None
 
 
+def planned_reason(planned: Any) -> str:
+    """The words a planner answer carries, never the answer itself rendered as a dict."""
+    if isinstance(planned, dict):
+        for key in ("failure_reason", "reason", "error", "message", "detail", "next"):
+            value = planned.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    if isinstance(planned, str) and planned.strip():
+        return planned.strip()
+    return "Deployment policy blocked this run."
+
+
 def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                  environment: str = "staging", target_id: Optional[str] = None,
                  actor: str = "operator", expected_cost_usd_micros: int = 0,
@@ -334,8 +346,15 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
             actor=actor,
         )
         deployment_run_id = planned.get("deployment_run_id") or planned.get("id")
+        # A REFUSED PLAN HAS NO RUN ID, and is an answer in words. It was checked after the id,
+        # so every refusal ("has no app port. Set the app's port…") reached the operator as
+        # "could not plan a deployment: {'status': 'blocked', 'refused': True, …}".
+        if planned.get("refused") or planned.get("status") in {"failed", "blocked"}:
+            return {"status": "blocked", "deployment_run_id": deployment_run_id,
+                    "reason": planned_reason(planned)}
         if not deployment_run_id:
-            return {"status": "failed", "reason": f"could not plan a deployment: {planned}"}
+            return {"status": "failed",
+                    "reason": f"could not plan a deployment: {planned_reason(planned)}"}
         if planned.get("status") in {"failed", "blocked"}:
             return {"status": "blocked", "deployment_run_id": deployment_run_id,
                     "reason": planned.get("failure_reason") or "Deployment policy blocked this run"}
