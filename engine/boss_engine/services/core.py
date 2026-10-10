@@ -72,6 +72,9 @@ def emit_event(
     """Emit through the configured edition sink, with Postgres compatibility."""
 
     from ..ports import get_engine_ports
+    from .build_services import scrub
+
+    data = scrub(data)       # a run's build-service password is never an event's content
 
     ports = get_engine_ports()
     if ports is not None:

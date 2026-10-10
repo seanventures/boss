@@ -400,6 +400,10 @@ def tick(engine: Any, settings: Any = None) -> dict[str, Any]:
         report["preview_workdirs"] = _safe(
             lambda: preview_service.sweep_preview_workdirs(engine))
     report["dirs"] = _safe(lambda: reap_dirs())
+    # A run that died never dropped its build-services database (build_services).
+    from . import build_services
+
+    report["build_databases"] = _safe(lambda: build_services.reap_tick(engine))
     if engine is not None and docker_available():
         from .resource_ledger import install_id
 
