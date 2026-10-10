@@ -2348,6 +2348,9 @@ def _perform_capability(
     result = {"capability": key, "tool": capability.tool, **output,
               "ran_as": {**ran_as, "tool": capability.tool,
                          "skills_offered": [], "skills_used": []}}
+    skipped = _preview_not_permitted(key, result, step_actor)
+    if skipped:
+        return skipped
     failed = _tool_failed_to_start(key, result)
     if failed:
         raise CapabilityExecutionError(failed)
@@ -2527,6 +2530,27 @@ def _awaited_handle(key: str, output: dict[str, Any]) -> Optional[dict[str, Any]
             if isinstance(value, str) and value.strip():
                 return {"kind": kind, "id": value.strip()}
     return None
+
+
+def _preview_not_permitted(key: str, output: dict[str, Any],
+                           actor: Optional[str]) -> Optional[dict[str, Any]]:
+    """A preview the step's agent may not start is SKIPPED, in words — not a deadletter.
+
+    The Captain's improve passes ran a workflow whose preview step runs as the QA agent, whose
+    Passport does not hold preview:manage. Every pass deadlettered with the raw
+    "'start_preview' needs preview:manage", and the next pass did the same. A preview is for a
+    person to look at; the build and its tests already stand without it. Any other refusal still
+    fails the step.
+    """
+    if key != "preview" or str(output.get("error") or "") != "forbidden":
+        return None
+    permission = str(output.get("permission") or "preview:manage")
+    who = str(actor or "the step's agent")
+    reason = (f"Preview skipped: {who} is not allowed to start previews ({permission}). "
+              "Grant it on that agent's Passport to get a preview here, or start one from the "
+              "build's card.")
+    return {**output, "ok": True, "status": "skipped", "skipped": True, "error": None,
+            "reason": reason, "message": reason, "summary": reason}
 
 
 def _tool_failed_to_start(key: str, output: dict[str, Any]) -> Optional[str]:

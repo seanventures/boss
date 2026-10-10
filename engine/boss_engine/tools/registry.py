@@ -460,11 +460,36 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
         message = (f"'{getattr(spec, 'name', '?')}': an id in the arguments names nothing in this "
                    "project.")
     else:
-        message = (f"'{getattr(spec, 'name', '?')}' needs {needs or 'a declared permission'}"
-                   + (" (agents can never hold it)" if outcome.reason == DenyReason.NOT_DELEGABLE
-                      else "") + ".")
+        message = permission_refusal_words(getattr(spec, "name", "?"), needs,
+                                           never_delegable=outcome.reason == DenyReason.NOT_DELEGABLE)
     return {"ok": False, "tool": getattr(spec, "name", "?"), "status": body.get("error", "forbidden"),
             "error": body.get("error", "forbidden"), "permission": needs, "message": message}
+
+
+def permission_refusal_words(tool: str, permission: Optional[str], *,
+                             never_delegable: bool = False) -> str:
+    """A refused tool call, said the way a person reads it.
+
+    It read "'start_preview' needs preview:manage." — a tool id and a permission key — and that
+    raw text is what a deadlettered workflow showed the operator. Named by the catalogue's own
+    title, with the key kept in brackets for whoever has to grant it."""
+    action = str(tool or "this step").replace("_", " ").strip() or "this step"
+    from ..identity.permissions_gen import PERMISSION_META
+
+    title = ""
+    if permission:
+        try:
+            title = str(PERMISSION_META[permission].title)
+        except Exception:  # noqa: BLE001 - an unknown key is still named, just without a title
+            title = ""
+    if not permission:
+        return f"Not allowed to {action}: it declares no permission, so it is refused."
+    named = f"\u201c{title}\u201d ({permission})" if title else permission
+    if never_delegable:
+        return (f"Not allowed to {action}: it needs {named}, which only a person can hold, "
+                "never an agent.")
+    return (f"Not allowed to {action}: it needs {named}, which whoever is running it does not "
+            "hold. An Owner can grant it (for an agent, on its Passport).")
 
 
 def _empty_object_schema() -> dict:

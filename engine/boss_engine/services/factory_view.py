@@ -97,6 +97,14 @@ SECTION_OF: dict[str, str] = {
 }
 QUIET_AFTER_MINUTES = 20
 
+#: The one state that means a worker is running the build right now.
+RUNNING_STATES = frozenset({"building"})
+
+
+def running_build_count(rows: list[Mapping[str, Any]]) -> int:
+    """How many of these build rows are really running, by their one state (§4.4)."""
+    return sum(1 for r in rows if str(r.get("state") or "") in RUNNING_STATES)
+
 
 class BuildState(TypedDict, total=False):
     state: str                     # BuildStateKey
@@ -221,7 +229,8 @@ class PreBuild(TypedDict, total=False):
 
 
 class FloorCounts(TypedDict):
-    building: int
+    building: int                  # builds a worker is running now (state `building`)
+    waiting: int                   # the rest of the BUILDING section: blocked, queued, quiet…
     needs_you: int                 # decisions listed (command_center.attention_counts)
     shipped_7d: int
     stopped: int                   # stopped work listed in NEEDS YOU (same rule)
@@ -1569,7 +1578,12 @@ def floor(connection: Any, settings: Any, project_id: str, *, viewer: Optional[s
         # The cards' counts by the one rule every surface uses (command_center.attention_counts):
         # `needs_you` decisions, `stopped` the stopped work NEEDS YOU lists. The STOPPED section
         # (failed builds with no newer attempt) is `stopped_builds`.
-        "counts": {"building": len(builds),
+        # "N building" is builds a worker is ACTUALLY running (the `building` state). It was
+        # len(builds) — the whole BUILDING section, which also holds blocked, needs-you,
+        # queued, budget-waiting and quiet rows — so an idle install read "7 building" while
+        # nothing ran. The rest are `waiting`.
+        "counts": {"building": running_build_count(builds),
+                   "waiting": len(builds) - running_build_count(builds),
                    **{k: v for k, v in command_center.attention_counts(attention).items()
                       if k in ("needs_you", "stopped")},
                    "shipped_7d": len({o["run_id"] for o in outcomes if o["kind"] != "preview"}),
