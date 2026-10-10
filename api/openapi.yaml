@@ -10391,6 +10391,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/architecture-reviews:
+    get:
+      summary: List Architecture Reviews
+      description: The architecture reviews of a project, or of one workflow run, with status
+        in words and the actions their decision offers. Answer through /v1/decisions/{id}/approve,
+        /revise (note required) or /reject.
+      operationId: get_v1_architecture_reviews
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: workflow_run_id
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 50
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+  /v1/architecture-reviews/{review_id}:
+    get:
+      summary: Get Architecture Review
+      description: One architecture review with every version of its document.
+      operationId: get_v1_architecture_reviews_review_id
+      parameters:
+      - name: review_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Not found in this project
   /v1/artifacts/{artifact_id}/rebuild:
     post:
       summary: Rebuild Change Record
@@ -12984,6 +13040,215 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/setup/repository/{binding_id}/ci-workflows:
+    get:
+      summary: 'CI workflows opt-in'
+      description: '"Builds may change CI workflows" for one repository; when on, the GitHub App permissions page and installation page where workflows: write is accepted.'
+      operationId: get_v1_setup_repository_ci_workflows
+      tags:
+      - ci
+      parameters:
+      - name: binding_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    put:
+      summary: 'Set the CI workflows opt-in'
+      description: 'Turn the opt-in on or off. Needs github:connect (Owner or Admin) with a fresh step-up; recorded.'
+      operationId: put_v1_setup_repository_ci_workflows
+      tags:
+      - ci
+      parameters:
+      - name: binding_id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - project_id
+              - enabled
+              properties:
+                project_id:
+                  type: string
+                enabled:
+                  type: boolean
+                actor:
+                  type: string
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /v1/ci/workflow-checks:
+    post:
+      summary: 'Workflow static checks'
+      description: 'Whether files change .github/workflows/ (CI changed) and BOSS''s deterministic findings (secret exfiltration, pull_request_target, unpinned actions, script injection).'
+      operationId: post_v1_ci_workflow_checks
+      tags:
+      - ci
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - project_id
+              - files
+              properties:
+                project_id:
+                  type: string
+                files:
+                  type: array
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /v1/ci/waits:
+    post:
+      summary: 'Wait for CI'
+      description: 'Start waiting for a pull request head''s (or a commit''s) check runs and statuses, with a bounded timeout; takes the first look.'
+      operationId: post_v1_ci_waits
+      tags:
+      - ci
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - project_id
+              properties:
+                project_id:
+                  type: string
+                pull_request_url:
+                  type: string
+                head_sha:
+                  type: string
+                repository:
+                  type: string
+                timeout_minutes:
+                  type: number
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /v1/ci/waits/{wait_id}:
+    get:
+      summary: 'A CI wait'
+      description: 'The wait in words: passed, failed (with the failing check''s link), timed_out, no_ci or waiting.'
+      operationId: get_v1_ci_wait
+      tags:
+      - ci
+      parameters:
+      - name: wait_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /v1/ci/waits/{wait_id}/poll:
+    post:
+      summary: 'Look at CI now'
+      description: 'One look at GitHub for a recorded CI wait.'
+      operationId: post_v1_ci_wait_poll
+      tags:
+      - ci
+      parameters:
+      - name: wait_id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - project_id
+              properties:
+                project_id:
+                  type: string
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /v1/ci/gate:
+    get:
+      summary: 'A decision''s CI gates'
+      description: 'Whether the decision ships a CI change (only a person may approve it) and the CI wait that blocks or clears its merge/deploy.'
+      operationId: get_v1_ci_gate
+      tags:
+      - ci
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: decision_id
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
   /v1/setup/status:
     get:
       summary: Setup Status Endpoint

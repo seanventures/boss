@@ -915,7 +915,7 @@ def check_spec(
 
         with connection.begin_nested():
             needs = [{**problem(p["step_id"], "ability", p["message"]), "severity": "warning",
-                      "ability": p["ability"]}
+                      "ability": p["ability"], "fix_label": p.get("fix_label"), "fix_href": p.get("fix_href")}
                      for p in ability_problems(connection, get_settings(), project_id, normalized)]
     except Exception:  # noqa: BLE001 — the Kit must never be why a check fails
         logger.debug("ability problems could not be read", exc_info=True)
@@ -5648,13 +5648,20 @@ _WORK_TABLES: dict[str, str] = {
     # the common case, and cancelling the record is what stops somebody applying it later
     # believing the workflow still wants it.
     "deployment": "deployment_runs",
+    # An architecture waiting for a person: cancelling the run closes the review, and the
+    # run's decision is no longer answerable (run_decisions.refusal_to_answer).
+    "architecture": "architecture_reviews",
+    # Waiting for CI (ci_gate): cancelling the run stops the looking; the wait no longer gates.
+    "ci_wait": "ci_waits",
 }
 
 _WORK_TERMINAL: frozenset[str] = frozenset(
     {"completed", "succeeded", "failed", "cancelled", "blocked", "stopped", "expired",
      # A deployment's own finished states. Without them a cancel would relabel a deployment
      # that already shipped (`deployed`, `healthy`) or already failed as "cancelled".
-     "deployed", "healthy", "unhealthy", "rolled_back", "rollback_pending"}
+     "deployed", "healthy", "unhealthy", "rolled_back", "rollback_pending",
+     # An architecture a person already answered stays answered.
+     "approved", "rejected"}
 )
 
 
@@ -5666,7 +5673,9 @@ _AWAIT_LABELS: dict[str, str] = {
     "code_task": "the build to finish",
     "preview": "the preview to come up",
     "deployment": "the deployment to finish",
+    "ci_wait": "CI to finish",
     "agent_run": "the agent's approved run to finish",
+    "architecture": "a person to approve the architecture",
 }
 
 

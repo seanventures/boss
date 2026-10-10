@@ -17,6 +17,7 @@ import React, { useEffect, useState } from "react";
 import type { CodeTaskRun, PreviewRec } from "@boss/api-client";
 import type { Cockpit, CockpitOutputs, ReviewComment } from "../../lib/cockpit";
 import { previewWebHref } from "../../lib/browser-links";
+import { isGitHubUrl, repoUrl } from "../../lib/github-urls";
 import { callAction } from "../../lib/call-action";
 import { GatedButton } from "../../components/gated";
 import { startPreviewAction } from "../actions";
@@ -233,7 +234,7 @@ function ChecksBody({ c, projectId, actor, onRefresh }: { c: Cockpit; projectId:
 function BriefBody({ c }: { c: Cockpit }) {
   const b = c.brief;
   const yes = (v?: boolean) => (v === undefined ? "—" : v ? "yes" : "no");
-  const github = b.repo && (c.outputs.pr?.url ?? "").startsWith("https://github.com/") ? `https://github.com/${b.repo}` : null;
+  const github = b.repo && isGitHubUrl(c.outputs.pr?.url) ? repoUrl(b.repo) : null;
   return (
     <span className="fx-out-col" data-testid="fx-brief">
       {b.criteria.length ? (
@@ -246,6 +247,12 @@ function BriefBody({ c }: { c: Cockpit }) {
         <span className="fx-out-col" data-group="verify">
           <span className="fx-out-sub" title="The commands the build must pass">Verified by</span>
           {b.testCommands.map((x, i) => <span key={i} className="fx-mono fx-trunc" title={x} data-user-text>{x}</span>)}
+        </span>
+      ) : null}
+      {b.database?.postgres ? (
+        <span className="fx-kv" data-testid="fx-brief-database" title={b.database.why.join("; ")}
+              data-tip={b.database.why.join("; ")}>
+          <span className="fx-out-sub">Database</span><span>Postgres for this build ✓</span>
         </span>
       ) : null}
       {b.repo ? (

@@ -21,6 +21,8 @@ gate does not. So the repo declares them, at its root:
         run: ["npx vitest run {tests}"]
         select: {tests_glob: "apps/web/tests/**/*.test.*"}
     timeout_seconds: 900
+    services: [postgres]                    # optional: a throwaway Postgres for this run
+                                            # (build_services: DATABASE_URL + PG* injected)
 
 and the gate runs only the suites a change touches, and in each only the tests that reference a
 changed file (``by: imports``) or the whole glob (``by: all``). A changed test file is always
@@ -98,6 +100,7 @@ class VerifyManifest:
     setup: tuple[str, ...] = ()
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     version: int = 1
+    services: tuple[str, ...] = ()
 
 
 @dataclass
@@ -182,7 +185,7 @@ def parse_verify_manifest(text: str) -> VerifyManifest:
         raise VerifyManifestError(f"{MANIFEST_NAME} must be a mapping with version and suites")
     if data.get("version") != 1:
         raise VerifyManifestError(f"{MANIFEST_NAME}: version must be 1")
-    unknown = set(data) - {"version", "setup", "suites", "timeout_seconds"}
+    unknown = set(data) - {"version", "setup", "suites", "timeout_seconds", "services"}
     if unknown:
         raise VerifyManifestError(f"{MANIFEST_NAME}: unknown key(s) {sorted(unknown)}")
     timeout = data.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
@@ -235,10 +238,17 @@ def parse_verify_manifest(text: str) -> VerifyManifest:
             name=name, paths=paths, run=run, tests_glob=tests_glob, by=by,
             fallback=fallback, setup=_commands(raw.get("setup"), f"{where}.setup"), cwd=cwd,
         ))
+    from .build_services import parse_services
+
+    try:
+        services = parse_services(data.get("services"), f"{MANIFEST_NAME}: services")
+    except ValueError as exc:
+        raise VerifyManifestError(str(exc)) from None
     return VerifyManifest(
         suites=tuple(suites),
         setup=_commands(data.get("setup"), f"{MANIFEST_NAME}: setup"),
         timeout_seconds=timeout,
+        services=services,
     )
 
 

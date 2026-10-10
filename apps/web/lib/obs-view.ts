@@ -92,7 +92,41 @@ export type AppDetail = {
     openUrl: string | null; dashboardUrl: string | null; lastError: string | null;
   };
   series: SeriesPoint[]; incidents: Incident[]; pins: Pin[]; window: WindowInfo;
+  metrics: AppMetrics;
 };
+/** The app's OWN /metrics (engine app_metrics.metrics_view): request rate, 5xx error rate and
+ *  p50/p95 over the alert window, the last scrape in words, and the error-rate alert. */
+export type AlertState = "firing" | "ok" | "quiet" | "off";
+export type AppMetrics = {
+  declared: boolean; word: string; tip: string | null; path: string | null; via: string | null;
+  state: "ok" | "failing" | "waiting" | null; lastScrapeAt: string | null; lastOkAt: string | null;
+  route: string | null; url: string | null; naming: string | null; intervalS: number | null;
+  requests: number | null; errors: number | null; errorRate: number | null; ratePerMin: number | null;
+  p50Ms: number | null; p95Ms: number | null; windowMinutes: number | null;
+  alert: { state: AlertState; word: string; incidentId: string | null; since: string | null;
+           rule: { errorRatePercent: number | null; windowMinutes: number | null; minRequests: number | null; enabled: boolean } } | null;
+};
+const ALERT_STATES = new Set(["firing", "ok", "quiet", "off"]);
+export function parseAppMetrics(w: unknown): AppMetrics {
+  const o = obj(w);
+  const a = o.alert ? obj(o.alert) : null;
+  const r = a ? obj(a.rule) : {};
+  const st = str(o.state);
+  return {
+    declared: o.declared === true, word: str(o.word) || "Not declared", tip: optStr(o.tip), path: optStr(o.path),
+    via: optStr(o.via), state: st === "ok" || st === "failing" || st === "waiting" ? st : null,
+    lastScrapeAt: optStr(o.last_scrape_at), lastOkAt: optStr(o.last_ok_at), route: optStr(o.route), url: optStr(o.url),
+    naming: optStr(o.naming), intervalS: optNum(o.interval_s), requests: optNum(o.requests), errors: optNum(o.errors),
+    errorRate: optNum(o.error_rate), ratePerMin: optNum(o.rate_per_min), p50Ms: optNum(o.p50_ms), p95Ms: optNum(o.p95_ms),
+    windowMinutes: optNum(o.window_minutes),
+    alert: a ? {
+      state: (ALERT_STATES.has(str(a.state)) ? str(a.state) : "quiet") as AlertState, word: str(a.word),
+      incidentId: optStr(a.incident_id), since: optStr(a.since),
+      rule: { errorRatePercent: optNum(r.error_rate_percent), windowMinutes: optNum(r.window_minutes),
+              minRequests: optNum(r.min_requests), enabled: r.enabled !== false },
+    } : null,
+  };
+}
 export function parseAppDetail(w: unknown): AppDetail {
   const o = obj(w);
   const f = obj(o.facts);
@@ -114,6 +148,7 @@ export function parseAppDetail(w: unknown): AppDetail {
                deployBefore: d ? { ref: str(d.ref), sha7: optStr(d.sha7) } : null };
     }),
     pins: arr(o.pins).map(parsePin), window: parseWindow(o.window),
+    metrics: parseAppMetrics(o.metrics),
   };
 }
 

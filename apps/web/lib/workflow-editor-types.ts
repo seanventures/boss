@@ -60,7 +60,11 @@ export type WorkflowSummary = { definition_id: string; workflow_key: string; nam
 
 /* ── Problems / check / publish ───────────────────────────────────────────────────── */
 
-export type Problem = { step_id: string | null; field: string | null; message: string };
+export type Problem = { step_id: string | null; field: string | null; message: string;
+  /** "warning": the step cannot run yet (an ability not set up), but the workflow saves. */
+  severity?: "warning" | "error";
+  /** Where the gap is closed (kit.setup_fix): a console link and the button's words. */
+  fix_label?: string; fix_href?: string };
 export type CheckResult = { ok: boolean; problems: Problem[];
   summary: { steps: number; agents: string[]; approvals: string[]; typical_minutes: number | null;
              needs: string[] } };

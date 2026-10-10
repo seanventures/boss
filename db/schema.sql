@@ -1234,6 +1234,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_github_repository_binding_primary
   ON github_repository_bindings(project_id)
   WHERE role = 'primary' AND status = 'active';
 
+-- Waiting for CI (services/ci_gate.py): one row per wait on a commit's check runs and statuses.
+-- A deploy (and an unforced merge) of the pull request / commit is refused until the latest
+-- wait is passed or no_ci. The per-repo "Builds may change CI workflows" opt-in lives in
+-- github_repository_bindings.metadata->'ci_workflows_write'.
+CREATE TABLE IF NOT EXISTS ci_waits (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository TEXT NOT NULL,
+  head_sha TEXT NOT NULL,
+  pull_request_url TEXT,
+  code_task_run_id TEXT,
+  workflow_run_id TEXT,
+  status TEXT NOT NULL DEFAULT 'waiting',
+  has_ci BOOLEAN NOT NULL DEFAULT true,
+  summary TEXT NOT NULL DEFAULT '',
+  checks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  failing_url TEXT,
+  timeout_seconds INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  deadline_at TIMESTAMPTZ NOT NULL,
+  next_poll_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (status IN ('waiting', 'passed', 'failed', 'timed_out', 'no_ci', 'unreadable', 'cancelled'))
+);
+CREATE INDEX IF NOT EXISTS idx_ci_waits_project_pr
+  ON ci_waits(project_id, pull_request_url, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ci_waits_project_sha
+  ON ci_waits(project_id, head_sha, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS github_branch_policies (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -2045,6 +2077,35 @@ CREATE INDEX IF NOT EXISTS idx_health_samples_target
   ON deployment_health_samples(deployment_target_id, checked_at DESC);
 CREATE INDEX IF NOT EXISTS idx_health_samples_project
   ON deployment_health_samples(project_id, checked_at DESC);
+
+-- What a deployed app says about its own traffic (app_metrics): one row per scrape of the
+-- `metrics: {path}` its boss.deploy.yaml declares. `snapshot` holds the cumulative counters as
+-- scraped; requests/errors/bucket_deltas are the window since the previous good scrape (a
+-- counter reset counts from zero). `word` is the outcome in words ("Scraped", "Metrics endpoint
+-- returned 404"). Seven days are kept.
+CREATE TABLE IF NOT EXISTS app_metrics_scrapes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  deployment_target_id TEXT NOT NULL REFERENCES deployment_targets(id) ON DELETE CASCADE,
+  scraped_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ok BOOLEAN NOT NULL,
+  route TEXT,
+  url TEXT,
+  status_code INTEGER,
+  word TEXT NOT NULL DEFAULT '',
+  naming TEXT,
+  took_ms INTEGER,
+  snapshot JSONB,
+  interval_s DOUBLE PRECISION,
+  requests DOUBLE PRECISION,
+  errors DOUBLE PRECISION,
+  counter_reset BOOLEAN NOT NULL DEFAULT false,
+  bucket_deltas JSONB,
+  p50_ms DOUBLE PRECISION,
+  p95_ms DOUBLE PRECISION
+);
+CREATE INDEX IF NOT EXISTS idx_app_metrics_scrapes_target
+  ON app_metrics_scrapes(deployment_target_id, scraped_at DESC);
 
 -- Generalized customer-app rollout state reuses the existing deployment_rollouts
 -- ledger while linking each new rollout to its ProviderOps DeploymentRun.
@@ -3373,6 +3434,34 @@ CREATE INDEX IF NOT EXISTS idx_meeting_runs_project ON meeting_runs(project_id, 
 -- What the meeting is called, kept apart from the directive: workflow framing prepended to the
 -- directive became every meeting's title on boss-1 ('PRD meeting: --- WHAT THIS PANEL IS FOR ---').
 ALTER TABLE meeting_runs ADD COLUMN IF NOT EXISTS title TEXT;
+
+-- ARCHITECTURE APPROVAL (workflow capability `architecture`, services/architecture_docs.py).
+-- An architect agent turns the run's APPROVED PRD into an architecture document; each version
+-- is an `architecture_document` artifact, and a person approves, sends back with a note (the
+-- architect writes the next version) or rejects it. The workflow step waits on this row.
+CREATE TABLE IF NOT EXISTS architecture_reviews (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  workflow_run_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  -- drafting | awaiting_approval | revision_requested | approved | rejected | cancelled | failed
+  status TEXT NOT NULL DEFAULT 'drafting',
+  architect TEXT NOT NULL DEFAULT 'chief_architect',
+  title TEXT,
+  prd_source JSONB NOT NULL DEFAULT '{}'::jsonb,   -- where the approved PRD came from, who approved it
+  current_version INTEGER NOT NULL DEFAULT 0,
+  current_artifact_id TEXT,
+  decision_id TEXT,
+  notes JSONB NOT NULL DEFAULT '[]'::jsonb,        -- [{version, note, by, at}] changes a person asked for
+  approved_by TEXT,
+  approved_at TIMESTAMPTZ,
+  approved_version INTEGER,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_architecture_reviews_run ON architecture_reviews(workflow_run_id, step_id);
+CREATE INDEX IF NOT EXISTS idx_architecture_reviews_project ON architecture_reviews(project_id, status, updated_at DESC);
 
 -- Durable coding-agent task: clone -> edit -> build/test -> open PR (gated).
 -- Unlike meeting_runs (pure-data phases), a code task's working tree is
@@ -7460,6 +7549,15 @@ CREATE TABLE IF NOT EXISTS identity_github_app (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Which settings tree each GitHub link goes to (identity/github_urls.py): the App's OWNER and the
+-- installation's ACCOUNT, each "User" or "Organization", as GitHub's API reports them. And what
+-- GitHub last said the installation was actually granted (permissions, repositories), so Setup
+-- shows what GitHub accepted rather than what BOSS asked for.
+ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS owner_login TEXT;
+ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS owner_type TEXT;
+ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS account_type TEXT;
+ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS verified JSONB;
+ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
 
 -- "Request access" from a refusal (amendment A13): who asked for which permission where, kept so
 -- an admin can see open requests and the requester is never asked twice. Decided by a binding.

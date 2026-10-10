@@ -25,15 +25,20 @@ import { webauthnAvailable } from "../../../lib/identity/webauthn";
 import { AuthStage, Live, Logo, linkToken } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
 import { CopyCommand } from "../copy-command";
+import { HOST_COMMANDS, overSsh } from "../../../lib/identity/host-commands";
 import { RecoveryCodesView } from "../recovery-codes";
 import { TotpStep } from "../enrol/totp-step";
 
 type Claim = NonNullable<AuthOptions["claim"]>;
 type Stage = "form" | "passkey" | "totp" | "codes";
 
-const SHOW_ON_SERVER = "python3 scripts/install/console_password.py show";
-const SHOW_OVER_SSH = `ssh -t user@your-server 'cd ~/boss && ${SHOW_ON_SERVER}'`;
-const SETUP_LINK = "docker exec boss-api boss identity setup-link";
+const SHOW_ON_SERVER = HOST_COMMANDS.password;
+const SHOW_OVER_SSH = overSsh(SHOW_ON_SERVER);
+const SETUP_LINK = HOST_COMMANDS.setupLink;
+
+/** THE NEXT STEP AFTER THE CLAIM is setup (repository, model, first build), not the Identity
+ *  overview: a new Owner landed on posture warnings with no pointer to what comes next. */
+export const AFTER_CLAIM = "/?area=setup";
 
 const SEAT_WORDS: Record<string, string> = {
   ceo: "ceo · approvals and history will show your name",
@@ -141,7 +146,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         <Logo host={options.host} />
         <h1>Save your recovery codes</h1>
         <p className="idn-s" data-copy="prose">If you lose every passkey, one of these gets you back in. You're this BOSS's first Owner.</p>
-        <RecoveryCodesView codes={codes} host={options.host} continueLabel="Open Identity" onContinue={() => { setCodes(null); window.location.assign("/identity"); }} />
+        <RecoveryCodesView codes={codes} host={options.host} continueLabel="Continue setup" onContinue={() => { setCodes(null); window.location.assign(AFTER_CLAIM); }} />
       </AuthStage>
     );
   }
@@ -151,7 +156,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
       <AuthStage label="Authenticator">
         <Logo host={options.host} />
         <h1>Add an authenticator</h1>
-        <p className="idn-s" data-copy="prose">This browser has no passkeys. Scan the code with an authenticator app, then enter the 6 digits it shows.</p>
+        <p className="idn-s" data-copy="prose">{noPasskey ? `${noPasskey.replace(/\.$/, "")}.` : "Passkeys aren't available here."} Scan the code with an authenticator app, then enter the 6 digits it shows.</p>
         <div className="idn-note" data-copy="prose"><Warning size={15} aria-hidden /> Posture will show &ldquo;No passkey on the only Owner&rdquo; until you add one.</div>
         <TotpStep onDone={(issued) => { showCodes(issued).catch((e) => setError(sayAuth(e))); }} />
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
@@ -198,7 +203,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         {path === "setup_token" && !token ? (
           <div className="idn-note bad" role="alert" data-testid="claim-no-token">
             <Warning size={15} aria-hidden />
-            <span data-copy="prose">Open the setup link from the install output. To print a new one:</span>
+            <span data-copy="prose">Claiming needs a one-hour link from the server. On the machine BOSS runs on:</span>
           </div>
         ) : null}
         {path === "setup_token" && !token ? <CopyCommand command={SETUP_LINK} /> : null}

@@ -9,9 +9,11 @@ import React, { forwardRef, useEffect, useRef, useState } from "react";
 import { CircleNotch, Plus } from "@phosphor-icons/react";
 
 import { idGet } from "../../lib/identity/api";
+import { newFineGrainedTokenUrl } from "../../lib/github-urls";
 import { fetchRepos, fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import { ageLabel, daysUntil } from "../../lib/setup-stepper";
 import type { CheckResult, RepoEntry, SetupRefusal, SetupView, TokenFound } from "../../lib/setup-types";
+import { CiWorkflowsToggle } from "./ci-workflows-toggle";
 import { Drawer } from "./drawer";
 import { statusOf } from "./github-access-row";
 import { AskBoss, CONSENT_REFUSAL, Consent, RowMenu, toast, useBoard } from "./parts";
@@ -30,7 +32,7 @@ const EXPIRY_SHOWN_DAYS = 365;
 
 /** GitHub's new-token page with the two permissions BOSS needs filled in (spec §6.4). */
 export function createTokenUrl(host: string): string {
-  const params = new URLSearchParams({
+  return newFineGrainedTokenUrl({
     name: `BOSS (${host})`.slice(0, 40),
     description: "BOSS writes branches and opens pull requests",
     expires_in: "90",
@@ -38,7 +40,6 @@ export function createTokenUrl(host: string): string {
     pull_requests: "write",
     metadata: "read",
   });
-  return `https://github.com/settings/personal-access-tokens/new?${params.toString()}`;
 }
 
 function refusalOf(error: unknown): SetupRefusal {
@@ -276,6 +277,7 @@ function RepoLine({ repo, onReplace }: { repo: RepoEntry; onReplace: () => void 
           </Tip>
         ) : null}
       </div>
+      {repo.binding_id ? <CiWorkflowsToggle bindingId={repo.binding_id} /> : null}
       {red || pill.tone === "amber" ? (
         <div className="su-line su-fix">
           {repo.pill.action === "fix_link" && repo.pill.fix_url ? (
@@ -382,6 +384,10 @@ export const RepositoryRow = forwardRef<HTMLElement, {
         ]} />
       </div>
     );
+    // The CI setting stays reachable on a finished row: it is chosen after setup, not during it.
+    if (first.binding_id) {
+      body = <div className="su-stack">{body}<CiWorkflowsToggle bindingId={first.binding_id} /></div>;
+    }
   } else if (mode === "waiting") {
     body = <span className="su-faint">Not connected</span>;
   } else if (repos.length === 0) {
@@ -426,6 +432,11 @@ export const RepositoryRow = forwardRef<HTMLElement, {
               done={mode === "done"} focused={focused}
               tip="Where BOSS writes code and opens pull requests.">
       {body}
+      {connection?.builds && connection.builds.ok === false ? (
+        <p className="su-builds-warn" data-testid="su-repo-builds" role="status">
+          {connection.builds.message}{connection.builds.next ? ` ${connection.builds.next}` : ""}
+        </p>
+      ) : null}
       {drawer && mode !== "current" ? (
         <Drawer title="Connect GitHub" onClose={close} testid="su-github-drawer">
           <TokenForm connectionId={drawer === "replace" ? replaceId : null} onDone={close} />

@@ -92,14 +92,20 @@ describe("a failed load", () => {
 
 describe("the seam to Skills and MCP", () => {
   it("a Ready board and a Ready stepper both say what is next, and nothing before", async () => {
-    for (const view of [board(), tryStep()]) {
-      fakeApi(view);
-      mounted = await mountBoard(view);
-      const next = q(document.body, "su-next-skills") as HTMLAnchorElement | null;
-      expect(next?.textContent).toBe("Next: give your crew skills");
-      expect(next?.getAttribute("href")).toBe("?area=skills&setup=1");
-      mounted.unmount(); mounted = null; document.body.innerHTML = "";
-    }
+    // A finished board points at Skills; a Ready stepper with no first PR yet points at Try it
+    // (the first build), never past it.
+    fakeApi(board());
+    mounted = await mountBoard(board());
+    const next = q(document.body, "su-next-skills") as HTMLAnchorElement | null;
+    expect(next?.textContent).toBe("Next: give your crew skills");
+    expect(next?.getAttribute("href")).toBe("?area=skills&setup=1");
+    mounted.unmount(); mounted = null; document.body.innerHTML = "";
+    fakeApi(tryStep());
+    mounted = await mountBoard(tryStep());
+    const first = q(document.body, "su-next-try") as HTMLAnchorElement | null;
+    expect(first?.textContent).toBe("Next: open your first PR");
+    expect(q(document.body, "su-next-skills")).toBeNull();
+    mounted.unmount(); mounted = null; document.body.innerHTML = "";
     fakeApi(firstRun());
     mounted = await mountBoard(firstRun());
     expect(q(document.body, "su-next-skills")).toBeNull();

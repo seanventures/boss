@@ -963,7 +963,8 @@ def _ports_assigned_on(connection, address: str) -> dict[int, str]:
     return taken
 
 
-def _first_free_port(connection, address: str, *, start: int = 3000) -> Optional[int]:
+def _first_free_port(connection, address: str, *, start: int = 3000,
+                     end: Optional[int] = None) -> Optional[int]:
     """A port nothing is listening on AND nothing has been promised.
 
     Both halves are required. A port that answers nothing right now but belongs to an app
@@ -974,7 +975,8 @@ def _first_free_port(connection, address: str, *, start: int = 3000) -> Optional
     taken = _ports_assigned_on(connection, address)
     port = max(1024, start)
     checked = 0
-    while checked < 200 and port < 65535:
+    stop = min(int(end), 65535) if end else 65535
+    while checked < 200 and port <= stop:
         checked += 1
         if port not in taken:
             probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1102,10 +1104,14 @@ def create_deployment_target(
                              f"{taken[port]!r}. Leave port unset and one will be chosen.",
                     "assigned": [{"port": k, "app": v} for k, v in sorted(taken.items())]}
     else:
-        port = _first_free_port(connection, address)
+        # IN THE HOST'S OWN RANGE (port_min..port_max, "Ports 8000-8999" in Infra): the range is
+        # what the operator said apps may use on this machine.
+        low = int(host.get("port_min") or 3000)
+        high = int(host.get("port_max") or 65535)
+        port = _first_free_port(connection, address, start=low, end=high)
         if not port:
             return {"ok": False,
-                    "error": f"no free port found on {address} in the range scanned"}
+                    "error": f"no free port found on {address} in {low}-{high}"}
 
     if not repo:
         row = connection.execute(
@@ -1123,10 +1129,14 @@ def create_deployment_target(
     connection.execute(
         sql("INSERT INTO deployment_targets "
             "(id, project_id, app_name, repo, environment, target_kind, target_ref, domains, "
-            " health_checks, status, created_by, created_at, updated_at) "
+            " health_checks, required_resources, status, created_by, created_at, updated_at) "
             "VALUES (:i, :p, :a, :r, :e, 'ssh', :ref, CAST(:dom AS JSONB), "
-            "        CAST(:hc AS JSONB), 'active', :by, now(), now())"),
+            "        CAST(:hc AS JSONB), CAST(:rr AS JSONB), 'active', :by, now(), now())"),
+        # THE APP PORT IS DECLARED, not only implied by the domain: the governed host plan
+        # refuses a target with no app_port ("has no app port. Set the app's port…"), which
+        # stopped the very first auto-created deploy.
         {"i": target_id, "p": project_id, "a": app, "r": repo, "e": environment,
+         "rr": json.dumps([{"kind": "app_port", "name": str(port)}]),
          "ref": target_ref_for(host), "dom": json.dumps([f"{address}:{port}"]),
          "hc": json.dumps([{"kind": "http", "scheme": scheme, "path": "/",
                             "expect_status": 200, "port": port}]),

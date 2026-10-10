@@ -78,10 +78,57 @@ THE ENDPOINT ITSELF
   dominate the request rate and hide real traffic.
 - Cheap to render. If `/metrics` is slow, the series count is already a problem.
 
+DECLARE IT IN boss.deploy.yaml — OR BOSS NEVER SCRAPES IT
+After every deploy BOSS scrapes the path the app DECLARES, through the same route its health
+probe uses, and turns it into request rate, error rate (5xx / total) and p50/p95 latency in
+Observability, with an alert when more than 5% of requests fail over 5 minutes. An undeclared
+endpoint is invisible. Add to the repository's boss.deploy.yaml:
+
+    metrics: {path: /metrics}
+    # optional: interval: 60 (15..3600 s), via: auto|public|host,
+    #           alert: {error_rate_percent: 5, window_minutes: 5, min_requests: 20}
+
+The path is a path only (no scheme or host). BOSS reads `http_requests_total` with a
+`status` (or `code`) label and the `http_request_duration_seconds` histogram; the
+prometheus-fastapi-instrumentator and starlette-exporter names are accepted too.
+
 DEPENDENCIES
-Prefer the standard library. BOSS runs many apps with no build step and no package install, so
-a metrics client library is usually a deployment failure waiting to happen. A small in-process
-registry (counter + histogram + a `render()` function) is enough and is easy to unit-test.
+An app that already installs packages (FastAPI, Flask, Express) uses its ecosystem's client:
+`prometheus_client` for Python. An app with no build step and no package install keeps to the
+standard library — a small in-process registry (counter + histogram + a `render()` function)
+is enough and is easy to unit-test.
+
+FastAPI, with prometheus_client (add `prometheus-client` to requirements):
+
+    import time
+    from fastapi import FastAPI, Request, Response
+    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+
+    REQUESTS = Counter("http_requests_total", "HTTP requests", ["method", "route", "status"])
+    LATENCY = Histogram("http_request_duration_seconds", "HTTP request latency",
+                        ["method", "route"],
+                        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10))
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def metrics_middleware(request: Request, call_next):
+        if request.url.path == "/metrics":          # scrapes stay out of the app's own numbers
+            return await call_next(request)
+        started = time.perf_counter()
+        status = 500
+        try:
+            response = await call_next(request)
+            status = response.status_code
+            return response
+        finally:
+            route = request.scope.get("route")
+            template = getattr(route, "path", "unmatched")   # the TEMPLATE, never the raw path
+            REQUESTS.labels(request.method, template, str(status)).inc()
+            LATENCY.labels(request.method, template).observe(time.perf_counter() - started)
+
+    @app.get("/metrics")
+    def metrics() -> Response:
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 TESTING
 Rendering must be testable without making HTTP requests: exposition text parses, histogram
@@ -114,6 +161,8 @@ invisible the moment it is live. Include these cases:
   ONE series, not two. This is the failure that takes the metrics backend down rather than the
   app, so it is worth a test of its own.
 - A scrape does not appear in the app's own request counters.
+- When the repository has a boss.deploy.yaml, it declares `metrics: {path: /metrics}` — the
+  path the test scrapes. Without it BOSS never scrapes the endpoint after deploy.
 
 If the app cannot serve `/metrics` at all, say so plainly in your summary rather than writing
 tests that pass around the gap.

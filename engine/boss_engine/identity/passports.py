@@ -91,12 +91,16 @@ def validate_external_ceiling(value: Any) -> dict[str, dict[str, str]]:
     return out
 
 
-def above_connection(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[str]:
+def above_connection(before: Mapping[str, Any], after: Mapping[str, Any], *,
+                     allow_workflows: bool = False) -> list[str]:
     """Keys a change RAISES above what the BOSS GitHub App asks GitHub for (github_setup.APP_PERMISSIONS):
     a limit no token can ever reach is a promise BOSS cannot keep, so it is refused rather than
     stored. Only raises are checked: a preset written before the App's set changed still loads."""
-    from .github_setup import APP_PERMISSIONS
+    from .github_setup import app_permissions
 
+    # `workflows: write` is within the App's set only while a repository opted in to builds
+    # changing CI (services/ci_gate.py) — then the App asks GitHub for it.
+    APP_PERMISSIONS = app_permissions(allow_workflows)
     over = []
     old = (before or {}).get("github") or {}
     for key, level in ((after or {}).get("github") or {}).items():
@@ -323,7 +327,10 @@ def set_rules(ctx: AuthContext, agent_id: str, *, db: Any, can_spawn: Optional[b
         # A ceiling change: `agent_passport:manage` (checked above, step-up via the PDP), audited
         # below with the before/after and the widened keys named.
         external_ceiling = validate_external_ceiling(external_ceiling)
-        over = above_connection(before.external_ceiling, external_ceiling)
+        from ..services.ci_gate import any_repo_allows_workflows
+
+        over = above_connection(before.external_ceiling, external_ceiling,
+                                allow_workflows=any_repo_allows_workflows(db))
         if over:
             raise PassportError("above_github_connection", 422, key=over[0])
     if sponsor_principal_id is not None:

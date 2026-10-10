@@ -43,7 +43,17 @@ function splitDuration(seconds: number): { amount: number; unit: (typeof UNITS)[
 
 export function FieldError({ problems, field }: { problems: Problem[]; field: string }) {
   const hit = problems.find((p) => p.field === field);
-  return hit ? <span className="wf-field-error" role="alert" title={hit.message}>{hit.message}</span> : null;
+  if (!hit) return null;
+  return (
+    <span className="wf-field-error" role="alert" title={hit.message}>
+      {hit.message}
+      {/* NO DEAD END: the gap names where it is closed (a deploy step with no target opens Infra
+          with the App target sheet). A new tab, so the unsaved workflow is not lost. */}
+      {hit.fix_href ? (
+        <> · <a href={hit.fix_href} target="_blank" rel="noreferrer" data-testid="wf-problem-fix">{hit.fix_label ?? "Set it up"}</a></>
+      ) : null}
+    </span>
+  );
 }
 
 /** The step fields BlockSettings draws a control for — and so where a problem on one shows. */

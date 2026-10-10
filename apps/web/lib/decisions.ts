@@ -42,7 +42,8 @@ export type DecisionFeedItem = {
 export type DecisionAttention = "needs_action" | "expired" | "resolved";
 
 export type DecisionKind =
-  | "refusal" | "deploy_gate" | "workflow_gate" | "pull_request" | "general";
+  | "refusal" | "deploy_gate" | "workflow_gate" | "architecture_review" | "pull_request"
+  | "general";
 
 export type DecisionActionOffer = {
   action: "approve" | "reject" | "revise" | "delegate" | "execute";

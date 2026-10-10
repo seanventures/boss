@@ -45,6 +45,7 @@ health:  [{url: "http://127.0.0.1:8080/health", expect: 200, timeout_seconds: 60
 open:    {url: "{target.public_url}"}
 teardown: ["docker compose down"]
 requires: {sudo: false, docker: true}
+metrics: {path: /metrics}       # optional: BOSS scrapes it after deploy (below)
 ```
 
 `kind: compose` with `compose: {file: compose.yml, project: shop}` is shorthand. Install and update then run `docker compose -f <file> -p <project> --env-file .boss/deploy.env up -d --build`.
@@ -52,6 +53,8 @@ requires: {sudo: false, docker: true}
 **Placeholders.** Steps, env values and `open` may use `{dir}`, `{commit}`, `{ref}`, `{target.host}`, `{target.public_url}` and `{target.user}`. Any other `{name}` is a manifest error, so write shell variables as `$NAME`, not `${NAME}`.
 
 **On the host.** Each commit is extracted from a `git archive` into `<dir>/releases/<commit>`. `<dir>/current` switches to it only after extraction completes. Every step runs from the release's own directory, `<dir>/releases/<commit>` (not through the `current` link, so tools such as Docker Compose see that the release changed and recreate what changed), with `deploy.env` exported, under a time limit. Its output goes to the deployment log, with secret values redacted. Health URLs are probed on the host itself, so a service bound to `127.0.0.1` can be checked. The last three releases are kept. The GitHub token that fetches the code never reaches the host.
+
+**App metrics.** With `metrics: {path: /metrics}`, BOSS scrapes the app's Prometheus page on the health sweep's cadence (every 120 s unless `interval` says otherwise, 15 to 3600 s). Observability's app drawer then shows request rate, error rate (5xx out of all requests), p50/p95 latency and the last scrape in words, such as "Metrics endpoint returned 404". The path must be a path only, with no scheme or host. BOSS asks the app's own origin, the one its health probe uses (`via: public`), or the origin of the first `health` URL over the host's SSH channel when the app is reachable only from the host (`via: host`). The default, `via: auto`, tries public first. Redirects are not followed. BOSS reads `http_requests_total` (with a `status`, `code` or `status_code` label) and `http_request_duration_seconds`, plus the prometheus-fastapi-instrumentator and starlette-exporter names. When more than 5% of requests fail over 5 minutes with at least 20 requests, BOSS opens an incident. The incident resolves once the error rate recovers. To change the rule, set `alert: {error_rate_percent, window_minutes, min_requests, enabled}` under `metrics`.
 
 **Generated secrets** are created on the first deploy and stored in BOSS's secret store. Later deploys reuse them. They are never logged or returned by the API.
 

@@ -321,7 +321,13 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
     except Exception as exc:  # noqa: BLE001
         return {"probed": probed, "skipped": skipped, "failed": failed,
                 "error": f"{type(exc).__name__}: {exc}"[:200]}
-    return {"probed": probed, "skipped": skipped, "failed": failed}
+    # The app's OWN metrics ride the same cadence and the same deployed-target list: an app
+    # that declares `metrics:` in boss.deploy.yaml is scraped when due (app_metrics.sweep never
+    # raises, so a broken metrics page cannot cost the health samples above).
+    from . import app_metrics
+
+    scraped = app_metrics.sweep(engine, settings, targets, now=now)
+    return {"probed": probed, "skipped": skipped, "failed": failed, **scraped}
 
 
 # --------------------------------------------------------------------------- #

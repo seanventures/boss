@@ -84,6 +84,7 @@
   "GET /v1/identity/github/app/installations",
   "GET /v1/identity/github/app/installed",
   "POST /v1/identity/github/app/manifest",
+  "POST /v1/identity/github/app/verify",
   "DELETE /v1/identity/github/token",
   "POST /v1/identity/github/token",
   "POST /v1/identity/github/token/migrate-env",
