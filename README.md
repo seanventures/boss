@@ -28,7 +28,7 @@
 
 AI agents can write code, open pull requests, call paid APIs, and touch infrastructure. BOSS is the layer that decides whether they should, and keeps the proof when they do.
 
-Every goal you give BOSS becomes an auditable chain: a plan you can read, a budget reserved before any spend, a leased and heartbeated job, a decision whenever a person has to approve, and a receipt for every external effect. Drive it from the web console, the Metatron terminal, or straight from your coding agents over MCP. It runs on hardware you control, with model keys that never leave it.
+Every goal you give BOSS becomes an auditable chain: a plan you can read, a budget reserved before any spend, a leased and heartbeated job, a decision whenever a person has to approve, and a receipt for every external effect. Drive it from the web console, the Metatron terminal, or straight from your coding agents over MCP. It runs on hardware you control. Credentials are stored locally; connecting or using a hosted model sends authentication and the selected task data to that provider.
 
 ```text
 Goal  →  Plan  →  Budget  →  Work  →  Evidence  →  Decision  →  Receipt
@@ -44,7 +44,7 @@ Goal  →  Plan  →  Budget  →  Work  →  Evidence  →  Decision  →  Rece
 
 **No silent failures.** Every job holds a lease with a TTL and heartbeat. A failure is retried, dead-lettered, or escalated to a person. It is never dropped.
 
-**Yours to run.** Apache 2.0, self-hosted on your own infrastructure, bring your own models. Credentials live in a private `.env` on your server and never leave it.
+**Yours to run.** Apache 2.0, self-hosted on your own infrastructure, bring your own models. Installer keys live in a private `.env`; console connections use your selected secret backend. Hosted providers receive the authentication and task data needed for the calls you authorize. A local model can keep model inference on your machine.
 
 ## How it works
 
@@ -88,12 +88,12 @@ The `boss` command works from anywhere: `boss open`, `boss password`, `boss doct
 **Deploying from your own machine instead?** Both commands above run on the server, and the server downloads BOSS from GitHub. If the server can't reach GitHub, or you're working from a private copy of the repository, deploy from a checkout on your own machine instead: `remote.sh` copies it to the server over SSH, runs the installer there, and backs up before every update. The server never needs GitHub access.
 
 ```sh
-git clone https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc6.1 https://github.com/seanventures/boss.git
 cd boss
-scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc1 install --yes -- --console-origin https://boss.example.com
+scripts/install/remote.sh --host user@your-server --dir '~/boss' --ref v1.0-rc6.1 install --yes -- --console-origin https://boss.example.com
 ```
 
-Everything after `--` goes to the installer on the server, so `--console-origin` is the same address as step 2. Clone `main` and let `--ref` pick the release: `remote.sh` runs from your checkout and ships only the commit `--ref` names, and the copy in the `v1.0-rc1` tree takes `--dir '~/boss'` literally, installing into a folder named `~`.
+Everything after `--` goes to the installer on the server, so `--console-origin` is the same address as step 2. Use the same release for the local wrapper and remote install. The current wrapper resolves the quoted `~/boss` against the SSH user's home on the remote machine. For an old RC1 install, use a current wrapper when upgrading; RC1 treated that quoted path literally.
 
 Later, update or check that install from the same checkout:
 
@@ -103,7 +103,7 @@ scripts/install/remote.sh --host user@your-server --dir '~/boss' smoke
 scripts/install/remote.sh --host user@your-server --dir '~/boss' tunnel   # console at http://127.0.0.1:3000
 ```
 
-Connect a Claude or Codex subscription from the same checkout. The credential goes over SSH on stdin, never on the command line. Storing a Claude token needs a build newer than `v1.0-rc1`:
+Connect a Claude or Codex subscription from the same checkout. The credential goes over SSH on stdin, never on the command line. Use the current wrapper for credential import:
 
 ```sh
 claude setup-token        # then paste the token it prints at the next command's hidden prompt
@@ -127,7 +127,7 @@ boss.example.com {
 
 On a private IP, use `https://192.168.1.50` as the site address and in the three header lines, and add `tls internal` inside the block. Caddy then issues the certificate from its own local authority, which each browser trusts once: copy `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` from the server (`ssh user@your-server sudo cat …`) and add it to each device's trusted roots — on a Mac, `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain root.crt`. Installed without `--console-origin`? [Add the address to a running install](docs/community/hostname.md#add-a-hostname-to-a-running-install).
 
-**4. Claim and sign in** at your address. The first visit to `/claim` (for example `http://127.0.0.1:3000/claim`) claims the install: the password from `boss password` (or a one-hour link from `boss identity setup-link`) proves you are the operator, then you create your own Owner account with a passkey. `boss doctor` reminds you until it is done. Invite your team in **Identity › People**. BOSS opens on **Repo and models**: paste a GitHub token, connect a model, and open your first PR. Upgrading an existing install? [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) explains the claim and the 30-day window for the shared password.
+**4. Claim and sign in** at your address. The first visit to `/claim` (for example `http://127.0.0.1:3000/claim`) claims the install: the password from `boss password` (or a one-hour link from `boss identity setup-link`) proves you are the operator, then you create your own Owner account with a passkey, or a password and authenticator app. `boss doctor` reminds you until it is done. Invite your team in **Identity › People**. BOSS opens on **Repo and models** while setup is incomplete. Connect a repository and model there, then start a small change with **Try it** or **Build**. Follow its checks before treating the pull request as finished. Upgrading an existing install? [Upgrade to named accounts](docs/community/IDENTITY_UPGRADE.md) explains the claim and the 30-day window for the shared password.
 
 Models found by the installer appear there already; `boss connect` does the same from a terminal. The [deployment guide](docs/community/hostname.md) covers nginx, publishing the API for remote clients, and adding a domain to a running install. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 

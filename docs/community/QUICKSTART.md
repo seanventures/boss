@@ -1,6 +1,6 @@
 # Quickstart
 
-Get BOSS running and create your first task in about ten minutes. This guide installs on a single machine, such as a laptop, dev box, or VM, and opens Mission Control on that machine. When you are ready to share it with your team, see [Deploy](hostname.md).
+Get BOSS running and create your first stored task. Allow several minutes for installation; first-time container builds and local model downloads can take longer. This guide installs on a single machine, such as a laptop, dev box, or VM, and opens Mission Control on that machine. When you are ready to share it with your team, see [Deploy](hostname.md).
 
 ## Before you begin
 
@@ -52,7 +52,7 @@ boss identity setup-link   # a one-hour link to claim BOSS, instead of the passw
 What the installer sets up:
 
 - The API, console, and database listen on `127.0.0.1` only.
-- Credentials go into `.env` in the install directory with mode `0600`. The file never leaves the machine, and no key or password is printed.
+- Installer keys go into `.env` in the install directory with mode `0600`; console connections use the selected secret backend. The installer does not upload the file or print keys. Hosted calls send the authentication and task data they need to that provider.
 - Your checkout is installed as-is. If it is ahead of the default branch or has diverged from it, the installer keeps your source rather than rewinding the tree. Pass `--ref` only when you want a different commit; a ref that has diverged stops the install instead of installing the wrong source.
 
 !!! note "Docker permissions"
@@ -88,7 +88,7 @@ The first time, the console says **This BOSS has no Owner yet. Claim it.** Claim
 
 From then on you sign in as yourself. Invite your team in **Identity › People** (see [People and access](PEOPLE_AND_ACCESS.md)).
 
-After you sign in, BOSS opens on **Repo and models** until a repository and a model are connected: paste a GitHub token, connect a model, and open your first PR from **Try it**. Then open **Command Center**. On a new install, the planned layout in **Agent Studio → Team** is empty, and **Agent Studio → + New agent → From template** offers the starter definitions. Installing a definition does not start any work. For session details and remote access, see [Sign in to Mission Control](CONSOLE_AUTH.md).
+After you sign in, BOSS opens on **Repo and models** until a repository and a model are connected: connect a GitHub repository and a model there. **Try it** starts a small build; it can spend model credit and write a branch and pull request to the repository you select. Follow the run and its checks before treating it as finished. Then open **Command Center**. On a new install, the planned layout in **Agent Studio → Team** is empty, and **Agent Studio → + New agent → From template** offers the starter definitions. Installing a definition does not start any work. For session details and remote access, see [Sign in to Mission Control](CONSOLE_AUTH.md).
 
 ## Create your first task
 
@@ -97,7 +97,7 @@ This step confirms that the control plane can store work. It does not call a mod
 From the directory you passed to `--dir`, load the API address and the host tools' key into your shell (the key is never printed):
 
 ```bash
-grep -q '^BOSS_HOST_API_KEY=' .env || boss identity host-key
+grep -q '^BOSS_HOST_API_KEY=.' .env || boss identity host-key
 source ./boss-community.env.sh
 export BOSS_API_KEY="$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env)"
 curl -fsS "$BOSS_API_URL/health"
@@ -121,19 +121,23 @@ Now run the task command a second time. The API rejects the repeated `dedupe_key
 
 ## Install without git
 
-On a machine without a checkout, the website installer does the same thing in one command. It installs the `v1.0-rc6.1` release into `~/boss` and keeps reruns on that release:
+On a machine without a checkout, the website installer does the same thing in one command. It selects the newest published release candidate on a fresh install and keeps reruns on the recorded release. To select `v1.0-rc6.1` explicitly:
 
 ```bash
-curl -fsSL https://boss.sean.network/install.sh | bash
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc6.1
 ```
 
 Pass installer flags after `bash -s --`, for example `| bash -s -- --skip-model-key`.
+
+## If you get stuck
+
+Start with `boss status` and `boss doctor`, then follow the [first-run troubleshooting steps](FEEDBACK_LOOP.md#stuck-during-your-first-run). Keep the release and error message; leave credentials and private data out of reports.
 
 ## Next steps
 
 None of these are required for a first run.
 
-- **Connect a model you already have.** See [model connections](MODEL_CONNECTIONS.md). Saving a key does not call the provider.
+- **Connect a model you already have.** See [model connections](MODEL_CONNECTIONS.md). **Connect** in the console makes one small budgeted, receipted model call. Importing keys through `boss connect keys` stores them without a completion; their first governed check or job proves them.
 - **Connect a subscription you already have** with `boss connect`. It asks before copying a Codex login, and `boss connect claude` or `boss connect grok` signs those CLIs in inside the BOSS container. To use an existing Grok subscription, see [Grok CLI](GROK_CLI.md).
 - **Install host copies of Claude Code, Codex CLI, and Grok Build** with `boss update --install-coding-clis`. This installs the tools but does not sign you in.
 - **Explore the [five example workflows](https://github.com/seanventures/boss/blob/main/examples/README.md).** Installing them does not start any work.

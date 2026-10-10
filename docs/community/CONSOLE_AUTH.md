@@ -40,7 +40,7 @@ An Owner can extend the 30 days once, by at most 30 more. Rotate the password wi
 
 ## What a session protects
 
-- Every page and every `/v1/*` request needs a valid session (or an API key, for scripts).
+- Protected console pages and business API requests need a valid session (or an appropriate API key, for scripts). Health, sign-in and initial claim endpoints have their own access rules; a reachable health endpoint does not prove a signed-in console works.
 - The session cookie is `__Host-`, HttpOnly and `Secure`. Its token never appears in a page or a response body.
 - Writes from the browser must come from the console's own origin and carry the session's CSRF token.
 - **Sign out** in the account menu ends the session. **My account › Sessions** ends the others.

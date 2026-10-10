@@ -47,10 +47,13 @@ describe("console capabilities help card", () => {
     expect(html).not.toMatch(/paused in Community/);
   });
 
-  it("cites a setup document that exists", () => {
-    const cited = /<code>([^<]+\.md)<\/code>/.exec(html)?.[1];
-    expect(cited).toBeTruthy();
-    expect(() => readFileSync(resolve(__dirname, "../../..", cited!), "utf8")).not.toThrow();
+  it("links to the published source guides and keeps new-tab navigation safe", () => {
+    for (const guide of ["GETTING_STARTED.md", "FEEDBACK_LOOP.md"]) {
+      expect(html).toContain(`href="https://github.com/seanventures/boss/blob/main/docs/community/${guide}"`);
+      expect(() => readFileSync(resolve(__dirname, "../../../docs/community", guide), "utf8")).not.toThrow();
+    }
+    expect((html.match(/rel="noopener noreferrer"/g) ?? []).length).toBe(2);
+    expect(html).not.toContain("<code>docs/community/");
   });
 
   it("does not overclaim", () => {
