@@ -713,7 +713,7 @@ def mode(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
     env_token = bool((get_settings().github_token or "").strip())
     active = "app" if app_ready(db, org_id) else ("token" if token else ("as_me" if people else "none"))
     read_by_builds = env_token and (get_settings().authz_mode or "enforce") != "enforce"
-    return {"mode": active, "verdict": _verdict(active, cfg["account_login"], read_by_builds),
+    return {"mode": active, "verdict": _verdict(active, cfg["account_login"], read_by_builds, _verified(cfg)),
             "app": {"configured": bool(cfg["app_id"]), "installed": bool(cfg["installation_id"]),
                     "slug": cfg["slug"], "html_url": cfg["html_url"], "account": cfg["account_login"],
                     "account_type": cfg.get("account_type"), "owner": cfg.get("owner_login"),
@@ -736,8 +736,16 @@ def _verified(cfg: dict[str, Any]) -> Optional[dict[str, Any]]:
     return raw if isinstance(raw, dict) else None
 
 
-def _verdict(active: str, account: Optional[str], env_read: bool) -> dict[str, str]:
-    """The Setup row's one pill, decided here (the console never maps a state to a colour)."""
+def _verdict(active: str, account: Optional[str], env_read: bool,
+             verified: Optional[dict[str, Any]] = None) -> dict[str, str]:
+    """The Setup row's one pill, decided here (the console never maps a state to a colour). For
+    the App it is what GitHub last SAID (verify), not what BOSS asked for."""
+    if active == "app" and verified and verified.get("state") in ("app_gone", "installation_gone"):
+        return {"tone": "red", "label": "GitHub App gone",
+                "tip": "GitHub no longer has this App or its installation. See below."}
+    if active == "app" and verified and verified.get("ok") is False and verified.get("state") == "ok":
+        return {"tone": "amber", "label": "GitHub App · needs you",
+                "tip": "GitHub has not granted everything builds need. See below."}
     if active == "app":
         return {"tone": "green", "label": "GitHub App" + (f" · @{account}" if account else ""),
                 "tip": "Each build gets a short-lived token for its own repos."}

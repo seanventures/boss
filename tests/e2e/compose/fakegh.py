@@ -186,15 +186,32 @@ def _installation() -> dict[str, Any]:
             "html_url": f"https://github.com{settings_root()}/installations/{INSTALLATION_ID}"}
 
 
-def configure(account: str, kind: str, repos: list[str]) -> None:
-    """Switch the fake to another account (a person or an organisation) with a fresh App world."""
+ACCOUNT_FILE = STATE / "account.json"
+
+
+def configure(account: str, kind: str, repos: list[str], *, fresh: bool = True) -> None:
+    """Switch the fake to another account (a person or an organisation), with a fresh App world
+    unless `fresh` is False. Kept in the state volume, so a restarted fake is the same account."""
     global OWNER, ACCOUNT_TYPE, REPOS
     OWNER = account
     ACCOUNT_TYPE = "User" if kind.lower() == "user" else "Organization"
     REPOS = repos or [f"{account}/boss-sandbox"]
-    with APPS.lock:
-        APPS.data = {"manifests": {}, "app": None, "installed": False, "tokens": {}}
-        APPS.save()
+    try:
+        ACCOUNT_FILE.write_text(json.dumps({"login": OWNER, "type": ACCOUNT_TYPE, "repos": REPOS}))
+    except OSError:
+        pass
+    if fresh:
+        with APPS.lock:
+            APPS.data = {"manifests": {}, "app": None, "installed": False, "tokens": {}}
+            APPS.save()
+
+
+if ACCOUNT_FILE.exists():
+    try:
+        _saved = json.loads(ACCOUNT_FILE.read_text())
+        OWNER, ACCOUNT_TYPE, REPOS = _saved["login"], _saved["type"], list(_saved["repos"])
+    except (OSError, ValueError, KeyError):
+        pass
 
 
 def _token_of(auth: str) -> Optional[dict[str, Any]]:
@@ -487,7 +504,7 @@ class Handler(Base):
         if path == "/_github_account" and method == "POST":
             b = body if isinstance(body, dict) else {}
             configure(str(b.get("login") or OWNER), str(b.get("type") or "Organization"),
-                      [str(r) for r in (b.get("repos") or [])])
+                      [str(r) for r in (b.get("repos") or [])], fresh=b.get("fresh", True) is not False)
             bound = type(self)
             for full in REPOS:
                 bound.git.ensure(*full.split("/"))
