@@ -33,4 +33,4 @@ The [RC9 validation record](RC9_VALIDATION.md) distinguishes source checks, inst
 
 Budget reservations authorize an estimated call; they do not cap a provider's final invoice. Reconcile uncertain provider outcomes before retrying, and reconcile later external effects before resuming workers from an older restored snapshot. A stored credential or a readable result is not evidence that the complete provider journey has passed.
 
-This is incremental Community release work. It retains the published contributor history; full private-source export synchronization remains separate. Runtime build contexts exclude application tests and scratch probes. Release downloads contain source and checksums, not prebuilt container images.
+This is incremental Community release work. It retains the published contributor history; full private-source export synchronization remains separate. Runtime build contexts exclude application and API-client tests and scratch probes. Release downloads contain source and checksums, not prebuilt container images.
