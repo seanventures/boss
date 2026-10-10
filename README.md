@@ -28,7 +28,7 @@
 
 AI agents can write code, open pull requests, call paid APIs, and touch infrastructure. BOSS is the layer that decides whether they should, and keeps the proof when they do.
 
-Every goal you give BOSS becomes an auditable chain: a plan you can read, a budget reserved before any spend, a leased and heartbeated job, a decision whenever a person has to approve, and a receipt for every external effect. Drive it from the web console, the Metatron terminal, or straight from your coding agents over MCP. It runs on hardware you control. Credentials are stored locally; connecting or using a hosted model sends authentication and the selected task data to that provider.
+Governed workflows turn a goal into a plan you can read, budget reservations, leased jobs, required decisions and effect receipts. Drive them from the web console, the Metatron terminal, or your coding agents over MCP. It runs on hardware you control. Credentials are stored locally; connecting or using a hosted model sends authentication and the selected task data to that provider. This candidate's qualified paths and remaining limits are recorded in the [release notes](docs/community/RELEASE_NOTES_v1.0-rc8.md).
 
 ```text
 Goal  →  Plan  →  Budget  →  Work  →  Evidence  →  Decision  →  Receipt
@@ -36,9 +36,9 @@ Goal  →  Plan  →  Budget  →  Work  →  Evidence  →  Decision  →  Rece
 
 ## Why BOSS
 
-**Nothing happens off the record.** Every external effect is recorded as a receipt with a unique dedupe key, so a retried step is recognized instead of repeated.
+**Keep the work history.** Governed effect paths use receipts and unique dedupe keys to identify attempts. An ambiguous provider outcome needs reconciliation before retry; recording a key alone cannot guarantee that every provider avoids a repeated effect.
 
-**Spend is reserved before it is spent.** Model and tool work goes through a quote, reserve, consume, and release cycle. A runaway agent hits a budget wall, not your credit card.
+**Reserve spending before work.** Governed model and tool jobs use a quote, reserve, consume, and release cycle. Admission can refuse further work, but the reservation is an estimate, not a hard cap on a provider's invoice. Review held and uncertain exposure before continuing.
 
 **People decide where it matters.** Gated steps land in an approval inbox with the context needed to decide. BOSS proposes changes to itself as pull requests and config diffs, never as silent writes.
 
@@ -126,7 +126,7 @@ Optional host copies of the Claude Code, Codex CLI, and Grok Build binaries inst
 
 ## Four ways to drive BOSS
 
-Every interface is a client of the same authenticated HTTP API, so the same permissions, budgets, approvals, and receipts apply no matter where a request comes from.
+The console, terminal and API-backed MCP use the authenticated HTTP API. Each operation applies its required permissions, budgets, approvals and receipts. Native engine tools use their local typed boundary, described below.
 
 | Interface | Open it with | Guide |
 | --- | --- | --- |
@@ -169,7 +169,7 @@ make mcp         # the stdio command your MCP client launches
 ```
 
 - **Project-scoped by design.** Each MCP credential belongs to one project and one principal. The client cannot change the URL, headers, or credentials it calls with.
-- **Full API reach, same guardrails.** Agents search, describe, and call the mounted BOSS API through a handful of tools, and every call passes the same permission, budget, approval, and receipt checks as the console.
+- **API reach with operation-specific checks.** Agents search, describe, and call the mounted BOSS API through a handful of tools, with the permissions, budgets, approvals and receipts required by that operation.
 - **People confirm the risky calls.** Sensitive actions require a separate human to approve the exact request, by digest, before the agent can run it once.
 - **Native engine tools.** Engine-only sessions on the install machine expose typed tools for starting code tasks, steering runs, reading pull requests, and authoring workflows, with a `--read-only` mode for inspection.
 
