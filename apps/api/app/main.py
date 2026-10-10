@@ -20540,34 +20540,47 @@ def apply_changeset(
     changeset_id: str,
     payload: ChangeSetApplyRequest,
 ) -> ChangeSetApplyResponse:
-    with begin(engine) as connection:
-        project_id = project_id_for_changeset(connection, changeset_id)
-        require_project_actor(
-            connection,
-            project_id,
-            payload.actor,
-            "providerops_manage",
-        )
+    from boss_engine.services.changeset_apply import (
+        ApplyAuthorityRefused, apply_changeset as durable_apply,
+    )
+
+    def authorize(connection, project_id):
         try:
-            result = resource_plane.apply_changeset(
-                connection,
-                changeset_id=changeset_id,
-                actor=payload.actor,
-                created_by_job_id=payload.created_by_job_id,
-                dry_run=payload.dry_run,
-            )
-        except (ChangeSetNotFoundError, ValueError) as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return ChangeSetApplyResponse(
-            status=result["status"],
-            changeset=ChangeSetSummary(**result["changeset"]),
-            resource_receipts=[
-                ResourceReceiptSummary(**item)
-                for item in result.get("resource_receipts", [])
-            ],
-            expected_receipts=result.get("expected_receipts"),
-            decision_id=result.get("decision_id"),
-        )
+            require_project_actor(connection, project_id, payload.actor, "providerops_manage")
+        except HTTPException as error:
+            raise ApplyAuthorityRefused("Current ChangeSet apply permission is required.") from error
+        if identity_guard.identity_enforced():
+            from boss_engine.identity import authz, request_memo
+            from boss_engine.identity.scope import ResolvedScope
+            ctx = identity_guard.REQUEST_IDENTITY.get()
+            if ctx is None:
+                raise ApplyAuthorityRefused("A canonical principal is required.")
+            request_memo.clear()
+            decision = authz.check(ctx, P.CHANGESET_APPROVE,
+                                  ResolvedScope.in_project(ctx.principal.org_id, project_id),
+                                  db=connection)
+            if not decision.allowed:
+                raise ApplyAuthorityRefused("Current ChangeSet apply permission is required.")
+        return payload.actor
+
+    try:
+        result = durable_apply(engine, resource_plane, changeset_id=changeset_id,
+                               authorize=authorize, created_by_job_id=payload.created_by_job_id,
+                               dry_run=payload.dry_run)
+    except ApplyAuthorityRefused as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except (ChangeSetNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return ChangeSetApplyResponse(
+        status=result["status"],
+        changeset=ChangeSetSummary(**result["changeset"]),
+        resource_receipts=[
+            ResourceReceiptSummary(**item)
+            for item in result.get("resource_receipts", [])
+        ],
+        expected_receipts=result.get("expected_receipts"),
+        decision_id=result.get("decision_id"),
+    )
 
 
 @app.post(
