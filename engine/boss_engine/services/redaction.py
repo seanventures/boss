@@ -26,6 +26,8 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("SECRET", re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}")),
     ("AWS_KEY", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     ("JWT", re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
+    # A connection URL's password: scheme://user:PASSWORD@host (DATABASE_URL and friends).
+    ("SECRET", re.compile(r"(?<=://)(?P<name>[^\s:/@'\"]{1,128})(?P<sep>:)(?P<value>[^\s@/'\"]{1,256})(?=@)")),
     ("BEARER", re.compile(r"\b(?:Bearer|Basic|token)\s+[A-Za-z0-9._~+/\-]{16,}=*", re.IGNORECASE)),
     # NAME_KEY=value, "password": "value", export API_TOKEN=value. The name is kept (it says
     # what was there); the value goes. A name must END in the secret word, so
@@ -54,7 +56,13 @@ def _apply(text: str, patterns: list[tuple[str, re.Pattern]]) -> tuple[str, dict
     if not text:
         return text, {}
     summary: dict[str, int] = {}
-    out = text
+    # Values BOSS itself handed a run (build_services: a run's database password): known exactly,
+    # so removed exactly, whatever shape the output printed them in.
+    from .build_services import scrub as _scrub_live
+
+    out = _scrub_live(text)
+    if out != text:
+        summary["SECRET"] = 1
     for label, pattern in patterns:
         count = 0
 
