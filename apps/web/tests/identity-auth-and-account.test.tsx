@@ -138,7 +138,7 @@ describe("Claim this BOSS", () => {
     const el = await mount(<ClaimFlow options={options({ path: "legacy_password", origin: null, expires_at: null, seats: SEATS })} />);
     expect(el.querySelector("[data-testid='claim-legacy-password']")).not.toBeNull();
     expect(el.querySelector("label[for='claim-legacy']")?.textContent).toBe("Shared console password");
-    expect(el.querySelector("[data-testid='console-password-hint']")?.textContent).toContain("console_password.py show");
+    expect(el.querySelector("[data-testid='console-password-hint']")?.textContent).toContain("boss password");
     accessible(el);
   });
 

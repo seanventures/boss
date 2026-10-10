@@ -25,15 +25,16 @@ import { webauthnAvailable } from "../../../lib/identity/webauthn";
 import { AuthStage, Live, Logo, linkToken } from "../auth-parts";
 import { primeCsrf, registerPasskey, sayAuth } from "../auth-flow";
 import { CopyCommand } from "../copy-command";
+import { HOST_COMMANDS, overSsh } from "../../../lib/identity/host-commands";
 import { RecoveryCodesView } from "../recovery-codes";
 import { TotpStep } from "../enrol/totp-step";
 
 type Claim = NonNullable<AuthOptions["claim"]>;
 type Stage = "form" | "passkey" | "totp" | "codes";
 
-const SHOW_ON_SERVER = "python3 scripts/install/console_password.py show";
-const SHOW_OVER_SSH = `ssh -t user@your-server 'cd ~/boss && ${SHOW_ON_SERVER}'`;
-const SETUP_LINK = "docker exec boss-api boss identity setup-link";
+const SHOW_ON_SERVER = HOST_COMMANDS.password;
+const SHOW_OVER_SSH = overSsh(SHOW_ON_SERVER);
+const SETUP_LINK = HOST_COMMANDS.setupLink;
 
 const SEAT_WORDS: Record<string, string> = {
   ceo: "ceo · approvals and history will show your name",
@@ -198,7 +199,7 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         {path === "setup_token" && !token ? (
           <div className="idn-note bad" role="alert" data-testid="claim-no-token">
             <Warning size={15} aria-hidden />
-            <span data-copy="prose">Open the setup link from the install output. To print a new one:</span>
+            <span data-copy="prose">Claiming needs a one-hour link from the server. On the machine BOSS runs on:</span>
           </div>
         ) : null}
         {path === "setup_token" && !token ? <CopyCommand command={SETUP_LINK} /> : null}
