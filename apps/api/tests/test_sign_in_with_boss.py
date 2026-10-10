@@ -374,3 +374,115 @@ def test_the_login_template_node_app_signs_a_member_in_through_boss(w, tmp_path,
             out = ""
         bridge.shutdown()
         assert env["OIDC_BOSS_CLIENT_SECRET"] not in out                    # the app never logs it
+
+
+def test_the_login_template_node_app_signs_a_member_in_inside_a_preview(w, tmp_path, monkeypatch):
+    """Sign-in INSIDE a preview: the browser reaches the app only through the preview origin
+    (/v1/previews/<id>/web, apps/api/app/preview_origin.py), which now carries the app's own session
+    cookie (tagged, scoped to the preview's path) and never BOSS's. The browser holds the console
+    session too, as a real one does (cookies are not port-scoped): it never reaches the app, and
+    another preview gets none of this preview's cookies."""
+    from apps.api.app.preview_origin import preview_only
+    from boss_engine.services import preview_service
+
+    node = _node_ready()
+    app_dir = tmp_path / "login-app"
+    shutil.copytree(NODE_STACK, app_dir)
+    npm = subprocess.run(["npm", "install", "--no-audit", "--no-fund", "--loglevel=error"], cwd=app_dir,
+                         capture_output=True, text=True, timeout=300)
+    if npm.returncode != 0:
+        pytest.skip(f"npm install failed (offline?): {npm.stderr[-300:]}")
+
+    from boss_engine.config import get_settings
+
+    boss_port, app_port, preview_port = _free_port(), _free_port(), _free_port()
+    boss = f"http://127.0.0.1:{boss_port}"
+    previews = f"http://localhost:{preview_port}"
+    monkeypatch.setattr(get_settings(), "public_url", boss)
+    monkeypatch.setenv("BOSS_PREVIEW_ORIGIN", previews)
+    w.http = TestClient(main.app, raise_server_exceptions=True, base_url=boss)
+    w.issuer = f"{boss}/oidc/{w.ids.org}"
+    _Bridge.http = w.http
+    bridge = ThreadingHTTPServer(("127.0.0.1", boss_port), _Bridge)
+    threading.Thread(target=bridge.serve_forever, daemon=True).start()
+
+    # The app runs as a preview of its build; a second preview (another app) on the same process.
+    pid, other = f"prv_{uuid.uuid4().hex[:10]}", f"prv_{uuid.uuid4().hex[:10]}"
+    with begin() as db:
+        for i, run in ((pid, w.run), (other, w.other_run)):
+            db.execute(text("INSERT INTO app_previews (id, project_id, run_id, repo, branch, port, url, status, mode) "
+                            "VALUES (:i, :p, :r, 'acme/demo', 'main', :port, :u, 'running', 'process')"),
+                       {"i": i, "p": w.ids.project_a, "r": run, "port": app_port, "u": f"http://127.0.0.1:{app_port}"})
+    assert _connect(w).status_code == 200
+    base = f"{previews}/v1/previews/{pid}/web"
+    assert f"{base}/auth/callback/boss" in _client(w)["redirect_uris"]
+    with begin() as db:
+        env = app_sign_in.preview_environment(db, project_id=w.ids.project_a, run_id=w.run, preview_id=pid)
+    assert env["APP_BASE_URL"] == base
+
+    forwarded: list = []
+    real_proxy = preview_service.proxy_preview
+
+    def spy(*a, **kw):
+        forwarded.append((a[1], kw.get("app_cookie_header")))
+        return real_proxy(*a, **kw)
+
+    monkeypatch.setattr(preview_service, "proxy_preview", spy)
+    proc = subprocess.Popen([node, "server.mjs"], cwd=app_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            env={"PATH": os.environ.get("PATH", ""), "PORT": str(app_port), **env})
+    try:
+        member = w.person("ada", role="viewer", project="a")
+        browser = TestClient(preview_only(main.app), base_url=previews, follow_redirects=False)
+        browser.cookies.set("__Host-boss_session", member.cookie)          # the console's, as a browser holds it
+        import httpx
+
+        for _ in range(100):   # wait at the app itself: the gateway marks an unreachable preview stopped
+            try:
+                if httpx.get(f"http://127.0.0.1:{app_port}/auth/providers", timeout=2).status_code == 200:
+                    break
+            except httpx.TransportError:
+                time.sleep(0.1)
+        assert browser.get(f"/v1/previews/{pid}/web/").text == "Signed out"
+
+        # 1. through the preview: the app sends the browser to BOSS and sets its own (tagged) cookie
+        go = browser.get(f"/v1/previews/{pid}/web/auth/login/boss")
+        assert go.status_code == 302, go.text
+        q = query_of(go.headers["location"])
+        assert q["redirect_uri"] == f"{base}/auth/callback/boss"
+        for c in go.headers.get_list("set-cookie"):
+            assert f"Path=/v1/previews/{pid}/" in c and "boss" not in c.split("=", 1)[0].lower()[14:], c
+
+        # 2. the member consents at BOSS (the console's origin)
+        auth = urlsplit(go.headers["location"])
+        page = w.http.get(f"{auth.path}?{auth.query}", headers={"Cookie": f"__Host-boss_session={member.cookie}"},
+                          follow_redirects=False)
+        assert page.status_code == 200, (page.headers.get("location"), page.text[:400])
+        back = w.consent(page, member, origin=boss)
+        assert back.status_code == 303 and back.headers["location"].startswith(f"{base}/auth/callback/boss?code=")
+
+        # 3. back through the preview: the app checks its state cookie, exchanges the code, signs in
+        done = browser.get(back.headers["location"].removeprefix(previews))
+        assert done.status_code == 302, done.text
+        assert done.headers["location"] == f"/v1/previews/{pid}/web/"
+        assert browser.get(done.headers["location"]).text.startswith("Signed in as ada-")
+        me = browser.get(f"/v1/previews/{pid}/web/api/me")
+        assert me.status_code == 200 and me.json()["providers"] == ["boss"]
+
+        # the other preview (same process, same browser) is signed out: none of this one's cookies
+        assert browser.get(f"/v1/previews/{other}/web/").text == "Signed out"
+        assert browser.get(f"/v1/previews/{other}/web/api/me").status_code == 401
+    finally:
+        proc.terminate()
+        try:
+            out = proc.communicate(timeout=5)[0].decode(errors="replace")
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out = ""
+        bridge.shutdown()
+        assert env["OIDC_BOSS_CLIENT_SECRET"] not in out
+    # what reached the app: its own cookies only; never the console session, never a boss_ cookie
+    assert any(cookie for _, cookie in forwarded), "the app's session cookie reached it"
+    for preview_id, cookie in forwarded:
+        assert member.cookie not in (cookie or "") and "boss" not in (cookie or "").lower(), cookie
+        if preview_id == other:
+            assert cookie is None, cookie

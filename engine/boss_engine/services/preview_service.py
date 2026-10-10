@@ -3327,6 +3327,22 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     return status, ctype, data, response_headers
 
 
+def _is_boss_oidc(parsed: urllib.parse.SplitResult) -> bool:
+    """A redirect to BOSS's OWN OIDC provider (Sign in with BOSS) at its public origin. On a local
+    install that origin is loopback too (http://localhost:<port>), and the loopback rule below would
+    glue the authorize URL under the preview's prefix: every sign-in inside a preview broke."""
+    try:
+        from ..config import get_settings
+
+        own = urllib.parse.urlsplit(str(get_settings().public_url or "").strip())
+    except Exception:  # noqa: BLE001
+        return False
+    if not own.scheme or not own.netloc:
+        return False
+    return (parsed.scheme.lower(), parsed.netloc.lower()) == (own.scheme.lower(), own.netloc.lower()) \
+        and parsed.path.startswith("/oidc/")
+
+
 def _gateway_location(preview_id: str, location: str) -> str:
     """A previewed app's redirect, pointed back through the gateway.
 
@@ -3358,7 +3374,7 @@ def _gateway_location(preview_id: str, location: str) -> str:
             return location   # `login`, `../x`: resolved against the gateway URL it came from
         # javascript:, data:, file:… never a place a preview may send the browser.
         return f"{prefix}/"
-    if _is_loopback_url(parsed.geturl()):
+    if _is_loopback_url(parsed.geturl()) and not _is_boss_oidc(parsed):
         rest = parsed.path or "/"
         return f"{prefix}{rest}" + (f"?{parsed.query}" if parsed.query else "") + (
             f"#{parsed.fragment}" if parsed.fragment else "")
