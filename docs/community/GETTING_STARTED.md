@@ -1,6 +1,6 @@
 # Getting started
 
-This guide takes you from a fresh machine to software that BOSS built for you. You will:
+This guide walks through installation and a small governed build. Follow the checks at each stage; starting a run does not mean its output is ready. The path is:
 
 1. Install BOSS.
 2. Sign in to Mission Control.
@@ -12,7 +12,7 @@ This guide takes you from a fresh machine to software that BOSS built for you. Y
 
 Plan on an hour or more. The install takes several minutes. On a machine without a GPU, a local model needs tens of minutes for the panel alone.
 
-The command output and messages quoted below were recorded on a fresh Ubuntu 24.04 install (8 CPUs, 16 GB of RAM, no GPU) with a local Ollama model and no paid API key. Steps 4, 6, and 7 depend on GitHub. The notes in those steps say which parts you will see for the first time on your own repository.
+The command output and messages quoted below were recorded on a fresh Ubuntu 24.04 install (8 CPUs, 16 GB of RAM, no GPU) with a local Ollama model and no paid API key. Steps 4, 6, and 7 depend on GitHub. The notes in those steps say which parts you will see for the first time on your own repository. This historical transcript proves installation and the recorded local-model stages; it is not an end-to-end RC7 qualification or a promise that every repository and model will complete a build.
 
 ## What you need
 
@@ -122,7 +122,7 @@ Then open `http://127.0.0.1:3000` on the computer that ran `ssh`. If ports 3000 
 
 **For your team, on a domain or private IP:** see [Deploy](hostname.md).
 
-The first time, the sign-in page says **This BOSS has no Owner yet. Claim it.** Click it, paste the password, enter your name and email, and add a passkey (or a password and an authenticator app). You are now the Owner, and you sign in as yourself from then on. Mission Control opens on **Command Center**.
+The first time, the sign-in page says **This BOSS has no Owner yet. Claim it.** Click it, paste the password, enter your name and email, and add a passkey (or a password and an authenticator app). You are now the Owner, and you sign in as yourself from then on. Mission Control opens on **Repo and models** while the selected project needs setup, and on **Command Center** once it is ready. You can open Repo and models from Settings at any time.
 
 Invite your team in **Identity › People** ([People and access](PEOPLE_AND_ACCESS.md)). More about sign-in is in [Sign in to Mission Control](CONSOLE_AUTH.md).
 
@@ -154,6 +154,8 @@ With only the free local model, the table ends like this (the model is the one t
 At least one row must say `connected`. To add an API key or a subscription you already have, follow the command on its row. [Model connections](MODEL_CONNECTIONS.md) covers each one.
 
 **Check that a model actually answers:**
+
+This optional check asks the model a question and uses model credit or local compute. `boss doctor` without `--probe` checks configuration without asking for a completion.
 
 ```bash
 boss doctor --probe
@@ -242,6 +244,7 @@ The same start, through the API. Run it from the install directory; `boss-commun
 
 ```bash
 cd ~/boss
+grep -q '^BOSS_HOST_API_KEY=.' .env || boss identity host-key
 source ./boss-community.env.sh
 export BOSS_API_KEY="$(sed -n 's/^BOSS_HOST_API_KEY=//p' .env)"
 curl -fsS -H "Authorization: Bearer $BOSS_API_KEY" -H "Content-Type: application/json" \
@@ -297,14 +300,16 @@ Before you approve, review:
 - **The PRD** from step 6. Does the change do what it says?
 - **The pull request** on GitHub: the diff, and the tests BOSS wrote.
 - **The evidence** on the Factory task: test results and the review outcome, for example `tests ✓ · review ✓`.
-- **The receipt.** Opening the pull request is recorded as a receipt in **Activity log**, so it is never repeated by a retry.
+- **The receipt.** Inspect the pull-request receipt in **Activity log** and match it to this run. If the outcome is uncertain, resolve that state before retrying.
 
-To run the software, check out the branch from the pull request on your own machine. For the tip calculator:
+To run the software, check out the branch from the pull request on your own machine. Replace the repository URL and branch below with the values from your pull request, and choose a fresh local folder. For the tip calculator:
 
 ```bash
-git clone https://github.com/<owner>/<repo>.git
-cd <repo>
-git checkout boss/code/<run-id>      # the branch named on the pull request
+REPOSITORY_URL="https://github.com/YOUR-OWNER/YOUR-REPO.git"
+PR_BRANCH="COPY-THE-BRANCH-NAME-FROM-YOUR-PR"
+git clone "$REPOSITORY_URL" first-result-review
+cd first-result-review
+git checkout "$PR_BRANCH"
 python3 tip.py 50 20
 python3 -m pytest
 ```

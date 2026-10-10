@@ -1,6 +1,6 @@
 # Connect a model you already have
 
-Attach an API key, a coding subscription, or a local model to your BOSS install, so governed jobs can use it. The control plane runs without a model, so you can connect one whenever you are ready. BOSS does not create provider accounts for you or copy logins from your laptop.
+Attach an API key, a coding subscription, or a local model to your BOSS install, so governed jobs can use it. The control plane runs without a model, so you can connect one whenever you are ready. BOSS does not create provider accounts. It asks before importing a Codex login; Claude Code and Grok Build sign in separately inside BOSS.
 
 ## The Models step
 
@@ -35,17 +35,17 @@ The table lists every model path BOSS currently supports, with its present limit
 
 | Model path | How to connect | Current limit |
 | --- | --- | --- |
-| OpenAI API | Hidden installer prompt, `OPENAI_API_KEY`, or the setup screen | The key is saved without a live test. |
-| Anthropic API | `ANTHROPIC_API_KEY` through the installer environment, or the setup screen | Environment-only Anthropic setup is not counted by the setup checklist; use the setup screen to see a project connection. |
-| OpenRouter API | Add OpenRouter on the setup screen with its own key and model | The installer does not prompt for this key; the saved model is unverified. |
-| Google Gemini API | Choose **Google Gemini API** in the setup screen and enter its key and model, or set `GOOGLE_API_KEY` on the VM | BOSS uses Google's OpenAI-compatible chat endpoint. Provider-specific tools may need a separate adapter; the connection is unverified until a governed job succeeds. |
-| xAI Grok API | Choose **xAI Grok API** in the setup screen and enter its key and model, or set `XAI_API_KEY` on the VM | This is an API-key path, separate from a Grok Build subscription. The connection is unverified until a governed job succeeds. |
-| OpenAI-compatible API | Choose **Anything OpenAI-compatible** and provide a reachable base URL, model, and credential | The setup form requires a nonempty key, even for a local server that does not authenticate. |
-| Ollama on the install machine | `boss connect ollama` for a running Ollama, `boss connect --install-ollama` to set one up, or yes at the installer's question | Uses the **Anything OpenAI-compatible** route with the placeholder key `ollama`, priced at zero for the local endpoint only. It becomes every role's model, and chat's, only when no hosted model is connected. See [Ollama](#ollama). Unverified until a governed job uses it. |
-| Codex ChatGPT subscription | Optionally install the official CLI, sign in on this VM, then rerun with `--connect-codex` | Explicit import stores the CLI auth file in BOSS's selected secret backend. BOSS then proves the connection with one governed test turn before it records it as connected. |
-| Claude Code subscription, local CLI login | `boss connect claude` (needs a terminal), or yes at the installer's question when a Claude Code login is found. Both run `claude auth login` as `boss` inside the API container, then the `--connect-claude-local` recording | Claude Code owns its private session in the shared API/worker config volume. BOSS never receives OAuth bytes. It proves the login with one governed test turn before recording it as connected. |
-| Claude Code subscription, setup-token import | Operator runs `claude setup-token` and passes the token to `--connect-claude`, `store_subscription_token.py claude_code --stdin`, or the setup screen | Stored only in the local secret store. Not written to git, logs, or Postgres. A missing token is an error. Storing the token makes no model call; connecting it runs the governed test turn. |
-| Grok Build subscription | `boss connect grok` (needs a terminal), which signs in as `boss` inside the API container with `grok login --device-auth`, then records it with `--connect-grok-local`; see [Grok CLI](GROK_CLI.md) | BOSS does not copy `auth.json`. Recording proves the login with one governed test turn. A missing login is an error. |
+| OpenAI API | **API key → OpenAI** in the console, or `OPENAI_API_KEY` through the installer or `boss connect keys` | Console **Connect** runs a governed proof. Environment imports store the key without a completion and remain unverified until checked or used. |
+| Anthropic API | **API key → Anthropic** in the console, or `ANTHROPIC_API_KEY` in the install environment | Console **Connect** runs a governed proof. An environment-only key is a separate source; check the source and model selected for the job. |
+| OpenRouter API | **API key → OpenRouter**, or `OPENROUTER_API_KEY` through `boss connect keys` | Console **Connect** runs a governed proof; the installer has no separate OpenRouter key prompt. |
+| Google Gemini API | **API key → Gemini**, or `GOOGLE_API_KEY` in the install environment | Uses Google's OpenAI-compatible chat endpoint. Console **Connect** runs a governed proof; provider-specific features outside that interface may need a separate adapter. |
+| xAI Grok API | **API key → xAI**, or `XAI_API_KEY` in the install environment | Console **Connect** runs a governed proof. This API-key connection is separate from a Grok Build subscription. |
+| OpenAI-compatible API | **API key → Other** with a reachable base URL, model and key | Console **Connect** runs a governed proof. For an unauthenticated local server, use **Local** instead. |
+| Ollama or a local compatible model | **Local** in the console; `boss connect ollama` for a running Ollama; `boss connect --install-ollama` to install one | Console **Connect** runs a governed proof. The CLI Ollama path checks reachability and model presence without a completion. Its local endpoint is priced at zero, and fallback role assignment is described below. |
+| Codex ChatGPT subscription | **Subscription → Codex** in the console, or `boss connect codex` / `--connect-codex` | Explicit import stores the CLI auth file in the selected secret backend, then one governed test turn proves the connection. |
+| Claude Code subscription, local CLI login | `boss connect claude` at a terminal, or `--connect-claude-local` after signing in inside the container | Claude Code owns its session in the shared API/worker config volume. BOSS proves the login with one governed turn before recording it as connected. |
+| Claude Code subscription, setup-token import | **Subscription → Claude Code**, `--connect-claude`, or `store_subscription_token.py claude_code --stdin` | The storage helper alone makes no model call. Connecting runs the governed proof. Database credential storage requires the explicit fallback acceptance described below. |
+| Grok Build subscription | `boss connect grok` at a terminal, then `--connect-grok-local`; see [Grok CLI](GROK_CLI.md) | BOSS does not copy `auth.json`. Recording the container login runs one governed test turn; a missing login is an error. |
 
 **What research needs.** Discovery web research, including the research step that opens Build's default workflow, runs on the Claude Code subscription: the Claude CLI does the web search, and each research stage is a governed call with its own budget reservation, model lease, and receipt. A local Ollama model or an API key cannot stand in. Without a usable Claude Code subscription, Build's research step is recorded as skipped with the reason, and the run goes on to the panel. See [Getting started](GETTING_STARTED.md#6-follow-the-governed-path).
 
@@ -60,7 +60,7 @@ To see what BOSS has recorded, use the setup screen or `GET /v1/setup/coding-age
 
     To add a key after installing, export it and run `boss connect keys` (plain `boss connect` does the same as part of its search). It saves `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, or `OPENROUTER_API_KEY` into the install's private `.env`, prints only the names, and recreates the api and worker containers so they read it. The database and console keep running, and no `boss update` is needed.
 
-Everything stays on the install machine:
+Credentials are stored on the install machine. A hosted provider receives authentication and the prompt or repository context needed for the call; connect only accounts and repositories you intend BOSS to use. Local persistence means:
 
 - The generated `.env` has mode `0600`. It is never uploaded; do not commit it.
 - Keys you save in the setup screen go to the secret backend you selected for this install. Imported subscription credentials are stored there too, and are never written to git or printed by the installer.
@@ -71,15 +71,15 @@ For a dedicated local secret store, choose `--secret-store infisical` during ins
 
 ## Verification and live checks
 
-Saving a connection and proving it works are separate steps.
+The connection method determines when BOSS calls the model:
 
-- **Save key without test** stores the key and marks the model **unverified**. It does not send the key to the provider or run a test request. Keys that arrive through `.env` are also unverified.
-- A green setup step is not a model response. The key may still be invalid or lack access to the model you named. A governed model job is what verifies it.
-- API keys and coding subscriptions are distinct. BOSS never treats one as the other.
-- Connecting a Codex, Claude Code, or Grok Build subscription, from the console, the installer, `boss connect`, or `remote.sh subscription`, proves it with one trivial governed turn ("Reply with exactly: BOSS_OK"). A budget reservation and an in-progress receipt are committed before the turn; afterwards the receipt succeeds or fails and the reservation settles at the actual cost or is released. A refused budget makes no call. A failed proof is not connected and says why, and a rejected login shows as **Login expired** in Repo and models.
+- **Console Connect** makes one small governed call for API keys, subscriptions and local models in every edition. It reserves budget and records a receipt before the call. A refused budget makes no call. **Working** means that check received an answer; it does not prove a larger build can finish.
+- **Environment key import**, including `boss connect keys`, stores a key without a completion. A later governed check or job tests it. A saved or detected source is not the same as a working model.
+- **Subscription recording** through the installer, `boss connect`, or `remote.sh subscription` runs one trivial governed turn (`BOSS_OK`). A failed proof reports why rather than declaring it working.
+- **CLI Ollama setup** checks reachability and installed models without asking for a completion. Use the console check or a small governed job to verify an answer.
+- A rejected credential is not kept by **Connect**. A provider that is temporarily busy or unreachable can leave a saved source with that status; read the row before starting work. A failed replacement does not overwrite a previously working credential.
 
-!!! note "Paused: API key probes"
-    Live probes of API keys stay paused in Community until they have a budget reservation and a receipt. **Save key without test** marks the key unverified.
+A proof's receipt records success or failure. Its reservation settles at the actual recorded cost or is released. API keys and coding subscriptions remain distinct sources. The console's **Re-check** also calls models: use it when you are ready for a small test, and inspect the resulting status and receipt.
 
 ## Coding CLIs
 
@@ -121,7 +121,7 @@ Grok device login follows the same pattern, as `boss` inside the API container. 
    - the placeholder key `ollama`
 4. When no hosted model is connected (no provider key in `.env`, no recorded subscription, and no API-key connection), Ollama becomes the model for every role: implementer, reviewer, hard problems, and routine work. A role you already chose is left alone. Chat, meetings, and the other surfaces that read `OPENAI_*` then use it too: BOSS sets `OPENAI_API_KEY=ollama`, `OPENAI_BASE_URL` to the local address, and `OPENAI_MODEL` in `.env`, but only when `.env` holds no hosted OpenAI key. With a hosted model connected, chat is untouched. When a hosted model is connected, Ollama is added but not made the default.
 5. The model is priced at zero for the local endpoint only: the `BOSS_MODEL_PRICES_JSON` key is `<local base URL>#<model>`, for example `http://host.docker.internal:11434/v1#qwen2.5-coder:7b`, so the same model name on a hosted provider keeps its normal price. Other entries are kept. Only api and worker are recreated.
-6. BOSS checks from the API container that the model is there. No completion is run, because Community setup makes no model calls (see [Verification and live checks](#verification-and-live-checks)). The first governed job is what verifies it.
+6. BOSS checks from the API container that the model is there. This CLI Ollama path does not run a completion. A console check or the first governed job verifies an answer; see [Verification and live checks](#verification-and-live-checks).
 
 An existing **Anything OpenAI-compatible** connection to another address is left alone. A local Ollama never takes the native (OpenAI-compatible) lane from a hosted connection: with an OpenAI key saved in the setup screen or in `.env`, that key is used whichever was saved last; Ollama is used there only when nothing hosted is connected.
 
