@@ -8,8 +8,8 @@
  *   Magic link | Email code → email, password (show/hide, "Forgot?") → "Sign in →"
  *   → "New here? Create account" → the host, and "Use the shared password" while it still works.
  *
- * The page always has that whole shape. What `/v1/auth/options` says isn't set up stays visible
- * but disabled, and says exactly what turns it on (lib/identity/sign-in-offers.ts): no fake
+ * What `/v1/auth/options` says isn't set up stays discoverable but disabled, and says exactly
+ * what turns it on (lib/identity/sign-in-offers.ts): no fake
  * buttons. Then the second factor (code, passkey or recovery code) when the account has one. No
  * phone or SMS anywhere. The API decides every step; the page only carries the person through
  * it, and keeps every message uniform (an unknown address gets exactly the words a known one does).
@@ -239,6 +239,14 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
       <Fingerprint size={20} weight="bold" aria-hidden /> Sign in with a passkey
     </button>
   );
+  const offers = providerOffers(options.providers, target);
+  const hasExternalMethod = offers.some((offer) => !!offer.href) || hasPasskeys;
+  const externalMethods = <>
+    <ProviderRow offers={offers} onWhy={(text) => setWhy({ at: "idp", text })} />
+    {whyLine("idp")}
+    {passkeyWhy ? <Tip text={passkeyWhy} className="block">{(tip) => passkeyButton(tip)}</Tip> : passkeyButton()}
+    {whyLine("passkey")}
+  </>;
   return (
     <AuthStage label="Sign in">
       <Logo />
@@ -255,11 +263,13 @@ export function SignIn({ options, next, initialStep = null, notice = null }: {
           <CopyCommand command={HOST_COMMANDS.setupLink} />
         </div>
       ) : null}
-      <ProviderRow offers={providerOffers(options.providers, target)} onWhy={(text) => setWhy({ at: "idp", text })} />
-      {whyLine("idp")}
-      {passkeyWhy ? <Tip text={passkeyWhy} className="block">{(tip) => passkeyButton(tip)}</Tip> : passkeyButton()}
-      {whyLine("passkey")}
-      <div className="idn-or">or use email</div>
+      {hasExternalMethod ? <>
+        {externalMethods}
+        <div className="idn-or">or use email</div>
+      </> : <details className="idn-other-signin" data-testid="other-signin-options">
+        <summary>Other sign-in options</summary>
+        {externalMethods}
+      </details>}
       <MethodTabs tabs={tabs} value={method} label="Sign-in method" onWhy={(text) => setWhy({ at: "tabs", text })}
         onChange={(m) => { setMethod(m); setError(null); setWhy(null); setStage({ kind: "start" }); }} />
       {whyLine("tabs")}
