@@ -87,6 +87,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "deploy_stack",
     # Approving a planned host deployment approves its ChangeSet and queues the apply.
     "deploy_host",
+    # Approving an architecture records it on its review; the waiting step then succeeds and
+    # every later build receives the approved document (architecture_docs.on_decision_answered).
+    "review_architecture",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on
@@ -97,6 +100,8 @@ REVISE_CONSUMED = frozenset({
     "self_improvement.begin_canary",
     "self_improvement.rollout",
     "role.autonomy_change",
+    # The architect writes the next version from the note (architecture_docs.revise_sent_back).
+    "review_architecture",
 })
 
 #: A workflow decision step (workflows.py) writes this action and no run id. The runner reads
@@ -159,7 +164,8 @@ RECORDED_ON_APPROVAL_PREFIXES = ("configure_or_enable_",)
 KNOWN_ACTIONS = (REFUSAL_REASONS | CARRIED_OUT_ON_APPROVAL | WORKFLOW_GATE_ACTIONS
                  | RECORDED_ON_APPROVAL)
 
-KINDS = ("refusal", "deploy_gate", "workflow_gate", "pull_request", "general")
+KINDS = ("refusal", "deploy_gate", "workflow_gate", "architecture_review", "pull_request",
+         "general")
 
 _OPEN = frozenset({"pending", "delegated"})
 #: An expired hold-default decision can still be answered: see DecisionService.transition.
@@ -207,6 +213,10 @@ def kind_of(decision: Mapping[str, Any]) -> str:
     action = _action_of(decision)
     if _refusal_family(decision):
         return "refusal"
+    if action == "review_architecture":
+        # A workflow's own sign-off, but one that can be sent back: checked before the generic
+        # workflow gate, which offers no "Request changes" because nothing reads it there.
+        return "architecture_review"
     if rec.get("workflow_run_id") or action in WORKFLOW_GATE_ACTIONS:
         if str(rec.get("capability") or "") in {"deploy", "redeploy"}:
             return "deploy_gate"
@@ -353,6 +363,20 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "Releases the step and the workflow continues from it."),
             _action("reject", "Reject", "reject",
                     "Fails the step. The run stops there unless you retry it."),
+            _delegate(),
+        ]
+    if kind == "architecture_review":
+        # Only a PERSON may approve (architecture_docs.require_a_person). Request changes does
+        # something here: the architect writes the next version from the note.
+        return [
+            _action("approve", "Approve", "approve",
+                    "Approves this version. The step completes and every later build step "
+                    "receives this architecture in its brief."),
+            _action("revise", "Request changes", "neutral",
+                    "Sends it back to the architect with your note; a new version comes back "
+                    "here for approval.", needs="note"),
+            _action("reject", "Reject", "reject",
+                    "Rejects the architecture. The step fails and the run stops there."),
             _delegate(),
         ]
     if _action_of(decision) in ("deploy_host", "deploy_stack"):

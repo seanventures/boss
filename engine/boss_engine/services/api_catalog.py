@@ -84,6 +84,7 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
             "/v1/code-tasks",
             "/v1/github",
             "/v1/delivery",
+            "/v1/architecture-reviews",
             "/v1/previews",
             "/v1/sandboxes",
             "/v1/software-factory",

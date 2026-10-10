@@ -9,6 +9,8 @@ import { identityKey } from "./app-identity";
 import { ClientRelativeTime } from "./client-relative-time";
 import { ActionForm, DecisionResolveForm } from "./client-forms";
 import { ActionPreview, actionPreviewOf, previewLead } from "./action-preview";
+import { ArchitectureDoc } from "./architecture-doc";
+import { architectureDocOf } from "../lib/architecture";
 import { AreaLink } from "./area-link";
 import { isAreaId } from "../lib/area-ids";
 import { displayTitle } from "../lib/directive-subject";
@@ -183,6 +185,10 @@ export function workflowGateEffect(r: Record<string, unknown>): string {
     case "spec_review":
       return "Approving publishes the spec and releases the build that follows it. Nothing is "
         + "written until it is approved.";
+    case "architecture":
+      return `Approving signs off this architecture for ${named}: the step completes and every `
+        + "build after it receives the document in its brief. Request changes sends it back to "
+        + "the architect with your note; a new version comes back here.";
     case "monitor":
       return `Approving sets up health probes against ${named} in ${env}.`;
     case "notify":
@@ -294,6 +300,8 @@ function approvalEffectLabel(recommendation: Record<string, unknown>): string {
     // A workflow's own decision step: the runner reads the answer like any gate's. The default
     // below said "no automated follow-on" above a button that releases the step.
     case "resume_workflow": return "Approving releases the step and the workflow continues from it.";
+    // An architecture a person signs off; the gate's own sentence says what follows.
+    case "review_architecture": return gate || "Approving signs off the architecture; builds after it receive it.";
     case "github.community.dispatch_plan": return "Approving dispatches the community plan into tasks.";
     case "github.community.merge_authorization": return "Approving records merge authorization (maintainer still merges).";
     case "self_improvement.begin_canary":
@@ -313,6 +321,7 @@ function decisionImpact(decision: DecisionFeedItem): { label: string; tone: stri
   if (action.startsWith("self_improvement")) return { label: "rollout", tone: "teal" };
   if (action === "execute_agent_tool") return { label: "publish", tone: "teal" };
   if (action === "resume_agent_run") return { label: "agent tool", tone: "teal" };
+  if (action === "review_architecture") return { label: "architecture", tone: "blue" };
   const rule = decisionRuleLabel(decision);
   return { label: rule.length > 18 ? rule.slice(0, 18).trimEnd() + "…" : rule, tone: "muted" };
 }
@@ -795,6 +804,7 @@ function DecisionInboxRow({
               </div>
             </details>
           ) : null}
+          {architectureDocOf(rec) ? <ArchitectureDoc doc={architectureDocOf(rec)!} /> : null}
           {plan || review ? (
             <details className="decision-plan-details">
               <summary>Read the technical plan{review ? " & automated review" : ""}</summary>
