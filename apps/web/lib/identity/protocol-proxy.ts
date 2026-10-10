@@ -23,6 +23,7 @@
  * cookie and CSRF (server-fetch.ts) or collapse two SCIM keys' reads into one (feed-cache.ts).
  */
 import { clientHop, proxyHops } from "../client-hop";
+import { readCapped } from "../read-capped";
 import { identityCookieHeader, normalisePath } from "./forward";
 
 export const SAML_METADATA_PATH = "/saml/v2/metadata";
@@ -98,10 +99,8 @@ export async function forwardProtocol(req: Request, opts: { apiUrl: string; fetc
   const method = req.method.toUpperCase();
   let body: Uint8Array | undefined;
   if (!["GET", "HEAD", "DELETE"].includes(method)) {
-    const declared = Number(req.headers.get("content-length") ?? "");
-    if (Number.isFinite(declared) && declared > PROTOCOL_BODY_CAP) return answer(413, "too_large");
-    const buf = new Uint8Array(await req.arrayBuffer());
-    if (buf.byteLength > PROTOCOL_BODY_CAP) return answer(413, "too_large");
+    const buf = await readCapped(req, PROTOCOL_BODY_CAP);
+    if (buf === null) return answer(413, "too_large");
     body = buf;
   }
   let upstream: Response;
