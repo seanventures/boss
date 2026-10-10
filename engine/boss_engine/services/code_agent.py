@@ -31,6 +31,7 @@ from sqlalchemy import text
 from ..config import Settings
 from ..schemas import FileChange
 from .verification_target import run_until_failure
+from .repo_files import MAX_SCAN_BYTES, RepoFileRefused, RepoFiles
 from .agent_turns import StreamParser, capture_enabled, parse_stream
 from .llm_telemetry import record_agent_turns, record_llm_call
 
@@ -318,23 +319,18 @@ def load_repo_guide(cwd, *, max_chars: int = 32_000) -> Optional[str]:
     """
     if cwd is None:
         return None
-    root = Path(cwd)
-    for name in REPO_GUIDE_FILENAMES:
-        f = root / name
-        try:
-            if not f.is_file():
+    with RepoFiles(Path(cwd)) as files:
+        for name in REPO_GUIDE_FILENAMES:
+            try:
+                text = files.read_text(name, max_bytes=max_chars * 4, truncate=True).strip()
+            except FileNotFoundError:
                 continue
-            text = f.read_text(encoding="utf-8", errors="replace").strip()
-        except OSError:
-            continue
-        if not text:
-            continue
-        # One file is the contract. Sending both AGENTS.md and CLAUDE.md would usually
-        # state the same rules twice and burn context doing it.
-        out = "--- " + name + " ---\n" + text
-        if len(out) > max_chars:
-            out = out[:max_chars] + "\n...[truncated: repo guide exceeds the configured cap]"
-        return out
+            if not text:
+                continue
+            out = "--- " + name + " ---\n" + text
+            if len(out) > max_chars:
+                out = out[:max_chars] + "\n...[truncated: repo guide exceeds the configured cap]"
+            return out
     return None
 
 
@@ -496,18 +492,17 @@ def _pack(
             "__pycache__", "vendor", "target", "coverage", ".turbo"}
     files: list[str] = []
     entries: list[dict] = []
-    for p in sorted(cwd.rglob("*")):
-        if not p.is_file() or skip & set(p.parts):
-            continue
-        rel = p.relative_to(cwd).as_posix()
-        files.append(rel)
-        if p.suffix not in exts:
-            continue
-        try:
-            entries.append({"rel": rel, "content": p.read_text(errors="ignore"),
-                            "size": p.stat().st_size})
-        except OSError:
-            continue
+    scanned_bytes = 0
+    with RepoFiles(cwd) as reader:
+        for rel in sorted(reader.walk(skip=skip)):
+            files.append(rel)
+            if Path(rel).suffix not in exts:
+                continue
+            content = reader.read_text(rel, max_bytes=head_bytes, truncate=True, errors="ignore")
+            scanned_bytes += len(content.encode("utf-8"))
+            if scanned_bytes > MAX_SCAN_BYTES:
+                raise RepoFileRefused("repository context exceeds read budget; narrow the repository")
+            entries.append({"rel": rel, "content": content, "size": len(content.encode("utf-8"))})
     # Pin the design-system source of truth (when the repo has one) so a UI task always sees the
     # tokens + component kit; Terraform core stays pinned too. The 40/20KB caps are gone as the
     # selection mechanism — max_files/max_bytes are a large safety ceiling.
@@ -649,6 +644,8 @@ class ClaudeCodeAgent:
                     max_bytes=max_bytes,
                     head_bytes=head_bytes,
                 )
+            except RepoFileRefused:
+                raise
             except Exception:
                 packed = ""
             if packed:
@@ -1230,35 +1227,7 @@ class NativeCodeAgent:
         )
 
     def _repo_context_impl(self, cwd: Path, *, task: str = "", limit: int = 120) -> str:
-        # IaC authoring (spec 05 §3.2 / T4): .tf/.tfvars/.hcl are context. APP-5 (#95): frontend exts
-        # added so the design system is visible, and selection is retrieval-driven (pin the design
-        # source-of-truth + Terraform core, rank the rest by relevance) instead of first-N-by-path.
-        exts = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".rb", ".rs", ".json", ".md",
-                ".txt", ".cfg", ".toml", ".yaml", ".yml", ".gradle", ".xml", ".css", ".scss",
-                ".html", ".vue", ".svelte", ".tf", ".tfvars", ".hcl"}
-        skip = {"node_modules", "dist", "build", ".next", ".git", ".venv", "venv",
-                "__pycache__", "vendor", "target", "coverage", ".turbo"}
-        files: list[str] = []
-        entries: list[dict] = []
-        for p in sorted(cwd.rglob("*")):
-            if not p.is_file() or skip & set(p.parts):
-                continue
-            rel = p.relative_to(cwd).as_posix()
-            files.append(rel)
-            if p.suffix not in exts:
-                continue
-            try:
-                entries.append({"rel": rel, "content": p.read_text(errors="ignore"),
-                                "size": p.stat().st_size})
-            except OSError:
-                continue
-        # Pin the design-system source of truth (when the repo has one) so a UI task always sees the
-        # tokens + component kit; Terraform core stays pinned too. The 40/20KB caps are gone as the
-        # selection mechanism — max_files/max_bytes are a large safety ceiling.
-        ui = any(repo_retriever.is_design_file(e["rel"]) for e in entries)
-        selection = repo_retriever.select_files(entries, task, ui=ui, pin=_is_core_tf_file,
-                                                 max_files=limit)
-        return repo_retriever.render_context(files, selection)
+        return build_repo_context(cwd, task=task, limit=limit)
 
     @staticmethod
     def _safe_json(content: str) -> dict:
@@ -1280,14 +1249,11 @@ class NativeCodeAgent:
 
     def _apply_files(self, cwd: Path, files: list) -> list[str]:
         written: list[str] = []
-        for f in files or []:
-            path = (f.get("path") or "").lstrip("/")
-            if not path or ".." in path:
-                continue
-            fp = cwd / path
-            fp.parent.mkdir(parents=True, exist_ok=True)
-            fp.write_text(f.get("content", ""), encoding="utf-8")
-            written.append(path)
+        with RepoFiles(cwd) as writer:
+            for f in files or []:
+                path = f.get("path") or ""
+                writer.write_text(path, f.get("content", ""))
+                written.append(path)
         return written
 
     # --- tool-calling loop (BOSS-407) ------------------------------------

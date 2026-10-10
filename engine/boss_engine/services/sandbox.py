@@ -14,6 +14,7 @@ where it executes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -29,6 +30,7 @@ from . import owned_process
 from ..schemas import FileChange
 from .agent_env import agent_environment
 from .scheduling import low_priority
+from .repo_files import RepoFiles
 
 
 #: Words that are shells, not programs. Seeing one as argv[0] means the caller wrote a shell
@@ -244,6 +246,9 @@ class EphemeralSandbox:
         self.work_branch: Optional[str] = None
         self.base_sha: Optional[str] = None
         self._owns_dir = False
+        self._provisioning = False
+        self._private_staging: Optional[Path] = None
+        self._repo_files: Optional[RepoFiles] = None
 
     # -- lifecycle ----------------------------------------------------------
     def __enter__(self) -> "EphemeralSandbox":
@@ -262,6 +267,65 @@ class EphemeralSandbox:
         return root
 
     def provision(
+        self, owner: str, repo: str, *, base_branch: str = "main",
+        work_branch: Optional[str] = None, token: Optional[str] = None,
+        repo_host: str = "github", egress: Optional[Any] = None,
+    ) -> Path:
+        """Credentialed Git sees only a private checkout, before any workload can touch it.
+
+        Publication is an atomic directory rename. After that point, Git in this checkout
+        always runs with the workload's authority and never receives BOSS's Git credentials.
+        A config blacklist is not sufficient: filters, includes, hooks and fsmonitor all
+        execute commands, and the workload is allowed to mutate its own Git metadata.
+        """
+        if self.path is not None:
+            raise SandboxError("Sandbox already provisioned.")
+        from .sandbox_identity import current, mode
+
+        self._sandbox = current()
+        self._git_owner = owned_process.current_owner()
+        if self._sandbox is None and mode() == "required":
+            raise SandboxError("sandbox isolation requires an active run identity")
+        root = self._sandbox.run_dir.parent if self._sandbox is not None else self._root()
+        staging = Path(tempfile.mkdtemp(prefix=".boss-git-", dir=root))
+        from .resource_ledger import claim_dir, release_dir
+
+        claim_dir(staging)
+        self._private_staging = staging
+        self._provisioning = True
+        try:
+            self._provision(owner, repo, base_branch=base_branch, work_branch=work_branch,
+                            token=token, repo_host=repo_host, egress=egress)
+            assert self.path is not None
+            # Pin the verified directory before publication; later reads never reopen an
+            # attacker-replaced workspace pathname. The staging parent remains private.
+            self._repo_files = RepoFiles(self.path)
+            destination_root = self._sandbox.run_dir if self._sandbox is not None else self._root()
+            destination = Path(tempfile.mkdtemp(prefix=f"{self.task_id}-", dir=destination_root))
+            os.chmod(self.path, 0o2777 if self._sandbox is not None else 0o700)
+            try:
+                # Replaces only an empty directory, never follows a planted destination link.
+                os.replace(self.path, destination)
+            except Exception:
+                with contextlib.suppress(OSError):
+                    destination.rmdir()
+                raise
+            self.path = destination
+            claim_dir(self.path)
+            return self.path
+        except Exception:
+            self.teardown()
+            raise
+        finally:
+            self._provisioning = False
+            self._private_staging = None
+            # The credential only belonged to private provisioning, never to later Git.
+            self._git_env = {}
+            self._git_own_config = []
+            shutil.rmtree(staging, ignore_errors=True)
+            release_dir(staging, "provisioning_ended")
+
+    def _provision(
         self,
         owner: str,
         repo: str,
@@ -280,24 +344,11 @@ class EphemeralSandbox:
         boss-egress proxy with a credential-free URL, git asks the run's shim for the per-run
         ``boss_egr_`` credential, and NO GitHub token exists anywhere in the sandbox
         (IDENTITY.md §7.10). ``token`` is then ignored."""
-        if self.path is not None:
-            raise SandboxError("Sandbox already provisioned.")
-        # THE RUN'S OWN UID (sandbox_identity): inside a run that holds a sandbox uid, the clone
-        # lives in that run's 2770 directory, and BOSS's own git writes it with umask 0 so the
-        # run's uid can edit it while no other run's uid can reach it.
-        from .sandbox_identity import current as _sandbox
-
-        self._sandbox = _sandbox()
-        if self._sandbox is not None:
-            self.path = self._sandbox.workspace(f"{self.task_id}-")
-        else:
-            root = self._root()
-            # mkdtemp gives us a unique, private directory we fully own.
-            self.path = Path(tempfile.mkdtemp(prefix=f"{self.task_id}-", dir=root))
+        if self._private_staging is None or not self._provisioning:
+            raise SandboxError("private Git provisioning is required")
+        self.path = self._private_staging / "checkout"
+        self.path.mkdir(mode=0o700)
         self._owns_dir = True
-        # Claimed while in use: the reaper sweeps unclaimed sandboxes a crash left behind.
-        from .resource_ledger import claim_dir
-        claim_dir(self.path)
         self.base_branch = base_branch
 
         # BOSS-267: the host's authenticated clone-URL form lives in ONE place now.
@@ -443,6 +494,9 @@ class EphemeralSandbox:
             pass  # best-effort; diff still works, just noisier
 
     def teardown(self) -> None:
+        if self._repo_files is not None:
+            self._repo_files.close()
+            self._repo_files = None
         if self.path and self._owns_dir and self.path.exists():
             shutil.rmtree(self.path, ignore_errors=True)
         if self.path and self._owns_dir:
@@ -616,15 +670,17 @@ class EphemeralSandbox:
         self._require_provisioned()
         summary = self.diff_summary()
         changes: list[FileChange] = []
-        for path in summary.paths:
-            file_path = self.path / path  # type: ignore[operator]
-            if not file_path.exists() or not file_path.is_file():
-                continue  # deletion/rename target absent — skip for now
-            try:
-                content = file_path.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
-                continue  # binary or unreadable — not committed via contents API
-            changes.append(FileChange(path=path, content=content))
+        reader = self._repo_files or RepoFiles(self.path)
+        try:
+            for path in summary.paths:
+                try:
+                    content = reader.read_text(path, errors="strict")
+                except (FileNotFoundError, UnicodeDecodeError):
+                    continue  # absent/deleted or binary; unsafe files fail visibly
+                changes.append(FileChange(path=path, content=content))
+        finally:
+            if reader is not self._repo_files:
+                reader.close()
         return changes
 
     # -- internals ----------------------------------------------------------
@@ -637,22 +693,33 @@ class EphemeralSandbox:
     ) -> str:
         assert self.path is not None
         try:
-            extra_env = getattr(self, "_git_env", None)
+            isolated = getattr(self, "_sandbox", None)
+            provisioning = self._provisioning
             own_config: list[str] = []
-            for key, value in getattr(self, "_git_own_config", ()):
-                own_config += ["-c", f"{key}={value}"]
-            isolated = getattr(self, "_sandbox", None) is not None
+            if provisioning:
+                for key, value in getattr(self, "_git_own_config", ()):
+                    own_config += ["-c", f"{key}={value}"]
+            # Never inherit ambient Git config, loader hooks, model credentials or BOSS
+            # environment. Only the explicit provisioning credential enters private Git.
+            env = {"PATH": os.defpath, "HOME": str(self.path), "LANG": "C.UTF-8",
+                   "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1",
+                   "GIT_CONFIG_GLOBAL": os.devnull, "GIT_ATTR_NOSYSTEM": "1"}
+            argv = ["git", "-C", str(self.path), *own_config, *args]
+            cwd = str(self.path)
+            if provisioning:
+                env.update(getattr(self, "_git_env", {}) or {})
+            elif isolated is not None:
+                from .sandbox_identity import for_owner
+
+                if for_owner(getattr(self, "_git_owner", None)) is not isolated:
+                    raise SandboxError("sandbox Git identity is no longer active")
             completed = owned_process.run(
-                ["git", "-C", str(self.path), *own_config, *args],
-                capture_output=True,
-                text=True,
+                argv, capture_output=True, text=True,
                 timeout=max(self.settings.sandbox_validation_timeout_seconds, 120),
-                check=False,
-                # BOSS's own git: never as the run's uid (it may carry a credential), and with
-                # umask 0 inside an isolated run so the run's uid can edit what it wrote.
-                sandboxed=False,
-                **({"umask": 0, "cwd": str(self.path)} if isolated else {}),
-                **({"env": {**os.environ, **extra_env}} if extra_env else {}),
+                check=False, sandboxed=not provisioning and isolated is not None,
+                cwd=cwd, env=env,
+                **({"owner": self._git_owner} if not provisioning and isolated is not None else {}),
+                **({"umask": 0} if provisioning and isolated is not None else {}),
             )
         except subprocess.TimeoutExpired as error:
             raise SandboxError(f"git {args[0]} timed out") from error
