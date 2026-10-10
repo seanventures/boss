@@ -445,9 +445,12 @@ class CloudBody(TypedDict, total=False):
 #   deploy_failed   id "infra:deploy_failed:<target_id>"   title "<app> deploy failed"
 #   app_down        id "infra:app_down:<target_id>"        title "<app> is down"
 #   host_unreachable id "infra:host_unreachable:<host_id>" title "<host> unreachable"
+#   app_errors      id "infra:app_errors:<target_id>"      title "<app> requests failing"
+#                   (the app's own /metrics error-rate alert has an open incident; app_metrics)
 # `area` on each item says where it lives: "infra" | "observability".
 
-INFRA_ATTENTION_KINDS = ("deploy_approval", "deploy_failed", "app_down", "host_unreachable")
+INFRA_ATTENTION_KINDS = ("deploy_approval", "deploy_failed", "app_down", "host_unreachable",
+                         "app_errors")
 
 
 def etag_of(material: Any) -> str:
@@ -2723,6 +2726,24 @@ def _apps_down(connection: Any, project_id: str, now: datetime) -> list[dict[str
     return out
 
 
+def _apps_erroring(connection: Any, project_id: str) -> list[dict[str, Any]]:
+    """An open error-rate incident (app_metrics' alert) is a card on Observability. Read from
+    the incidents ledger the alert writes — never scraped on a poll."""
+    rows = _rows(connection,
+                 "SELECT i.id AS incident_id, i.title, i.first_seen, t.id, t.app_name, "
+                 "       t.environment FROM incidents i "
+                 "JOIN deployment_targets t ON i.dedupe_key = 'app_error_rate:' || t.id "
+                 "WHERE i.project_id = :p AND i.dedupe_key LIKE 'app_error_rate:%' "
+                 "AND i.status NOT IN ('resolved', 'dismissed') AND t.status <> 'retired'",
+                 {"p": project_id})
+    return [_infra_item(id_=f"infra:app_errors:{r['id']}", infra_kind="app_errors",
+                        title=f"{r['app_name']} requests failing", detail=r["title"],
+                        area="observability",
+                        open_=f"?area=observability&view=apps&app={r['id']}",
+                        answers=[{"key": "open", "label": "Open", "enabled": True}],
+                        at=r["first_seen"]) for r in rows]
+
+
 def _hosts_unreachable(connection: Any, project_id: str) -> list[dict[str, Any]]:
     hosts = [_host_ready(h) for h in _rows(
         connection,
@@ -2756,6 +2777,8 @@ def attention(connection: Any, settings: Any, project_id: str) -> list[dict[str,
     items += _guard(connection, partial, "failed deploys",
                     lambda: _failed_deploys(connection, settings, project_id), [])
     items += _guard(connection, partial, "health", lambda: _apps_down(connection, project_id, now), [])
+    items += _guard(connection, partial, "app errors",
+                    lambda: _apps_erroring(connection, project_id), [])
     items += _guard(connection, partial, "hosts",
                     lambda: _hosts_unreachable(connection, project_id), [])
     return items

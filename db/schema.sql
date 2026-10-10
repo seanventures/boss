@@ -2046,6 +2046,35 @@ CREATE INDEX IF NOT EXISTS idx_health_samples_target
 CREATE INDEX IF NOT EXISTS idx_health_samples_project
   ON deployment_health_samples(project_id, checked_at DESC);
 
+-- What a deployed app says about its own traffic (app_metrics): one row per scrape of the
+-- `metrics: {path}` its boss.deploy.yaml declares. `snapshot` holds the cumulative counters as
+-- scraped; requests/errors/bucket_deltas are the window since the previous good scrape (a
+-- counter reset counts from zero). `word` is the outcome in words ("Scraped", "Metrics endpoint
+-- returned 404"). Seven days are kept.
+CREATE TABLE IF NOT EXISTS app_metrics_scrapes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  deployment_target_id TEXT NOT NULL REFERENCES deployment_targets(id) ON DELETE CASCADE,
+  scraped_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ok BOOLEAN NOT NULL,
+  route TEXT,
+  url TEXT,
+  status_code INTEGER,
+  word TEXT NOT NULL DEFAULT '',
+  naming TEXT,
+  took_ms INTEGER,
+  snapshot JSONB,
+  interval_s DOUBLE PRECISION,
+  requests DOUBLE PRECISION,
+  errors DOUBLE PRECISION,
+  counter_reset BOOLEAN NOT NULL DEFAULT false,
+  bucket_deltas JSONB,
+  p50_ms DOUBLE PRECISION,
+  p95_ms DOUBLE PRECISION
+);
+CREATE INDEX IF NOT EXISTS idx_app_metrics_scrapes_target
+  ON app_metrics_scrapes(deployment_target_id, scraped_at DESC);
+
 -- Generalized customer-app rollout state reuses the existing deployment_rollouts
 -- ledger while linking each new rollout to its ProviderOps DeploymentRun.
 ALTER TABLE deployment_rollouts
