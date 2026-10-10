@@ -39,6 +39,21 @@
  * request's answer, never an older one) and asked afresh after. And the browser's OWN calls
  * through the /v1 proxy (NO_REUSE_HEADER) are never collapsed or kept at all: a request the
  * browser sends after a revocation is decided by the API, every time.
+ *
+ * …UNLESS THIS REQUEST HAS PROVEN THE SESSION LIVE (console-latency fix, 2026-10-09). Without any
+ * reuse, every render — a page load, an area opened, each background refresh — asked the API all
+ * of its ~40 feeds again, each one paying the identity guard, and rc6's Factory took 3.6-4.6 s on
+ * boss-1 where rc5 (which kept everything for 5 s, revoked or not) was fast. A render now reads
+ * /v1/identity/me and /me/permissions FIRST, fresh, never from here (identity paths are never
+ * kept); only when both answered does the page call enterLiveProof(), and only for the rest of
+ * THAT request may a kept answer for the same session be served — and only one fetched at the
+ * same identity epoch (/me/permissions says which), within the TTL. So:
+ *   - a revoked session, a disabled person: the next request's own /me fails, the page signs in
+ *     and asks for no feed — nothing kept is ever served to it;
+ *   - a role or binding change bumps the epoch: the next request's proof names the new epoch,
+ *     and nothing kept under the old one matches;
+ *   - a request that proved nothing (a route handler, a server action, the browser's own call)
+ *     reuses nothing, exactly as before.
  */
 
 /**
@@ -64,7 +79,50 @@ export function isNoReuse(init: RequestInit | undefined | null): boolean {
   return Boolean(init && (init as RequestInit & Marked)[NO_REUSE]);
 }
 
-import { consoleAuthMarker, parseIdentityCookies, PREAUTH_COOKIE, sessionTag, tokenTag } from "./identity/forward";
+/** What this request proved: whose session answered /me live, and at which identity epoch. */
+export type LiveProof = { tag: string; epoch: number };
+
+type ProofStorage = { getStore(): LiveProof | undefined; enterWith(store: LiveProof): void };
+
+/** One store per process (Next gives the page and route handlers separate copies of this module).
+ *  Next's server installs globalThis.AsyncLocalStorage; without it (a browser, an odd runtime)
+ *  there is no proof and so no reuse — the safe default. */
+function proofStorage(): ProofStorage | null {
+  const g = globalThis as unknown as {
+    __bossLiveProof?: ProofStorage;
+    AsyncLocalStorage?: new () => ProofStorage;
+  };
+  if (g.__bossLiveProof) return g.__bossLiveProof;
+  if (typeof window !== "undefined" || typeof g.AsyncLocalStorage !== "function") return null;
+  g.__bossLiveProof = new g.AsyncLocalStorage();
+  return g.__bossLiveProof;
+}
+
+/** The proof for a session cookie the API just answered /me and /me/permissions for, at `epoch`. */
+export async function liveProofFor(cookieHeader: string | null | undefined,
+                                   epoch: number | null | undefined): Promise<LiveProof | null> {
+  const token = parseIdentityCookies(cookieHeader)[SESSION_COOKIE];
+  if (!token || typeof epoch !== "number" || !Number.isFinite(epoch)) return null;
+  return { tag: await tokenTag(token), epoch };
+}
+
+/**
+ * For the REST OF THE CURRENT REQUEST (this async context and everything it starts), kept answers
+ * for the proven session at the proven epoch may be served. Call it synchronously in the page's
+ * own body, after its fresh identity reads succeeded — an `await` between the proof and this call
+ * is fine, a helper that calls it after its own await is not (AsyncLocalStorage.enterWith only
+ * reaches the caller's continuation when called in the caller's frame).
+ */
+export function enterLiveProof(proof: LiveProof | null): void {
+  if (!proof) return;
+  proofStorage()?.enterWith(proof);
+}
+
+function currentProof(): LiveProof | undefined {
+  return proofStorage()?.getStore();
+}
+
+import { consoleAuthMarker, parseIdentityCookies, PREAUTH_COOKIE, SESSION_COOKIE, sessionTag, tokenTag } from "./identity/forward";
 
 /** A response read once and kept as bytes: every caller gets its OWN fresh Response.
  *  Cloning one shared Response raced — a joiner cloning while another reader drained it got
@@ -87,6 +145,23 @@ async function store(response: Response): Promise<Stored> {
 /** Control-plane reads that are never reused: state a write changes and the operator watches
  *  for (Repo and models re-reads after Replace token, a check or a Try it run). */
 const NEVER_REUSED = ["/v1/setup"];
+
+/** Never kept for a person, even under a proof: the reads that ARE the proof (who is signed in,
+ *  what they hold), and every other identity read (sessions, keys, people, roles). */
+const NEVER_KEPT_FOR_A_PERSON = /^\/v1\/(identity|auth)(\/|\?|$)/;
+
+/** A writing GET's POST twin (identity_guard.writing_get: `<path>/load`): the console reads with
+ *  it, and its only writes are housekeeping (seed a default, reap an expired reservation). It is
+ *  treated as the read it replaces — collapsed and kept like a GET — and it does not throw away
+ *  every kept read the way a real write does. Only with no body: a twin never takes one. */
+function isReadTwin(method: string, path: string, input: RequestInfo | URL,
+                    init: RequestInit | undefined): boolean {
+  // The body can ride on the init OR on a Request (the identity wrapper outside this cache hands
+  // a Request input on as a new Request, with no init): either one makes it a write (rc6.1).
+  const requestBody = input instanceof Request ? input.body : null;
+  return method === "POST" && /\/load$/.test(path.split("?")[0])
+    && (init?.body === undefined || init?.body === null) && requestBody === null;
+}
 
 /**
  * Per-URL durations, so a slow feed can be NAMED.
@@ -167,7 +242,9 @@ export function installFeedCache(apiUrl: string): void {
     // just removed stayed, the server it had just given did not appear (agent Loadout walk).
     // Which reads a write changes is not knowable here, so every write drops them all, before
     // it is sent and again when it lands (a read cached while it was in flight is stale too).
-    if (method !== "GET" && method !== "HEAD" && url.startsWith(apiUrl)) {
+    const path = url.startsWith(apiUrl) ? url.slice(apiUrl.length) : url;
+    const readTwin = url.startsWith(apiUrl) && isReadTwin(method, path, input, init);
+    if (method !== "GET" && method !== "HEAD" && url.startsWith(apiUrl) && !readTwin) {
       completed.clear();
       try {
         return await original(input as RequestInfo, init);
@@ -178,8 +255,18 @@ export function installFeedCache(apiUrl: string): void {
 
     // Only idempotent reads of the control plane. A POST that deploys something must never be
     // collapsed into another caller's POST, and a cached DELETE would be a genuine hazard.
-    if (direct || ttl === 0 || method !== "GET" || !url.startsWith(apiUrl)
-        || NEVER_REUSED.some((path) => url.slice(apiUrl.length).startsWith(path))) {
+    if (direct || ttl === 0 || (method !== "GET" && !readTwin) || !url.startsWith(apiUrl)
+        || NEVER_REUSED.some((prefix) => path.startsWith(prefix))) {
+      return original(input as RequestInfo, init);
+    }
+
+    // AN IDENTITY READ IS NEVER SHARED FOR A PERSON, NOT EVEN IN FLIGHT (rc6.1). /me and
+    // /me/permissions ARE the live proof: a render that joined another render's in-flight /me
+    // would hold an answer the API gave BEFORE this render began — a session revoked, or a role
+    // taken away, in between would still "prove" live, at the old epoch, and unlock answers kept
+    // for seconds (the-live-proof-cannot-be-borrowed.test.ts). Each render asks for itself.
+    const asker = await sessionTag(given);
+    if (asker !== "anon" && NEVER_KEPT_FOR_A_PERSON.test(path)) {
       return original(input as RequestInfo, init);
     }
 
@@ -187,7 +274,6 @@ export function installFeedCache(apiUrl: string): void {
     // session now (lib/identity/server-fetch.ts), and the same URL answers differently for an
     // Owner and a Viewer — so the key is the URL AND whose session asked. A request with no
     // session shares only with other sessionless requests.
-    const asker = await sessionTag(given);
     // B2: A SESSIONLESS ANSWER IS ONE CLIENT'S, TOO. The API judges a request without a session
     // by WHERE it comes from (the network bridge admits only a private peer; /v1/auth/options
     // answers about the caller's address) and by its pre-auth cookie (an SSO start). So a
@@ -197,11 +283,16 @@ export function installFeedCache(apiUrl: string): void {
     const client = asker === "anon"
       ? `\u0000${given.get("x-forwarded-for") ?? "-"}\u0000${preauth ? await tokenTag(preauth) : "-"}`
       : "";
-    const key = `${url}\u0000${asker}${client}`;
-    // …and a person's answer is not kept once it returned (see the header): only sessionless
-    // reads use the TTL — and never on a network-trusted console, where every visitor is
-    // sessionless and the API's answer depends on who is asking (B2).
-    const keep = asker === "anon" && consoleAuthMarker() === null;
+    // A person's answer is kept only under THIS request's proof that the session is live, and
+    // only for the same session at the same epoch (see the header). The epoch is in the key, so
+    // an answer fetched before a role change can never match a request proven after it.
+    const proof = asker !== "anon" ? currentProof() : undefined;
+    const proven = !!proof && proof.tag === asker
+      && !NEVER_KEPT_FOR_A_PERSON.test(path);
+    const key = `${method} ${url}\u0000${asker}${client}${proven ? `\u0000e${proof!.epoch}` : ""}`;
+    // A sessionless read uses the TTL — never on a network-trusted console, where every visitor
+    // is sessionless and the API's answer depends on who is asking (B2).
+    const keep = proven || (asker === "anon" && consoleAuthMarker() === null);
 
     const hit = keep ? completed.get(key) : undefined;
     if (hit && Date.now() - hit.at < ttl) return fresh(hit.stored);
@@ -212,7 +303,6 @@ export function installFeedCache(apiUrl: string): void {
     const started = Date.now();
     const promise: Promise<Stored> = original(input as RequestInfo, init)
       .then(async (response) => {
-        const path = url.replace(apiUrl, "");
         const table = timings();
         const prev = table.get(path);
         // Keep the WORST time seen and how often it was asked for. An average would hide the

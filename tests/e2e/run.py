@@ -136,6 +136,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if hasattr(signal, "SIGUSR1"):
         faulthandler.register(signal.SIGUSR1, all_threads=True)
+    args_in = list(sys.argv[1:] if argv is None else argv)
+    if args_in[:1] == ["perf"]:
+        # The performance walk (harness/perf.py): seed volume, sign in as the Owner, measure every
+        # page's render and API calls, fail on a budget. Its own flags: `perf --help`.
+        from e2e.harness import perf
+
+        return perf.main(args_in[1:])
     parser = argparse.ArgumentParser(prog="scripts/e2e.sh", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", default="all",

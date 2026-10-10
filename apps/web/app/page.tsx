@@ -7,6 +7,7 @@ import { EnrolmentGate } from "../components/identity/enrolment-gate";
 import { ORG_ONBOARD_PERMISSION } from "./org-gate-permission";
 import { snapshotFrom } from "../lib/identity/contract";
 import { loadIdentityCached } from "../lib/identity/server-cache";
+import { enterLiveProof, liveProofFor } from "../lib/feed-cache";
 import { identityStubEnabled } from "../lib/identity/stub/enabled";
 import { isAreaId } from "../lib/area-ids";
 import { CheckinCard } from "./improve/checkin-card";
@@ -52,7 +53,7 @@ import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
 import { ReportsView } from "./reports-ui";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
 import { fetchAuditSummary } from "../lib/audit";
-import { fetchArtifactFeed } from "../lib/artifacts";
+import { emptyArtifactFeed, fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
 import { fetchAgentStudioFeed } from "../lib/agent-studio";
 import { AgentProcesses } from "./agent-process-ui";
@@ -64,8 +65,7 @@ import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
 import { PackExportButton, PackImportForm } from "./packs-import-ui";
 import { DecisionInbox } from "./decision-inbox-ui";
-import { fetchAuthSession } from "../lib/auth-session";
-import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
+import { emptyInboxFeed, fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import {
   loadAssuranceAreaData,
   ASSURANCE_AREA_IDS,
@@ -98,11 +98,11 @@ import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
 import { fetchChangeJournalFeed } from "../lib/change-journal";
 import { fetchDeadletterFeed } from "../lib/deadletters";
-import { fetchDecisionFeed, parseDecisionInboxFilter, type DecisionFeedItem } from "../lib/decisions";
-import { fetchActivityFeed } from "../lib/events";
+import { emptyDecisionFeed, fetchDecisionFeed, parseDecisionInboxFilter, type DecisionFeedItem } from "../lib/decisions";
+import { emptyActivityFeed, fetchActivityFeed } from "../lib/events";
 import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
 import { fetchMemberFeed, fetchOrgMemberFeed } from "../lib/members";
-import { fetchMeetingFeed } from "../lib/meetings";
+import { emptyMeetingFeed, fetchMeetingFeed } from "../lib/meetings";
 import { researchRunParam } from "../lib/research-panels";
 import { fetchMetatronQuery } from "../lib/metatron";
 import { fetchOpsQueueFeed } from "../lib/ops";
@@ -119,11 +119,11 @@ import { fetchCapabilities } from "../lib/capabilities";
 import { CapabilitiesView } from "./capabilities-ui";
 import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
-import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
+import { fetchCodeTasksFeed, slimRunForFactory, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { WorkforceArea } from "./workforce-ui";
 import { consoleParams, searchParamsFrom } from "./legacy-areas";
-import { fetchOrgChart, fetchWorkforce } from "../lib/v2/workforce";
+import { emptyOrgChart, emptyWorkforce, fetchOrgChart, fetchWorkforce } from "../lib/v2/workforce";
 import { ShepherdConsole } from "./shepherd-ui";
 import { getShepherdOverviewAction } from "./actions";
 import { InfraHome } from "./infra/infra-home";
@@ -153,23 +153,23 @@ import { fetchOrgs } from "../lib/orgs";
 import { OrgGate, OrgReconnect } from "./org-gate";
 import { fetchApprovalRules } from "../lib/approval-rules";
 import { ApprovalRulesView } from "./approval-rules-ui";
-import { fetchPackFeed } from "../lib/packs";
+import { emptyPackFeed, fetchPackFeed } from "../lib/packs";
 import { fetchGitHubOperationsFeed } from "../lib/github-operations";
 import { GitHubOperations } from "./github-operations-ui";
 import { fetchRepoActivity } from "../lib/repo-activity";
 import { RepoActivityPanel } from "./repo-activity-ui";
 import { fetchProjectFeed } from "../lib/projects";
-import { fetchReceiptFeed } from "../lib/receipts";
-import { fetchRoleFeed } from "../lib/roles";
-import { fetchSelfImprovementFeed } from "../lib/self-improvement";
+import { emptyReceiptFeed, fetchReceiptFeed } from "../lib/receipts";
+import { emptyRoleFeed, fetchRoleFeed } from "../lib/roles";
+import { emptySelfImprovementFeed, fetchSelfImprovementFeed } from "../lib/self-improvement";
 import { ImprovementProgramsPanel } from "./improvement-programs-ui";
 import {
   extractSoftwareFactoryArtifactEvidence,
   extractSoftwareFactoryDecisionEvidence,
 } from "../lib/software-factory";
-import { fetchSkillFeed } from "../lib/skills";
+import { emptySkillFeed, fetchSkillFeed } from "../lib/skills";
 import { controlPlaneOnline, fetchStatus } from "../lib/status";
-import { fetchTaskFeed } from "../lib/tasks";
+import { emptyTaskFeed, fetchTaskFeed } from "../lib/tasks";
 import { API_URL, PROJECT_ID } from "../lib/client";
 import { SubmitButton } from "./submit-button";
 import { fetchIdentityProvidersFeed } from "../lib/identity-providers";
@@ -389,6 +389,13 @@ function getParam(value: string | string[] | undefined): string | undefined {
   return undefined;
 }
 
+/** What a gated feed says when this render does not show its area: the same shape its unreachable
+ *  path returns, and no round trip. */
+const NOT_REQUESTED = "not requested";
+function gate<T>(active: boolean, load: () => Promise<T>, empty: () => T): Promise<T> {
+  return active ? load() : Promise.resolve(empty());
+}
+
 export default async function HomePage({ searchParams }: HomePageProps) {
 
   // START INDEPENDENT WORK TOGETHER.
@@ -406,12 +413,24 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   //
   // .catch(() => null) is preserved per-feed: one dead panel must never take the console with
   // it, and Promise.all would reject the batch if any of them threw.
+  //
+  // WHO IS ASKING AND WHICH ORGS EXIST ARE ASKED TOGETHER (console-latency fix, 2026-10-09). The
+  // render opened with FIVE sequential round trips before its first feed: the Task Shepherd's
+  // overview (read by one area), then /me + /me/permissions, then /v1/orgs, then the setup
+  // summary, then the project's permissions. The overview now waits for `needs("shepherd")`; the
+  // identity reads and the org list start at once; setup and the project's permissions together.
+  // A dead session still signs in before anything is RENDERED from the org list (the
+  // checks below come first), and the org list is a read the API refuses it anyway.
+  const identityFirstP = loadIdentityCached(null);
+  const orgsP = fetchOrgs();
   const [
-    shepherdOverview,
     rawSearchParams,
+    requestHeaders,
+    requestCookies,
   ] = await Promise.all([
-    getShepherdOverviewAction().catch(() => null),
     searchParams ? Promise.resolve(searchParams).then((v) => v) : Promise.resolve(undefined),
+    headers(),
+    cookies(),
   ]);
   // A RETIRED SURFACE NEVER RENDERS. Agent Studio, Team structure and the Workflow area's old
   // tabs are rewritten to where they live now before anything is fetched for them; one table,
@@ -424,7 +443,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const resolvedSearchParams: Record<string, string> = Object.fromEntries(
     consoleParams(searchParamsFrom(rawSearchParams)).params);
   // AN ENROLMENT-ONLY SESSION sees the way to enrol, not a console of refusals (H1).
-  const enrolment = await loadIdentityCached(null);
+  const enrolment = await identityFirstP;
   if (needsEnrolment(enrolment.me, enrolment.problem)) {
     const enrolBack = new URLSearchParams(resolvedSearchParams).toString();
     return <EnrolmentGate href={enrolHref(enrolBack ? `/?${enrolBack}` : "/")} />;
@@ -441,6 +460,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <a className="idn-big p" href={signIn}>Sign in again</a>
       </main>
     );
+  }
+  // THE SESSION IS PROVEN LIVE FOR THIS REQUEST: /me and /me/permissions answered just now, fresh
+  // (lib/feed-cache.ts never keeps an identity read). For the rest of this render a feed this
+  // session fetched at this same identity epoch within the last few seconds may be reused —
+  // a revoked session never gets here, and a role change moves the epoch (lib/feed-cache.ts).
+  if (enrolment.me && enrolment.org && !enrolment.problem) {
+    enterLiveProof(await liveProofFor(requestHeaders.get("cookie"), enrolment.org.epoch));
   }
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
@@ -488,7 +514,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // real loading state and refreshes; from then on this renders every area the session has
   // opened, at the same tree positions, so the ones on screen update rather than remount and a
   // second click on them is the old pure CSS reveal.
-  const [requestHeaders, requestCookies] = await Promise.all([headers(), cookies()]);
   const requestedDecisionFilter = parseDecisionInboxFilter(
     getParam(resolvedSearchParams?.decision_filter),
   );
@@ -522,7 +547,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // and recovering. Treating org_id as an alias makes that class of link harmless.
   const requestedOrgId =
     getParam(resolvedSearchParams?.org) || getParam(resolvedSearchParams?.org_id);
-  const orgs = await fetchOrgs();
+  const orgs = await orgsP;
   const selectedOrg = requestedOrgId
     ? orgs.items.find((o) => o.org_id === requestedOrgId)
     : undefined;
@@ -567,6 +592,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // FIRST SIGN-IN LANDS WHERE THE WORK IS. With no `area` asked for and setup not ready, the
   // console opens on Repo and models; once ready the default is the Command Center as before.
   // The same read feeds the rail badge, so the two cannot disagree.
+  // Who may open what at this project is read alongside the setup summary, not after it.
+  const identityP = loadIdentityCached(activeProjectId);
   const setupSummary = await fetchSetupSummary(activeProjectId);
   // RENDERED, NOT REDIRECTED (same class as the aliases above): the landing area is the one
   // this render shows and the shell opens; no redirect() after the shell has streamed.
@@ -580,7 +607,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // WHO IS SIGNED IN, AND WHAT THEY MAY OPEN (IDENTITY.md §6.5). Read before any area's feeds:
   // an area the viewer cannot open is neither fetched nor rendered — the shell shows
   // <AccessDenied> for it — so no area loads and then 403s.
-  const identity = await loadIdentityCached(activeProjectId);
+  const identity = await identityP;
   const identityUnavailable = !identity.org;
   const orgSnap = identity.org ? snapshotFrom(identity.org) : null;
   const projectSnap = identity.project ? snapshotFrom(identity.project) : null;
@@ -610,6 +637,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // Skills listed three servers. Data that was simply not requested rendered as a failure.
   // `needs` is the one seam that decides what a render fetches, so the packs ask it too.
   const assuranceActive = needs(...ASSURANCE_AREA_IDS);
+  // Read by the Task Shepherd area alone; it was the render's first, sequential, round trip.
+  const shepherdOverviewP = needs("shepherd")
+    ? getShepherdOverviewAction().catch(() => null) : Promise.resolve(null);
   // ALWAYS FETCHED, deliberately.
   //
   // The sidebar switches area with history.pushState and NO server round-trip, so whichever
@@ -633,8 +663,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // in four separate round trips. Nothing is reordered and nothing is dropped — a batch that
   // genuinely depends on an earlier result (costInsights, the assurance-derived feeds) still
   // waits for it.
-  const workforceP = fetchWorkforce(activeProjectId);
-  const orgChartP = fetchOrgChart(activeProjectId);
+  // Read by the Workforce area alone. "ALWAYS FETCHED, deliberately" above dates from when the rail
+  // switched areas with no server round trip; areas load lazily now (lib/area-loading.ts), and an
+  // area not in `loadedAreas` is neither rendered nor fetched — so this is an ordinary gate.
+  const workforceP = gate(needs("workforce"), () => fetchWorkforce(activeProjectId),
+                          () => emptyWorkforce(activeProjectId, NOT_REQUESTED));
+  const orgChartP = gate(needs("workforce"), () => fetchOrgChart(activeProjectId),
+                         () => emptyOrgChart(activeProjectId, NOT_REQUESTED));
   // No Infra pack: Infra › Cloud reads GET /v1/infra/cloud itself (infra-observability spec §6.6),
   // which replaced the 17-call ProviderOps fan-out this page made for System Configuration.
   const assuranceP = loadAssuranceAreaData({ projectId: activeProjectId, active: assuranceActive });
@@ -646,8 +681,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     try { return raw ? decodeURIComponent(raw) : "UTC"; } catch { return "UTC"; }
   })();
   const reliabilityWaveP = Promise.all([
-    fetchReliabilityFeed(activeProjectId),
-    fetchAiSreCapabilities(activeProjectId),
+    gate(needs("reliability"), () => fetchReliabilityFeed(activeProjectId),
+         () => ({ projectId: activeProjectId, apiReachable: false, incidents: [], learning: null, policy: null })),
+    gate(needs("ai-sre"), () => fetchAiSreCapabilities(activeProjectId),
+         () => ({ projectId: activeProjectId, apiReachable: false, ledger: null })),
     // Was the delivery strip's feed. THIS WEEK reads the same numbers, relabelled honestly,
     // from the view below (command-center spec §4.12), so the position holds a settled value
     // rather than a second request.
@@ -747,22 +784,33 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
-      fetchDecisionFeed(activeProjectId),
-      fetchTaskFeed(activeProjectId, 50),
-      fetchMeetingFeed(activeProjectId),
-      fetchArtifactFeed(activeProjectId),
-      fetchActivityFeed(activeProjectId, 40),
+      // EACH FEED BELOW IS READ ONLY INSIDE THE AREAS ITS `needs` NAMES (one-area-per-fetch.test.ts
+      // keeps the map): the Factory render asked for twenty of them it never drew.
+      gate(needs("work", "decisions"), () => fetchDecisionFeed(activeProjectId),
+           () => emptyDecisionFeed(NOT_REQUESTED, activeProjectId)),
+      gate(needs("org", "meetings", "work", "decisions"), () => fetchTaskFeed(activeProjectId, 50),
+           () => emptyTaskFeed(NOT_REQUESTED, activeProjectId)),
+      gate(needs("code_tasks", "meetings", "work"), () => fetchMeetingFeed(activeProjectId),
+           () => emptyMeetingFeed(NOT_REQUESTED, activeProjectId)),
+      gate(needs("ops", "work"), () => fetchArtifactFeed(activeProjectId),
+           () => emptyArtifactFeed(NOT_REQUESTED, activeProjectId)),
+      gate(needs("ops", "work"), () => fetchActivityFeed(activeProjectId, 40),
+           () => emptyActivityFeed(NOT_REQUESTED, activeProjectId)),
       fetchHealthSnapshotFeed(activeProjectId, needs("ops")),
       fetchOpsQueueFeed(activeProjectId, 8, needs("ops", "work")),
       fetchDeadletterFeed(activeProjectId),
-      fetchPackFeed(activeProjectId),
-      fetchRoleFeed(activeProjectId),
+      gate(needs("org"), () => fetchPackFeed(activeProjectId),
+           () => emptyPackFeed(NOT_REQUESTED, activeProjectId)),
+      gate(needs("decisions", "meetings", "org"), () => fetchRoleFeed(activeProjectId),
+           () => emptyRoleFeed(NOT_REQUESTED, activeProjectId)),
       fetchAgentModuleFeed(activeProjectId, needs("org")),
-      fetchSkillFeed(activeProjectId),
+      gate(needs("agent", "capabilities", "ops", "org", "skills"), () => fetchSkillFeed(activeProjectId),
+           () => emptySkillFeed(NOT_REQUESTED)),
       // Twelve and thirty sub-requests respectively, both read only by data-area="github".
       fetchGitHubOperationsFeed(activeProjectId, needs("github")),
       fetchRepoActivity(activeProjectId, 30, needs("github")),
-      fetchReceiptFeed(activeProjectId, 100),
+      gate(needs("ops", "reports", "work"), () => fetchReceiptFeed(activeProjectId, 100),
+           () => emptyReceiptFeed(NOT_REQUESTED, activeProjectId)),
       fetchLatestCanary(activeProjectId, needs("ops")),
       fetchPlans(activeProjectId, needs("work")),
       // Was the single biggest cost on this page, for eight numbers: it called
@@ -772,9 +820,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       // an ordinary area gate like the rest.
       fetchAuditSummary(activeProjectId, needs("ops")),
       fetchChangeJournalFeed(activeProjectId, 8, needs("ops")),
-      fetchSelfImprovementFeed(activeProjectId),
+      // Three SEQUENTIAL reads (edition, programs, proposals) for the Ops area alone.
+      gate(needs("ops"), () => fetchSelfImprovementFeed(activeProjectId),
+           () => emptySelfImprovementFeed(NOT_REQUESTED, activeProjectId)),
       fetchOutboxFeed(activeProjectId, 8, needs("comms")),
-      fetchInboxFeed(activeProjectId),
+      gate(needs("comms", "decisions"), () => fetchInboxFeed(activeProjectId),
+           () => emptyInboxFeed(NOT_REQUESTED, activeProjectId)),
       fetchMemberFeed(activeProjectId),
       fetchOrgMemberFeed(
         activeOrgId,
@@ -788,12 +839,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         metatronDecisionId,
         activeProjectId,
       ),
-      fetchAuthSession(),
+      // Was GET /v1/auth/session on every render; nothing on the page reads it.
+      Promise.resolve(null),
       fetchBreakGlassGrantFeed(activeProjectId, needs("org")),
       fetchReportSummary(activeProjectId, needs("ops", "reports")),
       fetchAgentRuns(activeProjectId, needs("work")),
       fetchTaskOutputs(activeProjectId, needs("work")),
-      fetchCapabilities(activeProjectId),
+      gate(needs("capabilities"), () => fetchCapabilities(activeProjectId),
+           () => ({ apiReachable: false, blockedReason: NOT_REQUESTED, nativeTools: [], skills: [], mcpServers: [] })),
       fetchMeetingRooms(activeProjectId, needs("code_tasks", "meetings")),
       fetchApprovalRules(activeProjectId, needs("decisions")),
       fetchCodeTasksFeed(
@@ -840,6 +893,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     liveJobs,
     qaScorecard,
   ] = await platformOpsWaveP;
+  const shepherdOverview = await shepherdOverviewP;
 
   const deadletterCount = deadletters.items.length;
   const disableCommandEntry = !status.apiReachable || !status.databaseConnected;
@@ -2981,7 +3035,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <CodeTasksHome
             projectId={activeProjectId}
             orgId={activeOrgId}
-            codeTasks={codeTasksFeed.items}
+            codeTasks={codeTasksFeed.items.map(slimRunForFactory)}
             codeTaskTotal={codeTasksFeed.total}
             // A panel that is RUNNING has no code run yet, so Factory -- which lists runs --
             // could not show it at all. The work existed and the page that tracks work said

@@ -7,7 +7,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ENGINE = ROOT / "engine"
-RELEASE_VERSION = "1.0.0-rc.6"
+RELEASE_VERSION = "1.0.0-rc.6.1"
+#: PEP 440 cannot spell a fourth pre-release number: the engine package is the post-release of rc6.
+PYTHON_RELEASE_VERSION = "1.0.0-rc.6.post1"
 
 
 def _json(path: Path) -> dict[str, object]:
@@ -22,8 +24,8 @@ def test_release_versions_are_aligned() -> None:
     pyproject = (ENGINE / "pyproject.toml").read_text(encoding="utf-8")
     init = (ENGINE / "boss_engine/__init__.py").read_text(encoding="utf-8")
     chart = (ROOT / "deploy/helm/boss/Chart.yaml").read_text(encoding="utf-8")
-    assert f'version = "{RELEASE_VERSION}"' in pyproject
-    assert f'__version__ = "{RELEASE_VERSION}"' in init
+    assert f'version = "{PYTHON_RELEASE_VERSION}"' in pyproject
+    assert f'__version__ = "{PYTHON_RELEASE_VERSION}"' in init
     assert f"version: {RELEASE_VERSION}" in chart
     assert f'appVersion: "{RELEASE_VERSION}"' in chart
 

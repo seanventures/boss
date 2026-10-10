@@ -24,20 +24,21 @@ def engines(engine, monkeypatch):
         calls.append(("stack", target_id, ref, actor))
         return {"id": "sd_new", "status": "awaiting_approval"}
 
-    def fake_registry(self, connection, *, project_id, deployment_target_id, commit_ref,
-                      release_packet, expected_cost_usd_micros, reservation_id, actor):
+    # THE PLANNER is the one fake on the app path: the button, its route and the manual-deploy
+    # service all run. This test used to fake `delivery_deploy_endpoint` itself, which hid that
+    # the button called that handler without the `request` FastAPI fills: every press was a 500.
+    def fake_planner(self, connection, *, project_id, deployment_target_id, commit_ref,
+                     release_packet, expected_cost_usd_micros, reservation_id, actor):
+        if release_packet.get("source") == "manual_deploy":
+            calls.append(("delivery", deployment_target_id, commit_ref,
+                          release_packet.get("requested_by")))
+            return {"deployment_run_id": "dr_app", "status": "created", "changeset_id": "cs_app"}
         calls.append(("registry", deployment_target_id, commit_ref, expected_cost_usd_micros,
                       reservation_id, release_packet, actor))
         return {"deployment_run_id": "dr_reg", "status": "created"}
 
-    def fake_delivery(payload):
-        p = payload.payload()
-        calls.append(("delivery", p["target_id"], p.get("ref"), p.get("actor")))
-        return {"deployment_run_id": "dr_app", "status": "planned", "trigger": "manual"}
-
     monkeypatch.setattr(stack_deploy, "plan_stack_deploy", fake_stack)
-    monkeypatch.setattr(resource_plane.ResourcePlaneService, "plan_deployment_run", fake_registry)
-    monkeypatch.setattr(api_main, "delivery_deploy_endpoint", fake_delivery)
+    monkeypatch.setattr(resource_plane.ResourcePlaneService, "plan_deployment_run", fake_planner)
     yield calls
     with engine.begin() as c:
         clear(c, HOME)
@@ -79,7 +80,8 @@ def test_community_refuses_registry_but_plans_a_stack_and_a_host_deploy(
     r = _deploy(client, "t_live")
     assert r.status_code == 200, r.text
     assert r.json()["ref"] == "delivery:dr_app"
-    assert engines == [("stack", "t_stack", "main", "ceo"), ("delivery", "t_live", None, "ceo")]
+    # No ref named: the manual deploy ships the repo's default branch, never a stale one.
+    assert engines == [("stack", "t_stack", "main", "ceo"), ("delivery", "t_live", "main", "ceo")]
     detail = client.get("/v1/infra/targets/t_live", params={"project_id": HOME}).json()
     assert detail["disabled"] == {"auto_deploy": "Paused in Community"}
     assert detail["can"]["deploy"] is True

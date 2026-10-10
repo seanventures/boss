@@ -4198,6 +4198,13 @@ def get_meta_api_catalog() -> dict[str, Any]:
     Use this to discover controls available over the API. Coverage compares
     live FastAPI routes to ``api/openapi.yaml`` path entries.
     """
+    return api_catalog_document()
+
+
+def api_catalog_document() -> dict[str, Any]:
+    """get_meta_api_catalog, for callers inside the API.
+
+    A route handler is FastAPI's to call (test_no_code_calls_a_route_handler)."""
     from boss_engine.services.api_catalog import build_api_catalog
     import re
     from pathlib import Path
@@ -4240,7 +4247,7 @@ def get_meta_api_catalog() -> dict[str, Any]:
 @permit(P.SYSTEM_READ, scope=Scope.org())
 def get_meta_api_catalog_domain(domain: str) -> dict[str, Any]:
     """Single domain slice of the API catalog (e.g. reference host, providers, core)."""
-    full = get_meta_api_catalog()
+    full = api_catalog_document()
     for item in full.get("domains") or []:
         if item.get("id") == domain:
             return item
@@ -4251,7 +4258,7 @@ def get_meta_api_catalog_domain(domain: str) -> dict[str, Any]:
 @permit(P.SYSTEM_READ, scope=Scope.org())
 def get_openapi_coverage() -> dict[str, Any]:
     """Report OpenAPI documentation coverage vs live routes."""
-    catalog = get_meta_api_catalog()
+    catalog = api_catalog_document()
     missing = []
     for domain in catalog.get("domains") or []:
         for route in domain.get("routes") or []:
@@ -8393,7 +8400,7 @@ def list_deployment_targets_alias(project_id: str, limit: int = 50,
     for writes. Delegates rather than reimplements: two list queries would be two chances to
     filter differently.
     """
-    return list_deployment_targets(project_id=project_id, limit=limit, offset=offset)
+    return deployment_target_list(project_id=project_id, limit=limit, offset=offset)
 
 
 def merge_target_resources(current: Any, updates: dict[str, Any]) -> list[dict]:
@@ -8469,7 +8476,14 @@ def create_deployment_target_endpoint(payload: DeploymentTargetCreateBody):
 
     Both existing targets were inserted by a hand-run script; that is the step this replaces.
     """
-    payload = payload.payload()
+    return register_deployment_target(payload.payload())
+
+
+def register_deployment_target(payload: dict):
+    """create_deployment_target_endpoint, for callers inside the API, which hold a dict.
+
+    A route handler is FastAPI's to call (test_no_code_calls_a_route_handler). Setting up a
+    code task's deployment passed this dict to the handler, which read `.payload()` off it."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.core import make_id
@@ -8804,6 +8818,13 @@ def purge_deployment_target_endpoint(target_id: str, payload: DeploymentTargetPu
 @permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"))
 def bootstrap_deployment_target_endpoint(target_id: str, payload: Optional[dict] = None):
     """Refuse direct SSH host writes until Resource Plane records the operation."""
+    return bootstrap_deployment_target(target_id, payload)
+
+
+def bootstrap_deployment_target(target_id: str, payload: Optional[dict] = None):
+    """bootstrap_deployment_target_endpoint, for callers inside the API.
+
+    A route handler is FastAPI's to call (test_no_code_calls_a_route_handler)."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     actor = _deployment_target_write_actor(payload)
@@ -9355,7 +9376,17 @@ def delivery_deploy_endpoint(payload: ManualDeployBody, request: Request):
     (shipping a hotfix, re-shipping after a host fix, deploying a target that was onboarded
     after its last merge).
     """
-    payload = payload.payload()
+    return plan_manual_deploy(payload.payload())
+
+
+def plan_manual_deploy(payload: dict) -> dict:
+    """The manual deploy, for every caller: POST /v1/delivery/deploy and the Infra Deploy button.
+
+    A route handler is the HTTP door, not a function to call. Its signature is FastAPI's, so the
+    Infra button calling `delivery_deploy_endpoint(body)` from Python missed `request` and
+    answered 500 for every app target. Code inside the API calls this instead
+    (test_no_code_calls_a_route_handler holds that).
+    """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.resource_plane import ResourcePlaneService
@@ -11072,7 +11103,7 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.Co
     looks_like_ip = all(part.isdigit() for part in address.split(".")) and address.count(".") == 3
     scheme = "http" if (looks_like_ip or ":" in address) else "https"
 
-    created = create_deployment_target_endpoint({
+    created = register_deployment_target({
         "project_id": run["project_id"],
         "app_name": app_name,
         "repo": repo,
@@ -11109,7 +11140,7 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.Co
     # CI/CD screen, whereas losing the target because a port scan timed out is not.
     bootstrap_report = None
     try:
-        bootstrap_report = bootstrap_deployment_target_endpoint(target_id, {"apply_port": True})
+        bootstrap_report = bootstrap_deployment_target(target_id, {"apply_port": True})
     except HTTPException as exc:
         bootstrap_report = {"error": str(exc.detail)[:200]}
     except Exception as exc:  # noqa: BLE001
@@ -11563,11 +11594,11 @@ def approve_preview_endpoint(preview_id: str, payload: open_bodies.PreviewApprov
             raise HTTPException(status_code=exc.status, detail=str(exc))
         require_project_actor(connection, gate["project_id"], actor, "decision_resolve")
 
-    # Approve the merge decision through the SAME endpoint a human uses. Calling the existing
-    # transition keeps role checks, receipts and the merge itself on one path; a private
-    # shortcut here would be a second way to merge.
+    # Approve the merge decision through the SAME transition a human's approval uses. Calling
+    # the existing transition keeps role checks, receipts and the merge itself on one path; a
+    # private shortcut here would be a second way to merge.
     decision_id = gate["decision_id"]
-    card = approve_decision(
+    card = approve_decision_card(
         decision_id,
         DecisionActionRequest(actor=actor,
                               note=f"Preview {preview_id} approved by {actor}"
@@ -13439,6 +13470,15 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
 def list_tasks(
     project_id: Optional[str] = None, limit: int = 50, offset: int = 0
 ) -> TaskListResponse:
+    return task_list(project_id, limit, offset)
+
+
+def task_list(
+    project_id: Optional[str] = None, limit: int = 50, offset: int = 0
+) -> TaskListResponse:
+    """list_tasks, for callers inside the API.
+
+    A route handler is FastAPI's to call (test_no_code_calls_a_route_handler)."""
     project_id = resolve_list_project_id(project_id)
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
@@ -15152,8 +15192,8 @@ def coordination_snapshot_endpoint(project_id: str) -> CoordinationSnapshot:
 
     with begin(engine) as connection:
         require_project_reader(connection, project_id)
-    roles = list_roles(project_id).items
-    tasks = list_tasks(project_id=project_id, limit=50).items
+    roles = role_list(project_id).items
+    tasks = task_list(project_id=project_id, limit=50).items
     with begin(engine) as connection:
         recent_work = in_flight(connection, project_id, limit=6)
     return build_coordination_snapshot(roles, tasks, recent_work)
@@ -15380,6 +15420,13 @@ def get_artifact_pdf(artifact_id: str) -> Response:
 @app.get("/v1/roles", response_model=RoleListResponse)
 @permit(P.AGENT_READ, scope=Scope.project(query="project_id"))
 def list_roles(project_id: str) -> RoleListResponse:
+    return role_list(project_id)
+
+
+def role_list(project_id: str) -> RoleListResponse:
+    """list_roles, for callers inside the API.
+
+    A route handler is FastAPI's to call (test_no_code_calls_a_route_handler)."""
     with begin(engine) as connection:
         roles = specpack.list_roles_for_project(connection, project_id)
         return RoleListResponse(
@@ -20643,6 +20690,13 @@ def run_iac_verify(payload: IacVerifyRequest) -> IacVerifyResponse:
     a missing toolchain binary fails the corresponding step rather than silently skipping.
     Input paths are relative-only and confined to a disposable workdir.
     """
+    return verify_iac(payload)
+
+
+def verify_iac(payload: IacVerifyRequest) -> IacVerifyResponse:
+    """run_iac_verify, for callers inside the API.
+
+    A route handler is FastAPI's to call (test_no_code_calls_a_route_handler)."""
     import tempfile
     from pathlib import Path
 
@@ -20676,7 +20730,7 @@ def run_iac_plan(payload: IacVerifyRequest) -> IacVerifyResponse:
     Terraform/OpenTofu ``plan -refresh=false`` is step ``plan_dry``; there is no separate
     plan-only binary path because plan depends on init/validate graph resolution.
     """
-    return run_iac_verify(payload)
+    return verify_iac(payload)
 
 
 @app.get("/v1/resource-receipts", response_model=ResourceReceiptListResponse)
@@ -21273,6 +21327,14 @@ def run_resource_janitor(payload: ResourceJanitorRunRequest) -> ResourceJanitorR
 @app.get("/v1/deployments", response_model=DeploymentTargetListResponse)
 @permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def list_deployment_targets(project_id: str, limit: int = 50, offset: int = 0) -> DeploymentTargetListResponse:
+    return deployment_target_list(project_id, limit, offset)
+
+
+def deployment_target_list(project_id: str, limit: int = 50,
+                           offset: int = 0) -> DeploymentTargetListResponse:
+    """list_deployment_targets, for callers inside the API.
+
+    A route handler is FastAPI's to call (test_no_code_calls_a_route_handler)."""
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
     if offset < 0:
@@ -23151,6 +23213,15 @@ def create_decision_digest(payload: DecisionDigestRequest) -> DecisionDigestResp
 def approve_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
+    return approve_decision_card(decision_id, payload)
+
+
+def approve_decision_card(
+    decision_id: str, payload: DecisionActionRequest
+) -> DecisionCard:
+    """approve_decision, for callers inside the API.
+
+    A route handler is FastAPI's to call (test_no_code_calls_a_route_handler)."""
     from boss_engine.identity.approvals import ApprovalPending
 
     with begin(engine) as connection:
@@ -26200,13 +26271,14 @@ def set_delivery_run_input(run_id: str, payload: WorkflowRunInputBody) -> dict:
 
 @app.post("/v1/delivery-workflows/start")
 @permit(P.WORKFLOW_RUN_START, scope=Scope.project(body="project_id"))
-def start_delivery_workflow_route(payload: WorkflowStartBody) -> dict:
+def start_delivery_workflow_endpoint(payload: WorkflowStartBody) -> dict:
     """Launch a piece of work on a workflow."""
     return start_delivery_workflow(payload)
 
 
 def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = None) -> dict:
-    """THE start path behind POST /v1/delivery-workflows/start.
+    """THE start path behind POST /v1/delivery-workflows/start: the one door, for HTTP and the
+    chat's start card (a route handler is FastAPI's to call: test_no_code_calls_a_route_handler).
 
     `connection_in`: run every read and the start itself in the CALLER's transaction (a
     template apply writes its secret bindings and application row in the same one, so a refusal
@@ -29776,13 +29848,17 @@ def agents_org_board_handoffs(project_id: str, days: int = 7, source: str = "",
 
 
 def _etagged(request: Request, response: Response, body: dict):
+    """The body, ETag'd. `body` is ALREADY jsonable_encoder'd by every caller, so it is sent as it
+    is: returning the dict made FastAPI encode it a second time — ~20 ms of the 472 KB
+    /v1/factory/apps answer on the seeded stack (console-latency fix, 2026-10-09)."""
     etag = str(body.get("etag") or "")
     if etag and request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers={"ETag": etag})
+    headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
     if etag:
-        response.headers["ETag"] = etag
-    response.headers["Cache-Control"] = "no-cache"
-    return body
+        headers["ETag"] = etag
+    headers["Cache-Control"] = "no-cache"
+    return JSONResponse(content=body, headers=headers)
 
 
 @app.get("/v1/factory/floor")
@@ -30449,6 +30525,17 @@ from .routers.identity_access import build_identity_access_router  # noqa: E402 
 app.include_router(build_identity_access_router(engine))
 # One request id per request (outermost, pure ASGI): on every security event and echoed back.
 app.add_middleware(RequestIdMiddleware)
+# What each request cost (SQL statements, their time, the identity guard's share): outermost, so it
+# sees everything; emitted as Server-Timing under BOSS_SERVER_TIMING, read by the budget tests.
+from .request_metrics import RequestMetricsMiddleware  # noqa: E402
+
+app.add_middleware(RequestMetricsMiddleware)
+# Identity facts read once per request (session, principal status, epoch, project's org), not once
+# per check: boss_engine/identity/request_memo.py. Outermost, so the transport step, the guard and
+# the handler all share the request's one memo.
+from boss_engine.identity.request_memo import RequestMemoMiddleware  # noqa: E402
+
+app.add_middleware(RequestMemoMiddleware)
 from .routers.identity_access import declare_framework_routes  # noqa: E402  (identity S2)
 
 declare_framework_routes(app)

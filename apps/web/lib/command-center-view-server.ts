@@ -45,8 +45,35 @@ export async function fetchCommandCenterApps(projectId: string, enabled = true):
     const r = await fetch(`${API_URL}/v1/factory/apps?project_id=${encodeURIComponent(projectId)}`,
                           { headers: authHeaders({}), cache: "no-store" });
     if (!r.ok) return null;
-    return { wire: await r.json(), etag: r.headers.get("etag") };
+    return { wire: slimCcAppsWire(await r.json()), etag: r.headers.get("etag") };
   } catch {
     return null;
   }
+}
+
+/**
+ * The Factory's apps as the Command Center's FIRST PAINT needs them (console-latency fix,
+ * 2026-10-09). /v1/factory/apps draws every attempt of every app with its whole station line —
+ * ~470 KB for 35 apps on the seeded stack — and the server render serialised all of it into the
+ * Overview's HTML (1.16 MB). parseCcApps reads an attempt's run_id and state and nothing else, so
+ * that is all that ships; the poll after it (same ETag) parses the full answer to the same
+ * cards. tests/command-center-ships-slim-apps.test.ts pins it against parseCcApps.
+ */
+export function slimCcAppsWire(wire: unknown): unknown {
+  if (!wire || typeof wire !== "object" || !Array.isArray((wire as { apps?: unknown }).apps)) return wire;
+  const w = wire as { apps: unknown[] };
+  return {
+    ...w,
+    apps: w.apps.map((app) => {
+      if (!app || typeof app !== "object") return app;
+      const a = app as Record<string, unknown>;
+      const attempts = Array.isArray(a.attempts)
+        ? a.attempts.map((x) => {
+            const y = (x && typeof x === "object" ? x : {}) as Record<string, unknown>;
+            return { run_id: y.run_id, state: y.state };
+          })
+        : a.attempts;
+      return { ...a, attempts };
+    }),
+  };
 }
