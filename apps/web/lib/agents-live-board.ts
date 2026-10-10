@@ -91,7 +91,7 @@ export type AttentionItem = {
   /** system_health: the finding the options act on, and how bad it is. */
   findingId?: string;
   severity?: "info" | "warn" | "critical";
-  /** infra (infra-observability spec §2.2): `deploy_failed` | `app_down` | `host_unreachable`;
+  /** infra (infra-observability spec §2.2): `deploy_failed` | `app_down` | `app_errors` | `host_unreachable`;
    *  its answers are pressed through POST /v1/infra/attention/act. `open` is the console href of
    *  its home (`?area=infra&view=deploys&deploy=…`); `area` says which screen it belongs to. */
   infraKind?: string;
