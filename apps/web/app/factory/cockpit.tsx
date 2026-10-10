@@ -48,6 +48,7 @@ import { StationLine } from "./station-line";
 import { Story, bayLabel } from "./story";
 import { plural } from "../../lib/factory-floor";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
+import { ChangeSetCockpit, useRunChangeSet } from "../multirepo/change-set-cockpit";
 
 export type CockpitProps = {
   projectId: string;
@@ -111,13 +112,20 @@ function usePaused(): boolean {
 
 export function Cockpit({ projectId, runId, actor, onClose, onOpenBuild }: CockpitProps) {
   const { data, error, loading, refresh } = useCockpit(projectId, runId, actor);
+  // A build that is one lane of a multi-repo change opens the change's cockpit (every lane, one
+  // set of PRs); an ordinary build is answered 404 and keeps this page exactly as it was.
+  const changeSet = useRunChangeSet(projectId, runId);
   // Before the build has loaded (or while BOSS can't be reached) Esc still goes back.
   useEffect(() => {
-    if (data) return undefined;
+    if (data || changeSet) return undefined;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); onClose(); } };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [data, onClose]);
+  }, [data, changeSet, onClose]);
+  if (changeSet) {
+    return <ChangeSetCockpit key={changeSet.id} projectId={projectId} changeSetId={changeSet.id} initial={changeSet}
+                             actor={actor} onClose={onClose} />;
+  }
   if (!data) {
     if (error && !loading) {
       return (

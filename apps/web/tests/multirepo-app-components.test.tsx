@@ -137,3 +137,120 @@ describe("the app row opens its Components", () => {
     expect(opened).toEqual(["storefront"]);
   });
 });
+
+// ── What is live, and "New change" (screens 4 → 5) ──────────────────────────────────────────
+
+const CONSENT_409 = {
+  error: "consent_required", task: "Storefront: Add saved carts", task_run_id: "pending:Cs01",
+  agents: [{ id: "agt_helm", name: "Helm", role_key: "builder" }], permissions: ["code_task:create"], projects: ["p1"],
+  github: { repo: "acme/web", repos: ["acme/contracts", "acme/api", "acme/web", "acme/infra"],
+            permissions: { contents: "write", pull_requests: "write" }, summary: "code write · pushes only to boss/*" },
+  durations: [{ kind: "task", label: "For this change only", days: null }, { kind: "standing", label: "For 30 days", days: 30 }],
+  max_days: 90,
+  multirepo: {
+    app_key: "storefront", app_name: "Storefront", run_label: "Add saved carts",
+    repos: [{ full_name: "acme/contracts", access: "write", components: ["contracts"], words: "" },
+            { full_name: "acme/api", access: "write", components: ["backend"], words: "" },
+            { full_name: "acme/web", access: "write", components: ["frontend"], words: "" },
+            { full_name: "acme/infra", access: "read", components: ["deploy"], words: "" }],
+    unreachable: ["acme/mobile"], how: "", lasts: "", never: "",
+  },
+};
+
+describe("App › Components: what is live and New change", () => {
+  it("each component says its health and live version", async () => {
+    const data = componentsFixture();
+    data.components = data.components.map((c) => ({ ...c, status:
+      c.name === "backend" ? { live: "v2.31.0", ships_to: "api.acme.shop", health: "healthy" as const, target_id: "tgt_api" }
+      : c.name === "frontend" ? { live: "2026.10.08-3", ships_to: "shop.acme.com", health: "failing" as const, target_id: "tgt_web" }
+      : { live: "1.3.2", ships_to: "npm @acme/contracts", health: "published" as const, target_id: null } }));
+    api(data);
+    await mount("viewer");
+    expect(tid("mr-cmp-health-backend")?.textContent).toBe("Healthy");
+    expect(tid("mr-cmp-health-backend")?.dataset.tone).toBe("ok");
+    expect(tid("mr-cmp-health-frontend")?.textContent).toBe("Failing");
+    expect(tid("mr-cmp-health-frontend")?.dataset.tone).toBe("bad");
+    expect(tid("mr-cmp-health-contracts")?.textContent).toBe("Published");
+    expect(tid("mr-cmp-live-backend")?.textContent).toBe("v2.31.0");
+    expect(tid("mr-cmp-live-contracts")?.textContent).toBe("1.3.2");
+  });
+
+  it("nothing shipped yet: no pill, live —", async () => {
+    const data = componentsFixture();
+    data.components = data.components.map((c) => ({ ...c, status: {} }));
+    api(data);
+    await mount();
+    expect(tid("mr-cmp-health-backend")).toBeNull();
+    expect(tid("mr-cmp-live-backend")?.textContent).toBe("—");
+  });
+
+  it("a recent change links to its cockpit", async () => {
+    api({ ...componentsFixture(), change_sets: [{ id: "rcs_1", title: "Add saved carts", state: "building", repos: ["api"], prs: 1 }] });
+    await mount();
+    const href = tid("mr-cmp-open-change-rcs_1")?.getAttribute("href") ?? "";
+    expect(href).toContain("area=code_tasks");
+    expect(href).toContain("changeset=rcs_1");
+  });
+
+  it("New change opens the sheet and starts a change set; a 409 asks consent, then sends it again", async () => {
+    const { ConsentHost } = await import("../components/identity/consent-sheet");
+    let starts = 0;
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign, href: window.location.href, search: "" });
+    const calls = stubFetch((c) => {
+      if (c.method === "GET" && c.path === "/v1/apps/storefront/components") return { body: componentsFixture() };
+      if (c.method === "GET" && c.path === "/v1/projects/p1/repos") return { body: projectReposFixture() };
+      if (c.method === "POST" && c.path === "/v1/apps/storefront/change-sets") {
+        starts += 1;
+        return starts === 1 ? { status: 409, body: CONSENT_409 } : { status: 201, body: { id: "rcs_9", lanes: [] } };
+      }
+      if (c.method === "POST" && c.path === "/v1/identity/me/delegations") return { status: 201, body: { id: "dlg_1" } };
+      return undefined;
+    });
+    await mountAs(<><AppComponentsView projectId="p1" appKey="storefront" onBack={() => {}} /><ConsentHost /></>, "operator");
+    expect(tid("mr-cmp-new")?.title).toBe("One change across Storefront's repositories: planned, built and reviewed as one set");
+    await click(tid("mr-cmp-new"));
+    expect(tid("mr-new-change")).not.toBeNull();
+    expect((tid("mr-new-change-start") as HTMLButtonElement).disabled).toBe(true);
+    await type(tid("mr-new-change-title"), "Add saved carts");
+    await type(tid("mr-new-change-what"), "Shoppers save a cart and share it.");
+    await click(tid("mr-new-change-start"));
+    const first = calls.find((c) => c.method === "POST" && c.path === "/v1/apps/storefront/change-sets")!;
+    expect(first.body).toEqual({ project_id: "p1", title: "Add saved carts", instructions: "Shoppers save a cart and share it.", remember: true });
+    // The 409 opened the consent sheet with its multi-repo layout.
+    expect(tid("consent-multirepo")).not.toBeNull();
+    expect(tid("consent-mr-repo-acme/infra")).not.toBeNull();
+    await click(tid("consent-mr-allow"));
+    expect(calls.some((c) => c.path === "/v1/identity/me/delegations")).toBe(true);
+    const starts2 = calls.filter((c) => c.method === "POST" && c.path === "/v1/apps/storefront/change-sets");
+    expect(starts2).toHaveLength(2);
+    expect(starts2[1].body).toEqual(first.body);
+    expect(assign).toHaveBeenCalledTimes(1);
+    expect(String(assign.mock.calls[0][0])).toContain("changeset=rcs_9");
+  });
+
+  it("cancelling consent starts nothing and says so", async () => {
+    const { ConsentHost } = await import("../components/identity/consent-sheet");
+    const calls = stubFetch((c) => {
+      if (c.method === "GET" && c.path === "/v1/apps/storefront/components") return { body: componentsFixture() };
+      if (c.method === "POST" && c.path === "/v1/apps/storefront/change-sets") return { status: 409, body: CONSENT_409 };
+      return undefined;
+    });
+    await mountAs(<><AppComponentsView projectId="p1" appKey="storefront" onBack={() => {}} /><ConsentHost /></>, "owner");
+    await click(tid("mr-cmp-new"));
+    await type(tid("mr-new-change-title"), "Add saved carts");
+    await click(tid("mr-new-change-start"));
+    await click(tid("consent-mr-cancel"));
+    expect(calls.filter((c) => c.method === "POST" && c.path === "/v1/apps/storefront/change-sets")).toHaveLength(1);
+    expect(tid("mr-new-change-error")?.textContent).toBe("Not started: the agents need your consent for these repositories first.");
+  });
+
+  it.each([["viewer"], ["auditor"]] as const)("a %s sees New change disabled and why", async (role) => {
+    api();
+    await mount(role);
+    expect(tid("mr-cmp-new")?.getAttribute("aria-disabled")).toBe("true");
+    expect(tid("mr-cmp-new")?.title).toBe(needsWords("code_task:create"));
+    await click(tid("mr-cmp-new"));
+    expect(tid("mr-new-change")).toBeNull();
+  });
+});

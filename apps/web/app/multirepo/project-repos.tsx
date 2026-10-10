@@ -82,8 +82,9 @@ export function ProjectRepositories({ projectId }: { projectId: string }) {
                 const on = view.repo_mode === m;
                 return (
                   <button key={m} type="button" role="radio" aria-checked={on} data-testid={`mr-prj-mode-${m}`}
-                          disabled={!!busy} {...gate.props}
-                          title={gate.allowed ? (m === "single" ? "Every app builds in one repository" : "Each app maps its components to repositories") : gate.reason}
+                          disabled={!!busy}
+                          title={m === "single" ? "Every app builds in one repository" : "Each app maps its components to repositories"}
+                          {...gate.props}
                           onClick={gate.guard(() => {
                             if (on) return;
                             void write("mode", "Change how this project's apps use repositories.",

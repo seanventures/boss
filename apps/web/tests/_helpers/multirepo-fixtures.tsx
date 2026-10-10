@@ -11,7 +11,9 @@ import { vi } from "vitest";
 import { IdentityProvider } from "../../components/identity/identity-provider";
 import type { MePermissionsResponse, MeResponse } from "../../lib/identity/contract";
 import { ROLE_PERMISSIONS } from "../../lib/identity/permissions.gen";
-import type { AppComponents, ProjectRepos, Registry, RegistryRepo } from "../../lib/multirepo";
+import type {
+  AppComponents, ChangeSetView, DeployPlan, Lane, ProjectRepos, Registry, RegistryRepo,
+} from "../../lib/multirepo";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -91,6 +93,149 @@ export function componentsFixture(): AppComponents {
                       access: "read", kind: "deploy_config", depends_on: [], ship_target: { kind: "none" }, order: null }],
     waves: [["contracts"], ["backend"], ["frontend"]],
     change_sets: [],
+  };
+}
+
+// ── A change across the three repositories (mockup 05–08: "Add saved carts") ────────────────
+
+const steps = (states: string[]) => ["sandbox", "code", "tests", "review", "pr"].map((key, i) => ({
+  key, label: ["Sandbox", "Code", "Tests", "Review", "PR"][i], state: states[i] ?? "waiting",
+}));
+function lane(order: number, name: string, comps: string[], extra: Partial<Lane> = {}): Lane {
+  return {
+    id: `lane_${name}`, order, full_name: `acme/${name}`, components: comps, wave: order, lane_state: "waiting",
+    steps: steps([]), code_task_run_id: `crun_${name}`, phase: null, pr_number: null, pr_url: null,
+    branch: "boss/r1482-saved-carts", base_branch: "main", head_sha: null, additions: null, deletions: null,
+    changed_files: null, ci_state: null, review_state: null, findings: [], waiting_for: [], error: null,
+    merged_sha: null, revert_pr_number: null, plan: [], ...extra,
+  };
+}
+const PLAN = [
+  { name: "contracts", change: "Add SavedCart and ShareLink; version 1.4.0", interface: "Cart, SavedCart, ShareLink messages", unchanged: false },
+  { name: "backend", change: "PUT/GET /carts/saved, POST /carts/saved/share; owner check; migration 0042", interface: "pins @acme/contracts 1.4.0-r1482", unchanged: false },
+  { name: "frontend", change: "“Save for later” button, saved cart page, share dialog", interface: null, unchanged: false },
+];
+
+/** Building: contracts has its PR, api is in Tests, web waits for api (mockup 05). */
+export function changeSetFixture(extra: Partial<ChangeSetView> = {}): ChangeSetView {
+  return {
+    id: "rcs_1", project_id: "p1", app_key: "storefront", app_name: "Storefront", title: "Storefront: Add saved carts",
+    mode: "multi", state: "building", blocked_reason: null, error: null,
+    stage: { current: "build", steps: [
+      { key: "plan", label: "Plan", state: "done" }, { key: "build", label: "Build · 1 of 3", state: "active" },
+      { key: "review", label: "Review set", state: "waiting" }, { key: "approve", label: "You approve", state: "waiting" },
+      { key: "deploy", label: "Deploy together", state: "waiting" }] },
+    lanes: [
+      lane(1, "contracts", ["contracts"], { lane_state: "ready", steps: steps(["done", "done", "done", "done", "done"]), pr_number: 88,
+        pr_url: "https://github.com/acme/contracts/pull/88", head_sha: "aaa1111", additions: 64, deletions: 3, changed_files: 2,
+        ci_state: "success", review_state: "passed", plan: [PLAN[0]],
+        findings: [{ severity: "note", body: "ShareLink.expires_at has no max. Fine for now; API enforces 30 days.", path: null, line: null, author: "Sentinel", status: "open", stage: "review" }] }),
+      lane(2, "api", ["backend"], { lane_state: "building", steps: steps(["done", "done", "active"]), phase: "running_tests",
+        additions: 412, deletions: 58, changed_files: 11, plan: [PLAN[1]] }),
+      lane(3, "web", ["frontend"], { waiting_for: ["api"], plan: [PLAN[2]] }),
+    ],
+    plan: { summary: "Saved carts across contracts, api and web.", components: PLAN, by: "Atlas", at: "2026-10-10T09:20:00Z" },
+    cross_check: null,
+    grant: { repos: [{ full_name: "acme/contracts", access: "write" }, { full_name: "acme/api", access: "write" },
+                     { full_name: "acme/web", access: "write" }, { full_name: "acme/infra", access: "read" }],
+             consented_by: "Param", remember: true, expires_at: null, ended_at: null, token_lifetime_minutes: 60 },
+    decision: null, approved_shas: null, approved_by: null, approved_at: null, release: {},
+    cost_usd: 6.4, minutes: 38, created_at: "2026-10-10T09:20:00Z", updated_at: "2026-10-10T09:58:00Z",
+    ...extra,
+  };
+}
+
+/** Every PR open; a high finding on api and a failed cross-repo check hold the set (mockup 06). */
+export function blockedSetFixture(): ChangeSetView {
+  const base = changeSetFixture();
+  const ready = (l: Lane, n: number, a: number, d: number, f: number, findings: Lane["findings"] = []) => ({
+    ...l, lane_state: "ready", steps: steps(["done", "done", "done", "done", "done"]), pr_number: n,
+    pr_url: `https://github.com/${l.full_name}/pull/${n}`, head_sha: `sha${n}`, additions: a, deletions: d, changed_files: f,
+    ci_state: "success", review_state: "passed", waiting_for: [], findings,
+  });
+  return {
+    ...base, state: "blocked",
+    blocked_reason: "Cross-repo check failed: web calls DELETE /carts/saved/{id}; the contract has no such endpoint. The whole set waits.",
+    stage: { current: "review", steps: base.stage.steps.map((s) => (s.key === "plan" || s.key === "build" ? { ...s, state: "done", label: s.key === "build" ? "Build · 3 of 3" : s.label }
+      : s.key === "review" ? { ...s, state: "failed" } : s)) },
+    lanes: [
+      ready(base.lanes[0], 88, 64, 3, 2, [{ severity: "pass", body: "Additive only. No field renumbered; old clients still decode.", author: "Vera", status: "open" }]),
+      ready(base.lanes[1], 412, 412, 58, 11, [
+        { severity: "high", body: "GET /carts/saved/{id} loads by id without checking the owner.", path: "handlers/saved.go", line: 48, author: "Sentinel", status: "open" },
+        { severity: "medium", body: "Migration 0042 locks carts; add CONCURRENTLY to the index.", author: "Vera", status: "fixed" }]),
+      ready(base.lanes[2], 977, 538, 21, 14, [{ severity: "medium", body: "Share dialog copies the link without saying it is public.", author: "Sentinel", status: "fixed" }]),
+    ],
+    cross_check: { verdict: "fail", passed: 4, total: 5, at: "2026-10-10T10:00:00Z", results: [
+      { name: "api implements every new contract endpoint", detail: "3 of 3", pass: true, kind: "contract" },
+      { name: "Versions pinned to the same contract build", detail: "api and web both use @acme/contracts 1.4.0-r1482", pass: true, kind: "pins" },
+      { name: "web calls only what the contract defines", detail: "web calls DELETE /carts/saved/{id}; the contract has no such endpoint", pass: false, kind: "callers" },
+      { name: "Deploy order is safe", detail: "contracts additive → api migration reversible → web behind flag", pass: true, kind: "order" },
+      { name: "Every PR links the others", detail: "3 of 3 descriptions list the set", pass: true, kind: "links" },
+    ] },
+  };
+}
+
+/** In review: everything green, one decision asked. */
+export function inReviewFixture(): ChangeSetView {
+  const b = blockedSetFixture();
+  return {
+    ...b, state: "in_review", blocked_reason: null, cost_usd: 11.8,
+    lanes: b.lanes.map((l) => ({ ...l, findings: l.findings.map((f) => ({ ...f, status: f.severity === "high" ? "fixed" : f.status })) })),
+    cross_check: b.cross_check ? { ...b.cross_check, verdict: "pass", passed: 5, results: b.cross_check.results.map((r) => ({ ...r, pass: true })) } : null,
+    decision: { id: "dec_cs", status: "pending", created_at: "2026-10-10T10:05:00Z" },
+  };
+}
+
+export function deployPlanFixture(extra: Partial<DeployPlan> = {}): DeployPlan {
+  return {
+    change_set_id: "rcs_1", title: "Storefront: Add saved carts", app_name: "Storefront", app_key: "storefront",
+    state: "merged", status: "planned", environment: "production", host: "eu-west-1", ready: true, problems: [],
+    waves: [
+      { order: 1, lane_id: "lane_contracts", components: ["contracts"], repository: "acme/contracts", kind: "merge",
+        ship: { kind: "package", label: "npm", package: "@acme/contracts" }, from: "1.3.2", to: "1.4.0", status: "planned",
+        steps: [{ icon: "check", text: "Publish @acme/contracts 1.4.0" }, { icon: "check", text: "Additive: old api and web still work" }],
+        rollback: "Unpublish → 1.3.2 stays latest" },
+      { order: 2, lane_id: "lane_api", components: ["backend"], repository: "acme/api", kind: "host", from: "v2.31.0", to: "v2.32.0",
+        status: "planned", host: "eu-west-1", target_id: "tgt_api",
+        steps: [{ icon: "deploy", text: "Deploy v2.32.0 to api.acme.shop" }, { icon: "health", text: "Health check must pass, else this wave rolls back" }],
+        rollback: "Previous release v2.31.0" },
+      { order: 3, lane_id: "lane_web", components: ["frontend"], repository: "acme/web", kind: "host", from: "2026.10.08-3", to: "2026.10.10-1",
+        status: "planned", host: "eu-west-1", target_id: "tgt_web",
+        steps: [{ icon: "deploy", text: "Deploy shop.acme.com" }, { icon: "health", text: "Smoke: 6 Playwright checks" }],
+        rollback: "Previous build" },
+    ],
+    rollback: [
+      { order: 3, repository: "acme/web", components: ["frontend"], text: "frontend → Previous build", status: "ready" },
+      { order: 2, repository: "acme/api", components: ["backend"], text: "backend → Previous release v2.31.0", status: "ready" },
+      { order: 1, repository: "acme/contracts", components: ["contracts"], text: "contracts → Unpublish → 1.3.2 stays latest", status: "ready" },
+    ],
+    auto_rollback: "If a deploy fails or its health check fails, every component already deployed in this release goes back to its previous release, newest first.",
+    approved_by: "Param", started_at: null, finished_at: null, ...extra,
+  };
+}
+
+/** The Approvals row for a set (engine change_sets._ask). */
+export function changeSetDecision(extra: Record<string, unknown> = {}) {
+  const prs = [
+    { repository: "acme/contracts", pr_number: 88, pr_url: "https://github.com/acme/contracts/pull/88", head_sha: "sha88", additions: 64, deletions: 3, components: ["contracts"] },
+    { repository: "acme/api", pr_number: 412, pr_url: "https://github.com/acme/api/pull/412", head_sha: "sha412", additions: 431, deletions: 58, components: ["backend"] },
+    { repository: "acme/web", pr_number: 977, pr_url: "https://github.com/acme/web/pull/977", head_sha: "sha977", additions: 541, deletions: 21, components: ["frontend"] },
+  ];
+  return {
+    id: "dec_cs", status: "pending", question: "Ship a change · Storefront: Storefront: Add saved carts", riskTier: 2,
+    recommendation: {
+      action: "approve_change_set", change_set_id: "rcs_1", app_key: "storefront", app_name: "Storefront",
+      title: "Storefront: Add saved carts", pull_requests: prs, head_shas: Object.fromEntries(prs.map((p) => [p.repository, p.head_sha])),
+      summary: "One decision for all 3 pull requests.",
+      action_preview: { kind: "fields", content_hash: "hash_heads_v1", fields: prs.map((p) => ({ label: p.repository, value: `#${p.pr_number}` })) },
+    },
+    options: [], costSummary: {}, createdAt: "2026-10-10T10:05:00Z", updatedAt: "2026-10-10T10:05:00Z",
+    allowedActions: [
+      { action: "approve", label: "Approve and ship all 3", tone: "approve", effect: "Merges every pull request of the set.", needs: null },
+      { action: "revise", label: "Send back", tone: "neutral", effect: "Every pull request gets a fix build from your note.", needs: "note" },
+      { action: "reject", label: "Reject", tone: "reject", effect: "Nothing is merged or deployed.", needs: null },
+    ],
+    ...extra,
   };
 }
 

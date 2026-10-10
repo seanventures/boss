@@ -18,9 +18,11 @@ import { ArrowLeft, ArrowRight, FileCode, LockKey, PencilSimple, Plus, Warning }
 import { GatedButton } from "../../components/gated";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import {
-  MULTIREPO_PLACES, agoWords, buildOrder, listWords, multirepo, refusalMessage, shipsTo, stateWords,
-  type AppComponent, type AppComponents, type ProjectRepo,
+  CHANGE_SET_PLACES, MULTIREPO_PLACES, agoWords, buildOrder, changeTone, changeWord, listWords, multirepo, refusalCode, refusalMessage,
+  shipsTo, stateWords, type AppComponent, type AppComponents, type ComponentStatus, type ProjectRepo,
 } from "../../lib/multirepo";
+import { withConsent } from "../../lib/identity/consent";
+import { Sheet } from "../../components/identity/kit";
 import { NEW_BUILD_TIP } from "../../lib/compose-links";
 import { useNow } from "../agents/live-util";
 import { areaHref } from "../factory/cockpit-util";
@@ -48,6 +50,7 @@ export function AppComponentsView({ projectId, appKey, onBack }: { projectId: st
   const [editing, setEditing] = useState<MapRow[] | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(false);
   const guarded = useGuardedCall();
   const now = useNow(60_000);
 
@@ -132,11 +135,19 @@ export function AppComponentsView({ projectId, appKey, onBack }: { projectId: st
             {code.length || deploy.length ? " Edit components" : " Add component"}
           </GatedButton>
         )}
-        <GatedButton permission="workflow_run:start" className="ag-btn ag-btn-primary" data-testid="mr-cmp-new"
-                     title={NEW_BUILD_TIP}
-                     onClick={() => { window.location.assign(areaHref({ area: "delivery_workflows", compose: "add", app: appKey })); }}>
-          New change
-        </GatedButton>
+        {code.length > 1 ? (
+          <GatedButton permission="code_task:create" className="ag-btn ag-btn-primary" data-testid="mr-cmp-new"
+                       title={`One change across ${app}'s repositories: planned, built and reviewed as one set`}
+                       onClick={() => setAsking(true)}>
+            <Plus size={13} aria-hidden /> New change
+          </GatedButton>
+        ) : (
+          <GatedButton permission="workflow_run:start" className="ag-btn ag-btn-primary" data-testid="mr-cmp-new"
+                       title={NEW_BUILD_TIP}
+                       onClick={() => { window.location.assign(areaHref({ area: "delivery_workflows", compose: "add", app: appKey })); }}>
+            New change
+          </GatedButton>
+        )}
       </div>
 
       {editing ? (
@@ -182,14 +193,17 @@ export function AppComponentsView({ projectId, appKey, onBack }: { projectId: st
                     <span className="mr-cmp-ord" aria-label={`Builds ${n === 1 ? "first" : `#${n}`}`}>{n}</span>
                     <span data-user-text>{c.name}</span>
                     <span className="mr-ui-spacer" />
-                    {st ? <span className="mr-ui-pill" data-tone={st.tone} title="The repository is no longer active in this project">Inactive</span> : null}
+                    {st ? <span className="mr-ui-pill" data-tone={st.tone} title="The repository is no longer active in this project">Inactive</span>
+                      : <HealthPill status={c.status} testId={`mr-cmp-health-${c.name}`} />}
                   </h4>
                   <RepoName name={c.repository || repo?.full_name || "—"} sub={<Lang lang={repo?.language} />} />
                   <dl>
                     <dt>Path <TipQ tip="Folder inside the repository. Lets a monorepo hold several components." /></dt>
                     <dd className="mr-ui-mono">{c.path || "/"}</dd>
-                    <dt>Live</dt><dd className="mr-ui-mono" title="The version running now, once a deploy records one">—</dd>
-                    <dt>Ships to</dt><dd title={shipsTo(c.ship_target)}>{shipsTo(c.ship_target)}</dd>
+                    <dt>Live</dt>
+                    <dd className="mr-ui-mono" data-testid={`mr-cmp-live-${c.name}`}
+                        title={c.status?.live ? "The version running now" : "Nothing deployed or published yet"}>{c.status?.live || "—"}</dd>
+                    <dt>Ships to</dt><dd title={c.status?.ships_to || shipsTo(c.ship_target)}>{c.status?.ships_to || shipsTo(c.ship_target)}</dd>
                     <dt>Needs</dt><dd>{c.depends_on?.length ? c.depends_on.join(", ") : "—"}</dd>
                   </dl>
                 </div>
@@ -232,7 +246,8 @@ export function AppComponentsView({ projectId, appKey, onBack }: { projectId: st
                     return (
                       <tr key={cs.id} data-testid={`mr-cmp-change-${cs.id}`}>
                         <td>
-                          <b data-user-text>{cs.title || cs.id}</b>
+                          <a className="mr-ui-link" href={areaHref(CHANGE_SET_PLACES.cockpit(cs.id))} data-testid={`mr-cmp-open-change-${cs.id}`}
+                             title="Open this change: its lanes and pull requests"><b data-user-text>{cs.title || cs.id}</b></a>
                           <span className="mr-ui-when">{prs ? `${prs} ${prs === 1 ? "PR" : "linked PRs"}` : "No PR yet"}</span>
                         </td>
                         <td>
@@ -266,18 +281,95 @@ export function AppComponentsView({ projectId, appKey, onBack }: { projectId: st
           </div>
         </div>
       </div>
+      {asking ? (
+        <NewChangeSheet projectId={projectId} appKey={data.app_key || appKey} app={app}
+                        repos={writeRepos} onClose={() => setAsking(false)} />
+      ) : null}
     </div>
   );
 }
 
-const CHANGE_WORDS: Record<string, [string, "ok" | "warn" | "bad" | "muted" | "info"]> = {
-  planned: ["Planned", "muted"], building: ["Building", "info"], in_review: ["In review", "info"],
-  approved: ["Approved", "ok"], merging: ["Merging", "info"], merged: ["Merged", "ok"], deploying: ["Deploying", "info"],
-  live: ["Live", "ok"], rolled_back: ["Rolled back", "warn"], failed: ["Failed", "bad"],
+
+const HEALTH: Record<string, { label: string; tone: "ok" | "bad" | "info"; tip: string }> = {
+  healthy: { label: "Healthy", tone: "ok", tip: "The last deploy passed its health check" },
+  failing: { label: "Failing", tone: "bad", tip: "The last deploy failed or its health check failed" },
+  deploying: { label: "Deploying", tone: "info", tip: "A deploy is running now" },
+  published: { label: "Published", tone: "ok", tip: "Released by the merge (a package or no host)" },
 };
-function changeWord(state?: string | null): string {
-  return CHANGE_WORDS[state ?? ""]?.[0] ?? (state ? state.replace(/_/g, " ") : "—");
+function HealthPill({ status, testId }: { status?: ComponentStatus | null; testId: string }) {
+  const h = status?.health ? HEALTH[status.health] : null;
+  if (!h) return null;
+  return <span className="mr-ui-pill" data-tone={h.tone} title={h.tip} data-testid={testId}>{h.label}</span>;
 }
-function changeTone(state?: string | null) {
-  return CHANGE_WORDS[state ?? ""]?.[1] ?? "muted";
+
+/**
+ * "New change" on a multi-repo app: what should change, sent as one change set
+ * (POST /v1/apps/{app}/change-sets). A first change asks consent for exactly the app's
+ * repositories (409 consent_required: the consent sheet), then is sent again unchanged.
+ */
+function NewChangeSheet({ projectId, appKey, app, repos, onClose }: {
+  projectId: string; appKey: string; app: string; repos: string[]; onClose: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [remember, setRemember] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const guarded = useGuardedCall();
+  const start = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const body = { title: title.trim(), ...(instructions.trim() ? { instructions: instructions.trim() } : {}), remember };
+      const cs = await withConsent(() => guarded(`Start a change on ${app}.`, () => multirepo.startChangeSet(projectId, appKey, body)));
+      showToast("success", "Change started");
+      onClose();
+      window.location.assign(areaHref(CHANGE_SET_PLACES.cockpit(cs.id)));
+    } catch (err) {
+      if ((err as { code?: string }).code !== "step_up_cancelled") {
+        setError(refusalCode(err) === "consent_required"
+          ? "Not started: the agents need your consent for these repositories first."
+          : refusalMessage(err));
+      }
+      setBusy(false);
+    }
+  };
+  return (
+    <Sheet title={`New change · ${app}`} onClose={onClose} testId="mr-new-change">
+      <form className="mr-cs-body" onSubmit={(e) => void start(e)}>
+        <p className="mr-cs-subtitle" style={{ margin: 0 }}>
+          BOSS plans it across {repos.length ? listWords(repos) : "the app's repositories"}, builds each in order and opens
+          linked pull requests you approve once.
+        </p>
+        <label className="mr-ui-col" style={{ gap: 6 }}>
+          <span className="mr-ui-sub"><b>Title</b></span>
+          <input className="mr-ui-input" value={title} onChange={(e) => setTitle(e.target.value)} data-autofocus
+                 placeholder="Add saved carts" data-testid="mr-new-change-title" maxLength={160} />
+        </label>
+        <label className="mr-ui-col" style={{ gap: 6 }}>
+          <span className="mr-ui-sub"><b>What should change</b> (optional)</span>
+          <textarea className="mr-ui-input" style={{ height: 96, padding: 10, resize: "vertical" }} value={instructions}
+                    onChange={(e) => setInstructions(e.target.value)} data-testid="mr-new-change-what"
+                    placeholder="Shoppers can save a cart for later and share it with a link." />
+        </label>
+        <label className="mr-cs-remember" title="Later changes to this app do not ask for the repositories again">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} data-testid="mr-new-change-remember" />
+          Remember for <span data-user-text>{app}</span>
+        </label>
+        {error ? (
+          <div className="mr-ui-note" data-tone="bad" role="alert" data-testid="mr-new-change-error">
+            <Warning size={15} weight="bold" aria-hidden /><div>{error}</div>
+          </div>
+        ) : null}
+        <div className="mr-cs-foot">
+          <span className="mr-ui-spacer" />
+          <button type="button" className="idn-btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <GatedButton permission="code_task:create" type="submit" className="idn-btn primary" disabled={busy || !title.trim()}
+                       data-testid="mr-new-change-start">{busy ? "Starting…" : "Start change"}</GatedButton>
+        </div>
+      </form>
+    </Sheet>
+  );
 }

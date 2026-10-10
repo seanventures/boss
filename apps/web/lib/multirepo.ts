@@ -67,9 +67,14 @@ export type AppComponent = {
   id?: string; name: string; binding_id: string; repository?: string | null; path?: string | null;
   access?: "write" | "read"; kind?: ComponentKind; depends_on?: string[]; ship_target?: ShipTarget | null;
   base_branch?: string | null; repository_active?: boolean; order?: number | null;
+  /** What is live (release.component_status): `{}` before anything shipped. */
+  status?: ComponentStatus | null;
 };
+export type ComponentHealth = "healthy" | "failing" | "deploying" | "published";
+export type ComponentStatus = { live?: string | null; ships_to?: string | null; health?: ComponentHealth | null;
+                                target_id?: string | null };
 export type ChangeSetRow = { id: string; title?: string | null; state?: string | null; repos?: string[];
-                             prs?: number | null; created_at?: string | null };
+                             prs?: number | null; created_at?: string | null; mode?: string | null; run_id?: string | null };
 export type AppComponents = {
   project_id: string; app_key: string; app_name: string; repo_mode?: "single" | "multi";
   components: AppComponent[]; deploy_config: AppComponent[]; waves?: string[][]; change_sets?: ChangeSetRow[];
@@ -85,6 +90,82 @@ export type MultiRepoConsent = {
   repos: { full_name: string; access: "write" | "read"; components: string[]; words: string }[];
   unreachable: string[]; how: string; lasts: string; never: string;
 };
+
+// ── Change sets: one change across the app's repositories (engine multirepo/change_sets.py) ──
+
+export type ChangeSetState = "planned" | "building" | "blocked" | "in_review" | "approved" | "merging" | "merged"
+  | "deploying" | "live" | "rolled_back" | "failed" | "rejected" | "cancelled";
+export type StepState = "done" | "active" | "waiting" | "failed";
+export type StageKey = "plan" | "build" | "review" | "approve" | "deploy";
+export type LaneState = "waiting" | "building" | "ready" | "failed" | "unchanged" | "merged" | "reverted";
+export type Finding = { severity?: string | null; body: string; path?: string | null; line?: number | null;
+                        author?: string | null; status?: string | null; stage?: string | null };
+export type PlanItem = { name: string; change?: string | null; interface?: string | null; unchanged?: boolean | null };
+export type Lane = {
+  id: string; order: number; full_name: string; components: string[]; wave?: number | null; lane_state: LaneState | string;
+  steps: { key: string; label: string; state: StepState | string }[];
+  code_task_run_id?: string | null; phase?: string | null; pr_number?: number | null; pr_url?: string | null;
+  branch?: string | null; base_branch?: string | null; head_sha?: string | null;
+  additions?: number | null; deletions?: number | null; changed_files?: number | null;
+  ci_state?: string | null; review_state?: string | null; findings: Finding[]; waiting_for: string[];
+  error?: string | null; merged_sha?: string | null; revert_pr_number?: number | null; plan?: PlanItem[];
+};
+export type CrossCheck = {
+  verdict: "pass" | "fail" | string; results: { name: string; detail?: string | null; pass: boolean; kind?: string | null }[];
+  passed: number; total: number; at?: string | null;
+};
+export type ChangeSetGrant = {
+  repos: { full_name: string; access: "write" | "read" | string }[]; consented_by?: string | null; remember?: boolean;
+  expires_at?: string | null; ended_at?: string | null; token_lifetime_minutes?: number | null;
+};
+export type ChangeSetView = {
+  id: string; project_id: string; app_key: string; app_name: string; title: string; mode: "multi" | "single" | string;
+  state: ChangeSetState | string; blocked_reason?: string | null; error?: string | null;
+  stage: { current: StageKey | null; steps: { key: StageKey | string; label: string; state: StepState | string }[] };
+  lanes: Lane[];
+  plan: { summary?: string | null; components?: PlanItem[]; by?: string | null; at?: string | null } | null;
+  cross_check: CrossCheck | null; grant: ChangeSetGrant | null;
+  decision: { id: string; status: string; approved_by?: string | null; approved_at?: string | null; created_at?: string | null } | null;
+  approved_shas?: Record<string, string> | null; approved_by?: string | null; approved_at?: string | null;
+  release?: Record<string, unknown> | null; cost_usd: number; minutes: number;
+  created_at?: string | null; updated_at?: string | null;
+};
+export type DeployWave = {
+  order: number; lane_id: string; components: string[]; repository: string; kind: "host" | "merge" | string;
+  ship?: ShipTarget | null; from?: string | null; to?: string | null; status: string; deployment_run_id?: string | null;
+  error?: string | null; target_id?: string | null; host?: string | null;
+  steps: { icon: "deploy" | "health" | "check" | string; text: string }[]; rollback: string;
+};
+export type DeployPlan = {
+  change_set_id: string; title: string; app_name: string; app_key: string; state: string; status: string;
+  environment?: string | null; host?: string | null; ready: boolean; problems: string[]; waves: DeployWave[];
+  rollback: { order: number; repository: string; components: string[]; text: string; status: string }[];
+  auto_rollback?: string | null; approved_by?: string | null; started_at?: string | null; finished_at?: string | null;
+};
+export type ChangeSetGrantView = { grant: ChangeSetGrant | null; consent: unknown };
+
+/** The view, with every list present (an older or partial answer reads as empty lists). */
+export function asChangeSet(v: Record<string, unknown>): ChangeSetView | null {
+  if (typeof v.id !== "string" || !v.id || !Array.isArray(v.lanes)) return null;
+  const lanes = (v.lanes as Lane[]).map((l) => ({
+    ...l, steps: Array.isArray(l.steps) ? l.steps : [], findings: Array.isArray(l.findings) ? l.findings : [],
+    waiting_for: Array.isArray(l.waiting_for) ? l.waiting_for : [], components: Array.isArray(l.components) ? l.components : [],
+  }));
+  const stage = v.stage && typeof v.stage === "object" ? v.stage as ChangeSetView["stage"] : { current: null, steps: [] };
+  return {
+    ...(v as unknown as ChangeSetView), lanes,
+    stage: { current: stage.current ?? null, steps: Array.isArray(stage.steps) ? stage.steps : [] },
+    plan: v.plan && typeof v.plan === "object" ? v.plan as ChangeSetView["plan"] : null,
+    cross_check: v.cross_check && typeof v.cross_check === "object"
+      ? { ...(v.cross_check as CrossCheck), results: Array.isArray((v.cross_check as CrossCheck).results) ? (v.cross_check as CrossCheck).results : [] }
+      : null,
+    cost_usd: typeof v.cost_usd === "number" ? v.cost_usd : 0, minutes: typeof v.minutes === "number" ? v.minutes : 0,
+  };
+}
+const asPlan = (v: Record<string, unknown>): DeployPlan | null =>
+  (Array.isArray(v.waves) ? { ...(v as unknown as DeployPlan), problems: Array.isArray(v.problems) ? v.problems as string[] : [],
+                              rollback: Array.isArray(v.rollback) ? v.rollback as DeployPlan["rollback"] : [],
+                              ready: v.ready !== false } : null);
 
 // ── Calls ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -134,6 +215,27 @@ export const multirepo = {
     idPost<{ components: Suggestion[] }>(`/v1/projects/${enc(projectId)}/suggest-components`, { binding_ids: bindingIds }),
   consent: (projectId: string, appKey: string) =>
     idGet<MultiRepoConsent>(`/v1/apps/${enc(appKey)}/consent?${q(projectId)}`),
+
+  changeSet: (projectId: string, id: string) => shaped(idGet(`/v1/change-sets/${enc(id)}?${q(projectId)}`), asChangeSet),
+  /** The change a build belongs to; 404 `no_change_set` for an ordinary build. */
+  changeSetOfRun: (projectId: string, runId: string) =>
+    shaped(idGet(`/v1/runs/${enc(runId)}/change-set?${q(projectId)}`), asChangeSet),
+  changeSets: (projectId: string, states: string[]) =>
+    idGet<{ items?: unknown[] }>(`/v1/projects/${enc(projectId)}/change-sets?${q(projectId)}&state=${enc(states.join(","))}&mode=multi`)
+      .then((v) => (Array.isArray(v?.items) ? v.items : []).flatMap((x) => {
+        const cs = x && typeof x === "object" ? asChangeSet(x as Record<string, unknown>) : null;
+        return cs ? [cs] : [];
+      })),
+  grant: (projectId: string, id: string) => idGet<ChangeSetGrantView>(`/v1/change-sets/${enc(id)}/grant?${q(projectId)}`),
+  crossCheck: (projectId: string, id: string) =>
+    shaped(idPost(`/v1/change-sets/${enc(id)}/cross-check`, { project_id: projectId }), asChangeSet),
+  stop: (projectId: string, id: string) => shaped(idPost(`/v1/change-sets/${enc(id)}/stop`, { project_id: projectId }), asChangeSet),
+  deployPlan: (projectId: string, id: string) => shaped(idGet(`/v1/change-sets/${enc(id)}/deploy-plan?${q(projectId)}`), asPlan),
+  deploy: (projectId: string, id: string) => shaped(idPost(`/v1/change-sets/${enc(id)}/deploy`, { project_id: projectId }), asPlan),
+  rollback: (projectId: string, id: string) => shaped(idPost(`/v1/change-sets/${enc(id)}/rollback`, { project_id: projectId }), asPlan),
+  /** "New change": 201 the view; 409 consent_required (with `multirepo`) when no grant covers it. */
+  startChangeSet: (projectId: string, appKey: string, body: { title: string; instructions?: string; remember?: boolean }) =>
+    shaped(idPost(`/v1/apps/${enc(appKey)}/change-sets`, { project_id: projectId, ...body }), asChangeSet),
 };
 
 /** The API's own sentence for a refusal ({error, message}), else the identity words. */
@@ -274,3 +376,50 @@ export const MULTIREPO_PLACES = {
   projectRepos: { area: "code_tasks", view: "repositories" },
   components: (appKey: string) => ({ area: "code_tasks" as const, view: "components", app: appKey }),
 } as const;
+
+/** A change set's state in words, with its tone (Recent changes, the releases list, the cockpit). */
+export const CHANGE_WORDS: Record<string, [string, "ok" | "warn" | "bad" | "muted" | "info"]> = {
+  planned: ["Planned", "muted"], building: ["Building", "info"], blocked: ["Blocked", "bad"], in_review: ["In review", "info"],
+  approved: ["Approved", "ok"], merging: ["Merging", "info"], merged: ["Merged", "ok"], deploying: ["Deploying", "info"],
+  live: ["Live", "ok"], rolled_back: ["Rolled back", "warn"], failed: ["Failed", "bad"], rejected: ["Rejected", "muted"],
+  cancelled: ["Stopped", "muted"],
+};
+export function changeWord(state?: string | null): string {
+  return CHANGE_WORDS[state ?? ""]?.[0] ?? (state ? state.replace(/_/g, " ") : "—");
+}
+export function changeTone(state?: string | null) {
+  return CHANGE_WORDS[state ?? ""]?.[1] ?? "muted";
+}
+/** A change that is still moving (polled; Stop offered while it builds or waits). */
+export const CHANGE_MOVING = new Set(["planned", "building", "blocked", "in_review", "approved", "merging", "deploying"]);
+export const CHANGE_STOPPABLE = new Set(["planned", "building", "blocked", "in_review"]);
+
+/** "+412 −58 · 11 files". */
+export function diffWords(l: { additions?: number | null; deletions?: number | null; changed_files?: number | null }): string {
+  const parts: string[] = [];
+  if (l.additions != null || l.deletions != null) parts.push(`+${l.additions ?? 0} −${l.deletions ?? 0}`);
+  if (l.changed_files != null) parts.push(`${l.changed_files} ${l.changed_files === 1 ? "file" : "files"}`);
+  return parts.join(" · ");
+}
+
+/** A finding still holds the set when it is high/critical and not fixed or dismissed. */
+export function isBlocking(f: Finding): boolean {
+  const sev = (f.severity ?? "").toLowerCase();
+  const open = !["fixed", "addressed", "dismissed", "resolved"].includes((f.status ?? "").toLowerCase());
+  return open && (sev === "high" || sev === "critical" || sev === "blocker");
+}
+export function isFixed(f: Finding): boolean {
+  return ["fixed", "addressed", "resolved"].includes((f.status ?? "").toLowerCase());
+}
+
+/** Where a change set lives in the console. */
+export const CHANGE_SET_PLACES = {
+  cockpit: (id: string, tab?: "prs") => ({ area: "code_tasks" as const, changeset: id, ...(tab ? { tab } : {}) }),
+  deployPlan: (id: string) => ({ area: "infra" as const, tab: "deploys", changeset: id }),
+} as const;
+/** A finding still to address: a real issue (not a pass or a note) not fixed or dismissed. */
+export function isOpenIssue(f: Finding): boolean {
+  const sev = (f.severity ?? "").toLowerCase();
+  if (["pass", "note", "info", ""].includes(sev)) return false;
+  return !isFixed(f) && (f.status ?? "").toLowerCase() !== "dismissed";
+}

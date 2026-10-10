@@ -1255,8 +1255,8 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
       <button type="button" role="radio" aria-checked={layout === "one"} data-testid="np-layout-one"
               title="Everything in one repository. The simple default." onClick={() => void chooseLayout("one")}>One repo</button>
       <button type="button" role="radio" aria-checked={layout === "several"} data-testid="np-layout-several"
+              title="Each part of the app in its own repository."
               {...manageGate.props}
-              title={manageGate.allowed ? "Each part of the app in its own repository." : manageGate.reason}
               onClick={manageGate.guard(() => void chooseLayout("several"))}>Several repos{manageGate.sr}</button>
     </span>
   ) : (
