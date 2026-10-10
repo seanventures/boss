@@ -404,3 +404,12 @@ def test_outside_a_build_they_are_revoked_once_due(env, monkeypatch):
         github_setup.control_plane_token(c, "acme", "web")                  # the next mint sweeps
     assert first in env.hub.deleted
     assert github_setup.sweep_control_plane_tokens(everything=True) >= 0
+
+
+
+def test_the_app_manifest_asks_for_no_webhook_so_a_private_install_can_create_it(env):
+    # GitHub refuses a manifest whose hook URL isn't public ("Hook url is not supported because it
+    # isn't reachable over the public Internet (localhost)"); BOSS subscribes to no events anyway.
+    for origin in ("http://localhost:3000", "https://boss-1.tail1234.ts.net", "https://10.0.0.5"):
+        body = github_setup.manifest(origin=origin, person_id=env.alice)["manifest"]
+        assert "hook_attributes" not in body and body["default_events"] == []
