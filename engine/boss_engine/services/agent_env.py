@@ -77,6 +77,9 @@ NEVER: frozenset[str] = frozenset({
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
     "S3_ACCESS_KEY", "S3_SECRET_KEY", "MINIO_ROOT_PASSWORD",
     "MEILI_MASTER_KEY", "OPENAI_API_KEY",
+    # The build-services server's superuser (build_services): a run gets its own database's
+    # credentials, injected per run; never the key to every run's database.
+    "BOSS_BUILD_SERVICES_PG_URL", "BOSS_BUILD_SERVICES_PG_PASSWORD_FILE",
 })
 
 #: Substrings that mark a name as credential-shaped. Anything matching is withheld unless it is
