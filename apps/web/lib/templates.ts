@@ -232,7 +232,16 @@ const q = (o: Record<string, string | undefined | null>) =>
 export type ApplyBody = {
   project_id: string; stack: string; app_key?: string; extends_run_id?: string; new_app?: { name: string };
   framework?: string; note?: string; accept_egress?: boolean | string[]; start_anyway?: string[]; dedupe_key?: string;
+  workflow_key?: string;
 };
+/** A workflow a template can be applied through (GET /v1/templates/workflows: published, with a build step). */
+export type BuildWorkflow = { key: string; name: string; isDefault: boolean };
+export function parseBuildWorkflows(raw: unknown): BuildWorkflow[] {
+  return arr(obj(raw).workflows).map((w) => {
+    const o = obj(w);
+    return { key: str(o.workflow_key), name: str(o.name) || str(o.workflow_key), isDefault: o.default === true };
+  }).filter((w) => w.key);
+}
 export type Applied201 = { workflow_run_id: string | null; application_id: string; app_key: string;
   project_id?: string; lab?: { project_id: string; name: string; why?: string } };
 
@@ -249,6 +258,9 @@ export const templatesApi = {
   hide: (id: string) => idDelete<O>(`/v1/templates/${enc(id)}?hide=true`),
   remove: (id: string) => idDelete<O>(`/v1/templates/${enc(id)}`),
   apply: (id: string, body: ApplyBody) => idPost<Applied201>(`/v1/templates/${enc(id)}/apply`, body),
+  /** The workflows a template can be applied through in this project; the default first. */
+  workflows: async (projectId: string) =>
+    parseBuildWorkflows(await idGet(`/v1/templates/workflows?${q({ project_id: projectId })}`)),
   /** The lab projects this project's insecure-template apps are built in (each its own project). */
   labs: async (projectId: string) =>
     arr(obj(await idGet(`/v1/templates/labs?${q({ project_id: projectId })}`)).labs).map((l) => {

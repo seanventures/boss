@@ -15,6 +15,9 @@
  *   409 stack_mismatch       → the app's own stack is chosen, said in words
  *   anything else            → the API's sentence, never a code
  * A value typed into a secret field is never shown back: the field clears once it is stored.
+ *
+ * WORKFLOW: which of the project's workflows builds it (GET /v1/templates/workflows: published,
+ * with a build step). Left on the default, no workflow_key is sent and the API's default runs.
  */
 import React, { useEffect, useMemo, useState } from "react";
 
@@ -24,7 +27,7 @@ import { withConsent } from "../../../lib/identity/consent";
 import { IdentityError } from "../../../lib/identity/api";
 import {
   INSECURE, refusalCode, refusalWords, secretWord, stackLabel, templatesApi, testedWord,
-  type TemplateCard, type TemplateDetail,
+  type BuildWorkflow, type TemplateCard, type TemplateDetail,
 } from "../../../lib/templates";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../../../app/workflow-readiness-ui";
 import { LabelChips, stackTip, useInstalledStacks } from "./gallery";
@@ -72,6 +75,9 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
   const [error, setError] = useState("");
   const [refusal, setRefusal] = useState<Readiness | null>(null);
   const [startAnyway, setStartAnyway] = useState<string[]>([]);
+  const [workflows, setWorkflows] = useState<BuildWorkflow[]>([]);
+  /** "" = the default workflow (nothing sent). */
+  const [workflowKey, setWorkflowKey] = useState("");
   const guarded = useGuardedCall();
   const startGate = useGate("workflow_run:start", projectId);
   const secretGate = useGate("app_secret:write", projectId);
@@ -82,6 +88,14 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
       .catch((e) => { if (alive) setLoadError(refusalWords(e)); });
     return () => { alive = false; };
   }, [card.id]);
+
+  useEffect(() => {
+    let alive = true;
+    // No list (an older API, a read refused): the picker is not drawn and the default runs.
+    templatesApi.workflows(projectId).then((w) => { if (alive) setWorkflows(w); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [projectId]);
+  const defaultWorkflow = workflows.find((w) => w.isDefault);
 
   // The first stack this install can build — chosen again when the toolchains arrive, until the
   // person picks one themselves.
@@ -109,6 +123,7 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
     project_id: projectId, stack,
     ...(target.kind === "new" ? { new_app: { name: name.trim() } } : { extends_run_id: target.runId }),
     ...(note.trim() ? { note: note.trim() } : {}),
+    ...(workflowKey && workflowKey !== defaultWorkflow?.key ? { workflow_key: workflowKey } : {}),
     ...(egress.length ? { accept_egress: egress } : {}),
     ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
   });
@@ -225,6 +240,18 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
           })}
           {card.tested.length ? <span className="tpl-tested">{testedWord(card.tested)}</span> : null}
         </span>
+        {workflows.length > 1 ? (
+          <label className="tpl-field" title="The workflow that builds it: its steps, reviews and approvals. Only workflows with a build step are listed.">
+            <span>Workflow</span>
+            <select value={workflowKey || defaultWorkflow?.key || ""} data-testid="tpl-workflow"
+                    onChange={(e) => setWorkflowKey(e.target.value)}>
+              {defaultWorkflow ? null : <option value="">Default</option>}
+              {workflows.map((w) => (
+                <option key={w.key} value={w.key}>{w.name}{w.isDefault ? " (default)" : ""}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </section>
 
       <section className="tpl-sec" aria-label="What it adds">

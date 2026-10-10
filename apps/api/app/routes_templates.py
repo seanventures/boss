@@ -192,6 +192,17 @@ def build_templates_router() -> APIRouter:
             _project_in_org(db, project_id, ctx.principal.org_id)
             return {"project_id": project_id, "labs": lab_service.labs_of(db, project_id)}
 
+    @router.get("/v1/templates/workflows")
+    @permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
+    def template_workflows(request: Request, project_id: str) -> dict:
+        """The workflows a template can be applied through here (templates.apply.build_workflows:
+        published, with a build step; the default first). The apply sheet's Workflow picker."""
+        ctx = _ctx(request)
+        with begin() as db:
+            _project_in_org(db, project_id, ctx.principal.org_id)
+            return {"project_id": project_id, "default": apply_service.DEFAULT_WORKFLOW,
+                    "workflows": apply_service.build_workflows(db, project_id)}
+
     @router.get("/v1/templates/{template_id}")
     @permit(P.TEMPLATE_READ, scope=Scope.org())
     def describe_template(request: Request, template_id: str) -> Any:

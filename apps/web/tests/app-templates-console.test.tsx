@@ -52,6 +52,8 @@ const DETAIL = { ...STRIPE, manifest: { routes: ["POST /api/checkout", "POST /we
 type Call = { method: string; path: string; body: Record<string, unknown> | undefined };
 let calls: Call[] = [];
 let applyAnswers: Array<[number, unknown]> = [];
+/** GET /v1/templates/workflows: null = an API without it (404), so no picker. */
+let buildWorkflows: unknown[] | null = null;
 let toolchains: unknown[] = [{ name: "python", installed: true }, { name: "node", installed: true }, { name: "java", installed: false }];
 
 function json(body: unknown, status = 200) {
@@ -60,6 +62,7 @@ function json(body: unknown, status = 200) {
 
 beforeEach(() => {
   calls = [];
+  buildWorkflows = null;
   applyAnswers = [[201, { workflow_run_id: "wfr_9", application_id: "tap_1", app_key: "shop" }]];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -71,6 +74,9 @@ beforeEach(() => {
     if (path === "/v1/templates") return json({ templates: [STRIPE, BANK, PENDING], toolchains });
     if (path === "/v1/templates?status=active") return json({ templates: [STRIPE, BANK], toolchains });
     if (path === "/v1/templates/import") return json({ error: "invalid", report: { ok: false, reasons: ["insecure_by_design needs template:approve and the acknowledgement (D3)", "LICENSE is missing"] } }, 422);
+    if (path.startsWith("/v1/templates/workflows?project_id=p1") && buildWorkflows) {
+      return json({ project_id: "p1", default: "fast_fix", workflows: buildWorkflows });
+    }
     if (path.startsWith("/v1/templates/tpl_stripe/apply")) {
       const [status, body] = applyAnswers.shift() ?? [500, { error: "x" }];
       return json(body, status);
@@ -223,6 +229,44 @@ describe("a template's sheet", () => {
     expect(document.body.textContent).not.toContain("consent_required");
   });
 
+  it("Workflow: the project's build workflows, default first; a chosen one is sent as workflow_key", async () => {
+    buildWorkflows = [{ workflow_key: "fast_fix", name: "Fast Fix / Hotfix", default: true },
+                      { workflow_key: "helpdesk_delivery_d1", name: "HelpDesk Delivery (D1)", default: false }];
+    const started = await openNew("operator");
+    const pick = $('[data-testid="tpl-workflow"]') as HTMLSelectElement;
+    expect([...pick.options].map((o) => o.textContent)).toEqual(["Fast Fix / Hotfix (default)", "HelpDesk Delivery (D1)"]);
+    expect(pick.value).toBe("fast_fix");
+    expect(pick.closest("label")!.getAttribute("title")).toContain("build step");
+    await type('[data-testid="tpl-app-name"]', "HelpDesk");
+    await tick('[data-testid="tpl-egress-ok"]');
+    await type('[data-testid="tpl-secret-input-STRIPE_SECRET_KEY"]', "sk_test_abc123");
+    await act(async () => {
+      pick.value = "helpdesk_delivery_d1";
+      pick.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+    await press('[data-testid="tpl-start"]');
+    const apply = writes().find((c) => c.path.endsWith("/apply"))!;
+    expect(apply.body).toMatchObject({ new_app: { name: "HelpDesk" }, workflow_key: "helpdesk_delivery_d1" });
+    expect(started).toHaveBeenCalledWith("wfr_9");
+  });
+
+  it("Workflow left on the default sends no workflow_key; with no list there is no picker", async () => {
+    buildWorkflows = [{ workflow_key: "fast_fix", name: "Fast Fix / Hotfix", default: true },
+                      { workflow_key: "major_feature", name: "Major Feature", default: false }];
+    await mount(<TemplateSheet projectId="p1" card={card(STRIPE)} target={{ kind: "add", runId: "crun_1", appKey: "shop", name: "Shop", stack: "node" }}
+                               onStarted={() => {}} onClose={() => {}} />, "owner");
+    expect($('[data-testid="tpl-workflow"]')).toBeTruthy();                     // an existing app gets it too
+    await tick('[data-testid="tpl-egress-ok"]');
+    await press('[data-testid="tpl-start"]');
+    const apply = writes().find((c) => c.path.endsWith("/apply"))!;
+    expect(apply.body).not.toHaveProperty("workflow_key");
+    act(() => root?.unmount()); host?.remove();
+    buildWorkflows = null;
+    await openNew("operator");
+    expect($('[data-testid="tpl-workflow"]')).toBeNull();
+  });
+
   it("a refusal is the API's sentence, without spec references", async () => {
     await mount(<TemplateSheet projectId="p1" card={card(STRIPE)} target={{ kind: "add", runId: "crun_1", appKey: "shop", name: "Shop", stack: "node" }}
                                onStarted={() => {}} onClose={() => {}} />, "owner");
@@ -291,6 +335,9 @@ describe("App ▸ Setup", () => {
 
   it("names its copy values and environment cells in words", () => {
     expect(copyLabel("redirect_uri")).toBe("Redirect URI");
+    expect(copyLabel("deploy_url")).toBe("Deployed URL");
+    expect(copyLabel("callback_url:github")).toBe("Callback URL for GitHub");
+    expect(copyLabel("callback_url:boss")).toBe("Callback URL for BOSS");
     expect(envCell({ env: "deploy", testDefault: "none", binding: { name: "K", env: "deploy", mode: "live", shape: "x", setAt: "", lastUsedAt: "", liveApproved: false } }).word)
       .toBe("Live · awaiting approval");
     expect(secretWord({ testDefault: "stub" }).word).toBe("Test mode");

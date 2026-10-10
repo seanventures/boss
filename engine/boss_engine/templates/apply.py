@@ -310,8 +310,54 @@ def plan(c, *, org_id: str, project_id: str, template_ref: str, body: dict,
     if app["run_id"]:
         run_input["extends_run_id"] = app["run_id"]
     workflow_key = str(body.get("workflow_key") or "").strip() or DEFAULT_WORKFLOW
+    if body.get("workflow_key") and workflow_key != DEFAULT_WORKFLOW:
+        check_build_workflow(c, project_id, workflow_key)
     return {"row": row, "manifest": manifest, "app": app, "stack": stack, "framework": framework,
             "application_id": application_id, "run_input": run_input, "workflow_key": workflow_key}
+
+
+def _has_build_step(spec: Any) -> bool:
+    """A workflow spec with a step that builds code (binding.capability == "build"), at any depth."""
+    if isinstance(spec, dict):
+        binding = spec.get("binding")
+        if isinstance(binding, dict) and binding.get("capability") == "build":
+            return True
+        return any(_has_build_step(v) for v in spec.values())
+    if isinstance(spec, list):
+        return any(_has_build_step(v) for v in spec)
+    return False
+
+
+def build_workflows(c, project_id: str) -> list[dict]:
+    """The workflows a template can be applied through: this project's active workflows whose
+    published version has a build step. THE ONE RULE for the console's picker and for `plan()`
+    (a workflow without a build step would record an application nothing ever builds). The
+    default (fast_fix) is always first, marked `default`."""
+    import json as _json
+
+    rows = c.execute(text(
+        "SELECT d.workflow_key, d.name, d.is_catalogue, v.spec FROM workflow_definitions d "
+        "JOIN workflow_versions v ON v.id = d.active_version_id "
+        "WHERE d.project_id = :p AND d.status = 'active' AND v.status = 'published' "
+        "ORDER BY d.is_catalogue, d.name"), {"p": project_id}).mappings().all()
+    out: dict[str, dict] = {}
+    for r in rows:
+        spec = r["spec"]
+        if isinstance(spec, str):
+            spec = _json.loads(spec)
+        if r["workflow_key"] in out or not _has_build_step(spec):
+            continue
+        out[r["workflow_key"]] = {"workflow_key": r["workflow_key"], "name": r["name"],
+                                  "default": r["workflow_key"] == DEFAULT_WORKFLOW}
+    listed = sorted(out.values(), key=lambda w: (not w["default"], str(w["name"]).lower()))
+    return listed
+
+
+def check_build_workflow(c, project_id: str, workflow_key: str) -> None:
+    if not any(w["workflow_key"] == workflow_key for w in build_workflows(c, project_id)):
+        raise TemplateError(422, "workflow_cannot_build",
+                            f"workflow {workflow_key!r} is not a published workflow of this project "
+                            "with a build step; a template is applied through one that builds")
 
 
 def check_stack(app: dict, stack: str) -> None:
