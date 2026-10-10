@@ -3403,6 +3403,34 @@ CREATE INDEX IF NOT EXISTS idx_meeting_runs_project ON meeting_runs(project_id, 
 -- directive became every meeting's title on boss-1 ('PRD meeting: --- WHAT THIS PANEL IS FOR ---').
 ALTER TABLE meeting_runs ADD COLUMN IF NOT EXISTS title TEXT;
 
+-- ARCHITECTURE APPROVAL (workflow capability `architecture`, services/architecture_docs.py).
+-- An architect agent turns the run's APPROVED PRD into an architecture document; each version
+-- is an `architecture_document` artifact, and a person approves, sends back with a note (the
+-- architect writes the next version) or rejects it. The workflow step waits on this row.
+CREATE TABLE IF NOT EXISTS architecture_reviews (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  workflow_run_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  -- drafting | awaiting_approval | revision_requested | approved | rejected | cancelled | failed
+  status TEXT NOT NULL DEFAULT 'drafting',
+  architect TEXT NOT NULL DEFAULT 'chief_architect',
+  title TEXT,
+  prd_source JSONB NOT NULL DEFAULT '{}'::jsonb,   -- where the approved PRD came from, who approved it
+  current_version INTEGER NOT NULL DEFAULT 0,
+  current_artifact_id TEXT,
+  decision_id TEXT,
+  notes JSONB NOT NULL DEFAULT '[]'::jsonb,        -- [{version, note, by, at}] changes a person asked for
+  approved_by TEXT,
+  approved_at TIMESTAMPTZ,
+  approved_version INTEGER,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_architecture_reviews_run ON architecture_reviews(workflow_run_id, step_id);
+CREATE INDEX IF NOT EXISTS idx_architecture_reviews_project ON architecture_reviews(project_id, status, updated_at DESC);
+
 -- Durable coding-agent task: clone -> edit -> build/test -> open PR (gated).
 -- Unlike meeting_runs (pure-data phases), a code task's working tree is
 -- filesystem-ephemeral, so the whole pipeline runs in ONE job execution;

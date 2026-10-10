@@ -10391,6 +10391,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/architecture-reviews:
+    get:
+      summary: List Architecture Reviews
+      description: The architecture reviews of a project, or of one workflow run, with status
+        in words and the actions their decision offers. Answer through /v1/decisions/{id}/approve,
+        /revise (note required) or /reject.
+      operationId: get_v1_architecture_reviews
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: workflow_run_id
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 50
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+  /v1/architecture-reviews/{review_id}:
+    get:
+      summary: Get Architecture Review
+      description: One architecture review with every version of its document.
+      operationId: get_v1_architecture_reviews_review_id
+      parameters:
+      - name: review_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Not found in this project
   /v1/artifacts/{artifact_id}/rebuild:
     post:
       summary: Rebuild Change Record

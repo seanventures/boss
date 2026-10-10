@@ -342,6 +342,15 @@ class DecisionService:
         # the caller states it is policy — anything else still needs a member with
         # decision_resolve. The row records SYSTEM_ACTOR either way, so an auditor can always
         # separate the approvals a person made from the ones a setting made.
+        # AN ARCHITECTURE IS APPROVED BY A PERSON, NEVER BY AN AGENT OR A POLICY — refused here,
+        # before any check that might record part of the approval (architecture_docs).
+        if action == "approve":
+            from .architecture_docs import ArchitectureApprovalRefused, require_a_person
+
+            try:
+                require_a_person(connection, row, actor, system_policy=system_policy)
+            except ArchitectureApprovalRefused as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         identity_ctx = None if system_policy else _identity_decides(connection, row)
         if system_policy and action == "approve" and actor == SYSTEM_ACTOR:
             pass
@@ -939,6 +948,12 @@ class DecisionService:
             from .stack_deploy import on_decision_approved
 
             on_decision_approved(connection, self.settings, row, actor)
+        elif action == "review_architecture":
+            # A person approved an architecture: recorded on its review, which the waiting
+            # workflow step reads at the next tick.
+            from .architecture_docs import on_decision_answered
+
+            on_decision_answered(connection, row, action="approve", actor=actor, note=note)
         elif action == "deploy_host":
             # A host deployment held for approval: a person's approval approves its ChangeSet
             # and queues the apply as a durable worker job (services/governed_host_deploy.py).
@@ -1002,6 +1017,12 @@ class DecisionService:
             self.role_governance.apply_decision_outcome(
                 connection, row, action, actor, note
             )
+        elif recommendation_action == "review_architecture":
+            # Changes requested (the architect revises from the note) or rejected (the step
+            # fails and the run stops) — architecture_docs.
+            from .architecture_docs import on_decision_answered
+
+            on_decision_answered(connection, row, action=action, actor=actor, note=note)
 
     def _start_code_task_after_prd(
         self,
@@ -2160,9 +2181,13 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
     from ..identity import approvals as _approvals
 
     row = connection.execute(text(
-        "SELECT risk_tier, status FROM decisions WHERE id = :id AND project_id = :p FOR UPDATE"),
+        "SELECT risk_tier, status, recommendation->>'action' AS action FROM decisions "
+        "WHERE id = :id AND project_id = :p FOR UPDATE"),
         {"id": decision_id, "p": project_id}).mappings().first()
     if row is None or row["status"] != "pending":
+        return False
+    if row["action"] == "review_architecture":
+        # An architecture is approved by a person, never by a setting (architecture_docs).
         return False
     tier = int(row["risk_tier"] or 0)
     if _approvals.seats_for_tier(tier) or tier in _approvals.TWO_PERSON_TIERS:

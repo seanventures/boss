@@ -30274,6 +30274,11 @@ app.include_router(build_improve_router(
     actor_of=signed_in_actor,
     require_worker=require_worker_principal,
 ))
+# ARCHITECTURE APPROVAL: a run's architecture documents (routers/architecture.py).
+from .routers.architecture import build_architecture_router
+
+app.include_router(build_architecture_router(engine=engine,
+                                             require_reader=require_project_reader))
 from .hardware_api import mount_hardware_routes
 
 mount_hardware_routes(app, require_project_actor, require_project_reader)
