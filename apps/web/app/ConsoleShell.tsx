@@ -670,9 +670,13 @@ function ConsoleShellInner({
   const activeLoading = !!loadedAreas && !loadedAreas.includes(active);
   useEffect(() => {
     // Opened by a deep link, Back/Forward or anything else that set `active` without going
-    // through go(): the same fetch, once.
-    if (activeLoading && areaLoadAsked?.id !== active) ensureLoaded(active);
-  }, [activeLoading, active, areaLoadAsked, ensureLoaded]);
+    // through go(): the same fetch, once. First wait for Next's URL restore to commit:
+    // a restore prioritizes itself over a pending refresh and discards that response.
+    // The urgent area reveal can precede useSearchParams, so loading immediately would
+    // fetch the right URL but lose the payload when the router catches up.
+    if (activeLoading && areaLoadAsked?.id !== active
+        && new URLSearchParams(queryString).get("area") === active) ensureLoaded(active);
+  }, [activeLoading, active, areaLoadAsked, ensureLoaded, queryString]);
   // A REFRESH THAT CAME BACK WITHOUT THE AREA IS ASKED AGAIN AT ONCE.
   //
   // The area-load refresh can settle without the area in it (it raced another refresh in
