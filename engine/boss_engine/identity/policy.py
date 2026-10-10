@@ -40,6 +40,9 @@ class IdentityPolicy:
     delegation_allow_until_revoked: bool = False
     org_max_depth: int = 3
     github_jit_credentials: bool = False
+    # "Builds may change CI workflows" (services/ci_gate.py) raises a build's grant and its
+    # builder's ceiling to workflows: write for that repository. Off: the opt-in raises nothing.
+    github_ci_opt_in_grants_workflows: bool = True
     # D28: None = automatic (on exactly when more than one active human exists)
     github_require_user_repo_access: Optional[bool] = None
     # D29: None = automatic (on exactly while one active human exists)

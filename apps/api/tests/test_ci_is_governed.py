@@ -133,6 +133,8 @@ def test_the_opt_in_is_off_by_default_recorded_and_widens_the_apps_request(clien
         assert on.status_code == 200, on.text
         body = on.json()
         assert body["enabled"] is True and body["app_permission"] == "workflows: write"
+        # The opt-in IS the grant for this repository (identity policy allows it by default).
+        assert body["grant"]["applies"] is True and "acme/web" in body["grant"]["words"]
         assert body["permissions_url"] == (
             "https://github.com/organizations/acme/settings/apps/boss-acme/permissions")
         assert body["installation_url"].endswith("/organizations/acme/settings/installations/4242")
@@ -355,3 +357,37 @@ def test_a_repo_without_ci_is_said_so_and_not_waited_on(engine):
                             {"pull_request_number": 5, "pull_request_url": "https://github.com/a/b/pull/1"},
                             PROJECT, f"crun_ci_{uuid4().hex[:8]}", "acme/web", sleep=lambda s: None)
     assert out["status"] == "no_ci" and out["summary"].startswith("No CI is configured for acme/web")
+
+
+def test_ci_that_cannot_be_read_blocks_merge_and_deploy_unless_a_person_forces_the_merge(
+        client, engine, monkeypatch):
+    """FAIL CLOSED: a wait whose reads all fail ends `unreadable`, never passed."""
+    class Down(FakeCi):
+        def check_runs(self, sha):
+            raise RuntimeError("GitHub answered 502")
+    reader = Down([])
+    monkeypatch.setattr(ci_gate, "reader_for_project", lambda *a, **k: reader)
+    url = f"https://github.com/acme/web/pull/{uuid4().int % 10000}"
+    wait = client.post("/v1/ci/waits", json={"project_id": PROJECT, "pull_request_url": url,
+                                             "timeout_minutes": 1}).json()
+    assert wait["status"] == "waiting"
+    with engine.begin() as c:
+        c.execute(text("UPDATE ci_waits SET created_at = created_at - interval '70 seconds' "
+                       "WHERE id = :i"), {"i": wait["id"]})
+    polled = client.post(f"/v1/ci/waits/{wait['id']}/poll", json={"project_id": PROJECT}).json()
+    assert polled["status"] == "unreadable" and polled["blocks_deploy"] is True
+    assert polled["summary"] == "CI could not be read: RuntimeError: GitHub answered 502"
+
+    deploy = _decision(engine, {"action": "review_deployment", "pull_request_url": url,
+                                "environment": api_main.settings.sandbox_deploy_environment})
+    refused = client.post(f"/v1/decisions/{deploy}/approve", json={"actor": "ceo", "note": "x"})
+    assert refused.status_code == 409 and "CI could not be read" in refused.text
+    forced_deploy = client.post(f"/v1/decisions/{deploy}/approve",
+                                json={"actor": "ceo", "note": "ship it", "force": True})
+    assert forced_deploy.status_code == 409                       # never a forced deploy
+    merge = _decision(engine, {"action": "review_pull_request", "pull_request_url": url})
+    assert client.post(f"/v1/decisions/{merge}/approve",
+                       json={"actor": "ceo", "note": "x"}).status_code == 409
+    forced = client.post(f"/v1/decisions/{merge}/approve",
+                         json={"actor": "ceo", "note": "CI is down; reviewed by hand", "force": True})
+    assert forced.status_code == 200, forced.text

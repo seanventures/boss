@@ -23310,6 +23310,9 @@ def approve_decision_card(
                 delegate_to=payload.delegate_to,
                 external_ref=payload.external_ref,
                 content_hash=payload.content_hash,
+                # A person overriding the merge gate (CI failed or could not be read), with the
+                # note transition() requires. Never a deploy: ci_gate refuses a forced deploy.
+                force=payload.force,
             )
         except ApprovalPending as pending:
             # §6.13: the first of two approvals of a tier-3 decision is recorded (this transaction

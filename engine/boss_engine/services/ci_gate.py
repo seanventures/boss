@@ -55,9 +55,16 @@ MAX_POLL_SECONDS = 120
 #: How long a repository with no CI configured is given for an external CI to report a status.
 NO_CI_GRACE_SECONDS = 60
 
-TERMINAL = frozenset({"passed", "failed", "timed_out", "no_ci", "cancelled"})
-#: Statuses a deploy (and, unforced, a merge) may go ahead on.
+TERMINAL = frozenset({"passed", "failed", "timed_out", "no_ci", "unreadable", "cancelled"})
+#: Statuses a deploy (and, unforced, a merge) may go ahead on. FAIL CLOSED: only CI that passed,
+#: or a repository with explicitly no CI configured. CI that could not be read is NOT cleared.
 CLEARED = frozenset({"passed", "no_ci"})
+UNREADABLE_PREFIX = "CI could not be read: "
+
+
+def unreadable_words(why: Any) -> str:
+    text_ = why if isinstance(why, str) else f"{type(why).__name__}: {why}"
+    return (UNREADABLE_PREFIX + (text_.strip() or "no reason given"))[:500]
 _OK_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 
 #: Decisions that ship something. A CI change or a CI failure gates every one of them.
@@ -396,6 +403,70 @@ def permissions_link(app_cfg: Mapping[str, Any], web_base: str = "https://github
     }
 
 
+#: The identity policy key that lets the opt-in raise a build's grant and the builder's ceiling.
+POLICY_KEY = "github_ci_opt_in_grants_workflows"
+
+
+def _org_of(connection: Any, project_id: str) -> Optional[str]:
+    try:
+        row = _one(connection, "SELECT w.org_id FROM projects p JOIN workspaces w "
+                               "ON w.id = p.workspace_id WHERE p.id = :p", {"p": project_id})
+    except Exception:  # noqa: BLE001
+        return None
+    return str(row["org_id"]) if row and row["org_id"] else None
+
+
+def policy_allows_grant(connection: Any, org_id: Optional[str]) -> bool:
+    """Whether this install's identity policy lets the opt-in raise grants (default: yes)."""
+    if not org_id:
+        return True
+    try:
+        from ..identity.policy import get_policy
+
+        nested = getattr(connection, "begin_nested", None)
+        point = nested() if callable(nested) else None
+        try:
+            allowed = bool(getattr(get_policy(org_id, db=connection), POLICY_KEY, True))
+        except Exception:
+            if point is not None:
+                point.rollback()
+            raise
+        if point is not None:
+            point.commit()
+        return allowed
+    except Exception:  # noqa: BLE001 — no identity tables: nothing forbids it
+        return True
+
+
+def opt_in_grants(connection: Any, org_id: Optional[str], project_id: Optional[str],
+                  repos: Iterable[str]) -> bool:
+    """THE OPT-IN IS THE GRANT: a build of repositories that ALL have "Builds may change CI
+    workflows" on gets workflows: write in its build grant and its builder's ceiling — for those
+    repositories only, read live at every mint (turning the opt-in off reverts it at once), and
+    never when the identity policy forbids it."""
+    repos = [r for r in repos if r]
+    if not repos or not project_id:
+        return False
+    if not all(workflows_write_allowed(connection, project_id, r) for r in repos):
+        return False
+    return policy_allows_grant(connection, org_id or _org_of(connection, project_id))
+
+
+def grant_view(connection: Any, project_id: str, repository: str, enabled: bool) -> dict[str, Any]:
+    if not enabled:
+        return {"applies": False, "words": "Builds cannot change .github/workflows/ in this "
+                                           "repository."}
+    if not policy_allows_grant(connection, _org_of(connection, project_id)):
+        return {"applies": False, "forbidden_by_policy": True, "policy_key": POLICY_KEY,
+                "words": (f"This install's identity policy ({POLICY_KEY} is off) does not let this "
+                          "setting raise a build's grant, so builds still cannot push "
+                          ".github/workflows/: GitHub will refuse the push. An Owner can turn that "
+                          "policy on in Identity › Policy, or grant workflows: write by hand.")}
+    return {"applies": True,
+            "words": (f"Builds of {repository} get workflows: write in their build grant and their "
+                      "builder's ceiling — for this repository only, and only while this is on.")}
+
+
 def setting_view(connection: Any, project_id: str, binding_id: str,
                  app_cfg: Optional[Mapping[str, Any]] = None, web_base: str = "https://github.com"
                  ) -> dict[str, Any]:
@@ -404,7 +475,8 @@ def setting_view(connection: Any, project_id: str, binding_id: str,
     out = {"binding_id": row["id"], "repository": row["full_name"], "key": SETTING_KEY,
            "label": SETTING_LABEL, "help": SETTING_HELP, "enabled": enabled,
            "requires": "Owner or Admin, with step-up",
-           "app_permission": "workflows: write" if enabled else None}
+           "app_permission": "workflows: write" if enabled else None,
+           "grant": grant_view(connection, project_id, row["full_name"], enabled)}
     if enabled:
         out.update(permissions_link(app_cfg or {}, web_base))
     return out
@@ -426,7 +498,10 @@ def set_workflows_write(connection: Any, project_id: str, binding_id: str, enabl
         "WHERE id = :b AND project_id = :p"),
         {"m": json.dumps(meta), "b": binding_id, "p": project_id})
     data = {"repository": row["full_name"], "setting": SETTING_KEY, "before": before,
-            "after": bool(enabled)}
+            "after": bool(enabled),
+            # What the change grants: the opt-in IS the build grant for this repository.
+            "grant": ("workflows: write for builds of this repository (build grant and builder "
+                      "ceiling)") if enabled else "workflows: write withdrawn"}
     emit_event(connection, project_id, "repository.ci_workflows_write_changed", actor,
                "github_repository_binding", binding_id, data)
     _security_audit(connection, data, binding_id)
@@ -467,7 +542,7 @@ class CiReader(Protocol):
 
 @dataclass
 class CiOutcome:
-    state: str                      # waiting | passed | failed | timed_out | no_ci
+    state: str                      # waiting | passed | failed | timed_out | no_ci | unreadable
     summary: str
     checks: list[dict] = field(default_factory=list)
     failing_url: Optional[str] = None
@@ -556,6 +631,8 @@ def settle(outcome: CiOutcome, *, elapsed: float, timeout: float, has_ci: bool,
         return CiOutcome("no_ci", f"No CI is configured{where} (no .github/workflows and no "
                                   "check reported), so there was nothing to wait for.", [])
     if elapsed >= timeout:
+        if not outcome.checks and outcome.summary.startswith(UNREADABLE_PREFIX):
+            return CiOutcome("unreadable", outcome.summary, [])
         if not outcome.checks:
             return CiOutcome("timed_out", f"CI did not finish in {_minutes(timeout)}: no checks "
                                           "were reported for this commit.", [])
@@ -590,7 +667,7 @@ def wait_for_ci(reader: CiReader, sha: str, *, timeout_seconds: float = DEFAULT_
         try:
             outcome = look(reader, sha)
         except Exception as error:  # noqa: BLE001 — a flaky read is retried, never a pass
-            outcome = CiOutcome("waiting", f"Could not read CI yet: {type(error).__name__}.", [])
+            outcome = CiOutcome("waiting", unreadable_words(error), [])
         if outcome.checks:
             has_ci = True
         outcome = settle(outcome, elapsed=clock() - start, timeout=timeout_seconds,
@@ -754,6 +831,29 @@ def start_wait(connection: Any, *, project_id: str, repository: str, head_sha: s
     return get_wait(connection, wait_id)
 
 
+def record_unreadable(connection: Any, *, project_id: str, repository: str, why: Any,
+                      head_sha: str = "", pull_request_url: Optional[str] = None,
+                      code_task_run_id: Optional[str] = None, actor: str = "boss") -> dict[str, Any]:
+    """FAIL CLOSED: BOSS could not read CI (the PR head, the check runs) for a change that has or
+    changes CI. Recorded as a terminal `unreadable` wait, so the merge and the deploy approval are
+    refused in words until CI is read again — or a person forces the merge with a note."""
+    from .core import emit_event, make_id
+
+    wait_id = make_id("ciw")
+    now = _now()
+    words = unreadable_words(why)
+    connection.execute(text(
+        "INSERT INTO ci_waits (id, project_id, repository, head_sha, pull_request_url, "
+        "code_task_run_id, status, has_ci, summary, timeout_seconds, deadline_at, next_poll_at, "
+        "finished_at, created_by, created_at, updated_at) VALUES (:id, :p, :r, :s, :u, :ct, "
+        "'unreadable', true, :su, 0, :n, :n, :n, :by, :n, :n)"),
+        {"id": wait_id, "p": project_id, "r": repository, "s": head_sha or "", "u": pull_request_url,
+         "ct": code_task_run_id, "su": words, "n": now, "by": actor})
+    emit_event(connection, project_id, "ci.unreadable", actor, "ci_wait", wait_id,
+               {"summary": words, "pull_request_url": pull_request_url, "head_sha": head_sha})
+    return get_wait(connection, wait_id)
+
+
 def get_wait(connection: Any, wait_id: str) -> dict[str, Any]:
     row = connection.execute(text("SELECT * FROM ci_waits WHERE id = :i"),
                              {"i": wait_id}).mappings().first()
@@ -786,7 +886,7 @@ def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = 
     try:
         outcome = look(reader, row["head_sha"])
     except Exception as error:  # noqa: BLE001
-        outcome = CiOutcome("waiting", f"Could not read CI yet: {type(error).__name__}.", [])
+        outcome = CiOutcome("waiting", unreadable_words(error), [])
     has_ci = bool(row["has_ci"] or outcome.checks)
     elapsed = (now - row["created_at"]).total_seconds()
     outcome = settle(outcome, elapsed=elapsed, timeout=float(row["timeout_seconds"]),

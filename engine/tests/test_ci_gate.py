@@ -361,7 +361,7 @@ def test_wait_for_ci_is_a_selectable_awaited_workflow_step():
     assert "wait_for_ci" in {c["key"] for c in wc.palette()}
     assert runner._AWAIT_KINDS["wait_for_ci"][0] == "ci_wait"  # noqa: SLF001
     table, ok, bad = runner._AWAIT_TABLES["ci_wait"]  # noqa: SLF001
-    assert table == "ci_waits" and ok == {"passed", "no_ci"} and bad == {"failed", "timed_out", "cancelled"}
+    assert table == "ci_waits" and ok == {"passed", "no_ci"} and bad == {"failed", "timed_out", "unreadable", "cancelled"}
     assert workflow_outcomes.judge("wait_for_ci", {"status": "awaiting",
                                                    "await": {"kind": "ci_wait", "id": "x"}}, {}).outcome \
         == "awaiting"
@@ -394,3 +394,132 @@ def test_the_pull_request_is_labelled_and_commented_ci_changed():
     (event,) = events
     assert event[2] == "software_factory.ci_changed" and event[6]["comment"] is True
     assert event[6]["label"] is True and event[6]["files"] == [".github/workflows/release.yml"]
+
+
+# ---- fail closed: CI that cannot be read never clears a merge or a deploy -----------------------
+
+def test_ci_that_can_never_be_read_ends_unreadable_in_words():
+    class Down(FakeCi):
+        def check_runs(self, sha):
+            raise RuntimeError("GitHub answered 502")
+    clock = Clock()
+    out = _wait(Down([[]]), clock, timeout_seconds=600)
+    assert out.state == "unreadable" and out.state not in ci_gate.CLEARED
+    assert out.summary == "CI could not be read: RuntimeError: GitHub answered 502"
+
+
+@pytest.mark.parametrize("action", ["review_deployment", "deploy_stack", "review_pull_request"])
+def test_unreadable_ci_blocks_merge_and_deploy_unless_a_person_forces_the_merge(monkeypatch, action):
+    unread = {"id": "ciw_u", "status": "unreadable", "failing_url": None,
+              "summary": "CI could not be read: the pull request's head commit is unknown"}
+    monkeypatch.setattr(ci_gate, "latest_wait", lambda *a, **k: unread)
+    row = _decision(action=action, pull_request_url="https://github.test/a/b/pull/3")
+    with pytest.raises(ci_gate.CiGateRefused) as refused:
+        ci_gate.refuse_approval(NoDb(), row, "ceo")
+    assert refused.value.message.startswith("CI could not be read: the pull request's head")
+    if action == "review_pull_request":
+        ci_gate.refuse_approval(NoDb(), row, "ceo", force=True)     # a person, with a note
+    else:
+        with pytest.raises(ci_gate.CiGateRefused):
+            ci_gate.refuse_approval(NoDb(), row, "ceo", force=True)
+        with pytest.raises(ci_gate.CiGateRefused):
+            ci_gate.refuse_effect(NoDb(), "p1", {**row, "approved_by": "ceo"})
+
+
+def test_only_explicit_no_ci_passes_unread():
+    assert ci_gate.CLEARED == {"passed", "no_ci"}
+    assert "unreadable" in ci_gate.TERMINAL
+
+
+def test_the_pipeline_records_unreadable_ci_when_the_head_is_unknown(monkeypatch):
+    recorded: list = []
+    monkeypatch.setattr(ci_gate, "record_unreadable", lambda c, **kw: recorded.append(kw) or {"id": "ciw_x"})
+
+    class Tx:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *a):
+            return False
+    monkeypatch.setattr(gcts, "_transaction", lambda engine: Tx())
+    monkeypatch.setattr(gcts, "emit_event", lambda *a, **k: None)
+    sf = SimpleNamespace(github=SimpleNamespace(repository_full_name="acme/web",
+                                                pull_request_snapshot=lambda n: {"head_sha": None}))
+    out = gcts._wait_for_ci(None, SimpleNamespace(ci_wait_timeout_seconds=1800), sf,  # noqa: SLF001
+                            {"pull_request_number": 4, "pull_request_url": "u"}, "p1", "crun_1",
+                            "acme/web", sleep=lambda s: None)
+    assert out["status"] == "unreadable" and out["id"] == "ciw_x"
+    assert out["summary"] == "CI could not be read: the pull request's head commit is unknown"
+    assert recorded[0]["pull_request_url"] == "u" and recorded[0]["code_task_run_id"] == "crun_1"
+
+
+# ---- the opt-in is the grant -------------------------------------------------------------------
+
+def _claims(repos=("acme/web",), needs=None):
+    from boss_engine.identity.principal import TaskBinding
+
+    task = TaskBinding(run_id="run_ct:1", project_id="p1",
+                       resources={"github": list(repos),
+                                  "github_permissions": needs or {
+                                      "contents": "write", "pull_requests": "write",
+                                      "workflows": "write"}})
+    return SimpleNamespace(grant_id="grt_1", org_id="org_1", sub="agt_builder",
+                           chain=SimpleNamespace(agent_ids=("agt_builder",)), task=task)
+
+
+@pytest.fixture
+def no_workflows_anywhere(monkeypatch):
+    """A grant and a builder ceiling that never mention workflows: what an install has today."""
+    from boss_engine.identity import github_app, grants, passports
+
+    monkeypatch.setattr(grants, "load", lambda gid, db=None: object())
+    monkeypatch.setattr(grants, "github_resources",
+                        lambda g: {"repos": ["acme/web"], "contents": "write", "pull_requests": "write"})
+    monkeypatch.setattr(passports, "get", lambda aid, db=None: SimpleNamespace(
+        external_ceiling={"github": {"contents": "write", "pull_requests": "write"}}))
+    return github_app
+
+
+def test_the_opt_in_raises_the_grant_and_ceiling_for_its_repository_only(monkeypatch, no_workflows_anywhere):
+    github_app = no_workflows_anywhere
+    seen: list = []
+
+    def opted(db, org, project, repos):
+        seen.append((org, project, list(repos)))
+        return list(repos) == ["acme/web"]
+    monkeypatch.setattr(ci_gate, "opt_in_grants", opted)
+    perms = github_app.run_permissions(_claims(), db=None)
+    assert perms["workflows"] == "write" and perms["contents"] == "write"
+    assert seen == [("org_1", "p1", ["acme/web"])]
+    # Another repository in the same run (not opted in): nothing is raised.
+    assert "workflows" not in github_app.run_permissions(_claims(("acme/web", "acme/api")), db=None)
+    # Turned off (read live at every mint): withdrawn.
+    monkeypatch.setattr(ci_gate, "opt_in_grants", lambda *a: False)
+    assert "workflows" not in github_app.run_permissions(_claims(), db=None)
+    # A build that did not ask for workflows never gets it, opted in or not.
+    monkeypatch.setattr(ci_gate, "opt_in_grants", lambda *a: True)
+    assert "workflows" not in github_app.run_permissions(
+        _claims(needs={"contents": "write"}), db=None)
+
+
+def test_opt_in_grants_needs_every_repo_opted_in_and_the_policy(monkeypatch):
+    monkeypatch.setattr(ci_gate, "workflows_write_allowed", lambda c, p, r: r == "acme/web")
+    monkeypatch.setattr(ci_gate, "policy_allows_grant", lambda c, org: org == "org_ok")
+    assert ci_gate.opt_in_grants(NoDb(), "org_ok", "p1", ["acme/web"]) is True
+    assert ci_gate.opt_in_grants(NoDb(), "org_ok", "p1", ["acme/web", "acme/api"]) is False
+    assert ci_gate.opt_in_grants(NoDb(), "org_strict", "p1", ["acme/web"]) is False
+    assert ci_gate.opt_in_grants(NoDb(), "org_ok", "p1", []) is False
+
+
+def test_the_setting_says_in_words_when_policy_forbids_the_grant(monkeypatch):
+    monkeypatch.setattr(ci_gate, "_org_of", lambda c, p: "org_strict")
+    monkeypatch.setattr(ci_gate, "policy_allows_grant", lambda c, org: False)
+    view = ci_gate.grant_view(NoDb(), "p1", "acme/web", True)
+    assert view["applies"] is False and view["forbidden_by_policy"] is True
+    assert "GitHub will refuse the push" in view["words"] and ci_gate.POLICY_KEY in view["words"]
+    monkeypatch.setattr(ci_gate, "policy_allows_grant", lambda c, org: True)
+    ok = ci_gate.grant_view(NoDb(), "p1", "acme/web", True)
+    assert ok["applies"] is True and "for this repository only" in ok["words"]
+    assert ci_gate.grant_view(NoDb(), "p1", "acme/web", False)["applies"] is False
+    from boss_engine.identity.policy import IdentityPolicy
+    assert IdentityPolicy().github_ci_opt_in_grants_workflows is True

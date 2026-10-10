@@ -1259,7 +1259,7 @@ CREATE TABLE IF NOT EXISTS ci_waits (
   created_by TEXT NOT NULL DEFAULT 'boss',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (status IN ('waiting', 'passed', 'failed', 'timed_out', 'no_ci', 'cancelled'))
+  CHECK (status IN ('waiting', 'passed', 'failed', 'timed_out', 'no_ci', 'unreadable', 'cancelled'))
 );
 CREATE INDEX IF NOT EXISTS idx_ci_waits_project_pr
   ON ci_waits(project_id, pull_request_url, created_at DESC);

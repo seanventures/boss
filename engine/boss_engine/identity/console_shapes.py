@@ -38,6 +38,7 @@ _SAME = ("mfa_required_roles", "session_idle_minutes", "session_absolute_hours",
 #: IdentityPolicy keys S4's shape does not carry; served and accepted as-is
 _EXTRA = ("step_up_minutes", "email_magic_link", "email_code", "key_default_days",
           "key_auto_revoke_unused_days", "delegation_default_days", "github_jit_credentials",
+          "github_ci_opt_in_grants_workflows",
           "single_operator_waiver", "legacy_cutoff_days", "network_bridge_enabled")
 READ_ONLY = ("smtp", "github_require_user_repo_access_auto")
 NETWORK_REF = "BOSS_CONSOLE_AUTH=network"
