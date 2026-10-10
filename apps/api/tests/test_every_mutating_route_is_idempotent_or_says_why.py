@@ -123,11 +123,11 @@ def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_doe
     claim is replaced by a recorder that answers "replay", so no handler runs and nothing is
     written; a covered route must reach it, on its own template, and come back replayed — an
     excluded one must not reach it at all."""
-    from fastapi.testclient import TestClient
-
     from apps.api.app import main
 
     from apps.api.tests.identity_fixtures import IdentityWorld
+    from boss_engine.identity.authn import SESSION_COOKIE
+
     world = IdentityWorld.create(engine)
     owner = world.person("owned census caller")
     world.bind(owner, "owner", project=world.project_a)
@@ -144,7 +144,9 @@ def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_doe
                                  content_type="application/json")
 
     monkeypatch.setattr(main, "_idempotency_claim", recorder)
-    client = TestClient(app, raise_server_exceptions=False)
+    # Keep the fixture client's transport and select the existing IdentityWorld
+    # session seam. This is canonical authorization proof, not session-crypto QA.
+    client.cookies.set(SESSION_COOKIE, "owned-census-session-selector")
     missed, leaked = [], []
     import re as _re
 
@@ -153,20 +155,19 @@ def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_doe
             continue
         concrete = _re.sub(r"\{[^}:]+(?::path)?\}", "zzparam", route.path)
         reached.clear()
-        # Governed voice replays check current project permission before the claim.
-        # Use the actual seeded scope; do not mock away that new admission boundary.
+        # Every request has the same real owned Owner/project. Governed streams
+        # additionally check current permission before the recorder can replay.
         from apps.api.app import stream_intent
-        probe_body = ({"project_id": "boss-dogfood", "actor": "ceo",
-                       "probe": "intro", "field": "mission"}
-                      if stream_intent.governs(method, concrete) else {})
+        probe_body = {"project_id": world.project_a, "actor": owner.id}
+        if stream_intent.family(method, concrete) == "voice":
+            probe_body.update(probe="intro", field="mission")
         if stream_intent.family(method, concrete) == "conversation":
             concrete = concrete.replace("zzparam", "cnv_census")
-            with world.acting_as(world.ctx(owner)):
-                response = client.request(method, concrete, json={"project_id": world.project_a},
-                                          headers={idempotency.HEADER: "route-probe-1"})
-        else:
+        with world.acting_as(world.ctx(owner)):
             response = client.request(method, concrete, json=probe_body,
-                                      headers={idempotency.HEADER: "route-probe-1"})
+                                      headers={idempotency.HEADER: "route-probe-1",
+                                               "sec-fetch-site": "same-origin"},
+                                      follow_redirects=False)
         excluded = idempotency.exclusion_reason(method, route.path)
         if excluded:
             if reached:
