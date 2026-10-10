@@ -9,6 +9,7 @@
 import React from "react";
 
 import { money, type Meter as MeterData, type Period } from "../../lib/govern";
+import { consoleHref } from "../console-href";
 
 const TICK_LABEL: Record<string, string> = {
   soft_cap_pct: "Heads-up", auto_lite_mode_pct: "Cheaper builds",
@@ -72,6 +73,7 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
   const ticks = (["soft_cap_pct", "auto_lite_mode_pct", "freeze_provisioning_pct", "freeze_tier2_pct"] as const)
     .map((key) => ({ key, at: Number(meter[key] ?? 0) }));
   const forecast = meter.period === "day" ? meter.forecasted_24h_usd_micros : 0;
+  const historicalHold = meter.legacy_financial_hold;
   const metaTip = [
     `Reserved ${money(meter.reserved_usd_micros)} · ${holds(meter.active_reservations_count)}`,
     `Burn ${money(meter.burn_rate_usd_micros_per_hour)}/h`,
@@ -84,7 +86,9 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
         <span className="gv-meter-amount" data-testid="gv-meter-amount">
           {money(meter.committed_usd_micros)} <span className="gv-of">of</span> {money(meter.cap_usd_micros)}
         </span>
-        <span className="gv-state" data-state={meter.state} data-testid="gv-meter-state">{meter.state_label}</span>
+        <span className="gv-state" data-state={historicalHold ? "held" : meter.state} data-testid="gv-meter-state">
+          {historicalHold ? "Paid work held" : meter.state_label}
+        </span>
         <span className="gv-reset">resets {meter.resets_at_label}</span>
         <span className="gv-spacer" />
         <span className="gv-meta" data-testid="gv-meter-meta">
@@ -93,6 +97,13 @@ export function GovernMeter({ meter, error, onRetry }: { meter: MeterData | null
           {meter.time_to_cap_seconds !== null ? <span>Cap in {capIn(meter.time_to_cap_seconds)}</span> : null}
         </span>
       </div>
+      {historicalHold ? <div className="gv-legacy-hold" role="status" data-testid="gv-legacy-hold">
+        <span>An earlier model call needs reconciliation. New paid work is held. Earlier estimate {money(historicalHold.original_estimate_usd_micros)};
+          actual charge unknown. A cap reset will not clear this hold.</span>
+        {historicalHold.decision_id ? <a className="ag-link" href={consoleHref({ area: "decisions", decision: historicalHold.decision_id })}>
+          Open decision ↗
+        </a> : null}
+      </div> : null}
       <Bar cap={meter.cap_usd_micros} actual={meter.actual_usd_micros} reserved={meter.reserved_usd_micros}
            ticks={ticks} forecast={forecast} testid="gv-bar"
            forecastTip={`Spend over ${meter.burn_window_hours}h plus reservations, projected`} />
