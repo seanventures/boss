@@ -261,6 +261,8 @@ curl -X PATCH "$BOSS_URL/v1/event-subscriptions/<id>" \
 
 A meeting's PRD is approved automatically only when `BOSS_MEETING_PRD_AUTO_APPROVE` says so. Left unset, it follows `BOSS_AUTHZ_MODE`: **off under `enforce`** (the default), and on under `shadow` or `off`. So on an enforced install, a drafted PRD waits for a person who may approve it before it becomes a build. An Owner who wants the panel's PRD to go straight to a build sets `BOSS_MEETING_PRD_AUTO_APPROVE=true` in `.env` and restarts the API and worker. An automatic approval is still written and resolved as `auto_approval` in the audit trail.
 
+The same setting controls a direct-change delivery workflow's `spec_review` shortcut. With automatic approval enabled, a direct change without a PRD records that review as `not_applicable`. With the setting disabled, or if the runner cannot read it, the step retains manual review. A settings-read failure also records a warning in the API or worker log. Builds adopted from a meeting or approval decision keep their existing decision checks.
+
 ## Passing environment variables to a build's agent
 
 A build's agent gets a filtered environment: anything shaped like a secret (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*` …) is removed, and a fixed list of names can never pass. To let an extra, non-secret variable through (a test harness's stub URL, a feature flag the agent's tools read), name it in `BOSS_AGENT_ENV_ALLOW`, comma-separated, on the API and worker:
