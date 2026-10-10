@@ -15,6 +15,8 @@ RC9 builds on the published RC8 candidate and preserves the RC6.2 changes and Co
 - **Recover cleanup after restart.** A bounded durable-ledger scan can release an exact pending database/role record after both resources are proven absent. It does not grant new deletion authority. See [build isolation](SANDBOX.md).
 - **Require a working IPv6 fence.** When IPv6 is usable, missing or failed IPv6 rules keep build execution held. A positive kernel-disabled result is the only supported reason to skip those rules.
 - **Reject oversized public requests early.** SAML/SCIM proxy requests use a capped stream reader; an absent or understated length cannot make the proxy read the complete oversized request first. Existing protocol and response-stream behavior is retained.
+- **Keep an unknown repository explicit.** Factory displays “Repository unknown” when the reported owner or repository is incomplete. Its tooltip preserves the source and reported reason and points to Connect for access checks.
+- **Correct a stalled first navigation.** The web dependency includes the upstream React fix for a synchronous response that could leave a new area suspended. The final visible-browser response check remains part of release qualification.
 
 The first-use website and manual focus on one accountable software change, with actual installed-console screenshots and explicit setup requirements. The separate website release preserves its existing signup and mail service; local website preparation is not hosted deployment.
 
