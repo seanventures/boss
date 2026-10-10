@@ -9,11 +9,13 @@
  * The GitHub web origin is https://github.com, or BOSS_GITHUB_WEB_URL (a GitHub Enterprise host),
  * the same variable the API builds post_url from (engine/boss_engine/identity/github_setup.py).
  */
+import { GITHUB_WEB } from "../github-urls";
+
 export const HANDOFF_PATH = "/github-app";
 export const HANDOFF_KEY = "boss:github-app-manifest";
 
 export function githubWebOrigins(env: string | undefined = process.env.BOSS_GITHUB_WEB_URL): string[] {
-  const out = ["https://github.com"];
+  const out = [GITHUB_WEB];
   try {
     if (env && env.trim()) {
       const u = new URL(env.trim());

@@ -39,6 +39,14 @@ class SetupGitHub(FakeGitHub):
                                      serialization.NoEncryption()).decode()
         self.installs = {"4242": "acme"}
         self.token_repos = {PAT: {"acme/web"}}
+        # GitHub's own answers about accounts: a person or an organisation (github_urls).
+        self.users = {"acme": "Organization", "paramg": "User"}
+        self.owner = "acme"
+        # What the App asks for now, and what the installation ACCEPTED (they differ until the
+        # installation accepts a new permission).
+        self.app_perms = dict(github_setup.APP_PERMISSIONS)
+        self.granted = dict(github_setup.APP_PERMISSIONS)
+        self.reachable = ["acme/web"]
 
     def __call__(self, method, url, headers, body):
         from boss_engine.identity.github_app import Response
@@ -49,18 +57,40 @@ class SetupGitHub(FakeGitHub):
             if "/app-manifests/good-code/" not in url:
                 return Response(404, b"{}")
             return Response(201, json.dumps({"id": 777, "slug": "boss-test", "pem": self.pem, "client_id": "Iv1.app",
-                                             "client_secret": "app-client-secret", "owner": {"login": "acme"},
+                                             "client_secret": "app-client-secret",
+                                             "owner": {"login": self.owner, "type": self.users[self.owner]},
                                              "html_url": "https://github.test/apps/boss-test"}).encode())
         if method == "GET" and url.endswith("/app/installations"):
             self.calls.append((method, url, dict(headers), body or b""))
-            return Response(200, json.dumps([{"id": int(i), "account": {"login": a}, "repository_selection": "all"}
+            return Response(200, json.dumps([{"id": int(i), "account": {"login": a, "type": self.users.get(a)},
+                                              "repository_selection": "all"}
                                              for i, a in self.installs.items()]).encode())
         if method == "GET" and "/app/installations/" in url:
             self.calls.append((method, url, dict(headers), body or b""))
             iid = url.rsplit("/", 1)[1]
             if iid not in self.installs or not auth.startswith("Bearer ey"):
                 return Response(404, b"{}")
-            return Response(200, json.dumps({"id": int(iid), "account": {"login": self.installs[iid]}}).encode())
+            a = self.installs[iid]
+            return Response(200, json.dumps({"id": int(iid), "account": {"login": a, "type": self.users.get(a)},
+                                             "permissions": self.granted,
+                                             "repository_selection": "selected"}).encode())
+        if method == "GET" and url.endswith("/app"):
+            self.calls.append((method, url, dict(headers), body or b""))
+            return Response(200, json.dumps({"id": 777, "slug": "boss-test", "permissions": self.app_perms,
+                                             "owner": {"login": self.owner,
+                                                       "type": self.users[self.owner]}}).encode())
+        if method == "GET" and "/users/" in url:
+            self.calls.append((method, url, dict(headers), body or b""))
+            login = url.rsplit("/", 1)[1]
+            if login not in self.users:
+                return Response(404, b"{}")
+            return Response(200, json.dumps({"login": login, "type": self.users[login]}).encode())
+        if method == "GET" and "/installation/repositories" in url:
+            self.calls.append((method, url, dict(headers), body or b""))
+            return Response(200, json.dumps({"repositories": [
+                {"full_name": r, "private": True, "owner": {"login": r.split("/")[0],
+                                                            "type": self.users.get(r.split("/")[0])}}
+                for r in self.reachable]}).encode())
         if method == "GET" and url.endswith("/user"):
             self.calls.append((method, url, dict(headers), body or b""))
             ok = auth.split(" ", 1)[-1] in self.token_repos
@@ -91,6 +121,7 @@ def env(monkeypatch):
     monkeypatch.setenv("BOSS_GITHUB_API_URL", "https://api.github.test")
     monkeypatch.setenv(github_setup.WEB_BASE_ENV, "https://github.test")
     e.hub = SetupGitHub()
+    e.mp = monkeypatch
     monkeypatch.setattr(github_app, "TRANSPORT", e.hub)
     monkeypatch.setitem(vault.REFRESHERS, "github", github_app._oauth_refresh)
     return e
@@ -196,11 +227,104 @@ def test_the_manifest_and_install_states_are_signed_single_use_and_purpose_bound
     assert e.value.code == "bad_code"
 
 
+# ---- the account type decides every settings link (identity/github_urls) ------------------------------------
+
+def test_a_personal_owner_creates_the_app_on_the_personal_page_never_an_organizations_one(env):
+    """paramg is a person: /organizations/paramg/... is a 404 at GitHub. GitHub says which it is."""
+    personal = github_setup.manifest(origin="https://boss.acme.test", person_id=env.alice, owner="paramg")
+    assert personal["post_url"].startswith("https://github.test/settings/apps/new?state=")
+    assert personal["owner"] == {"login": "paramg", "type": "User"}
+    org = github_setup.manifest(origin="https://boss.acme.test", person_id=env.alice, owner="acme")
+    assert org["post_url"].startswith("https://github.test/organizations/acme/settings/apps/new?state=")
+    blank = github_setup.manifest(origin="https://boss.acme.test", person_id=env.alice)
+    assert blank["post_url"].startswith("https://github.test/settings/apps/new?state=")
+    with pytest.raises(github_setup.GitHubSetupError) as e:
+        github_setup.manifest(origin="https://boss.acme.test", person_id=env.alice, owner="nobody-here")
+    assert e.value.code == "github_account_not_found" and "nobody-here" in e.value.body()["message"]
+
+
+@pytest.mark.parametrize("kind,login,perm_root", [
+    ("User", "paramg", "https://github.test/settings"),
+    ("Organization", "acme", "https://github.test/organizations/acme/settings"),
+])
+def test_every_app_link_follows_the_account_type_github_reported(env, kind, login, perm_root):
+    env.hub.owner = login
+    env.hub.installs = {"4242": login}
+    _connect_app(env)
+    with env.db() as c:
+        row = c.execute(text("SELECT owner_login, owner_type, account_login, account_type "
+                             "FROM identity_github_app")).one()
+        assert tuple(row) == (login, kind, login, kind)
+        m = github_setup.mode(c, "org_boss")
+        link = github_setup.workflows_permission_link(c, "org_boss")
+    assert m["app"]["links"]["permissions"] == f"{perm_root}/apps/boss-test/permissions"
+    assert m["app"]["links"]["installation"] == f"{perm_root}/installations/4242"
+    assert m["app"]["links"]["install"] == "https://github.test/apps/boss-test/installations/new"
+    assert link["permissions_url"] == f"{perm_root}/apps/boss-test/permissions"
+    assert link["installation_url"] == f"{perm_root}/installations/4242"
+
+
+# ---- verify, don't trust: Setup shows what GitHub actually granted ---------------------------------------------
+
+def test_verify_reads_the_installations_real_permissions_and_repositories(env):
+    env.hub.owner = "paramg"
+    env.hub.installs = {"4242": "paramg"}
+    env.hub.reachable = ["paramg/boss-sandbox"]
+    _connect_app(env)
+    registered = ["paramg/boss-sandbox", "paramg/not-installed"]
+    env.mp.setattr(github_setup, "_registered_repos", lambda db: registered)
+    with env.db() as c:
+        out = github_setup.verify(c, "org_boss")
+    assert out["state"] == "ok" and out["account"] == {"login": "paramg", "type": "User"}
+    assert all(p["state"] == "accepted" for p in out["permissions"])
+    repos = {r["full_name"]: r for r in out["repos"]}
+    assert repos["paramg/boss-sandbox"]["installed"] is True
+    assert repos["paramg/not-installed"]["installed"] is False
+    assert repos["paramg/not-installed"]["fix_url"] == "https://github.test/settings/installations/4242"
+    assert out["ok"] is False
+    with env.db() as c:
+        cached = github_setup.mode(c, "org_boss")["app"]["verified"]
+    assert cached["repos"] == out["repos"]                       # kept: the page needs no GitHub call
+
+
+def test_verify_says_workflows_is_waiting_until_the_installation_accepts_it(env):
+    _connect_app(env)
+    from boss_engine.services import ci_gate
+
+    env.hub.app_perms = {**github_setup.APP_PERMISSIONS, "workflows": "write"}   # the App asks now
+    import unittest.mock as mock
+
+    with mock.patch.object(ci_gate, "any_repo_allows_workflows", return_value=True), env.db() as c:
+        waiting = {p["name"]: p for p in github_setup.verify(c, "org_boss")["permissions"]}
+    assert waiting["workflows"]["state"] == "waiting"
+    assert waiting["workflows"]["fix_url"] == "https://github.test/organizations/acme/settings/installations/4242"
+    env.hub.app_perms = dict(github_setup.APP_PERMISSIONS)                      # the App never asked
+    with mock.patch.object(ci_gate, "any_repo_allows_workflows", return_value=True), env.db() as c:
+        lacks = {p["name"]: p for p in github_setup.verify(c, "org_boss")["permissions"]}
+    assert lacks["workflows"]["state"] == "app_lacks"
+    assert lacks["workflows"]["fix_url"] == "https://github.test/organizations/acme/settings/apps/boss-test/permissions"
+    env.hub.granted = {**github_setup.APP_PERMISSIONS, "workflows": "write"}    # accepted on GitHub
+    with mock.patch.object(ci_gate, "any_repo_allows_workflows", return_value=True), env.db() as c:
+        out = github_setup.verify(c, "org_boss")
+        view = ci_gate._verified_workflows(github_setup.app_config(c, "org_boss"))
+    assert {p["name"]: p["state"] for p in out["permissions"]}["workflows"] == "accepted"
+    assert view["state"] == "accepted"
+
+
+def test_verify_says_when_the_app_was_uninstalled_on_github(env):
+    _connect_app(env)
+    env.hub.installs = {}
+    with env.db() as c:
+        out = github_setup.verify(c, "org_boss")
+    assert out["state"] == "installation_gone" and out["ok"] is False
+    assert out["links"]["install"] == "https://github.test/apps/boss-test/installations/new"
+
+
 def test_the_installation_picker_only_accepts_this_apps_installations(env):
     _connect_app(env)
     with env.db() as c:
         assert github_setup.installations(db=c, org_id="org_boss") == [
-            {"id": "4242", "account": "acme", "repository_selection": "all"}]
+            {"id": "4242", "account": "acme", "account_type": "Organization", "repository_selection": "all"}]
         with pytest.raises(github_setup.GitHubSetupError) as e:
             github_setup.select_installation(installation_id="9999", org_id="org_boss", db=c, by=env.alice)
     assert e.value.code == "not_this_apps_installation"
@@ -375,8 +499,9 @@ def test_every_github_setup_route_is_declared_and_changes_need_github_connect():
         assert access is not None, route.path
         if route.path.endswith(("/created", "/installed")):
             assert type(access).__name__ == "Public"
-        elif route.methods == {"GET"}:
-            # a read (the status, the installation picker) needs only github:read
+        elif route.methods == {"GET"} or route.path.endswith("/app/verify"):
+            # a read (the status, the installation picker; verify asks GitHub what it granted and
+            # keeps that answer, changing no credential) needs only github:read
             assert access.permission == "github:read", route.path
         else:
             assert access.permission == "github:connect", route.path

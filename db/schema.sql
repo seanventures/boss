@@ -7549,6 +7549,15 @@ CREATE TABLE IF NOT EXISTS identity_github_app (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Which settings tree each GitHub link goes to (identity/github_urls.py): the App's OWNER and the
+-- installation's ACCOUNT, each "User" or "Organization", as GitHub's API reports them. And what
+-- GitHub last said the installation was actually granted (permissions, repositories), so Setup
+-- shows what GitHub accepted rather than what BOSS asked for.
+ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS owner_login TEXT;
+ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS owner_type TEXT;
+ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS account_type TEXT;
+ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS verified JSONB;
+ALTER TABLE identity_github_app ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
 
 -- "Request access" from a refusal (amendment A13): who asked for which permission where, kept so
 -- an admin can see open requests and the requester is never asked twice. Decided by a binding.

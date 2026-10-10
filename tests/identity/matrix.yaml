@@ -701,6 +701,7 @@
 "POST /v1/identity/github/app/installation": ["permit github:connect @ org", "OA"]
 "GET /v1/identity/github/app/installations": ["permit github:read @ org", "OAPVU"]
 "GET /v1/identity/github/app/installed": ["public:oauth_state_bound_callback", "OAPVU"]
+"POST /v1/identity/github/app/verify": ["permit github:read @ org", "OAPVU"]
 "POST /v1/identity/github/app/manifest": ["permit github:connect @ org", "OA"]
 "DELETE /v1/identity/github/token": ["permit github:connect @ org", "OA"]
 "POST /v1/identity/github/token": ["permit github:connect @ org", "OA"]

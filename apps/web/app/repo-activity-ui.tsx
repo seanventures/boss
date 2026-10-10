@@ -1,4 +1,5 @@
 import { ClientRelativeTime } from "./client-relative-time";
+import { repoUrl } from "../lib/github-urls";
 import type { RepoActivity, RepoRecentRun } from "../lib/repo-activity";
 
 /** The GitHub area used to show only "is a connection configured", which tells a developer
@@ -56,7 +57,7 @@ function RepoCard({ repo }: { repo: RepoActivity }) {
           <span className="eyebrow">Repository</span>
           <h3 className="ra-repo-name">
             <a
-              href={`https://github.com/${repo.full_name}`}
+              href={repoUrl(repo.full_name)}
               target="_blank"
               rel="noreferrer"
             >

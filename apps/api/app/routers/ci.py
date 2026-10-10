@@ -72,21 +72,45 @@ def build_ci_router(*, engine, get_settings: Callable[[], Any], require_actor: C
         raise HTTPException(status_code=error.status,
                             detail={"error": error.code, "message": error.message}) from error
 
-    def _app_cfg(connection) -> dict[str, Any]:
+    def _app_cfg(connection, *, verify: bool = False) -> dict[str, Any]:
+        """The App's row. verify=True asks GitHub first what the installation actually accepted
+        (github_setup.verify), so the page says "accepted" or "waiting" from GitHub's answer."""
         try:
-            return dict(github_setup.app_config(connection))
+            cfg = dict(github_setup.app_config(connection))
         except Exception:  # noqa: BLE001 — no identity tables: no App to link
             return {}
+        if verify and cfg.get("source") == "setup" and cfg.get("app_id"):
+            try:
+                nested = connection.begin_nested()
+                try:
+                    github_setup.verify(connection)
+                    nested.commit()
+                except Exception:
+                    nested.rollback()
+                    raise
+                cfg = dict(github_setup.app_config(connection))
+            except Exception:  # noqa: BLE001 — GitHub unreachable: the last answer stands
+                pass
+        return cfg
+
+    def _wants_check(connection, project_id: str, binding_id: str) -> bool:
+        """On and never verified since: ask GitHub once (the page then shows its answer)."""
+        try:
+            view = ci_gate.setting_view(connection, project_id, binding_id, _app_cfg(connection))
+        except ci_gate.CiSettingError:
+            return False
+        return bool(view.get("enabled")) and (view.get("workflows") or {}).get("state") == "unknown"
 
     @router.get("/v1/setup/repository/{binding_id}/ci-workflows")
     @permit(P.GITHUB_READ, scope=Scope.project(query="project_id"))
-    def get_ci_workflows(binding_id: str, project_id: str) -> dict[str, Any]:
+    def get_ci_workflows(binding_id: str, project_id: str, recheck: bool = False) -> dict[str, Any]:
         """"Builds may change CI workflows" for one repository, and — when on — the exact GitHub
         pages where the App's `workflows: write` permission is accepted."""
         with begin(engine) as connection:
             try:
+                verify = recheck or _wants_check(connection, project_id, binding_id)
                 return ci_gate.setting_view(connection, project_id, binding_id,
-                                            _app_cfg(connection), github_setup.web_base())
+                                            _app_cfg(connection, verify=verify), github_setup.web_base())
             except ci_gate.CiSettingError as error:
                 fail(error)
         raise AssertionError("unreachable")
@@ -103,7 +127,7 @@ def build_ci_router(*, engine, get_settings: Callable[[], Any], require_actor: C
                 ci_gate.set_workflows_write(connection, body.project_id, binding_id,
                                             body.enabled, actor=actor)
                 return ci_gate.setting_view(connection, body.project_id, binding_id,
-                                            _app_cfg(connection), github_setup.web_base())
+                                            _app_cfg(connection, verify=body.enabled), github_setup.web_base())
             except ci_gate.CiSettingError as error:
                 fail(error)
         raise AssertionError("unreachable")

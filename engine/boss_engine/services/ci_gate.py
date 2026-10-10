@@ -376,35 +376,41 @@ def any_repo_allows_workflows(connection: Any) -> bool:
         return False
 
 
-def permissions_link(app_cfg: Mapping[str, Any], web_base: str = "https://github.com") -> dict[str, Any]:
+def permissions_link(app_cfg: Mapping[str, Any], web_base: Optional[str] = None) -> dict[str, Any]:
     """Where an operator accepts `workflows: write` for an App created before the opt-in.
 
-    The App's permissions page (personal or organisation-owned); after saving there, GitHub asks
-    every installation to accept the new permission on the installation's own settings page."""
-    slug = app_cfg.get("slug")
-    owner = app_cfg.get("account_login")
-    base = web_base.rstrip("/")
-    inst = app_cfg.get("installation_id")
+    The App's permissions page (in its OWNER's settings tree), then the installation's page (in
+    the tree of the account it is installed on), each built by identity/github_urls from the
+    account type GitHub reported. `web_base` is accepted for older callers and ignored: the
+    builder reads the same BOSS_GITHUB_WEB_URL."""
+    from ..identity import github_urls
+
+    del web_base
+    slug = str(app_cfg.get("slug") or "")
     if not slug:
         return {"permissions_url": None, "installation_url": None,
                 "note": ("No GitHub App was created from Setup here, so BOSS cannot link it. Open "
                          "your App's settings at GitHub > Settings > Developer settings > GitHub "
                          "Apps, add Repository permission 'Workflows: Read and write', save, then "
                          "accept the new permission on the installation.")}
-    org_path = f"{base}/organizations/{owner}/settings/apps/{slug}/permissions"
-    user_path = f"{base}/settings/apps/{slug}/permissions"
-    perm_url = org_path if owner else user_path
-    install_url = (f"{base}/organizations/{owner}/settings/installations/{inst}" if owner and inst
-                   else f"{base}/settings/installations/{inst}" if inst else None)
-    return {
-        "permissions_url": perm_url,
-        "permissions_url_personal": user_path,
+    owner = github_urls.Account.of(app_cfg.get("owner_login") or app_cfg.get("account_login"),
+                                   app_cfg.get("owner_type"))
+    account = github_urls.Account.of(app_cfg.get("account_login"), app_cfg.get("account_type"))
+    perm_url = github_urls.app_permissions(slug, owner)
+    install_url = github_urls.installation_settings(app_cfg.get("installation_id"), account)
+    out = {
+        "permissions_url": perm_url or github_urls.app_public(slug),
         "installation_url": install_url,
         "note": ("Open the App's permissions page, set Repository permissions > Workflows to "
                  "'Read and write' and save. GitHub then asks the installation to accept it: open "
                  "the installation's settings page and press 'Accept new permissions'. Until both "
                  "are done GitHub refuses pushes that touch .github/workflows/."),
     }
+    if not perm_url:
+        out["note"] = ("GitHub has not told BOSS yet whether the App belongs to a person or an "
+                       "organisation, so this opens the App's public page: choose App settings > "
+                       "Permissions & events there. " + out["note"])
+    return out
 
 
 #: The identity policy key that lets the opt-in raise a build's grant and the builder's ceiling.
@@ -483,7 +489,26 @@ def setting_view(connection: Any, project_id: str, binding_id: str,
            "grant": grant_view(connection, project_id, row["full_name"], enabled)}
     if enabled:
         out.update(permissions_link(app_cfg or {}, web_base))
+        out["workflows"] = _verified_workflows(app_cfg or {})
     return out
+
+
+def _verified_workflows(app_cfg: Mapping[str, Any]) -> dict[str, Any]:
+    """What GitHub last said about `workflows` on the installation (github_setup.verify), never
+    what BOSS asked for: accepted, waiting (the App asks; the installation has not accepted),
+    app_lacks (the App does not ask yet), or unknown (not verified since it was turned on)."""
+    raw = app_cfg.get("verified")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raw = None
+    perms = (raw or {}).get("permissions") if isinstance(raw, dict) else None
+    for p in perms or ():
+        if p.get("name") == "workflows":
+            return {"state": p.get("state"), "fix_url": p.get("fix_url"),
+                    "checked_at": (raw or {}).get("checked_at")}
+    return {"state": "unknown", "fix_url": None, "checked_at": (raw or {}).get("checked_at") if raw else None}
 
 
 def set_workflows_write(connection: Any, project_id: str, binding_id: str, enabled: bool, *,
