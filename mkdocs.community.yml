@@ -1,5 +1,5 @@
 site_name: BOSS
-site_description: The self-hosted control plane for AI software work
+site_description: Delegate one useful software change with plans, decisions, cost evidence and a work history you can inspect
 site_url: https://boss.sean.network/docs/
 repo_url: https://github.com/seanventures/boss
 repo_name: seanventures/boss
@@ -60,6 +60,7 @@ markdown_extensions:
 nav:
   - Home: README.md
   - Get started:
+      - First useful change: FIRST_USEFUL_CHANGE.md
       - Getting started: GETTING_STARTED.md
       - Quickstart: QUICKSTART.md
       - Deploy: hostname.md

@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BOSS: an open source software factory you run yourself</title>
-<meta name="description" content="Give BOSS a goal. AI roles write the PRD, agents implement and test it, and a pull request arrives with evidence. You approve every gate, and every spend and side effect has a receipt. Self-hosted, Apache 2.0.">
-<meta property="og:title" content="BOSS: an open source software factory you run yourself">
-<meta property="og:description" content="Governed AI software work on your own infrastructure. Plans, budgets, approvals, and receipts. Apache 2.0.">
+<title>BOSS — Delegate one useful software change</title>
+<meta name="description" content="Self-hosted AI software work with a plan you can read, decisions you control, cost evidence and a work history you can inspect. BOSS Community, Apache 2.0.">
+<meta property="og:title" content="BOSS — Delegate one useful software change">
+<meta property="og:description" content="Know what ran, what it cost, what needs your decision, and how to continue safely. Self-hosted BOSS Community.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://boss.sean.network/">
 <link rel="canonical" href="https://boss.sean.network/">
@@ -14,488 +14,109 @@
 <link rel="icon" href="assets/boss-mark.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <script src="app.js" defer></script>
 </head>
 <body>
-
+<a class="skip" href="#main">Skip to content</a>
 <header class="site-header">
-  <div class="wrap">
-    <div class="header-left">
-      <a class="brand" href="./" aria-label="BOSS home">
-        <img src="assets/boss-mark.png" alt="">
-        <span>BOSS</span>
-      </a>
-      <nav class="site-nav" aria-label="Primary">
-        <a href="#how">How it works</a>
-        <a href="#features">Features</a>
-        <a href="#examples">Examples</a>
-        <a href="docs/">Docs</a>
-        <a href="#community">Community</a>
-      </nav>
-    </div>
-    <div class="header-right">
-      <a class="gh-link" href="https://github.com/seanventures/boss" aria-label="BOSS on GitHub">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-        <span>GitHub</span>
-        <span class="stars" data-stars></span>
-      </a>
-      <a class="install-link" href="#install">Install</a>
-    </div>
+  <div class="wrap header-inner">
+    <a class="brand" href="./" aria-label="BOSS home"><img src="assets/boss-mark.png" alt=""><span>BOSS</span></a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="#how">How it works</a><a href="#ready">Before you start</a><a href="docs/">Docs</a>
+    </nav>
+    <a class="header-action" href="https://github.com/seanventures/boss">GitHub <span aria-hidden="true">↗</span></a>
   </div>
 </header>
-
-<main>
-
-  <section class="section hero">
-    <div class="wrap">
-      <div class="hero-copy">
-        <h1>An open source software factory you run yourself.</h1>
-        <p class="hero-lede">Give BOSS a goal. A panel of AI roles writes the PRD, an architect reviews it, agents implement and test it in a sandbox, and a pull request arrives with evidence. You approve every gate, and every spend and side effect has a receipt.</p>
-        <div class="hero-ctas">
-          <a class="btn btn-primary" href="docs/QUICKSTART/">Get started</a>
-          <a class="btn btn-ghost" href="https://github.com/seanventures/boss">Source on GitHub</a>
-          <span class="hero-license">Apache License 2.0</span>
-        </div>
-      </div>
-
-      <figure class="console" aria-label="Illustration of Mission Control">
-        <div class="console-bar">
-          <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
-          <div class="console-tabs" role="tablist">
-            <button class="tab" role="tab" aria-selected="true" data-pane="approvals">Approvals</button>
-            <button class="tab" role="tab" aria-selected="false" data-pane="activity">Activity log</button>
-            <button class="tab" role="tab" aria-selected="false" data-pane="govern">Govern</button>
-          </div>
-          <span class="console-url">boss.example.com</span>
-        </div>
-        <div class="console-body">
-          <aside class="console-side">
-            <div class="console-brand"><img src="assets/boss-mark.png" alt=""><b>BOSS</b><span>Mission Control</span></div>
-            <div class="side-group">
-              <div class="side-label">Platform</div>
-              <div class="side-item">Command Center</div>
-            </div>
-            <div class="side-group">
-              <div class="side-label">Run</div>
-              <div class="side-item">Agent work</div>
-              <div class="side-item">Team structure</div>
-              <div class="side-item">Agent Studio</div>
-              <div class="side-item on" data-side="approvals">Approvals</div>
-              <div class="side-item" data-side="activity">Activity log</div>
-              <div class="side-item">Evidence</div>
-            </div>
-            <div class="side-group">
-              <div class="side-label">Settings</div>
-              <div class="side-item">Repo and models</div>
-              <div class="side-item" data-side="govern">Govern</div>
-              <div class="side-item">Communications</div>
-              <div class="side-item">Identity</div>
-            </div>
-          </aside>
-          <div class="console-main">
-            <div class="pane" data-pane-id="approvals">
-              <div class="pane-title">Approvals</div>
-              <div class="pane-sub">Agents proposed. <em>You decide.</em></div>
-              <div class="pane-label">Needs action</div>
-              <div class="empty">
-                <b>Queue is clear</b>
-                <p>Nothing needs your signature. Decisions appear here when work hits a gate that requires a person.</p>
-              </div>
-              <div class="pane-label">What requires your approval, and why</div>
-              <div class="rule-row"><span>Any spend above the per-task quote</span><span>Budget reservation</span></div>
-              <div class="rule-row"><span>Anything that leaves this server</span><span>External effect</span></div>
-              <div class="rule-row"><span>Merging to a protected branch</span><span>Merge authorization</span></div>
-              <div class="rule-row"><span>Changes to BOSS itself</span><span>PR, tests, approval, rollback</span></div>
-            </div>
-            <div class="pane" data-pane-id="activity" hidden>
-              <div class="pane-title">Activity log</div>
-              <div class="pane-sub">Central log of events, steps, jobs, receipts, and deadletters.</div>
-              <div class="chips">
-                <span class="chip">event</span><span class="chip">process_step</span><span class="chip">job</span><span class="chip">deadletter</span><span class="chip">receipt</span><span class="chip">llm_call</span><span class="chip">agent_turn</span><span class="chip">app_log</span><span class="chip">workflow_step</span><span class="chip">deployment</span>
-              </div>
-              <div class="log-head"><span>Time</span><span>Source</span><span>Message</span><span>Actor</span></div>
-              <div class="log-empty">No rows recorded for this project yet. When the log cannot be loaded, it says so; no rows are invented.</div>
-            </div>
-            <div class="pane" data-pane-id="govern" hidden>
-              <div class="pane-title">Govern</div>
-              <div class="pane-sub">How hard BOSS runs: concurrency, turn budgets, and spend.</div>
-              <div class="knob"><div><b>Concurrency</b><p>How many leased jobs may run at once.</p></div><code>not set</code></div>
-              <div class="knob"><div><b>Turn budget</b><p>Model turns a single task may take before it stops for you.</p></div><code>not set</code></div>
-              <div class="knob"><div><b>Spend ceiling</b><p>Total a project may reserve. Every spend is quoted and reserved first.</p></div><code>not set</code></div>
-              <div class="knob"><div><b>Gate autonomy</b><p>Which gates a person must sign. Changing it needs a separate CEO confirmation.</p></div><code>all gates human</code></div>
-            </div>
-          </div>
-        </div>
-        <figcaption class="console-foot">Illustration of Mission Control on a fresh install. Screen names and copy are from the console; no operational data is shown.</figcaption>
-      </figure>
+<main id="main">
+<section class="hero">
+  <div class="wrap hero-layout">
+    <div class="hero-copy">
+      <p class="eyebrow">Self-hosted software work · Community preview</p>
+      <p class="hero-brand" aria-hidden="true">BOSS</p>
+      <h1>Delegate one useful<br>software change.</h1>
+      <p class="hero-lede">Know what ran, what it cost, what needs your decision, and how to continue safely.</p>
+      <div class="hero-ctas"><a class="btn btn-primary" href="docs/FIRST_USEFUL_CHANGE/">Start with one change <span aria-hidden="true">↗</span></a><a class="btn btn-ghost" href="#install">Install the release</a></div>
+      <p class="hero-meta">Your server. Your repository. Your model access.<br>Apache License 2.0 · Release candidate</p>
     </div>
-  </section>
-
-  <section class="section section-flush" aria-label="BOSS in numbers">
-    <div class="wrap numbers">
-      <div class="number"><b data-count="api">983</b><span>mounted API operations, all mapped for the terminal and MCP</span></div>
-      <div class="number"><b>106</b><span>typed engine tools over MCP: 61 read, 45 write</span></div>
-      <div class="number"><b>34</b><span>agent definitions and 3 panels seeded on first run</span></div>
-      <div class="number"><b>5</b><span>example workflows built only from the public API</span></div>
+    <figure class="product-capture">
+      <a href="assets/screenshots/home-28d75d69.jpg" aria-label="Open the full installed Command Center screenshot"><img src="assets/screenshots/home-28d75d69.jpg" alt="Actual installed BOSS Command Center with repository and model setup actions and no work in flight." width="1272" height="1120"></a>
+      <figcaption>Actual installed console · new Owner, setup pending.<br>Disposable RC8-image baseline; no live-provider result. <a href="assets/screenshots/provenance.json">Capture details</a></figcaption>
+    </figure>
+  </div>
+</section>
+<section class="release-line" aria-label="Release status"><div class="wrap"><span class="status-dot" aria-hidden="true"></span><p><a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc8">RC8 source is available.</a> Useful live-provider results, independent first use and hosted parity remain qualification work. <a href="docs/RC8_VALIDATION/">Read the evidence and limits <span aria-hidden="true">↗</span></a></p></div></section>
+<section class="section" id="how">
+  <div class="wrap">
+    <div class="section-intro" data-reveal><p class="eyebrow">One complete path</p><h2>A change you can<br>follow and review.</h2><p>BOSS keeps the work around the model: the plan, the decisions, the attempts and the evidence. Start with a small correction you can check yourself.</p></div>
+    <ol class="work-path">
+      <li data-reveal><span class="step-number">01</span><div><h3>Say what good looks like.</h3><p>Choose one repository and a bounded task. Name the intended behavior, allowed scope, acceptance checks and spending allowance.</p><a href="docs/FIRST_USEFUL_CHANGE/#3-write-a-bounded-work-agreement">Write the brief <span aria-hidden="true">↗</span></a></div></li>
+      <li data-reveal><span class="step-number">02</span><div><h3>Read the plan before the work.</h3><p>Follow the selected workflow and its required decisions. Standard Product Delivery includes a panel and PRD review; its default has no separate Architecture step.</p><a href="docs/GETTING_STARTED/#6-follow-the-governed-path">See the current workflow <span aria-hidden="true">↗</span></a></div></li>
+      <li data-reveal><span class="step-number">03</span><div><h3>Inspect the actual result.</h3><p>Open the deliverable in Factory, compare it with your checks and verify the exact revision. A completed job or a created pull request is evidence to review.</p><a href="docs/FIRST_USEFUL_CHANGE/#5-review-the-deliverable-and-exact-revision">Review the result <span aria-hidden="true">↗</span></a></div></li>
+    </ol>
+  </div>
+</section>
+<section class="section" id="ready">
+  <div class="wrap two-col">
+    <div class="section-intro" data-reveal><p class="eyebrow">For people who own the code</p><h2>One Owner.<br>One repository.<br>One useful task.</h2><p>Built for technical founders, independent developers and small engineering operators who can administer a single-tenant server and review their software.</p></div>
+    <div class="requirements" data-reveal>
+      <h3>Before you delegate</h3>
+      <dl>
+        <div><dt>A host you administer</dt><dd>A supported Linux/Docker install, storage for the services and backups, and time to claim the named Owner account. <a href="docs/QUICKSTART/">Host requirements</a></dd></div>
+        <div><dt>A repository you may change</dt><dd>Connect GitHub and inspect the granted permissions. Choose a non-production repository for your first attempt.</dd></div>
+        <div><dt>Authorized model access</dt><dd>Use a supported provider or local model. Hosted calls send selected task data to the provider. Personal coding subscriptions remain within their permitted owner/single-tenant use.</dd></div>
+        <div><dt>Checks you can run</dt><dd>Define success before starting. Keep merge and deployment as separate decisions after you review the output.</dd></div>
+      </dl>
+      <p class="detail-note">Allow time for setup and model work. Historical CPU-only timings are in the guide; a fast or successful first result is not guaranteed.</p>
     </div>
-  </section>
-
-  <section class="section" id="how">
-    <div class="wrap">
-      <div class="intro">
-        <h2 class="h2">From goal to pull request.</h2>
-        <p class="lede">This is the governed code path. Each phase is a leased job with a budget reservation, and each handoff is recorded. The gates are enforced by the API, not by the model.</p>
-      </div>
-      <div class="grid-lines loop">
-        <div class="step"><div class="n">01</div><h3>Goal</h3><p>Describe what to build in Command Center, the terminal, or an MCP client. Build starts the governed path; Talk to BOSS starts nothing.</p></div>
-        <div class="step"><div class="n">02</div><h3>PRD</h3><p>A panel of role-scoped agents (PM, architect, CTO, VP-PM) drafts and reviews a PRD. You approve it before any code exists.</p></div>
-        <div class="step"><div class="n">03</div><h3>Spec and architecture</h3><p>The task is broken into phases. Each phase quotes and reserves budget before a model is called.</p></div>
-        <div class="step"><div class="n">04</div><h3>Implement and test</h3><p>Agents write code in a sandbox on a fenced branch lease. Tests, browser runs, and artifacts are attached as evidence.</p></div>
-        <div class="step"><div class="n">05</div><h3>Pull request</h3><p>A review packet opens on your GitHub repository. Merge needs a separate authorization, and the merge itself gets a receipt.</p></div>
-        <div class="step"><div class="n">06</div><h3>Verify and ship</h3><p>A task is done when evidence exists, receipts exist, budget has settled, and every sensitive step has a recorded decision.</p></div>
-      </div>
+  </div>
+</section>
+<section class="section" id="controls">
+  <div class="wrap">
+    <div class="section-intro" data-reveal><p class="eyebrow">Control through visible records</p><h2>Keep the questions<br>you need to answer.</h2></div>
+    <div class="control-list">
+      <article data-reveal><h3>What needs my decision?</h3><p>Home points to the current record. Approvals holds the decisions required by the selected workflow and policy. Open the scope and evidence before continuing.</p><a href="docs/walkthroughs/">Tour the controls <span aria-hidden="true">↗</span></a></article>
+      <article data-reveal><h3>What did it cost?</h3><p>Read estimated, reserved, observed and reconciled cost separately. Governed spending uses reservations; a reservation is not a hard ceiling on the provider's invoice.</p><a href="docs/ARCHITECTURE_GOVERNANCE/">Spending and authority <span aria-hidden="true">↗</span></a></article>
+      <article data-reveal><h3>Can I continue safely?</h3><p>Jobs, receipts and failures retain a trail. A Stop request may leave a submitted call or held budget. Reconcile uncertain external outcomes before retrying.</p><a href="docs/FIRST_USEFUL_CHANGE/#if-work-stops-or-the-outcome-is-uncertain">Handle a hold or failure <span aria-hidden="true">↗</span></a></article>
     </div>
-  </section>
-
-  <section class="section" id="interfaces">
-    <div class="wrap two-col">
-      <div>
-        <h2 class="h2">One API. Console, terminal, and MCP on top.</h2>
-        <p class="lede">Mission Control, the Metatron terminal, and MCP clients all call the same authenticated HTTP API. It checks project membership, permission, budget, approval, lease, and receipt rules on each request, and shows denials instead of pretending the work happened.</p>
-        <dl class="facts">
-          <div><dt>HTTP</dt><dd>OpenAPI contract with typed request bodies. Discover operations at <span class="mono">/openapi.json</span>.</dd></div>
-          <div><dt>Terminal</dt><dd><span class="mono">make metatron</span>. <span class="mono">/ops</span> to search, <span class="mono">/describe</span> to inspect, <span class="mono">/op</span> to call, <span class="mono">--json</span> for scripts.</dd></div>
-          <div><dt>MCP</dt><dd>Native engine tools, plus search and invocation of the mounted API through a dedicated project credential.</dd></div>
-          <div><dt>Console</dt><dd>Mission Control for your team, served over HTTPS on your domain or private network.</dd></div>
-        </dl>
-      </div>
-      <div class="code-card">
-        <div class="code-tabs" role="tablist">
-          <button class="code-tab" role="tab" aria-selected="true" data-surface="http">HTTP</button>
-          <button class="code-tab" role="tab" aria-selected="false" data-surface="terminal">Terminal</button>
-          <button class="code-tab" role="tab" aria-selected="false" data-surface="mcp">MCP</button>
-        </div>
-<pre data-surface-id="http">POST /v1/tasks
-Authorization: Bearer boss_pat_…
-Content-Type: application/json
-
-{
-  "project_id": "boss-dogfood",
-  "title": "Plan launch",
-  "dedupe_key": "launch-plan-1"
-}</pre>
-<pre data-surface-id="terminal" hidden>$ make metatron
-
-metatron> /project boss-dogfood
-metatron> /tasks
-metatron> /task create launch-plan-1 Plan launch
-metatron> /decisions
-metatron> /decision approve dec-launch-1 Release gates reviewed</pre>
-<pre data-surface-id="mcp" hidden>$ make mcp-setup   # once: a project-scoped member and key
-$ make mcp         # the command your MCP client launches
-
-api_find_operations({"query": "create task"})
-api_write_operation({
-  "operation": "&lt;operation id&gt;",
-  "body": {"title": "Plan launch",
-           "dedupe_key": "launch-plan-1"}
-})</pre>
-        <div class="code-note" data-surface-note="http">Sending the same <span class="mono">dedupe_key</span> twice is rejected instead of creating a duplicate.</div>
-        <div class="code-note" data-surface-note="terminal" hidden>A successful call means the API accepted it. Check the receipt and event records before treating work as done.</div>
-        <div class="code-note" data-surface-note="mcp" hidden>One client, one pinned project, one dedicated credential. Sensitive operations need a person to confirm the exact request.</div>
-      </div>
+  </div>
+</section>
+<section class="section" id="interfaces">
+  <div class="wrap two-col">
+    <div class="section-intro" data-reveal><p class="eyebrow">Use the surface that suits the work</p><h2>Console, terminal<br>and your coding agent.</h2><p>Mission Control, the Metatron terminal and API-backed MCP share the authenticated control plane. Each operation retains its own authority, budget and effect requirements.</p><a class="text-link" href="docs/CONTROL_SURFACES/">Understand the boundaries <span aria-hidden="true">↗</span></a></div>
+    <div class="interface-list" data-reveal>
+      <a href="docs/walkthroughs/"><span>Mission Control</span><small>Next action, decisions, steps and deliverables</small><b aria-hidden="true">↗</b></a>
+      <a href="docs/TERMINAL_API/"><span>Metatron terminal</span><small>Find and inspect API operations from the keyboard</small><b aria-hidden="true">↗</b></a>
+      <a href="docs/MCP/"><span>MCP</span><small>Project-scoped access for your existing agent</small><b aria-hidden="true">↗</b></a>
+      <a href="docs/FEATURES/"><span>Full capability list</span><small>Current, preview and planned behavior</small><b aria-hidden="true">↗</b></a>
     </div>
-  </section>
-
-  <section class="section" id="features">
-    <div class="wrap">
-      <div class="intro-row">
-        <div class="intro">
-          <h2 class="h2">What ships in Community.</h2>
-          <p class="lede">The whole product, self-hosted, without a hosted account. Where something is in preview or paused, it says so.</p>
-        </div>
-        <a class="link-strong" href="docs/FEATURES/">Full feature list</a>
-      </div>
-      <div class="grid-lines features">
-        <div class="feature-group"><h3>Control plane</h3><ul>
-          <li class="ok">Durable tasks, plans, and jobs in Postgres</li>
-          <li class="ok">Job leases, heartbeat, and fencing</li>
-          <li class="ok">Decision inbox: approve, reject, escalate</li>
-          <li class="ok">Receipts with unique dedupe keys</li>
-          <li class="ok">Budget quote, reserve, consume, release</li>
-          <li class="ok">Deadletters with retry, requeue, escalate, hold</li>
-          <li class="ok">Event and audit feed</li>
-          <li class="part">Searchable global activity log</li>
-        </ul></div>
-        <div class="feature-group"><h3>Interfaces</h3><ul>
-          <li class="ok">HTTP API with OpenAPI contract</li>
-          <li class="ok">Metatron terminal</li>
-          <li class="ok">Self-hosted Mission Control console</li>
-          <li class="ok">API client package</li>
-          <li class="part">MCP server for agent clients</li>
-        </ul></div>
-        <div class="feature-group"><h3>Software Factory</h3><ul>
-          <li class="ok">Outcome to governed code task</li>
-          <li class="ok">Spec, architecture, implement, test phases</li>
-          <li class="ok">Evidence-backed completion</li>
-          <li class="ok">PR and review packets on GitHub</li>
-          <li class="ok">Browser and automated test evidence</li>
-          <li class="part">Sandbox execution (local subprocess)</li>
-          <li class="part">Discovery research (governed job, needs Claude Code)</li>
-          <li class="part">Live debugging (paused)</li>
-        </ul></div>
-        <div class="feature-group"><h3>GitHub</h3><ul>
-          <li class="ok">Project connection and repo binding</li>
-          <li class="ok">Branch policies and immutable snapshots</li>
-          <li class="ok">Fenced branch leases</li>
-          <li class="ok">Safe sync and conflict resolution</li>
-          <li class="ok">Merge authorizations</li>
-          <li class="ok">Durable reconciler</li>
-        </ul></div>
-        <div class="feature-group"><h3>Models and skills</h3><ul>
-          <li class="ok">Bring-your-own keys stored as SecretRefs</li>
-          <li class="ok">Local and OpenAI-compatible endpoints</li>
-          <li class="ok">Role packs and skill packs</li>
-          <li class="ok">Pack YAML import and export</li>
-          <li class="part">Agent Studio starter catalog (34 agents)</li>
-        </ul></div>
-        <div class="feature-group"><h3>Workforce and ops</h3><ul>
-          <li class="ok">Role-scoped agents and multi-agent panels</li>
-          <li class="ok">Work orchestration and portfolio</li>
-          <li class="ok">Provider accounts and read-only inventory</li>
-          <li class="ok">ChangeSets: plan, approve, apply</li>
-          <li class="ok">Self-hosted SSO (OIDC, SAML, SCIM)</li>
-          <li class="part">Metatron captain and always-on agents</li>
-          <li class="part">AI SRE kernel (observe-only)</li>
-        </ul></div>
-      </div>
-      <div class="legend"><span><span class="ok">●</span> Stable</span><span><span class="part">◐</span> Preview or paused</span></div>
+  </div>
+</section>
+<section class="section install-section" id="install">
+  <div class="wrap">
+    <div class="section-intro" data-reveal><p class="eyebrow">Start deliberately</p><h2>Install a pinned release.<br>Then choose one change.</h2><p>RC8 ships source and a checksum. Use Git and an account with repository access if GitHub asks you to sign in. The installer sets up the services on the host you control.</p></div>
+    <div class="install-code" data-reveal>
+      <div class="code-head"><span>Published source · v1.0-rc8</span><button type="button" data-copy aria-label="Copy the pinned release install commands">Copy</button><span class="copy-status" role="status" aria-live="polite" data-copy-status></span></div>
+      <pre data-copy-source><code>(
+  set -e
+  git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git boss-rc8
+  cd boss-rc8
+  BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
+  ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
+)</code></pre>
     </div>
-  </section>
-
-  <section class="section" id="examples">
-    <div class="wrap">
-      <div class="intro">
-        <h2 class="h2">Five workflows, built from the public API.</h2>
-        <p class="lede">Each is a setup script plus a README that shows how to build the same thing by hand. Installing one creates definitions in your project; every external action stops for approval.</p>
-      </div>
-      <div class="examples">
-        <a class="example" href="https://github.com/seanventures/boss/tree/main/examples/video-workflow">
-          <div><div class="name">video-workflow</div><div class="title">Edit a video and publish it</div></div>
-          <div class="body">Paste a link and say what you want done. An agent composes its own editing skills to satisfy the sentence; publishing waits for you.</div>
-          <div class="steps">fetch and edit → publish (stops)</div>
-        </a>
-        <a class="example" href="https://github.com/seanventures/boss/tree/main/examples/meeting-to-tickets">
-          <div><div class="name">meeting-to-tickets</div><div class="title">A transcript becomes tracked work</div></div>
-          <div class="body">BOSS writes down what was decided and who has to do what. You read that as sentences before tickets are created in Plane, Jira, Linear, GitHub Issues, or Azure DevOps.</div>
-          <div class="steps">read → create (stops)</div>
-        </a>
-        <a class="example" href="https://github.com/seanventures/boss/tree/main/examples/weekly-newsletter">
-          <div><div class="name">weekly-newsletter</div><div class="title">Research, written up, in your inbox</div></div>
-          <div class="body">Name the sectors. BOSS researches them into a cited dossier, writes the newsletter, and emails it after you approve the send. Can run every Monday.</div>
-          <div class="steps">gather → write → send (stops)</div>
-        </a>
-        <a class="example" href="https://github.com/seanventures/boss/tree/main/examples/sales-signal">
-          <div><div class="name">sales-signal</div><div class="title">A company name becomes a researched approach</div></div>
-          <div class="body">BOSS researches the company, scores the opportunity, drafts an opening email, and puts both in your salesperson's inbox. Nothing goes near the prospect.</div>
-          <div class="steps">research → assess → draft → notify (stops)</div>
-        </a>
-        <a class="example" href="https://github.com/seanventures/boss/tree/main/examples/trend-to-content">
-          <div><div class="name">trend-to-content</div><div class="title">A trend becomes a script, or a no</div></div>
-          <div class="body">BOSS researches the trend, says whether it is yours to talk about, and writes a script only if it is.</div>
-          <div class="steps">research → assess → script → review (stops)</div>
-        </a>
-      </div>
-<pre class="snippet">python3 examples/setup_all.py --dry-run
-python3 examples/setup_all.py</pre>
-    </div>
-  </section>
-
-  <section class="section" id="models">
-    <div class="wrap models-grid">
-      <div>
-        <h2 class="h2">Your models. Your keys. Your server.</h2>
-        <p class="lede">Use an API key or coding subscription you already pay for. Console Connect asks one small, budgeted question and records a receipt. Keys imported through the install environment are stored without a completion; check the connection before starting work.</p>
-        <p class="lede">Local inference on Ollama or vLLM works through the OpenAI-compatible path, and can be priced at zero so cost accounting stays accurate.</p>
-<pre class="snippet">export BOSS_LLM_ENGINE=openai OPENAI_API_KEY=ollama
-export OPENAI_BASE_URL=http://localhost:11434/v1
-export OPENAI_MODEL=qwen2.5-coder:14b
-export BOSS_MODEL_PRICES_JSON='{"qwen2.5-coder:14b":[0,0]}'</pre>
-      </div>
-      <div class="model-list">
-        <div class="model-row"><b>OpenAI API</b><span>Installer prompt, OPENAI_API_KEY, or the setup screen.</span></div>
-        <div class="model-row"><b>Anthropic API</b><span>ANTHROPIC_API_KEY or the setup screen.</span></div>
-        <div class="model-row"><b>OpenRouter API</b><span>Setup screen, with its own key and model.</span></div>
-        <div class="model-row"><b>Google Gemini API</b><span>Setup screen or GOOGLE_API_KEY, through the OpenAI-compatible endpoint.</span></div>
-        <div class="model-row"><b>xAI Grok API</b><span>Setup screen or XAI_API_KEY.</span></div>
-        <div class="model-row"><b>Ollama, vLLM, any OpenAI-compatible server</b><span>Base URL, model, and credential.</span></div>
-        <div class="model-row"><b>Codex ChatGPT subscription</b><span>Sign in with the official CLI on the server, then rerun the installer with <span class="mono">--connect-codex</span>.</span></div>
-        <div class="model-row"><b>Claude Code subscription</b><span>Run <span class="mono">claude auth login</span> inside the API container, or import a setup token.</span></div>
-        <div class="model-row"><b>Grok Build subscription</b><span>Device-auth login inside the API container, then rerun the installer with <span class="mono">--connect-grok-local</span>.</span></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section" id="architecture">
-    <div class="wrap">
-      <div class="intro">
-        <h2 class="h2">What runs on your server.</h2>
-        <p class="lede">The installer starts these with Docker Compose. They listen only on the server itself; your HTTPS proxy is the one door in. The engine is also a standalone Python package with no dependency on the API or console.</p>
-      </div>
-      <div class="components">
-        <div class="component"><div class="path">apps/api</div><h3>API</h3><p>FastAPI control plane. Enforces auth, permissions, budget, approvals, leases, and receipts on every /v1 route.</p></div>
-        <div class="component"><div class="path">apps/worker</div><h3>Worker</h3><p>Polls for leased jobs, heartbeats, runs phases, and ticks always-on agents every 60 seconds.</p></div>
-        <div class="component"><div class="path">apps/web</div><h3>Mission Control</h3><p>Next.js console. Command Center, Approvals, Activity log, and Agent Studio.</p></div>
-        <div class="component"><div class="path">engine/</div><h3>Engine</h3><p>Workflow and policy service graph, tool layer, native agent, and MCP server.</p></div>
-        <div class="component"><div class="path">db/schema.sql</div><h3>Postgres</h3><p>The durable workspace. Tasks, leases, receipts, decisions, and budgets live here, on your disk.</p></div>
-      </div>
-      <div class="principles">
-        <div>
-          <h3>Operating invariants</h3>
-          <ul>
-            <li>No external effect without a Receipt.</li>
-            <li>No spendy action without a BudgetReservation.</li>
-            <li>No worker execution without a lease.</li>
-            <li>No silent drops.</li>
-            <li>No self-modification without PR, tests, approval, and rollback.</li>
-          </ul>
-        </div>
-        <div>
-          <h3>What "done" means</h3>
-          <ol>
-            <li>Evidence exists: tests, artifacts, traces.</li>
-            <li>Required receipts exist for side effects.</li>
-            <li>Budget reservations settled correctly.</li>
-            <li>Any sensitive step has a recorded decision.</li>
-          </ol>
-          <p class="aside">A task is not done because a model said so.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section" id="docs">
-    <div class="wrap">
-      <div class="intro-row">
-        <h2 class="h2">Documentation</h2>
-        <a class="link-strong" href="docs/">Open the guides</a>
-      </div>
-      <div class="doc-groups">
-        <div class="doc-group">
-          <h3>Start</h3>
-          <a class="doc-link" href="docs/GETTING_STARTED/"><b>Getting started</b><span>Install, connect a model and repo, then follow a small build.</span></a>
-          <a class="doc-link" href="docs/QUICKSTART/"><b>Quickstart</b><span>Install, open the console, create one task.</span></a>
-          <a class="doc-link" href="docs/hostname/"><b>Deploy</b><span>HTTPS on your domain or private network.</span></a>
-          <a class="doc-link" href="docs/MODEL_CONNECTIONS/"><b>Connect models</b><span>API keys and coding subscriptions.</span></a>
-          <a class="doc-link" href="docs/use-cases/"><b>Use cases</b><span>Four things a new install can do.</span></a>
-        </div>
-        <div class="doc-group">
-          <h3>Interfaces</h3>
-          <a class="doc-link" href="docs/CONSOLE_AUTH/"><b>Mission Control</b><span>Signing in and console sessions.</span></a>
-          <a class="doc-link" href="docs/TERMINAL_API/"><b>Metatron terminal</b><span>Commands, direct /v1/ calls, one-shot JSON.</span></a>
-          <a class="doc-link" href="docs/MCP/"><b>MCP</b><span>Connecting agents and the confirmation flow.</span></a>
-          <a class="doc-link" href="docs/CONTROL_SURFACES/"><b>Control surfaces</b><span>How the API, terminal, and MCP relate.</span></a>
-        </div>
-        <div class="doc-group">
-          <h3>Project</h3>
-          <a class="doc-link" href="https://github.com/seanventures/boss/blob/main/examples/README.md"><b>Example workflows</b><span>Five workflows built on the public API.</span></a>
-          <a class="doc-link" href="https://github.com/seanventures/boss/blob/main/scripts/install/README.md"><b>Upgrade and uninstall</b><span>Backups, recovery, and flags.</span></a>
-          <a class="doc-link" href="https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md"><b>Contributing</b><span>Proposing a docs or code change.</span></a>
-          <a class="doc-link" href="docs/FEATURES/"><b>Features</b><span>Everything that ships, with status.</span></a>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section" id="community">
-    <div class="wrap community">
-      <div>
-        <h2 class="h2">Built in the open.</h2>
-        <p class="lede">Changes land through a GitHub issue and a pull request. Maintainers review scope, safety, tests, and documentation before merging.</p>
-        <div class="button-row">
-          <a class="btn btn-ghost btn-sm" href="https://github.com/seanventures/boss/issues">Open an issue</a>
-          <a class="btn btn-ghost btn-sm" href="https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md">Contributing guide</a>
-          <a class="btn btn-ghost btn-sm" href="https://github.com/seanventures/boss/releases">Releases</a>
-        </div>
-      </div>
-      <div>
-        <h3 class="col-title">Before you open a pull request</h3>
-        <ul>
-          <li>Search existing issues. Say what you did, what you expected, how you installed, and which edition you run.</li>
-          <li>Keep it small. Add tests for the state transitions you touch.</li>
-          <li>If it can spend or write outside BOSS, test the reservation, the receipt, the lease, and the tenant boundary.</li>
-          <li>A new console action needs a matching API permission check and an audit event.</li>
-        </ul>
-      </div>
-      <div>
-        <h3 class="col-title">Security</h3>
-        <p class="small">Report vulnerabilities privately to <a href="mailto:boss@sean.net">boss@sean.net</a>. Do not open a public issue, and keep credentials out of the report.</p>
-        <div class="stats">
-          <div data-stat="stars" hidden><span>Stars</span><span data-stars></span></div>
-          <div data-stat="forks" hidden><span>Forks</span><span data-forks></span></div>
-          <div><span>License</span><span>Apache-2.0</span></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section cta" id="install">
-    <div class="wrap cta-grid">
-      <div>
-        <h2 class="h2">Deploy it on your server.</h2>
-        <p class="lede">Ubuntu 22.04/24.04 or Debian 12/13 with sudo, or any Linux or macOS host with git, curl, and Docker Compose. Point a domain or private IP at the server, and your team signs in over HTTPS. A model key is optional. Credentials are stored locally; hosted model calls send authentication and the task data you select to that provider.</p>
-      </div>
-      <div>
-        <div class="terminal">
-          <div class="terminal-bar">
-            <span>Install v1.0-rc8</span>
-            <button class="copy" type="button" data-copy>Copy</button>
-          </div>
-<pre data-copy-source>curl -fsSL https://boss.sean.network/install.sh | bash</pre>
-        </div>
-        <p class="cta-note">For your team, add <span class="mono">-s -- --console-origin https://boss.example.com</span> after <span class="mono">bash</span> with your domain or the server's private IP, then put Caddy or nginx in front for HTTPS. The <a href="docs/hostname/">deploy guide</a> has both configs. Prefer git? <a href="https://github.com/seanventures/boss/blob/main/scripts/install/README.md">Clone the release</a> instead.</p>
-      </div>
-    </div>
-  </section>
-
+    <p class="detail-note">Use a fresh <code>boss-rc8</code> directory. Keep generated credentials and backups private. The <a href="docs/QUICKSTART/">Quickstart</a> covers host sizing, Owner enrollment and the next checks. A source release alone does not certify the website installer or your provider's behavior.</p>
+    <div class="hero-ctas"><a class="btn btn-primary" href="docs/FIRST_USEFUL_CHANGE/">Follow the useful-change guide <span aria-hidden="true">↗</span></a><a class="btn btn-ghost" href="https://github.com/seanventures/boss/releases/tag/v1.0-rc8">Release and checksum</a></div>
+  </div>
+</section>
+<section class="section" id="community">
+  <div class="wrap two-col">
+    <div class="section-intro" data-reveal><p class="eyebrow">Built in the open</p><h2>Help make the next<br>change more useful.</h2><p>Tell us where you stopped, what you checked and whether the result solved the need. Source tests, real provider results and customer usefulness are separate evidence.</p></div>
+    <div class="community-links" data-reveal><a href="docs/FEEDBACK_LOOP/">Report a problem <span aria-hidden="true">↗</span></a><a href="https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md">Contribute a focused change <span aria-hidden="true">↗</span></a><a href="https://github.com/seanventures/boss/blob/main/SECURITY.md">Report a vulnerability privately <span aria-hidden="true">↗</span></a><p class="detail-note">Keep credentials and private task data out of public issues. Local Help is available inside the console.</p></div>
+  </div>
+</section>
 </main>
-
-<footer class="site-footer">
-  <div class="wrap footer-cols">
-    <div>
-      <div class="footer-brand"><img src="assets/boss-mark.png" alt=""><b>BOSS</b></div>
-      <div class="footer-about">Business Operating System Sentinel. Self-hosted, Apache License 2.0.</div>
-    </div>
-    <nav aria-label="Product">
-      <h3>Product</h3>
-      <a href="#how">How it works</a>
-      <a href="#features">Features</a>
-      <a href="#examples">Examples</a>
-      <a href="#models">Models</a>
-    </nav>
-    <nav aria-label="Docs">
-      <h3>Docs</h3>
-      <a href="docs/QUICKSTART/">Quickstart</a>
-      <a href="docs/hostname/">Deploy</a>
-      <a href="docs/TERMINAL_API/">Terminal</a>
-      <a href="docs/MCP/">MCP</a>
-    </nav>
-    <nav aria-label="Project">
-      <h3>Project</h3>
-      <a href="https://github.com/seanventures/boss">GitHub</a>
-      <a href="https://github.com/seanventures/boss/releases">Releases</a>
-      <a href="https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md">Contributing</a>
-      <a href="https://github.com/seanventures/boss/blob/main/CODE_OF_CONDUCT.md">Code of Conduct</a>
-      <a href="https://github.com/seanventures/boss/blob/main/LICENSE">License</a>
-    </nav>
-  </div>
-  <div class="wrap footer-legal">
-    <span>© 2026 Sean Ventures LLC, DBA BOSS AI. Community source under the Apache License 2.0.</span>
-    <span>Security: <a href="mailto:boss@sean.net">boss@sean.net</a></span>
-  </div>
-</footer>
-
+<footer class="site-footer"><div class="wrap"><div><a class="brand" href="./"><img src="assets/boss-mark.png" alt=""><span>BOSS</span></a><p>Business Operating System Sentinel.<br>Self-hosted Community · Apache License 2.0.</p></div><nav aria-label="Footer"><a href="docs/">Manual</a><a href="https://github.com/seanventures/boss">Source</a><a href="https://github.com/seanventures/boss/releases">Releases</a><a href="https://github.com/seanventures/boss/blob/main/LICENSE">License</a></nav><p class="copyright">© 2026 Sean Ventures LLC, DBA BOSS AI</p></div></footer>
 </body>
 </html>
