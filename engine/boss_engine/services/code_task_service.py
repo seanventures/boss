@@ -1517,38 +1517,9 @@ def retry_code_task(
     work_branch = f"boss/code/{root}"
     pr_url = prev.get("pull_request_url")
 
-    # REFRESH THE BRANCH FROM ITS BASE BEFORE THE AGENT SEES IT.
-    # A lineage branch is cut once and then reused for every attempt, so it keeps showing the
-    # agent the world as it was when the branch was created. Concretely: PR #66 merged
-    # `web-stocks` into main, then an extend asked the agent to consolidate the two stock
-    # apps — and it could not, because its working tree never contained web-stocks. It saw one
-    # app and correctly left one app.
-    #
-    # The merge path already knows how to do this (update_pull_request_branch, added for the
-    # 405-on-stale-base case). The gap was that nothing refreshed a branch before WORK, only
-    # before merging. Best-effort: a refusal here means a real conflict, which the agent is
-    # about to be asked to resolve anyway, and a failure must never block the retry.
-    if pr_url:
-        try:
-            from .software_factory import SoftwareFactoryService
-
-            sf = SoftwareFactoryService(settings)
-            pr_number = int(str(pr_url).rstrip("/").rsplit("/", 1)[-1])
-            if hasattr(sf.github, "update_pull_request_branch"):
-                refreshed = sf.github.update_pull_request_branch(pr_number)
-                with _transaction(engine) as c:
-                    emit_event(
-                        c, prev["project_id"],
-                        "code_task.branch_refreshed" if refreshed
-                        else "code_task.branch_refresh_declined",
-                        "boss", "code_task_run", run_id,
-                        {"branch": work_branch, "pull_request": pr_number,
-                         "why": ("merged the base in so the agent works against current main"
-                                 if refreshed else
-                                 "base could not be merged cleanly; the agent will see the "
-                                 "branch as-is and may need to resolve conflicts")})
-        except Exception:  # noqa: BLE001 — never block a retry on a refresh
-            pass
+    # Retry admission creates local work only. Refreshing the remote PR branch here
+    # would write before the child job, reservation and governed provider boundary.
+    # Reuse the lineage branch as recorded; do not promise that its base is current.
 
     # Prior adversarial findings — only meaningful when the previous attempt did NOT
     # complete (a completed attempt's reviews passed; carrying them as "findings" would
@@ -1695,6 +1666,13 @@ def retry_code_task(
             substrate=substrate_override,
             job_priority=job_priority,
         )
+        if pr_url:
+            emit_event(
+                c, prev["project_id"], "code_task.branch_refresh_not_requested",
+                "boss", "code_task_run", new_id,
+                {"parent_run_id": run_id, "child_run_id": new_id, "branch": work_branch,
+                 "why": "Retry admission reused the lineage branch without requesting a provider-side refresh."},
+            )
         if allow_test_retirement:
             # Declared on the RUN's spec so the gate can read it. Kept out of start_code_task's
             # signature: this is an exception a caller asks for, not a property of every task.
