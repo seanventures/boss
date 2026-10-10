@@ -1623,6 +1623,13 @@ def retry_code_task(
                           # workflow for is a new piece of work following that path.
                           **({"workflow_version_id": workflow_version_id}
                              if workflow_version_id else {}),
+                          # THE SAME WORKFLOW RUN ASKED FOR THIS ATTEMPT. Without the link a
+                          # repair of a template build lost its template (templates.gate reads
+                          # it from the workflow run's input), so the child ran WITHOUT the
+                          # template gates, and the application never saw the attempt.
+                          **({"workflow_run_id": fctx_prev["workflow_run_id"]}
+                             if fctx_prev.get("workflow_run_id") and not workflow_version_id
+                             else {}),
                           "feedback_history": history,
                           # UNRESOLVED REVIEW COMMENTS FOLLOW THE WORK, NOT THE ATTEMPT.
                           #

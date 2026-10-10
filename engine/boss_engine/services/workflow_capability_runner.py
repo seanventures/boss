@@ -2984,6 +2984,42 @@ def resume_awaited(
             # checks to waive or a budget to raise is the build's own card; failing the step
             # above it added a second card for the same wait ("Build, review and test failed").
             continue
+        if kind == "code_task" and (status == "repairing" or status in ok_states):
+            # A REPAIRED ATTEMPT IS NOT THE RESULT, AND A FINISHED BUILD IS NOT A PASSED ONE.
+            # `repairing` means the attempt failed its checks and handed its work to a repair
+            # round: follow that attempt. A `completed` build a template gate stopped (or an
+            # attempt superseded by its repair) did not pass: fail the step with why, so the
+            # deploy after it never offers a release for it.
+            from .run_fencing import build_not_passed
+
+            not_passed = None if status == "repairing" else build_not_passed(
+                connection, awaited_id)
+            if status == "repairing" or not_passed:
+                successor = _successor_attempt(connection, project_id, awaited_id, run_id)
+                if successor:
+                    workflows.repoint_waiting_step(
+                        connection, project_id=project_id, step_run_id=step["id"],
+                        handle={**handle, "id": successor},
+                        note=(f"the build failed its checks and is being repaired; this step "
+                              f"now follows {successor} (the earlier attempt {awaited_id})"),
+                    )
+                    done.append({"run_id": run_id, "step_id": step["step_id"],
+                                 "outcome": "following_retry", "awaited": kind,
+                                 "was": awaited_id, "now": successor})
+                    continue
+                if status == "repairing":
+                    continue  # the repair round is being started; the shepherd ends a dead one
+                workflows.force_fail_waiting_step(
+                    connection, project_id=project_id, step_run_id=step["id"],
+                    error=str(not_passed)[:500],
+                    output={**output, "status": "failed", "awaited_status": status,
+                            "reached_before_failing": _evidence_quietly(
+                                connection, kind, awaited_id)},
+                )
+                done.append({"run_id": run_id, "step_id": step["step_id"],
+                             "outcome": "failed", "awaited": kind, "awaited_status": status,
+                             "because": not_passed})
+                continue
         if status in ok_states:
             # `completed` IS the inner pipeline's success. A missing pull request is not a
             # refusal — reviewer refusal lands as `blocked` / `failed`, already handled below.
@@ -3310,13 +3346,17 @@ def _successor_attempt(
             text(
                 """
                 WITH target AS (
-                    SELECT COALESCE(NULLIF(finalize_ctx->>'root_run_id', ''), id) AS root
+                    SELECT COALESCE(NULLIF(finalize_ctx->>'root_run_id', ''), id) AS root,
+                           created_at AS born
                     FROM code_task_runs WHERE id = :awaited
                 )
                 SELECT r.id
                 FROM code_task_runs r, target t
                 WHERE r.project_id = :p
                   AND r.id <> :awaited
+                  -- A later attempt, never an earlier one: a blocked repair must not send
+                  -- the step back to the attempt it repaired.
+                  AND r.created_at > t.born
                   AND r.status IN ('running', 'queued', 'completed')
                   AND (
                         COALESCE(NULLIF(r.finalize_ctx->>'root_run_id', ''), r.id) = t.root

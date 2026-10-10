@@ -462,6 +462,7 @@ _ADVISORY_HARD_FLOOR = ("code_written", "app_serves", "template_tests", "no_comm
 # whose app does not run is not done, so exhausting the repairs BLOCKS with the app's own
 # error (and the partial PR rescue keeps the work), rather than shipping with dissent.
 _NEVER_SHIP_PAST = frozenset({"app_serves", "template_tests", "no_committed_secrets"})
+_TEMPLATE_GATE_SET = frozenset({"template_tests", "no_committed_secrets"})
 
 # THE TEMPLATE HOLD (F2 §2.3, S2.1). A build that applies a template carries two mechanical
 # gates (`_template_gates`): its tests ran and passed, and its diff holds no secret. Neither is a
@@ -586,6 +587,14 @@ def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional
     return error, reason
 
 
+def review_repair_rounds(settings: Any) -> int:
+    """BOSS_CODE_REVIEW_REPAIR_MAX_ROUNDS. A missing/blank value must never SILENTLY disable the
+    moat (2), but an explicit 0 is the documented "block on the first failure" and is honoured:
+    `int(x or 2)` turned it into 2."""
+    value = getattr(settings, "code_review_repair_max_rounds", 2)
+    return max(0, int(2 if value in (None, "") else value))
+
+
 def resolve_gate_failure_action(
     *,
     failing: list[str],
@@ -595,8 +604,14 @@ def resolve_gate_failure_action(
     open_pr: bool = True,
     never_block: bool = True,
     faults: Optional[dict[str, str]] = None,
+    template_repair_max: Optional[int] = None,
 ) -> str:
     """Decide what to do after a non-passing quality gate.
+
+    ``template_repair_max`` is the build's own repair budget (``repair_max``: the run's
+    ``repair_retries``, else BOSS_CODE_REPAIR_MAX_RETRIES). A failed TEMPLATE gate is mechanical
+    and unwaivable, so it is repaired only within that budget: at 0 the build goes straight to
+    ``block`` (never `repairing`), and once the budget is spent it blocks too.
 
     Returns one of:
       - ``"ship"``              — open the PR (hard pass, or advisory first-pass)
@@ -651,6 +666,9 @@ def resolve_gate_failure_action(
     # and those remaining gates can themselves be harness faults.
     if faults and failing and all(faults.get(g) == "HARNESS" for g in failing):
         return "inconclusive"
+    if (template_repair_max is not None and rounds_used >= max(0, int(template_repair_max))
+            and any(g in _TEMPLATE_GATE_SET for g in failing)):
+        return "block"
     if rounds_used < max_repair_rounds and open_pr:
         return "repair"
     if any(g in _NEVER_SHIP_PAST and (faults or {}).get(g) != "HARNESS" for g in failing):
@@ -4699,7 +4717,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
             rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
             # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
-            max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 2) or 2))
+            max_repair_rounds = review_repair_rounds(settings)
             gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
             # Non-final decomposition slices suppress the PR and advance the chain on
             # completed_no_pr. They must NOT take ship_with_dissent: that path marks the
@@ -4718,6 +4736,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 open_pr=_can_ship_pr,
                 never_block=bool(getattr(settings, "code_gate_never_block", True)),
                 faults=gate_faults,
+                template_repair_max=max_repair,
             )
             if action == "inconclusive":
                 # The checks never finished, so nothing is known about the code. Re-run the
@@ -4777,7 +4796,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         rounds_used=rounds_used, max_repair_rounds=max_repair_rounds,
                         open_pr=_can_ship_pr,
                         never_block=bool(getattr(settings, "code_gate_never_block", True)),
-                        faults=gate_faults)
+                        faults=gate_faults, template_repair_max=max_repair)
                 if action == "inconclusive":
                     # Escalations exhausted: ship, recording that the code was NOT reviewed.
                     # Still respect _can_ship_pr — a non-final slice / open_pr=false run must

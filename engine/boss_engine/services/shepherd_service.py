@@ -566,7 +566,8 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
         try:
             with begin(engine) as c:
                 rows = c.execute(
-                    sql(f"SELECT r.{id_col} AS id, r.phase AS phase FROM {table} r "
+                    sql(f"SELECT r.{id_col} AS id, r.phase AS phase, r.status AS status "
+                        f"FROM {table} r "
                         f"WHERE r.project_id = :p AND r.status = ANY(:working) "
                         f"  AND r.updated_at < now() - (:m || ' minutes')::interval "
                         f"  AND NOT EXISTS (SELECT 1 FROM jobs j "
@@ -596,8 +597,24 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
                 # would replace one wrong answer with another and erase work that succeeded.
                 # A run that reached its last phase COMPLETED; one that never left the first
                 # was abandoned.
+                # A run that ENDED blocked (phase done) is at rest, saying why: never relabel
+                # it `completed`, which is what this did to a build its gates stopped.
+                rows = [r for r in rows if not (str(r.get("status") or "") == "blocked"
+                                                and str(r["phase"] or "") == "done")]
                 done = [r["id"] for r in rows if str(r["phase"] or "") == "done"]
                 stalled = [r["id"] for r in rows if str(r["phase"] or "") != "done"]
+                # A FINISHED PHASE IS NOT A PASSED BUILD. A run left `repairing` handed its
+                # work to a repair attempt (or never managed to start one): its own result is
+                # failed checks, and calling it `completed` showed "Done · no PR" and let the
+                # workflow above it offer a release for a build with four failed checks. Those,
+                # and any run a template gate stopped, end BLOCKED with why (per table).
+                not_passed = _FINISHED_NOT_PASSED.get(table)
+                blocked = [r["id"] for r in rows if str(r["phase"] or "") == "done"
+                           and not_passed is not None and not_passed(c, dict(r))]
+                done = [i for i in done if i not in blocked]
+                for rid in blocked:
+                    _close_as_blocked(c, rid)
+                done_blocked = len(blocked)
                 if done:
                     c.execute(
                         sql(f"UPDATE {table} SET status = 'completed', updated_at = now() "
@@ -609,10 +626,10 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
                             f"WHERE {id_col} = ANY(:ids)"),
                         {"ids": stalled,
                          "e": "abandoned: no job remains that could advance this run"})
-                if done or stalled:
+                if done or stalled or done_blocked:
                     closed.append({"table": table, "completed": len(done),
-                                   "cancelled": len(stalled),
-                                   "count": len(done) + len(stalled)})
+                                   "cancelled": len(stalled), "blocked": done_blocked,
+                                   "count": len(done) + len(stalled) + done_blocked})
         except Exception as exc:  # noqa: BLE001 — one missing table must not stop the rest
             closed.append({"table": table, "error": f"{type(exc).__name__}"})
 
@@ -622,6 +639,46 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
             emit_event(c, project_id, "shepherd.abandoned_runs_closed", actor,
                        "project", project_id, {"closed": closed})
     return {"project_id": project_id, "closed_total": total, "detail": closed}
+
+
+def _code_task_not_passed(connection, row: dict) -> bool:
+    from .run_fencing import template_hold
+
+    return (str(row.get("status") or "") == "repairing"
+            or template_hold(connection, str(row["id"])) is not None)
+
+
+def _close_as_blocked(connection, run_id: str) -> None:
+    """End a finished-but-not-passed run BLOCKED, saying why and what to do (never `completed`)."""
+    from .run_fencing import template_hold
+
+    row = connection.execute(sql(
+        "SELECT status, error, finalize_ctx->>'review_repair_next_run' AS nxt "
+        "FROM code_task_runs WHERE id = :i"), {"i": run_id}).mappings().first()
+    held = template_hold(connection, run_id)
+    nxt = str((row or {}).get("nxt") or "")
+    alive = bool(nxt) and connection.execute(sql(
+        "SELECT 1 FROM code_task_runs WHERE id = :n"), {"n": nxt}).first() is not None
+    if held is not None and not alive:
+        error = held["error"]
+    elif alive:
+        error = (f"Blocked: this attempt failed its checks; the repair continued in {nxt}. "
+                 "Open that attempt for its outcome.")
+    else:
+        error = ("Blocked: the build failed its checks and its repair round never started, so "
+                 "nothing is working on it. Open its Checks, then retry it with a note on what "
+                 "to fix.")
+    connection.execute(sql(
+        "UPDATE code_task_runs SET status = 'blocked', phase = 'done', error = :e, "
+        "finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+        "|| CASE WHEN CAST(:h AS jsonb) IS NULL THEN '{}'::jsonb "
+        "        ELSE jsonb_build_object('template_hold', CAST(:h AS jsonb)) END, "
+        "updated_at = now() WHERE id = :i"),
+        {"e": error, "h": json.dumps(held) if held is not None else None, "i": run_id})
+
+
+#: Per run table: is a run at its last phase nevertheless NOT passed (so it ends blocked)?
+_FINISHED_NOT_PASSED = {"code_task_runs": _code_task_not_passed}
 
 
 def _quiet_minutes(engine, job_id: str) -> float:

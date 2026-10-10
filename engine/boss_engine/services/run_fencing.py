@@ -213,3 +213,32 @@ def template_hold(connection, run_id: str) -> Optional[dict[str, Any]]:
             return held_run(connection, run_id)
     except Exception:  # noqa: BLE001
         return None
+
+
+def build_not_passed(connection, run_id: str) -> Optional[str]:
+    """Why a FINISHED build must not be treated as a passed one (None when it passed).
+
+    One rule for every consumer that turns "the build finished" into "ship it" (the workflow
+    step that awaited it, deploy_build): a build a template gate stopped, or an attempt whose
+    checks failed and whose work went to a repair round, did not pass, whatever its status says.
+    """
+    held = template_hold(connection, run_id)
+    if held is not None:
+        return held["error"]
+    try:
+        with connection.begin_nested():
+            row = connection.execute(sql(
+                "SELECT status, finalize_ctx->>'review_repair_next_run' AS nxt, "
+                "finalize_ctx->'failing_gates' AS failing FROM code_task_runs WHERE id = :i"),
+                {"i": run_id}).mappings().first()
+    except Exception:  # noqa: BLE001
+        return None
+    if row is None:
+        return None
+    if str(row["status"] or "") == "repairing" or row["nxt"]:
+        failing = row["failing"] if isinstance(row["failing"], list) else []
+        return ("Blocked: this attempt failed its checks"
+                + (f" ({', '.join(str(g) for g in failing)})" if failing else "")
+                + (f"; its repair continued in {row['nxt']}" if row["nxt"] else "")
+                + ". It is not a passed build, so nothing ships from it.")
+    return None
