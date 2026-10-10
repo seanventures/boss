@@ -1191,6 +1191,17 @@ class FactoryChunkPlanRequest(BaseModel):
         return self
 
 
+class LegacyFinancialHold(BaseModel):
+    reservation_id: str
+    lease_id: str
+    invocation_id: str
+    receipt_id: str
+    original_reservation_status: Literal["expired", "released"]
+    original_estimate_usd_micros: int = Field(gt=0)
+    decision_id: Optional[str] = None
+    message: str
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str
@@ -1227,6 +1238,7 @@ class BudgetStatusResponse(BaseModel):
     resets_at_label: Optional[str] = None
     budget_timezone: Optional[str] = None
     periods: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    legacy_financial_hold: Optional[LegacyFinancialHold] = None
 
 
 class BudgetForecastResponse(BaseModel):
