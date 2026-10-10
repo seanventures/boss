@@ -170,6 +170,7 @@ class SetupView(_Open):
     budget: Budget
     # `try` is a Python keyword.
     try_: TrySection = Field(alias="try")
+    build_database: Optional[dict[str, Any]] = None
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 

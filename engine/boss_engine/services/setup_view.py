@@ -959,8 +959,31 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "routing": _routing(connection, settings, project_id),
         "budget": budget,
         "try": trying,
+        "build_database": build_database(connection, settings, project_id),
         "generated_at": now.isoformat(),
     }
+
+
+def build_database(connection: Connection, settings: Any, project_id: str) -> dict[str, Any]:
+    """"Give builds a database (Postgres)": the project setting `build_services`
+    (services/build_services.py). On, every build of this project gets its own empty PostgreSQL
+    database, dropped when the build ends. `configured` says whether this install has a
+    build-services server at all (the variable only: no network here)."""
+    import os
+
+    from . import build_services, project_settings
+
+    try:
+        with connection.begin_nested():
+            chosen = project_settings.get_all(connection, project_id)
+    except Exception:  # noqa: BLE001
+        chosen = {}
+    value = str(chosen.get(build_services.SETTING_KEY)
+                or getattr(settings, "build_services", None) or "off").lower()
+    return {"key": build_services.SETTING_KEY, "enabled": value == "postgres",
+            "source": "project" if build_services.SETTING_KEY in chosen else "default",
+            "configured": bool((os.environ.get(build_services.SERVER_URL_ENV) or "").strip()),
+            "permission": "settings:update"}
 
 
 def _routing(connection: Connection, settings: Any, project_id: str) -> Optional[dict[str, Any]]:

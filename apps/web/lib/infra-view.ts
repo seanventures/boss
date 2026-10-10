@@ -391,6 +391,8 @@ export type InfraUrl = {
   cloud: CloudView;
   q: string;
   state: string | null; app: string | null; env: string | null;   // Deploys filters
+  /** `add=host|target|…` opens that + Add sheet once (a "set up where it deploys" link lands here). */
+  add: string | null;
 };
 const INFRA_TAB_KEYS = new Set<string>(INFRA_TABS.map((t) => t.key));
 export function readInfraUrl(search: string): InfraUrl {
@@ -403,6 +405,7 @@ export function readInfraUrl(search: string): InfraUrl {
     account: p.get("account"), resource: p.get("resource"), changeset: p.get("changeset"), pool: p.get("pool"),
     cloud: (CLOUD_VIEWS.some((c) => c.key === cloud) ? cloud : "accounts") as CloudView,
     q: p.get("q") ?? "", state: p.get("state"), app: p.get("app"), env: p.get("env"),
+    add: p.get("add"),
   };
 }
 /** Drawer keys: opening one closes the others. */

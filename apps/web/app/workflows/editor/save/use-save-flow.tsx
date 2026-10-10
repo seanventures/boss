@@ -125,7 +125,10 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
     const definitionId = s.meta.is_catalogue ? (s.meta.copy?.definition_id ?? null) : s.meta.definition_id;
     const result = await checkSpec(projectId, s.spec, definitionId);
     dispatch({ type: "SET_PROBLEMS", result, spec: s.spec });
-    if (!result.ok || result.problems.length) {
+    // A WARNING DOES NOT BLOCK SAVE: "Needs Deploy set up" means the step cannot RUN yet, and the
+    // server says the workflow is fine to save (ok). It is still shown, with its fix.
+    const blocking = result.problems.filter((p) => p.severity !== "warning");
+    if (!result.ok || blocking.length) {
       const first = firstBadStep(s.spec, result.problems);
       if (first) dispatch({ type: "SELECT", id: first });
       setPop("issues");
@@ -253,6 +256,10 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
                 {p.step_id ? <span className="wf-mono wf-faint">{p.step_id}</span> : null}
                 <span className="wf-pop-msg">{p.message}</span>
               </button>
+              {p.fix_href ? (
+                <a className="wf-pop-fix" href={p.fix_href} target="_blank" rel="noreferrer"
+                   data-testid="wf-issue-fix">{p.fix_label ?? "Set it up"}</a>
+              ) : null}
             </li>
           ))}
         </ul>

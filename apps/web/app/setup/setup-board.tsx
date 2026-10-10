@@ -23,6 +23,7 @@ import {
 } from "../../lib/setup-stepper";
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BudgetRow } from "./budget-row";
+import { BuildDatabaseRow } from "./build-database-row";
 import { CapacityRow } from "./capacity-row";
 import { ModelsRow } from "./models-row";
 import { BoardContext, toast } from "./parts";
@@ -229,6 +230,7 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
         <RepositoryRow ref={ref("repository")} mode={rowMode(view, "repository")}
                        step={stepNumber(view, "repository")} focused={focus === "repository"} />
         <GitHubAccessRow />
+        <BuildDatabaseRow />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}
                    step={stepNumber(view, "models")} focused={focus === "models"}
                    add={params.add} source={params.source}
