@@ -393,7 +393,7 @@ def seed() -> None:
             text(
                 """
                 INSERT INTO workspaces (id, org_id, name)
-                VALUES (:id, :org_id, 'Dogfood')
+                VALUES (:id, :org_id, 'Default workspace')
                 ON CONFLICT (id) DO NOTHING
                 """
             ),
@@ -403,7 +403,7 @@ def seed() -> None:
             text(
                 """
                 INSERT INTO projects (id, workspace_id, name, slug)
-                VALUES (:id, :workspace_id, 'BOSS dogfood bootstrap', 'boss-dogfood')
+                VALUES (:id, :workspace_id, 'Default project', 'boss-dogfood')
                 ON CONFLICT (id) DO NOTHING
                 """
             ),
