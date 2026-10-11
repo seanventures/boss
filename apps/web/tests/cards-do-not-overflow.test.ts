@@ -32,11 +32,11 @@ function block(selector: string): string {
 describe("the app card grid", () => {
   it("lets a track shrink below its preferred width", () => {
     // repeat(auto-fit, minmax(560px, 1fr)) overflows; min(560px, 100%) does not.
-    expect(CSS).toContain("minmax(min(560px, 100%), 1fr)");
+    expect(CSS).toContain("minmax(min(29.47368rem, 100%), 1fr)");   // 560px
   });
 
   it("has no remaining hard-floor minmax in the tile grid", () => {
-    expect(CSS).not.toContain("minmax(560px, 1fr)");
+    expect(CSS).not.toContain("minmax(29.47368rem, 1fr)");   // a hard 560px floor
   });
 });
 

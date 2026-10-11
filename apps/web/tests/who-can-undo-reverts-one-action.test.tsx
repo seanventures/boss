@@ -95,8 +95,9 @@ describe("columns past the edge are announced (K18)", () => {
     const { readFileSync } = await import("node:fs");
     const { resolve } = await import("node:path");
     const css = readFileSync(resolve(__dirname, "../app/skills/kit.css"), "utf8");
-    const width = Number(css.match(/\.kit-matrix thead th \{[^}]*width: (\d+)px/)![1]);
-    const first = Number(css.match(/\.kit-matrix tbody th \{[^}]*min-width: (\d+)px/)![1]);
+    // rem at the console's 19px root (layout-scale.css), as px at 1440.
+    const width = 19 * Number(css.match(/\.kit-matrix thead th \{[^}]*width: ([\d.]+)rem/)![1]);
+    const first = 19 * Number(css.match(/\.kit-matrix tbody th \{[^}]*min-width: ([\d.]+)rem/)![1]);
     // 1440 minus the console's sidebar (~244) and the panel's padding (~80).
     expect(12 * width + first).toBeLessThanOrEqual(1440 - 244 - 80);
   });

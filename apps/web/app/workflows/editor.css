@@ -17,19 +17,19 @@
 .wf-body {
   position: relative;
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: 12.63158rem minmax(0, 1fr);
   gap: 12px;
   min-width: 0;
   min-height: 420px;
   align-items: start;
 }
-.wf-body[data-palette="rail"] { grid-template-columns: 48px minmax(0, 1fr); }
+.wf-body[data-palette="rail"] { grid-template-columns: 2.52632rem minmax(0, 1fr); }
 .wf-editor[data-view="json"] .wf-body { grid-template-columns: minmax(0, 1fr); }
 .wf-stage { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .wf-body > .wf-palette, .wf-drawer { align-self: start; }
 .wf-drawer {
   position: absolute; top: 0; right: 0; z-index: 20;
-  width: min(380px, 100%);
+  width: min(20rem, 100%);
   max-height: calc(100vh - 80px); overflow: auto;
   border: 1px solid var(--border); border-radius: var(--r-xl);
   background: var(--surface); box-shadow: var(--shadow);
@@ -37,9 +37,9 @@
 
 /* From 1280px the inspector sits beside the lane (or the JSON), in a column of its own. */
 @media (min-width: 1280px) {
-  .wf-editor[data-inspector="open"] .wf-body { grid-template-columns: 240px minmax(0, 1fr) 380px; }
-  .wf-editor[data-inspector="open"] .wf-body[data-palette="rail"] { grid-template-columns: 48px minmax(0, 1fr) 380px; }
-  .wf-editor[data-inspector="open"][data-view="json"] .wf-body { grid-template-columns: minmax(0, 1fr) 380px; }
+  .wf-editor[data-inspector="open"] .wf-body { grid-template-columns: 12.63158rem minmax(0, 1fr) 20rem; }
+  .wf-editor[data-inspector="open"] .wf-body[data-palette="rail"] { grid-template-columns: 2.52632rem minmax(0, 1fr) 20rem; }
+  .wf-editor[data-inspector="open"][data-view="json"] .wf-body { grid-template-columns: minmax(0, 1fr) 20rem; }
   .wf-drawer { position: sticky; top: 64px; width: auto; box-shadow: none; }
 }
 /* Under 720px: the palette is a sheet behind the + button, the inspector a bottom sheet. */

@@ -1,0 +1,36 @@
+/* THE PAGE SCALE — how wide a page is and how big its type is, for every screen.
+ *
+ * Pages once hard-coded their own widths (1240px here, 1120px there, 760px for reading), so a
+ * 2560px monitor showed a 1240px column of 13px text with half the screen empty. Every page and
+ * section container now takes its width from these tokens, and the type takes its size from the
+ * root font below. tests/a-page-width-is-a-layout-token.test.ts keeps a raw px width >640px from
+ * coming back on a page container, and keeps px type out of the console's CSS.
+ *
+ * At ≤1440px wide every token equals the width it replaced and the root stays 19px: nothing
+ * moves on a laptop or a phone. Wider than that, --page-grow spends most of the extra width on
+ * the page (up to +520px at ~2090px), and the root font grows ~10% at 1920 and ~15% from ~2075.
+ * The type grows with the root, not with `zoom` or `transform: scale`: those blur text or put
+ * every JS-positioned popover, drag and chart hover in the wrong place.
+ */
+:root {
+  --page-grow: clamp(0px, calc((100vw - 1440px) * 0.8), 520px);
+  /* The shell's side padding around every page (26px at <=1440px). */
+  --page-gutter: calc(26px + var(--page-grow) * 0.03);
+  /* The shell's content column (every area sits in it). */
+  --shell-max: calc(1440px + var(--page-grow));
+  /* A full page: Command Center, Infra, Research. */
+  --page-max: calc(1240px + var(--page-grow));
+  /* A page that was a little wider: the Factory cockpit, a template's own page (outside the shell). */
+  --page-max-wide: calc(1280px + var(--page-grow));
+  /* A denser page that was a little narrower on a laptop: Factory, Govern, Agent Studio. */
+  --page-max-compact: calc(1120px + var(--page-grow));
+  /* A settings page or a column of decision cards: Repo and models, Approvals. */
+  --page-max-mid: calc(960px + var(--page-grow) * 0.6);
+  /* Reading and forms: a line of prose, a form column. Grows less, so a line stays readable. */
+  --page-max-narrow: calc(760px + var(--page-grow) * 0.35);
+}
+
+/* One root size; every console size is rem (19px at ≤1600px). */
+html {
+  font-size: clamp(19px, calc(19px + (100vw - 1600px) * 0.006), 21.85px);
+}

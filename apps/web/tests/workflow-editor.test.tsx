@@ -594,9 +594,9 @@ describe("the inspector never hides the flow", () => {
     const wide = css.slice(css.indexOf("@media (min-width: 1280px)"));
     const block = wide.slice(0, wide.indexOf("\n}") + 2);
     // Visual, with the palette open and folded.
-    expect(block).toMatch(/\.wf-editor\[data-inspector="open"\] \.wf-body \{ grid-template-columns: 240px minmax\(0, 1fr\) 380px;/);
-    expect(block).toMatch(/\.wf-editor\[data-inspector="open"\] \.wf-body\[data-palette="rail"\] \{ grid-template-columns: 48px minmax\(0, 1fr\) 380px;/);
-    expect(block).toMatch(/\[data-view="json"\] \.wf-body \{ grid-template-columns: minmax\(0, 1fr\) 380px;/);
+    expect(block).toMatch(/\.wf-editor\[data-inspector="open"\] \.wf-body \{ grid-template-columns: 12\.63158rem minmax\(0, 1fr\) 20rem;/);
+    expect(block).toMatch(/\.wf-editor\[data-inspector="open"\] \.wf-body\[data-palette="rail"\] \{ grid-template-columns: 2\.52632rem minmax\(0, 1fr\) 20rem;/);
+    expect(block).toMatch(/\[data-view="json"\] \.wf-body \{ grid-template-columns: minmax\(0, 1fr\) 20rem;/);
     // In its column, not floating over the lane, in either view.
     expect(block).toMatch(/\n  \.wf-drawer \{ position: sticky;/);
     // Under 1280px it floats.

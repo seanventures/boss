@@ -3,7 +3,7 @@
    chips and chain edges (ag-*), so one build looks the same on both. Motion only on a real state
    change; every motion has a still (reduced motion, Paused, quiet, budget wait). */
 
-.fx { display: flex; flex-direction: column; gap: 18px; width: 100%; max-width: 1120px; margin: 0 auto; min-width: 0; }
+.fx { display: flex; flex-direction: column; gap: 18px; width: 100%; max-width: var(--page-max-compact); margin: 0 auto; min-width: 0; }
 .bx-content[data-active="code_tasks"]:has(.fx) { max-width: none; }
 
 /* Header: one row. */
@@ -50,7 +50,7 @@
 /* A build row (56px): name · line · now · cost · open. */
 .fx-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .fx-row {
-  display: grid; grid-template-columns: minmax(120px, 200px) minmax(0, 1fr) minmax(170px, auto) 56px auto;
+  display: grid; grid-template-columns: minmax(6.31579rem, 10.52632rem) minmax(0, 1fr) minmax(8.94737rem, auto) 2.94737rem auto;
   align-items: center; gap: 10px; min-height: 44px; padding: 4px 12px; cursor: pointer; min-width: 0;
   border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
 }
@@ -73,9 +73,9 @@
 .fx-word-cancelled { color: var(--muted); }
 .fx-row-cost { font-size: 0.76rem; color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; }
 .fx-row-go { justify-self: end; }
-.fx-row[data-density="compact"] { min-height: 40px; grid-template-columns: minmax(90px, 140px) minmax(0, 1fr) minmax(150px, auto) 48px auto; }
-.fx-stopped { grid-template-columns: minmax(120px, 200px) 32px minmax(0, 1fr) auto auto; }
-.fx-prebuild { grid-template-columns: minmax(120px, 200px) minmax(0, 1fr) minmax(170px, auto) 56px auto; }
+.fx-row[data-density="compact"] { min-height: 40px; grid-template-columns: minmax(4.73684rem, 7.36842rem) minmax(0, 1fr) minmax(7.89474rem, auto) 2.52632rem auto; }
+.fx-stopped { grid-template-columns: minmax(6.31579rem, 10.52632rem) 1.68421rem minmax(0, 1fr) auto auto; }
+.fx-prebuild { grid-template-columns: minmax(6.31579rem, 10.52632rem) minmax(0, 1fr) minmax(8.94737rem, auto) 2.94737rem auto; }
 .fx-group { list-style: none; }
 .fx-group-head { display: inline-flex; align-items: center; gap: 6px; padding: 8px 4px; border: 0; background: none; color: var(--ink); font: inherit; font-weight: 650; font-size: 0.86rem; cursor: pointer; }
 
@@ -113,7 +113,7 @@
 .fx-bay-body { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; min-width: 64px; }
 .fx-bay-name {
   padding: 0 4px; border: 0; border-radius: 4px; background: none; color: var(--faint); font: inherit;
-  font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
+  font-size: 0.57895rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
 }
 .fx-bay-name[aria-pressed="true"] { color: var(--accent-text); }
 .fx-bay-name:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
@@ -127,7 +127,7 @@
 .fx-apps { display: flex; flex-direction: column; min-width: 0; font-size: 0.84rem; }
 .fx-app-grid {
   display: grid; align-items: center; column-gap: 12px;
-  grid-template-columns: 28px minmax(160px, 2fr) minmax(112px, 150px) minmax(104px, 1.2fr) minmax(76px, 96px) minmax(60px, 0.8fr) minmax(56px, 72px) 52px minmax(64px, 76px);
+  grid-template-columns: 1.47368rem minmax(8.42105rem, 2fr) minmax(5.89474rem, 7.89474rem) minmax(5.47368rem, 1.2fr) minmax(4rem, 5.05263rem) minmax(3.15789rem, 0.8fr) minmax(2.94737rem, 3.78947rem) 2.73684rem minmax(3.36842rem, 4rem);
 }
 .fx-apps-head { padding: 0 12px 6px; border-bottom: 1px solid var(--border-soft); color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; }
 .fx-apps-th { white-space: nowrap; }
@@ -228,13 +228,13 @@
 .fx-row[data-still] .ag-av, .fx-row[data-still] .ag-av *, .fx-line[data-still] .ag-av, .fx-line[data-still] .ag-av * { animation: none !important; }
 
 @media (max-width: 1279px) {
-  .fx-row { grid-template-columns: minmax(110px, 170px) minmax(0, 1fr) minmax(150px, auto) 52px auto; }
+  .fx-row { grid-template-columns: minmax(5.78947rem, 8.94737rem) minmax(0, 1fr) minmax(7.89474rem, auto) 2.73684rem auto; }
 }
 @media (max-width: 1023px) {
-  .fx-row { grid-template-columns: minmax(100px, 150px) minmax(0, auto) minmax(130px, 1fr) auto; }
+  .fx-row { grid-template-columns: minmax(5.26316rem, 7.89474rem) minmax(0, auto) minmax(6.84211rem, 1fr) auto; }
   .fx-row-cost { display: none; }
-  .fx-stopped { grid-template-columns: minmax(100px, 150px) 32px minmax(0, 1fr) auto auto; }
-  .fx-app-grid { grid-template-columns: 28px minmax(160px, 1fr) 112px minmax(100px, 0.9fr) 84px 64px 64px; }
+  .fx-stopped { grid-template-columns: minmax(5.26316rem, 7.89474rem) 1.68421rem minmax(0, 1fr) auto auto; }
+  .fx-app-grid { grid-template-columns: 1.47368rem minmax(8.42105rem, 1fr) 5.89474rem minmax(5.26316rem, 0.9fr) 4.42105rem 3.36842rem 3.36842rem; }
   .fx-app-grid > .fx-c-deploy, .fx-app-grid > .fx-c-builds { display: none; }
 }
 @media (max-width: 639px) {
@@ -252,14 +252,14 @@
   .fx-row-now { grid-area: now; }
   .fx-row-go, .fx-prebuild > a { grid-area: go; min-height: 44px; min-width: 44px; justify-content: center; }
   .fx-row-cost { display: none; }
-  .fx-stopped { grid-template-columns: 32px minmax(0, 1fr) auto; grid-template-areas: "face name go" "face now retry"; }
+  .fx-stopped { grid-template-columns: 1.68421rem minmax(0, 1fr) auto; grid-template-areas: "face name go" "face now retry"; }
   .fx-stopped .fx-stopped-face { grid-area: face; }
   .fx-stopped .fx-retry { grid-area: retry; }
   .fx-stopped .fx-retry, .fx-split button, .fx-empty .ag-btn, .fx-sheet .ag-btn { min-height: 44px; }
   .fx-empty .ag-btn { flex: 1 1 100%; justify-content: center; }
   /* Phone: a card per app. Name and state on top; crew, PR, spend, builds and when below. */
   .fx-apps-head { display: none; }
-  .fx-app-grid { grid-template-columns: 44px minmax(0, 1fr) auto;
+  .fx-app-grid { grid-template-columns: 2.31579rem minmax(0, 1fr) auto;
     grid-template-areas: "chev app updated" ". state state" ". crew crew" ". pr spend"; row-gap: 4px; }
   .fx-app-grid > .fx-c-chev { grid-area: chev; align-self: start; }
   .fx-app-grid > .fx-c-app { grid-area: app; }
@@ -318,5 +318,5 @@
 .fx-signin-note { margin: 0; font-size: 0.78rem; }
 
 /* Lab projects (insecure-template apps are built apart): a link to each one's own Factory. */
-.fx-labs { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 0 0 10px; font-size: 13px; }
+.fx-labs { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 0 0 10px; font-size: 0.68421rem; }
 .fx-labs-k { color: var(--muted, #6b7280); }

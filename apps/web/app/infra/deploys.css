@@ -23,7 +23,7 @@
   display: grid; align-items: center; gap: 10px; min-height: 56px; padding: 6px 12px; min-width: 0;
   /* Every column a fixed track (no `auto`): each row is its own grid, so an auto track sized
      by one row's Approve/Reject pushed that row's columns out of line with the rest. */
-  grid-template-columns: minmax(96px, 120px) minmax(150px, 1.6fr) 64px minmax(64px, 0.7fr) 72px 24px 96px 56px 36px 172px 20px;
+  grid-template-columns: minmax(5.05263rem, 6.31579rem) minmax(7.89474rem, 1.6fr) 3.36842rem minmax(3.36842rem, 0.7fr) 3.78947rem 1.26316rem 5.05263rem 2.94737rem 1.89474rem 9.05263rem 1.05263rem;
   border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
 }
 .inf-dep-row:hover { border-color: var(--accent-line); }
@@ -60,7 +60,7 @@
 .inf-dd-head { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
 .inf-dd-now { font-size: 0.82rem; color: var(--ink); }
 .inf-dd-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.inf-dd-steps li { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 0.84rem; }
+.inf-dd-steps li { display: grid; grid-template-columns: 0.94737rem minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 0.84rem; }
 .inf-dd-steps li[data-s="pending"] { color: var(--muted); }
 .inf-dd-glyph { text-align: center; color: var(--faint); }
 .inf-dd-glyph[data-s="done"] { color: var(--green); animation: inf-dep-fill 300ms ease-out 1; }
@@ -78,7 +78,7 @@
 .inf-dd-plan[open] { display: flex; flex-direction: column; gap: 8px; }
 .inf-dd-plan-steps { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 2px; }
 .inf-dchecks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.inf-dchecks li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 0.82rem; }
+.inf-dchecks li { display: grid; grid-template-columns: 0.84211rem minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 0.82rem; }
 .inf-dchecks li[data-ok="1"] > span:first-child { color: var(--green); }
 .inf-dchecks li[data-ok="0"] > span:first-child { color: var(--red); font-weight: 700; }
 .inf-dchecks li[data-ok="warn"] > span:first-child { color: var(--amber); font-weight: 700; }
@@ -95,7 +95,7 @@
 .inf-caption { caption-side: top; text-align: left; padding: 4px 2px 6px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
 
 /* CI config vendor cards. */
-.inf-ci-vendors { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.inf-ci-vendors { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.94737rem, 1fr)); gap: 8px; }
 .inf-ci-card {
   display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-xl);
   background: var(--surface); color: var(--ink); font: inherit; font-size: 0.82rem; text-align: left; cursor: pointer;
@@ -106,7 +106,7 @@
 /* Previews: one row each; the TTL bar is an SVG whose fill width is the time left. */
 .inf-pv-row {
   display: grid; align-items: center; gap: 10px; min-height: 52px; padding: 6px 12px; min-width: 0;
-  grid-template-columns: minmax(110px, 230px) minmax(120px, 1.4fr) 64px 48px minmax(56px, 0.6fr) 84px minmax(110px, 150px) auto;
+  grid-template-columns: minmax(5.78947rem, 12.10526rem) minmax(6.31579rem, 1.4fr) 3.36842rem 2.52632rem minmax(2.94737rem, 0.6fr) 4.42105rem minmax(5.78947rem, 7.89474rem) auto;
   border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface);
 }
 .inf-pv-row[data-tone="red"] { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
@@ -132,9 +132,9 @@
 
 /* 640-1023: host and approver go to the row's tooltip; previews drop host. */
 @media (max-width: 1023px) {
-  .inf-dep-row { grid-template-columns: minmax(90px, 110px) minmax(100px, 1fr) 64px 72px 96px 56px 36px 172px 20px; }
+  .inf-dep-row { grid-template-columns: minmax(4.73684rem, 5.78947rem) minmax(5.26316rem, 1fr) 3.36842rem 3.78947rem 5.05263rem 2.94737rem 1.89474rem 9.05263rem 1.05263rem; }
   .inf-dep-host, .inf-dep-who { display: none; }
-  .inf-pv-row { grid-template-columns: minmax(100px, 160px) minmax(110px, 1fr) 64px 48px 84px minmax(100px, 140px) auto; }
+  .inf-pv-row { grid-template-columns: minmax(5.26316rem, 8.42105rem) minmax(5.78947rem, 1fr) 3.36842rem 2.52632rem 4.42105rem minmax(5.26316rem, 7.36842rem) auto; }
   .inf-pv-host { display: none; }
 }
 

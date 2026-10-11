@@ -145,7 +145,7 @@
 /* ── Grid and cards ────────────────────────────────────────────────────────────── */
 .wf-lib-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(17.89474rem, 100%), 1fr));
   gap: 12px;
 }
 .wf-lib-divider {
@@ -433,7 +433,7 @@
 .wf-ag-profile-head .wf-btn { margin-left: auto; }
 .wf-ag-facts {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(6.31579rem, 1fr));
   gap: 8px 16px;
   margin: 0;
 }
@@ -446,7 +446,7 @@
 
 .wf-ag-panels {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(17.89474rem, 100%), 1fr));
   gap: 12px;
 }
 .wf-ag-panels .wf-ag-panel {

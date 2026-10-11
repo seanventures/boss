@@ -1,17 +1,17 @@
 /* Identity › people (idn- classes; tokens only — see identity.css). */
 
 /* page headings and small helpers */
-.idn-h1 { font: 600 24px var(--display); margin: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.idn-h1 { font: 600 1.26316rem var(--display); margin: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .idn-grow { flex: 1; min-width: 0; }
 .idn-right { text-align: right; }
-.idn-small { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
+.idn-small { font-size: 0.63158rem; display: inline-flex; align-items: center; gap: 5px; }
 .idn-block { display: block; }
-.idn-empty { padding: 18px 4px; color: var(--faint); font-size: 13px; text-align: center; }
+.idn-empty { padding: 18px 4px; color: var(--faint); font-size: 0.68421rem; text-align: center; }
 .idn-ico-lg { width: 46px; height: 46px; border-radius: 13px; }
 
 /* the people filter bar: selects drawn as filter chips */
 .idn-fsel { display: inline-flex; }
-.idn-fsel select.idn-fchip { appearance: none; -webkit-appearance: none; background: transparent; font: inherit; font-size: 12.5px; cursor: pointer; padding-right: 12px; }
+.idn-fsel select.idn-fchip { appearance: none; -webkit-appearance: none; background: transparent; font: inherit; font-size: 0.65789rem; cursor: pointer; padding-right: 12px; }
 .idn-fsel select.idn-fchip option { background: var(--surface-2); color: var(--ink); }
 
 /* the profile header's middle column */
@@ -20,11 +20,11 @@
 
 /* effective access: the finder, the remaining categories, show-all */
 .idn-find { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border-strong); border-radius: 999px; padding: 0 12px; color: var(--faint); background: var(--idn-well); min-height: 32px; }
-.idn-find input { background: none; border: 0; color: var(--ink); font: inherit; font-size: 12.5px; width: 150px; min-width: 0; }
+.idn-find input { background: none; border: 0; color: var(--ink); font: inherit; font-size: 0.65789rem; width: 150px; min-width: 0; }
 .idn-find input:focus { outline: none; }
-.idn-acc-more { width: 100%; padding: 8px 14px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); color: var(--teal); font-size: 12.5px; font-weight: 600; text-align: left; min-height: 36px; }
-.idn-acc-rest { display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 14px; font-weight: 700; font-size: 13.5px; color: var(--muted); background: color-mix(in srgb, var(--surface-3) 40%, transparent); text-align: left; margin-top: 8px; }
-.idn-acc-rest .idn-n { margin-left: auto; font: 500 12px var(--mono); color: var(--faint); display: inline-flex; gap: 6px; align-items: center; }
+.idn-acc-more { width: 100%; padding: 8px 14px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); color: var(--teal); font-size: 0.65789rem; font-weight: 600; text-align: left; min-height: 36px; }
+.idn-acc-rest { display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 14px; font-weight: 700; font-size: 0.71053rem; color: var(--muted); background: color-mix(in srgb, var(--surface-3) 40%, transparent); text-align: left; margin-top: 8px; }
+.idn-acc-rest .idn-n { margin-left: auto; font: 500 0.63158rem var(--mono); color: var(--faint); display: inline-flex; gap: 6px; align-items: center; }
 
 /* grants in the right column */
 .idn-dg .idn-top a { display: block; }
@@ -35,31 +35,31 @@
 .idn-pick-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; text-align: left; min-height: 40px; flex-wrap: wrap; }
 .idn-pick-row[data-selected] { border-color: color-mix(in srgb, var(--teal) 55%, transparent); background: color-mix(in srgb, var(--teal) 8%, transparent); }
 .idn-pick-row[aria-disabled="true"] { opacity: 0.55; border-style: dashed; cursor: not-allowed; }
-.idn-lockline { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--amber); font-size: 12px; }
+.idn-lockline { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--amber); font-size: 0.63158rem; }
 .idn-cascade-list { list-style: none; margin: 10px 0 4px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.idn-cascade-list li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; font-size: 13px; color: var(--ink-soft); }
-.idn-cascade-list li b { margin-left: auto; font: 600 14px var(--display); }
+.idn-cascade-list li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; font-size: 0.68421rem; color: var(--ink-soft); }
+.idn-cascade-list li b { margin-left: auto; font: 600 0.73684rem var(--display); }
 .idn-sheet .idn-field + .idn-field { margin-top: 12px; }
 
 /* the Security tab's admin actions */
 .idn-adm { display: grid; grid-template-columns: 1fr auto; gap: 14px 12px; align-items: center; }
-.idn-adm b { display: block; font-size: 13.5px; }
-.idn-adm small { display: block; color: var(--faint); font-size: 12px; line-height: 1.4; }
+.idn-adm b { display: block; font-size: 0.71053rem; }
+.idn-adm small { display: block; color: var(--faint); font-size: 0.63158rem; line-height: 1.4; }
 
 /* groups */
-.idn-glist { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.idn-glist { display: grid; grid-template-columns: repeat(auto-fill, minmax(15.78947rem, 1fr)); gap: 12px; }
 .idn-gcard { display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--border); border-radius: 14px; padding: 14px; background: linear-gradient(180deg, var(--idn-card-a), var(--idn-card-b)); min-width: 0; }
 .idn-gcard:hover { border-color: var(--border-strong); }
 .idn-gcard-h { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.idn-gcard-h b { display: block; font-size: 14px; }
-.idn-gcard-h small { display: block; color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.idn-impact { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--idn-sky) 30%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--idn-sky) 7%, transparent); color: var(--ink-soft); font-size: 13px; }
+.idn-gcard-h b { display: block; font-size: 0.73684rem; }
+.idn-gcard-h small { display: block; color: var(--faint); font-size: 0.63158rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.idn-impact { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--idn-sky) 30%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--idn-sky) 7%, transparent); color: var(--ink-soft); font-size: 0.68421rem; }
 
 @media (max-width: 560px) {
   .idn-find input { width: 110px; }
   .idn-adm { grid-template-columns: minmax(0, 1fr); }
   .idn-glist { grid-template-columns: minmax(0, 1fr); }
-  .idn-h1 { font-size: 20px; }
+  .idn-h1 { font-size: 1.05263rem; }
 }
 
 /* group picker chips (invite), access requests, CSV import preview */
@@ -70,9 +70,9 @@
 .idn-requests h2 { display: inline-flex; align-items: center; gap: 8px; }
 .idn-req { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
 .idn-req-who { display: flex; flex-direction: column; gap: 4px; flex: 1 1 260px; min-width: 0; }
-.idn-req-who b { font-size: 13.5px; }
-.idn-req-who small { font-size: 12px; }
+.idn-req-who b { font-size: 0.71053rem; }
+.idn-req-who small { font-size: 0.63158rem; }
 .idn-import-preview { max-height: 240px; overflow-y: auto; margin-top: 12px; }
 .idn-import-preview tr[data-ok="false"] td { opacity: 0.85; }
 .idn-dh .idn-acts { display: flex; gap: 8px; flex-wrap: wrap; }
-.idn-meta .idn-link { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; font-size: 12.5px; }
+.idn-meta .idn-link { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; font-size: 0.65789rem; }

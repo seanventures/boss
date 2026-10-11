@@ -113,7 +113,7 @@
 .wf-edge[data-kind="no"] { stroke: color-mix(in srgb, var(--red) 60%, transparent); }
 .wf-edge-head { fill: color-mix(in srgb, var(--faint) 70%, transparent); }
 .wf-edge-label {
-  fill: var(--muted); font: 600 12px/1 var(--sans);
+  fill: var(--muted); font: 600 0.75rem/1 var(--sans);
   paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round;
 }
 
@@ -265,7 +265,7 @@
 [data-density="compact"] .wf-node[data-mode="run"] .wf-node-icon > svg { display: none; }
 [data-density="compact"] .wf-flag { font-size: 0.875rem; }
 [data-density="compact"] .wf-flag-label { font-size: 0.875rem; }
-[data-density="compact"] .wf-edge-label { font-size: 14px; }
+[data-density="compact"] .wf-edge-label { font-size: 0.875rem; }
 [data-density="compact"] .wf-gap-add { width: 18px; height: 18px; }
 
 /* Run mode: the left edge says where the work has got to. */
@@ -408,7 +408,7 @@
 .wf-step-empty { font-size: 0.8125rem; color: var(--faint); }
 .wf-step-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .wf-step-log li {
-  display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: baseline;
+  display: grid; grid-template-columns: 2.31579rem minmax(0, 1fr); gap: 8px; align-items: baseline;
   font-size: 0.8125rem; color: var(--muted);
 }
 .wf-step-log time { font-family: var(--mono, monospace); font-size: 0.75rem; color: var(--faint); }
@@ -418,7 +418,7 @@
 .wf-step-sec .dw-step-out dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-step-sec .dw-step-out > div { min-width: 0; }
 .wf-stepout {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(8.42105rem, 1fr));
   gap: 8px 16px; margin: 8px 0 0;
 }
 .wf-stepout > div { min-width: 0; }

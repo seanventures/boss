@@ -42,7 +42,7 @@ async function at(width: number) {
 const tracks = (t: string) => t.replace(/\([^)]*\)/g, "()").trim().split(/\s+/).filter(Boolean);
 
 describe("the cockpit is Story | Outputs at desktop width", () => {
-  for (const [width, columns] of [[1440, "minmax(0, 3fr) minmax(0, 2fr)"], [1280, "minmax(0, 3fr) minmax(0, 2fr)"], [1200, "minmax(0, 1fr) 380px"]] as const) {
+  for (const [width, columns] of [[1440, "minmax(0, 3fr) minmax(0, 2fr)"], [1280, "minmax(0, 3fr) minmax(0, 2fr)"], [1200, "minmax(0, 1fr) 20rem"]] as const) {
     it(`${width}px: two columns, Story first, Outputs sticky`, async () => {
       const { body, b, o } = await at(width);
       expect(b.display).toBe("grid");

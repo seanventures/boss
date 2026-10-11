@@ -49,7 +49,7 @@ describe("the master-detail split collapses", () => {
   it("stops being two columns when there is no room for two", () => {
     // minmax(280px, …) never collapses on its own: the list keeps its 280px whatever the
     // window does, and the detail is pushed off the edge.
-    expect(CSS).toContain("grid-template-columns: minmax(280px, 360px) minmax(0, 1fr)");
+    expect(CSS).toContain("grid-template-columns: minmax(14.73684rem, 18.94737rem) minmax(0, 1fr)");   // 280px, 360px
     expect(narrow).toContain(".ct-split, .ct-split[data-docked=\"true\"] { grid-template-columns: minmax(0, 1fr); }");
   });
 
@@ -74,7 +74,7 @@ describe("cards fit a phone", () => {
   it("stop being a 320px grid on a 360px screen", () => {
     // `minmax(320px, 1fr)` plus the page padding is wider than the viewport, so a single
     // column of cards still overflowed.
-    expect(CSS).toContain("grid-template-columns: repeat(auto-fit, minmax(320px, 1fr))");
+    expect(CSS).toContain("grid-template-columns: repeat(auto-fit, minmax(16.84211rem, 1fr))");   // 320px
     expect(phone).toContain(".mr-grid, .ct-tiles { grid-template-columns: minmax(0, 1fr) !important; }");
   });
 
