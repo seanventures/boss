@@ -167,3 +167,15 @@ def test_an_attempts_whole_workspace_is_its_seed_plus_its_own_changes():
     }
     files = {f["path"]: f["content"] for f in layered_workspace_files(runs.get, runs["new"])}
     assert files == {"app/a.ts": "1", "app/b.ts": "2", "app/c.ts": "2"}
+
+
+def test_a_retry_continues_from_the_attempt_that_got_furthest():
+    """crun_053f2098 seeded from a just-cancelled sibling instead of crun_fe2dbbc8 (tests
+    green, one gate left). The pick ranks tests passed, then fewest failing gates, then age."""
+    import inspect
+
+    from boss_engine.services import code_task_service as cts
+
+    src = inspect.getsource(cts.retry_code_task)
+    assert 'st.get("tests_passed") is True' in src and 'fctx_n.get("failing_gates")' in src
+    assert "max(whole, key=lambda w: w[2])" in src

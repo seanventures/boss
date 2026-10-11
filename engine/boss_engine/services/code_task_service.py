@@ -1663,25 +1663,35 @@ def retry_code_task(
     # crun_cb6e15f4's 75). Either is skipped instead of rebuilding or repairing a husk.
     seed_files, seed_from = 0, run_id
     if prev.get("status") != "completed":
-        window: list[tuple[str, int]] = []
-        node, node_id = prev, run_id
+        # (id, whole-tree files, how far it got) newest first. HOW FAR: tests passed, then the
+        # fewest failing gates. A retry continues from the attempt that got FURTHEST, newest
+        # breaking ties: crun_053f2098 seeded from a just-cancelled sibling of the older attempt
+        # instead of crun_fe2dbbc8 (tests green, one gate left).
+        window: list[tuple[str, int, tuple]] = []
+        node, node_id, age = prev, run_id, 0
         for _ in range(12):
             if node is None or node.get("status") == "completed":
                 break
+
             def _ld(rid: str):
                 with _transaction(engine) as c:
                     return load_code_task_run(c, rid)
-            window.append((node_id, len(layered_workspace_files(_ld, node))))
-            node_id = str((node.get("finalize_ctx") or {}).get("parent_run_id") or "")
+            st = node.get("state") or {}
+            fctx_n = node.get("finalize_ctx") or {}
+            failing = fctx_n.get("failing_gates")
+            reached = (1 if st.get("tests_passed") is True else 0,
+                       -(len(failing) if isinstance(failing, list) else 99), -age)
+            window.append((node_id, len(layered_workspace_files(_ld, node)), reached))
+            node_id = str(fctx_n.get("parent_run_id") or "")
+            age += 1
             if not node_id:
                 break
-            with _transaction(engine) as c:
-                node = load_code_task_run(c, node_id)
-        fullest = max((n for _, n in window), default=0)
-        for rid, n in window:  # newest first
-            if n and n * 2 >= fullest:
-                seed_files, seed_from = n, rid
-                break
+            node = _ld(node_id)
+        fullest = max((n for _, n, _r in window), default=0)
+        whole = [(rid, n, r) for rid, n, r in window if n and n * 2 >= fullest]
+        if whole:
+            rid, n, _r = max(whole, key=lambda w: w[2])
+            seed_files, seed_from = n, rid
     history = list(fctx_prev.get("feedback_history") or [])
     history.append({
         "attempt": attempt, "parent_run_id": run_id, "prev_status": prev.get("status"),
