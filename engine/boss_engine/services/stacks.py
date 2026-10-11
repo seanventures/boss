@@ -82,6 +82,10 @@ class Framework:
     markers: tuple[str, ...]
     #: Words a brief or an architecture uses for it.
     words: tuple[str, ...] = ()
+    #: How a backend starts on $PORT (`{target}`: the app object the code names), or how BOSS
+    #: serves a built front end on $PORT when its Playwright config serves nothing. "" when the
+    #: language's own rule decides (npm start, the jar).
+    start: str = ""
 
 
 @dataclass(frozen=True)
@@ -97,6 +101,12 @@ class Language:
     #: (service dir) -> argv that starts it on $PORT, or None when it is not a server.
     start: Callable[["Service", Path], Optional[list[str]]]
     words: tuple[str, ...] = ()
+    #: The runtime the image carries for it, and its package manager.
+    runtime: str = ""
+    package_manager: str = ""
+    #: install / build / lint / typecheck / test / e2e — THE commands `steps` runs (None: not
+    #: a separate step for this language). The adapter registry and the docs read them here.
+    commands: Mapping[str, Optional[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -211,29 +221,36 @@ def _has_python_tests(base: Path) -> bool:
 
 
 def _python_steps(service: Service, path: Path) -> list[tuple[str, Path]]:
+    commands = LANGUAGES["python"].commands
     steps: list[tuple[str, Path]] = []
     if (path / "requirements.txt").is_file():
-        steps.append((PIP_INSTALL, path))
+        steps.append((str(commands["install"]), path))
     elif "[project]" in _read(path / "pyproject.toml") or (path / "setup.py").is_file():
         steps.append((PIP_INSTALL_PROJECT, path))
     if _has_python_tests(path):
-        steps.append((PYTEST, path))
+        steps.append((str(commands["test"]), path))
     return steps
+
+
+FASTAPI_START = 'exec python3 -m uvicorn {target} --host 0.0.0.0 --port "$PORT"'
+FLASK_START = 'exec python3 -m flask --app {target} run --host 0.0.0.0 --port "$PORT"'
+DJANGO_START = 'exec python3 manage.py runserver "0.0.0.0:$PORT" --noreload'
+VITE_SERVE = 'exec npm run preview -- --host 127.0.0.1 --port "$PORT" --strictPort'
+NEXT_SERVE = 'exec npm run start -- -H 127.0.0.1 -p "$PORT"'
 
 
 def _start_python(service: Service, path: Path) -> Optional[list[str]]:
     if service.framework == "django" or (path / "manage.py").is_file():
-        return ["sh", "-lc", 'exec python3 manage.py runserver "0.0.0.0:$PORT" --noreload']
+        return ["sh", "-lc", DJANGO_START]
     if service.framework == "flask":
         found = _find_app_object(path, "Flask")
         target = (found[0] if found and found[2] else f"{found[0]}:{found[1]}") if found else "app"
-        return ["sh", "-lc", f'exec python3 -m flask --app {target} run --host 0.0.0.0 --port "$PORT"']
+        return ["sh", "-lc", FLASK_START.format(target=target)]
     found = _find_app_object(path, "FastAPI")
     if found:
         module, attr, is_factory = found
-        factory = " --factory" if is_factory else ""
-        return ["sh", "-lc",
-                f'exec python3 -m uvicorn {module}:{attr}{factory} --host 0.0.0.0 --port "$PORT"']
+        target = f"{module}:{attr}" + (" --factory" if is_factory else "")
+        return ["sh", "-lc", FASTAPI_START.format(target=target)]
     for name in ("main.py", "app.py", "server.py"):
         if (path / name).is_file():
             return ["sh", "-lc", f"exec python3 {name}"]
@@ -243,10 +260,8 @@ def _start_python(service: Service, path: Path) -> Optional[list[str]]:
 # -- Node -----------------------------------------------------------------------------------
 
 def _node_steps(service: Service, path: Path) -> list[tuple[str, Path]]:
-    from .verification_target import NPM_INSTALL_CMD
-
     scripts = _scripts(_package(path))
-    steps: list[tuple[str, Path]] = [(NPM_INSTALL_CMD, path)]
+    steps: list[tuple[str, Path]] = [(str(LANGUAGES["node"].commands["install"]), path)]
     for name in NODE_UNIT_SCRIPTS:
         body = scripts.get(name, "").strip()
         if not body or (name == "test" and _NPM_PLACEHOLDER_TEST.search(body)):
@@ -279,17 +294,28 @@ def _start_java(service: Service, path: Path) -> Optional[list[str]]:
     return toolchains.java_preview_command(path, build) if build else None
 
 
+def _npm_install() -> str:
+    from .verification_target import NPM_INSTALL_CMD
+
+    return NPM_INSTALL_CMD
+
+
 #: THE REGISTRY. What BOSS can build is exactly what has build functions here.
 LANGUAGES: dict[str, Language] = {
     "python": Language(
         "python", "Python", None, PYTHON_MANIFESTS,
-        (Framework("fastapi", "FastAPI", "backend", ("fastapi",), ("fastapi",)),
-         Framework("flask", "Flask", "backend", ("flask",), ("flask",)),
-         Framework("django", "Django", "backend", ("django",), ("django",)),
+        (Framework("fastapi", "FastAPI", "backend", ("fastapi",), ("fastapi",),
+                   FASTAPI_START.format(target="<module>:<app>")),
+         Framework("flask", "Flask", "backend", ("flask",), ("flask",),
+                   FLASK_START.format(target="<module>:<app>")),
+         Framework("django", "Django", "backend", ("django",), ("django",), DJANGO_START),
          # The standard library's wsgiref: no dependency to detect it by; it starts from its
          # declared command or its main.py.
          Framework("wsgi", "WSGI", "backend", (), ())),
-        _python_steps, _start_python, ("python",)),
+        _python_steps, _start_python, ("python",),
+        runtime="python >=3.11", package_manager="pip",
+        commands={"install": PIP_INSTALL, "build": None, "lint": None, "typecheck": None,
+                  "test": PYTEST, "e2e": None}),
     "node": Language(
         "node", "Node", None, NODE_MANIFESTS,
         (Framework("express", "Express", "backend", ("express",), ("express.js", "expressjs")),
@@ -299,19 +325,31 @@ LANGUAGES: dict[str, Language] = {
          # Node's own http module: a `start` script, no framework dependency.
          Framework("node-http", "node:http", "backend", (), ()),
          Framework("nestjs", "NestJS", "backend", ("@nestjs/core",), ("nestjs",)),
-         Framework("react", "React", "frontend", ("react",), ("react",)),
-         Framework("vite", "Vite", "frontend", ("vite",), ("vite",)),
-         Framework("vue", "Vue", "frontend", ("vue",), ("vue",)),
-         Framework("svelte", "Svelte", "frontend", ("svelte",), ("svelte", "sveltekit")),
-         Framework("angular", "Angular", "frontend", ("@angular/core",), ("angular",)),
-         Framework("next", "Next.js", "frontend", ("next",), ("next.js", "nextjs"))),
-        _node_steps, _start_node, ("node", "node.js", "nodejs", "typescript", "javascript")),
+         # Next.js before React: a Next app depends on react too, and is served by `next start`.
+         Framework("next", "Next.js", "frontend", ("next",), ("next.js", "nextjs"), NEXT_SERVE),
+         Framework("react", "React", "frontend", ("react",), ("react",), VITE_SERVE),
+         Framework("vite", "Vite", "frontend", ("vite",), ("vite",), VITE_SERVE),
+         Framework("vue", "Vue", "frontend", ("vue",), ("vue",), VITE_SERVE),
+         Framework("svelte", "Svelte", "frontend", ("svelte",), ("svelte", "sveltekit"), VITE_SERVE),
+         Framework("angular", "Angular", "frontend", ("@angular/core",), ("angular",))),
+        _node_steps, _start_node, ("node", "node.js", "nodejs", "typescript", "javascript"),
+        runtime="node >=20", package_manager="npm",
+        commands={"install": _npm_install(), "build": "npm run build", "lint": "npm run lint",
+                  "typecheck": "npm run typecheck", "test": "npm run test",
+                  "e2e": "npm run test:e2e"}),
     "java": Language(
         "java", "Java", "java", JAVA_MANIFESTS,
         (Framework("spring-boot", "Spring Boot", "backend", ("spring-boot",),
-                   ("spring boot", "spring-boot", "springboot")),
-         Framework("dropwizard", "Dropwizard", "backend", ("dropwizard",), ("dropwizard",))),
-        _java_steps, _start_java, ("java",)),
+                   ("spring boot", "spring-boot", "springboot"),
+                   'java -Dserver.port="$PORT" -jar <the built jar>'),
+         Framework("dropwizard", "Dropwizard", "backend", ("dropwizard",), ("dropwizard",),
+                   'java -jar <the built jar> server config.yml')),
+        _java_steps, _start_java, ("java",),
+        runtime="java 21 (Temurin)", package_manager="maven or gradle",
+        commands={"install": None, "build": toolchains.MAVEN_GATE[0] + " | "
+                  + toolchains.GRADLE_GATE[0], "lint": None, "typecheck": None,
+                  "test": toolchains.MAVEN_GATE[0] + " | " + toolchains.GRADLE_GATE[0],
+                  "e2e": None}),
 }
 
 #: Languages BOSS recognises in a brief or an architecture and cannot build. For the words only.
@@ -341,6 +379,237 @@ _NEGATION = re.compile(r"\b(?:not|no|never|without|instead of|avoid|rather than|
                        r"don'?t use|do not use|rejected|considered)\b[^.,;\n]{0,24}$", re.I)
 
 
+# ── The adapter registry (BOSS_OSS_v1 stack recommendations §6-7) ───────────────────────────
+#
+# An ADAPTER is a stack BOSS builds end to end: which languages and frameworks it covers, at what
+# support level. Only the choice of components and the level are written here; everything else an
+# adapter says — runtimes, package managers, detection files, the install/build/lint/typecheck/
+# test/e2e commands, how the backend starts and where its health is asked — is read from LANGUAGES,
+# the same entries the gate plans and runs with. docs/community/SUPPORTED_STACKS.md is rendered
+# from it (render_supported_stacks_md) and a test holds the file to it.
+
+SUPPORT_LEVELS = ("certified", "experimental", "best_effort", "unsupported")
+LEVEL_WORDS = {"certified": "certified", "experimental": "experimental",
+               "best_effort": "best effort", "unsupported": "not supported"}
+#: How an adapter is promoted. A person changes the level in ADAPTERS; nothing promotes itself.
+PROMOTION_RULE = (
+    "An experimental adapter becomes certified only when a recorded benchmark run for its id "
+    "(GET /v1/delivery-workflows/runs/{run_id}/benchmark) passed end to end: result success, "
+    "tests_passed equal to tests_total and above zero, and deployment_smoke_test pass. A "
+    "maintainer then changes its support_level here, citing that run.")
+DATABASES = ("postgres", "sqlite (local development)")
+
+
+@dataclass(frozen=True)
+class Component:
+    role: str                      # backend | frontend
+    language: str
+    frameworks: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Adapter:
+    id: str
+    label: str
+    support_level: str
+    components: tuple[Component, ...]
+    databases: tuple[str, ...] = DATABASES
+    note: str = ""
+
+    @property
+    def languages(self) -> list[str]:
+        return list(dict.fromkeys(c.language for c in self.components))
+
+    @property
+    def frameworks(self) -> list[str]:
+        return list(dict.fromkeys(f for c in self.components for f in c.frameworks))
+
+    def ready(self) -> bool:
+        return all(language_ready(k) for k in self.languages)
+
+    def as_dict(self, *, install: bool = True) -> dict[str, Any]:
+        """The adapter, every field derived from LANGUAGES. `install`: add whether this
+        install's toolchains can build it (left out of the docs, which are not per install)."""
+        comps = []
+        for c in self.components:
+            lang = LANGUAGES[c.language]
+            fws = [f for f in lang.frameworks if f.key in c.frameworks]
+            comps.append({
+                "role": c.role, "language": lang.key, "frameworks": [f.key for f in fws],
+                "runtime": lang.runtime, "package_manager": lang.package_manager,
+                "detection_files": list(lang.manifests),
+                "commands": dict(lang.commands),
+                **({"start": next((f.start for f in fws if f.start), "") or
+                    _DEFAULT_START.get(lang.key, ""),
+                    "health_path": "/ (or the path in boss.preview.health)"}
+                   if c.role == "backend" else
+                   {"serve": next((f.start for f in fws if f.start), VITE_SERVE)}),
+            })
+        out = {"id": self.id, "label": self.label, "support_level": self.support_level,
+               "languages": self.languages, "frameworks": self.frameworks,
+               "databases": list(self.databases), "components": comps,
+               **({"note": self.note} if self.note else {})}
+        if install:
+            out["ready"] = self.ready()
+            out["enable"] = next((enable_hint(k) for k in self.languages if enable_hint(k)), None)
+        return out
+
+
+#: How a backend starts when its framework names no template (the language's own rule).
+_DEFAULT_START = {"node": "exec npm start", "python": "exec python3 main.py",
+                  "java": "java -jar <the built jar>"}
+
+_REACT_VITE = Component("frontend", "node", ("react", "vite"))
+ADAPTERS: tuple[Adapter, ...] = (
+    Adapter("react-vite+express+postgres", "React + Vite, Express, PostgreSQL", "experimental",
+            (_REACT_VITE, Component("backend", "node", ("express",)))),
+    Adapter("react-vite+fastapi+postgres", "React + Vite, FastAPI, PostgreSQL", "experimental",
+            (_REACT_VITE, Component("backend", "python", ("fastapi",)))),
+    Adapter("nextjs+fastapi+postgres", "Next.js, FastAPI, PostgreSQL", "experimental",
+            (Component("frontend", "node", ("next",)), Component("backend", "python", ("fastapi",)))),
+    Adapter("java-spring", "Java Spring Boot (with an optional React + Vite front end)",
+            "experimental", (Component("backend", "java", ("spring-boot",)), _REACT_VITE),
+            note="needs the Java toolchain on the install"),
+    Adapter("python-service", "Python service (FastAPI, Flask, Django, WSGI)", "best_effort",
+            (Component("backend", "python", ("fastapi", "flask", "django", "wsgi")),)),
+    Adapter("node-service", "Node service (Express, Fastify, Koa, Hono, NestJS, node:http)",
+            "best_effort",
+            (Component("backend", "node", ("express", "fastify", "koa", "hono", "nestjs",
+                                           "node-http")),)),
+    Adapter("node-web", "Node web front end (Vue, Svelte, Angular)", "best_effort",
+            (Component("frontend", "node", ("vue", "svelte", "angular")),), databases=()),
+    Adapter("java-dropwizard", "Java Dropwizard", "best_effort",
+            (Component("backend", "java", ("dropwizard",)),),
+            note="needs the Java toolchain on the install"),
+)
+
+
+def unsupported_adapters() -> list[dict[str, Any]]:
+    """Every language BOSS refuses, as an adapter entry at level `unsupported`."""
+    return [{"id": u.key, "label": u.label, "support_level": "unsupported",
+             "languages": [u.key], "detection_files": sorted(
+                 f for f, k in _UNSUPPORTED_MANIFESTS.items() if k == u.key)}
+            for u in UNSUPPORTED]
+
+
+def adapter(adapter_id: str) -> Optional[Adapter]:
+    return next((a for a in ADAPTERS if a.id == adapter_id), None)
+
+
+def language_support_level(key: str) -> str:
+    """The best level of any adapter that builds `key` ("unsupported" for none)."""
+    levels = [a.support_level for a in ADAPTERS if key in a.languages]
+    return min(levels, key=SUPPORT_LEVELS.index) if levels else "unsupported"
+
+
+def adapter_for(services: Iterable[Any]) -> Optional[Adapter]:
+    """The adapter an app's detected services match (the most specific, best-level one):
+    every service's language and framework is one of the adapter's components."""
+    found = [(s.language if hasattr(s, "language") else s["language"],
+              s.framework if hasattr(s, "framework") else s.get("framework"),
+              s.role if hasattr(s, "role") else s.get("role"))
+             for s in services]
+    found = [f for f in found if f[2] in ("backend", "frontend")]
+    if not found:
+        return None
+    best = None
+    for a in ADAPTERS:
+        ok = all(any(c.language == lang and c.role == role and (fw is None or fw in c.frameworks)
+                     for c in a.components) for lang, fw, role in found)
+        if ok and (best is None or SUPPORT_LEVELS.index(a.support_level)
+                   < SUPPORT_LEVELS.index(best.support_level)):
+            best = a
+    return best
+
+
+def adapter_for_template(stack: Optional[str], framework: Optional[str] = None,
+                         layout: Optional["Layout"] = None) -> Optional[Adapter]:
+    """The adapter a build is for, before any file exists: its layout, else its template."""
+    if layout is not None:
+        return adapter_for([
+            {"language": layout.backend_language, "framework": layout.backend_framework,
+             "role": "backend"},
+            {"language": "node", "framework": layout.frontend_framework, "role": "frontend"}])
+    if stack:
+        return adapter_for([{"language": stack, "framework": framework, "role": "backend"}])
+    return None
+
+
+def certification_evidence(records: Iterable[Mapping[str, Any]], adapter_id: str) -> list[str]:
+    """The run ids among benchmark records (services.benchmark) that meet PROMOTION_RULE for
+    `adapter_id`. Promotion is a person's change to ADAPTERS; this says whether one may."""
+    out = []
+    for r in records:
+        if (r.get("stack") == adapter_id and r.get("result") == "success"
+                and isinstance(r.get("tests_total"), int) and r["tests_total"] > 0
+                and r.get("tests_passed") == r["tests_total"]
+                and r.get("deployment_smoke_test") == "pass"):
+            out.append(str(r.get("run_id")))
+    return out
+
+
+def render_supported_stacks_md() -> str:
+    """docs/community/SUPPORTED_STACKS.md, from the registry. Not per install (no "ready")."""
+    lines = [
+        "# Supported stacks",
+        "",
+        "<!-- Generated from engine/boss_engine/services/stacks.py (ADAPTERS, LANGUAGES). Do not "
+        "edit by hand: run `python3 -m boss_engine.services.stacks --write-docs "
+        "docs/community/SUPPORTED_STACKS.md` from engine/. A test fails when this file and the "
+        "registry disagree. -->",
+        "",
+        "What BOSS builds, tests and starts, and how sure we are of it. Levels:",
+        "",
+        "- **certified** — the full workflow passed a recorded, repeatable benchmark run.",
+        "- **experimental** — BOSS builds, tests and starts it; the full lifecycle is not yet "
+        "certified.",
+        "- **best effort** — BOSS attempts it with the same build code; no reliability claim.",
+        "- **not supported** — refused before anything is spent (at Start, at architecture "
+        "approval and at the build).",
+        "",
+        f"Promotion: {PROMOTION_RULE}",
+        "",
+        "| Stack | Level | Languages | Frameworks | Databases |",
+        "|---|---|---|---|---|",
+    ]
+    for a in ADAPTERS:
+        lines.append(f"| `{a.id}` — {a.label} | {LEVEL_WORDS[a.support_level]} | "
+                     f"{', '.join(LANGUAGES[k].label for k in a.languages)} | "
+                     f"{', '.join(a.frameworks)} | {', '.join(a.databases)} |")
+    for u in unsupported_adapters():
+        lines.append(f"| `{u['id']}` — {u['label']} | not supported | {u['label']} | — | — |")
+    lines += ["", "## Languages", "",
+              "| Language | Runtime | Package manager | Detected by | Toolchain |",
+              "|---|---|---|---|---|"]
+    for lang in LANGUAGES.values():
+        lines.append(f"| {lang.label} | {lang.runtime} | {lang.package_manager} | "
+                     f"{', '.join(f'`{m}`' for m in lang.manifests)} | "
+                     f"{'always installed' if lang.toolchain is None else f'opt-in: `{toolchains.ENABLE_HINT.format(name=lang.toolchain)}`'} |")
+    lines += ["", "## Commands", "",
+              "Each service runs its own, in its own directory. `—`: not a separate step.", "",
+              "| Language | install | build | lint | typecheck | test | e2e |",
+              "|---|---|---|---|---|---|---|"]
+    for lang in LANGUAGES.values():
+        cells = [f"`{lang.commands.get(k)}`" if lang.commands.get(k) else "—"
+                 for k in ("install", "build", "lint", "typecheck", "test", "e2e")]
+        lines.append(f"| {lang.label} | " + " | ".join(cells) + " |")
+    lines += ["", "## Starting a backend and serving a front end", "",
+              "BOSS starts the backend on `$PORT` (the command in the service's "
+              "`boss.preview.command` wins) and asks `/` — or the path in `boss.preview.health` — "
+              "for an answer before any e2e test runs. A front end whose Playwright config serves "
+              "nothing is served built.", "",
+              "| Framework | Role | Command |", "|---|---|---|"]
+    for lang in LANGUAGES.values():
+        for f in lang.frameworks:
+            cmd = f.start or (_DEFAULT_START.get(lang.key, "") if f.role == "backend" else "")
+            if cmd:
+                lines.append(f"| {f.label} ({lang.label}) | {f.role} | `{cmd}` |")
+    lines += ["", "A multi-service app is a backend and a web front end, each in its own "
+              "directory with its own manifest. Data: `DATABASE_URL` (PostgreSQL) with a local "
+              "SQLite file when it is unset, for local development.", ""]
+    return "\n".join(lines)
+
+
 def language_ready(key: str) -> bool:
     lang = LANGUAGES.get(key)
     return bool(lang) and (lang.toolchain is None or toolchains.has(lang.toolchain))
@@ -368,11 +637,14 @@ def capabilities() -> dict[str, Any]:
             "backends": [f.label for f in lang.frameworks if f.role == "backend"],
             "frontends": [f.label for f in lang.frameworks if f.role == "frontend"],
             "frameworks": [f.key for f in lang.frameworks],
+            "support_level": language_support_level(lang.key),
         })
     backends = [l["key"] for l in languages if l["backends"]]
     combos = [{"backend": b, "frontend": "node", "ready": all(
         x["ready"] for x in languages if x["key"] in (b, "node"))} for b in backends]
     return {"languages": languages, "multi_service": combos,
+            "adapters": [a.as_dict() for a in ADAPTERS] + unsupported_adapters(),
+            "promotion_rule": PROMOTION_RULE,
             "not_supported": [u.label for u in UNSUPPORTED]}
 
 
@@ -383,7 +655,9 @@ def supported_sentence(caps: Optional[dict[str, Any]] = None) -> str:
     for lang in caps["languages"]:
         names = lang["backends"] + ([f"{'/'.join(lang['frontends'][:3])} web front ends"]
                                     if lang["frontends"] else [])
-        part = f"{lang['label']} ({', '.join(names)})" if names else lang["label"]
+        level = LEVEL_WORDS.get(lang.get("support_level") or "", "")
+        part = (f"{lang['label']} ({', '.join(names)}; {level})" if names
+                else f"{lang['label']} ({level})")
         if not lang["ready"]:
             part += f" — off on this install; turn it on with `{lang['enable']}`"
         parts.append(part)
@@ -713,8 +987,10 @@ class StackPlan:
     frontend: Optional[Service] = None
     #: (command, absolute dir) run with the backend up and BACKEND_ENV set.
     e2e_steps: list[tuple[str, Path]] = field(default_factory=list)
-    #: The frontend needs BOSS to serve it (its Playwright config starts no webServer).
+    #: The frontend needs BOSS to serve it (its Playwright config starts no webServer), and
+    #: the command that serves it built on $PORT (`vite preview`, `next start`).
     serve_frontend: bool = False
+    frontend_command: Optional[list[str]] = None
     error: Optional[str] = None
 
     def dir_of(self, service: Service) -> Path:
@@ -796,6 +1072,8 @@ def stack_plan(app_dir: Path | str, services: Optional[list[Service]] = None) ->
         plan.e2e_steps += [(f"npm run {n}", path) for n in wanted]
         if svc is plan.frontend and "test:e2e" in wanted and not _playwright_has_webserver(path):
             plan.serve_frontend = True
+            fw = next((f for f in LANGUAGES["node"].frameworks if f.key == svc.framework), None)
+            plan.frontend_command = ["sh", "-lc", (fw.start if fw and fw.start else VITE_SERVE)]
     return plan
 
 
@@ -876,6 +1154,22 @@ def layout_prompt(layout: Layout, app_root: Optional[str], *, template_command: 
     else:
         back_rules = "its own package.json with a `start` script and its own tests"
         start_example = "node server.js"
+    if layout.frontend_framework == "next":
+        front_rules = (
+            f"- {f}/ — the Node (Next.js) web front end: its own package.json with the scripts "
+            "build (`next build`), start (`next start`), typecheck, lint and test:e2e, and "
+            "@playwright/test in devDependencies. Its Playwright specs live in "
+            f"{f}/e2e/. next.config rewrites the API paths (e.g. /api, /auth) to "
+            "process.env.BACKEND_URL (default http://127.0.0.1:8000), and playwright.config's "
+            "webServer serves the built app (`npm run start`).\n")
+    else:
+        front_rules = (
+            f"- {f}/ — the Node ({ffw}) web front end: its own package.json with the scripts "
+            "build, typecheck, lint and test:e2e, and @playwright/test and vite in "
+            f"devDependencies. Its Playwright specs live in {f}/e2e/. Its vite config proxies "
+            "the API paths (e.g. /api, /auth) to process.env.BACKEND_URL (default "
+            "http://127.0.0.1:8000), and playwright.config's webServer serves the built front "
+            "end (`npm run preview`).\n")
     tpl = ""
     if template_command and template_stack:
         where = b if template_stack == back.key else f
@@ -886,11 +1180,10 @@ def layout_prompt(layout: Layout, app_root: Optional[str], *, template_command: 
         f"- {b}/ — the {back.label} ({bfw}) backend: {back_rules}. It reads PORT from the "
         f"environment and declares how it starts in {b}/boss.preview.command (one line, e.g. "
         f"`{start_example}`).\n"
-        f"- {f}/ — the Node ({ffw}) web front end: its own package.json with the scripts "
-        "build, typecheck, lint and test:e2e, and @playwright/test and vite in devDependencies. "
-        f"Its Playwright specs live in {f}/e2e/. Its vite config proxies the API paths (e.g. "
-        "/api, /auth) to process.env.BACKEND_URL (default http://127.0.0.1:8000), and "
-        "playwright.config's webServer serves the built front end (`npm run preview`).\n"
+        + front_rules
+        + "- Data: read DATABASE_URL (PostgreSQL; BOSS provides one to the build when the app "
+        "needs it) and fall back to a local SQLite file when it is unset, for local "
+        "development.\n"
         f"- Nothing else at {root}/ itself: no package.json, no Playwright config, no tests "
         "there. Never write JS tests in the backend or Python tests in the front end.\n"
         "HOW BOSS BUILDS AND TESTS IT: each service's own install, build and unit tests, in its "
@@ -963,3 +1256,12 @@ def refuse_unsupported_start(connection: Any, *, version_id: Optional[str],
     if result.ok or not _workflow_builds(connection, version_id):
         return
     raise StackUnsupported(result)
+
+
+if __name__ == "__main__":  # python3 -m boss_engine.services.stacks --write-docs <path>
+    import sys
+
+    if len(sys.argv) == 3 and sys.argv[1] == "--write-docs":
+        Path(sys.argv[2]).write_text(render_supported_stacks_md(), encoding="utf-8")
+    else:
+        print(render_supported_stacks_md())

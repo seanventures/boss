@@ -53,7 +53,7 @@ import { defaultInputs, invalidInputs, missingRequired, startsFromABrief, suppli
 import { ReadinessPanel, WIZARD_COLLECTS, unaccepted, useWorkflowReadiness, type Readiness }
   from "../workflow-readiness-ui";
 import { get, post } from "./delivery-api";
-import { StackWarning, useStackCheck } from "../../components/v2/templates/stack-warning";
+import { StackSupportLine, StackWarning, useStackCheck } from "../../components/v2/templates/stack-warning";
 import {
   KEEPS_WORKING, QUICK, SPEC, appLine, appMatches, approvalsWord, checksWithKind, costKey,
   costRange, counts, defaultPath, featureInput, findApp, landsAs, matchIdea, monogram, normalizeChannel,
@@ -1104,6 +1104,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                 placeholder={"A shift-swap board where staff can offer a shift they cannot work "
                   + "and colleagues can claim it, with the manager approving the swap."}
                 onFull={() => setFull("brief")} onSubmit={() => void primary()} />
+        <StackSupportLine projectId={projectId} testId="np-stack-support" />
         <div className="np-ideas" data-testid="np-ideas">
           <small>Or start from</small>
           {IDEAS.slice(0, 6).map((idea) => (

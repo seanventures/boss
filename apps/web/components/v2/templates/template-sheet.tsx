@@ -26,11 +26,11 @@ import { useGuardedCall } from "../../identity/identity-provider";
 import { withConsent } from "../../../lib/identity/consent";
 import { IdentityError } from "../../../lib/identity/api";
 import {
-  INSECURE, refusalCode, refusalWords, secretWord, stackLabel, templatesApi, testedWord,
+  INSECURE, levelWord, refusalCode, refusalWords, secretWord, stackLabel, templatesApi, testedWord,
   type BuildWorkflow, type TemplateCard, type TemplateDetail,
 } from "../../../lib/templates";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../../../app/workflow-readiness-ui";
-import { LabelChips, stackTip, useInstalledStacks } from "./gallery";
+import { LabelChips, stackTip, useInstalledStacks, useStackLevels } from "./gallery";
 import { SideSheet } from "./side-sheet";
 import { StackWarning, useStackCheck } from "./stack-warning";
 import { consoleHref } from "../../../app/console-href";
@@ -66,6 +66,7 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
   const [detail, setDetail] = useState<TemplateDetail | null>(null);
   const [loadError, setLoadError] = useState("");
   const installed = useInstalledStacks(projectId);
+  const levels = useStackLevels();
   const [stack, setStack] = useState<string>("");
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
@@ -237,9 +238,10 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
             const off = !!installed && !installed.has(s);
             return (
               <button key={s} type="button" role="radio" className="tpl-chip" aria-checked={stack === s}
-                      aria-disabled={off || undefined} data-off={off || undefined} title={stackTip(s, installed)}
+                      aria-disabled={off || undefined} data-off={off || undefined} data-level={levels[s] || undefined}
+                      title={stackTip(s, installed) + (levels[s] ? ` Support: ${levelWord(levels[s])}.` : "")}
                       data-testid={`tpl-stack-${s}`} onClick={() => { if (!off) { setStack(s); setPicked(true); } }}>
-                {stackLabel(s)}{off ? " · off" : ""}
+                {stackLabel(s)}{levels[s] ? ` · ${levelWord(levels[s])}` : ""}{off ? " · off" : ""}
               </button>
             );
           })}

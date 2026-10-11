@@ -393,3 +393,80 @@ def test_a_monorepo_of_many_apps_is_not_one_multi_service_app(tmp_path):
     for i in range(6):
         _write(tmp_path / "apps" / f"a{i}" / "package.json", json.dumps({"dependencies": {"express": "4"}}))
     assert stacks.find_stack_root(tmp_path, ["apps/a1/package.json"]) is None
+
+
+# ── The adapter registry ───────────────────────────────────────────────────────────────────
+
+def test_every_framework_the_build_code_knows_belongs_to_an_adapter():
+    covered = {(c.language, f) for a in stacks.ADAPTERS for c in a.components for f in c.frameworks}
+    for lang in stacks.LANGUAGES.values():
+        for f in lang.frameworks:
+            assert (lang.key, f.key) in covered, f"{lang.key}/{f.key} has no adapter"
+    for a in stacks.ADAPTERS:
+        assert a.support_level in stacks.SUPPORT_LEVELS
+        for c in a.components:
+            known = {f.key for f in stacks.LANGUAGES[c.language].frameworks}
+            assert set(c.frameworks) <= known, (a.id, c)
+
+
+def test_the_initial_levels_and_go_is_unsupported():
+    level = {a.id: a.support_level for a in stacks.ADAPTERS}
+    assert level["react-vite+express+postgres"] == "experimental"
+    assert level["react-vite+fastapi+postgres"] == "experimental"
+    assert level["nextjs+fastapi+postgres"] == "experimental"
+    assert level["java-spring"] == "experimental"
+    assert not any(a.support_level == "certified" for a in stacks.ADAPTERS)
+    unsupported = {u["id"]: u for u in stacks.unsupported_adapters()}
+    assert unsupported["go"]["support_level"] == "unsupported"
+    assert unsupported["go"]["detection_files"] == ["go.mod"]
+
+
+def test_an_adapter_is_derived_from_the_build_code(with_java):
+    entry = stacks.adapter("react-vite+fastapi+postgres").as_dict()
+    back = next(c for c in entry["components"] if c["role"] == "backend")
+    front = next(c for c in entry["components"] if c["role"] == "frontend")
+    assert back["commands"] is stacks.LANGUAGES["python"].commands or \
+        back["commands"] == dict(stacks.LANGUAGES["python"].commands)
+    assert back["commands"]["install"] == stacks.PIP_INSTALL and back["commands"]["test"] == stacks.PYTEST
+    assert back["detection_files"] == list(stacks.PYTHON_MANIFESTS)
+    assert "python3 -m uvicorn" in back["start"] and back["health_path"].startswith("/")
+    assert front["commands"]["install"] == verification_target.NPM_INSTALL_CMD
+    assert front["commands"]["e2e"] == "npm run test:e2e" and front["package_manager"] == "npm"
+    assert entry["ready"] is True and entry["support_level"] == "experimental"
+    nxt = stacks.adapter("nextjs+fastapi+postgres").as_dict()
+    assert "next start" in nxt["components"][0]["serve"] or "npm run start" in nxt["components"][0]["serve"]
+
+
+def test_the_promotion_rule_needs_a_recorded_passing_run():
+    passing = {"stack": "react-vite+express+postgres", "run_id": "wfr_1", "result": "success",
+               "tests_passed": 12, "tests_total": 12, "deployment_smoke_test": "pass"}
+    assert stacks.certification_evidence([passing], "react-vite+express+postgres") == ["wfr_1"]
+    for broken in ({"tests_total": None}, {"tests_passed": 11}, {"deployment_smoke_test": "not-run"},
+                   {"result": "failure"}, {"tests_total": 0, "tests_passed": 0}):
+        assert stacks.certification_evidence([{**passing, **broken}],
+                                             "react-vite+express+postgres") == []
+
+
+def test_apps_are_matched_to_their_adapter(tmp_path):
+    _helpdesk(tmp_path)
+    services = stacks.detect_services(tmp_path / "helpdesk-ai")
+    assert stacks.adapter_for(services).id == "react-vite+fastapi+postgres"
+    _write(tmp_path / "n" / "web" / "package.json",
+           json.dumps({"dependencies": {"next": "14", "react": "18"}}))
+    _write(tmp_path / "n" / "api" / "requirements.txt", "fastapi\n")
+    services = stacks.detect_services(tmp_path / "n")
+    assert {s.framework for s in services} == {"next", "fastapi"}
+    assert stacks.adapter_for(services).id == "nextjs+fastapi+postgres"
+    plan = stacks.stack_plan(tmp_path / "n")
+    assert [c for c, _ in plan.steps if "npm" in c][0] == verification_target.NPM_INSTALL_CMD
+
+
+def test_the_messages_say_the_support_level(with_java):
+    assert "experimental" in stacks.check_text("build it in Go").message
+
+
+def test_supported_stacks_doc_matches_the_registry():
+    doc = (ROOT / "docs" / "community" / "SUPPORTED_STACKS.md").read_text(encoding="utf-8")
+    assert doc == stacks.render_supported_stacks_md(), (
+        "docs/community/SUPPORTED_STACKS.md is stale: run `python3 -m boss_engine.services.stacks "
+        "--write-docs ../docs/community/SUPPORTED_STACKS.md` from engine/")

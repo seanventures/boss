@@ -775,8 +775,11 @@ def prepare_web_verify_env(
     return hardened
 
 
-def evaluate_web_package_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
-    """Contract over a package.json object. Never invents a pass."""
+def evaluate_web_package_payload(payload: dict[str, Any] | None, *,
+                                 runners: tuple[str, ...] = ("vite", "@playwright/test"),
+                                 ) -> dict[str, Any]:
+    """Contract over a package.json object. Never invents a pass. `runners`: the build and
+    test runners it must carry (a Next.js front end builds with next, not vite)."""
     scripts = payload.get("scripts") if isinstance(payload, dict) and isinstance(payload.get("scripts"), dict) else {}
     deps: dict[str, Any] = {}
     if isinstance(payload, dict):
@@ -791,7 +794,7 @@ def evaluate_web_package_payload(payload: dict[str, Any] | None) -> dict[str, An
     ]
     missing = [name for name in REQUIRED_WEB_DEV_DEPS if name not in deps]
     # Fail-closed on the runners that killed official canaries, not every helper.
-    required_runners = ["vite", "@playwright/test"]
+    required_runners = list(runners)
     missing_runners = [name for name in required_runners if name not in deps]
     ok = not stubs and not missing_runners
     return {
@@ -803,7 +806,13 @@ def evaluate_web_package_payload(payload: dict[str, Any] | None) -> dict[str, An
     }
 
 
-def evaluate_web_package_contract(app_dir: Path | str) -> dict[str, Any]:
+#: The runners a Next.js front end must carry: it builds and serves with next, not vite.
+NEXT_RUNNERS = ("next", "@playwright/test")
+
+
+def evaluate_web_package_contract(app_dir: Path | str, *,
+                                  runners: tuple[str, ...] = ("vite", "@playwright/test"),
+                                  ) -> dict[str, Any]:
     pkg_path = Path(app_dir) / "package.json"
     if not pkg_path.is_file():
         return {
@@ -831,4 +840,4 @@ def evaluate_web_package_contract(app_dir: Path | str) -> dict[str, Any]:
             "has_verify": False,
             "reason": "package.json not an object",
         }
-    return evaluate_web_package_payload(payload)
+    return evaluate_web_package_payload(payload, runners=runners)

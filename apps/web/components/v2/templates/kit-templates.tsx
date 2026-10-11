@@ -20,7 +20,7 @@ import {
   INSECURE, STATUS_WORD, refusalWords, stackLabel, templatesApi, testedWord, trialWord,
   type TemplateCard, type TemplateDetail,
 } from "../../../lib/templates";
-import { LabelChips, StackChips, useInstalledStacks } from "./gallery";
+import { LabelChips, StackChips, useInstalledStacks, useStackLevels } from "./gallery";
 import { SideSheet } from "./side-sheet";
 
 /** Every template the org has, newest status first: pending review, approved, hidden, rejected. */
@@ -52,6 +52,7 @@ export function KitTemplates({ projectId }: { projectId: string }) {
   const [open, setOpen] = useState<TemplateCard | null>(null);
   const [importing, setImporting] = useState(false);
   const installed = useInstalledStacks(projectId);
+  const levels = useStackLevels();
 
   const load = useCallback(async () => {
     try {
@@ -89,7 +90,7 @@ export function KitTemplates({ projectId }: { projectId: string }) {
                         onClick={() => setOpen(t)} data-user-text={t.source === "git" || undefined}>{t.name}</button>
                 <span className="tpl-faint">{t.source === "git" ? "Imported" : "Built-in"} · v{t.version}{t.summary ? ` · ${t.summary}` : ""}</span>
               </span>
-              <StackChips stacks={t.stacks} installed={installed} />
+              <StackChips stacks={t.stacks} installed={installed} levels={levels} />
               {t.tested.length ? <span className="tpl-tested">{testedWord(t.tested)}</span> : null}
               <span className="tpl-chip" data-tone={t.status === "pending_review" ? "amber" : t.status === "rejected" ? "red" : t.status === "active" ? "green" : undefined}
                     data-off={t.status === "hidden" || undefined}>{STATUS_WORD[t.status] ?? t.status}</span>
@@ -165,6 +166,7 @@ function ImportSheet({ onClose, onDone }: { onClose: () => void; onDone: () => v
 function ReviewSheet({ card, installed, onClose, onChanged }: {
   card: TemplateCard; installed: Set<string> | null; onClose: () => void; onChanged: () => void;
 }) {
+  const levels = useStackLevels();
   const [d, setD] = useState<TemplateDetail | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<string>("");
@@ -270,7 +272,7 @@ function ReviewSheet({ card, installed, onClose, onChanged }: {
 
       <section className="tpl-sec" aria-label="What it is">
         <h3>What it is</h3>
-        <span className="tpl-chips"><StackChips stacks={t.stacks} installed={installed} /></span>
+        <span className="tpl-chips"><StackChips stacks={t.stacks} installed={installed} levels={levels} /></span>
         {t.adds.length ? <span className="tpl-faint">Adds: {t.adds.map((a) => a.replace(/_/g, " ")).join(", ")}</span> : null}
         {t.secrets.length ? <span className="tpl-faint">Secrets: {t.secrets.map((s) => s.name).join(", ")}</span> : null}
         <span className="tpl-faint">Talks to: {t.egress.length ? t.egress.join(", ") : "nothing outside BOSS"}</span>

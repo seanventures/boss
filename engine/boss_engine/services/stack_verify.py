@@ -121,8 +121,9 @@ def backend_running(plan: StackPlan, *, timeout: Optional[float] = None) -> Iter
         session.record = {"backend": {"dir": plan.backend.rel, "command": session.command,
                                       "url": session.url, "ok": True}}
         if plan.serve_frontend and plan.frontend is not None:
-            front_cmd = ["sh", "-lc", 'exec npm run preview -- --host 127.0.0.1 --port "$PORT" '
-                                      "--strictPort"]
+            from .stacks import VITE_SERVE
+
+            front_cmd = plan.frontend_command or ["sh", "-lc", VITE_SERVE]
             fproc, fport, flog = _launch(plan.dir_of(plan.frontend), front_cmd, "frontend",
                                          extra_env=session.env(), timeout=120.0)
             procs.append(fproc)
@@ -165,7 +166,7 @@ def run_stack_plan(sandbox, plan: StackPlan, *, timeout: Optional[int] = None,
     record: dict[str, Any] = {"services": [s.as_dict() for s in plan.services]}
     if plan.error:
         return [_failed(plan.error)], {**record, "error": plan.error}
-    if plan.frontend is not None:
+    if plan.frontend is not None and plan.frontend.framework != "next":
         # The scaffold's promise for a web package (real vite and Playwright, no echo stubs),
         # kept for the front end exactly as for a single-package app.
         try:

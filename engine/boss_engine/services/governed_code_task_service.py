@@ -4534,7 +4534,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if _sp.frontend is not None:
                 try:
                     _web_contract = verification_target.evaluate_web_package_contract(
-                        _sp.dir_of(_sp.frontend))
+                        _sp.dir_of(_sp.frontend),
+                        runners=(verification_target.NEXT_RUNNERS
+                                 if _sp.frontend.framework == "next"
+                                 else ("vite", "@playwright/test")))
                 except Exception:  # noqa: BLE001
                     _web_contract = {"ok": False, "stubs": ["unreadable"], "missing_runners": []}
                 gates["web_package_honest"] = bool(_web_contract.get("ok"))
