@@ -28,6 +28,7 @@ RC9 builds on the published RC8 candidate and preserves the RC6.2 changes and Co
 - **Preview cleanup before removing resources.** Low-disk advice points to read-only inspection and a BOSS cleanup preview. It limits removal to confirmed BOSS-owned, unused resources.
 - **Keep simulated QA explicit.** Fresh startup no longer automatically creates simulated canary results. Explicit QA fixtures and existing history remain available; simulated receipts do not establish a real model or provider outcome.
 - **Make build forms easier to scan.** Headings are shorter, setup explanations expand when needed, and the phone footer follows the form. The secondary build row appears when work or a loading/error state needs attention. Required acceptance, budget notices and setup actions stay visible.
+- **Read model setup at a glance.** Each source has a readable name. Expand it for technical details; connection controls, warnings and current sessions stay visible.
 
 The first-use website and manual focus on one accountable software change, with actual installed-console screenshots and explicit setup requirements. The separate website release preserves its existing signup and mail service; local website preparation is not hosted deployment.
 
