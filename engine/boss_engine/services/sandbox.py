@@ -557,7 +557,15 @@ class EphemeralSandbox:
             local_bin = str(Path(workdir) / "node_modules" / ".bin")
         except TypeError:
             local_bin = ""
-        if local_bin and Path(local_bin).is_dir():
+        try:
+            # The sandbox uid made node_modules; BOSS's own uid may not be able to look inside
+            # it. A stat refused is "not here", never a dead build (HelpDesk crun_5344bcfa died
+            # on PermissionError at this line). The command, run as the sandbox uid, still
+            # finds its own .bin through npm.
+            has_bin = bool(local_bin) and Path(local_bin).is_dir()
+        except OSError:
+            has_bin = False
+        if has_bin:
             env["PATH"] = local_bin + os.pathsep + env.get("PATH", "")
         try:
             # npm install / build / playwright run in the API's own container; at normal
