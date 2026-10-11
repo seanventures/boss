@@ -46,7 +46,12 @@ from . import toolchains
 SKIP_DIRS = frozenset({"node_modules", ".git", ".venv", "venv", "env", "__pycache__", "dist",
                        "build", ".next", "target", ".pytest_cache", "coverage", ".gradle",
                        "tests", "test", "e2e", "docs", "scripts", ".github", "migrations",
-                       "public", "static", "src"})
+                       "public", "static", "src",
+                       # Test and tool OUTPUT: never a service, and a test run leaves it
+                       # readable only by the sandbox uid (crun_2b10d03d, crun_1412506d died
+                       # stat-ing test-results/go.mod).
+                       "test-results", "playwright-report", "blob-report", ".vite", ".turbo",
+                       ".cache", "out", "tmp"})
 #: Directories that hold services one level further down (apps/api, services/web).
 GROUP_DIRS = ("apps", "services", "packages")
 #: More services than this under one directory is a monorepo of apps, not one app.
@@ -884,6 +889,15 @@ def check_build(instructions: str, *, template_stack: Optional[str] = None) -> S
 # ── The services an app directory holds ─────────────────────────────────────────────────────
 
 def _service_in(path: Path, rel: str) -> Optional[Service]:
+    """The service `path` is, or None. A directory BOSS's uid may not look inside is not a
+    service BOSS can build, never a crash."""
+    try:
+        return _service_in_unsafe(path, rel)
+    except OSError:
+        return None
+
+
+def _service_in_unsafe(path: Path, rel: str) -> Optional[Service]:
     """The service `path` is (by its manifests), or None when it holds none."""
     for manifest, key in _UNSUPPORTED_MANIFESTS.items():
         if (path / manifest).is_file():

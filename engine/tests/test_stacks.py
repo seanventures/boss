@@ -483,3 +483,21 @@ def test_a_prose_stack_line_is_read_as_text_not_refused_as_a_language():
     assert stacks.check_build(prose).ok
     assert not stacks.check_architecture("Stack: one service written in Go\n").ok
     assert not stacks.check_architecture("Stack: api=go/gin\n").ok
+
+
+def test_test_output_and_unreadable_dirs_are_never_services(tmp_path, monkeypatch):
+    """crun_2b10d03d and crun_1412506d died on PermissionError stat-ing test-results/go.mod."""
+    from pathlib import Path
+
+    from boss_engine.services import stacks
+
+    assert "test-results" in stacks.SKIP_DIRS and "playwright-report" in stacks.SKIP_DIRS
+    real = Path.is_file
+
+    def is_file(self):
+        if "locked" in self.parts:
+            raise PermissionError(13, "denied")
+        return real(self)
+    monkeypatch.setattr(Path, "is_file", is_file)
+    (tmp_path / "locked").mkdir()
+    assert stacks._service_in(tmp_path / "locked", "locked") is None
