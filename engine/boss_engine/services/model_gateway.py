@@ -816,7 +816,96 @@ class ModelGatewayService:
         invocation = dict(invocation)
         if invocation["status"] != "in_progress":
             return self._serialize_invocation(invocation)
+        return self._record_settlement(
+            connection, project_id, lease, invocation, worker_id=worker_id,
+            succeeded=succeeded, provider_ref=provider_ref, usage_units=usage_units,
+            actual_cost_usd_micros=actual_cost_usd_micros,
+            observed_capacity=observed_capacity, error=error,
+        )
 
+    def settle_retained_invocation(
+        self,
+        connection: Connection,
+        project_id: str,
+        invocation_id: str,
+        *,
+        actor: str,
+        succeeded: bool,
+        provider_ref: Optional[str],
+        usage_units: dict[str, Any],
+        actual_cost_usd_micros: Optional[int],
+        error: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """Settle an in-progress call whose worker lost its lease, without that worker's tokens.
+
+        A reply can arrive after the step's lease ran out; the worker then keeps the reply on the
+        receipt and stops. Its tokens die with it, so `settle_invocation` can never close that
+        call again: the receipt stayed in_progress for ever and every retry asked a person to
+        reconcile it, with no way for the answer to do anything. The caller here proves its
+        authority another way (the exact receipt key of the same run, step and prompt, and a
+        live workflow claim, or a person's approval). This only refuses when the call's chain
+        was TAKEN by someone else: the job no longer leased by the worker that started it.
+        Idempotent: an invocation that is no longer in progress is returned as it is.
+        """
+        invocation = connection.execute(
+            text("SELECT * FROM model_gateway_invocations WHERE id=:id AND project_id=:p "
+                 "FOR UPDATE"),
+            {"id": invocation_id, "p": project_id},
+        ).mappings().first()
+        if not invocation:
+            raise ModelGatewayInvocationError("Model invocation not found.")
+        invocation = dict(invocation)
+        if invocation["status"] != "in_progress":
+            return self._serialize_invocation(invocation)
+        lease = connection.execute(
+            text("SELECT * FROM model_gateway_leases WHERE id=:id AND project_id=:p FOR UPDATE"),
+            {"id": invocation["model_gateway_lease_id"], "p": project_id},
+        ).mappings().first()
+        if not lease or lease["status"] not in ("active", "expired"):
+            raise ModelGatewayLeaseError("The call's model lease was already closed another way.")
+        lease = dict(lease)
+        job = connection.execute(
+            text("SELECT id, status, lease_owner FROM jobs WHERE id=:id FOR UPDATE"),
+            {"id": invocation["job_id"]},
+        ).mappings().first()
+        if job and (job["status"] not in ("leased", "running")
+                    or job["lease_owner"] != lease["worker_id"]):
+            raise ModelGatewayLeaseError("The call's job was taken by another worker.")
+        settled = self._record_settlement(
+            connection, project_id, lease, invocation, worker_id=actor,
+            succeeded=succeeded, provider_ref=provider_ref, usage_units=usage_units,
+            actual_cost_usd_micros=actual_cost_usd_micros,
+            observed_capacity={"capacity_state": "available"},
+            error=error or {}, allow_expired_reservation=True,
+        )
+        if job:
+            self.jobs.close_abandoned(
+                connection, job["id"], actor=actor, succeeded=succeeded,
+                reason="settled after its lease was lost",
+            )
+        emit_event(connection, project_id, "model_gateway.invocation_settled_late", actor,
+                   "model_gateway_invocation", invocation_id,
+                   {"receipt_id": invocation["receipt_id"], "succeeded": succeeded})
+        return settled
+
+    def _record_settlement(
+        self,
+        connection: Connection,
+        project_id: str,
+        lease: dict[str, Any],
+        invocation: dict[str, Any],
+        *,
+        worker_id: str,
+        succeeded: bool,
+        provider_ref: Optional[str],
+        usage_units: dict[str, Any],
+        actual_cost_usd_micros: Optional[int],
+        observed_capacity: dict[str, Any],
+        error: dict[str, Any],
+        allow_expired_reservation: bool = False,
+    ) -> dict[str, Any]:
+        lease_id = lease["id"]
+        invocation_id = invocation["id"]
         # A SUBSCRIPTION CALL IS NOT MONEY (included_spend.py). The Claude CLI reports what a
         # call would cost at API list price whether or not a subscription answered it, and that
         # figure used to settle here as actual money: boss-1's $10 cap went red with no API key.
@@ -842,7 +931,7 @@ class ModelGatewayService:
                 connection, project_id, reservation_id, invocation["receipt_id"],
                 "model_gateway", lease.get("model_id") or lease["source_id"],
                 int(lease["estimated_cost_usd_micros"]), actual_cost_usd_micros, worker_id,
-                included_in_subscription=included,
+                included_in_subscription=included, allow_expired=allow_expired_reservation,
             )
         elif reservation_id:
             self.budget.release(connection, project_id, reservation_id, "Model invocation failed before billable use.")

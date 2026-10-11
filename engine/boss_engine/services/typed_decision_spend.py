@@ -13,7 +13,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
+from threading import Event, Thread
 from typing import Any, Callable, Optional
 
 from sqlalchemy import text
@@ -47,6 +49,10 @@ class TypedDecisionReconciliationRequired(RuntimeError):
 
 class TypedDecisionCancelled(Exception):
     """The caller stopped the attempt before the provider was contacted."""
+
+
+class ReconciliationRefused(RuntimeError):
+    """A person's approval cannot settle this call: another worker took it, or it is gone."""
 
 
 @dataclass
@@ -331,7 +337,8 @@ class TypedDecisionSpend:
             raise TypedDecisionSpendError(str(reason)) from reason
         self._ensure_lease(authority)
         try:
-            batch = self._call(decider, binding, state)
+            with self._kept_alive(authority):
+                batch = self._call(decider, binding, state)
         except Exception as error:
             reason = error
             if _uncertain(reason):
@@ -635,6 +642,37 @@ class TypedDecisionSpend:
             job_lease_token=job_token, ttl_seconds=self.ttl_seconds,
         )
 
+    @contextmanager
+    def _kept_alive(self, authority: _Authority):
+        """Heartbeat the job and model leases for as long as the provider call runs.
+
+        A lease is a couple of minutes; a model call can take longer. Without this the lease
+        ran out mid-call, settlement then refused the expired lease, and a reply that had been
+        paid for was left for a person to reconcile. Yields the heartbeat errors seen, so a
+        caller can refuse to settle under a lease it lost.
+        """
+        stop = Event()
+        errors: list[Exception] = []
+
+        def beat():
+            while not stop.wait(max(0.1, self.ttl_seconds / 3)):
+                try:
+                    self.commit(lambda connection: self._heartbeat(
+                        connection, authority.job_id, authority.job_lease_token,
+                        authority.lease_id, authority.lease_token,
+                    ))
+                except Exception as error:  # noqa: BLE001 — reported to the caller
+                    errors.append(error)
+                    return
+
+        thread = Thread(target=beat, name=f"{self.stage}-lease-heartbeat", daemon=True)
+        thread.start()
+        try:
+            yield errors
+        finally:
+            stop.set()
+            thread.join()
+
     def _ensure_lease(self, authority: _Authority) -> None:
         try:
             self.commit(lambda connection: self._heartbeat(
@@ -844,3 +882,114 @@ def _merge_opinions(binding: dict, first: dict, second: dict) -> dict:
         confidence is not None and float(confidence) >= float(floor)
     )
     return merged
+
+
+def resolve_reconciliation_decisions(connection, project_id: str, receipt_id: str,
+                                     note: str) -> list[str]:
+    """Close the pending reconciliation cards of a receipt that has now been settled."""
+    rows = connection.execute(
+        text("UPDATE decisions SET status='resolved', resolution_note=:note, "
+             "updated_at=clock_timestamp() WHERE project_id=:p AND status='pending' "
+             "AND recommendation->>'action' IN "
+             "('architecture_reconciliation', 'typed_decision_reconciliation') "
+             "AND cost_summary->>'receipt_id' = :r RETURNING id"),
+        {"p": project_id, "r": receipt_id, "note": note[:500]},
+    ).scalars().all()
+    return list(rows)
+
+
+def _call_of_receipt(connection, project_id: str, receipt_id: str) -> Optional[dict]:
+    row = connection.execute(
+        text("SELECT i.id AS invocation_id, i.status AS invocation_status, l.source_id, "
+             "j.payload AS job_payload FROM model_gateway_invocations i "
+             "JOIN model_gateway_leases l ON l.id = i.model_gateway_lease_id "
+             "LEFT JOIN jobs j ON j.id = i.job_id "
+             "WHERE i.project_id = :p AND i.receipt_id = :r"),
+        {"p": project_id, "r": receipt_id},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def on_reconciliation_approved(connection, settings, decision: dict, actor: str) -> dict:
+    """A person approved reconciling a call: settle it, then put its step back in the queue.
+
+    A reply the receipt kept is recorded with its usage and cost and marked succeeded, so the
+    step's retry replays it and never pays for it again. With no reply the receipt is marked
+    failed and its hold released, so the retry makes a fresh attempt. Approving used to record
+    the decision and nothing else: the receipt stayed in progress, every retry raised the same
+    card, and the run could never move again.
+    """
+    from .model_gateway import ModelGatewayError, ModelGatewayService
+    project_id = decision["project_id"]
+    detail = decision.get("cost_summary") or {}
+    if isinstance(detail, str):
+        try:
+            detail = json.loads(detail)
+        except ValueError:
+            detail = {}
+    receipt_id = str((detail or {}).get("receipt_id") or "")
+    receipt = connection.execute(
+        text("SELECT id, status, result FROM receipts WHERE id = :r AND project_id = :p "
+             "FOR UPDATE"),
+        {"r": receipt_id, "p": project_id},
+    ).mappings().first() if receipt_id else None
+    if receipt is None:
+        raise ReconciliationRefused(
+            "This card names no call BOSS can find, so there is nothing to settle. Retry the "
+            "step from its run.")
+    call = _call_of_receipt(connection, project_id, receipt_id)
+    outcome = receipt["status"]
+    if receipt["status"] == "in_progress":
+        if call is None:
+            raise ReconciliationRefused("The call behind this card was never started.")
+        reply = _result_of(dict(receipt)).get("unsettled_architecture_reply")
+        try:
+            with connection.begin_nested():
+                if isinstance(reply, dict) and "text" in reply:
+                    from .architecture_spend import settle_retained_reply
+
+                    settle_retained_reply(connection, settings, project_id, receipt_id,
+                                          reply, actor=actor, strict=False)
+                    outcome = "settled"
+                else:
+                    ModelGatewayService(settings).settle_retained_invocation(
+                        connection, project_id, call["invocation_id"], actor=actor,
+                        succeeded=False, provider_ref=None, usage_units={},
+                        actual_cost_usd_micros=0,
+                        error={"reason": "A person reconciled this call as not answered."},
+                    )
+                    outcome = "failed"
+        except (ModelGatewayError, ValueError, TypedDecisionSpendError) as refused:
+            raise ReconciliationRefused(str(refused)) from refused
+    resolve_reconciliation_decisions(connection, project_id, receipt_id,
+                                     f"Reconciled by {actor}: {outcome}.")
+    payload = (call or {}).get("job_payload") or {}
+    if isinstance(payload, str):
+        payload = json.loads(payload or "{}")
+    run_id, step_id = payload.get("workflow_run_id"), payload.get("step_id")
+    retried = False
+    if run_id and step_id:
+        from . import workflows
+
+        stopped = connection.execute(
+            text("SELECT status FROM workflow_step_runs WHERE project_id=:p "
+                 "AND workflow_run_id=:r AND step_id=:s ORDER BY iteration DESC LIMIT 1"),
+            {"p": project_id, "r": run_id, "s": step_id},
+        ).scalar()
+        if stopped in workflows.OPERATOR_RECOVERABLE_STEP_STATES:
+            point = connection.begin_nested()
+            try:
+                workflows.retry_failed_step(connection, project_id=project_id,
+                                            run_id=run_id, step_id=step_id, actor=actor)
+                point.commit()
+                retried = True
+            except Exception as error:  # noqa: BLE001 — the settlement stands; say why
+                point.rollback()
+                emit_event(connection, project_id, "decision.follow_on_skipped", actor,
+                           "decision", decision["id"],
+                           {"reason": "step_retry_refused", "message": str(error)[:300]})
+    emit_event(connection, project_id, "typed_decision.reconciled", actor, "receipt",
+               receipt_id, {"decision_id": decision["id"], "outcome": outcome,
+                            "workflow_run_id": run_id, "step_id": step_id,
+                            "step_retried": retried})
+    return {"receipt_id": receipt_id, "outcome": outcome, "step_retried": retried}

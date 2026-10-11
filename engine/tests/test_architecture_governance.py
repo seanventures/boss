@@ -281,6 +281,15 @@ def test_received_reply_cannot_free_unknown_or_expired_liability(scope, case):
     model = Scripted(call, usage=usage)
     with pytest.raises(TypedDecisionReconciliationRequired):
         generate(spender(scope), settings, model, check=check)
+    if case not in {"missing_usage", "unpriced_usage"}:
+        # The reply has usable cost evidence and only the authority to settle it was lost. A
+        # retry holding the current claim settles it once and replays it, never paying twice
+        # (test_architecture_lease_recovery.py).
+        assert generate(spender(scope), settings, model)[1].startswith("## Context")
+        assert model.calls == 1
+        with engine.connect() as c:
+            assert c.execute(text("SELECT count(*) FROM cost_receipts WHERE project_id=:p"), {"p": p}).scalar_one() == 1
+        return
     with pytest.raises(TypedDecisionReconciliationRequired):
         generate(spender(scope), settings, model)
     assert model.calls == 1

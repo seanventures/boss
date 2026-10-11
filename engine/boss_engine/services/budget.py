@@ -1367,6 +1367,7 @@ class BudgetGovernor:
         actor: str,
         *,
         included_in_subscription: bool = False,
+        allow_expired: bool = False,
     ) -> dict[str, Any]:
         """Settle `reservation_id` with a call's cost. `included_in_subscription` (a subscription,
         licensed seat or local model answered — included_spend.py): `actual_usd_micros` is the
@@ -1397,7 +1398,11 @@ class BudgetGovernor:
                 return {"status": "consumed", "reservation_id": reservation_id,
                         "budget_state": self.status_for_project(connection, project_id)['budget_state'],
                         "message": "Reservation already consumed.", "cost_receipt": dict(settled)}
-        if reservation and reservation['status'] != 'active':
+        # `allow_expired`: a call settled after its worker lost the lease
+        # (ModelGatewayService.settle_retained_invocation). Only a $0 hold ever expires; the
+        # call it admitted was still made, and its usage is still recorded.
+        settleable = ('active', 'expired') if allow_expired else ('active',)
+        if reservation and reservation['status'] not in settleable:
             reservation = None
         if not reservation:
             raise ValueError("Active budget reservation not found.")
@@ -1423,6 +1428,7 @@ class BudgetGovernor:
             estimated_usd_micros,
             actual_usd_micros,
             included_in_subscription=included_in_subscription,
+            allow_expired=allow_expired,
         )
         actual_or_estimated = (
             0 if included_in_subscription
@@ -1559,6 +1565,7 @@ class BudgetGovernor:
         actual_usd_micros: Optional[int],
         *,
         included_in_subscription: bool = False,
+        allow_expired: bool = False,
     ) -> str:
         """Record a cost receipt and consume the reservation.
 
@@ -1585,7 +1592,8 @@ class BudgetGovernor:
                     and prior['equivalent_usd_micros'] == equivalent):
                 return prior['id']
             raise ValueError("Reservation was already settled with different cost evidence.")
-        if not reservation or reservation['status'] != 'active':
+        if not reservation or reservation['status'] not in (
+                ('active', 'expired') if allow_expired else ('active',)):
             raise ValueError("Active budget reservation not found.")
         cost_receipt_id = make_id("cost")
         connection.execute(

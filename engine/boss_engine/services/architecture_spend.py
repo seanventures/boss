@@ -8,14 +8,91 @@ from __future__ import annotations
 
 import hashlib
 import json
-from threading import Event, Thread
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from .typed_decision_spend import (
     TypedDecisionSpend, TypedDecisionSpendError, TypedDecisionReconciliationRequired,
-    _Authority, _result_of, model_receipt_dedupe,
+    _Authority, _call_of_receipt, _result_of, model_receipt_dedupe,
+    resolve_reconciliation_decisions,
 )
+
+
+def reply_cost(connection, project_id: str, source_id: Optional[str], usage: dict, *,
+               strict: bool = True) -> Optional[int]:
+    """What a reply cost, from its own usage evidence.
+
+    Missing paid usage is not a zero-dollar success. An included source has known zero cash
+    liability; usage still records API-equivalent value. `strict=False` (a person approved the
+    settlement) returns None for unusable evidence, which settles at the reserved estimate.
+    """
+    from .included_spend import source_by_id, source_is_included
+    from .openai_adapter import estimate_cost_usd_micros, price_for_model
+
+    usage = usage if isinstance(usage, dict) else {}
+    included = source_is_included(source_by_id(connection, project_id, source_id))
+    token_keys = ("prompt_tokens", "completion_tokens")
+    explicit_cost = usage.get("cost_usd_micros")
+    known_cost = isinstance(explicit_cost, int) and not isinstance(explicit_cost, bool) \
+        and explicit_cost >= 0
+    priced_tokens = (usage.get("model") and all(
+        isinstance(usage.get(k), int) and not isinstance(usage[k], bool)
+        and usage[k] >= 0 for k in token_keys
+    ) and all(k not in usage or (isinstance(usage[k], int)
+        and not isinstance(usage[k], bool) and usage[k] >= 0)
+        for k in ("cache_read_tokens", "cache_write_tokens"))
+        and sum(usage[k] for k in token_keys) > 0 and price_for_model(
+        str(usage["model"]), provider=str(usage.get("provider") or ""),
+        endpoint=str(usage.get("base_url") or ""),
+    )[2])
+    if not included and not (known_cost or priced_tokens):
+        if not strict:
+            return None
+        raise RuntimeError("Architecture reply has no usable paid cost/usage evidence.")
+    # The shared estimator accepts convertible explicit values. This paid
+    # boundary accepts only typed nonnegative costs, and must not let an
+    # invalid override replace otherwise valid priced token evidence.
+    costing_usage = dict(usage)
+    if not known_cost:
+        costing_usage.pop("cost_usd_micros", None)
+    return estimate_cost_usd_micros(costing_usage)
+
+
+def settle_retained_reply(connection, settings, project_id: str, receipt_id: str, reply: dict,
+                          *, actor: str, strict: bool = True) -> dict:
+    """Settle a reply that arrived after its worker lost the lease, and keep it for replay.
+
+    The usage and cost already incurred are recorded once, on the call's own receipt and
+    reservation; the receipt is then succeeded with the reply's text, which every later
+    attempt at the same run, step, version and prompt replays instead of calling again.
+    """
+    from .model_gateway import ModelGatewayService
+
+    call = _call_of_receipt(connection, project_id, receipt_id)
+    if call is None:
+        raise TypedDecisionSpendError("The retained reply has no call to settle.")
+    usage = reply.get("usage") if isinstance(reply.get("usage"), dict) else {}
+    cost = reply_cost(connection, project_id, call["source_id"], usage, strict=strict)
+    units = {k: int(v) for k, v in usage.items()
+             if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    ModelGatewayService(settings).settle_retained_invocation(
+        connection, project_id, call["invocation_id"], actor=actor, succeeded=True,
+        provider_ref=f"{call['source_id']}:{usage.get('model') or call['source_id']}"[:200],
+        usage_units=units, actual_cost_usd_micros=cost,
+    )
+    from .receipts import ReceiptService
+
+    output = {**reply, "receipt_id": receipt_id, "settled_after_lease_lost": True}
+    ReceiptService().merge_result(connection, receipt_id, output)
+    resolve_reconciliation_decisions(connection, project_id, receipt_id,
+                                     "The reply was settled and replayed; nothing to reconcile.")
+    from .core import emit_event
+
+    emit_event(connection, project_id, "architecture.settled_after_lease_lost", actor,
+               "typed_decision_attempt", receipt_id,
+               {"receipt_id": receipt_id, "cost_usd_micros": cost,
+                "workflow_run_id": reply.get("workflow_run_id"), "step_id": reply.get("step_id")})
+    return output
 
 
 class ArchitectureSpend(TypedDecisionSpend):
@@ -58,6 +135,13 @@ class ArchitectureSpend(TypedDecisionSpend):
                        "attempt": self.attempt, "message": reason})
 
     def _prepare(self, connection, settings, binding, state, identity, role, source_id=None):
+        # A version whose earlier attempts were settled as FAILED (cancelled before submission,
+        # or reconciled by a person as unanswered) makes its next attempt under a new key, so
+        # the failed receipt is never mistaken for an open liability.
+        self._settings = settings
+        failed = sum(1 for row in self._family(connection, identity)
+                     if row.get("status") == "failed")
+        self.attempt = 1 + failed
         authority = super()._prepare(connection, settings, binding, state, identity, role, source_id)
         if authority.outcome == "ready":
             self.receipts.merge_result(connection, authority.receipt_id, {
@@ -68,33 +152,71 @@ class ArchitectureSpend(TypedDecisionSpend):
 
     def _reconcile(self, connection, authority, error):
         from .redaction import redact_secrets
-        safe = RuntimeError(f"{type(error).__name__}: {redact_secrets(str(error))}")
-        return super()._reconcile(connection, authority, safe)
+        message = f"{type(error).__name__}: {redact_secrets(str(error))}"[:500]
+        # Approving this card settles the receipt and retries the step
+        # (typed_decision_spend.on_reconciliation_approved).
+        from .core import create_blocking_decision
+
+        create_blocking_decision(
+            connection, self.project_id, None,
+            f"Reconcile architecture draft {self.run_id}/{self.step_id}",
+            {"action": "architecture_reconciliation"},
+            {"attempt": self.attempt, "receipt_id": authority.receipt_id, "message": message},
+            "architecture_reconciliation",
+        )
+        self._emit(connection, "architecture.reconciliation_required", authority.invocation_dedupe, {
+            "run_id": self.run_id, "step_id": self.step_id, "attempt": self.attempt,
+            "receipt_id": authority.receipt_id, "message": message,
+        })
 
     def _fail(self, connection, authority, error, **kwargs):
         from .redaction import redact_secrets
         safe = RuntimeError(f"{type(error).__name__}: {redact_secrets(str(error))}")
         return super()._fail(connection, authority, safe, **kwargs)
 
-    def _existing(self, connection, identity, dedupe):
+    def _family(self, connection, identity):
+        """This EXACT version/prompt's receipts, and its retries; never another revision."""
         rows = self.receipts.list_by_dedupe_prefix(
             connection, self._scope(connection)["org_id"],
             model_receipt_dedupe(self.project_id, identity),
         )
-        # Prefix searches are shared with typed decisions. Architecture only accepts
-        # this EXACT version/prompt receipt, never a longer prefix or another revision.
-        key = model_receipt_dedupe(self.project_id, dedupe)
-        row = next((r for r in rows if r.get("dedupe_key") == key), None)
+        key = model_receipt_dedupe(self.project_id, identity)
+        return [r for r in rows if r.get("dedupe_key") == key
+                or str(r.get("dedupe_key") or "").startswith(key + ":retry:")]
+
+    def _existing(self, connection, identity, dedupe):
+        rows = self._family(connection, identity)
+        done = next((r for r in rows if r.get("status") == "succeeded"
+                     and "text" in _result_of(r)), None)
+        if done is not None:
+            return _Authority(outcome="replay", output=_result_of(done), receipt_id=done["id"],
+                              invocation_dedupe=dedupe)
+        row = next((r for r in rows if r.get("status") != "failed"), None)
         if row is None:
             return None
-        result = _result_of(row)
-        if row.get("status") == "succeeded" and "text" in result:
-            return _Authority(outcome="replay", output=result, receipt_id=row["id"],
-                              invocation_dedupe=dedupe)
+        # THE REPLY ARRIVED, THE LEASE DID NOT LAST. The worker that received it kept it on the
+        # receipt and stopped. This attempt holds the current workflow claim for the same run,
+        # step, version and prompt (the caller checked it before preparing), so it settles
+        # that reply once, at the cost already incurred, and replays it. Calling again would
+        # pay twice; refusing for ever dead-lettered the run with the answer in hand.
+        reply = _result_of(row).get("unsettled_architecture_reply")
+        reason: Exception = RuntimeError("Architecture version needs receipt reconciliation.")
+        if row.get("status") == "in_progress" and isinstance(reply, dict) and "text" in reply:
+            try:
+                with connection.begin_nested():
+                    output = settle_retained_reply(
+                        connection, getattr(self, "_settings", None), self.project_id,
+                        row["id"], reply,
+                        actor=self.worker_id,
+                    )
+                return _Authority(outcome="replay", output=output, receipt_id=row["id"],
+                                  invocation_dedupe=dedupe)
+            except Exception as error:  # noqa: BLE001 — falls back to a person reconciling
+                reason = error
         authority = _Authority(outcome="reconcile", receipt_id=row["id"],
                                invocation_dedupe=dedupe,
                                message="Architecture version needs receipt reconciliation.")
-        self._reconcile(connection, authority, RuntimeError(authority.message))
+        self._reconcile(connection, authority, reason)
         return authority
 
     def _emit(self, connection, event_type, entity_id, data):
@@ -109,9 +231,8 @@ class ArchitectureSpend(TypedDecisionSpend):
 
     def generate(self, settings, adapter, *, prompt: str, system_prompt: str,
                  version: int, check_work: Callable[[], None]) -> tuple[str, str, dict]:
-        from .included_spend import source_by_id, source_is_included
         from .model_router.failover import FailoverChatAdapter
-        from .openai_adapter import estimate_cost_usd_micros, price_for_model, single_attempt
+        from .openai_adapter import single_attempt
 
         check_work()
         choice = getattr(adapter, "_boss_choice", None)
@@ -156,24 +277,8 @@ class ArchitectureSpend(TypedDecisionSpend):
             from .redaction import redact_secrets
             raise TypedDecisionSpendError(redact_secrets(str(error))) from error
 
-        stop = Event()
-        heartbeat_errors: list[Exception] = []
-
-        def heartbeat():
-            while not stop.wait(max(0.1, self.ttl_seconds / 3)):
-                try:
-                    self.commit(lambda c: self._heartbeat(
-                        c, authority.job_id, authority.job_lease_token,
-                        authority.lease_id, authority.lease_token,
-                    ))
-                except Exception as error:
-                    heartbeat_errors.append(error)
-                    return
-
-        thread = Thread(target=heartbeat, name="architecture-lease-heartbeat", daemon=True)
-        thread.start()
         try:
-            with single_attempt():
+            with self._kept_alive(authority) as heartbeat_errors, single_attempt():
                 provider_ref, written, usage = adapter.create_text_response(
                     prompt, system_prompt=system_prompt,
                 )
@@ -185,9 +290,6 @@ class ArchitectureSpend(TypedDecisionSpend):
             raise TypedDecisionReconciliationRequired(
                 "Architecture provider outcome is unknown; reconcile its receipt before retry."
             ) from error
-        finally:
-            stop.set()
-            thread.join()
         usage = usage if isinstance(usage, dict) else {}
         raw = {"provider_ref": str(provider_ref or ""), "text": str(written or ""),
                "usage": usage, "architecture_version": version,
@@ -197,34 +299,7 @@ class ArchitectureSpend(TypedDecisionSpend):
             if heartbeat_errors:
                 raise heartbeat_errors[0]
             check_work()
-            # Missing paid usage is not a zero-dollar success. An included source
-            # has known zero cash liability; usage still records API-equivalent value.
-            included = self.commit(lambda c: source_is_included(
-                source_by_id(c, self.project_id, source_id),
-            ))
-            token_keys = ("prompt_tokens", "completion_tokens")
-            explicit_cost = usage.get("cost_usd_micros")
-            known_cost = isinstance(explicit_cost, int) and not isinstance(explicit_cost, bool) \
-                and explicit_cost >= 0
-            priced_tokens = (usage.get("model") and all(
-                isinstance(usage.get(k), int) and not isinstance(usage[k], bool)
-                and usage[k] >= 0 for k in token_keys
-            ) and all(k not in usage or (isinstance(usage[k], int)
-                and not isinstance(usage[k], bool) and usage[k] >= 0)
-                for k in ("cache_read_tokens", "cache_write_tokens"))
-                and sum(usage[k] for k in token_keys) > 0 and price_for_model(
-                str(usage["model"]), provider=str(usage.get("provider") or ""),
-                endpoint=str(usage.get("base_url") or ""),
-            )[2])
-            if not included and not (known_cost or priced_tokens):
-                raise RuntimeError("Architecture reply has no usable paid cost/usage evidence.")
-            # The shared estimator accepts convertible explicit values. This paid
-            # boundary accepts only typed nonnegative costs, and must not let an
-            # invalid override replace otherwise valid priced token evidence.
-            costing_usage = dict(usage)
-            if not known_cost:
-                costing_usage.pop("cost_usd_micros", None)
-            cost = estimate_cost_usd_micros(costing_usage)
+            cost = self.commit(lambda c: reply_cost(c, self.project_id, source_id, usage))
             batch = SimpleNamespace(cost_usd_micros=cost, usage=usage,
                                     backend=source_id, model=usage.get("model") or source_id)
             self.commit(lambda c: self._settle_success(c, authority, batch, raw))

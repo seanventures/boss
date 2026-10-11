@@ -238,10 +238,41 @@ def approved_prd(connection: Connection, project_id: str, context: Mapping[str, 
             "prd_sha256": hashlib.sha256(markdown.encode()).hexdigest(), **approval}
 
 
-def _draft_authority(connection, project_id, run_id, step_id, *, version, review_id=None):
-    """Current claimed step, or the exact person-requested revision of a waiting step."""
+# workflow_capability_runner.LEASE_SECONDS: the claim a step's tick takes.
+_STEP_LEASE_SECONDS = 120
+
+
+def _renew_step_lease(connection, step_run_id: str, owner: str, attempt) -> bool:
+    """Keep this step's claim alive across a model call longer than the claim.
+
+    The tick that claims a step is one transaction and holds the step row locked until it
+    commits, so no other worker can take the step while the architect writes. Only the claim's
+    clock ran out: a reply that took longer than two minutes came back to "no current
+    workflow lease", was kept unsettled, and every retry dead-lettered on it. Renewal is fenced
+    exactly as workflows.heartbeat_step (same owner, still leased or running, not expired as
+    of this transaction's start) and also on the attempt, so a step another claim took over is
+    never renewed.
+    """
+    renewed = connection.execute(
+        text("UPDATE workflow_step_runs SET heartbeat_at = now(), updated_at = now(), "
+             "lease_expires_at = clock_timestamp() + make_interval(secs => :ttl) "
+             "WHERE id = :id AND lease_owner = :owner AND attempt = :attempt "
+             "AND status IN ('leased', 'running') AND lease_expires_at >= now() "
+             "RETURNING id"),
+        {"id": step_run_id, "owner": owner, "attempt": attempt, "ttl": _STEP_LEASE_SECONDS},
+    ).first()
+    return renewed is not None
+
+
+def _draft_authority(connection, project_id, run_id, step_id, *, version, review_id=None,
+                     held: Optional[Mapping[str, Any]] = None):
+    """Current claimed step, or the exact person-requested revision of a waiting step.
+
+    `held`: the claim this draft already proved (owner and attempt). It is renewed rather
+    than refused when only its clock ran out during the model call."""
     row = connection.execute(
-        text("SELECT r.status AS run_status, r.actor, s.status, s.lease_owner, s.attempt, "
+        text("SELECT s.id AS step_run_id, r.status AS run_status, r.actor, s.status, "
+             "s.lease_owner, s.attempt, "
              "s.lease_expires_at > clock_timestamp() AS lease_live "
              "FROM workflow_runs r JOIN workflow_step_runs s ON s.workflow_run_id = r.id "
              "WHERE r.id = :r AND r.project_id = :p AND s.project_id = :p AND s.step_id = :s "
@@ -250,6 +281,11 @@ def _draft_authority(connection, project_id, run_id, step_id, *, version, review
     ).mappings().first()
     if not row or row["run_status"] not in {"running", "waiting"}:
         raise ArchitectureRefused("Architecture run is missing, stopped or belongs to another project.")
+    if version == 1 and row["status"] in {"leased", "running"} and row["lease_owner"] \
+            and held and row["lease_owner"] == held.get("lease_owner") \
+            and row["attempt"] == held.get("attempt"):
+        if _renew_step_lease(connection, row["step_run_id"], row["lease_owner"], row["attempt"]):
+            return {**dict(row), "lease_live": True}
     if version == 1 and row["status"] in {"leased", "running"} and \
             row["lease_owner"] and row["lease_live"]:
         return dict(row)
@@ -376,9 +412,14 @@ def draft(connection: Connection, settings: Any, project_id: str, *, architect: 
     or returns nothing — never a placeholder passed off as a design."""
     prompt = _prompt(prd, title=title, constraints=constraints, previous=previous, note=note,
                      version=version)
+    held: dict[str, Any] = {}
+
     def check_work():
         authority = _draft_authority(connection, project_id, run_id, step_id,
-                                     version=version, review_id=review_id)
+                                     version=version, review_id=review_id, held=held or None)
+        if not held and version == 1:
+            held.update(lease_owner=authority.get("lease_owner"),
+                        attempt=authority.get("attempt"))
         current = approved_prd(connection, project_id, {}, run_id=run_id)
         if current["markdown"] != prd or (prd_sha256 and current["prd_sha256"] != prd_sha256):
             raise ArchitectureRefused("The approved PRD changed before architecture submission.")

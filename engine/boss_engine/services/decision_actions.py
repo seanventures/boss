@@ -93,6 +93,11 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Approving a multi-repo change set pins its head SHAs and merges the whole set
     # (multirepo/change_sets.on_decision); a later push re-asks.
     "approve_change_set",
+    # Approving a reconciliation settles the call's receipt (replaying a reply it holds, or
+    # failing it) and puts the stopped step back in the queue
+    # (typed_decision_spend.on_reconciliation_approved).
+    "architecture_reconciliation",
+    "typed_decision_reconciliation",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on
@@ -157,7 +162,6 @@ RECORDED_ON_APPROVAL = frozenset({
     "review_stalled_meeting",
     "set_BOSS_INFRA_REAL_PROVISION_ALLOWED",
     "typed_decision_lease_expired",
-    "typed_decision_reconciliation",
     "update_deployment_environment_policy",
     "upsert_comms_channel_policy",
     "use_settled_conclusion_or_reopen_with_new_evidence",

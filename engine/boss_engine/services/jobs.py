@@ -1527,6 +1527,48 @@ class JobLeaseService:
             raise LeaseNotFoundError("Lease has expired.")
         return row
 
+    def close_abandoned(
+        self,
+        connection: Connection,
+        job_id: str,
+        *,
+        actor: str,
+        succeeded: bool,
+        reason: str,
+    ) -> Optional[dict[str, Any]]:
+        """Close a single-call job whose worker lost its lease, once its call is settled.
+
+        Only for ModelGatewayService.settle_retained_invocation, which has already proved the
+        job was not taken by another worker. A job no longer leased or running is left alone.
+        """
+        row = connection.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status = :status, lease_owner = NULL, lease_token_hash = NULL,
+                    lease_expires_at = NULL, heartbeat_at = NULL,
+                    last_error = CAST(:last_error AS JSONB), updated_at = :updated_at
+                WHERE id = :job_id AND status IN ('leased', 'running')
+                RETURNING id, project_id, kind, allocation_id, resource_units
+                """
+            ),
+            {"job_id": job_id, "status": "succeeded" if succeeded else "deadlettered",
+             "last_error": json.dumps({} if succeeded else {"message": reason[:500]}),
+             "updated_at": now_utc()},
+        ).mappings().first()
+        if not row:
+            return None
+        self.work_orchestration.release_job_slot(
+            connection, project_id=row["project_id"], job_id=job_id,
+            allocation_id=row.get("allocation_id"),
+            resource_units=int(row.get("resource_units") or 1),
+            reason="job_succeeded" if succeeded else "job_failed_final",
+        )
+        emit_event(connection, row["project_id"],
+                   "job.succeeded" if succeeded else "job.deadlettered", actor, "job", job_id,
+                   {"kind": row["kind"], "reason": reason})
+        return dict(row)
+
     def require_active_lease(
         self,
         connection: Connection,

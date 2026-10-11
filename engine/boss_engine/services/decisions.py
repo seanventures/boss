@@ -982,6 +982,18 @@ class DecisionService:
             from .governed_host_deploy import on_decision_approved as approve_host
 
             approve_host(connection, self.settings, row, actor)
+        elif action in ("architecture_reconciliation", "typed_decision_reconciliation"):
+            # A paid call whose outcome was never settled. Approving settles it: a reply the
+            # receipt holds is recorded (usage and cost) and replayed by the step, never paid
+            # for again; with no reply the receipt is marked failed. Either way the stopped
+            # step is put back in the queue. Refused (approval not recorded) when another
+            # worker took the call (typed_decision_spend.on_reconciliation_approved).
+            from .typed_decision_spend import ReconciliationRefused, on_reconciliation_approved
+
+            try:
+                on_reconciliation_approved(connection, self.settings, row, actor)
+            except ReconciliationRefused as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
 
     def _handle_rejected_follow_on(
         self, connection: Connection, row: dict[str, Any], *, actor: str
