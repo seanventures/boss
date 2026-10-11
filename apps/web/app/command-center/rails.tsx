@@ -148,7 +148,7 @@ export function TemplatesShelf() {
   return (
     <section className="cc-shelf" aria-labelledby="cc-tpl-h" data-testid="cc-templates">
       <div className="cc-sec-h">
-        <h2 id="cc-tpl-h">Start from a template</h2>
+        <h2 id="cc-tpl-h" title="A whole app, described: the team builds it from the brief">Brief templates</h2>
         <span className="cc-sub">Each one is a full brief your team can build today</span>
         <span className="cc-spacer" />
         <button type="button" className="cc-link" data-testid="cc-templates-all"

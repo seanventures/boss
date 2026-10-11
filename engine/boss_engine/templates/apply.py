@@ -365,6 +365,34 @@ def build_workflows(c, project_id: str) -> list[dict]:
     return listed
 
 
+#: Where a person links their own GitHub ("as me on GitHub" grants).
+LINK_GITHUB_HREF = "/account/agents"
+
+
+def github_as_me(c, *, org_id: str, person_id: Optional[str], is_person: bool) -> dict:
+    """Does starting a build here need the person's OWN GitHub link, and do they have it?
+
+    Every workflow build_workflows lists has a build step, so it pushes to the app's repository.
+    On an install whose consent checks the person's own GitHub access (grants.repo_guard_active:
+    multi-person installs, or the policy), a person with no linked GitHub is refused at the
+    consent step (github_access_lacking) — after they filled in the whole sheet. The sheet asks
+    this first and says so before Start, with the link."""
+    from ..config import get_settings
+    from ..identity import grants
+
+    host = str(getattr(get_settings(), "target_repo_host", "github") or "github").lower()
+    if not is_person or not person_id or host != "github":
+        return {"required": False, "linked": False, "href": LINK_GITHUB_HREF}
+    try:
+        required = bool(grants.repo_guard_active(org_id, db=c))
+    except Exception:  # noqa: BLE001 — cannot tell: say nothing rather than a wrong warning
+        required = False
+    linked = bool(c.execute(text(
+        "SELECT 1 FROM identity_vault_items WHERE owner_principal_id = :p AND kind = 'oauth_user' "
+        "AND provider = 'github' AND status = 'active' LIMIT 1"), {"p": person_id}).first())
+    return {"required": required, "linked": linked, "href": LINK_GITHUB_HREF}
+
+
 def check_build_workflow(c, project_id: str, workflow_key: str) -> None:
     if not any(w["workflow_key"] == workflow_key for w in build_workflows(c, project_id)):
         raise TemplateError(422, "workflow_cannot_build",

@@ -226,7 +226,11 @@ def build_templates_router() -> APIRouter:
         with begin() as db:
             _project_in_org(db, project_id, ctx.principal.org_id)
             return {"project_id": project_id, "default": apply_service.DEFAULT_WORKFLOW,
-                    "workflows": apply_service.build_workflows(db, project_id)}
+                    "workflows": apply_service.build_workflows(db, project_id),
+                    # Said on the sheet BEFORE Start: the build needs the person's own GitHub.
+                    "github_as_me": apply_service.github_as_me(
+                        db, org_id=ctx.principal.org_id, person_id=ctx.principal.id,
+                        is_person=bool(getattr(ctx.principal, "is_person", False)))}
 
     @router.get("/v1/templates/{template_id}")
     @permit(P.TEMPLATE_READ, scope=Scope.org())

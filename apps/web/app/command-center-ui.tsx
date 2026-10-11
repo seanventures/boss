@@ -20,6 +20,7 @@ import { FlightCard, HealthCard, NeedsCard } from "./command-center/cards";
 import { Go, Proof, TeamGrid, proofOf } from "./command-center/hero";
 import { PulseRow } from "./command-center/pulse";
 import { AppsShelf, TemplatesShelf } from "./command-center/rails";
+import { ConnectorsShelf } from "./command-center/connectors-shelf";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { OnboardingHelpRows } from "./onboarding-help-card";
 import { HelpPopover } from "./command-center/help-popover";
@@ -140,6 +141,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
   const error = polled.error ?? (view ? null : initialError);
   const reachable = !error && !!view;
   const apps = useCcApps(projectId, initialApps);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
 
   const live = useConsoleLive();
   const visible = useVisible();
@@ -282,9 +284,14 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
 
       {nowCards}
       <AppsShelf apps={appRows} attention={attention} orgId={orgId} />
-      <details className="cc-secondary" data-testid="cc-template-details">
-        <summary>Browse templates</summary>
+      <details className="cc-secondary" data-testid="cc-template-details"
+               onToggle={(e) => setTemplatesOpen((e.currentTarget as HTMLDetailsElement).open)}>
+        <summary title="Brief templates start a new app; app connectors add a feature such as sign-in or payments">Browse templates</summary>
+        {/* BOTH KINDS, GROUPED: the briefs (a whole app) and the app connectors (code templates
+            such as login-oauth or Stripe), which were only under New build › From a template. */}
         <TemplatesShelf />
+        {/* Read only once opened: a closed section fetches nothing (console latency budget). */}
+        {templatesOpen ? <ConnectorsShelf projectId={projectId} /> : null}
       </details>
       {view ? (
         <details className="cc-secondary" data-testid="cc-team-details">

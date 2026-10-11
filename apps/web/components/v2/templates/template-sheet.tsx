@@ -26,8 +26,8 @@ import { useGuardedCall } from "../../identity/identity-provider";
 import { withConsent } from "../../../lib/identity/consent";
 import { IdentityError } from "../../../lib/identity/api";
 import {
-  INSECURE, levelWord, refusalCode, refusalWords, secretWord, stackLabel, templatesApi, testedWord,
-  type BuildWorkflow, type TemplateCard, type TemplateDetail,
+  INSECURE, githubAsMeNotice, levelWord, refusalCode, refusalWords, secretWord, stackLabel, templatesApi, testedWord,
+  type BuildWorkflow, type GithubAsMe, type TemplateCard, type TemplateDetail,
 } from "../../../lib/templates";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../../../app/workflow-readiness-ui";
 import { LabelChips, stackTip, useInstalledStacks, useStackLevels } from "./gallery";
@@ -78,6 +78,8 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
   const [refusal, setRefusal] = useState<Readiness | null>(null);
   const [startAnyway, setStartAnyway] = useState<string[]>([]);
   const [workflows, setWorkflows] = useState<BuildWorkflow[]>([]);
+  /** Does Start need the person's own GitHub link, and do they have it (said before Start). */
+  const [githubAsMe, setGithubAsMe] = useState<GithubAsMe | null>(null);
   /** "" = the default workflow (nothing sent). */
   const [workflowKey, setWorkflowKey] = useState("");
   const guarded = useGuardedCall();
@@ -94,7 +96,9 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
   useEffect(() => {
     let alive = true;
     // No list (an older API, a read refused): the picker is not drawn and the default runs.
-    templatesApi.workflows(projectId).then((w) => { if (alive) setWorkflows(w); }).catch(() => undefined);
+    templatesApi.buildContext(projectId).then((c) => {
+      if (alive) { setWorkflows(c.workflows); setGithubAsMe(c.githubAsMe); }
+    }).catch(() => undefined);
     return () => { alive = false; };
   }, [projectId]);
   const defaultWorkflow = workflows.find((w) => w.isDefault);
@@ -223,6 +227,13 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
         </p>
       ) : null}
       {loadError ? <p className="tpl-err" role="alert">{loadError}</p> : null}
+      {githubAsMeNotice(githubAsMe) ? (
+        <p className="tpl-warn" role="status" data-testid="tpl-github-as-me">
+          {githubAsMeNotice(githubAsMe)}{" "}
+          <a href={githubAsMe?.href ?? "/account/agents"} data-testid="tpl-github-link"
+             title="My account › Agents: link your own GitHub for “as me” grants">Link GitHub</a>
+        </p>
+      ) : null}
 
       <section className="tpl-sec" aria-label="Where">
         <h3>{target.kind === "new" ? "New app" : "Into"}</h3>

@@ -27,7 +27,8 @@ import { TemplateGallery, galleryCards, stackTip } from "../components/v2/templa
 import { TemplateSheet, applyBlocker } from "../components/v2/templates/template-sheet";
 import { AppSetup, copyLabel, envCell } from "../components/v2/templates/setup-sheet";
 import { KitTemplates, approveBlocker, importReasons, kitRows } from "../components/v2/templates/kit-templates";
-import { parseCard, plainSentence, secretWord, testedWord, type TemplateCard } from "../lib/templates";
+import { githubAsMeNotice, parseCard, parseGithubAsMe, plainSentence, secretWord, testedWord, type TemplateCard } from "../lib/templates";
+import { ConnectorsShelf, connectorRunHref } from "../app/command-center/connectors-shelf";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -54,6 +55,8 @@ let calls: Call[] = [];
 let applyAnswers: Array<[number, unknown]> = [];
 /** GET /v1/templates/workflows: null = an API without it (404), so no picker. */
 let buildWorkflows: unknown[] | null = null;
+/** GET /v1/templates/workflows' github_as_me; undefined = an API that does not say. */
+let githubAsMe: Record<string, unknown> | undefined;
 let toolchains: unknown[] = [{ name: "python", installed: true }, { name: "node", installed: true }, { name: "java", installed: false }];
 
 function json(body: unknown, status = 200) {
@@ -63,6 +66,7 @@ function json(body: unknown, status = 200) {
 beforeEach(() => {
   calls = [];
   buildWorkflows = null;
+  githubAsMe = undefined;
   applyAnswers = [[201, { workflow_run_id: "wfr_9", application_id: "tap_1", app_key: "shop" }]];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -75,7 +79,8 @@ beforeEach(() => {
     if (path === "/v1/templates?status=active") return json({ templates: [STRIPE, BANK], toolchains });
     if (path === "/v1/templates/import") return json({ error: "invalid", report: { ok: false, reasons: ["insecure_by_design needs template:approve and the acknowledgement (D3)", "LICENSE is missing"] } }, 422);
     if (path.startsWith("/v1/templates/workflows?project_id=p1") && buildWorkflows) {
-      return json({ project_id: "p1", default: "fast_fix", workflows: buildWorkflows });
+      return json({ project_id: "p1", default: "fast_fix", workflows: buildWorkflows,
+                    ...(githubAsMe ? { github_as_me: githubAsMe } : {}) });
     }
     if (path.startsWith("/v1/templates/tpl_stripe/apply")) {
       const [status, body] = applyAnswers.shift() ?? [500, { error: "x" }];
@@ -392,5 +397,48 @@ describe("Kit ▸ Templates", () => {
     expect(importReasons({ report: { reasons: ["needs approve (D3)"] } })).toEqual(["needs approve"]);
     expect(plainSentence("the importer cannot approve it (D3)")).toBe("The importer cannot approve it");
     expect(testedWord([])).toBe("");
+  });
+});
+
+describe("GitHub as me, before Start", () => {
+  const sheet = () => <TemplateSheet projectId="p1" card={card(STRIPE)} target={{ kind: "new" }} onStarted={() => {}} onClose={() => {}} />;
+  it("says up front, with a link, when the build needs the person's own GitHub and it is not linked", async () => {
+    buildWorkflows = [{ workflow_key: "fast_fix", name: "Fast Fix / Hotfix", default: true }];
+    githubAsMe = { required: true, linked: false, href: "/account/agents" };
+    await mount(sheet(), "operator");
+    const note = $('[data-testid="tpl-github-as-me"]');
+    expect(note.textContent).toContain("isn't linked");
+    expect(($('[data-testid="tpl-github-link"]') as HTMLAnchorElement).getAttribute("href")).toBe("/account/agents");
+    expect(writes()).toEqual([]);                                   // said before anything is started
+  });
+  it("says nothing when it is linked, not required, or the API does not say", async () => {
+    buildWorkflows = [{ workflow_key: "fast_fix", name: "Fast Fix / Hotfix", default: true }];
+    githubAsMe = { required: true, linked: true, href: "/account/agents" };
+    await mount(sheet(), "operator");
+    expect($('[data-testid="tpl-github-as-me"]')).toBeNull();
+    expect(githubAsMeNotice(parseGithubAsMe({ github_as_me: { required: false, linked: false } }))).toBe("");
+    expect(githubAsMeNotice(parseGithubAsMe({}))).toBe("");
+    expect(githubAsMeNotice(null)).toBe("");
+  });
+});
+
+describe("Command Center › Browse templates", () => {
+  it("shows the app connectors (code templates) next to the briefs, and a card opens its sheet", async () => {
+    await mount(<ConnectorsShelf projectId="p1" />, "operator");
+    const shelf = $('[data-testid="cc-connectors"]');
+    expect(shelf.textContent).toContain("App connectors");
+    expect($('[data-testid="tpl-card-stripe-checkout"]')).toBeTruthy();
+    await press('[data-testid="tpl-card-stripe-checkout"]');
+    expect($('[data-testid="tpl-sheet"]')).toBeTruthy();
+    expect(connectorRunHref("p1", "wfr_9")).toContain("wfr=wfr_9");
+  });
+  it("groups both kinds under Browse templates", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(`${process.cwd()}/app/command-center-ui.tsx`, "utf8");
+    const block = src.slice(src.indexOf('data-testid="cc-template-details"'));
+    expect(block.indexOf("<TemplatesShelf />")).toBeGreaterThan(0);
+    expect(block.indexOf("<ConnectorsShelf")).toBeGreaterThan(block.indexOf("<TemplatesShelf />"));
+    expect(block).toContain("templatesOpen ? <ConnectorsShelf");
+    expect(block.indexOf("<ConnectorsShelf")).toBeLessThan(block.indexOf("</details>"));
   });
 });
