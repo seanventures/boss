@@ -4,15 +4,11 @@
  * Capacity: where model capacity comes from (was System Configuration › AI Capacity; operator
  * decision §11.2 moved it here, beside the Model row it overlaps).
  *
- *   Capacity   ● Active  anthropic_api   anthropic · key · available      On Model row  Replace ↗
- *              ● Blocked openai_gateway  openai · gateway                 [Store credential]
- *              ● Needs login claude_max  anthropic · plan                 [Start official session]
- *              ● Active  chatgpt_pro     openai · plan · connected        [Disconnect session]
- *              SESSIONS  claude_cli_login · Waiting on you · `claude login`  [Complete session]
- *              Broker skills  Skills ↗
+ * Source names open optional identity/model details. Status, reported capacity and actions
+ * stay visible, as do every session and its completion controls.
  *
  * One source per line, every source the project has (the Model row shows only the connected
- * ones). A key that is already a Model row is replaced THERE (`Replace ↗` opens its menu) — no
+ * ones). A key that is already a Model row is replaced THERE (`Replace key ↗` opens its menu) — no
  * second key form; a source with no key yet takes one here, into the secret backend you pick.
  * Official logins are started, completed (the session reference and the capacity it reports,
  * as fields, not raw JSON) and disconnected here. The data is read client-side from the API
@@ -71,6 +67,15 @@ export function parseSessions(w: unknown): CapSession[] {
 }
 
 const words = (v: string) => v.replace(/[_-]+/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+// Display names only: source IDs remain the identity for every control and request.
+const SOURCE_NAMES: Record<string, string> = {
+  openai_codex_chatgpt: "Codex (ChatGPT)", openai_api: "OpenAI API",
+  anthropic_claude_code: "Claude Code", anthropic_api: "Anthropic API",
+  typesafe_jev: "TypeSafe Jev", google_gemini_cli: "Gemini CLI", google_api: "Google API",
+  cursor_cli: "Cursor CLI", cursor_api: "Cursor API", xai_grok_build: "Grok Build", xai_api: "xAI API",
+  approved_local_model_host: "Local model", managed_cloud_model_gateway: "Managed gateway",
+};
+const sourceName = (id: string) => Object.hasOwn(SOURCE_NAMES, id) ? SOURCE_NAMES[id] : id;
 const KIND: Record<string, string> = { api_key: "key", gateway: "gateway", subscription: "plan", local_capacity: "local", local: "local" };
 export function stateOf(src: CapSource): { label: string; tone: "green" | "amber" | "red" | "grey" } {
   if (src.effective === "active") return { label: "Active", tone: "green" };
@@ -269,21 +274,20 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
             <div key={src.sourceId} className="su-cap" data-testid="setup-cap-source" data-source={src.sourceId}>
               <div className="su-line">
                 <span className={`su-pill su-tone-${st.tone}`} role="status"><Dot tone={st.tone} />{st.label}</span>
-                <span className="su-mono su-strong" data-user-text>{src.sourceId}</span>
-                <span className="su-faint" data-user-text>{src.provider}</span>
-                <span className="su-chip">{KIND[src.kind] ?? words(src.kind)}</span>
+                <details className="mr-criteria" style={{ minWidth: 0, maxWidth: "100%" }} data-testid="setup-cap-details">
+                  <summary style={{ maxWidth: "100%", overflowWrap: "anywhere" }}><span data-user-text>{sourceName(src.sourceId)}</span><span className="su-sr"> details</span></summary>
+                  <div className="su-stack su-faint" style={{ overflowWrap: "anywhere" }}>
+                    <span>Source ID: <span className="su-mono" data-user-text>{src.sourceId}</span></span>
+                    <span>Provider: <span data-user-text>{src.provider}</span></span>
+                    <span>Type: <span data-user-text>{KIND[src.kind] ?? words(src.kind)}</span></span>
+                    {src.models.length ? <span>Models: <span className="su-mono" data-user-text>{src.models.join(", ")}</span></span> : null}
+                  </div>
+                </details>
                 {src.capacity !== "unknown" ? <Tip tip="The capacity this source last reported." className="su-faint">{words(src.capacity)}</Tip> : null}
-                {src.models.length ? (
-                  <Tip tip={src.models.join(", ")} className="su-faint su-mono">
-                    {src.models[0]}{src.models.length > 1 ? ` +${src.models.length - 1}` : ""}
-                  </Tip>
-                ) : null}
                 <span className="su-spacer" />
                 {takesKey(src) && onBoard.has(src.sourceId) ? (
-                  <>
-                    <Tip tip="Its key is managed on the Model row above." className="su-chip">On Model row</Tip>
-                    <a className="su-link" href={`?area=setup&source=${encodeURIComponent(src.sourceId)}`} data-testid="setup-cap-replace">Replace ↗</a>
-                  </>
+                  <a className="su-link" href={`?area=setup&source=${encodeURIComponent(src.sourceId)}`} data-testid="setup-cap-replace"
+                     title="Replace its key on the Model row">Replace key ↗</a>
                 ) : null}
                 {takesKey(src) && !onBoard.has(src.sourceId) ? (
                   <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm" aria-expanded={editing} data-testid="setup-cap-key-open"
@@ -357,7 +361,6 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
             {sessions.length ? `${sessions.length} · ${sessions.filter((x) => x.status === "operator_action_required").length} waiting` : "None"}
           </span>
           <span className="su-spacer" />
-          <Tip tip="Broker and model skills live in Skills and MCP." className="su-faint">Broker skills</Tip>
           <a className="su-link" href="?area=skills" data-testid="setup-broker-skills-link">Skills ↗</a>
         </div>
       </div>
