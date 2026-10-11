@@ -773,13 +773,26 @@ def declare_app_entry(paths, read=None) -> Optional[str]:
 RUN_DECLARATION_FILE = "boss.preview.command"
 
 
+def _strip_cd_into_itself(directory: Path, command: str) -> str:
+    """A declared command runs FROM the directory that declares it. One written for the
+    repository root (`cd helpdesk-ai && npm …`, in helpdesk-ai/boss.preview.command) failed
+    `can't cd to helpdesk-ai` and the app read as not serving (crun_cb6e15f4). A leading cd into
+    the declaring directory itself, which does not exist inside it, is dropped."""
+    import re as _re
+
+    m = _re.match(r"\s*cd\s+(?:\./)?([\w.\-]+)/?\s*&&\s*(.+)$", command, _re.S)
+    if m and m.group(1) == directory.name and not (directory / m.group(1)).exists():
+        return m.group(2).strip()
+    return command
+
+
 def _declared_command_in(directory: Path) -> Optional[str]:
     """The run command declared in ONE directory, from either form, or None."""
     hint = directory / RUN_DECLARATION_FILE
     if hint.is_file():
         command = hint.read_text(errors="ignore").strip()
         if command:
-            return command
+            return _strip_cd_into_itself(directory, command)
     package = directory / "package.json"
     if package.is_file():
         try:
@@ -789,7 +802,7 @@ def _declared_command_in(directory: Path) -> Optional[str]:
         configured = ((payload.get("boss") or {}).get("preview") or {}).get("command") \
             if isinstance(payload, dict) else None
         if isinstance(configured, str) and configured.strip():
-            return configured.strip()
+            return _strip_cd_into_itself(directory, configured.strip())
     return None
 
 

@@ -4816,8 +4816,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 gates["web_package_honest"] = bool(_web_contract.get("ok"))
         elif _web_verify:
             try:
+                # THE DIRECTORY THE TESTS RAN IN. With no app id this resolved to the repository
+                # root, and a shared repo's root package.json "lacked" vite and @playwright/test
+                # that helpdesk-ai/package.json declares (crun_cb6e15f4).
+                _ran_in = (root / last_verify_cwd) if last_verify_cwd and last_verify_cwd != "." \
+                    and not Path(last_verify_cwd).is_absolute() else None
                 _web_contract = verification_target.evaluate_web_package_contract(
-                    verification_target.resolve_verify_cwd(root, app_id=_app_id)
+                    _ran_in if _ran_in is not None and _ran_in.is_dir()
+                    else verification_target.resolve_verify_cwd(root, app_id=_app_id)
                 )
             except Exception:  # noqa: BLE001
                 _log_caught(logger)
