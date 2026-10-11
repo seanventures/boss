@@ -53,6 +53,7 @@ import { defaultInputs, invalidInputs, missingRequired, startsFromABrief, suppli
 import { ReadinessPanel, WIZARD_COLLECTS, unaccepted, useWorkflowReadiness, type Readiness }
   from "../workflow-readiness-ui";
 import { get, post } from "./delivery-api";
+import { StackSupportLine, StackWarning, useStackCheck } from "../../components/v2/templates/stack-warning";
 import {
   KEEPS_WORKING, QUICK, SPEC, appLine, appMatches, approvalsWord, checksWithKind, costKey,
   costRange, counts, defaultPath, featureInput, findApp, landsAs, matchIdea, monogram, normalizeChannel,
@@ -724,7 +725,10 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
 
   // `??` WAS WRONG HERE AND IT COST A RUN: "" is "nothing blocking", and `??` never looks past
   // it. A required input left blank must stop the start at the form, not at the runtime.
+  // CAN BOSS BUILD WHAT IT ASKS FOR ("build it in Go")? Asked while typing; said before Start.
+  const stackCheck = useStackCheck(projectId, adding ? gain : `${draft.title}\n${draft.directive}`);
   const blocked = (mode === "template" ? "" : adding ? addBlockingReason({ app, gain }) : blockingReason(0, draft, !brief))
+    || (mode !== "template" && stackCheck.blocks ? "BOSS cannot build the stack this asks for: see the note above." : "")
     || (stillBlank.length ? `Needs ${stillBlank.join(", ")}` : "")
     || (malformed.length ? `Check ${malformed.join(", ")}` : "")
     || talksToProblem(talks)
@@ -779,6 +783,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
       ...(workflowKey ? { workflow_key: workflowKey } : { work_class: "project.new" }),
       input,
       ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
+      ...(stackCheck.refused && stackCheck.allowed ? { allow_unsupported_stack: true } : {}),
     });
     if (!r.ok) {
       setError(r.error ?? "Could not start it.");
@@ -1099,6 +1104,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                 placeholder={"A shift-swap board where staff can offer a shift they cannot work "
                   + "and colleagues can claim it, with the manager approving the swap."}
                 onFull={() => setFull("brief")} onSubmit={() => void primary()} />
+        <StackSupportLine projectId={projectId} testId="np-stack-support" />
         <div className="np-ideas" data-testid="np-ideas">
           <small>Or start from</small>
           {IDEAS.slice(0, 6).map((idea) => (
@@ -1569,6 +1575,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
             Plan it with an agent
           </GatedButton>
         ) : null}
+        {mode !== "template" ? <StackWarning state={stackCheck} testId="np-stack-warning" /> : null}
         {/* THE PAIR STAYS TOGETHER: the reason wraps above it, never between Cancel and Start. */}
         <span className="np-go">
           {blocked && !(adding && proposal?.proposal) ? (

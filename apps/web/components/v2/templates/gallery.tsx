@@ -10,8 +10,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import {
-  INSECURE, STACKS, installedStacks, labelWord, refusalWords, stackLabel, templatesApi, testedWord,
-  type TemplateCard,
+  INSECURE, STACKS, installedStacks, labelWord, levelWord, refusalWords, stackLabel, stackSupport,
+  templatesApi, testedWord, type TemplateCard,
 } from "../../../lib/templates";
 
 /** The cards a gallery shows: approved ones, of the stack asked for (when one is). */
@@ -38,12 +38,28 @@ export function useInstalledStacks(projectId: string): Set<string> | null {
   return installed;
 }
 
-export function StackChips({ stacks, installed }: { stacks: string[]; installed: Set<string> | null }) {
+/** Each stack's support level (certified / experimental / best effort), from the API's registry. */
+export function useStackLevels(): Record<string, string> {
+  const [levels, setLevels] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let alive = true;
+    void stackSupport().then((s) => { if (alive) setLevels(s.levels); });
+    return () => { alive = false; };
+  }, []);
+  return levels;
+}
+
+export function StackChips({ stacks, installed, levels = {} }: { stacks: string[]; installed: Set<string> | null; levels?: Record<string, string> }) {
   return (
     <span className="tpl-chips" aria-label="Stacks">
       {stacks.map((s) => {
         const off = !!installed && !installed.has(s);
-        return <span key={s} className="tpl-chip" data-off={off || undefined} title={stackTip(s, installed)}>{stackLabel(s)}{off ? " · off" : ""}</span>;
+        return (
+          <span key={s} className="tpl-chip" data-off={off || undefined} data-level={levels[s] || undefined}
+                title={stackTip(s, installed) + (levels[s] ? ` Support: ${levelWord(levels[s])}.` : "")}>
+            {stackLabel(s)}{levels[s] ? ` · ${levelWord(levels[s])}` : ""}{off ? " · off" : ""}
+          </span>
+        );
       })}
     </span>
   );
@@ -74,6 +90,7 @@ export function TemplateGallery({ projectId, stack, onPick, testId = "tpl-galler
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<string | null>(stack ?? null);
   const installed = useInstalledStacks(projectId);
+  const levels = useStackLevels();
   useEffect(() => {
     let alive = true;
     templatesApi.list().then((t) => { if (alive) setAll(t); }).catch((e) => { if (alive) { setError(refusalWords(e)); setAll([]); } });
@@ -112,7 +129,7 @@ export function TemplateGallery({ projectId, stack, onPick, testId = "tpl-galler
             <span className="tpl-card-sum" data-user-text={t.source === "git" || undefined}>{t.summary}</span>
             <LabelChips labels={t.labels} />
             <span className="tpl-card-foot">
-              <StackChips stacks={t.stacks} installed={installed} />
+              <StackChips stacks={t.stacks} installed={installed} levels={levels} />
               {t.tested.length ? <span className="tpl-tested" title="A trial ran the template's own tests in a throwaway sandbox">{testedWord(t.tested)}</span> : null}
               {t.source === "git" ? <span className="tpl-faint" title={t.gitUrl}>Imported</span> : null}
             </span>

@@ -8105,9 +8105,50 @@ def workflow_run_report_endpoint(run_id: str, project_id: str = "") -> dict:
             raise HTTPException(status_code=404, detail="workflow run not found")
         require_project_reader(connection, stored_project)
         report = assemble_workflow(connection, project_id or stored_project, run_id)
+        if report.get("ok"):
+            report["benchmark"] = _benchmark_quietly(connection, str(stored_project), run_id)
     if report.get("ok"):
         report["markdown"] = workflow_markdown(report)
     return report
+
+
+def _benchmark_quietly(connection, project_id: str, run_id: str) -> Optional[dict]:
+    """The run's benchmark record (services.benchmark), in a savepoint: a record that cannot be
+    read must never cost the operator the report it sits at the end of."""
+    from boss_engine.services import benchmark
+
+    point = connection.begin_nested()
+    try:
+        rec = benchmark.record(connection, project_id, run_id)
+    except Exception as error:  # noqa: BLE001
+        point.rollback()
+        LOGGER.warning("benchmark record for %s failed: %s", run_id, error)
+        return None
+    point.commit()
+    return rec if rec.get("run_id") else None
+
+
+@app.get("/v1/workflow-runs/{run_id}/benchmark")
+@permit(P.WORKFLOW_RUN_READ, scope=Scope.of("workflow_run", path="run_id"))
+def workflow_run_benchmark_endpoint(run_id: str) -> dict:
+    """ONE BENCHMARK RECORD for the run (services.benchmark): scenario, stack, source commit,
+    models, result, PR, tests, human approvals, manual interventions, elapsed minutes, model
+    cost, retries, deployment smoke test — measured values only, null where BOSS did not
+    measure one. The promotion rule for a stack adapter reads these (services.stacks)."""
+    from boss_engine.services import benchmark
+
+    with begin(engine) as connection:
+        stored_project = connection.execute(
+            text("SELECT project_id FROM workflow_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).scalar()
+        if stored_project is None:
+            raise HTTPException(status_code=404, detail="workflow run not found")
+        require_project_reader(connection, stored_project)
+        rec = benchmark.record(connection, str(stored_project), run_id)
+    if not rec.get("run_id"):
+        raise HTTPException(status_code=404, detail=rec.get("error") or "workflow run not found")
+    return {"benchmark": rec, "yaml": benchmark.as_yaml(rec)}
 
 
 @app.post("/v1/workflow-runs/{run_id}/report")
@@ -8147,6 +8188,7 @@ def publish_workflow_run_report_endpoint(run_id: str, project_id: str = "") -> d
         report = assemble_workflow(connection, resolved_project, run_id)
         if not report.get("ok"):
             raise HTTPException(status_code=404, detail=report.get("error") or "no such run")
+        report["benchmark"] = _benchmark_quietly(connection, resolved_project, run_id)
         markdown = workflow_markdown(report)
         title = "Run report — " + str(
             (report.get("product") or {}).get("name") or report.get("workflow") or run_id
@@ -26578,6 +26620,17 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
                     if isinstance(payload.get("start_anyway"), list)]
         if repeats:
             accepted = sorted({*accepted, *accepted_by_run(connection, project_id, repeats)})
+        # CAN BOSS BUILD WHAT IT ASKS FOR — a brief naming Go, or Java on an install without
+        # the toolchain, is refused here, before a panel is paid for, unless the caller says to
+        # start anyway (services.stacks). A workflow with no build step is never refused.
+        from boss_engine.services import stacks as _stacks
+
+        try:
+            _stacks.refuse_unsupported_start(
+                connection, version_id=version_id, run_input=run_input,
+                allow=bool(payload.get(_stacks.OVERRIDE_FIELD)))
+        except _stacks.StackUnsupported as refused:
+            raise HTTPException(status_code=409, detail=refused.detail()) from refused
         # CAN IT RUN HERE — asked before anything is spent, and before anything is STOPPED.
         # See workflow_readiness.
         readiness = _delivery_readiness_or_409(

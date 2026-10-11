@@ -59,6 +59,8 @@ class ApplyBody(_Body):
     #: readiness keys the person was shown missing and chose to start without (the composer's
     #: "Start anyway"; passed through to the start path unchanged)
     start_anyway: Optional[list[str]] = Field(default=None, max_length=20)
+    #: start even though the note asks for a stack BOSS cannot build here (409 stack_unsupported)
+    allow_unsupported_stack: Optional[bool] = None
 
 
 class SecretBody(_Body):
@@ -157,7 +159,30 @@ def build_templates_router() -> APIRouter:
         ctx = _ctx(request)
         with begin() as db:
             items = service.list_templates(db, ctx.principal.org_id, stack=stack, status=status, label=label)
-        return {"templates": items}
+        from boss_engine.services import stacks as stack_registry
+        from boss_engine.services import toolchains
+
+        # Which stacks this install can build (services.stacks): the gallery and the sheet mark
+        # a template's stack "off" from `toolchains` (lib/templates.ts installedStacks).
+        return {"templates": items, "toolchains": toolchains.setup_summary(),
+                "stacks": stack_registry.capabilities()}
+
+    # WHAT BOSS CAN BUILD, AND WHETHER A BRIEF ASKS FOR SOMETHING ELSE (services.stacks): the
+    # New project composer and a template's sheet ask before Start, so the person reads "BOSS
+    # cannot build Go" while typing — not from a refusal, and never from a failed build.
+    @router.get("/v1/stacks")
+    @permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
+    def stack_capabilities(request: Request, project_id: str, text: Optional[str] = None,
+                           stack: Optional[str] = None) -> dict:
+        from boss_engine.services import stacks as stack_registry
+
+        out: dict = {"supported": stack_registry.capabilities(),
+                     "sentence": stack_registry.supported_sentence()}
+        if (text or "").strip() or (stack or "").strip():
+            result = stack_registry.check_text((text or "")[:20000],
+                                               template_stack=(stack or "").strip() or None)
+            out["check"] = {k: v for k, v in result.as_dict().items() if k != "supported"}
+        return out
 
     @router.post("/v1/templates/import")
     @permit(P.TEMPLATE_IMPORT, scope=Scope.org())
@@ -330,7 +355,10 @@ def build_templates_router() -> APIRouter:
                     project_id=target_project, actor=identity_guard.request_actor() or None,
                     workflow_key=plan["workflow_key"], input=plan["run_input"],
                     dedupe_key=body.dedupe_key or f"template:{plan['application_id']}",
-                    start_anyway=body.start_anyway), connection_in=db)
+                    start_anyway=body.start_anyway,
+                    # plan() asked the stack question already (and the template's own brief,
+                    # which names every stack it ships, is not the operator's request).
+                    allow_unsupported_stack=True), connection_in=db)
                 run = started.get("run") or {}
                 out = apply_service.record(db, plan, project_id=target_project,
                                            workflow_run_id=run.get("id"), actor_id=ctx.principal.id)

@@ -356,6 +356,11 @@ def _prompt(prd: str, *, title: str, constraints: str, previous: str = "", note:
                      f"Write version {version}: the whole document again, with those changes "
                      "made. Keep what was not asked to change.")
     parts.append(_instructions())
+    # WHAT BOSS CAN BUILD, so the architect never designs a stack the build cannot build, and
+    # the one line the approval check reads it from (services.stacks).
+    from . import stacks
+
+    parts.append(stacks.prompt_block() + "\n" + stacks.STACK_LINE_INSTRUCTION)
     return "\n\n".join(p for p in parts if p)
 
 
@@ -708,6 +713,21 @@ def on_decision_answered(connection: Connection, decision: Mapping[str, Any], *,
         return
     version = int(rec.get("version") or review["current_version"] or 0)
     if action == "approve":
+        refused = _unbuildable_stack(connection, review)
+        if refused:
+            # APPROVED, AND NOT BUILDABLE: the step fails here, with the words, before a build
+            # is started and paid for (services.stacks). A person's approval cannot make BOSS
+            # build Go; the fix is a revised architecture or a turned-on toolchain.
+            connection.execute(
+                text("UPDATE architecture_reviews SET status = 'failed', error = :e, "
+                     "updated_at = now() WHERE id = :i"),
+                {"e": refused[:500], "i": review_id},
+            )
+            emit_event(connection, review["project_id"], "architecture.stack_unsupported", actor,
+                       "architecture_review", review_id,
+                       {"version": version, "decision_id": decision.get("id"),
+                        "message": refused, "workflow_run_id": review["workflow_run_id"]})
+            return
         connection.execute(
             text("UPDATE architecture_reviews SET status = 'approved', approved_by = :a, "
                  "approved_at = now(), approved_version = :v, updated_at = now() WHERE id = :i"),
@@ -737,6 +757,20 @@ def on_decision_answered(connection: Connection, decision: Mapping[str, Any], *,
     emit_event(connection, review["project_id"], event, actor, "architecture_review",
                review_id, {"version": version, "decision_id": decision.get("id"),
                            "note": note, "workflow_run_id": review["workflow_run_id"]})
+
+
+def _unbuildable_stack(connection: Connection, review: Mapping[str, Any]) -> Optional[str]:
+    """Why the architecture being approved declares a stack BOSS cannot build, or None."""
+    from . import stacks
+
+    content = _json(connection.execute(
+        text("SELECT content FROM artifacts WHERE id = :a"),
+        {"a": review.get("current_artifact_id")}).scalar(), {}) or {}
+    verdict = stacks.check_architecture(str(content.get("markdown") or ""))
+    if verdict.ok:
+        return None
+    return (verdict.message + " Nothing was built. Retry the Architecture step asking for a "
+            "supported stack (or turn the toolchain on first).")
 
 
 # ── The revision loop (runner tick) ──────────────────────────────────────────────────────────
