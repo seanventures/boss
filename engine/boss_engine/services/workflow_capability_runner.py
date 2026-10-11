@@ -396,6 +396,21 @@ def _invoke_tool(
         raise CapabilityExecutionError(
             "raw SQL is unavailable in project-scoped workflow steps"
         )
+    spec, refused = _authorize_step_tool(ctx, tool_name, project_id, args)
+    if refused is not None:
+        return refused
+    result = spec.handler(ctx, project_id=project_id, actor=actor, args=args)
+    if isinstance(result, dict) and result.get("ok") is False:
+        raise CapabilityExecutionError(str(result.get("error") or f"{tool_name} failed."))
+    return result if isinstance(result, dict) else {"result": result}
+
+
+def _authorize_step_tool(
+    ctx: Any, tool_name: str, project_id: str, args: dict[str, Any]
+) -> tuple[Any, Optional[dict[str, Any]]]:
+    """The checks a step's tool call passes before its handler runs: (spec, refusal-or-None).
+    Shared by `_invoke_tool` and the resumed build (`_retried_build`), so a retried build is
+    decided exactly as the step's own `create_code_task` would be."""
     registry = _tool_registry()
     spec = {s.name: s for s in registry.specs()}.get(tool_name)
     if spec is None:
@@ -408,7 +423,7 @@ def _invoke_tool(
 
     refused = identity_gate(spec, CURRENT_TOOL_AUTH.get(), project_id, args)
     if refused is not None:
-        return refused
+        return spec, refused
     # Inside a delegated run, the step's tool is decided against the run token (IDENTITY.md §7.4);
     # this path calls the handler directly, so the check cannot be left to the registry.
     from boss_engine.identity import lineage as _identity_lineage
@@ -423,10 +438,7 @@ def _invoke_tool(
                 raise CapabilityExecutionError(
                     f"'{tool_name}' was refused for this agent: {refused.permission} ({refused.reason})"
                 ) from refused
-    result = spec.handler(ctx, project_id=project_id, actor=actor, args=args)
-    if isinstance(result, dict) and result.get("ok") is False:
-        raise CapabilityExecutionError(str(result.get("error") or f"{tool_name} failed."))
-    return result if isinstance(result, dict) else {"result": result}
+    return spec, None
 
 
 #: Work a run was started WITH, which the matching step should wait on rather than start again.
@@ -2487,16 +2499,6 @@ def _perform_capability(
                 f"{architecture}"
             ).strip()}
 
-    # RETRY WITH A NOTE. A build the operator retried resumes the failed attempt's lineage
-    # (its branch, its design, its findings and failure) with their note as the feedback; a
-    # retry with nothing to resume carries the note into the new build's instructions.
-    retry_note = ""
-    if key == "build":
-        resumed, inputs, retry_note = _retried_build(
-            connection, ctx, project_id, step, context, inputs)
-        if resumed is not None:
-            return _settle_started_work(capability, key, resumed)
-
     # THE SECURITY REVIEW'S TOOL-BACKED STEPS (services/security_review_steps.py): the scan, the
     # panel and the fix build their tool's arguments from what the run produced — or say why
     # there is nothing to do (no findings, nothing chosen, round 1 already passed).
@@ -2527,6 +2529,18 @@ def _perform_capability(
     ran_as = who_runs_it(connection, getattr(ctx, "settings", None), project_id, step,
                          actor=actor)
     step_actor = ran_as["agent"]
+    # RETRY WITH A NOTE. A build the operator retried resumes the failed attempt's lineage
+    # (its branch, its design, its findings and failure) with their note as the feedback; a
+    # retry with nothing to resume carries the note into the new build's instructions. The
+    # resume is started EXACTLY like this step's build: as `step_actor`, under the run's
+    # recorded authority, through the same tool checks (_retried_build).
+    retry_note = ""
+    if key == "build":
+        resumed, inputs, retry_note = _retried_build(
+            connection, ctx, project_id, step, context, inputs,
+            ran_as=ran_as, tool_name=capability.tool)
+        if resumed is not None:
+            return _settle_started_work(capability, key, resumed)
     # Under the run's recorded authority (the step's agent for that person), never the worker's.
     with _step_authority(ctx, connection, project_id, context, step, step_actor):
         output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
@@ -2556,9 +2570,18 @@ _RESUMABLE_BUILD = frozenset({"failed", "blocked", "cancelled", "error", "reject
 
 def _retried_build(
     connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
-    context: dict[str, Any], inputs: dict[str, Any],
+    context: dict[str, Any], inputs: dict[str, Any], *,
+    ran_as: Optional[dict[str, Any]] = None, tool_name: str = "create_code_task",
 ) -> tuple[Optional[dict[str, Any]], dict[str, Any], str]:
     """A build step the operator retried (workflows.retry_failed_step): what it starts.
+
+    WHO STARTS THE RESUME. Exactly who starts the step's own build: the step's actor (`ran_as`,
+    step_agents.resolve), under the workflow run's recorded authority (`_step_authority`), past
+    the same tool checks as `tool_name` (`_authorize_step_tool`). The resumed code task's job is
+    therefore stamped with that person's grant, as a `create_code_task` from the step would be.
+    Called bare it ran as whoever advanced the run (the worker, a system principal), and the
+    resumed build was refused `no_grant` the moment it started. No grant is borrowed: a run
+    whose authority has ended is refused here, before anything is queued.
 
     Returns (result, inputs, note). `result` is the resumed attempt when the failed build is resumed
     — `code_task_service.retry_code_task`, the same operation as the code task's own Retry, so
@@ -2593,18 +2616,32 @@ def _retried_build(
     prev = cts.load_code_task_run(connection, previous) if previous else None
     if prev is not None and str(prev.get("project_id")) == str(project_id) and (
             str(prev.get("status") or "") in _RESUMABLE_BUILD or note):
-        try:
-            result = cts.retry_code_task(
-                ctx.engine, getattr(ctx, "settings", None) or get_settings(), ctx.jobs,
-                previous, fix_note=note)
-        except ValueError as error:
-            raise CapabilityExecutionError(
-                f"could not resume the previous build {previous}: {error}") from error
+        if ran_as is None:
+            from .step_agents import resolve as who_runs_it
+
+            ran_as = who_runs_it(connection, getattr(ctx, "settings", None), project_id, step,
+                                 actor=str(output.get("retried_by") or "ceo"))
+        step_actor = ran_as["agent"]
+        with _step_authority(ctx, connection, project_id, context, step, step_actor):
+            _, refused = _authorize_step_tool(ctx, tool_name, project_id, inputs)
+            if refused is not None:
+                raise CapabilityExecutionError(str(
+                    refused.get("error") or refused.get("message")
+                    or f"'{tool_name}' was refused for this run's authority."))
+            try:
+                result = cts.retry_code_task(
+                    ctx.engine, getattr(ctx, "settings", None) or get_settings(), ctx.jobs,
+                    previous, fix_note=note)
+            except ValueError as error:
+                raise CapabilityExecutionError(
+                    f"could not resume the previous build {previous}: {error}") from error
         emit_event(connection, project_id, "workflow.build_resumed", "boss", "workflow_run",
                    run_id, {"step_id": step_id, "from_code_task_run_id": previous,
                             "code_task_run_id": result.get("run_id"),
                             "with_note": bool(note)})
         return ({"capability": "build", "tool": "retry_code_task", **result,
+                 "ran_as": {**ran_as, "tool": "retry_code_task",
+                            "skills_offered": [], "skills_used": []},
                  "resumed_from_code_task_run_id": previous,
                  **({"retry_note": note} if note else {})}, inputs, note)
     if not note:
