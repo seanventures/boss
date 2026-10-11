@@ -1657,6 +1657,25 @@ def retry_code_task(
     from .governed_code_task_service import saved_workspace_files
 
     seed_files = len(saved_workspace_files(prev)) if prev.get("status") != "completed" else 0
+    seed_from = run_id
+    # THE NEAREST ATTEMPT THAT SAVED ONE. An attempt refused before it ran (no authority, a
+    # stack refusal) saves nothing; its retry rebuilt the whole app from scratch although the
+    # attempt before it had kept 75 files (HelpDesk, crun_7f9367c9 after crun_3f3d6b5a after
+    # crun_bbc5629f). Walk back through the lineage to the newest attempt with a workspace.
+    if not seed_files and prev.get("status") != "completed":
+        ancestor = fctx_prev.get("parent_run_id")
+        for _ in range(12):
+            if not ancestor:
+                break
+            with _transaction(engine) as c:
+                older = load_code_task_run(c, str(ancestor))
+            if older is None or older.get("status") == "completed":
+                break
+            found = len(saved_workspace_files(older))
+            if found:
+                seed_files, seed_from = found, str(ancestor)
+                break
+            ancestor = (older.get("finalize_ctx") or {}).get("parent_run_id")
     history = list(fctx_prev.get("feedback_history") or [])
     history.append({
         "attempt": attempt, "parent_run_id": run_id, "prev_status": prev.get("status"),
@@ -1693,7 +1712,7 @@ def retry_code_task(
                              if fctx_prev.get("workflow_run_id") and not workflow_version_id
                              else {}),
                           "feedback_history": history,
-                          **({"seed_workspace_from": run_id} if seed_files else {}),
+                          **({"seed_workspace_from": seed_from} if seed_files else {}),
                           # UNRESOLVED REVIEW COMMENTS FOLLOW THE WORK, NOT THE ATTEMPT.
                           #
                           # Comments are stored per run, and a retry mints a NEW run — so a

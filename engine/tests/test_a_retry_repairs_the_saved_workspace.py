@@ -115,3 +115,17 @@ def test_seeding_pushes_nothing():
     sites ever reach the remote (test_template_gates_block_the_pr checks every one)."""
     seed = inspect.getsource(gov.seed_workspace)
     assert "github" not in seed and "upsert" not in seed
+
+
+def test_a_retry_after_an_attempt_that_saved_nothing_seeds_from_the_nearest_ancestor_that_did():
+    """crun_7f9367c9 rebuilt HelpDesk from scratch: its parent had been refused before it ran
+    (no workspace), although the attempt before THAT kept 75 files."""
+    import inspect
+
+    from boss_engine.services import code_task_service as cts
+
+    src = inspect.getsource(cts.retry_code_task)
+    assert "seed_from = run_id" in src
+    walk = src[src.index("seed_from = run_id"):src.index("history = list(")]
+    assert "parent_run_id" in walk and "saved_workspace_files(older)" in walk
+    assert '{"seed_workspace_from": seed_from}' in src
