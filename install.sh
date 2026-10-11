@@ -545,13 +545,42 @@ fi
 
 # Adding the current user to the docker group would grant root-equivalent access and does
 # not take effect in this shell. Use sudo for this install when the socket requires it.
+# ---- scoped sudo Docker fallback ------------------------------------------
+# Keep this small boundary identical in the installer and lifecycle helpers.
+# sudo resets selection variables and uses root's Docker configuration.
+boss_sudo_scope_safe() {
+  _boss_docker_os="$(uname -s)" || return 1
+  [ "$_boss_docker_os" = Linux ] || return 1
+  [ -z "${DOCKER_HOST:-}${DOCKER_CONTEXT:-}${DOCKER_CONFIG:-}${DOCKER_TLS:-}${DOCKER_TLS_VERIFY:-}${DOCKER_CERT_PATH:-}" ] || return 1
+  if [ "${2:-}" != restore ]; then
+  [ "${COMPOSE_PROJECT_NAME:-boss-community}" = boss-community ] || return 1
+  [ "${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}" = boss-community ] || return 1
+  if [ -f "$1" ]; then
+    [ -r "$1" ] || return 1
+    awk '
+      NR == 1 { sub(/^\357\273\277/, "") }
+      /^[[:space:]]*(export[[:space:]]+)?(COMPOSE_PROJECT_NAME|BOSS_COMMUNITY_IMAGE_TAG)([[:space:]]|=|:|$)/ {
+        if ($0 !~ /^(COMPOSE_PROJECT_NAME|BOSS_COMMUNITY_IMAGE_TAG)=(boss-community)?$/) exit 1
+        split($0, field, "="); if (seen[field[1]]++) exit 1
+      }
+    ' "$1" || return 1
+  fi
+  fi
+  _boss_docker_context="$(docker context show 2>/dev/null)" || return 1
+  [ "$_boss_docker_context" = default ] || return 1
+  _boss_docker_endpoint="$(docker context inspect default --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || return 1
+  [ "$_boss_docker_endpoint" = unix:///var/run/docker.sock ]
+}
+# ---- end scoped sudo Docker fallback --------------------------------------
+
 if ! docker info >/dev/null 2>&1; then
-  if [[ "$OS" == Linux && "$(id -u)" -ne 0 ]] && need_cmd sudo && sudo -n docker info >/dev/null 2>&1; then
-    DOCKER=(sudo -n docker)
+  boss_sudo_scope_safe "$INSTALL_DIR/.env" || { echo "Cannot safely use sudo for this Docker selection. Use direct Docker access for custom projects, contexts or connection settings." >&2; exit 1; }
+  if [[ "$OS" == Linux && "$(id -u)" -ne 0 ]] && need_cmd sudo && sudo -n docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then
+    DOCKER=(sudo -n docker --host unix:///var/run/docker.sock)
   elif [[ "$OS" == Linux && "$(id -u)" -ne 0 && "$NONINTERACTIVE" -eq 0 ]] && need_cmd sudo &&
        ui_info "Docker needs administrator access for this user. sudo may ask for your password." &&
-       sudo -v </dev/tty && sudo -n docker info >/dev/null 2>&1; then
-    DOCKER=(sudo -n docker)
+       sudo -v </dev/tty && sudo -n docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then
+    DOCKER=(sudo -n docker --host unix:///var/run/docker.sock)
   else
     die "Docker daemon is unavailable. Start Docker and rerun; on Linux ensure noninteractive sudo access to Docker."
   fi
@@ -559,7 +588,7 @@ fi
 ui_ok "Docker daemon is running"
 if "${DOCKER[@]}" compose version >/dev/null 2>&1; then
   COMPOSE=("${DOCKER[@]}" compose)
-elif need_cmd docker-compose; then
+elif [[ "${DOCKER[0]}" != sudo ]] && need_cmd docker-compose; then
   COMPOSE=(docker-compose)
 else
   die "Docker Compose v2 is required."
