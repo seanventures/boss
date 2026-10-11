@@ -143,9 +143,12 @@ def test_seeded_files_are_group_writable_and_workaround_copies_are_dropped(tmp_p
         {"path": "helpdesk-ai-locked/src/app.ts", "content": "copy"},
         {"path": "helpdesk-ai__orig_readonly/src/app.ts", "content": "copy"},
         {"path": "helpdesk-ai__prev_readonly_snapshot/src/app.ts", "content": "copy"},
+        {"path": "helpdesk-ai-locked-orig/src/app.ts", "content": "copy"},
+        {"path": "helpdesk-ai_backup/src/app.ts", "content": "copy"},
     ])
     assert n == 1
     f = tmp_path / "helpdesk-ai" / "src" / "app.ts"
-    assert stat.S_IMODE(f.stat().st_mode) & 0o020
-    assert stat.S_IMODE(f.parent.stat().st_mode) & 0o020
+    # the sandbox uid has no supplementary groups: it needs the OTHER bits
+    assert stat.S_IMODE(f.stat().st_mode) & 0o002
+    assert stat.S_IMODE(f.parent.stat().st_mode) & 0o002
     assert not (tmp_path / "helpdesk-ai-locked").exists()

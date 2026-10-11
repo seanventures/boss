@@ -530,26 +530,29 @@ def seed_workspace(root: Path, files: list[dict]) -> int:
         # used to land BOSS-owned 0644, the agent could not edit them, so it copied the app to
         # `<app>-locked/`, `<app>__orig_readonly/`, `<app>__prev_readonly_snapshot/`, and every
         # retry carried the copies forward (HelpDesk: 147 → 219 → 291 files).
-        if _re.search(r"(?:-locked|__orig_readonly|__prev_readonly_snapshot|__readonly)$",
-                      rel.split("/", 1)[0]):
+        top = rel.split("/", 1)[0]
+        if _re.search(r"(?:[-_]+(?:locked|orig|original|readonly|read[-_]only|snapshot|backup|"
+                      r"bak|copy|prev|old))+$", top, _re.I):
             continue
         target = (base / rel).resolve()
         if base != target and base not in target.parents:
             continue
-        # Directories and files the run's uid can write: group-writable, as a fresh checkout
-        # is (the sandbox uid works through group boss, setgid on directories).
+        # Directories and files the run's uid can write. The sandbox uid runs with NO
+        # supplementary groups (boss-sandbox-exec), so group-writable is still read-only to it:
+        # it kept copying the app (helpdesk-ai-locked-orig/) to edit it. World-writable is safe
+        # here: the run directory is <uid>:boss 2770, no other uid can enter it.
         missing = [d for d in [target.parent, *target.parent.parents]
                    if base in d.parents or d == base]
         target.parent.mkdir(parents=True, exist_ok=True)
         for d in missing:
             if d != base:
                 try:
-                    _os.chmod(d, 0o2775)
+                    _os.chmod(d, 0o2777)
                 except OSError:
                     pass
         _ws_write(target, f["content"])
         try:
-            _os.chmod(target, 0o664)
+            _os.chmod(target, 0o666)
         except OSError:
             pass
         written += 1

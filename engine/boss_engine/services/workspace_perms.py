@@ -184,6 +184,11 @@ def write_text(path: Any, content: str, *, encoding: str = "utf-8") -> None:
     except PermissionError:
         make_writable(p)
         p.write_text(content, encoding=encoding)
+    # A file BOSS writes stays editable by the run: its uid has no supplementary groups, so
+    # only the other bits reach it (safe: the run directory is <uid>:boss 2770).
+    with contextlib.suppress(OSError):
+        if p.stat().st_uid == os.geteuid():
+            os.chmod(p, (p.stat().st_mode & 0o7777) | 0o666)
 
 
 def tidies_workspace(fn: Callable[..., Any]) -> Callable[..., Any]:
