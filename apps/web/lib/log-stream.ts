@@ -11,6 +11,7 @@
  *
  * Each screen keeps its own rows, filters and words; only the loop is shared.
  */
+import { useOnScreen } from "./area-shown";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type StreamPage<T> = { items: T[]; next: string | null; newest: string | null; etag?: string | null };
@@ -19,15 +20,10 @@ type Failed = { error: string };
 
 const failed = (x: unknown): x is Failed => Boolean(x) && typeof (x as Failed).error === "string";
 
-/** Whether the tab is showing. A hidden tab polls nothing. */
+/** Whether the tab is showing AND this panel's area is on screen (lib/area-shown.ts). A hidden
+ *  tab, or an area nobody is looking at, polls nothing. */
 export function useVisible(): boolean {
-  const [visible, setVisible] = useState(() => typeof document === "undefined" || document.visibilityState !== "hidden");
-  useEffect(() => {
-    const on = () => setVisible(document.visibilityState !== "hidden");
-    document.addEventListener("visibilitychange", on);
-    return () => document.removeEventListener("visibilitychange", on);
-  }, []);
-  return visible;
+  return useOnScreen();
 }
 
 export type LogStream<T> = {

@@ -86,7 +86,8 @@ describe("what it talks to", () => {
   it("polls only while a deployment is actually moving", () => {
     // A card that polls forever keeps a browser and an API busy describing a deployment that
     // finished yesterday — and this console's load problems were request VOLUME.
-    expect(source()).toMatch(/if\s*\(!live\)\s*return;/);
+    // …and only while its area is on screen (lib/area-shown.ts).
+    expect(source()).toMatch(/if\s*\(!live \|\| !onScreen\)\s*return;/);
   });
 
   it("every button says what it will do before it is pressed", () => {

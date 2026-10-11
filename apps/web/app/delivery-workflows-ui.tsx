@@ -53,6 +53,7 @@ export {
 import {
   FlowLane, WorkflowEditor, runLaneSpec, runPalette, useRunDefinition,
 } from "./workflows/studio-parts";
+import { useOnScreen } from "../lib/area-shown";
 
 // Moved to app/workflows/ (Workflow Studio, phase 0); re-exported so existing imports hold.
 export { CaptainCanRunIt, DefineStepForm };
@@ -786,19 +787,25 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // approving a PRD creates its run somewhere else. Fast while something is in flight, slower
   // when idle — idle still means "watch for work appearing".
   const anyLive = runs.some(runIsLive);
+  // OFF SCREEN, NOTHING (lib/area-shown.ts): this list polled every 8-15 s from a hidden area
+  // for as long as the console was open. Back on screen it reads at once.
+  const onScreen = useOnScreen();
+  const wasOnScreen = useRef(onScreen);
   useEffect(() => {
+    if (!onScreen) { wasOnScreen.current = false; return; }
+    if (!wasOnScreen.current) { wasOnScreen.current = true; void load(); }
     const t = window.setInterval(() => { void load(); }, anyLive ? 8000 : 15000);
     return () => window.clearInterval(t);
-  }, [anyLive, load]);
+  }, [anyLive, load, onScreen]);
 
   // A RUN THAT IS ON ITS WAY. Arriving from Build, the run may not be in the list yet. Poll
   // fast until it shows rather than presenting an empty list, which reads as "nothing happened".
   const awaited = openRun && !runs.some((r) => r.id === openRun) ? openRun : null;
   useEffect(() => {
-    if (!awaited) return;
+    if (!awaited || !onScreen) return;
     const t = window.setInterval(() => { void load(); }, 2000);
     return () => window.clearInterval(t);
-  }, [awaited, load]);
+  }, [awaited, load, onScreen]);
 
   // SENT HERE TO START SOMETHING. `?new=1` and `?compose=new|add[&app=…]` (the Factory's and
   // the Command Center's "Add a feature") are one-shot commands, consumed on read so a later
@@ -868,13 +875,13 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // Poll while a preview is coming up, so the URL appears on its own. Bounded: after three
   // minutes we stop claiming it is on its way and let the step's own state speak.
   useEffect(() => {
-    if (!previewStarting) return;
+    if (!previewStarting || !onScreen) return;
     const timer = window.setInterval(() => {
       if (Date.now() - previewStarting.at > 180_000) { setPreviewStarting(null); return; }
       void load();
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [previewStarting, load]);
+  }, [previewStarting, load, onScreen]);
 
   // ONE PRESS AT A TIME, AND A REFUSED PRESS IS SAID OUT LOUD. Every press on this panel goes
   // through `pressOn`, which holds the panel's press scope in lib/api-write's one registry

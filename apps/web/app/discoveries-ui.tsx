@@ -34,6 +34,7 @@ import {
   outcomeBrief, pct, researchDoing, researchStages, usd, type VerdictFilter,
 } from "../lib/research-panels";
 import { useConsoleRefresh } from "./use-console-refresh";
+import { useOnScreen } from "../lib/area-shown";
 
 /** While a run is live, ask the console for a refresh. Asked, not issued: the console's one
  *  refresh coordinator coalesces it with every other panel's (lib/console-refresh.ts). */
@@ -53,6 +54,7 @@ function useDossier(id: string, stamp = ""): { run: DiscoveryRun | null; error: 
   const [error, setError] = useState<string | null>(null);
   const mine = run && run.id === id ? run : null;
   const live = mine ? mine.status === "running" || mine.status === "queued" : false;
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
     let cancelled = false;
     const load = () => fetchDiscoveryDetail(id).then((res) => {
@@ -60,10 +62,10 @@ function useDossier(id: string, stamp = ""): { run: DiscoveryRun | null; error: 
       if (res.ok) { setRun(res.run); setError(null); } else setError(res.error);
     });
     void load();
-    if (!live) return () => { cancelled = true; };
+    if (!live || !onScreen) return () => { cancelled = true; };
     const t = setInterval(() => { void load(); }, 4000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [id, stamp, live]);
+  }, [id, stamp, live, onScreen]);
   return { run: mine, error: mine ? null : error };
 }
 

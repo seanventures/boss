@@ -32,6 +32,7 @@ import { steerBuild } from "../factory/cockpit-actions";
 import { showToast } from "../client-forms";
 import { LinkedPrs } from "./linked-prs";
 import { TipQ } from "./parts";
+import { useOnScreen } from "../../lib/area-shown";
 
 const POLL_MS = 5000;
 
@@ -96,11 +97,12 @@ export function ChangeSetCockpit({ projectId, changeSetId, initial, actor, onClo
 
   // Polled while it moves; a hidden tab does not ask.
   const moving = cs ? CHANGE_MOVING.has(cs.state) : false;
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
-    if (!moving) return undefined;
+    if (!moving || !onScreen) return undefined;
     const t = window.setInterval(() => { if (document.visibilityState !== "hidden") void load(); }, POLL_MS);
     return () => window.clearInterval(t);
-  }, [moving, load]);
+  }, [moving, load, onScreen]);
 
   // Esc goes back (unless a sheet or a confirm has it).
   useEffect(() => {

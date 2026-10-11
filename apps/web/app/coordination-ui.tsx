@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { InFlightItem } from "../lib/metrics";
 import type { AgentRosterRow } from "../lib/roster";
 import { AreaLink } from "./area-link";
+import { useOnScreen } from "../lib/area-shown";
 
 type Snapshot = {
   roster: AgentRosterRow[];
@@ -59,7 +60,9 @@ export function CoordinationPanel({ projectId, orgId, initial }: {
     }
   }, [projectId]);
 
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
+    if (!onScreen) return undefined;
     const timer = window.setInterval(() => { void refresh(); }, 5_000);
     const onVisible = () => { if (!document.hidden) void refresh(); };
     document.addEventListener("visibilitychange", onVisible);
@@ -67,7 +70,7 @@ export function CoordinationPanel({ projectId, orgId, initial }: {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [refresh]);
+  }, [refresh, onScreen]);
 
   const activeCount = snapshot.roster.filter((agent) => agent.state === "running").length;
   const activeAgents = snapshot.roster.filter((agent) => agent.state !== "idle");

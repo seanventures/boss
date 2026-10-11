@@ -8,6 +8,7 @@
  * (no percent, no ETA, no guessed face: `roleKey: null` stays null).
  */
 
+import { useAreaShown } from "./area-shown";
 import type { AvatarState } from "./agent-world-types";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -415,6 +416,11 @@ export function useLiveBoard(projectId: string, enabled = true): LiveBoardState 
   const [loading, setLoading] = useState(true);
   const etag = useRef<string | null>(null);
   const kick = useRef<() => void>(() => {});
+  // Off screen, nothing is asked (lib/area-shown.ts); back on screen, it asks at once.
+  const shown = useAreaShown();
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  useEffect(() => { if (shown) kick.current(); }, [shown]);
 
   useEffect(() => {
     if (!projectId || !enabled) return undefined;
@@ -422,12 +428,14 @@ export function useLiveBoard(projectId: string, enabled = true): LiveBoardState 
     let timer: ReturnType<typeof setTimeout> | null = null;
     let inflight = false;
     let gen = 0;
+    let askedOnce = false;   // the first read happens on or off screen; the polling only on
     const hidden = () => typeof document !== "undefined" && document.visibilityState === "hidden";
 
     const tick = async (mine: number) => {
       if (stopped || mine !== gen) return;
       let wait = BOARD_POLL_MS;
-      if (!hidden() && isConsoleLive() && !inflight) {
+      if (!hidden() && isConsoleLive() && !inflight && (shownRef.current || !askedOnce)) {
+        askedOnce = true;
         inflight = true;
         try {
           const r = await fetch(`/v1/agents/live-board?project_id=${encodeURIComponent(projectId)}`, {
@@ -456,7 +464,7 @@ export function useLiveBoard(projectId: string, enabled = true): LiveBoardState 
       if (!stopped && mine === gen) timer = setTimeout(() => void tick(mine), wait);
     };
     const restart = () => {
-      if (stopped || hidden() || !isConsoleLive()) return;
+      if (stopped || hidden() || !isConsoleLive() || !shownRef.current) return;
       if (timer) clearTimeout(timer);
       gen += 1;
       void tick(gen);

@@ -43,6 +43,7 @@ import { CiWorkflowsToggle } from "./ci-workflows-toggle";
 import { GitHubSigninRow, useSignin } from "./github-signin-row";
 import { Tip } from "./pill";
 import { SectionLabel } from "../section-label";
+import { useOnScreen } from "../../lib/area-shown";
 
 /** One plain line per Advanced item (≤ 6 words), the detail in its tooltip. */
 const ADVANCED: Record<string, { line: string; tip: string }> = {
@@ -196,13 +197,14 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
 
   // A RUN IN FLIGHT IS WATCHED: every 5s while the page is visible.
   const running = view?.try.last_run?.pill.tone === "busy";
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
-    if (!running) return;
+    if (!running || !onScreen) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void load();
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [running, load]);
+  }, [running, load, onScreen]);
 
   // LEAVING MID-CHECK is asked about: the check finishes on the server, but its answer is lost.
   useEffect(() => {

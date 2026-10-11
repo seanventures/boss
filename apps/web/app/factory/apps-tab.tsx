@@ -33,6 +33,7 @@ import { SecuritySheet, readSecurityParam, writeSecurityParam } from "./security
 import { SIGN_IN_TIP, SignInSheet } from "./sign-in-sheet";
 import { AppSetupSheet } from "../../components/v2/templates/setup-sheet";
 import { LabLinks } from "./lab-links";
+import { useOnScreen } from "../../lib/area-shown";
 
 /** Where "＋ Add a feature" goes: New project, in add mode, with this app chosen. */
 export function addFeatureHref(appKey: string, previewId?: string | null): string {
@@ -147,6 +148,7 @@ export function parseApps(w: unknown): AppRow[] {
  *  itself while anything ran), or null when no server answers it (then the fallback). */
 function useServerApps(projectId: string): AppRow[] | null {
   const [apps, setApps] = useState<AppRow[] | null>(null);
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
     let stop = false;
     const load = async () => {
@@ -158,9 +160,9 @@ function useServerApps(projectId: string): AppRow[] | null {
       } catch { /* the fallback stands */ }
     };
     void load();
-    const id = window.setInterval(() => void load(), 15_000);
-    return () => { stop = true; window.clearInterval(id); };
-  }, [projectId]);
+    const id = onScreen ? window.setInterval(() => void load(), 15_000) : undefined;
+    return () => { stop = true; if (id) window.clearInterval(id); };
+  }, [projectId, onScreen]);
   return apps;
 }
 
