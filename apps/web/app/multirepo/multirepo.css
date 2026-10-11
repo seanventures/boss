@@ -22,7 +22,7 @@
   display: flex; align-items: center; gap: 8px;
 }
 .mr-ui-eyebrow span { font: 500 0.72rem var(--sans); letter-spacing: 0; text-transform: none; color: var(--faint); }
-.mr-ui-lead { color: var(--muted); font-size: 0.85rem; line-height: 1.55; margin: 6px 0 0; max-width: 860px; }
+.mr-ui-lead { color: var(--muted); font-size: 0.85rem; line-height: 1.55; margin: 6px 0 0; max-width: 72ch; }
 .mr-ui-tipq {
   display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%;
   border: 1px solid var(--border-strong); font: 600 0.6rem var(--sans); color: var(--faint);
@@ -166,10 +166,10 @@
 .mr-ui-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 4px; }
 .mr-ui-foot .mr-ui-sub { flex: 1 1 280px; }
 
-.mr-ui-grid2 { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+.mr-ui-grid2 { display: grid; grid-template-columns: minmax(0, 1fr) 16.84211rem; gap: 16px; align-items: start; }
 .mr-ui-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .mr-ui-xrow {
-  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+  display: grid; grid-template-columns: 1.26316rem minmax(0, 1fr) auto; gap: 10px; align-items: center;
   padding: 10px 2px; border-bottom: 1px solid var(--hair); font-size: 0.82rem;
 }
 .mr-ui-xrow:last-child { border-bottom: 0; }
@@ -181,7 +181,7 @@
 .mr-reg[data-focused] .mr-ui-card { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .mr-reg-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 .mr-reg-filters { display: flex; gap: 8px; flex-wrap: wrap; }
-.mr-reg .mr-ui-table td:first-child { width: 34px; }
+.mr-reg .mr-ui-table td:first-child { width: 1.78947rem; }
 
 /* ── 2 · A project's repositories ─────────────────────────────────────────────────────────── */
 .mr-prj { display: flex; flex-direction: column; gap: 14px; padding: 4px 0 24px; min-width: 0; }
@@ -192,7 +192,7 @@
 .mr-map { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .mr-map-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .mr-map-cols, .mr-map-row {
-  display: grid; grid-template-columns: minmax(96px, 150px) 18px minmax(0, 1fr) auto; gap: 8px; align-items: start;
+  display: grid; grid-template-columns: minmax(5.05263rem, 7.89474rem) 0.94737rem minmax(0, 1fr) auto; gap: 8px; align-items: start;
 }
 .mr-map-cols { color: var(--faint); font-size: 0.74rem; }
 .mr-map-row { padding: 8px 0; border-bottom: 1px solid var(--hair); }
@@ -236,18 +236,18 @@
 .mr-cmp-card dd { margin: 0; color: var(--ink-soft); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mr-cmp-deploy { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .mr-cmp-edit { display: flex; flex-direction: column; gap: 10px; }
-.mr-cmp-edit .mr-map-row, .mr-cmp-edit .mr-map-cols { grid-template-columns: minmax(96px, 150px) 18px minmax(0, 1fr) minmax(90px, 140px) auto; }
+.mr-cmp-edit .mr-map-row, .mr-cmp-edit .mr-map-cols { grid-template-columns: minmax(5.05263rem, 7.89474rem) 0.94737rem minmax(0, 1fr) minmax(4.73684rem, 7.36842rem) auto; }
 
 /* ── 9 · Consent: which repositories may the agents touch? ─────────────────────────────────── */
 /* The sheet's title row is a flex row (identity.css); here the eyebrow sits above the question. */
-.idn-sheet h2:has(> .mr-cs-eyebrow) { flex-direction: column; align-items: flex-start; gap: 0; font-size: 20px; line-height: 1.25; }
+.idn-sheet h2:has(> .mr-cs-eyebrow) { flex-direction: column; align-items: flex-start; gap: 0; font-size: 1.05263rem; line-height: 1.25; }
 .mr-cs-eyebrow { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 .mr-cs-title { display: block; }
 .mr-cs-subtitle { color: var(--muted); font-size: 0.82rem; margin: 0 0 14px; }
 .mr-cs-body { display: flex; flex-direction: column; gap: 16px; }
 .mr-cs-list { display: flex; flex-direction: column; gap: 8px; margin-top: 9px; }
 .mr-cs-grant {
-  display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+  display: grid; grid-template-columns: 1.57895rem minmax(0, 1fr) auto; gap: 10px; align-items: center;
   border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: var(--surface-2);
 }
 .mr-cs-grant[data-access="read"] { border-style: dashed; }
@@ -326,7 +326,7 @@
 
 .mr-lanes { display: flex; flex-direction: column; gap: 12px; }
 .mr-lane {
-  display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr) minmax(150px, 190px); gap: 16px; align-items: center;
+  display: grid; grid-template-columns: minmax(7.89474rem, 11.57895rem) minmax(0, 1fr) minmax(7.89474rem, 10rem); gap: 16px; align-items: center;
   border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; background: var(--surface); min-width: 0;
 }
 .mr-lane[data-now] {
@@ -359,7 +359,7 @@
 .mr-lane-end .mr-ui-sub { overflow-wrap: anywhere; }
 .mr-lane-err { grid-column: 1 / -1; color: var(--red); font-size: 0.78rem; display: flex; gap: 6px; align-items: flex-start; }
 
-.mr-plan-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--hair); }
+.mr-plan-row { display: grid; grid-template-columns: 1.26316rem minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--hair); }
 .mr-plan-row:last-child { border-bottom: 0; }
 .mr-plan-row b { display: block; font: 600 0.84rem var(--mono); color: var(--ink); }
 .mr-plan-row small { display: block; color: var(--muted); font-size: 0.76rem; margin-top: 2px; }
@@ -372,7 +372,7 @@
 .mr-now small { display: block; color: var(--muted); font-size: 0.76rem; }
 
 /* ── 6 · Linked pull requests ─────────────────────────────────────────────────────────────── */
-.mr-prs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.mr-prs { display: grid; grid-template-columns: repeat(auto-fit, minmax(13.68421rem, 1fr)); gap: 14px; }
 .mr-pr { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); display: flex; flex-direction: column; min-width: 0; }
 .mr-pr[data-blocked] { border-color: color-mix(in srgb, var(--red) 45%, transparent); }
 .mr-pr-h { padding: 14px 14px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
