@@ -9,6 +9,10 @@ arrive as an instruction, in words that do not assume they know what swap is.
 
 from __future__ import annotations
 
+import re
+
+import pytest
+
 from boss_engine.services.self_observability import operator_advice
 
 # The real run: 242 minutes elapsed, 63 of them model work.
@@ -103,6 +107,20 @@ def test_cpu_is_load_per_core_not_a_utilisation_percent():
 
 def test_a_full_disk_raises_the_alarm_too():
     assert pressure(_mem(16000, 9000), _HEALTHY_CPU, {"used_pct": 96})["state"] == "critical"
+
+
+@pytest.mark.parametrize("scope", ["machine", "vm", None])
+def test_disk_advice_copies_inspection_and_preview_not_global_cleanup(scope):
+    gauges = pressure(_mem(16000, 9000), _HEALTHY_CPU, {"used_pct": 96})
+    gauges["scope"] = scope
+    advice = operator_advice({"state": "critical"}, gauges=gauges)
+    assert advice["cause"] == "disk"
+    # The console makes each backtick-delimited command a Copy button.
+    assert re.findall(r"`([^`]+)`", advice["action"]) == [
+        "docker system df", "boss prune --dry-run",
+    ]
+    assert "confirmed BOSS-owned, unused resources" in advice["action"]
+    assert "system prune" not in advice["action"]
 
 
 def test_the_worst_gauge_decides():

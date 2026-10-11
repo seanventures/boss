@@ -605,3 +605,31 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-adv-why { display: block; font-size: .75rem; margin: .25rem 0 0; }
 .su-code { font-size: 1.125rem; letter-spacing: .12em; padding: .25rem .5rem; border-radius: 6px;
   border: 1px solid var(--border); }
+
+/* Setup choices stay in document flow; forms remain mounted when a disclosure closes. */
+.su-ways-alternatives { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 8px; }
+.su-other-ways, .su-add-source { min-width: 0; }
+.su-other-ways > summary, .su-add-source > summary { cursor: pointer; font-size: 0.8125rem; }
+.su-add-source .su-field { margin-top: 8px; }
+.su-add-source select { width: 100%; min-width: 0; max-width: 100%; min-height: 36px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--ink); font: inherit; }
+@media (max-width: 760px) { .su-ways-alternatives { grid-template-columns: minmax(0, 1fr); } }
+
+/* Models and its source controls share one heading and panel. Connection controls stay
+   readable while the repository step is waiting; their permission gates still apply. */
+#su-models[data-mode="waiting"] { opacity: 1; }
+.su-model-sources { margin-top: 16px; min-width: 0; scroll-margin-top: 80px; }
+
+/* Hide only the generic waiting summary when a visible source reports known absence.
+   Every source state, error and connection action remains outside this rule. */
+#su-models[data-mode="waiting"]:has(.su-model-sources [data-connection-summary]) .su-model-empty { display: none; }
+
+@media (max-width: 640px) {
+  /* Source name and status share one row; controls and expanded details retain the width. */
+  .su-cap-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .su-cap-head > .mr-criteria { grid-column: 1; }
+  .su-cap-head > .mr-criteria > summary { width: auto; }
+  .su-cap-head > .mr-criteria[open] { grid-column: 1 / -1; }
+  .su-cap-head > .su-pill { grid-column: 2; justify-self: end; max-width: 140px; min-width: 0; height: auto; min-height: 24px; padding: 4px 8px; box-sizing: border-box; white-space: normal; overflow-wrap: anywhere; line-height: 1.3; text-align: left; }
+  .su-cap-head > .su-spacer { display: none; }
+  .su-cap-head > .su-faint, .su-cap-head > .su-btn, .su-cap-head > .su-link { grid-column: 1 / -1; justify-self: start; }
+}

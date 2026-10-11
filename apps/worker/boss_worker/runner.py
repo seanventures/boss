@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 from .config import WorkerSettings
 from .control_plane import ControlPlaneClient, LeasedJob
@@ -22,17 +22,19 @@ SHUTDOWN = threading.Event()
 SHUTDOWN_LEASE_TTL_SECONDS = 5
 
 
-def _wait_in_slices(stop: threading.Event, seconds: float, slice_s: float = 1.0) -> bool:
+def _wait_in_slices(stop: threading.Event, seconds: float, slice_s: float = 1.0, *,
+                    deadline: Callable[[], float | None] | None = None) -> bool:
     """Wait up to ``seconds`` for ``stop``, checking SHUTDOWN every ``slice_s``.
 
-    Returns True if ``stop`` was set (the job finished), False if the time elapsed or a
-    shutdown was requested — the caller distinguishes those two.
+    Returns True if ``stop`` was set, False when the interval, shutdown request,
+    or optional absolute deadline needs the caller's attention.
     """
     remaining = max(0.0, float(seconds))
     while remaining > 0:
         if stop.wait(min(slice_s, remaining)):
             return True
-        if SHUTDOWN.is_set():
+        expires = deadline() if deadline is not None else None
+        if SHUTDOWN.is_set() or (expires is not None and time.monotonic() >= expires):
             return False
         remaining -= slice_s
     return False
@@ -1219,13 +1221,13 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
     # write_tests/implement phases can each run minutes (code_agent_timeout is 900s).
     # Without renewing the lease mid-run it expires (default 300s) and the reclaimer
     # restarts the STILL-running job → an infinite loop on the longest phase. A daemon
-    # thread renews every lease_ttl/2 (its OWN client — the main one is busy in
-    # execute_job) until the job finishes.
+    # thread renews at a capped fraction of the TTL (its OWN client — the main one
+    # is busy) through bounded settlement acknowledgment.
     hb_stop = threading.Event()
     control_plane_url = getattr(settings, "control_plane_url", None)
     owns_hb_client = bool(control_plane_url)
     hb_client = (
-        ControlPlaneClient(control_plane_url, api_key=getattr(settings, "api_key", ""))
+        ControlPlaneClient(control_plane_url, timeout=3.0, api_key=getattr(settings, "api_key", ""))
         if owns_hb_client
         else client
     )
@@ -1264,6 +1266,12 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                 settings.worker_id, job.id,
             )
             return False
+
+    completion_pending = threading.Event()
+    settlement_deadline: float | None = None
+    # Even an operator-disabled execution ceiling cannot renew a stuck acknowledgment
+    # forever. The sliced wait notices this deadline within one second.
+    settlement_limit = max(0.1, min(float(getattr(client, "lease_timeout_seconds", 30.0)), 30.0))
 
     def _renew_lease() -> None:
         # The heartbeat proves the WORKER is alive, never that the JOB is progressing. A
@@ -1312,10 +1320,16 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
         # TTL later. Docker's grace period before SIGKILL is ~10s: a renewal interval of 150s
         # would mean the process is dead long before the loop next looks at anything.
         while True:
-            if _wait_in_slices(hb_stop, retry_interval if misses else interval):
-                return  # the job finished; nothing to renew
+            if _wait_in_slices(hb_stop, retry_interval if misses else interval,
+                               deadline=lambda: settlement_deadline):
+                return  # this cycle settled or exited; nothing further to renew
             if SHUTDOWN.is_set():
                 _hand_back_on_shutdown()
+                return
+            if settlement_deadline is not None and time.monotonic() >= settlement_deadline:
+                LOGGER.error("lease_renewal_stopped_ack_deadline worker_id=%s job_id=%s — "
+                             "acknowledgment exceeded its renewal window; lease expiry is the backstop",
+                             settings.worker_id, job.id)
                 return
             elapsed = time.monotonic() - started_at
             if max_runtime and elapsed > max_runtime and progressing:
@@ -1363,11 +1377,17 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                 # 409s while worker-local-3 owned the lease, both writing phases, so the run's
                 # phase moved backwards and stages re-ran. Stop renewing and signal the job.
                 if "409" in str(exc) or "Conflict" in str(exc):
-                    LOGGER.error(
-                        "lease_lost worker_id=%s job_id=%s — another worker owns this lease; "
-                        "abandoning our execution to avoid duplicate concurrent work",
-                        settings.worker_id, job.id,
-                    )
+                    if completion_pending.is_set():
+                        # Completion may already have committed while its response is delayed.
+                        # Stop renewal; the pending acknowledgment still determines its outcome.
+                        LOGGER.info("lease_ended_during_completion worker_id=%s job_id=%s",
+                                    settings.worker_id, job.id)
+                    else:
+                        LOGGER.error(
+                            "lease_lost worker_id=%s job_id=%s — another worker owns this lease; "
+                            "abandoning our execution to avoid duplicate concurrent work",
+                            settings.worker_id, job.id,
+                        )
                     lease_lost.set()
                     return
                 misses += 1
@@ -1378,87 +1398,102 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                     settings.lease_ttl_seconds,
                 )
 
+    def _heartbeat_lifetime() -> None:
+        try:
+            _renew_lease()
+        finally:
+            # The renewing thread owns its client, including when a bounded request
+            # takes longer than the main thread's cleanup join. Never close it in-flight.
+            if owns_hb_client:
+                try:
+                    hb_client.close()
+                except Exception:  # noqa: BLE001
+                    LOGGER.warning("heartbeat_client_close_failed job_id=%s", job.id)
+
     lease_lost = threading.Event()
-    hb_thread = threading.Thread(target=_renew_lease, name=f"lease-hb-{job.id}", daemon=True)
+    hb_thread = threading.Thread(target=_heartbeat_lifetime, name=f"lease-hb-{job.id}", daemon=True)
     hb_thread.start()
 
+    # Keep renewing through the server acknowledgment, not only local execution.
+    # The existing whole-job renewal ceiling also covers this phase.
     try:
-        result = execute_job(job, client)
-    except Exception as error:
-        LOGGER.exception(
-            "job_execution_failed worker_id=%s job_id=%s kind=%s",
-            settings.worker_id,
-            job.id,
-            job.kind,
-        )
-        retryable = isinstance(error, RetryableJobError)
-        retry_delay_seconds = (
-            min(300, 5 * (2 ** min(max(job.attempt - 1, 0), 6)))
-            if retryable
-            else 0
-        )
         try:
-            client.fail(
+            result = execute_job(job, client)
+        except Exception as error:
+            LOGGER.exception(
+                "job_execution_failed worker_id=%s job_id=%s kind=%s",
+                settings.worker_id,
+                job.id,
+                job.kind,
+            )
+            retryable = isinstance(error, RetryableJobError)
+            retry_delay_seconds = (
+                min(300, 5 * (2 ** min(max(job.attempt - 1, 0), 6)))
+                if retryable
+                else 0
+            )
+            settlement_deadline = time.monotonic() + settlement_limit
+            try:
+                client.fail(
+                    settings.worker_id,
+                    job.id,
+                    job.lease_token,
+                    {
+                        "message": str(error),
+                        "type": error.__class__.__name__,
+                    },
+                    retryable=retryable,
+                    retry_delay_seconds=retry_delay_seconds,
+                )
+            except Exception as fail_error:
+                if not _is_conflict(fail_error):
+                    raise
+                _hand_back_after_conflict(client, settings, job, "fail", fail_error)
+            return True
+
+        if isinstance(result, dict) and result.get("job_deferred"):
+            # The control plane re-queued this job itself (JobLeaseService.defer_leased): our
+            # lease is gone, and completing it would fail or, worse, mark waiting work done.
+            LOGGER.info("job_deferred_by_api worker_id=%s job_id=%s reason=%s",
+                        settings.worker_id, job.id, result.get("error"))
+            return True
+
+        # Reconciliation owns its bounded retry/deadletter transition in the same
+        # transaction that records provider-read Receipts and observations.
+        if job.kind == "github.repository.reconcile":
+            LOGGER.info(
+                "job_finalized_by_reconciler worker_id=%s job_id=%s status=%s",
+                settings.worker_id,
+                job.id,
+                (result.get("job") or {}).get("status"),
+            )
+            return True
+
+        completion_pending.set()
+        settlement_deadline = time.monotonic() + settlement_limit
+        try:
+            completion = client.complete(
                 settings.worker_id,
                 job.id,
                 job.lease_token,
-                {
-                    "message": str(error),
-                    "type": error.__class__.__name__,
-                },
-                retryable=retryable,
-                retry_delay_seconds=retry_delay_seconds,
+                result,
             )
-        except Exception as fail_error:
-            if not _is_conflict(fail_error):
+        except Exception as error:
+            if not _is_conflict(error):
                 raise
-            _hand_back_after_conflict(client, settings, job, "fail", fail_error)
+            _hand_back_after_conflict(client, settings, job, "complete", error)
+            return True
+        LOGGER.info(
+            "job_completed worker_id=%s job_id=%s status=%s artifact_id=%s decision_id=%s",
+            settings.worker_id,
+            job.id,
+            completion["status"],
+            completion.get("artifact_id"),
+            completion.get("decision_id"),
+        )
         return True
     finally:
         hb_stop.set()
         hb_thread.join(timeout=3)
-        if owns_hb_client:
-            try:
-                hb_client.close()
-            except Exception:  # noqa: BLE001
-                pass
-
-    if isinstance(result, dict) and result.get("job_deferred"):
-        # The control plane re-queued this job itself (JobLeaseService.defer_leased): our
-        # lease is gone, and completing it would fail or, worse, mark waiting work done.
-        LOGGER.info("job_deferred_by_api worker_id=%s job_id=%s reason=%s",
-                    settings.worker_id, job.id, result.get("error"))
-        return True
-
-    # Reconciliation owns its bounded retry/deadletter transition in the same
-    # transaction that records provider-read Receipts and observations.
-    if job.kind == "github.repository.reconcile":
-        LOGGER.info(
-            "job_finalized_by_reconciler worker_id=%s job_id=%s status=%s",
-            settings.worker_id,
-            job.id,
-            (result.get("job") or {}).get("status"),
-        )
-        return True
-
-    try:
-        completion = client.complete(
-            settings.worker_id,
-            job.id,
-            job.lease_token,
-            result,
-        )
-    except Exception as error:
-        if not _is_conflict(error):
-            raise
-        _hand_back_after_conflict(client, settings, job, "complete", error)
-        return True
-    LOGGER.info(
-        "job_completed worker_id=%s job_id=%s status=%s artifact_id=%s decision_id=%s",
-        settings.worker_id,
-        job.id,
-        completion["status"],
-        completion.get("artifact_id"),
-        completion.get("decision_id"),
-    )
-    return True
+        if hb_thread.is_alive():
+            LOGGER.warning("heartbeat_cleanup_pending job_id=%s — bounded lease request still finishing", job.id)

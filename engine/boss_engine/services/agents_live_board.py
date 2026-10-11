@@ -628,7 +628,7 @@ def _next_steps(spec_steps: Mapping[str, Mapping[str, Any]], started: set[str],
 _SORT = {"stopped": 0, "waiting_you": 1, "blocked": 2, "running": 3, "waiting_person": 3,
          "waiting": 3, "stalled": 4, "done": 5}
 
-#: A live run with no progress for this long is STALLED, not running: on shared-server eight runs
+#: A live run with no progress for this long is STALLED, not running: on an existing install eight runs
 #: "running" for a month made the page say "8 running" while nothing moved. The rule is here,
 #: once; every count (running, stalled) and the state sentence read the state it sets.
 STALLED_AFTER = timedelta(days=7)
@@ -1083,7 +1083,7 @@ def compose(connection: Any, settings: Any, project_id: str, *,
             "needs_you": int(cc["counts"]["needs_you"]),
             "setup": int(cc["counts"]["setup"]),
             # RUNNING IS WHAT MOVES: a run with no progress for a week is `stalled`, counted
-            # apart, never "running" (shared-server said "8 running" for a month of nothing).
+            # apart, never "running" (an existing install said "8 running" for a month of nothing).
             "running": sum(1 for m in rows if m["state"] not in ("done", "stopped", "stalled")),
             "stalled": sum(1 for m in rows if m["state"] == "stalled"),
             # What NEEDS YOU lists as stopped work, counted by the one rule (attention_counts).

@@ -72,7 +72,7 @@ describe("Where the code lives", () => {
   it("One repo is the default and sends today's request unchanged", async () => {
     const calls = api();
     await mount();
-    expect(tid("np-lives")?.textContent).toContain("Where the code lives");
+    expect(tid("np-lives")?.textContent).toContain("Repository");  // rc9 copy: one repo says "Repository"
     expect(tid("np-lives")?.textContent).toContain("acme/web");
     expect(tid("np-layout-one")?.getAttribute("aria-checked")).toBe("true");
     await type(tid("dw-new-directive"), BRIEF);

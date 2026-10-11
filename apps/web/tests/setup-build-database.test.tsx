@@ -22,7 +22,7 @@ describe("Build database", () => {
     mounted = await mountBoard(view);
     expect(document.querySelector('[data-testid="su-build-database-auto"]')!.getAttribute("aria-checked")).toBe("true");
     expect(document.querySelector('[data-testid="su-row-build-database"]')!.textContent)
-      .toContain("Postgres per build when the app needs one");
+      .toContain("Postgres when needed");
     await click(document.querySelector('[data-testid="su-build-database-never"]'));
     expect(api.calls.find((c) => c.op === "build_database")?.body).toMatchObject({ key: "build_services", value: "never" });
   });

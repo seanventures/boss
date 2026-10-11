@@ -3704,6 +3704,8 @@ class ResourcePlaneService:
         changeset = self._get_changeset_any_project(connection, changeset_id)
         project_id = changeset["project_id"]
         self._refuse_phased(changeset)
+        if not dry_run:
+            raise ValueError("Provider writes require the committed ChangeSet apply coordinator.")
         if changeset["status"] != "approved":
             emit_event(
                 connection,
@@ -3750,20 +3752,6 @@ class ResourcePlaneService:
                     "resource_receipts": [],
                     "decision_id": decision_id,
                 }
-        operations = connection.execute(
-            text(
-                """
-                SELECT id, project_id, changeset_id, provider_account_id, operation_index,
-                       skill_id, action, resource_type, resource_ref, desired_state,
-                       risk_tier, destructive, production_affecting, status,
-                       resource_receipt_id
-                FROM changeset_operations
-                WHERE changeset_id = :changeset_id
-                ORDER BY operation_index ASC
-                """
-            ),
-            {"changeset_id": changeset_id},
-        ).mappings().all()
         if dry_run:
             return {
                 "status": "dry_run",
@@ -3771,162 +3759,6 @@ class ResourcePlaneService:
                 "resource_receipts": [],
                 "expected_receipts": changeset["expected_receipts"],
             }
-        from .assurance import AssuranceService
-
-        assurance = AssuranceService(self.settings)
-        for operation in operations:
-            guard = (operation.get("desired_state") or {}).get("surface_ownership")
-            if not guard:
-                continue
-            preflight = assurance.preflight_surface(
-                connection,
-                project_id=project_id,
-                surface_key=guard["surface_key"],
-                environment=guard["environment"],
-                actor_ref=actor,
-                expected_version=int(guard["version"]),
-                effect_ref=f"changeset:{changeset_id}:operation:{operation['id']}",
-                dedupe_key=f"changeset-ownership:{changeset_id}:{operation['id']}",
-            )
-            if not preflight["allowed"]:
-                emit_event(
-                    connection,
-                    project_id,
-                    "changeset.apply_blocked",
-                    actor,
-                    "decision",
-                    preflight["decision_id"],
-                    {
-                        "reason": "surface_ownership_preflight_failed",
-                        "changeset_id": changeset_id,
-                        "operation_id": operation["id"],
-                    },
-                )
-                return {
-                    "status": "blocked",
-                    "changeset": self.get_changeset(
-                        connection, project_id, changeset_id
-                    ),
-                    "resource_receipts": [],
-                    "decision_id": preflight["decision_id"],
-                }
-        connection.execute(
-            text(
-                """
-                UPDATE changesets
-                SET status = 'applying',
-                    applied_by = :actor,
-                    updated_at = now()
-                WHERE id = :changeset_id
-                """
-            ),
-            {"changeset_id": changeset_id, "actor": actor},
-        )
-        resource_receipts: list[dict[str, Any]] = []
-        failed = False
-        for operation in operations:
-            resource_receipt = self._record_resource_action_attempt(
-                connection,
-                changeset=dict(changeset),
-                operation=dict(operation),
-                actor=actor,
-                created_by_job_id=created_by_job_id,
-            )
-            resource_receipts.append(resource_receipt)
-            if resource_receipt["status"] != "succeeded":
-                failed = True
-                self._create_deadletter(
-                    connection,
-                    project_id=project_id,
-                    source_kind="resource_receipt",
-                    source_id=resource_receipt["id"],
-                    reason=resource_receipt.get("error", {}).get(
-                        "message",
-                        "provider action failed",
-                    ),
-                    payload={
-                        "changeset_id": changeset_id,
-                        "operation_id": operation["id"],
-                        "skill_id": operation["skill_id"],
-                    },
-                )
-        final_status = "deadlettered" if failed else "applied"
-        if failed and changeset["reservation_id"]:
-            self.budget.release(
-                connection,
-                project_id,
-                changeset["reservation_id"],
-                "Released reservation because ProviderOps ChangeSet actuation failed.",
-            )
-        elif not failed and changeset["reservation_id"]:
-            self.budget.settle(
-                connection,
-                project_id,
-                changeset["reservation_id"],
-                resource_receipts[0]["receipt_id"],
-                "provider",
-                "resource_plane.changeset.apply",
-                int(changeset["expected_cost_usd_micros"]),
-                None,
-            )
-            self._record_changeset_cost_event(
-                connection,
-                changeset=dict(changeset),
-                resource_receipts=resource_receipts,
-            )
-        if not failed:
-            self._mark_deployment_runs_deployed(
-                connection,
-                project_id=project_id,
-                changeset_id=changeset_id,
-                resource_receipts=resource_receipts,
-            )
-            self._register_elastic_workers_from_apply(
-                connection,
-                project_id=project_id,
-                changeset_id=changeset_id,
-                actor=actor,
-                resource_receipts=resource_receipts,
-                operations=[dict(op) for op in operations],
-            )
-        connection.execute(
-            text(
-                """
-                UPDATE changesets
-                SET status = :status,
-                    applied_at = now(),
-                    failure_reason = :failure_reason,
-                    updated_at = now()
-                WHERE id = :changeset_id
-                """
-            ),
-            {
-                "status": final_status,
-                "failure_reason": (
-                    "One or more provider actions failed; see resource receipts and deadletters."
-                    if failed
-                    else None
-                ),
-                "changeset_id": changeset_id,
-            },
-        )
-        emit_event(
-            connection,
-            project_id,
-            "changeset.applied" if not failed else "changeset.deadlettered",
-            actor,
-            "changeset",
-            changeset_id,
-            {
-                "status": final_status,
-                "resource_receipt_ids": [item["id"] for item in resource_receipts],
-            },
-        )
-        return {
-            "status": final_status,
-            "changeset": self.get_changeset(connection, project_id, changeset_id),
-            "resource_receipts": resource_receipts,
-        }
 
     def list_resource_receipts(
         self,
@@ -5971,7 +5803,7 @@ class ResourcePlaneService:
                   AND co.resource_ref = :resource_ref
                   AND c.status IN (
                     'draft', 'quoted', 'policy_checked', 'budget_reserved',
-                    'pending_approval', 'approved', 'applying'
+                    'pending_approval', 'approved', 'applying', 'needs_reconciliation'
                   )
                 LIMIT 1
                 """
@@ -5985,7 +5817,7 @@ class ResourcePlaneService:
         ).first()
         return row is not None
 
-    def _record_resource_action_attempt(
+    def prepare_resource_action(
         self,
         connection: Connection,
         *,
@@ -6024,7 +5856,7 @@ class ResourcePlaneService:
             {"project_id": project_id, "dedupe_key": dedupe_key},
         ).mappings().first()
         if existing:
-            return self._serialize_resource_receipt(existing)
+            raise ValueError("Provider operation already has a durable claim; reconcile before retry.")
 
         scope = self._scope(connection, project_id)
         effect_scope = {
@@ -6042,7 +5874,7 @@ class ResourcePlaneService:
             "desired_state": operation.get("desired_state") or {},
             "actor": actor,
         }
-        receipt, _ = self.receipts.create_or_reuse(
+        receipt, created = self.receipts.create_or_reuse(
             connection,
             scope["org_id"],
             scope["workspace_id"],
@@ -6054,25 +5886,13 @@ class ResourcePlaneService:
             created_by_job_id=created_by_job_id,
             data_boundary="internal",
         )
+        if not created:
+            raise ValueError("Provider receipt already exists; reconcile before retry.")
         resource_receipt_id = make_id("rrcpt")
-        status = "succeeded"
-        provider_ref: Optional[str] = None
-        result: Optional[dict[str, Any]] = None
-        error: Optional[dict[str, Any]] = None
-        try:
-            result = self._execute_provider_operation(
-                connection,
-                account,
-                dict(operation),
-            )
-            provider_ref = result.get("provider_ref")
-        except Exception as exc:
-            status = "failed"
-            error = {
-                "message": str(exc),
-                "skill_id": operation["skill_id"],
-                "error_type": exc.__class__.__name__,
-            }
+        status = "in_progress"
+        provider_ref = None
+        result = None
+        error = None
         connection.execute(
             text(
                 """
@@ -6111,51 +5931,65 @@ class ResourcePlaneService:
                 "created_by_job_id": created_by_job_id,
             },
         )
-        if status == "succeeded":
-            self.receipts.mark_succeeded(
-                connection,
-                receipt["id"],
-                provider_ref,
-                result or {},
-            )
-            self._persist_managed_resource_from_result(
+        connection.execute(text("UPDATE changeset_operations SET resource_receipt_id=:r, "
+                                "status='applying', updated_at=now() WHERE id=:id"),
+                           {"r": resource_receipt_id, "id": operation['id']})
+        return {"operation": dict(operation), "receipt_id": receipt["id"],
+                "resource_receipt_id": resource_receipt_id, "dedupe_key": dedupe_key}
+
+    def finish_resource_action(
+        self, connection: Connection, *, changeset: dict[str, Any],
+        claim: dict[str, Any], actor: str, result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Record a known result for the caller's locked, previously committed claim."""
+        operation = claim["operation"]
+        project_id = changeset["project_id"]
+        account = (self.get_provider_account(connection, project_id,
+                   operation["provider_account_id"]) if operation["provider_account_id"] else None)
+        provider = self._provider_from_skill(operation["skill_id"])
+        receipt = {"id": claim["receipt_id"]}
+        resource_receipt_id = claim["resource_receipt_id"]
+        dedupe_key = claim["dedupe_key"]
+        status = "succeeded"
+        error = None
+        provider_ref = result.get("provider_ref")
+        updated = connection.execute(text(
+            "UPDATE resource_receipts SET status='succeeded', provider_ref=:provider_ref, "
+            "result=CAST(:result AS JSONB), error=NULL, updated_at=now() "
+            "WHERE id=:id AND project_id=:p AND changeset_id=:cs AND status='in_progress' "
+            "RETURNING id"),
+            {"id": resource_receipt_id, "p": project_id, "cs": changeset["id"],
+             "provider_ref": provider_ref, "result": json.dumps(result)}).scalar_one_or_none()
+        if not updated:
+            raise ValueError("Provider claim changed; reconciliation required.")
+        self.receipts.mark_succeeded(
+            connection,
+            receipt["id"],
+            provider_ref,
+            result or {},
+        )
+        self._persist_managed_resource_from_result(
+            connection,
+            project_id=project_id,
+            provider_account_id=operation["provider_account_id"],
+            operation=dict(operation),
+            resource_receipt_id=resource_receipt_id,
+            receipt_id=receipt["id"],
+            result=result or {},
+        )
+        if account:
+            self._record_provider_health(
                 connection,
                 project_id=project_id,
-                provider_account_id=operation["provider_account_id"],
-                operation=dict(operation),
-                resource_receipt_id=resource_receipt_id,
-                receipt_id=receipt["id"],
-                result=result or {},
+                provider_account_id=account["id"],
+                provider=provider,
+                status="healthy",
+                api_available=True,
+                detail={
+                    "operation": operation["skill_id"],
+                    "changeset_id": changeset["id"],
+                },
             )
-            if account:
-                self._record_provider_health(
-                    connection,
-                    project_id=project_id,
-                    provider_account_id=account["id"],
-                    provider=provider,
-                    status="healthy",
-                    api_available=True,
-                    detail={
-                        "operation": operation["skill_id"],
-                        "changeset_id": changeset["id"],
-                    },
-                )
-        else:
-            self.receipts.mark_failed(connection, receipt["id"], error or {})
-            if account:
-                self._record_provider_health(
-                    connection,
-                    project_id=project_id,
-                    provider_account_id=account["id"],
-                    provider=provider,
-                    status="degraded",
-                    api_available=False,
-                    detail={
-                        "operation": operation["skill_id"],
-                        "changeset_id": changeset["id"],
-                        "error": error,
-                    },
-                )
         connection.execute(
             text(
                 """

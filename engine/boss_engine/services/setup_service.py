@@ -673,79 +673,58 @@ PROOF_ESTIMATE_USD_MICROS = 50_000
 
 
 def governed_proof(engine, settings: Settings, project_id: str, provider: str, actor: str,
-                   prove=None, *, amount: int = None) -> dict[str, Any]:  # type: ignore[assignment]
-    """`prove_coding_agent`, spent only after its reservation and receipt commit.
+                   prove=None, *, amount: int = None, candidate=None, credential="",
+                   backend="database", capacity_group="", intent="", before_call=None,
+                   bound_prove=None) -> dict[str, Any]:  # type: ignore[assignment]
+    """One explicit proof with committed reservation, worker/model leases and receipt.
 
-    A proof is one real model turn. On its own committed connection, before the turn: a budget
-    reservation of the proof's estimate and an in-progress
-    receipt. After the turn: the receipt succeeds or fails and the reservation settles at the
-    actual cost or is released. A refused budget makes no call. `prove` is injectable for tests.
-
-    `amount` is what the proof reserves: the full estimate for a metered key, 0 for a
-    subscription or a local model — a gate rather than a hold, so a flat-rate proof still passes
-    while the budget is red and is refused only once spend is already over the cap.
+    Metered replies require typed cost or priced usage evidence. Timeout/unknown
+    acceptance retains its financial hold and creates a reconciliation decision.
+    The encrypted proof-only candidate cannot serve ordinary work or certify readiness.
     """
     import uuid
-
-    from .budget import BudgetGovernor
-    from .receipts import ReceiptService
-
-    budget, receipts = BudgetGovernor(settings), ReceiptService()
+    from .connection_spend import ConnectionSpend
+    if candidate is None:
+        from .cli_harness import detect, load_specs
+        from .entitlements import WORKSPACE_OPERATOR_ID
+        spec = load_specs(settings).get(provider)
+        if spec is None:
+            return {"ok": False, "state": "failed", "error": "Proof needs an identified model source."}
+        found = detect(spec, settings)
+        if not found.get("installed") or found.get("ready") is not True:
+            return {"ok": False, "state": "failed", "error": "Proof needs an authenticated official CLI session."}
+        candidate = {"provider": spec.entitlement_provider or provider,
+                     "source_kind": "official_cli", "entitlement_kind": "subscription",
+                     "owner_type": "workspace_operator", "owner_id": WORKSPACE_OPERATOR_ID,
+                     "cost_mode": "subscription", "auth_method": "official_cli_oauth",
+                     "connection_status": "connected", "status": "active",
+                     "runtime_supported": True, "observed_capacity": {"credential_present": True},
+                     "supported_models": [provider], "workload_classes_allowed": ["owner_sandbox"],
+                     "risk_tier_max": 1, "limit_shape": {"max_concurrent": 1}}
+        capacity_group = capacity_group or spec.entitlement_source_id or provider
+    intent = intent or uuid.uuid4().hex
+    spend = ConnectionSpend.for_runner(settings, engine=engine, project_id=project_id,
+        run_id="setup:connection", step_id=provider, attempt=1, actor=actor,
+        worker_id=f"setup:{actor}:{__import__('hashlib').sha256(intent.encode()).hexdigest()[:32]}")
+    spend.max_cost_usd_micros = PROOF_ESTIMATE_USD_MICROS if amount is None else max(0, int(amount))
     prove = prove or (lambda: prove_coding_agent(settings, provider))
 
-    # The reservation and the in-progress receipt commit on their own connection BEFORE the
-    # turn, in this function, so the same function visibly closes the receipt it opened.
-    with engine.begin() as connection:
-        # The full estimate: the per-minute cap measures actual spend, not reservations.
-        amount = PROOF_ESTIMATE_USD_MICROS if amount is None else max(0, int(amount))
-        reserved = budget.reserve(connection, project_id, "model", amount,
-                                  f"Connection proof for {provider}", 15, risk_tier=1)
-        refused = None
-        if reserved.get("status") != "reserved":
-            refused = reserved.get("message") or "Budget reservation denied."
-        else:
-            scope = connection.execute(
-                text("SELECT w.org_id, p.workspace_id FROM projects p "
-                     "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :p"),
-                {"p": project_id}).mappings().one()
-            receipt, _ = receipts.create_or_reuse(
-                connection, scope["org_id"], scope["workspace_id"], project_id,
-                f"setup-proof:{provider}:{uuid.uuid4().hex[:16]}", "model.connection_proof",
-                {"project_id": project_id, "provider": provider},
-                {"provider": provider, "actor": actor})
-            spend = {"reservation_id": reserved["reservation_id"], "receipt_id": receipt["id"],
-                     "amount": amount}
-    if refused is not None:
-        return {"ok": False, "error": refused, "budget_refused": True}
-    # THE PROOF IS A MODEL CALL TOO: it gets a route record (why this source answered — the
-    # operator asked to check it) and its llm_calls row carries that route.
-    from .llm_telemetry import get_llm_context, set_llm_context
+    def contact(bound):
+        # Preserve existing connection-proof routing/telemetry at the actual
+        # submission boundary. Replay and authority refusal create no new call.
+        from .llm_telemetry import get_llm_context, set_llm_context
+        before = get_llm_context()
+        set_llm_context(route_id=_proof_route(engine, project_id, provider),
+                        stage="connection_proof", project_id=project_id, db_engine=engine)
+        try:
+            return bound_prove(bound) if bound_prove else prove()
+        finally:
+            set_llm_context(**{key: before.get(key) for key in
+                              ("route_id", "stage", "project_id", "db_engine")})
 
-    route_id = _proof_route(engine, project_id, provider)
-    before = get_llm_context()
-    set_llm_context(route_id=route_id, stage="connection_proof", project_id=project_id,
-                    db_engine=before.get("db_engine") or engine)
-    try:
-        proof = prove()
-    except Exception as exc:  # noqa: BLE001 — recorded below, then reported
-        proof = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    finally:
-        set_llm_context(route_id=before.get("route_id"), stage=before.get("stage"),
-                        project_id=before.get("project_id"), db_engine=before.get("db_engine"))
-    with engine.begin() as connection:
-        if proof.get("ok"):
-            receipts.mark_succeeded(connection, spend["receipt_id"], f"{provider}:proof",
-                                    {"replied": str(proof.get("replied") or "")[:120]})
-            budget.settle(connection, project_id, spend["reservation_id"], spend["receipt_id"],
-                          "model", provider, spend["amount"],
-                          int(proof.get("cost_usd_micros") or 0))
-        else:
-            receipts.mark_failed(connection, spend["receipt_id"],
-                                 {"message": str(proof.get("error") or "")[:500]})
-            budget.release(connection, project_id, spend["reservation_id"],
-                           "Connection proof did not complete a turn.")
-    proof["receipt_id"] = spend["receipt_id"]
-    return proof
+    return spend.prove(settings, provider=provider, intent=intent, candidate=candidate,
+                       credential=credential, backend=backend, capacity_group=capacity_group,
+                       call=contact, before_call=before_call)
 
 
 def _proof_route(engine, project_id: str, provider: str):
@@ -769,7 +748,7 @@ def _proof_route(engine, project_id: str, provider: str):
 
 def connect_coding_agent(
     connection: Connection, settings: Settings, project_id: str, provider: str, *,
-    actor: str = "ceo", prove: bool = True, prove_with=None,
+    actor: str = "ceo", prove: bool = True, prove_with=None, intent: str = "",
 ) -> dict[str, Any]:
     """Import a coding-agent subscription the customer already has, into BOSS.
 
@@ -822,7 +801,7 @@ def connect_coding_agent(
         if engine is None:
             raise SetupError("the connection proof needs its own database connection.")
         proof = governed_proof(engine, settings, project_id, provider, actor,
-                               prove=prove_with, amount=0)
+                               prove=prove_with, amount=0, intent=intent)
     if not proof.get("ok"):
         from .model_failures import explain, is_login_rejected, mark_login
 
@@ -841,6 +820,8 @@ def connect_coding_agent(
             raise SetupError(f"BOSS could not check the {provider} connection: the budget "
                              f"refused its one test turn ({proof.get('error')}). Try again "
                              "in a minute.")
+        if proof.get("capacity_refused"):
+            raise SetupError("Selected CLI capacity is in use; no connection proof was submitted.")
         raise SetupError(
             f"the {provider} CLI is signed in but could not complete a turn: "
             f"{proof.get('error')}. Signed in is not the same as working — check the "

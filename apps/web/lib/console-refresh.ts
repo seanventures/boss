@@ -17,16 +17,17 @@
  * task, a running discovery, a promotion in flight — each a bare 4-5 s `setInterval` of
  * `router.refresh()`) kept the queue full.
  *
- * So: at most ONE refresh in flight, at most ONE more owed. Asking while one is in flight
+ * So: at most ONE current logical refresh, at most ONE more owed. Asking while one is in flight
  * marks one owed; it starts the moment the in-flight one lands, so it sees everything asked
  * for meanwhile (an area added to the session cookie, a change just made). A poll also waits
  * out a cool-down as long as the last refresh took, so a slow console polls itself gently; a
  * "now" (an area being opened, a change the operator just made) skips the cool-down but still
- * never overlaps.
+ * never overlaps another refresh the router still accepts.
  *
- * Pure: the shell supplies `start` (a refresh inside its transition) and reports `landed()`
- * when the server's new render is on screen. Timers and the clock are injectable, so it is
- * tested for real.
+ * Pure: the shell supplies `start` and reports `landed()` when fresh server props commit.
+ * A committed URL restore can discard Next's pending response; the shell then calls `cancel()`
+ * before requesting the current area. Cancellation releases bookkeeping, not the network request.
+ * Timers and the clock are injectable, so it is tested for real.
  *
  * A REFRESH THAT NEVER LANDS IS UNSTUCK, NOT WAITED OUT (2026-10-10). Next 15.5's router
  * sometimes never completes a refresh issued in the first seconds after a page load: the RSC
@@ -43,11 +44,14 @@
 export type RefreshKind = "poll" | "now";
 
 export type RefreshCoordinator = {
-  /** Ask for a refresh. Coalesced: never starts one while another is in flight. */
+  /** Ask for a refresh. Coalesced while another logical refresh is in flight. */
   request(kind?: RefreshKind): void;
-  /** The shell's report that the refresh it started has landed (its transition settled). */
+  /** The shell reports newly committed server props for the current refresh. A canceled
+   *  response must not acknowledge a replacement request. */
   landed(): void;
-  /** A refresh is in flight. */
+  /** Release a discarded refresh and pending work without recording success or aborting I/O. */
+  cancel(): void;
+  /** A logical refresh is in flight. */
   busy(): boolean;
   /** Hear `busy()` change (a refresh starting or landing): the Syncing chip subscribes, so the
    *  shell itself never re-renders for it (lib/console-refresh.ts header). */
@@ -103,6 +107,7 @@ export function createRefreshCoordinator(options: CoordinatorOptions): RefreshCo
       ? Math.min(3_000, Math.max(700, last * 2))
       : Math.max(3_000, last * 3)));
   const maxUnsticks = options.maxUnsticks ?? 3;
+  let generation = 0;
 
   const merge = (a: RefreshKind | null, b: RefreshKind): RefreshKind =>
     a === "now" || b === "now" ? "now" : "poll";
@@ -125,7 +130,12 @@ export function createRefreshCoordinator(options: CoordinatorOptions): RefreshCo
     inFlight = true;
     owed = null;
     startedAt = now();
-    ceiling = setTimer(() => { ceiling = null; landed(); }, ceilingMs);
+    const attempt = ++generation;
+    ceiling = setTimer(() => {
+      if (disposed || attempt !== generation) return;
+      ceiling = null;
+      landed();
+    }, ceilingMs);
     unsticks = 0;
     options.start();
     arm(kind);
@@ -139,7 +149,14 @@ export function createRefreshCoordinator(options: CoordinatorOptions): RefreshCo
       const wait = Math.min(maxCooldownMs, lastDuration) - (now() - landedAt);
       if (wait > 0) {
         owed = merge(owed, kind);
-        if (cooldown === null) cooldown = setTimer(() => { cooldown = null; fire("poll"); }, wait);
+        if (cooldown === null) {
+          const scheduled = generation;
+          cooldown = setTimer(() => {
+            if (disposed || scheduled !== generation) return;
+            cooldown = null;
+            fire("poll");
+          }, wait);
+        }
         return;
       }
     }
@@ -162,9 +179,20 @@ export function createRefreshCoordinator(options: CoordinatorOptions): RefreshCo
     }
   }
 
+  function cancel() {
+    generation += 1;
+    inFlight = false;
+    owed = null;
+    if (cooldown !== null) { clearTimer(cooldown); cooldown = null; }
+    if (ceiling !== null) { clearTimer(ceiling); ceiling = null; }
+    if (watchdog !== null) { clearTimer(watchdog); watchdog = null; }
+    if (!disposed) notify();
+  }
+
   return {
     request,
     landed,
+    cancel,
     busy: () => inFlight,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -173,9 +201,7 @@ export function createRefreshCoordinator(options: CoordinatorOptions): RefreshCo
     lastDurationMs: () => lastDuration,
     dispose() {
       disposed = true;
-      if (cooldown !== null) clearTimer(cooldown);
-      if (ceiling !== null) clearTimer(ceiling);
-      if (watchdog !== null) clearTimer(watchdog);
+      cancel();
     },
   };
 }

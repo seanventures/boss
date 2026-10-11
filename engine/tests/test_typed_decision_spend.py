@@ -546,10 +546,12 @@ def test_settlement_decrements_the_reservation_and_keeps_only_the_actual_cost():
     assert reservation["actual"] == 4_000
 
 
-def test_a_failed_attempt_releases_the_reservation_and_a_retry_is_visible():
+def test_an_authentication_refusal_releases_the_reservation_and_a_retry_is_visible():
+    from boss_engine.services.typed_decisions import TypeSafeAuthenticationRefused
+
     world = World()
-    world.decider.fail = RuntimeError("provider rejected the prompt")
-    with pytest.raises(Exception, match="provider rejected"):
+    world.decider.fail = TypeSafeAuthenticationRefused()
+    with pytest.raises(Exception, match="authentication refused"):
         world.execute(attempt=1)
     assert world.decider.calls == 1
     assert world.budget.active_reserved() == 0
@@ -666,27 +668,29 @@ def test_each_attempt_books_capacity_on_the_source_that_answers_for_the_actor():
     assert world.gateway.acquired_for == [("typesafe_jev", "workflow")]
 
 
-def test_when_jev_fails_claude_answers_on_its_own_receipt():
-    """TypeSafe is the default decider and Claude the fallback — a separate, receipted attempt
-    against Claude's own source, after a visible fallback event."""
+def test_a_jev_server_failure_keeps_liability_without_calling_claude():
+    """A server failure can follow acceptance; it does not authorize a free fallback."""
+    from boss_engine.services.typed_decision_spend import TypedDecisionReconciliationRequired
+
     world = World()
     spend, jev, claude = _jev_then_claude(world)
     jev.fail = RuntimeError("TypeSafe HTTP 500")
-    output = spend.execute(_settings(), _binding(), "My card was charged twice")
-    assert output["answer"] == "technical" and (jev.calls, claude.calls) == (1, 1)
-    assert world.gateway.acquired_for == [("typesafe_jev", "workflow"),
-                                          ("anthropic_claude_code", "workflow")]
-    statuses = sorted(row["status"] for row in world.receipts.rows.values())
-    assert statuses == ["failed", "succeeded"], "each provider attempt has its own receipt"
-    assert "typed_decision.fallback" in world.events.types()
-    assert world.budget.active_reserved() == 0
+    with pytest.raises(TypedDecisionReconciliationRequired):
+        spend.execute(_settings(), _binding(), "My card was charged twice")
+    assert (jev.calls, claude.calls) == (1, 0)
+    assert world.gateway.acquired_for == [("typesafe_jev", "workflow")]
+    assert [row["status"] for row in world.receipts.rows.values()] == ["in_progress"]
+    assert "typed_decision.fallback" not in world.events.types()
+    assert world.budget.active_reserved() == QUOTE
 
 
 def test_proving_a_key_never_falls_back():
     """A Claude answer after a Jev failure would prove nothing about the Jev key."""
+    from boss_engine.services.typed_decisions import TypeSafeAuthenticationRefused
+
     world = World()
     spend, jev, claude = _jev_then_claude(world)
-    jev.fail = RuntimeError("TypeSafe HTTP 401")
+    jev.fail = TypeSafeAuthenticationRefused()
     with pytest.raises(Exception, match="401"):
         spend.execute(_settings(), _binding(), "My card was charged twice", fallback=False)
     assert claude.calls == 0

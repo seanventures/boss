@@ -1,0 +1,12 @@
+.brief { margin: 0 0 22px; border-block: 1px solid var(--border, #343b4a); padding: 12px 0; color: var(--text, #e8edf5); }
+.brief summary { cursor: pointer; font-weight: 600; }
+.brief summary span { margin-inline-start: 12px; font-size: 0.63158rem; font-weight: 400; }
+.brief p { font-size: 0.68421rem; line-height: 1.5; margin: 12px 0; }
+.brief ol { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.brief li { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; }
+.brief li span { overflow-wrap: anywhere; }
+.brief a { flex-shrink: 0; color: inherit; text-underline-offset: 3px; }
+.brief a:focus-visible, .brief summary:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+.brief .note { font-size: 0.63158rem; }
+.brief[data-stale="true"] { opacity: .8; }
+@media (max-width: 520px) { .brief li { flex-direction: column; gap: 4px; } }

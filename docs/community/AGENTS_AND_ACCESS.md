@@ -55,7 +55,7 @@ A build never holds a GitHub credential itself. **boss-egress**, a separate serv
 
 | Way | What egress uses | Set up |
 | --- | --- | --- |
-| **GitHub App** (recommended) | A token per build, for that build's repositories only, revoked when the build ends. | **Create the App on GitHub**, then **Install on GitHub** and pick repositories. Nothing to paste. |
+| **GitHub App** (recommended) | A token per build, for that build's repositories only, revoked when the build ends. | **Create GitHub App**, then **Install on GitHub** and pick repositories. Nothing to paste. |
 | **As me** | Your own GitHub connection, only for runs whose grant says "act as me on GitHub". | **My account › Agents for me › Connections › GitHub**. |
 | **Fine-grained token** (less safe) | A token kept in the vault, for the repositories it was given. It is long-lived and acts as whoever made it. | Paste it in **Repository**. |
 

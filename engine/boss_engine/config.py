@@ -1487,7 +1487,7 @@ class Settings(BaseSettings):
     # compared in constant time), then usr_legacy_shared with the Operator role for 30 days
     # (D25). Never stored or logged. (One copy for S1 and S5.)
     legacy_console_password: str = Field(default="", alias="BOSS_CONSOLE_PASSWORD")
-    # `network` on a network-trusted install (shared-server): the network bridge (D27). The console
+    # `network` on a network-trusted install: the network bridge (D27). The console
     # can also say so per request from a trusted proxy (X-Boss-Console-Auth: network).
     legacy_console_auth: str = Field(default="", alias="BOSS_CONSOLE_AUTH")
     # HMAC key for identifiers of failed sign-ins (A79). Unset: a per-process random key, so an

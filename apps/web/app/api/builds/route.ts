@@ -19,10 +19,18 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return NextResponse.json({ error: "JSON body must be an object" }, { status: 400 });
+  }
   const projectId = String(body.project_id ?? "").trim();
   const directive = String(body.directive ?? "").trim();
   if (!projectId || !directive) {
     return NextResponse.json({ error: "project_id and directive are required" }, { status: 400 });
+  }
+  const agreementHash = body.agreement_content_hash;
+  const agreementToken = body.agreement_binding_token;
+  if (typeof agreementHash !== "string" || typeof agreementToken !== "string") {
+    return NextResponse.json({ error: "Review the work agreement before starting." }, { status: 409 });
   }
   // BUILD STARTS THE WORKFLOW, NOT THE PANEL.
   //
@@ -36,7 +44,8 @@ export async function POST(req: Request) {
   // convenes the panel (the same convene_prd_meeting_core), `spec_review` waits on the PRD
   // approval that panel raises, and `build` creates the project. One press, and every step
   // after it is visible from the first second.
-  const title = directive.length > 72 ? `${directive.slice(0, 69)}…` : directive;
+  const characters = Array.from(directive);
+  const title = characters.length > 72 ? `${characters.slice(0, 69).join("")}…` : directive;
   try {
     const r = await apiWrite(`${API_URL}/v1/delivery-workflows/start`, {
       method: "POST",
@@ -48,6 +57,8 @@ export async function POST(req: Request) {
         project_id: projectId,
         work_class: "project.new",
         input: { title, directive },
+        agreement_content_hash: agreementHash,
+        agreement_binding_token: agreementToken,
         ...(String(body.actor ?? "").trim() ? { actor: String(body.actor).trim() } : {}),
         // START ANYWAY, SAID OUT LOUD. The hero draws the checklist a refusal carries and
         // sends back exactly the keys the operator ticked; anything else missing still refuses.

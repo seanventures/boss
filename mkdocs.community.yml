@@ -1,5 +1,5 @@
 site_name: BOSS
-site_description: The self-hosted control plane for AI software work
+site_description: Delegate one useful software change with plans, decisions, cost evidence and a work history you can inspect
 site_url: https://boss.sean.network/docs/
 repo_url: https://github.com/seanventures/boss
 repo_name: seanventures/boss
@@ -60,6 +60,11 @@ markdown_extensions:
 nav:
   - Home: README.md
   - Get started:
+      - First useful change: FIRST_USEFUL_CHANGE.md
+      - Review the work agreement: WORK_AGREEMENT.md
+      - Review a result (RC9): RESULT_REVIEW.md
+      - Return to work (RC9): RETURNING_TO_WORK.md
+      - Reuse accepted checks (RC9): ACCEPTANCE_CHECKS.md
       - Getting started: GETTING_STARTED.md
       - Quickstart: QUICKSTART.md
       - Deploy: hostname.md
@@ -74,6 +79,11 @@ nav:
       - Architecture approval and spending: ARCHITECTURE_GOVERNANCE.md
       - Build toolchains: TOOLCHAINS.md
       - Supported stacks: SUPPORTED_STACKS.md
+      - Hearing an agent's voice: AGENT_VOICE_TESTS.md
+      - Conversation costs and retries: CONVERSATION_STREAMS.md
+      - Provider apply and recovery: PROVIDER_RECOVERY.md
+      - Restored data and startup holds: RESTORED_STATE_HOLD.md
+      - Historical financial exposure: LEGACY_FINANCIAL_HOLD.md
       - Identity administration: IDENTITY_ADMIN.md
       - Connect models: MODEL_CONNECTIONS.md
       - Use cases: use-cases.md
@@ -90,6 +100,8 @@ nav:
       - Features: FEATURES.md
       - Control surfaces: CONTROL_SURFACES.md
       - Terminal capability matrix: TERMINAL_CAPABILITY_MATRIX.md
+      - RC9 candidate changes: RELEASE_NOTES_v1.0-rc9.md
+      - RC9 validation in progress: RC9_VALIDATION.md
       - Release notes (v1.0-rc8): RELEASE_NOTES_v1.0-rc8.md
       - RC8 validation: RC8_VALIDATION.md
       - Release notes (v1.0-rc6.2): RELEASE_NOTES_v1.0-rc6.2.md

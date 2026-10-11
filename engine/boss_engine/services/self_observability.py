@@ -836,8 +836,8 @@ def operator_advice(host: dict[str, Any], *, elapsed_minutes: float = 0.0,
             action = "Close what you are not using on the machine BOSS runs on."
     elif cause == "disk":
         headline = f"This {noun}'s disk is nearly full"
-        action = ("Free disk space — `docker system prune` reclaims old images and build "
-                  "cache — before the next run.")
+        action = ("Inspect Docker disk use with `docker system df`. Preview BOSS cleanup "
+                  "with `boss prune --dry-run`; remove only confirmed BOSS-owned, unused resources.")
     elif cause == "cpu":
         headline = (f"This {noun} is overloaded — BOSS is waiting on it" if severe
                     else f"This {noun} is busy")

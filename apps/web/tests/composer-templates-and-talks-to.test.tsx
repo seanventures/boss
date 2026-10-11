@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /**
  * The composer's template door and "Talks to" (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.8, §5.5;
- * tester P0-5): the mode switch is A new app · Add to an existing app · From a template; From a
+ * tester P0-5): the mode switch is New app · Add a feature · Template (rc9 copy); From a
  * template is the gallery (a card opens its sheet; ⌘↵ in the composer starts nothing); "+ Template"
  * in add mode opens the gallery for the chosen app, greyed until an app is picked; "Talks to" makes
  * the link once the start is accepted — for an app that exists, from its build; for a new app,
@@ -133,7 +133,7 @@ async function choose(el: HTMLElement | null, value: string) {
 describe("From a template", () => {
   it("is the third job of the mode switch, opens the gallery, and a card its sheet", async () => {
     await mount();
-    expect($('[data-testid="np-mode-template"]')?.textContent).toContain("From a template");
+    expect($('[data-testid="np-mode-template"]')?.textContent).toContain("Template");  // rc9 copy: New app · Add a feature · Template
     await click($('[data-testid="np-mode-template"]'));
     expect($('[data-testid="dw-new-project"]')?.dataset.mode).toBe("template");
     // One job is chosen at a time: "A new app" is not lit beside it.

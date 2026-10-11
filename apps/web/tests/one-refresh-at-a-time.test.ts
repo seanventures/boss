@@ -88,6 +88,114 @@ describe("the coordinator", () => {
     expect(starts).toBe(2);
   });
 
+  it("cancels a discarded refresh and its owed work without recording a landing", () => {
+    const time = fakeTime();
+    let starts = 0;
+    const c = createRefreshCoordinator({ start: () => { starts += 1; }, ...time });
+    c.request("now");
+    time.run(800);
+    c.landed();
+    expect(c.lastDurationMs()).toBe(800);
+
+    c.request("now");
+    c.request("now");
+    time.run(900);
+    c.cancel();
+    expect(c.busy()).toBe(false);
+    expect(c.lastDurationMs()).toBe(800);
+    c.landed(); // An idle acknowledgement after discard cannot record a success.
+    expect(c.lastDurationMs()).toBe(800);
+    time.run(121_000);
+    expect(starts).toBe(2);
+
+    c.request("now");
+    expect(starts).toBe(3);
+    expect(c.busy()).toBe(true);
+    time.run(121_400);
+    c.landed();
+    expect(c.lastDurationMs()).toBe(400);
+    expect(starts).toBe(3); // The discarded request's owed work is gone.
+  });
+
+  it("cancels a scheduled poll cooldown without starting it later", () => {
+    const time = fakeTime();
+    let starts = 0;
+    const c = createRefreshCoordinator({ start: () => { starts += 1; }, ...time });
+    c.request("now");
+    time.run(2_000);
+    c.landed();
+    c.request("poll");
+    c.cancel();
+    c.cancel();
+    time.run(4_000);
+    expect(starts).toBe(1);
+    expect(c.busy()).toBe(false);
+    expect(c.lastDurationMs()).toBe(2_000);
+    c.request("now");
+    expect(starts).toBe(2);
+  });
+
+  it("ignores an already queued ceiling callback from a canceled attempt", () => {
+    const time = fakeTime();
+    const callbacks: (() => void)[] = [];
+    let starts = 0;
+    const c = createRefreshCoordinator({
+      start: () => { starts += 1; }, ...time,
+      setTimer: (fn, ms) => { callbacks.push(fn); return time.setTimer(fn, ms); },
+    });
+    c.request("now");
+    const canceledCeiling = callbacks[0];
+    c.cancel();
+    c.request("now");
+    c.request("now");
+    canceledCeiling(); // Clearing a timer cannot retract a callback already dispatched.
+    expect(starts).toBe(2);
+    expect(c.busy()).toBe(true);
+    expect(c.lastDurationMs()).toBe(0);
+    time.run(350);
+    c.landed();
+    expect(starts).toBe(3);
+    expect(c.lastDurationMs()).toBe(350);
+    c.dispose();
+  });
+
+  it("ignores an already queued cooldown callback after cancellation", () => {
+    const time = fakeTime();
+    const callbacks: (() => void)[] = [];
+    let starts = 0;
+    const c = createRefreshCoordinator({
+      start: () => { starts += 1; }, ...time,
+      setTimer: (fn, ms) => { callbacks.push(fn); return time.setTimer(fn, ms); },
+    });
+    c.request("now");
+    time.run(500);
+    c.landed();
+    c.request("poll");
+    const canceledCooldown = callbacks[1];
+    c.cancel();
+    c.request("now");
+    canceledCooldown();
+    expect(starts).toBe(2);
+    expect(c.busy()).toBe(true);
+    c.dispose();
+  });
+
+  it("cannot resume disposed work after cancellation or a late acknowledgement", () => {
+    const time = fakeTime();
+    let starts = 0;
+    const c = createRefreshCoordinator({ start: () => { starts += 1; }, ...time });
+    c.request("now");
+    c.request("now");
+    c.cancel();
+    c.dispose();
+    c.request("now");
+    c.landed();
+    time.run(130_000);
+    expect(starts).toBe(1);
+    expect(c.busy()).toBe(false);
+    expect(c.lastDurationMs()).toBe(0);
+  });
+
   it("with no shell mounted, a request refreshes directly", () => {
     let direct = 0;
     requestConsoleRefresh({ refresh: () => { direct += 1; } }, "now");
@@ -265,7 +373,8 @@ describe("a refresh that never lands is unstuck, not waited out (2026-10-10)", (
   it("the shell lands a refresh on the server's new render, not on React's transition flag", () => {
     const shell = codeOnly("app/ConsoleShell.tsx");
     expect(shell).toContain("renderToken");
-    expect(shell).toMatch(/lastToken\.current = renderToken;\s*refreshCoordinator\.landed\(\);/);
+    // rc9 merge: a render that commits with a URL restore is not the canceled refresh landing.
+    expect(shell).toMatch(/lastToken\.current = renderToken;\s*if \(!canceled\) refreshCoordinator\.landed\(\);/);
     expect(codeOnly("app/page.tsx")).toMatch(/renderToken=\{/);
   });
 });

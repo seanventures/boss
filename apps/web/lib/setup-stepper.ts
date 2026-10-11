@@ -51,7 +51,7 @@ const ROWS: RowKey[] = ["github", "repository", "models", "capacity", "jobs", "b
 
 /** Rows folded under Advanced: a deep link to one opens the fold first. */
 export const ADVANCED_ROWS: readonly RowKey[] = ["advanced", "github_app", "repositories", "ci", "build_database",
-                                                 "toolchains", "capacity", "jobs", "budget", "public_url"];
+                                                 "toolchains", "jobs", "budget", "public_url"];
 
 /** `?area=setup[&focus=…][&add=<provider>][&source=<id>]`, plus the legacy `step=` names. */
 export function readParams(search: string): SetupParams {

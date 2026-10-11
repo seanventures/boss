@@ -16,6 +16,11 @@ an Owner claim or a successful sign-in.
 
 ## Ways to sign in
 
+If no social sign-in or passkey is usable on this installation, the password
+form stays prominent. Open **Other sign-in options** to see those methods and
+why they are unavailable. Configured, usable methods stay in the main sign-in
+screen; expanding the list does not enable a method or change access.
+
 | Method | Needs |
 | --- | --- |
 | Passkey | Works once BOSS knows its public address (HTTPS, or `http://localhost`). |

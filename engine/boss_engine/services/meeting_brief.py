@@ -4,7 +4,7 @@ A panel's directive IS its prompt, so BOSS wraps the operator's ask in scaffoldi
 must read: the panel-purpose section (the workflow's objective), the research section
 (meeting_service's markers) followed by "## What was researched" and a JSON dump of the dossier, the
 dossier-promotion template ("Produce a PRD for this evidence-backed opportunity …  OUTCOME TO
-BUILD: …"), and [boss:…] markers. On shared-server 4 of 22 panels showed that scaffolding in the
+BUILD: …"), and [boss:…] markers. On an existing install 4 of 22 panels showed that scaffolding in the
 console's hero line, cards and drawer.
 
 So the two are kept apart:

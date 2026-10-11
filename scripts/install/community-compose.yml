@@ -8,7 +8,8 @@ name: boss-community
 
 services:
   db:
-    image: postgres:16-alpine
+    image: ${BOSS_RECOVERY_DB_IMAGE_ID:-postgres:16-alpine}
+    pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
     restart: unless-stopped
     # THE DATABASE IS THE LAST THING THE KERNEL MAY KILL (stability spec §4b.1). Builds run at
     # +500, the API at -500, Postgres at -900: under memory pressure a build dies first,
@@ -129,7 +130,9 @@ services:
         # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or java. Every image
         # built from python-runtime takes the same value, so that stage is built once.
         BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
-    image: boss-community-api:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-api:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
+    pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
+    command: ["python", "-m", "apps.api.serve", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
     # THE SANDBOX BOUNDARY (IDENTITY.md §7.6). Builds run in this container, each as its own
     # unprivileged uid. The entrypoint starts as root with NET_ADMIN only to fence those uids'
@@ -317,6 +320,7 @@ services:
       # The preview origin: preview capability paths only, every cookie and credential stripped.
       - "${BOSS_PREVIEW_BIND:-127.0.0.1}:${BOSS_PREVIEW_PORT:-3001}:${BOSS_PREVIEW_PORT:-3001}"
     volumes:
+      - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_artifacts:/var/lib/boss/artifacts
       - boss_community_identity:/var/lib/boss/identity
       # Per-project Maven/Gradle downloads the build sandbox keeps between runs (toolchains).
@@ -359,7 +363,10 @@ services:
         # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or java. Every image
         # built from python-runtime takes the same value, so that stage is built once.
         BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
-    image: boss-community-worker:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-worker:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
+    pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
+    command: ["python", "-m", "apps.worker.boss_worker.main"]
+    entrypoint: ["python3", "/usr/local/libexec/boss/recovery_guard.py"]
     restart: unless-stopped
     # AN INIT AS PID 1 (stability spec §4a.4). Agents, builds and previews are this
     # container's children; without an init, uvicorn is PID 1 and never reaps the orphans they
@@ -478,6 +485,7 @@ services:
       # Token prices per model, e.g. a local model at zero. Empty uses BOSS's built-in table.
       BOSS_MODEL_PRICES_JSON: ${BOSS_MODEL_PRICES_JSON:-}
     volumes:
+      - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_artifacts:/var/lib/boss/artifacts
       - boss_community_identity:/var/lib/boss/identity
       # Per-project Maven/Gradle downloads the build sandbox keeps between runs (toolchains).
@@ -511,7 +519,10 @@ services:
         # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or java. Every image
         # built from python-runtime takes the same value, so that stage is built once.
         BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
-    image: boss-community-mcp-tools:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-mcp-tools:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
+    pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
+    command: ["python", "-m", "tools.mcp_tools_mux"]
+    entrypoint: ["python3", "/usr/local/libexec/boss/recovery_guard.py"]
     restart: unless-stopped
     # AN INIT AS PID 1 (stability spec §4a.4). Agents, builds and previews are this
     # container's children; without an init, uvicorn is PID 1 and never reaps the orphans they
@@ -525,6 +536,7 @@ services:
       BOSS_DOC_RENDER_DIR: /var/lib/boss/artifacts/rendered
       BOSS_ARTIFACTS_DIR: /var/lib/boss/artifacts
     volumes:
+      - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_artifacts:/var/lib/boss/artifacts
     healthcheck:
       test:
@@ -553,7 +565,10 @@ services:
         # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or java. Every image
         # built from python-runtime takes the same value, so that stage is built once.
         BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
-    image: boss-community-egress:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
+    image: ${BOSS_RECOVERY_API_IMAGE_ID:-boss-community-egress:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
+    pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
+    command: ["python", "-m", "apps.egress.boss_egress"]
+    entrypoint: ["python3", "/usr/local/libexec/boss/recovery_guard.py"]
     restart: unless-stopped
     init: true
     mem_limit: 384m
@@ -576,6 +591,7 @@ services:
       BOSS_GITHUB_APP_ID: ${BOSS_GITHUB_APP_ID:-}
       BOSS_GITHUB_APP_INSTALLATION_ID: ${BOSS_GITHUB_APP_INSTALLATION_ID:-}
     volumes:
+      - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_identity:/var/lib/boss/identity:ro
     healthcheck:
       test:
@@ -640,3 +656,5 @@ volumes:
   boss_community_artifacts:
   boss_community_identity:
   boss_community_toolchain_cache:
+  # Independent of restored database and identity/key archives.
+  boss_community_recovery:

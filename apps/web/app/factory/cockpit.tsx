@@ -37,6 +37,7 @@ import { CreditsButton } from "../agents/run-credits";
 import { useRunChain } from "../agents/run-acts";
 import { nameOf } from "../agents/run-face";
 import { ChangeIt } from "./change-it";
+import { ResultReview } from "./result-review";
 import { addFeatureHref } from "./apps-tab";
 import { stopBuild, steerBuild } from "./cockpit-actions";
 import { RateIt, ReasonChips, sendReasons } from "../improve/rate-it";
@@ -185,8 +186,10 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
   const [guidance, setGuidance] = useState("");
   const [steerChips, setSteerChips] = useState<string[]>([]);
   const [sharing, setSharing] = useState(false);
+  const [diagnostics, setDiagnostics] = useState(false);
   const [pending, setPending] = useState<{ id: string; text: string; at: string }[]>([]);
   const [changeIt, setChangeIt] = useState(false);
+  const [reviewChange, setReviewChange] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState("");
   const [pop, setPop] = useState<{ actId: string; anchor: HTMLElement | null } | null>(null);
@@ -399,6 +402,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                   }}>Ask BOSS</button>
                   <a role="menuitem" href={logHref({ run: c.run.id })}>Activity log ↗</a>
                   <button type="button" role="menuitem" onClick={copyLink}>Copy link</button>
+                  <GatedButton permission="telemetry:share" type="button" role="menuitem" data-testid="fx-menu-diagnostics"
+                               onClick={() => { setMenu(false); setDiagnostics(true); }}>Download diagnostics</GatedButton>
                   <button type="button" role="menuitem" data-testid="fx-menu-share"
                           title="Send this run, redacted and edited by you, to the BOSS project"
                           onClick={() => { setMenu(false); setSharing(true); }}>Share this run</button>
@@ -459,6 +464,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
         ) : null}
         {sharing ? <ShareRunSheet projectId={projectId} actor={actor} unitKind="build" unitId={c.run.id}
                                   onClose={() => setSharing(false)} /> : null}
+        {diagnostics ? <ShareRunSheet projectId={projectId} actor={actor} unitKind="build" unitId={c.run.id}
+                                      localOnly onClose={() => setDiagnostics(false)} /> : null}
         {err ? <span className="fx-err" role="alert" data-user-text data-testid="fx-error">{err}</span> : null}
       </header>
 
@@ -487,6 +494,9 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
         ))}
       </ol>
 
+      {c.run.status === "completed" ? <ResultReview key={c.run.id} runId={c.run.id}
+        onChangeRequested={(note) => { setReviewChange(note); setChangeIt(true); }} /> : null}
+
       <div className="fx-body">
         <Story projectId={projectId} runId={c.run.id} viewer={actor} rows={c.story} stations={c.stations} now={c.now}
                comments={c.outputs.comments.items} filter={filter} onClearFilter={() => setFilter(null)}
@@ -506,7 +516,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                     previewStatus={c.outputs.preview?.status} deployId={latestDeploy}
                     tab={logs} onTab={setLogs} onClose={() => setLogs(null)} />, document.body,
       ) : null}
-      {changeIt ? <ChangeIt projectId={projectId} runId={c.run.id} actor={actor} onClose={() => setChangeIt(false)} onStarted={onOpenBuild}
+      {changeIt ? <ChangeIt projectId={projectId} runId={c.run.id} actor={actor} onClose={() => { setChangeIt(false); setReviewChange(""); }} onStarted={onOpenBuild}
+                            initialMessage={reviewChange}
                             app={c.app} repo={c.brief.repo ?? ""}
                             previewId={c.outputs.preview?.status === "running" ? c.outputs.preview.id : null} /> : null}
       {pop ? <ActPopover projectId={projectId} actId={pop.actId} viewer={actor} anchor={pop.anchor} onClose={() => setPop(null)} /> : null}

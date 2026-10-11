@@ -27,7 +27,9 @@ from .model_gateway import (
     ModelCapacityDeniedError,
     ModelGatewayLeaseError,
 )
-from .typed_decisions import DecisionBatch, Question, _step_output
+from .typed_decisions import (
+    DecisionBatch, Question, TypeSafeAuthenticationRefused, _step_output,
+)
 
 
 # Same wall as workflow_capability_runner.LEASE_SECONDS. A decision call is one
@@ -69,6 +71,8 @@ class _Authority:
     receipt_id: Optional[str] = None
     invocation_dedupe: str = ""
     role: str = "primary"
+    included_in_subscription: bool = False
+    source_id: Optional[str] = None
 
 
 def model_receipt_dedupe(project_id: str, invocation_dedupe: str) -> str:
@@ -105,10 +109,16 @@ def _result_of(row: dict) -> dict:
 
 
 def _uncertain(error: BaseException) -> bool:
-    if isinstance(error, (TimeoutError, ConnectionError)):
-        return True
-    name = type(error).__name__.lower()
-    return "timeout" in name or "connect" in name
+    # Once the decider is entered, a transport, parser, or arbitrary adapter
+    # error says nothing about provider acceptance or cost. Only an explicit
+    # adapter-observed refusal may close this attempt as unused.
+    return not isinstance(error, TypeSafeAuthenticationRefused)
+
+
+def _safe_error(error: Any) -> str:
+    from .redaction import redact_secrets
+
+    return redact_secrets(str(error))
 
 
 def consumer_for(connection, project_id: str, source_id: Optional[str], actor: str,
@@ -280,7 +290,7 @@ class TypedDecisionSpend:
                 raise
             self._emit_now("typed_decision.fallback", {
                 "run_id": self.run_id, "step_id": self.step_id, "attempt": self.attempt,
-                "reason": str(error)[:300],
+                "reason": _safe_error(error)[:300],
             })
             return self._attempt(settings, binding, state, identity, "careful")
         if not fallback or not _needs_second_opinion(settings, primary):
@@ -311,7 +321,7 @@ class TypedDecisionSpend:
         try:
             decider = factory(role, settings)
         except RuntimeError as error:
-            raise TypedDecisionSpendError(str(error)) from error
+            raise TypedDecisionSpendError(_safe_error(error)) from None
         if role == "primary":
             self._primary_backend = getattr(decider, "backend", "")
         source_id = getattr(decider, "source_id", None)
@@ -321,11 +331,11 @@ class TypedDecisionSpend:
         if authority.outcome == "replay":
             return authority.output or {}
         if authority.outcome == "refused":
-            raise TypedDecisionSpendError(authority.message)
+            raise TypedDecisionSpendError(_safe_error(authority.message))
         if authority.outcome == "reconcile":
-            raise TypedDecisionReconciliationRequired(authority.message)
+            raise TypedDecisionReconciliationRequired(_safe_error(authority.message))
         if authority.outcome == "prior_failure":
-            raise TypedDecisionSpendError(authority.message)
+            raise TypedDecisionSpendError(_safe_error(authority.message))
         try:
             if self.before_provider_call is not None:
                 self.before_provider_call()
@@ -333,8 +343,9 @@ class TypedDecisionSpend:
             reason = cancelled
             self.commit(lambda connection: self._fail(
                 connection, authority, reason, event_type="typed_decision.cancelled",
+                nonacceptance_kind="cancelled_before_dispatch",
             ))
-            raise TypedDecisionSpendError(str(reason)) from reason
+            raise TypedDecisionSpendError(_safe_error(reason)) from None
         self._ensure_lease(authority)
         try:
             with self._kept_alive(authority):
@@ -345,27 +356,44 @@ class TypedDecisionSpend:
                 self.commit(lambda connection: self._reconcile(connection, authority, reason))
                 raise TypedDecisionReconciliationRequired(
                     "typed decision outcome is uncertain and needs reconciliation "
-                    f"({reason})"
-                ) from reason
+                    f"({_safe_error(reason)})"
+                ) from None
             self.commit(lambda connection: self._fail(
                 connection, authority, reason, event_type="typed_decision.attempt_failed",
+                nonacceptance_kind="provider_auth_rejected",
             ))
-            raise TypedDecisionSpendError(str(reason)) from reason
+            raise TypedDecisionSpendError(_safe_error(reason)) from None
+        cost = batch.cost_usd_micros
+        known_cost = isinstance(cost, int) and not isinstance(cost, bool) and cost >= 0
+        if not known_cost and not (cost is None and authority.included_in_subscription):
+            reason = RuntimeError("Typed decision reply has no usable cost evidence.")
+            self.commit(lambda connection: self._reconcile(connection, authority, reason))
+            raise TypedDecisionReconciliationRequired(
+                "typed decision cost is uncertain and needs reconciliation"
+            ) from reason
         try:
             output = _step_output(binding["typed_decision"], batch)
         except RuntimeError as error:
             reason = error
-            self.commit(lambda connection: self._fail(
-                connection, authority, reason, event_type="typed_decision.attempt_failed",
-                actual=int(batch.cost_usd_micros or 0),
-            ))
-            raise TypedDecisionSpendError(str(reason)) from reason
+            try:
+                self.commit(lambda connection: self._fail(
+                    connection, authority, reason, event_type="typed_decision.attempt_failed",
+                    actual=self._settlement_cost(connection, authority, batch),
+                ))
+            except TypedDecisionReconciliationRequired as cost_error:
+                uncertainty = cost_error
+                self.commit(lambda connection: self._reconcile(connection, authority, uncertainty))
+                raise
+            raise TypedDecisionSpendError(_safe_error(reason)) from None
         try:
             return self.commit(lambda connection: self._settle_success(
                 connection, authority, batch, output,
             ))
         except (ModelGatewayLeaseError, LeaseNotFoundError, RuntimeError) as error:
             reason = error
+            if isinstance(reason, TypedDecisionReconciliationRequired):
+                self.commit(lambda connection: self._reconcile(connection, authority, reason))
+                raise
             if "expired" not in str(reason).lower():
                 raise
             self.commit(lambda connection: self._reconcile(connection, authority, reason))
@@ -389,10 +417,10 @@ class TypedDecisionSpend:
             })
         # $0 of money on a subscription or local source the call is pinned to
         # (included_spend.py); the reservation is then a gate, not a hold.
-        from .included_spend import reservation_estimate
+        from .included_spend import source_by_id, source_is_included
 
-        estimate = reservation_estimate(connection, self.project_id, source_id,
-                                        self.max_cost_usd_micros)
+        included = source_is_included(source_by_id(connection, self.project_id, source_id))
+        estimate = 0 if included else int(self.max_cost_usd_micros)
         reserved = self.budget.reserve(
             connection,
             self.project_id,
@@ -412,16 +440,16 @@ class TypedDecisionSpend:
                     connection,
                     f"Budget refused typed decision {self.run_id}/{self.step_id}",
                     "budget_denied",
-                    {"attempt": self.attempt, "message": reserved.get("message")},
+                    {"attempt": self.attempt, "message": _safe_error(reserved.get("message") or "Budget reservation denied.")},
                 )
             self._emit(connection, "typed_decision.spend_refused", dedupe, {
                 "decision_id": decision_id,
                 "attempt": self.attempt,
-                "message": reserved.get("message"),
+                "message": _safe_error(reserved.get("message") or "Budget reservation denied."),
             })
             return _Authority(
                 outcome="refused",
-                message=reserved.get("message") or "Budget reservation denied.",
+                message=_safe_error(reserved.get("message") or "Budget reservation denied."),
                 invocation_dedupe=dedupe,
                 role=role,
             )
@@ -437,28 +465,28 @@ class TypedDecisionSpend:
                 lease_ttl_seconds=self.ttl_seconds,
             )
         except LeaseNotFoundError as missing:
-            self.budget.release(connection, self.project_id, reservation_id, str(missing))
+            self.budget.release(connection, self.project_id, reservation_id, _safe_error(missing))
             self._emit(connection, "typed_decision.reconciliation_required", dedupe, {
-                "attempt": self.attempt, "message": str(missing),
+                "attempt": self.attempt, "message": _safe_error(missing),
             })
             return _Authority(
-                outcome="reconcile", message=str(missing), invocation_dedupe=dedupe, role=role,
+                outcome="reconcile", message=_safe_error(missing), invocation_dedupe=dedupe, role=role,
             )
         except JobDeferredError as deferred:
             self.budget.release(
-                connection, self.project_id, reservation_id, str(deferred),
+                connection, self.project_id, reservation_id, _safe_error(deferred),
             )
             decision_id = self._decision(
                 connection,
                 f"Budget deferred typed decision {self.run_id}/{self.step_id}",
                 "budget_deferred",
-                {"attempt": self.attempt, "reason": str(deferred)},
+                {"attempt": self.attempt, "reason": _safe_error(deferred)},
             )
             self._emit(connection, "typed_decision.spend_refused", dedupe, {
-                "decision_id": decision_id, "attempt": self.attempt, "message": str(deferred),
+                "decision_id": decision_id, "attempt": self.attempt, "message": _safe_error(deferred),
             })
             return _Authority(
-                outcome="refused", message=str(deferred), invocation_dedupe=dedupe, role=role,
+                outcome="refused", message=_safe_error(deferred), invocation_dedupe=dedupe, role=role,
             )
         try:
             acquired = self.gateway.acquire(
@@ -484,7 +512,8 @@ class TypedDecisionSpend:
                 source_id=source_id,
             )
         except ModelCapacityDeniedError as denied:
-            self.budget.release(connection, self.project_id, reservation_id, str(denied))
+            self.budget.release(connection, self.project_id, reservation_id, _safe_error(denied))
+            self._capacity_refused(connection, job["id"], leased["lease_token"], denied)
             # Every lease held by other work is a queue, not something a person decides: the
             # step waits (workflow_capability_runner._as_wait reads the same classification).
             from .model_failures import waiting_for
@@ -493,13 +522,13 @@ class TypedDecisionSpend:
                 connection,
                 f"Model capacity refused typed decision {self.run_id}/{self.step_id}",
                 "model_capacity_denied",
-                {"attempt": self.attempt, "message": str(denied)},
+                {"attempt": self.attempt, "message": _safe_error(denied)},
             )
             self._emit(connection, "typed_decision.spend_refused", dedupe, {
-                "decision_id": decision_id, "attempt": self.attempt, "message": str(denied),
+                "decision_id": decision_id, "attempt": self.attempt, "message": _safe_error(denied),
             })
             return _Authority(
-                outcome="refused", message=str(denied), invocation_dedupe=dedupe, role=role,
+                outcome="refused", message=_safe_error(denied), invocation_dedupe=dedupe, role=role,
             )
         if acquired.get("duplicate") or not acquired.get("lease_token"):
             self.budget.release(
@@ -558,7 +587,12 @@ class TypedDecisionSpend:
             receipt_id=invocation["receipt_id"],
             invocation_dedupe=dedupe,
             role=role,
+            included_in_subscription=included,
+            source_id=source_id,
         )
+
+    def _capacity_refused(self, connection, job_id, job_lease_token, error) -> None:
+        """Optional no-contact cleanup; ordinary typed-decision behavior is unchanged."""
 
     def _existing(self, connection, identity: str, dedupe: str) -> Optional[_Authority]:
         scope = self._scope(connection)
@@ -720,7 +754,7 @@ class TypedDecisionSpend:
             connection, authority.job_id, authority.job_lease_token,
             authority.lease_id, authority.lease_token,
         )
-        actual = int(batch.cost_usd_micros or 0)
+        actual = self._settlement_cost(connection, authority, batch)
         usage = {
             key: int(value)
             for key, value in (batch.usage or {}).items()
@@ -757,10 +791,65 @@ class TypedDecisionSpend:
         })
         return output
 
+    def _settlement_cost(self, connection, authority: _Authority, batch: DecisionBatch) -> int:
+        cost = batch.cost_usd_micros
+        if isinstance(cost, int) and not isinstance(cost, bool) and cost >= 0:
+            return cost
+        # Missing equivalent usage is harmless only when THIS still-active
+        # authority names a canonical included source and zero money reservation.
+        # Lock that source until settlement: its classification must not change
+        # between this check and the gateway's own money calculation.
+        if cost is None and authority.included_in_subscription:
+            from .included_spend import source_is_included
+
+            source = connection.execute(text(
+                "SELECT s.entitlement_kind,s.cost_mode FROM model_gateway_leases l "
+                "JOIN budget_reservations b ON b.id=l.budget_reservation_id "
+                "AND b.project_id=l.project_id AND b.job_id=l.job_id "
+                "JOIN entitlement_sources s ON s.id=l.entitlement_source_id "
+                "AND s.project_id=l.project_id AND s.source_id=l.source_id "
+                "WHERE l.id=:lease AND l.project_id=:project AND l.job_id=:job "
+                "AND l.source_id=:source AND b.id=:reservation "
+                "AND l.status='active' AND b.status='active' "
+                "AND l.expires_at>now() AND b.expires_at>now() "
+                "AND l.estimated_cost_usd_micros=0 AND b.amount_usd_micros=0 "
+                "FOR UPDATE OF l,b,s"
+            ), {"lease": authority.lease_id, "project": self.project_id,
+                "job": authority.job_id, "source": authority.source_id,
+                "reservation": authority.reservation_id}).mappings().first()
+            if source_is_included(source):
+                return 0
+        raise TypedDecisionReconciliationRequired(
+            "typed decision cost is uncertain and needs reconciliation"
+        )
+
     def _fail(
         self, connection, authority: _Authority, error: BaseException, *,
-        event_type: str, actual: int = 0,
+        event_type: str, actual: int = 0, nonacceptance_kind: Optional[str] = None,
     ) -> None:
+        message = _safe_error(error)[:500]
+        evidence: dict[str, Any] = {"reason": message}
+        # Produce matching, versioned evidence in the canonical invocation,
+        # Receipt and event. Historical failed rows without this proof remain
+        # ambiguous; do not infer nonacceptance from their error strings.
+        if actual == 0 and (
+            (nonacceptance_kind == "cancelled_before_dispatch"
+             and isinstance(error, TypedDecisionCancelled)
+             and event_type == "typed_decision.cancelled")
+            or (nonacceptance_kind == "provider_auth_rejected"
+                and isinstance(error, TypeSafeAuthenticationRefused)
+                and event_type == "typed_decision.attempt_failed")
+        ):
+            evidence["typed_decision_nonacceptance"] = {
+                "version": 1,
+                "kind": nonacceptance_kind,
+                "project_id": self.project_id,
+                "invocation_id": authority.invocation_id,
+                "receipt_id": authority.receipt_id,
+                "reservation_id": authority.reservation_id,
+                **({"provider": "typesafe", "http_status": 401}
+                   if nonacceptance_kind == "provider_auth_rejected" else {}),
+            }
         self.gateway.settle_invocation(
             connection,
             self.project_id,
@@ -774,22 +863,25 @@ class TypedDecisionSpend:
             usage_units={},
             actual_cost_usd_micros=actual,
             observed_capacity=capacity_after_failure(error),
-            error={"reason": str(error)[:500]},
+            error=evidence,
         )
         try:
             self.jobs.fail(
                 connection, self.worker_id, authority.job_id, authority.job_lease_token,
-                {"message": str(error)[:500]}, False, 0,
+                {"message": message}, False, 0,
             )
         except (LeaseNotFoundError, RuntimeError):
             pass
         self._emit(connection, event_type, authority.invocation_dedupe, {
             "attempt": self.attempt,
             "receipt_id": authority.receipt_id,
-            "message": str(error)[:500],
+            "message": message,
+            **({"typed_decision_nonacceptance": evidence["typed_decision_nonacceptance"]}
+               if "typed_decision_nonacceptance" in evidence else {}),
         })
 
     def _reconcile(self, connection, authority: _Authority, error: BaseException) -> None:
+        message = _safe_error(error)[:500]
         self._decision(
             connection,
             f"Reconcile typed decision {self.run_id}/{self.step_id}",
@@ -797,7 +889,7 @@ class TypedDecisionSpend:
             {
                 "attempt": self.attempt,
                 "receipt_id": authority.receipt_id,
-                "message": str(error)[:500],
+                "message": message,
             },
         )
         self._emit(connection, "typed_decision.reconciliation_required", authority.invocation_dedupe, {
@@ -805,7 +897,7 @@ class TypedDecisionSpend:
             "step_id": self.step_id,
             "attempt": self.attempt,
             "receipt_id": authority.receipt_id,
-            "message": str(error)[:500],
+            "message": message,
         })
 
     def _replay(self, connection, receipt_id: Optional[str], dedupe: str, role: str) -> _Authority:

@@ -545,13 +545,42 @@ fi
 
 # Adding the current user to the docker group would grant root-equivalent access and does
 # not take effect in this shell. Use sudo for this install when the socket requires it.
+# ---- scoped sudo Docker fallback ------------------------------------------
+# Keep this small boundary identical in the installer and lifecycle helpers.
+# sudo resets selection variables and uses root's Docker configuration.
+boss_sudo_scope_safe() {
+  _boss_docker_os="$(uname -s)" || return 1
+  [ "$_boss_docker_os" = Linux ] || return 1
+  [ -z "${DOCKER_HOST:-}${DOCKER_CONTEXT:-}${DOCKER_CONFIG:-}${DOCKER_TLS:-}${DOCKER_TLS_VERIFY:-}${DOCKER_CERT_PATH:-}" ] || return 1
+  if [ "${2:-}" != restore ]; then
+  [ "${COMPOSE_PROJECT_NAME:-boss-community}" = boss-community ] || return 1
+  [ "${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}" = boss-community ] || return 1
+  if [ -f "$1" ]; then
+    [ -r "$1" ] || return 1
+    awk '
+      NR == 1 { sub(/^\357\273\277/, "") }
+      /^[[:space:]]*(export[[:space:]]+)?(COMPOSE_PROJECT_NAME|BOSS_COMMUNITY_IMAGE_TAG)([[:space:]]|=|:|$)/ {
+        if ($0 !~ /^(COMPOSE_PROJECT_NAME|BOSS_COMMUNITY_IMAGE_TAG)=(boss-community)?$/) exit 1
+        split($0, field, "="); if (seen[field[1]]++) exit 1
+      }
+    ' "$1" || return 1
+  fi
+  fi
+  _boss_docker_context="$(docker context show 2>/dev/null)" || return 1
+  [ "$_boss_docker_context" = default ] || return 1
+  _boss_docker_endpoint="$(docker context inspect default --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || return 1
+  [ "$_boss_docker_endpoint" = unix:///var/run/docker.sock ]
+}
+# ---- end scoped sudo Docker fallback --------------------------------------
+
 if ! docker info >/dev/null 2>&1; then
-  if [[ "$OS" == Linux && "$(id -u)" -ne 0 ]] && need_cmd sudo && sudo -n docker info >/dev/null 2>&1; then
-    DOCKER=(sudo -n docker)
+  boss_sudo_scope_safe "$INSTALL_DIR/.env" || { echo "Cannot safely use sudo for this Docker selection. Use direct Docker access for custom projects, contexts or connection settings." >&2; exit 1; }
+  if [[ "$OS" == Linux && "$(id -u)" -ne 0 ]] && need_cmd sudo && sudo -n docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then
+    DOCKER=(sudo -n docker --host unix:///var/run/docker.sock)
   elif [[ "$OS" == Linux && "$(id -u)" -ne 0 && "$NONINTERACTIVE" -eq 0 ]] && need_cmd sudo &&
        ui_info "Docker needs administrator access for this user. sudo may ask for your password." &&
-       sudo -v </dev/tty && sudo -n docker info >/dev/null 2>&1; then
-    DOCKER=(sudo -n docker)
+       sudo -v </dev/tty && sudo -n docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then
+    DOCKER=(sudo -n docker --host unix:///var/run/docker.sock)
   else
     die "Docker daemon is unavailable. Start Docker and rerun; on Linux ensure noninteractive sudo access to Docker."
   fi
@@ -559,7 +588,7 @@ fi
 ui_ok "Docker daemon is running"
 if "${DOCKER[@]}" compose version >/dev/null 2>&1; then
   COMPOSE=("${DOCKER[@]}" compose)
-elif need_cmd docker-compose; then
+elif [[ "${DOCKER[0]}" != sudo ]] && need_cmd docker-compose; then
   COMPOSE=(docker-compose)
 else
   die "Docker Compose v2 is required."
@@ -590,21 +619,46 @@ ui_step "Choosing settings"
 # No questions for what has a safe default. --dir, --no-web and --secret-store change them.
 ui_ok "Install dir: $INSTALL_DIR"
 
-# Measure the filesystem that will hold the checkout, not $HOME. A small home
-# directory and a large install volume are a normal laptop layout; warning
-# about the wrong disk stops people who actually have room.
-if need_cmd df; then
-  _disk_path="$INSTALL_DIR"
-  if [[ ! -e "$_disk_path" ]]; then
-    _disk_path="$(dirname "$_disk_path")"
+# ---- storage advice -------------------------------------------------------
+# The checkout filesystem and the daemon's image store may be different disks.
+# These are planning measurements, not an installation admission threshold.
+report_disk_space() {
+  local label="$1" path="$2" free_kb
+  if ! need_cmd df || ! free_kb="$(df -Pk "$path" 2>/dev/null | awk 'NR==2{print $4}')" ||
+     [[ ! "$free_kb" =~ ^[0-9]+$ ]]; then
+    ui_warn "$label: free space could not be measured."
+    return
   fi
-  FREE_KB="$(df -Pk "$_disk_path" 2>/dev/null | awk 'NR==2{print $4}')"
-  if [[ -n "${FREE_KB:-}" && "$FREE_KB" -lt 80000000 ]]; then
-    ui_warn "Less than 80 GB free on $_disk_path. Allow about 100 GB for images, build cache and agent work."
-  else
-    ui_ok "Disk space looks OK"
+  ui_info "$label ($path): $(awk -v kb="$free_kb" 'BEGIN {printf "%.1f", kb/1048576}') GiB free."
+  if [[ "$free_kb" -lt 80000000 ]]; then
+    ui_warn "$label has less than about 80 GB free; builds and agent work may need more space. This is advisory."
   fi
+}
+_disk_path="$INSTALL_DIR"
+while [[ ! -e "$_disk_path" && "$_disk_path" != / && "$_disk_path" != . ]]; do
+  _disk_path="$(dirname "$_disk_path")"
+done
+report_disk_space "Install filesystem" "$_disk_path"
+
+# Never df a remote daemon's path on this host, or treat Desktop's host free
+# space as free space inside its VM. An inaccessible local path is unknown too.
+_docker_endpoint=""
+if [[ -n "${DOCKER_HOST:-}" && -z "${DOCKER_CONTEXT:-}" ]]; then
+  _docker_endpoint="$DOCKER_HOST"
+else
+  _docker_endpoint="$("${DOCKER[@]}" context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)"
 fi
+_docker_root=""; _docker_os=""
+if [[ "$OS" == Linux && "$_docker_endpoint" == unix://* ]]; then
+  IFS='|' read -r _docker_root _docker_os <<< "$("${DOCKER[@]}" info --format '{{.DockerRootDir}}|{{.OperatingSystem}}' 2>/dev/null || true)"
+fi
+if [[ "$_docker_root" == /* && -d "$_docker_root" && -n "$_docker_os" && "$_docker_os" != *"Docker Desktop"* ]]; then
+  report_disk_space "Docker image-store filesystem" "$_docker_root"
+else
+  ui_warn "Docker image-store free space is unknown here. Check the selected Docker host or Docker Desktop disk settings; install filesystem space is not Docker-store headroom."
+fi
+ui_info "About 100 GB of working capacity is recommended for images, cache and agent work; actual needs vary."
+# ---- end storage advice ---------------------------------------------------
 
 # A noninteractive reinstall or upgrade must retain the service profile chosen on the
 # first run. Without this marker, `upgrade.sh --yes` silently added the web build to a
@@ -1202,12 +1256,74 @@ export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-boss-community}"
 # The image tag follows this compose project. A second install on the same
 # machine must not replace the images this one is running.
 export BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-$COMPOSE_PROJECT_NAME}"
+# ---- build metadata -------------------------------------------------------
+# Describe this installed source, not a caller's stale build environment. This
+# identifies a clean Git checkout; it is not a content attestation for an image.
+set_build_metadata() {
+  local source_root="" source_head="" source_status="" built_at=""
+  BOSS_SOURCE_SHA=unknown
+  BOSS_BUILT_AT=unknown
+  if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]] &&
+     source_root="$(git -C "$INSTALL_DIR" rev-parse --show-toplevel 2>/dev/null)" &&
+     [[ "$source_root" == "$(cd "$INSTALL_DIR" && pwd -P)" ]] &&
+     source_head="$(git -C "$INSTALL_DIR" rev-parse --verify HEAD 2>/dev/null)" &&
+     [[ "$source_head" =~ ^[0-9a-f]{40}$ ]] &&
+     source_status="$(GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C "$INSTALL_DIR" status --porcelain --untracked-files=normal 2>/dev/null)" &&
+     [[ -z "$source_status" ]]; then
+    BOSS_SOURCE_SHA="$source_head"
+  fi
+  # One UTC build-invocation timestamp for all roles, not a completion timestamp.
+  if built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" &&
+     [[ "$built_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    BOSS_BUILT_AT="$built_at"
+  fi
+  export BOSS_SOURCE_SHA BOSS_BUILT_AT
+  if [[ "$BOSS_SOURCE_SHA" == unknown ]]; then
+    ui_warn "Build source revision is unknown: a clean Git checkout is required."
+  fi
+  if [[ "$BOSS_BUILT_AT" == unknown ]]; then
+    ui_warn "Build timestamp is unknown: the local UTC clock could not be read."
+  fi
+}
+set_build_metadata
+# ---- end build metadata ---------------------------------------------------
+# One blocking build per service also serializes image export/load. Compose's
+# parallel limit alone does not prevent a single multi-service build from
+# exporting several large images at once. Keep normal cache/platform behavior.
+# Parse config in memory only: it contains resolved credentials, never log it.
+# ---- serial image builds --------------------------------------------------
 # shellcheck disable=SC2086
-${COMPOSE[@]} \
+if ! BUILD_SERVICES="$("${COMPOSE[@]}" \
   -f scripts/install/community-compose.yml \
   --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES \
-  build </dev/null
+  config --format json </dev/null 2>/dev/null | python3 -c '
+import argparse, json, re, sys
+parser = argparse.ArgumentParser()
+parser.add_argument("--profile", action="append", default=[])
+active = set(parser.parse_args().profile)
+services = json.load(sys.stdin)["services"]
+for name, service in services.items():
+    profiles = set(service.get("profiles", []))
+    if "build" not in service or (profiles and not active.intersection(profiles) and "*" not in active):
+        continue
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", name):
+        raise SystemExit("Invalid build service name in Compose configuration")
+    print(name)
+' $COMPOSE_PROFILES 2>/dev/null)"; then
+  die "Could not resolve the selected Compose build services; stopping before image builds. Check the Compose configuration and .env."
+fi
+while IFS= read -r _build_service; do
+  [[ -n "$_build_service" ]] || continue
+  ui_info "Building $_build_service (one image at a time)"
+  # Pass observed metadata as build arguments: sudo may reset exported variables.
+  # shellcheck disable=SC2086
+  "${COMPOSE[@]}" -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+    $COMPOSE_PROFILES build \
+    --build-arg "BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA" \
+    --build-arg "BOSS_BUILT_AT=$BOSS_BUILT_AT" "$_build_service" </dev/null
+done <<< "$BUILD_SERVICES"
+# ---- end serial image builds ----------------------------------------------
 
 # A rerun/upgrade may already have a worker polling the old API. Keep it up
 # during the image build, then pause it before changing the API or schema.

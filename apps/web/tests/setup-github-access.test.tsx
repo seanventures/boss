@@ -174,3 +174,58 @@ describe("GitHub access", () => {
     expect(api.calls.filter((c) => c.url.endsWith("/app/verify")).length).toBe(2);
   });
 });
+
+
+describe("simple GitHub entry", () => {
+  // Merged with github-simple (rc9 merge, scratchpad/rc9/MERGE.md): the one GitHub sign-in is
+  // step ①, and the org's GitHub App lives in Advanced, so `focus=repository` lands on Repository
+  // and `focus=github_app` on the App. What rc9 added inside the App row holds: the App first,
+  // the other ways folded on a fresh install.
+  it("keeps the App first and both alternatives intact in closed Other ways on a fresh install", async () => {
+    const view = firstRun();
+    view.secrets.needs_consent = true;
+    const api = fakeApi(view);
+    withGitHub(api, NONE);
+    mounted = await mountBoard(view, "?area=setup&focus=github_app");
+    const repo = document.querySelector('[data-testid="su-row-repository"]')!;
+    const alternatives = document.querySelector('[data-testid="gh-other-ways"]') as HTMLDetailsElement;
+    expect(alternatives.open).toBe(false);
+    expect(alternatives.querySelector("summary")?.textContent).toBe("Other ways");
+    expect(document.querySelector('[data-testid="gh-way-app"]')!.textContent).toContain("A token per build, only for its repos, gone when it ends.");
+    await click(alternatives.querySelector("summary"));
+    expect(alternatives.open).toBe(true);
+    expect(alternatives.textContent).toContain("Less safe");
+    expect(alternatives.querySelector('[data-testid="gh-as-me-link"]')).not.toBeNull();
+    expect(repo.querySelector('[data-testid="su-consent"]')?.getAttribute("title")).toContain("Encrypted in Postgres");
+    expect(api.calls.filter(x => x.method !== "GET")).toEqual([]);
+  });
+
+  for (const patch of [
+    { people_connected: undefined }, { token: undefined }, { token: {} },
+    { verdict: { tone: "grey", label: "Unknown", tip: "Not reported" } },
+    { people_connected: 1 }, { mode: "as_me" }, { mode: "token", token: { repos: [], login: "me", migrated: false } },
+    { app: { ...NONE.app, configured: true } }, { app: { ...NONE.app, configured: undefined } },
+    { app: { ...NONE.app, verified: { state: "unreachable" } } },
+    { env_token: { present: true, read_by_builds: false } },
+  ]) {
+    it(`keeps alternatives exposed for ${JSON.stringify(patch)}`, async () => {
+      const api = fakeApi(firstRun());
+      withGitHub(api, { ...NONE, ...patch });
+      mounted = await mountBoard(firstRun());
+      const alternatives = document.querySelector('[data-testid="gh-other-ways"]') as HTMLDetailsElement;
+      expect(alternatives.open).toBe(true);
+      expect(document.querySelector('[data-testid="gh-way-token"]')).not.toBeNull();
+    });
+  }
+
+  it("connected repository deep links still land on Repository", async () => {
+    const api = fakeApi(board()); withGitHub(api, NONE);
+    const landed: HTMLElement[] = [];
+    vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) { landed.push(this); });
+    mounted = await mountBoard(board(), "?area=setup&focus=repository");
+    expect(landed[0]).toBe(document.querySelector('[data-testid="su-row-repository"]'));
+    expect(document.querySelector('[data-testid="su-row-repository"]')?.getAttribute("data-focused")).toBe("true");
+    expect(document.querySelector('[data-testid="su-row-github-access"]')?.getAttribute("data-focused")).toBeNull();
+    expect((document.querySelector('[data-testid="gh-other-ways"]') as HTMLDetailsElement).open).toBe(true);
+  });
+});

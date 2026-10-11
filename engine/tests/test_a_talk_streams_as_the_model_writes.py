@@ -17,7 +17,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from boss_engine.services import agent_converse
 from boss_engine.services.claude_cli_adapter import ClaudeCliAdapter, FallingBackAdapter
 from boss_engine.services.model_routing import GovernedChatAdapter
 from boss_engine.services.openai_adapter import OpenAIAdapter
@@ -163,18 +162,20 @@ def test_openai_responses_api_streams_text_deltas(monkeypatch):
 
 # ── Through the conversation and the wrappers ────────────────────────────────────────────────
 
-def test_a_conversation_call_reads_the_adapters_stream_as_it_comes(claude):
-    """agent_converse._call over the real CLI adapter: a chunk is in the caller's hands while
-    the child is still waiting to write the rest."""
+def test_the_adapter_stream_preserves_the_first_token_boundary(claude):
+    """The actual CLI adapter yields while its owned child waits for the reader.
+
+    Canonical conversation job/lease/receipt proof lives in the real-PG API suite.
+    """
     adapter, tmp = claude
     out = []
-    for kind, value in agent_converse._call(adapter, "You are Vera.", "Hi"):
-        if kind == "chunk" and not out:
+    for value in adapter.stream_text_response("Hi", system_prompt="You are Vera."):
+        if isinstance(value, str) and not out:
             (tmp / "marker").write_text("seen")
-        out.append((kind, value))
-    assert [v for k, v in out if k == "chunk"] == ["First words. ", "Then the rest."]
-    full, usage = out[-1][1]
-    assert full == "First words. Then the rest." and usage["completion_tokens"] == 7
+        out.append(value)
+    assert out[:-1] == ["First words. ", "Then the rest."]
+    assert "".join(out[:-1]) == "First words. Then the rest."
+    assert out[-1]["completion_tokens"] == 7
 
 
 def test_the_fallback_wrapper_passes_the_stream_through(claude):

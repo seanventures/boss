@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1506 operations.
+# 1512 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -62,6 +62,9 @@
 "POST /v1/a2a/messages/{message_id}/replay": ["permit integration:manage @ project(body=project_id)", "OA"]
 "POST /v1/a2a/poll": ["permit worker:lease @ org", "-"]
 "POST /v1/a2a/subscriptions": ["permit integration:manage @ project(body=project_id)", "OA"]
+"GET /v1/acceptance-checks": ["permit workflow:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/acceptance-checks": ["permit workflow:create @ project(body=project_id)", "OAP"]
+"POST /v1/acceptance-checks/{template_id}/revisions": ["permit workflow:create @ project(body=project_id)", "OAP"]
 "GET /v1/activity": ["permit activity:read @ project(query=project_id)|org", "OAPVU"]
 "GET /v1/activity/context": ["permit activity:read @ project(query=project_id)|org", "OAPVU"]
 "GET /v1/activity/export": ["permit activity:export @ project(query=project_id)|org", "OAU"]
@@ -352,6 +355,8 @@
 "POST /v1/code-tasks/{run_id}/override": ["permit code_task:override @ code_task(path=run_id)", "OA"]
 "POST /v1/code-tasks/{run_id}/preview": ["permit preview:manage @ code_task(path=run_id)", "OAP"]
 "POST /v1/code-tasks/{run_id}/redelivered": ["permit worker:lease @ org", "-"]
+"GET /v1/code-tasks/{run_id}/result-review": ["permit code_task:read @ code_task(path=run_id)", "OAPVU"]
+"POST /v1/code-tasks/{run_id}/result-review": ["permit code_task:steer @ code_task(path=run_id)", "OAP"]
 "GET /v1/code-tasks/{run_id}/retrospective": ["permit code_task:read @ code_task(path=run_id)", "OAPVU"]
 "POST /v1/code-tasks/{run_id}/retry": ["permit code_task:retry @ code_task(path=run_id)", "OAP"]
 "GET /v1/code-tasks/{run_id}/review-comments": ["permit code_task:read @ code_task(path=run_id)", "OAPVU"]
@@ -427,6 +432,7 @@
 "POST /v1/decisions/{decision_id}/reject": ["permit decision:approve @ decision(path=decision_id)", "OAP"]
 "POST /v1/decisions/{decision_id}/revise": ["permit decision:approve @ decision(path=decision_id)", "OAP"]
 "GET /v1/delivery-workflows": ["permit workflow:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/delivery-workflows/agreement": ["permit workflow:read @ project(body=project_id)", "OAPVU"]
 "POST /v1/delivery-workflows/apply": ["permit workflow:publish @ project(body=project_id)", "OAP"]
 "GET /v1/delivery-workflows/asks": ["permit workflow:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/delivery-workflows/capabilities": ["permit workflow:read @ project(query=project_id)|org", "OAPVU"]
