@@ -14,7 +14,7 @@
  * GitHub's redirects land back here with `?github=app_connected|app_failed`.
  */
 import { GatedButton } from "../../components/gated";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { forwardRef, useCallback, useEffect, useRef, useState } from "react";
 import { CircleNotch, GithubLogo } from "@phosphor-icons/react";
 
 import { IdentityError, idDelete, idGet, idPost } from "../../lib/identity/api";
@@ -167,6 +167,16 @@ export function statusOf(raw: unknown): GitHubStatus | null {
       || !s.verdict || typeof s.verdict.label !== "string") return null;
   return { ...(s as GitHubStatus), people_connected: Number(s.people_connected) || 0,
            token: s.token && Array.isArray(s.token.repos) ? s.token : null };
+}
+
+/** Missing fields must never turn an unknown connection into fresh setup. */
+function unusedAccess(raw: unknown): boolean {
+  const s = raw as GitHubStatus | null;
+  return Boolean(s && s.mode === "none" && s.verdict?.tone === "red" && s.app?.configured === false && s.app.installed === false
+    && s.app.source === null && s.app.slug === null && s.app.html_url === null && s.app.account === null
+    && (!s.app.verified || s.app.verified.state === "no_app")
+    && s.token === null && s.people_connected === 0
+    && s.env_token?.present === false && s.env_token.read_by_builds === false);
 }
 
 function sentence(error: unknown): string {
@@ -451,9 +461,12 @@ function MoveEnvToken({ repos, reload }: { repos: string[]; reload: () => void }
   );
 }
 
-export function GitHubAccessRow({ initial = null }: { initial?: GitHubStatus | null }) {
+export const GitHubAccessRow = forwardRef<HTMLElement, { initial?: GitHubStatus | null; focused?: boolean }>(function GitHubAccessRow({ initial = null, focused }, ref) {
   const { view } = useBoard();
   const [status, setStatus] = useState<GitHubStatus | null>(initial);
+  const [unused, setUnused] = useState(unusedAccess(initial));
+  const [otherWaysOpen, setOtherWaysOpen] = useState(false);
+  const [redirectFailed, setRedirectFailed] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [back, setBack] = useState(false);
   const repos = view.repository.repos.map((r) => r.full_name);
@@ -463,6 +476,7 @@ export function GitHubAccessRow({ initial = null }: { initial?: GitHubStatus | n
       .then((raw) => {
         const s = statusOf(raw);
         setStatus(s);
+        setUnused(Boolean(s && unusedAccess(raw)));
         setFailed(s ? null : "Not reported");
       })
       .catch((error) => setFailed(error instanceof IdentityError ? error.message : "Not readable now"));
@@ -475,15 +489,16 @@ export function GitHubAccessRow({ initial = null }: { initial?: GitHubStatus | n
       const said = params.get("github");
       if (!said) return;
       if (said === "app_connected") { toast("GitHub App connected"); setBack(true); }
-      else toast(FAILED_WORDS[params.get("reason") ?? ""] ?? "GitHub App not connected", "error");
+      else { setRedirectFailed(true); toast(FAILED_WORDS[params.get("reason") ?? ""] ?? "GitHub App not connected", "error"); }
       params.delete("github"); params.delete("reason");
       window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
     } catch { /* no window */ }
   }, []);
 
   const verdict = status?.verdict ?? null;
+  const hideAlternatives = unused && !redirectFailed && !view.repository.connection && !repos.length;
   return (
-    <section className="su-row" data-testid="su-row-github-access" aria-label="GitHub access" id="su-github-access">
+    <section ref={ref} className="su-row" data-testid="su-row-github-access" data-focused={focused || undefined} aria-label="GitHub access" id="su-github-access">
       <div className="su-row-label">
         <SectionLabel as="span" tip={SANDBOX_TIP}>GitHub access</SectionLabel>
       </div>
@@ -497,14 +512,19 @@ export function GitHubAccessRow({ initial = null }: { initial?: GitHubStatus | n
               <Dot tone={verdict.tone} />{verdict.label}
             </span>
             {status.env_token.present ? <MoveEnvToken repos={repos} reload={reload} /> : null}
-            <div className="su-ways">
-              <AppCard status={status} reload={reload} back={back} repos={repos} />
-              <AsMeCard status={status} />
-              <TokenCard status={status} reload={reload} />
-            </div>
+            <AppCard status={status} reload={reload} back={back} repos={repos} />
+            <details className="su-other-ways" data-testid="gh-other-ways"
+                     open={!hideAlternatives || otherWaysOpen}
+                     onToggle={(e) => { if (hideAlternatives) setOtherWaysOpen(e.currentTarget.open); }}>
+              <summary hidden={!hideAlternatives}>Other ways</summary>
+              <div className="su-ways su-ways-alternatives">
+                <AsMeCard status={status} />
+                <TokenCard status={status} reload={reload} />
+              </div>
+            </details>
           </>
         )}
       </div>
     </section>
   );
-}
+});

@@ -16,6 +16,8 @@ The step ends with one row per source (API keys, Codex, Claude Code, Grok Build,
 
 Open **Mission Control → Settings → Repo and models**. **+ Add model** offers three kinds: **Subscription** (Claude Code, Codex, Grok Build, Cursor), **API key** (OpenRouter, OpenAI, Anthropic, Gemini, xAI, or any OpenAI-compatible endpoint as **Other**), and **Local** (Ollama, or any local OpenAI-compatible URL). **Connect** asks an API-key, local model, or already authenticated coding CLI one tiny governed question. An API key is saved only after the outcome is known; a row says **Working** after an answer, not merely after a login. In RC9 source, pasted subscription tokens and auth files are held before storage or a model call: sign the CLI in as the BOSS service user, then Connect without pasted credential material. Candidate-isolated subscription import is still pending.
 
+**Model sources** shows connected sources, status problems, and existing sign-in sessions. Open **Add source**, choose a source, then use its **Add key** or **Sign in** action. Choosing a source does not connect it. Sources with unknown credentials or unreadable session history remain visible.
+
 **Who does what** on the same page assigns models to jobs: **Build**, **Review**, **Chat**, **Decisions**, and under **More jobs**, **Hard problems** and **Routine work**. Each job defaults to **Auto**, which picks your choice, else a working subscription, else a local model, else a metered key, else a key in the install's settings file.
 
 The same setup is available through the API:

@@ -7,7 +7,8 @@
  * Source names open optional identity/model details. Status, reported capacity and actions
  * stay visible, as do every session and its completion controls.
  *
- * One source per line, every source the project has (the Model row shows only the connected
+ * Connected, uncertain and attention sources stay in view. Positively unused sources are
+ * offered through Add source, only after both reads prove absence (the Model row shows connected
  * ones). A key that is already a Model row is replaced THERE (`Replace key ↗` opens its menu) — no
  * second key form; a source with no key yet takes one here, into the secret backend you pick.
  * Official logins are started, completed (the session reference and the capacity it reports,
@@ -36,7 +37,7 @@ const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is st
 
 export type CapSource = {
   sourceId: string; provider: string; kind: string; effective: string; auth: string; connection: string;
-  credentialPresent: boolean; capacity: string; models: string[]; modes: string[]; scopes: string[]; pooled: boolean;
+  credentialPresent: boolean; credentialAbsent: boolean; capacity: string; models: string[]; modes: string[]; scopes: string[]; pooled: boolean;
 };
 export type CapSession = {
   id: string; sourceId: string; mode: string; status: string; scopes: string[]; login: string | null; action: string | null; at: string;
@@ -49,6 +50,8 @@ export function parseSources(w: unknown): CapSource[] {
     return {
       sourceId: s(r.source_id), provider: s(r.provider), kind: s(r.source_kind), effective: s(r.effective_status, s(r.status)),
       auth: s(r.auth_method), connection: s(r.connection_status), credentialPresent: cap.credential_present === true,
+      // Seeded credential_ref/connection_ref can name an absent environment variable.
+      credentialAbsent: cap.credential_present === false && !r.credential_secret_ref_id,
       capacity: s(cap.capacity_state, "unknown"), models: list(r.supported_models),
       modes: list(o(r.connection_metadata).supported_connection_modes), scopes: list(r.oauth_scopes),
       pooled: r.multi_tenant_allowed === true,
@@ -221,6 +224,10 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
   const { projectId, view, apply } = useBoard();
   const [sources, setSources] = useState<CapSource[] | null>(null);
   const [sessions, setSessions] = useState<CapSession[]>([]);
+  const [readsComplete, setReadsComplete] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [selected, setSelected] = useState("");
+  const [edited, setEdited] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [locked, setLocked] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -229,16 +236,35 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
 
   const load = useCallback(async () => {
     const pid = encodeURIComponent(projectId);
+    setReadsComplete(false);
     try {
       const [a, b] = await Promise.all([
         fetch(`/v1/entitlements/sources?project_id=${pid}`, { cache: "no-store" }),
-        fetch(`/v1/entitlement-connection-sessions?project_id=${pid}&limit=20`, { cache: "no-store" }),
+        fetch(`/v1/entitlement-connection-sessions?project_id=${pid}&limit=20`, { cache: "no-store" }).catch(() => null),
       ]);
       if (isLocked(a)) { setLocked(await lockedReason(a)); setSources([]); setError(null); return; }
       if (!a.ok) throw new Error(`HTTP ${a.status}`);
       setLocked(null);
-      setSources(parseSources(await a.json()));
-      setSessions(b.ok ? parseSessions(await b.json()) : []);
+      const sourceWire = await a.json();
+      const parsed = parseSources(sourceWire);
+      setSources(parsed);
+      const sourceItems = o(sourceWire).items;
+      const sourcesKnown = Array.isArray(sourceItems) && parsed.length === sourceItems.length;
+      try {
+        if (!b) throw new Error("Not readable now");
+        if (!b.ok) throw new Error(`HTTP ${b.status}`);
+        const sessionWire = await b.json();
+        const items = o(sessionWire).items;
+        const parsedSessions = parseSessions(sessionWire);
+        if (!Array.isArray(items) || parsedSessions.length !== items.length
+            || parsedSessions.some((x) => !x.sourceId)) throw new Error("Not reported");
+        setSessions(parsedSessions);
+        setSessionError(null);
+        // The API returns at most 20 sessions. A full page cannot prove an older session absent.
+        setReadsComplete(sourcesKnown && items.length < 20);
+      } catch (e) {
+        setSessionError(e instanceof Error ? e.message : String(e));
+      }
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -257,16 +283,41 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
     return true;
   };
   const onBoard = new Set(view.models.map((m) => m.source_id));
+  const confirmedUnused = (src: CapSource) => readsComplete && !error && !locked && src.credentialAbsent
+    && src.connection === "not_connected"
+    && ["declared", "needs_connection", "missing_credentials", "missing_oauth_connection"].includes(src.effective)
+    && src.capacity === "unknown" && (takesKey(src) || isLogin(src))
+    && !onBoard.has(src.sourceId) && !sessions.some((x) => x.sourceId === src.sourceId);
+  const unused = (src: CapSource) => confirmedUnused(src) && open !== src.sourceId && disconnecting !== src.sourceId && !edited.has(src.sourceId);
+  const choices = (sources ?? []).filter(confirmedUnused);
+  const shown = (sources ?? []).filter((src) => !unused(src) || selected === src.sourceId);
+  const edit = (id: string, editing: boolean) => {
+    setEdited((prev) => new Set(prev).add(id));
+    setOpen(editing ? null : id);
+  };
 
   return (
-    <SetupRow ref={ref} row="capacity" label="Capacity" focused={focused} mode="open"
+    <SetupRow ref={ref} row="capacity" label="Model sources" focused={focused} mode="open"
               tip="Where model capacity comes from: keys, plans and official logins.">
       <div className="su-stack" data-testid="setup-entitlements">
         {sources === null ? <span className="su-faint">Loading…</span> : null}
         {locked ? <LockedPanel inline reason={locked} testId="setup-entitlements-locked" /> : null}
-        {error ? <Tip tip={error} className="su-faint">Can&apos;t load capacity</Tip> : null}
+        {error ? <Tip tip={error} className="su-faint">Can&apos;t load model sources</Tip> : null}
         {sources && !error && !locked && sources.length === 0 ? <span className="su-faint">No sources yet</span> : null}
-        {(sources ?? []).map((src) => {
+        {choices.length ? (
+          <details className="su-add-source" data-testid="setup-cap-add">
+            <summary>Add source</summary>
+            <label className="su-field">
+              <span className="su-field-label">Source</span>
+              <select value={choices.some((src) => src.sourceId === selected) ? selected : ""} aria-label="Source" data-testid="setup-cap-chooser"
+                      onChange={(e) => setSelected(e.target.value)}>
+                <option value="">Choose a source</option>
+                {choices.map((src) => <option key={src.sourceId} value={src.sourceId}>{sourceName(src.sourceId)}</option>)}
+              </select>
+            </label>
+          </details>
+        ) : null}
+        {shown.map((src) => {
           const st = stateOf(src);
           const mine = sessions.filter((x) => x.sourceId === src.sourceId);
           const editing = open === src.sourceId;
@@ -291,7 +342,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                 ) : null}
                 {takesKey(src) && !onBoard.has(src.sourceId) ? (
                   <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm" aria-expanded={editing} data-testid="setup-cap-key-open"
-                          onClick={() => setOpen(editing ? null : src.sourceId)}>
+                          onClick={() => edit(src.sourceId, editing)}>
                     {src.credentialPresent ? "Replace key" : "Add key"}
                   </GatedButton>
                 ) : null}
@@ -301,7 +352,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                 ) : null}
                 {isLogin(src) && src.connection !== "connected" ? (
                   <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm" aria-expanded={editing} data-testid="setup-cap-start-open"
-                          onClick={() => setOpen(editing ? null : src.sourceId)}>Sign in</GatedButton>
+                          onClick={() => edit(src.sourceId, editing)}>Sign in</GatedButton>
                 ) : null}
               </div>
               {editing && takesKey(src) ? (
@@ -358,7 +409,8 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
         <div className="su-line" data-testid="setup-entitlement-session">
           <Tip tip="Official logins started from a plan above." className="su-faint su-cap-label">Sessions</Tip>
           <span className="su-faint">
-            {sessions.length ? `${sessions.length} · ${sessions.filter((x) => x.status === "operator_action_required").length} waiting` : "None"}
+            {sessionError ? <Tip tip={sessionError}>Can&apos;t load sessions</Tip>
+              : sessions.length ? `${sessions.length} · ${sessions.filter((x) => x.status === "operator_action_required").length} waiting` : "None"}
           </span>
           <span className="su-spacer" />
           <a className="su-link" href="?area=skills" data-testid="setup-broker-skills-link">Skills ↗</a>

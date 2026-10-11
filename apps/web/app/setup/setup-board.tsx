@@ -239,9 +239,12 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
             Test all
           </GatedButton>
         </header>
-        <RepositoryRow ref={ref("repository")} mode={rowMode(view, "repository")}
-                       step={stepNumber(view, "repository")} focused={focus === "repository"} />
-        <GitHubAccessRow />
+        {!view.repository.repos.length ? (
+          <GitHubAccessRow ref={ref("repository")} focused={focus === "repository"} />
+        ) : null}
+        <RepositoryRow ref={view.repository.repos.length ? ref("repository") : undefined} mode={rowMode(view, "repository")}
+                       step={stepNumber(view, "repository")} focused={focus === "repository" && view.repository.repos.length > 0} />
+        {view.repository.repos.length ? <GitHubAccessRow /> : null}
         <BuildDatabaseRow />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}
                    step={stepNumber(view, "models")} focused={focus === "models"}
