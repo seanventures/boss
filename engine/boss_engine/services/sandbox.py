@@ -270,6 +270,7 @@ class EphemeralSandbox:
         self.base_branch: Optional[str] = None
         self.work_branch: Optional[str] = None
         self.base_sha: Optional[str] = None
+        self.diff_base_sha: Optional[str] = None
         self._owns_dir = False
         self._provisioning = False
         self._private_staging: Optional[Path] = None
@@ -322,6 +323,10 @@ class EphemeralSandbox:
             self._provision(owner, repo, base_branch=base_branch, work_branch=work_branch,
                             token=token, repo_host=repo_host, egress=egress)
             assert self.path is not None
+            # THE TREE THIS RUN STARTS FROM (base branch, or the resumed checkpoint): the diff is
+            # measured from here, so an agent's own `git commit` cannot hide its work
+            # (HelpDesk crun_a3a733ed: HEAD moved, impl_files 0, "code written" failed).
+            self.diff_base_sha = self._git(["rev-parse", "HEAD"]).strip() or None
             # Pin the verified directory before publication; later reads never reopen an
             # attacker-replaced workspace pathname. The staging parent remains private.
             self._repo_files = RepoFiles(self.path)
@@ -680,7 +685,8 @@ class EphemeralSandbox:
     def diff_summary(self) -> DiffSummary:
         self._require_provisioned()
         self._git(["add", "-A"])
-        numstat = self._git(["diff", "--cached", "--numstat"]).strip()
+        base = getattr(self, "diff_base_sha", None)
+        numstat = self._git(["diff", "--cached", "--numstat", *([base] if base else [])]).strip()
         additions = deletions = 0
         paths: list[str] = []
         for line in numstat.splitlines():
@@ -703,7 +709,8 @@ class EphemeralSandbox:
         summary unless the customer opts in (see architecture §5.1)."""
         self._require_provisioned()
         self._git(["add", "-A"])
-        return self._git(["diff", "--cached"], raw=True)
+        base = getattr(self, "diff_base_sha", None)
+        return self._git(["diff", "--cached", *([base] if base else [])], raw=True)
 
     def diff(self) -> list[FileChange]:
         """The changed tree as BOSS ``FileChange`` objects, ready to feed the
