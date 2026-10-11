@@ -1,0 +1,33 @@
+apiVersion: boss.plugin/v1
+kind: Plugin
+metadata:
+  id: official.docker-compose
+  name: Docker Compose environment
+  version: 0.1.0
+  owner: BOSS maintainers
+  license: Apache-2.0
+  description: >-
+    The environment provider: assembles every resource fragment, plus the app services' depends_on
+    and bindings, into one override file BOSS's existing stack deploy adds to the app's compose
+    file; bindings stay ${NAME}, resolved from the vault when the deploy writes its env file.
+spec:
+  supportLevel: certified
+  capabilities: [environment.compose]
+  features: [assemble, depends-on, bindings]
+  engines: [docker-compose]
+  engineVersions: ["Docker Compose 2.23+"]
+  runtime: {type: python, entrypoint: "plugin:DockerComposePlugin"}
+  permissions: {network: [declared-services], docker: true}
+  configSchema:
+    type: object
+    additionalProperties: false
+    properties:
+      appServices:
+        type: array
+        items: {type: string, pattern: "^[a-z0-9][a-z0-9_.-]{0,62}$"}
+  hooks: [validate, plan, provision, verify, destroy]
+  bindings: []
+  limitations:
+    - "Single host: one compose project per app and environment."
+    - "Destroy removes app services only and is refused while resource services still run."
+    - "Needs the app's resources handed over in state.resources (fragment and binding names)."

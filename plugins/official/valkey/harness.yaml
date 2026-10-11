@@ -1,0 +1,1 @@
+resource: {name: cache, capability: cache, engine: valkey}

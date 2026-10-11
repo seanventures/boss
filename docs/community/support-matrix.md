@@ -10,6 +10,14 @@ What each plugin in this repository provides, and what BOSS promises about it.
 
 | Plugin | Version | Source | Support | Capabilities | Engines | Hooks |
 |---|---|---|---|---|---|---|
+| `official.caddy` | 0.1.0 | builtin | certified | network.ingress, network.tls | caddy (2.10.2) | plan, provision, verify, destroy |
+| `official.docker-compose` | 0.1.0 | builtin | certified | environment.compose | docker-compose (Docker Compose 2.23+) | plan, provision, verify, destroy |
+| `official.minio-s3` | 0.1.0 | builtin | certified | object-storage, object-storage.s3 | minio, s3 (RELEASE.2026-08-04T00-00-00Z (pgsty/minio build)) | plan, provision, configure, verify, observe, destroy |
+| `official.opentelemetry` | 0.1.0 | builtin | certified | observability.telemetry, observability.tracing | otel-collector (0.135.0 (contrib)) | plan, provision, configure, verify, observe, destroy |
+| `official.pgvector` | 0.1.0 | builtin | certified | database.vector | postgres (pgvector 0.8.1 on PostgreSQL 17) | plan, provision, verify, destroy |
+| `official.postgres` | 0.1.0 | builtin | certified | database.relational, database.migrations, database.backup-restore | postgres (17.6) | plan, provision, configure, verify, observe, backup, restore, destroy |
+| `official.sqlite` | 0.1.0 | builtin | certified | database.relational | sqlite (3 (Python's bundled SQLite)) | plan, provision, configure, verify, observe, backup, restore, destroy |
+| `official.valkey` | 0.1.0 | builtin | certified | cache | valkey, redis (8.1.3) | plan, provision, configure, verify, observe, destroy |
 | `community.example-cache` | 0.1.0 | community | community | cache | valkey (8.1.3) | plan, provision, configure, verify, observe, destroy |
 
 `validate` is implemented by every plugin and not listed.

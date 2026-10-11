@@ -1,0 +1,1 @@
+resource: {name: local, capability: database.relational, engine: sqlite, environment: build}

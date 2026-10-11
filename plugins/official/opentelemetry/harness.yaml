@@ -1,0 +1,1 @@
+resource: {name: otel, capability: observability.telemetry}
