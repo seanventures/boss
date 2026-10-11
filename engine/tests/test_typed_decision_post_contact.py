@@ -25,7 +25,7 @@ from boss_engine.services.typed_decision_spend import (
     _uncertain,
 )
 from boss_engine.services.typed_decisions import (
-    Decision, DecisionBatch, Question, TypeSafeAuthenticationRefused, TypeSafeDecider,
+    ClaudeDecider, Decision, DecisionBatch, Question, TypeSafeAuthenticationRefused, TypeSafeDecider,
 )
 from engine.tests.test_typed_decision_spend import (
     QUOTE, World, _binding, _jev_then_claude, _settings,
@@ -408,3 +408,125 @@ def test_credentials_are_absent_from_canonical_failure_surfaces(canonical_scope,
             rows = c.execute(text(f"SELECT to_jsonb(t) FROM {table} t WHERE project_id=:p"),
                              {"p": project}).scalars().all()
             assert credential not in json.dumps(rows, default=str), table
+
+
+@pytest.mark.parametrize(("case", "usage", "expected_cost"), [
+    ("absent", None, None), ("null", None, None), ("missing_input", {}, None),
+    ("null_input", {"input_tokens": None}, None),
+    ("negative", {"input_tokens": -1}, None),
+    ("bool_false", {"input_tokens": False}, None),
+    ("bool_true", {"input_tokens": True}, None),
+    ("numeric_string", {"input_tokens": "1000"}, None),
+    ("fraction", {"input_tokens": 1.5}, None),
+    ("malformed_usage", ["invalid"], None),
+    ("zero", {"input_tokens": 0}, 0),
+    ("positive", {"input_tokens": 1000}, 42),
+])
+def test_typesafe_requires_actual_typed_token_evidence_for_paid_settlement(
+    canonical_scope, case, usage, expected_cost,
+):
+    scope = canonical_scope
+    _, _, settings = scope
+    calls = []
+    body = {"model": "owned", "answers": {
+        "decision": {"choice": "billing", "confidence": 0.9},
+    }}
+    if case != "absent":
+        body["usage"] = usage
+
+    def contact(request):
+        calls.append("accepted")
+        return httpx.Response(200, json=body)
+
+    with httpx.Client(transport=httpx.MockTransport(contact), trust_env=False) as client:
+        decider = TypeSafeDecider(settings, api_key="owned-inert", client=client, attempts=1)
+        decider.source_id = "approved_local_model_host"
+        for attempt in (1, 2):
+            spend = _spender(scope, decider, attempt)
+            if expected_cost is None:
+                with pytest.raises(TypedDecisionReconciliationRequired):
+                    spend.execute(settings, _binding(), "owned input")
+            else:
+                result = spend.execute(settings, _binding(), "owned input")
+                assert result["cost_usd_micros"] == expected_cost
+    assert len(calls) == 1
+    row, costs = _snapshot(scope)
+    if expected_cost is None:
+        assert row["invocation_status"] == row["receipt_status"] == "in_progress"
+        assert row["reservation_status"] == "active" and costs == []
+    else:
+        assert row["invocation_status"] == row["receipt_status"] == "succeeded"
+        assert row["reservation_status"] == "consumed" and costs == [expected_cost]
+
+
+def _inert_claude(usages, answers):
+    calls = []
+
+    class Adapter:
+        def create_text_response(self, prompt):
+            index = len(calls)
+            calls.append(1)
+            reply = json.dumps({"decision": {"answer": answers[index], "confidence": 0.9}})
+            return "owned-response", reply, usages[index]
+
+    # Run the actual ClaudeDecider parser against the API-adapter interface,
+    # without constructing a real CLI or network client.
+    decider = object.__new__(ClaudeDecider)
+    decider._adapter, decider._attempts = Adapter(), len(usages)
+    decider.backend, decider.model = "openai", "owned"
+    decider.source_id = "approved_local_model_host"
+    return decider, calls
+
+
+@pytest.mark.parametrize("cost", [None, False, True, -1, "3", 1.5])
+@pytest.mark.parametrize("unknown_attempt", [0, 1])
+def test_claude_multi_attempt_cost_remains_unknown_after_any_invalid_cost(cost, unknown_attempt):
+    usages = [{"cost_usd_micros": 3}, {"cost_usd_micros": 7}]
+    usages[unknown_attempt] = {"cost_usd_micros": cost}
+    decider, calls = _inert_claude(usages, [None, "billing"])
+    batch = decider.decide("owned input", [Question("decision", "Route?", {"billing": "Billing"})])
+    assert batch.cost_usd_micros is None and len(calls) == 2
+
+
+def test_claude_multi_attempt_known_cost_is_summed():
+    decider, calls = _inert_claude([{"cost_usd_micros": 3}, {"cost_usd_micros": 7}],
+                                  [None, "billing"])
+    batch = decider.decide("owned input", [Question("decision", "Route?", {"billing": "Billing"})])
+    assert batch.cost_usd_micros == 10 and len(calls) == 2
+
+
+@pytest.mark.parametrize("usage", [
+    {}, {"cost_usd_micros": None}, {"cost_usd_micros": False}, {"cost_usd_micros": True},
+    {"cost_usd_micros": -1}, {"cost_usd_micros": "3"}, {"cost_usd_micros": 1.5},
+    {"cost_usd_micros": 0}, {"cost_usd_micros": 3},
+])
+@pytest.mark.parametrize("included", [False, True])
+def test_claude_api_cost_evidence_reaches_paid_guard_or_canonical_included_proof(
+    canonical_scope, usage, included,
+):
+    scope = canonical_scope
+    engine, project, settings = scope
+    if included:
+        with engine.begin() as c:
+            c.execute(text("UPDATE entitlement_sources SET entitlement_kind='local_capacity', "
+                           "cost_mode='local_capacity' WHERE project_id=:p "
+                           "AND source_id='approved_local_model_host'"), {"p": project})
+    decider, calls = _inert_claude([usage], ["billing"])
+    reported = usage.get("cost_usd_micros")
+    known_cost = isinstance(reported, int) and not isinstance(reported, bool) and reported >= 0
+    for attempt in (1, 2):
+        spend = _spender(scope, decider, attempt)
+        if not included and not known_cost:
+            with pytest.raises(TypedDecisionReconciliationRequired):
+                spend.execute(settings, _binding(), "owned input")
+        else:
+            spend.execute(settings, _binding(), "owned input")
+    assert len(calls) == 1
+    row, costs = _snapshot(scope)
+    if not included and not known_cost:
+        assert row["invocation_status"] == row["receipt_status"] == "in_progress"
+        assert row["reservation_status"] == "active" and costs == []
+    else:
+        assert row["invocation_status"] == row["receipt_status"] == "succeeded"
+        assert row["reservation_status"] == "consumed"
+        assert costs == [0 if included else reported]

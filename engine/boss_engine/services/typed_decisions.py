@@ -215,7 +215,11 @@ class TypeSafeDecider:
             usage = data.get("usage") or {}
             # $0.042 per million input tokens, output free (docs.typesafe.ai/models.md). An
             # estimate: the bill is TypeSafe's, and their price can change.
-            cost = int(round(int(usage.get("input_tokens") or 0) * 0.042))
+            # Omitted or malformed usage is not evidence of zero billed tokens.
+            input_tokens = usage.get("input_tokens")
+            known_input = (isinstance(input_tokens, int) and not isinstance(input_tokens, bool)
+                           and input_tokens >= 0)
+            cost = int(round(input_tokens * 0.042)) if known_input else None
             return DecisionBatch(decisions=decisions, backend=self.backend,
                                  model=str(data.get("model") or self.model),
                                  latency_ms=int((time.monotonic() - started) * 1000),
@@ -337,7 +341,12 @@ class ClaudeDecider:
         cost, usage, decisions = 0, {}, {}
         for _ in range(self._attempts):
             _, text, usage = self._adapter.create_text_response(prompt)
-            cost += int(usage.get("cost_usd_micros") or 0)
+            reported_cost = usage.get("cost_usd_micros")
+            known_cost = (isinstance(reported_cost, int) and not isinstance(reported_cost, bool)
+                          and reported_cost >= 0)
+            # Unknown in any attempt keeps the combined cost unknown. The
+            # governed path makes one attempt and requires paid cost evidence.
+            cost = cost + reported_cost if cost is not None and known_cost else None
             decisions = _parse(text, questions)
             if all(d.answer is not None for d in decisions.values()):
                 break
