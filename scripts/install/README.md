@@ -256,6 +256,10 @@ Existing single-key installs receive a new worker key on the next installer reru
 
 The installer does not add your account to the root-equivalent Docker group. On a Linux host where only the administrator can access Docker, run Compose with `sudo` or grant Docker access deliberately through your host policy.
 
+Default local Linux installs can use sudo. Custom project names, image tags, or Docker connection settings need Docker access as your user account. The helpers stop when sudo cannot safely preserve your selection. They never forward Docker credentials or preserve the full environment.
+
+Restore uses the target project you specify and the validated archived images. Running apps in a custom restored project still needs direct Docker access. Keep the same project and image-tag settings for each lifecycle command.
+
 ## Mission Control access
 
 Mission Control has its own single-operator password and signed session secret, generated on first install and stored only in the private `.env`. The password is never the BOSS API key. On the VM, retrieve or rotate it deliberately:

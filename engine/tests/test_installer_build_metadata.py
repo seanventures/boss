@@ -274,9 +274,8 @@ os.execve(sys.argv[2],sys.argv[2:],{'PATH':'/usr/bin:/bin:/opt/homebrew/bin','LC
         # Existing direct-shell inheritance is unchanged, never promoted into build args.
         self.assertTrue(all(r['credential_marker_present'] for r in rows))
 
-    def test_sudo_policy_and_unrelated_daemon_project_configuration_unchanged(self):
+    def test_metadata_build_args_do_not_forward_environment_or_select_daemon(self):
         source=(ROOT/'install.sh').read_text()
-        self.assertEqual(source.count('DOCKER=(sudo -n docker)'),2)
         self.assertIn('COMPOSE=("${DOCKER[@]}" compose)',source)
         serial=source[source.index('# ---- serial image builds '):source.index('# ---- end serial image builds ')]
         self.assertNotIn('--preserve-env',serial);self.assertNotIn('sudo -E',serial)
