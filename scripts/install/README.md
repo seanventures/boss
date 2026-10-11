@@ -359,7 +359,7 @@ The BOSS source URL the installer uses is not an operator repository binding. Fr
 
 | Path | Role |
 |---|---|
-| `docs/landing/install.sh` | Website bootstrap: finds the newest release and runs its `install.sh` |
+| `scripts/install/bootstrap.sh` | Release bootstrap: finds the newest release and runs its `install.sh`; imported by the separate website |
 | `install.sh` | The installer (repo root) |
 | `scripts/install/boss.sh` | The `boss` command; the launcher on `PATH` runs it from the install |
 | `scripts/install/discover_models.py` | Read-only report of model keys, subscriptions, and Ollama on this machine |

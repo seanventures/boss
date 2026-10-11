@@ -2,7 +2,7 @@
 # =============================================================================
 # BOSS Community — one-line installer
 #
-#   The website bootstrap (docs/landing/install.sh) finds the newest release and runs
+#   The release bootstrap (scripts/install/bootstrap.sh) finds the newest release and runs
 #   this file from it. See docs/community/QUICKSTART.md.
 #
 # Checks the machine, installs what it can, picks defaults (~/boss, the database

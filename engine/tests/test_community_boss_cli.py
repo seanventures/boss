@@ -17,7 +17,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 MARKER = re.compile(r"# >>> boss_pick_release\n(.*?)# <<< boss_pick_release", re.S)
-PICKERS = (REPO / "install.sh", REPO / "scripts/install/upgrade.sh", REPO / "docs/landing/install.sh")
+PICKERS = (REPO / "install.sh", REPO / "scripts/install/upgrade.sh", REPO / "scripts/install/bootstrap.sh")
 HELPERS = (
     "community-compose.yml", "restore_preserved_env.sh", "reconcile_api_credentials.py",
     "boss.sh", "upgrade.sh", "uninstall.sh", "discover_models.py", "coding_subscriptions.py",
@@ -636,7 +636,7 @@ def _bootstrap_world(tmp_path: Path, tags: str, *, download_fails: bool = False)
 def test_bootstrap_runs_the_newest_releases_installer_with_that_release(tmp_path: Path) -> None:
     env = _bootstrap_world(tmp_path, "v0.9.1\nv1.0-rc1\nv0.10.0\n")
     env.pop("BOSS_REF", None)
-    result = _run("bash", "-s", "--", "--yes", stdin=(REPO / "docs/landing/install.sh").read_text(),
+    result = _run("bash", "-s", "--", "--yes", stdin=(REPO / "scripts/install/bootstrap.sh").read_text(),
                   env=env)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "raw.githubusercontent.com/seanventures/boss/v0.10.0/install.sh" in (tmp_path / "curl.log").read_text()
@@ -645,21 +645,21 @@ def test_bootstrap_runs_the_newest_releases_installer_with_that_release(tmp_path
 
 def test_bootstrap_honours_an_explicit_ref_and_stops_on_a_failed_download(tmp_path: Path) -> None:
     env = _bootstrap_world(tmp_path, "v1.0-rc1\n")
-    pinned = _run("bash", REPO / "docs/landing/install.sh", "--ref", "v1.0-rc1", "--no-web", env=env)
+    pinned = _run("bash", REPO / "scripts/install/bootstrap.sh", "--ref", "v1.0-rc1", "--no-web", env=env)
     assert pinned.returncode == 0, pinned.stderr
     assert (tmp_path / "ran").read_text().strip() == "ref=v1.0-rc1 args=--no-web"
 
-    only_pre = _run("bash", REPO / "docs/landing/install.sh", env=env)
+    only_pre = _run("bash", REPO / "scripts/install/bootstrap.sh", env=env)
     assert only_pre.returncode == 0, only_pre.stderr
     assert (tmp_path / "ran").read_text().startswith("ref=v1.0-rc1")
 
-    bad = _run("bash", REPO / "docs/landing/install.sh", "--ref", "-x", env=env)
+    bad = _run("bash", REPO / "scripts/install/bootstrap.sh", "--ref", "-x", env=env)
     assert bad.returncode != 0
 
     failing_dir = tmp_path / "failing"
     failing_dir.mkdir()
     failing = _bootstrap_world(failing_dir, "v1.0-rc1\n", download_fails=True)
-    failed = _run("bash", REPO / "docs/landing/install.sh", env=failing)
+    failed = _run("bash", REPO / "scripts/install/bootstrap.sh", env=failing)
     assert failed.returncode != 0
     assert "nothing was installed" in failed.stderr
     assert not (failing_dir / "ran").exists()
