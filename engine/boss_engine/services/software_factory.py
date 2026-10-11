@@ -2105,7 +2105,14 @@ class SoftwareFactoryService:
             created_by_job_id=created_by_job_id,
         )
         sealed_evidence = attach_sealed_evidence(evidence)
-        decision_id = self.decisions.create_blocking(
+        # ONE DECISION FOR A MULTI-REPO CHANGE (multirepo/change_sets.py). A lane of a change set
+        # opens its PR and stops: the set asks once, pinned to every PR's head, when all of them
+        # (and the cross-repo check) are green. A per-PR merge decision here would let one PR of
+        # the set be merged on its own.
+        from ..multirepo import change_sets as _change_sets
+
+        set_member = _change_sets.member_change_set(connection, run_id) if run_id else None
+        decision_id = None if set_member else self.decisions.create_blocking(
             connection,
             project_id,
             task_id,
@@ -2153,6 +2160,14 @@ class SoftwareFactoryService:
             {},
             "merge_decision_required",
         )
+        if run_id and not set_member:
+            # A single-repo run is a one-PR change (observer only: its own approval and merge
+            # stay exactly as they are), so an app's Recent changes read one table.
+            _change_sets.record_single(
+                connection, run_id=run_id, project_id=project_id,
+                full_name=str(getattr(self.github, "repository_full_name", "") or ""),
+                pr_number=int(pr.number), pr_url=pr.url, branch=branch_name,
+                head_sha=branch_head_sha, decision_id=decision_id, title=title)
         result = attach_sealed_receipt_result(
             {
                 "artifact_id": artifact_id,
@@ -2192,8 +2207,8 @@ class SoftwareFactoryService:
             project_id,
             "software_factory.pull_request_proposed",
             "coding_worker",
-            "decision",
-            decision_id,
+            "decision" if decision_id else "code_task_run",
+            decision_id or run_id or pr_receipt["id"],
             {
                 "receipt_id": pr_receipt["id"],
                 "pull_request_url": pr.url,
@@ -2466,6 +2481,11 @@ class SoftwareFactoryService:
                 decision_id=None, actor="release_manager")
         except Exception:  # noqa: BLE001 — delivery must never un-ship a merge
             pass
+        if branch_name and branch_name.startswith("boss/code/"):
+            # The one-PR change set this run is recorded as (multirepo/change_sets.py) says merged.
+            from ..multirepo import change_sets as _change_sets
+
+            _change_sets.mark_single(connection, branch_name.rsplit("/", 1)[-1], "merged")
         follow_on_decision_id = self._mark_merge_completed(
             connection,
             project_id,

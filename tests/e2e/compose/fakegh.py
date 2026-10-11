@@ -74,6 +74,12 @@ REPOS = [r for r in os.environ.get("FAKEGH_REPOS", "fxd-org/fxd-build-app").spli
 INSTALLATION_ID = int(os.environ.get("FAKEGH_INSTALLATION_ID", "7301"))
 ACCOUNT_TYPE = "User" if os.environ.get("FAKEGH_ACCOUNT_TYPE", "Organization").lower() == "user" else "Organization"
 USER_LOGIN = os.environ.get("FAKEGH_USER_LOGIN", "fxd-owner")
+#: What GitHub's listing says about each repository beyond its name ({full_name: {id, language,
+#: description, archived, default_branch}}); FAKEGH_REPO_META or POST /_github_account repo_meta.
+try:
+    REPO_META: dict[str, dict[str, Any]] = json.loads(os.environ.get("FAKEGH_REPO_META") or "{}")
+except ValueError:
+    REPO_META = {}
 _LOCAL = threading.local()
 
 
@@ -189,15 +195,19 @@ def _installation() -> dict[str, Any]:
 ACCOUNT_FILE = STATE / "account.json"
 
 
-def configure(account: str, kind: str, repos: list[str], *, fresh: bool = True) -> None:
+def configure(account: str, kind: str, repos: list[str], *, fresh: bool = True,
+              meta: Optional[dict[str, dict[str, Any]]] = None) -> None:
     """Switch the fake to another account (a person or an organisation), with a fresh App world
     unless `fresh` is False. Kept in the state volume, so a restarted fake is the same account."""
-    global OWNER, ACCOUNT_TYPE, REPOS
+    global OWNER, ACCOUNT_TYPE, REPOS, REPO_META
     OWNER = account
     ACCOUNT_TYPE = "User" if kind.lower() == "user" else "Organization"
     REPOS = repos or [f"{account}/boss-sandbox"]
+    if meta is not None:
+        REPO_META = dict(meta)
     try:
-        ACCOUNT_FILE.write_text(json.dumps({"login": OWNER, "type": ACCOUNT_TYPE, "repos": REPOS}))
+        ACCOUNT_FILE.write_text(json.dumps({"login": OWNER, "type": ACCOUNT_TYPE, "repos": REPOS,
+                                            "meta": REPO_META}))
     except OSError:
         pass
     if fresh:
@@ -210,6 +220,7 @@ if ACCOUNT_FILE.exists():
     try:
         _saved = json.loads(ACCOUNT_FILE.read_text())
         OWNER, ACCOUNT_TYPE, REPOS = _saved["login"], _saved["type"], list(_saved["repos"])
+        REPO_META = dict(_saved.get("meta") or REPO_META)
     except (OSError, ValueError, KeyError):
         pass
 
@@ -308,7 +319,9 @@ def app_api(method: str, path: str, auth: str, body: Any) -> Optional[tuple[int,
                 APPS.save()
             return 204, b""
         repos = [{"full_name": r, "name": r.split("/")[1], "private": True, "default_branch": "main",
-                  "owner": {"login": r.split("/")[0], "type": ACCOUNT_TYPE}} for r in tok["repositories"]]
+                  "archived": False, "description": None, "language": None,
+                  "owner": {"login": r.split("/")[0], "type": ACCOUNT_TYPE}, **(REPO_META.get(r) or {})}
+                 for r in tok["repositories"]]
         return 200, {"total_count": len(repos), "repositories": repos}
     return None
 
@@ -504,7 +517,8 @@ class Handler(Base):
         if path == "/_github_account" and method == "POST":
             b = body if isinstance(body, dict) else {}
             configure(str(b.get("login") or OWNER), str(b.get("type") or "Organization"),
-                      [str(r) for r in (b.get("repos") or [])], fresh=b.get("fresh", True) is not False)
+                      [str(r) for r in (b.get("repos") or [])], fresh=b.get("fresh", True) is not False,
+                      meta=b.get("repo_meta") if isinstance(b.get("repo_meta"), dict) else None)
             bound = type(self)
             for full in REPOS:
                 bound.git.ensure(*full.split("/"))
@@ -538,6 +552,7 @@ class Handler(Base):
                     self._send(401, b"", "text/plain", {"WWW-Authenticate": 'Basic realm="GitHub"'})
                     return
                 tok["uses"] = tok.get("uses", 0) + 1
+                _LOCAL.extra["token_id"] = tok["id"]
         if h == "api.github.com":
             body = self._json(raw)
             answered = app_api(method, path, auth, body)
@@ -547,6 +562,7 @@ class Handler(Base):
                     answered = (401, {"message": "Bad credentials"})
                 else:
                     tok["uses"] = tok.get("uses", 0) + 1
+                    _LOCAL.extra["token_id"] = tok["id"]
             if answered is not None:
                 status, payload = answered
                 self.world.record({"egress": host, "method": method, "path": path, "route": "github-app",

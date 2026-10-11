@@ -1012,6 +1012,16 @@ class GitHubConnectionService:
             return None
         try:
             ref = self._credential_ref(connection, project_id, str(rows["connection_id"]))
+            if str(ref) == "identity_github:app":
+                # THE SETUP APP: a token for THIS repository only. Resolving the reference itself
+                # mints one for every repository the installation reaches, so a build of one
+                # repository (one lane of a multi-repo change) wrote with a credential that could
+                # also write to its siblings. A one-repo mint, as the Setup App's own control-plane
+                # path does; None (not the wide token) when the App cannot mint for it.
+                from boss_engine.identity import github_setup
+
+                with connection.begin_nested():
+                    return github_setup.control_plane_token(connection, owner, repo)
             record = self.secret_refs.get_by_credential_ref(connection, project_id, ref) \
                 if hasattr(self.secret_refs, "get_by_credential_ref") else None
             if record is None:

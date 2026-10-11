@@ -245,9 +245,11 @@ export type AppsTabProps = {
   query?: string;
   onOpen: (runId: string, from: HTMLElement | null) => void;
   onNew: () => void;
+  /** App › Components (multi-repo): its parts and the repositories they live in. */
+  onComponents?: (appKey: string) => void;
 };
 
-export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }: AppsTabProps) {
+export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, onComponents }: AppsTabProps) {
   useIdentityVersion();
   const now = useNow(30_000);
   const served = useServerApps(projectId);
@@ -364,6 +366,11 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
                             e.stopPropagation(); setMenu(null);
                             onOpen(opens, (e.currentTarget as HTMLElement).closest("li"));
                           }}>Open its build</button>
+                          {onComponents ? (
+                            <button type="button" role="menuitem" data-testid={`fx-app-menu-components-${a.key}`}
+                                    title="What it is built from: its components and their repositories"
+                                    onClick={(e) => { e.stopPropagation(); setMenu(null); onComponents(a.appKey ?? opens); }}>Components</button>
+                          ) : null}
                           <button type="button" role="menuitem" title="Its templates, secrets and setup guide"
                                   data-testid={`fx-app-menu-setup-${a.key}`}
                                   onClick={(e) => { e.stopPropagation(); setMenu(null); setSetupOf(a); }}>Setup</button>

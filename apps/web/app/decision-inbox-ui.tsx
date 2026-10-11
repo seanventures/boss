@@ -31,6 +31,7 @@ import {
 } from "../lib/decisions";
 import type { RoleFeedItem } from "../lib/roles";
 import type { TaskFeedItem } from "../lib/tasks";
+import { ChangeSetApproval, isChangeSetDecision } from "./multirepo/change-set-approval";
 
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
@@ -744,6 +745,18 @@ function DecisionInboxRow({
   // WHAT APPROVING WILL DO, as the thing itself (action-preview.tsx). When it is there it
   // replaces the sentence about the step: the email is the explanation.
   const preview = actionPreviewOf(rec.action_preview);
+
+  // ONE APPROVAL FOR A MULTI-REPO CHANGE: its own card (every PR, review, cross-repo check, cost,
+  // rollback) and the three answers the engine offers for a set; no per-PR approval.
+  if (isChangeSetDecision(decision)) {
+    return (
+      <article className="dq-row dq-row-changeset" data-testid="decision-row" data-decision-status={decision.status}
+               data-highlighted={highlighted || undefined} id={`decision-${decision.id}`}
+               ref={(el) => { if (el && highlighted) el.scrollIntoView({ block: "center" }); }}>
+        <ChangeSetApproval decision={decision} projectId={projectId} actorId={actorId} pending={isPending} />
+      </article>
+    );
+  }
 
   return (
     <article

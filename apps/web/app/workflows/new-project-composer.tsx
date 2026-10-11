@@ -19,6 +19,12 @@
  * (Trend to content, a video edit) opens on its own start form, with no mode switch, no product
  * questions, and "Lives in" only when a step needs a repository (the readiness check's answer).
  * Every Start in the console opens this, so a run is never started blind.
+ *
+ * WHERE THE CODE LIVES (multi-repo, mockup 03): One repo is the default and exactly today's
+ * behaviour and request. Several repos — offered when the project has two or more repositories —
+ * maps the app's components to repositories (suggested from names and languages, in build
+ * order), PUTs them as the app's components on Start, then starts as today with
+ * `repo_layout: {mode: "multi", app_name}`. A refused PUT says why and starts nothing.
  */
 // React by name: the suite renders with renderToStaticMarkup (classic runtime).
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -60,6 +66,11 @@ import { TemplateSheet, type ApplyTarget } from "../../components/v2/templates/t
 import { SideSheet } from "../../components/v2/templates/side-sheet";
 import { templatesApi, type TemplateCard } from "../../lib/templates";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
+import { useGuardedCall } from "../../components/identity/identity-provider";
+import { MULTIREPO_PLACES, listWords, multirepo, refusalMessage, roleLabel, shortName,
+         type ProjectRepo } from "../../lib/multirepo";
+import { ComponentRows, rowKey, rowsToInput, type MapRow } from "../multirepo/parts";
+import { GitPullRequest, LockKey, Plus } from "@phosphor-icons/react";
 
 /** A repository this project can build in, from its registry. */
 type Repo = { id: string; full_name: string; role?: string | null; default_branch?: string };
@@ -590,6 +601,14 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     return () => { alive = false; };
   }, [projectId]);
   const [repos, setRepos] = useState<Repo[]>([]);
+  // ── Where the code lives: One repo (today) or Several repos (the app's components). ──────────
+  const [layout, setLayout] = useState<"one" | "several">("one");
+  /** The project's repositories (GET /v1/projects/{id}/repos); null until read or on an older API. */
+  const [projectRepos, setProjectRepos] = useState<ProjectRepo[] | null>(null);
+  const [mapRows, setMapRows] = useState<MapRow[]>([]);
+  const [suggesting, setSuggesting] = useState(false);
+  const manageGate = useGate("repository:manage");
+  const guarded = useGuardedCall();
   const [suggested, setSuggested] = useState<{ name: string; source: string } | null>(null);
   const repoHint = repositoryHint(suggested, repos.length);
   const [busy, setBusy] = useState(false);
@@ -624,6 +643,34 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     return () => { alive = false; };
   }, [projectId]);
 
+  // THE PROJECT'S REPOSITORIES, for Several repos. An API without them leaves One repo alone.
+  useEffect(() => {
+    let alive = true;
+    multirepo.projectRepos(projectId)
+      .then((v) => { if (alive) setProjectRepos(v.items ?? []); })
+      .catch(() => { if (alive) setProjectRepos(null); });
+    return () => { alive = false; };
+  }, [projectId]);
+
+  /** Several repos: the suggested mapping, asked once; a row per repository when none comes. */
+  const chooseLayout = async (next: "one" | "several") => {
+    setLayout(next);
+    setError(null);
+    if (next !== "several" || mapRows.length || !projectRepos?.length) return;
+    setSuggesting(true);
+    try {
+      const out = await multirepo.suggest(projectId, projectRepos.map((r) => r.binding_id));
+      const rows = (out.components ?? []).map((c): MapRow => ({
+        key: rowKey(), name: c.name, binding_id: c.binding_id, path: c.path ?? "/", kind: c.kind ?? "code",
+        depends_on: c.depends_on ?? [], reason: c.reason ?? null }));
+      if (rows.length) { setMapRows(rows); return; }
+    } catch { /* no suggestions: one row per repository, named by its role */ }
+    finally { setSuggesting(false); }
+    setMapRows(projectRepos.map((r) => ({
+      key: rowKey(), name: roleLabel(r.role_hint) || shortName(r.full_name), binding_id: r.binding_id, path: "/",
+      kind: r.role_hint === "deploy_config" ? "deploy_config" : "code", depends_on: [] })));
+  };
+
   // WHAT THE CHOSEN WORKFLOW IS. Read from the installed definition rather than hardcoded: a
   // custom workflow declares its own start form, and the composer has to draw whatever it is.
   const adding = mode === "add";
@@ -650,6 +697,15 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
 
   const needsRepository = !adding && needsARepository({ workflowKey: draft.workflowKey, readiness,
                                                         entry, schema });
+  /** Several repos is offered only where it can mean something: two or more repositories. */
+  const severalOffered = (projectRepos?.length ?? 0) >= 2;
+  const several = needsRepository && severalOffered && layout === "several";
+  const mapInput = rowsToInput(mapRows);
+  const mapReady = mapInput.some((c) => c.kind === "code") && mapInput.length === mapRows.length;
+  const mapRepoNames = (kind?: "code" | "deploy_config") => [...new Set(mapInput
+    .filter((c) => !kind || c.kind === kind)
+    .map((c) => projectRepos?.find((r) => r.binding_id === c.binding_id)?.full_name ?? "")
+    .filter(Boolean))];
   const declaredInputs = composerFields(schema, brief, needsRepository);
   const inputsToSend = suppliedInputs(declaredInputs, inputsNow);
   const stillBlank = missingRequired(declaredInputs, inputsToSend);
@@ -672,6 +728,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     || (stillBlank.length ? `Needs ${stillBlank.join(", ")}` : "")
     || (malformed.length ? `Check ${malformed.join(", ")}` : "")
     || talksToProblem(talks)
+    || (several && !mapReady ? "Map each component to a repository." : "")
     // So does something the project lacks, unless the operator chose to start without it.
     || (notReady.length
         ? `Not ready here yet: ${notReady.map((m) => m.label).join("; ")} — see the plan.`
@@ -740,10 +797,25 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     // A NEW APP'S LINKS travel with its start: the app exists only once it is built, so the start
     // checks them (app_link:manage, the apps, the aliases) and the first build makes them.
     if (brief && talks.length) input.app_links = linkRequests(talks);
+    if (several) {
+      // THE APP'S COMPONENTS FIRST, under the name the run files the app by; refused, nothing starts.
+      const appName = String(input.title || heading).trim();
+      try {
+        await guarded(`Map ${appName}'s components to repositories.`,
+                      () => multirepo.putComponents(projectId, appName, mapInput, appName));
+      } catch (e) {
+        if ((e as { code?: string }).code !== "step_up_cancelled") setError(refusalMessage(e));
+        return;
+      }
+      delete input.repository;
+      input.repo_layout = { mode: "multi", app_name: appName };
+    }
     const started = await startRun(draft.workflowKey, input);
     if (!started.ok) return;
     setDraft(EMPTY_DRAFT);
     setTalks([]);
+    setLayout("one");
+    setMapRows([]);
     onStarted(started.id);
   };
 
@@ -1177,14 +1249,69 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     </div>
   );
 
+  /** One repo / Several repos — or, with fewer than two repositories, where to add more. */
+  const layoutSwitch = !needsRepository || projectRepos === null ? null : severalOffered ? (
+    <span className="mr-ui-seg" role="radiogroup" aria-label="Where the code lives" data-testid="np-layout">
+      <button type="button" role="radio" aria-checked={layout === "one"} data-testid="np-layout-one"
+              title="Everything in one repository. The simple default." onClick={() => void chooseLayout("one")}>One repo</button>
+      <button type="button" role="radio" aria-checked={layout === "several"} data-testid="np-layout-several"
+              title="Each part of the app in its own repository."
+              {...manageGate.props}
+              onClick={manageGate.guard(() => void chooseLayout("several"))}>Several repos{manageGate.sr}</button>
+    </span>
+  ) : (
+    <span className="mr-map-hint" data-testid="np-layout-hint">
+      Several repos needs two or more in this project ·{" "}
+      <a className="mr-ui-link" href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
+                                                  MULTIREPO_PLACES.projectRepos)}>Add repositories</a>
+    </span>
+  );
+
+  const severalEditor = several ? (() => {
+    const all = mapRepoNames();
+    const readOnly = mapRepoNames("deploy_config").filter((r) => !mapRepoNames("code").includes(r));
+    return (
+      <div className="mr-map np-where" data-testid="np-several">
+        {suggesting ? <p className="np-dim">Suggesting a mapping…</p> : (
+          <ComponentRows rows={mapRows} repos={projectRepos ?? []} onChange={setMapRows} disabled={busy} testPrefix="np-map" />
+        )}
+        <div className="mr-map-head">
+          <button type="button" className="mr-ui-link" data-testid="np-map-add" disabled={busy}
+                  onClick={() => setMapRows((rows) => [...rows, { key: rowKey(), name: "", binding_id: "", path: "/", kind: "code", depends_on: [] }])}>
+            <Plus size={12} aria-hidden /> Add a component
+          </button>
+          <span className="mr-ui-spacer" />
+          <span className="np-dim" style={{ fontSize: 12 }}>Suggestions come from repository names and languages.</span>
+        </div>
+        <div className="mr-ui-note" data-testid="np-map-lock">
+          <LockKey size={15} aria-hidden />
+          <div>
+            Agents in this project may touch <b>{all.length === 1 ? "this repository only" : `these ${all.length} repositories only`}</b>
+            {readOnly.length ? ` (${listWords(readOnly)} read only)` : ""}. You confirm this before the first build.
+          </div>
+        </div>
+        <div className="mr-ui-note" data-testid="np-map-linked">
+          <GitPullRequest size={15} aria-hidden />
+          <div>With several repositories one run opens <b>linked pull requests</b>, one per repository, reviewed and approved <b>as a set</b>, and deploys them together.</div>
+        </div>
+      </div>
+    );
+  })() : null;
+
   const livesIn = adding ? (
     <div className="np-fact" data-testid="np-lands">
       <small>Lands as</small>
       <b title="From the app's PR: an open one is updated on its branch; a merged one means a new PR">{landsAs(app)}</b>
     </div>
+  ) : needsRepository && several ? (
+    <div className="np-fact" data-testid="np-lives" data-layout="several">
+      <small>Where the code lives</small>
+      <b>{mapRepoNames().length} repositories</b>
+      {layoutSwitch}
+    </div>
   ) : needsRepository ? (
     <div className="np-fact" data-testid="np-lives">
-      <small>Lives in<button type="button" className="np-fact-act" aria-expanded={editRepo}
+      <small>Where the code lives<button type="button" className="np-fact-act" aria-expanded={editRepo}
                              data-testid="np-repo-change" onClick={() => setEditRepo((v) => !v)}>
         {editRepo ? "Done" : "Change"}</button></small>
       <b data-user-text>{draft.repository || suggested?.name
@@ -1203,6 +1330,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           </a>
         </span>
       ) : null}
+      {layoutSwitch}
     </div>
   ) : null;
 
@@ -1363,7 +1491,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
         )}
         <div className="np-facts">{team}{livesIn}</div>
         {editTeam ? agentPicker : null}
-        {repoChoices}
+        {several ? severalEditor : repoChoices}
         {readyDots}
         {readiness?.missing?.length ? (
           <ReadinessPanel readiness={readiness} accepted={startAnyway} projectId={projectId}
@@ -1425,7 +1553,10 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
       <footer className="np-foot">
         <span className="np-cost" data-testid="np-cost">
           {cost ? <>{adding ? "Changes" : "Builds"} like this cost <b>{cost}</b> · </> : null}
-          {total.steps} steps · {youApproveWord(total.approvals)}
+          {several ? (() => {
+            const code = mapRepoNames("code").length;
+            return <span data-testid="np-cost-several">{code} {code === 1 ? "repository" : "repositories"} · {code} linked {code === 1 ? "PR" : "PRs"} · you approve once</span>;
+          })() : <>{total.steps} steps · {youApproveWord(total.approvals)}</>}
           {deploysOnlyWithYou && !formOnly ? " · nothing deploys without you" : ""}
           <HelpTip label="Cost" text="Starting spends model budget. It stops and asks before it deploys anything." />
         </span>

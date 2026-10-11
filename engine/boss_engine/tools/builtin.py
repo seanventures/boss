@@ -694,6 +694,63 @@ def _app_build_in_flight(connection, project_id: str, run_id: str):
         "ORDER BY c.created_at LIMIT 1"), {"r": run_id, "p": project_id}).scalar()
 
 
+def _multirepo_app_key(c, pid: str, args: dict, extends: str) -> tuple[str, str]:
+    """(app_key, app_name) of the app this build is for: the composer's own name for it (the
+    workflow run's `repo_layout`), else the app the build extends, else the title."""
+    from sqlalchemy import text as _text
+
+    from ..multirepo import components as _components
+
+    wf = str(args.get("workflow_run_id") or "").strip()
+    if wf:
+        row = c.execute(_text("SELECT input FROM workflow_runs WHERE id = :w"), {"w": wf}).scalar()
+        layout = (row or {}).get("repo_layout") if isinstance(row, dict) else None
+        if isinstance(layout, dict) and layout.get("app_name"):
+            name = str(layout["app_name"])
+            return _components.app_key_of(name), name
+    if extends:
+        parent = c.execute(_text("SELECT id, title, spec, finalize_ctx FROM code_task_runs WHERE id = :r "
+                                 "AND project_id = :p"), {"r": extends, "p": pid}).mappings().first()
+        if parent:
+            name = services_module("factory_view").app_name(dict(parent))
+            return _components.app_key_of(name), name
+    title = str(args.get("title") or "")
+    from ..services.naming import project_name
+
+    name = project_name(title)[0]
+    return _components.app_key_of(title), name
+
+
+def _multirepo_change(ctx, pid: str, actor: str, args: dict, extends: str, finalize_ctx: dict) -> dict | None:
+    """Start a multi-repo change set when this build's app has several components, else None."""
+    from ..multirepo import change_sets as _change_sets
+    from ..multirepo import components as _components
+    from ..multirepo.common import MultiRepoError
+
+    with ctx.begin() as c:
+        try:
+            key, name = _multirepo_app_key(c, pid, args, extends)
+        except Exception:  # noqa: BLE001 — no app to resolve: the ordinary path decides
+            return None
+        if not key or not _components.is_multi(c, pid, key):
+            return None
+        title = str(args.get("title") or "Change")
+        if name and not title.lower().startswith(name.lower()):
+            title = f"{name}: {title}"
+        try:
+            started = _change_sets.start(
+                c, ctx.settings, ctx.jobs, project_id=pid, app_key=key, title=title,
+                instructions=str(args.get("instructions") or title),
+                acceptance_criteria=args.get("acceptance_criteria") or [],
+                test_commands=args.get("test_commands") or [], actor=actor,
+                workflow_run_id=str(args.get("workflow_run_id") or "") or None, task_id=args.get("task_id"),
+                finalize_extra={k: v for k, v in finalize_ctx.items() if k in ("origin", "agent")})
+        except MultiRepoError as refused:
+            return {"ok": False, "status": "failed", "error": refused.message, "reason": refused.message}
+    return {"status": "queued", "change_set_id": started["id"], "project_id": pid,
+            "repositories": [lane["full_name"] for lane in started["lanes"]], "multirepo": True}
+
+
 def _titled_for_the_app(connection, cts, run_id: str, title) -> str:
     """"<App>: <feature>". The Factory names an app from its newest build's title, so a build
     titled only for the feature would rename the app on screen to the feature it gained."""
@@ -822,6 +879,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         if started_by:
             finalize_ctx["origin"] = started_by
         extends = str(args.get("extends_run_id") or "").strip()
+        # AN APP BUILT FROM SEVERAL REPOSITORIES gets one change set — a lane per repository, in
+        # dependency order, linked PRs, one approval — instead of a single build in one repo.
+        multi = _multirepo_change(ctx, pid, actor, args, extends, finalize_ctx)
+        if multi is not None:
+            return multi
         if extends:
             return _build_onto_existing_app(ctx, cts, pid, actor, args, extends, finalize_ctx)
         risk_tier = args.get("risk_tier")

@@ -257,6 +257,18 @@ def mint_for_run(claims: RunTokenClaims, *, task: TaskBinding, db: Any):
     repos = run_repos(task)
     if not repos:
         raise GitHubRefused("no_repo")
+    # THE REGISTRY (multirepo/registry.py): a repository the operator unticked, or one GitHub no
+    # longer lists, is out of the next mint — a run already holding a token keeps it until it ends.
+    from ..multirepo import grants as repo_grants
+    from ..multirepo import registry as repo_registry
+
+    refused = repo_registry.mint_allowed(db, claims.org_id, repos)
+    if refused:
+        raise GitHubRefused("repo_not_allowed")
+    # THE RUN'S GRANT (multirepo/grants.py): a build of a multi-repo app reaches only its app's
+    # repositories, exactly — never one outside the set the person consented to.
+    if repo_grants.outside_run_grant(db, task.run_id, repos):
+        raise GitHubRefused("repo_outside_app")
     grant = grants.load(claims.grant_id, db=db)
     if claims.mode.value == "obo":
         gh = grants.github_resources(grant)

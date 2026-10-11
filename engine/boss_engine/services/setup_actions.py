@@ -197,14 +197,16 @@ APP_CREDENTIAL_REF = "identity_github:app"
 
 
 def repository_from_app(connection: Connection, settings: Any, project_id: str, *,
-                        actor: str = "ceo") -> dict[str, Any]:
+                        actor: str = "ceo", list_repos: bool = True) -> dict[str, Any]:
     """Use the GitHub App connected in Setup › GitHub access: no token to paste. The project gets
     one connection whose credential is the App itself (`identity_github:app`, a fresh installation
-    token at each use) and the picker lists the repositories the App is installed on."""
+    token at each use) and the picker lists the repositories the App is installed on.
+    `list_repos=False` only makes sure the connection exists (the multi-repo registry already
+    knows which repositories the App reaches)."""
     from ..identity import github_setup
 
     try:
-        repos = github_setup.installation_repositories(connection)
+        repos = github_setup.installation_repositories(connection) if list_repos else []
     except github_setup.GitHubSetupError as error:
         if error.code == "app_not_connected":
             raise SetupActionError(409, "app_not_connected", "Connect the App",

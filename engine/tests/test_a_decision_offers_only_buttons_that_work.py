@@ -29,6 +29,9 @@ SAMPLES = {
         "capability": "architecture", "architecture_review_id": "arch_1", "version": 1}},
     "pull_request": {"status": "pending", "recommendation": {
         "action": "review_pull_request", "pull_request_url": "https://x/pull/7"}},
+    "change_set": {"status": "pending", "recommendation": {
+        "action": "approve_change_set", "change_set_id": "chs_1",
+        "pull_requests": [{"repository": "acme/api", "pr_number": 1}, {"repository": "acme/web", "pr_number": 2}]}},
     "general": {"status": "pending", "recommendation": {"action": "role.autonomy_change"}},
 }
 

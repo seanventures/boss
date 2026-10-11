@@ -376,6 +376,7 @@ def capabilities() -> list[str]:
         "agent.resume",
         "software_factory.propose_pr",
         "github.pull_request.merge",
+        "change_set.merge",
         "github.deployment.create",
         "infra.droplet.create",
         "infra.droplet.delete",
@@ -905,6 +906,14 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         )
         if result.get("status") == "failed":
             raise RuntimeError(result.get("message") or "Pull-request merge failed.")
+        return result
+    if job.kind == "change_set.merge":
+        # A multi-repo change after its one approval: merged as a set (heads re-checked, in
+        # dependency order, reverted if one fails). The API owns the merge; this hands it over.
+        result = client.merge_change_set({"project_id": job.project_id,
+                                          "change_set_id": job.payload["change_set_id"]})
+        if result.get("status") == "failed" and not result.get("reverted") and not result.get("failed"):
+            raise RuntimeError(result.get("message") or "Change set merge failed.")
         return result
     if job.kind == "github.deployment.create":
         result = client.create_deployment(

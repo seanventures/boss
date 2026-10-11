@@ -26770,7 +26770,20 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
             advanced, timeouts = result, swept
         else:
             others[pid] = {**result, "gate_timeouts": swept}
-    return {**advanced, "gate_timeouts": timeouts, **({"other_projects": others} if others else {})}
+    # MULTI-REPO CHANGE SETS move on the same tick (multirepo/change_sets.py): plan, start the
+    # next wave of lanes, link the PRs, run the cross-repo check, ask once, watch for pushes.
+    # Each set in its own transaction; one that cannot move never stops the rest.
+    try:
+        from boss_engine.multirepo import change_sets as _change_sets
+
+        from boss_engine.multirepo import release as _release
+
+        moved = _change_sets.advance_all(engine, ctx.settings, ctx.jobs)
+        moved.update({f"release:{k}": v for k, v in _release.advance_all(engine, ctx.settings).items()})
+    except Exception as error:  # noqa: BLE001
+        moved = {"error": type(error).__name__}
+    return {**advanced, "gate_timeouts": timeouts, **({"other_projects": others} if others else {}),
+            **({"change_sets": moved} if moved else {})}
 
 
 @app.get("/v1/workflows", response_model=WorkflowDefinitionListResponse)
@@ -30663,6 +30676,9 @@ app.include_router(build_templates_router())
 app.include_router(build_security_router())
 app.include_router(build_links_router())
 app.include_router(build_oidc_router())
+from .routes_multirepo import build_multirepo_router  # noqa: E402  (multi-repo apps)
+
+app.include_router(build_multirepo_router())
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

@@ -777,6 +777,18 @@ class DecisionService:
         safe behaviour for callers that do not supply either value."""
         recommendation = row["recommendation"] or {}
         action = recommendation.get("action")
+        if action == "approve_change_set":
+            # ONE APPROVAL FOR A MULTI-REPO CHANGE (multirepo/change_sets.py): pins the exact head
+            # SHAs it covered and queues the merge of the whole set. Refused (and the approval not
+            # recorded) when a PR moved since the question was asked.
+            from ..multirepo import change_sets
+            from ..multirepo.common import MultiRepoError
+
+            try:
+                change_sets.on_decision(connection, row, status="approved", actor=actor, jobs=self.jobs)
+            except MultiRepoError as refused:
+                raise InvalidDecisionTransitionError(refused.message) from refused
+            return
         if action == "execute_agent_tool":
             # A high-risk agent tool call that was deferred for approval — run it now.
             from .agent_loop import execute_agent_tool
@@ -1016,7 +1028,18 @@ class DecisionService:
     ) -> None:
         recommendation = row["recommendation"] or {}
         recommendation_action = recommendation.get("action")
-        if recommendation_action in {
+        if recommendation_action == "approve_change_set":
+            # Send back: every PR of the set gets a fix build from the note, and the set is asked
+            # again. Reject: the set stops; nothing merges, nothing deploys.
+            from ..multirepo import change_sets
+            from ..multirepo.common import MultiRepoError
+
+            try:
+                change_sets.on_decision(connection, row, actor=actor, jobs=self.jobs, note=note,
+                                        status="revision_requested" if action == "revise" else "rejected")
+            except MultiRepoError as refused:
+                raise InvalidDecisionTransitionError(refused.message) from refused
+        elif recommendation_action in {
             "self_improvement.begin_canary",
             "self_improvement.rollout",
         }:

@@ -8758,3 +8758,166 @@ CREATE TABLE IF NOT EXISTS oidc_app_challenges (
 );
 CREATE INDEX IF NOT EXISTS oidc_app_challenges_binding ON oidc_app_challenges (binding_hash);
 -- END F6 ------------------------------------------------------------------------------------------
+
+-- MULTI-REPO APPS (docs/product/MULTIREPO.md) -----------------------------------------------------
+-- The org's repository registry: every repository the GitHub App installation (or the org's
+-- token) reaches, and whether BOSS may use it (the operator's tick). A project chooses only from
+-- allowed rows; unticking removes the repository from every project and from the next token mint.
+CREATE TABLE IF NOT EXISTS github_repos (
+  id               TEXT PRIMARY KEY,
+  org_id           TEXT NOT NULL,
+  source           TEXT NOT NULL DEFAULT 'app',
+  github_repo_id   BIGINT,
+  full_name        TEXT NOT NULL,
+  description      TEXT,
+  default_branch   TEXT,
+  language         TEXT,
+  private          BOOLEAN,
+  archived         BOOLEAN NOT NULL DEFAULT false,
+  allowed          BOOLEAN NOT NULL DEFAULT false,
+  allowed_by       TEXT,
+  allowed_at       TIMESTAMPTZ,
+  -- {read, write, pull_requests: {ok, state, at}, state} from setup_checks.probe_repository
+  checks           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  checked_at       TIMESTAMPTZ,
+  -- false: the installation no longer lists it (removed from the App, or deleted on GitHub).
+  reachable        BOOLEAN NOT NULL DEFAULT true,
+  last_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (source IN ('app', 'token'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS github_repos_org_full_name ON github_repos (org_id, lower(full_name));
+-- A project's repositories are its github_repository_bindings (one row per repository); these
+-- columns carry the multi-repo role hint and the registry row the binding was chosen from.
+ALTER TABLE github_repository_bindings ADD COLUMN IF NOT EXISTS role_hint TEXT;
+ALTER TABLE github_repository_bindings ADD COLUMN IF NOT EXISTS registry_repo_id TEXT;
+-- One repo or several: a project's mode (app_key '') and each app's (app_key = the app's key).
+-- Absent = 'single', today's behaviour: one implicit component in the project's default repo.
+CREATE TABLE IF NOT EXISTS repo_layouts (
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  app_key     TEXT NOT NULL DEFAULT '',
+  repo_mode   TEXT NOT NULL DEFAULT 'single',
+  updated_by  TEXT,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, app_key),
+  CHECK (repo_mode IN ('single', 'multi'))
+);
+-- An app's components, each in a repository of its project (a binding) and a folder of it.
+-- Order = the topological sort of depends_on (component names of the same app); cycles are
+-- refused on save. kind deploy_config is read only: BOSS plans deploys from it, never builds it.
+CREATE TABLE IF NOT EXISTS app_components (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  app_key      TEXT NOT NULL,
+  app_name     TEXT,
+  name         TEXT NOT NULL,
+  binding_id   TEXT NOT NULL REFERENCES github_repository_bindings(id),
+  path         TEXT NOT NULL DEFAULT '/',
+  access       TEXT NOT NULL DEFAULT 'write',
+  kind         TEXT NOT NULL DEFAULT 'code',
+  depends_on   TEXT[] NOT NULL DEFAULT '{}',
+  ship_target  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  position     INTEGER NOT NULL DEFAULT 0,
+  created_by   TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, app_key, name),
+  CHECK (access IN ('write', 'read')),
+  CHECK (kind IN ('code', 'deploy_config'))
+);
+CREATE INDEX IF NOT EXISTS app_components_app ON app_components (project_id, app_key);
+-- What a run of a multi-repo app may touch: EXACTLY its app's repositories, recorded when the
+-- person consents (who, which repositories, which access) and checked at every token mint.
+CREATE TABLE IF NOT EXISTS repo_run_grants (
+  id                 TEXT PRIMARY KEY,
+  project_id         TEXT NOT NULL,
+  app_key            TEXT NOT NULL,
+  change_set_id      TEXT,
+  identity_grant_id  TEXT,
+  repos              JSONB NOT NULL DEFAULT '[]'::jsonb,
+  permissions        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  consented_by       TEXT,
+  remember           BOOLEAN NOT NULL DEFAULT false,
+  expires_at         TIMESTAMPTZ,
+  ended_at           TIMESTAMPTZ,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS repo_run_grants_change_set ON repo_run_grants (change_set_id);
+-- ONE CHANGE ACROSS N REPOSITORIES (SPEC.md `change_sets`; named repo_change_sets because
+-- `changesets` is the resource plane's deploy change set). A single-repo run gets a one-PR set.
+CREATE TABLE IF NOT EXISTS repo_change_sets (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  app_key          TEXT NOT NULL,
+  app_name         TEXT,
+  title            TEXT NOT NULL,
+  directive        TEXT,
+  mode             TEXT NOT NULL DEFAULT 'multi',
+  state            TEXT NOT NULL DEFAULT 'planned',
+  -- {components: [{name, change, unchanged, interface}], summary, by}
+  plan             JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- the authority the set was started under: {principal_id, org_id, grant_id, run_id}
+  acting           JSONB,
+  workflow_run_id  TEXT,
+  task_id          TEXT,
+  decision_id      TEXT,
+  -- the exact head SHAs the approval covers: {full_name: sha}; any later push re-asks
+  approved_shas    JSONB,
+  approved_by      TEXT,
+  approved_at      TIMESTAMPTZ,
+  blocked_reason   TEXT,
+  error            TEXT,
+  -- the release: {waves, status, steps, rolled_back}
+  release          JSONB NOT NULL DEFAULT '{}'::jsonb,
+  options          JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by       TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (mode IN ('single', 'multi')),
+  CHECK (state IN ('planned', 'building', 'blocked', 'in_review', 'approved', 'merging', 'merged',
+                   'deploying', 'live', 'rolled_back', 'failed', 'rejected', 'cancelled'))
+);
+CREATE INDEX IF NOT EXISTS repo_change_sets_app ON repo_change_sets (project_id, app_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS repo_change_sets_state ON repo_change_sets (state);
+-- One row per repository of the set (a monorepo's components share one row, one PR).
+CREATE TABLE IF NOT EXISTS change_set_prs (
+  id                 TEXT PRIMARY KEY,
+  change_set_id      TEXT NOT NULL REFERENCES repo_change_sets(id) ON DELETE CASCADE,
+  binding_id         TEXT,
+  full_name          TEXT NOT NULL,
+  components         TEXT[] NOT NULL DEFAULT '{}',
+  wave               INTEGER NOT NULL DEFAULT 1,
+  -- waiting | building | ready | failed | unchanged | merged | reverted
+  lane_state         TEXT NOT NULL DEFAULT 'waiting',
+  code_task_run_id   TEXT,
+  base_branch        TEXT,
+  branch             TEXT,
+  pr_number          INTEGER,
+  pr_url             TEXT,
+  head_sha           TEXT,
+  additions          INTEGER,
+  deletions          INTEGER,
+  changed_files      INTEGER,
+  ci_state           TEXT,
+  review_state       TEXT,
+  review             JSONB NOT NULL DEFAULT '{}'::jsonb,
+  merged_sha         TEXT,
+  merged_at          TIMESTAMPTZ,
+  revert_pr_number   INTEGER,
+  revert_sha         TEXT,
+  error              TEXT,
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (change_set_id, full_name)
+);
+CREATE INDEX IF NOT EXISTS change_set_prs_run ON change_set_prs (code_task_run_id);
+-- The set gate: do the PRs fit together? Re-run on every push to any PR of the set.
+CREATE TABLE IF NOT EXISTS cross_repo_checks (
+  id             TEXT PRIMARY KEY,
+  change_set_id  TEXT NOT NULL REFERENCES repo_change_sets(id) ON DELETE CASCADE,
+  head_shas      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  results        JSONB NOT NULL DEFAULT '[]'::jsonb,
+  verdict        TEXT NOT NULL DEFAULT 'pending',
+  at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cross_repo_checks_set ON cross_repo_checks (change_set_id, at DESC);

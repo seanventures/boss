@@ -260,6 +260,15 @@ def clean_tables(engine):
             "github_branch_leases",
             "github_branch_snapshots",
             "github_branch_policies",
+            # Multi-repo apps: change sets and their PRs/checks, run grants, components, layouts
+            # and the org registry (before the bindings their components point at).
+            "cross_repo_checks",
+            "change_set_prs",
+            "repo_change_sets",
+            "repo_run_grants",
+            "app_components",
+            "repo_layouts",
+            "github_repos",
             "github_repository_bindings",
             "github_connections",
             "model_gateway_invocations",

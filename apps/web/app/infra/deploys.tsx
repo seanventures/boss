@@ -21,6 +21,7 @@ import { ErrorLine, Menu } from "./infra-util";
 import { Empty, Skeleton } from "./kit";
 import { RulesSheet } from "./rules-sheet";
 import { SecretsSheet } from "./secrets-sheet";
+import { ChangeSetReleases, DeployPlanView } from "../multirepo/deploy-plan";
 import "./deploys.css";
 
 const CHIPS: { key: string | null; label: string; count: "needsYou" | "live" | "failed" | null }[] = [
@@ -72,8 +73,18 @@ export function DeploysTab({ projectId, actor, url, go, query }: InfraTabProps) 
   const filtered = !!(url.state || url.app || url.env);
   const more = cursor === "" ? null : next;
 
+  // A change across repositories: its plan, one release with one rollback (`changeset=<id>`).
+  if (url.changeset) {
+    return (
+      <div className="inf-deploys" data-testid="inf-deploys">
+        <DeployPlanView projectId={projectId} changeSetId={url.changeset} onBack={() => go({ changeset: null })} />
+      </div>
+    );
+  }
+
   return (
     <div className="inf-deploys" data-testid="inf-deploys">
+      <ChangeSetReleases projectId={projectId} onOpen={(id) => go({ changeset: id, deploy: null })} />
       <div className="inf-dep-bar" role="toolbar" aria-label="Deploy filters">
         <span className="inf-seg" role="radiogroup" aria-label="Show">
           {CHIPS.map((c) => {
