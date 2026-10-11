@@ -184,6 +184,7 @@ scripts/e2e.sh workflows --only fast_fix --only weekly-newsletter
 scripts/e2e.sh console --only skills --only /v2/factory --headed
 scripts/e2e.sh status                 # URLs of the running stack
 scripts/e2e.sh perf --seed            # the performance walk (below)
+scripts/e2e.sh budget --seed          # the navigation budget (below); `all` runs it too
 scripts/e2e.sh down
 ```
 
@@ -196,6 +197,16 @@ loads are 6 s apart by default (`--gap`), past the feed cache's reuse window: a 
 fails when a page or endpoint breaks `PAGE_BUDGETS` / `API_P95_MS` (`--no-budget` only reports).
 `--root <checkout>` (with `--restart-api --restart-web`) measures another version on the same
 data; `--legacy` signs in the rc5 way (console password + API key).
+
+**`budget`** (`harness/nav_budget.py`) is the navigation budget, and `all` runs it after the console
+walk, so a breach fails a release. Signed in as the Owner with a second factor older than the
+step-up window, it times what a person waits for in a real browser: each main area opened from the
+Command Center's rail (fresh browser, 1-3 s after the page loads, `--rounds` clicks per area) until
+the area is on screen — p95 must stay under 1.0 s; the API calls one cold page load of each area
+makes (from the API's request log) — at most 35; the browser's requests while the Command Center
+sits idle for 30 s after every area was opened — at most 25; and the step-up sheet must never
+appear. `scripts/e2e.sh budget --seed` runs it alone; `--no-budget` only reports. It refuses to run
+in a hidden tab (a hidden automation tab never finishes streaming the console).
 
 `BOSS_E2E_RUN_TIMEOUT` (seconds, default 900) bounds each run. `scripts/e2e.sh down --all` stops
 every stack ever recorded here, and everything each one started.
