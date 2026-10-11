@@ -441,7 +441,8 @@ class ModelGatewayService:
         self, connection: Connection, project_id: str, *, included: bool,
         estimate: int, reservation_id: Optional[str] = None, require_reservation: bool = False,
     ) -> None:
-        hold = self.budget.legacy_model_reconciliation(connection, project_id)
+        hold = (self.budget.legacy_model_reconciliation(connection, project_id)
+                or self.budget.legacy_provider_reconciliation(connection, project_id))
         if not hold:
             return
         zero_cash = (included and type(estimate) is int and estimate == 0
