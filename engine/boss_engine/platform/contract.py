@@ -47,7 +47,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 API_VERSION = "boss.plugin/v1"
 #: The version of this contract module. Additive changes bump MINOR; nothing here is removed or
 #: renamed under boss.plugin/v1.
-CONTRACT_VERSION = "1.0.0"
+CONTRACT_VERSION = "1.1.0"
 MANIFEST_FILE = "boss-plugin.yaml"
 
 #: `official.postgres`, `community.example-kv`: a namespace, a dot, a name.
@@ -514,6 +514,42 @@ class SecretBroker(Protocol):
 
 
 @dataclass
+class CommandOutcome:
+    returncode: int
+    stdout: str
+    stderr: str
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0
+
+
+@runtime_checkable
+class HostRunner(Protocol):
+    """Where a plugin's commands run: the target host of the deploy (over BOSS's governed SSH)
+    or, in the harness and for a local install, this machine. A plugin never opens its own
+    connection to a host; it calls `ctx.host.run(...)`. `address` is how the host is reached."""
+    address: str
+
+    def run(self, command: str, *, timeout: int = 120, stdin_text: Optional[str] = None) -> Any: ...
+
+
+class LocalHost:
+    """This machine. `run` executes through bash, returns a CommandOutcome, never raises on a
+    non-zero exit (a timeout is returncode 124)."""
+    address = "127.0.0.1"
+
+    def run(self, command: str, *, timeout: int = 120, stdin_text: Optional[str] = None) -> CommandOutcome:
+        import subprocess
+        try:
+            proc = subprocess.run(["bash", "-c", command], input=stdin_text, capture_output=True,
+                                  text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return CommandOutcome(124, "", f"timed out after {timeout}s")
+        return CommandOutcome(proc.returncode, proc.stdout, proc.stderr)
+
+
+@dataclass
 class HookContext:
     """Everything a hook gets. Built by BOSS (or the contract harness); plugins only read it."""
     hook: Hook
@@ -534,6 +570,7 @@ class HookContext:
     log: Callable[[str], None] = lambda _line: None  # redacting logger supplied by BOSS
     plugin_id: str = ""
     plugin_version: str = ""
+    host: HostRunner = field(default_factory=LocalHost)  # contract 1.1: where commands run
 
     def result(self, status: Union[OperationStatus, str, None] = None, **kw: Any) -> OperationResult:
         """An OperationResult with the ids filled in; `status` defaults to the hook's success."""
