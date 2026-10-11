@@ -149,6 +149,36 @@ def _json(body: Any, etag: str) -> JSONResponse:
                         headers={"ETag": etag, "Cache-Control": "no-cache"})
 
 
+# THE COUNTS, KEPT BY THEIR ETAG (console latency, 2026-10-10). The histogram and the facets are
+# aggregations over every stream in the window: 210-290 ms each on the laptop install (p95 over
+# 300 ms), asked every 5 s by every open Activity view, and again by each tab. Their ETag
+# (`signature`) is already the promise that the answer has not changed — the filters, the minute,
+# and the newest row of every stream — and a client holding it gets a 304. A second reader (another
+# tab, a refresh, the next poll after a 304 elsewhere) asking under the same ETag is now answered
+# from here instead of recounting. Exact by construction: a different answer has a different ETag.
+_COUNTS_KEPT: "dict[str, tuple[float, Any]]" = {}
+_COUNTS_MAX = 256
+_COUNTS_TTL_S = 120.0
+
+
+def _kept_counts(etag: str) -> Optional[Any]:
+    import time
+
+    hit = _COUNTS_KEPT.get(etag)
+    if hit is None or time.monotonic() - hit[0] > _COUNTS_TTL_S:
+        return None
+    return hit[1]
+
+
+def _keep_counts(etag: str, body: Any) -> None:
+    import time
+
+    if len(_COUNTS_KEPT) >= _COUNTS_MAX:
+        for key in sorted(_COUNTS_KEPT, key=lambda k: _COUNTS_KEPT[k][0])[: _COUNTS_MAX // 4]:
+            _COUNTS_KEPT.pop(key, None)
+    _COUNTS_KEPT[etag] = (time.monotonic(), body)
+
+
 
 @router.get("/v1/activity")
 @permit(P.ACTIVITY_READ, scope=Scope.project_or_org(query="project_id"))
@@ -238,7 +268,10 @@ def activity_histogram(
             cached = _not_modified(request, etag)
             if cached is not None:
                 return cached
-            body = service.histogram(connection, project_id, now=now, **values)
+            body = _kept_counts(etag)
+            if body is None:
+                body = service.histogram(connection, project_id, now=now, **values)
+                _keep_counts(etag, body)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _json(body, etag)
@@ -264,7 +297,10 @@ def activity_facets(
             cached = _not_modified(request, etag)
             if cached is not None:
                 return cached
-            body = service.facets(connection, project_id, **filters.values)
+            body = _kept_counts(etag)
+            if body is None:
+                body = service.facets(connection, project_id, **filters.values)
+                _keep_counts(etag, body)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _json(body, etag)
