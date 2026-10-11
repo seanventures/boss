@@ -1,0 +1,170 @@
+{
+  "$defs": {
+    "AttachSpec": {
+      "additionalProperties": false,
+      "description": "An existing resource BOSS connects to. Its connection values are ALREADY in the app's\nsecret vault; `bindings` maps the env name the app gets to that vault secret's name.",
+      "properties": {
+        "bindings": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "minProperties": 1,
+          "title": "Bindings",
+          "type": "object"
+        }
+      },
+      "required": [
+        "bindings"
+      ],
+      "title": "AttachSpec",
+      "type": "object"
+    },
+    "ResourceMode": {
+      "enum": [
+        "owned",
+        "attached"
+      ],
+      "title": "ResourceMode",
+      "type": "string"
+    }
+  },
+  "$id": "https://boss.dev/schemas/boss.plugin/v1/ResourceRequest",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "What an app asks for. `db: {capability: database.relational, engine: postgres}`.",
+  "properties": {
+    "attach": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AttachSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "backups": {
+      "default": false,
+      "title": "Backups",
+      "type": "boolean"
+    },
+    "bindings": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Rename map: plugin binding name -> env name the app gets",
+      "title": "Bindings",
+      "type": "object"
+    },
+    "capability": {
+      "pattern": "^[a-z][a-z0-9-]{0,31}(\\.[a-z][a-z0-9-]{0,31}){0,3}$",
+      "title": "Capability",
+      "type": "string"
+    },
+    "config": {
+      "additionalProperties": true,
+      "title": "Config",
+      "type": "object"
+    },
+    "dependsOn": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Dependson",
+      "type": "array"
+    },
+    "engine": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z][a-z0-9_-]{0,47}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Engine"
+    },
+    "engineVersion": {
+      "anyOf": [
+        {
+          "maxLength": 32,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Engineversion"
+    },
+    "environment": {
+      "default": "deploy",
+      "pattern": "^[a-z][a-z0-9_-]{0,47}$",
+      "title": "Environment",
+      "type": "string"
+    },
+    "features": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Features",
+      "type": "array"
+    },
+    "mode": {
+      "$ref": "#/$defs/ResourceMode",
+      "default": "owned"
+    },
+    "name": {
+      "pattern": "^[a-z][a-z0-9-]{0,47}$",
+      "title": "Name",
+      "type": "string"
+    },
+    "persistence": {
+      "default": true,
+      "title": "Persistence",
+      "type": "boolean"
+    },
+    "provider": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z][a-z0-9-]{1,31}\\.[a-z0-9][a-z0-9.-]{1,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Plugin id; resolved by capability when absent",
+      "title": "Provider"
+    },
+    "publicAccess": {
+      "default": false,
+      "description": "Expose a host port publicly; needs approval",
+      "title": "Publicaccess",
+      "type": "boolean"
+    },
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Plugin version pin: an exact semver or a ^/~ range",
+      "title": "Version"
+    }
+  },
+  "required": [
+    "name",
+    "capability"
+  ],
+  "title": "ResourceRequest",
+  "type": "object"
+}

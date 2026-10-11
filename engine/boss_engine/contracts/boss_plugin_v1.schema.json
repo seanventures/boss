@@ -1,0 +1,324 @@
+{
+  "$defs": {
+    "Hook": {
+      "enum": [
+        "validate",
+        "plan",
+        "provision",
+        "configure",
+        "verify",
+        "observe",
+        "backup",
+        "restore",
+        "destroy"
+      ],
+      "title": "Hook",
+      "type": "string"
+    },
+    "PluginMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Description",
+          "type": "string"
+        },
+        "homepage": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Homepage"
+        },
+        "id": {
+          "description": "Stable id: <namespace>.<name>, e.g. official.postgres",
+          "pattern": "^[a-z][a-z0-9-]{1,31}\\.[a-z0-9][a-z0-9.-]{1,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "license": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "License",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "owner": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Owner",
+          "type": "string"
+        },
+        "version": {
+          "description": "The plugin's own semantic version",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "version",
+        "owner",
+        "license"
+      ],
+      "title": "PluginMetadata",
+      "type": "object"
+    },
+    "PluginPermissions": {
+      "additionalProperties": false,
+      "description": "What the plugin may touch. Everything is denied unless declared (spec \u00a77); the operator\nreviews this list when enabling a plugin.",
+      "properties": {
+        "cloud": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cloud",
+          "type": "array"
+        },
+        "docker": {
+          "default": false,
+          "description": "May start and remove containers",
+          "title": "Docker",
+          "type": "boolean"
+        },
+        "filesystem": {
+          "items": {
+            "const": "workspace-artifacts",
+            "type": "string"
+          },
+          "title": "Filesystem",
+          "type": "array"
+        },
+        "network": {
+          "description": "'declared-services' or 'egress:<host>' entries",
+          "items": {
+            "type": "string"
+          },
+          "title": "Network",
+          "type": "array"
+        },
+        "secrets": {
+          "items": {
+            "enum": [
+              "read-scoped",
+              "write-scoped"
+            ],
+            "type": "string"
+          },
+          "title": "Secrets",
+          "type": "array"
+        },
+        "subprocess": {
+          "default": false,
+          "title": "Subprocess",
+          "type": "boolean"
+        }
+      },
+      "title": "PluginPermissions",
+      "type": "object"
+    },
+    "PluginRuntime": {
+      "additionalProperties": false,
+      "description": "How BOSS runs the hooks. `python`: in-process, from `entrypoint` (built-in plugins, P0\nspeed). `container`: an isolated container from a digest-pinned image (third-party).",
+      "properties": {
+        "entrypoint": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entrypoint"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image"
+        },
+        "timeoutSeconds": {
+          "default": 600,
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Timeoutseconds",
+          "type": "integer"
+        },
+        "type": {
+          "enum": [
+            "python",
+            "container"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "PluginRuntime",
+      "type": "object"
+    },
+    "PluginSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "bindings": {
+          "description": "Env names the plugin can bind, e.g. DATABASE_URL",
+          "items": {
+            "type": "string"
+          },
+          "title": "Bindings",
+          "type": "array"
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "configSchema": {
+          "additionalProperties": true,
+          "description": "JSON Schema for ResourceRequest.config",
+          "title": "Configschema",
+          "type": "object"
+        },
+        "engineVersions": {
+          "description": "Pinned, certified versions",
+          "items": {
+            "type": "string"
+          },
+          "title": "Engineversions",
+          "type": "array"
+        },
+        "engines": {
+          "description": "e.g. postgres, valkey, minio",
+          "items": {
+            "type": "string"
+          },
+          "title": "Engines",
+          "type": "array"
+        },
+        "features": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Features",
+          "type": "array"
+        },
+        "hooks": {
+          "items": {
+            "$ref": "#/$defs/Hook"
+          },
+          "minItems": 1,
+          "title": "Hooks",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "permissions": {
+          "$ref": "#/$defs/PluginPermissions"
+        },
+        "ports": {
+          "description": "Container ports the resource listens on",
+          "items": {
+            "type": "integer"
+          },
+          "title": "Ports",
+          "type": "array"
+        },
+        "requires": {
+          "description": "Capabilities this plugin needs first (pgvector needs database.relational)",
+          "items": {
+            "type": "string"
+          },
+          "title": "Requires",
+          "type": "array"
+        },
+        "runtime": {
+          "$ref": "#/$defs/PluginRuntime"
+        },
+        "supportLevel": {
+          "$ref": "#/$defs/SupportLevel"
+        }
+      },
+      "required": [
+        "supportLevel",
+        "capabilities",
+        "runtime",
+        "hooks"
+      ],
+      "title": "PluginSpec",
+      "type": "object"
+    },
+    "SupportLevel": {
+      "description": "What BOSS promises about a plugin (spec \u00a73). Shown on every surface that lists one.",
+      "enum": [
+        "certified",
+        "experimental",
+        "community"
+      ],
+      "title": "SupportLevel",
+      "type": "string"
+    }
+  },
+  "$id": "https://boss.dev/schemas/boss.plugin/v1/PluginManifest",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "boss.plugin/v1",
+      "title": "Apiversion",
+      "type": "string"
+    },
+    "kind": {
+      "const": "Plugin",
+      "title": "Kind",
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/PluginMetadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/PluginSpec"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "PluginManifest",
+  "type": "object"
+}

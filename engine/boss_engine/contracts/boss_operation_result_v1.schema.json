@@ -1,0 +1,463 @@
+{
+  "$defs": {
+    "CostEstimate": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "default": "",
+          "description": "How the number was reached, or why unknown",
+          "maxLength": 200,
+          "title": "Basis",
+          "type": "string"
+        },
+        "monthlyUsd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Monthlyusd"
+        }
+      },
+      "title": "CostEstimate",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "description": "One observed fact. `connection` evidence is a real round trip to the resource.",
+      "properties": {
+        "check": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Check",
+          "type": "string"
+        },
+        "detail": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Detail",
+          "type": "string"
+        },
+        "kind": {
+          "default": "other",
+          "enum": [
+            "connection",
+            "healthcheck",
+            "migration",
+            "backup",
+            "restore",
+            "cleanup",
+            "config",
+            "observe",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "check",
+        "passed"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "Hook": {
+      "enum": [
+        "validate",
+        "plan",
+        "provision",
+        "configure",
+        "verify",
+        "observe",
+        "backup",
+        "restore",
+        "destroy"
+      ],
+      "title": "Hook",
+      "type": "string"
+    },
+    "OperationError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 1000,
+          "title": "Message",
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "title": "Retryable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "OperationError",
+      "type": "object"
+    },
+    "OperationStatus": {
+      "enum": [
+        "valid",
+        "invalid",
+        "planned",
+        "provisioned",
+        "configured",
+        "verified",
+        "observed",
+        "backed_up",
+        "restored",
+        "destroyed",
+        "unsupported",
+        "refused",
+        "cancelled",
+        "failed"
+      ],
+      "title": "OperationStatus",
+      "type": "string"
+    },
+    "PlannedChange": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "create",
+            "update",
+            "replace",
+            "delete",
+            "attach",
+            "noop"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "destructive": {
+          "default": false,
+          "title": "Destructive",
+          "type": "boolean"
+        },
+        "detail": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Detail",
+          "type": "string"
+        },
+        "target": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Target",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "target"
+      ],
+      "title": "PlannedChange",
+      "type": "object"
+    },
+    "PortSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "containerPort": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Containerport",
+          "type": "integer"
+        },
+        "hostPort": {
+          "anyOf": [
+            {
+              "maximum": 65535,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hostport"
+        },
+        "name": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "protocol": {
+          "default": "tcp",
+          "enum": [
+            "tcp",
+            "udp"
+          ],
+          "title": "Protocol",
+          "type": "string"
+        },
+        "public": {
+          "default": false,
+          "title": "Public",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "containerPort"
+      ],
+      "title": "PortSpec",
+      "type": "object"
+    },
+    "ResourceMode": {
+      "enum": [
+        "owned",
+        "attached"
+      ],
+      "title": "ResourceMode",
+      "type": "string"
+    },
+    "ResourcePlan": {
+      "additionalProperties": false,
+      "description": "What a `plan` hook proposes for one resource. Declarative; nothing has happened yet.",
+      "properties": {
+        "bindings": {
+          "description": "Env names the app will get, by name only",
+          "items": {
+            "type": "string"
+          },
+          "title": "Bindings",
+          "type": "array"
+        },
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/PlannedChange"
+          },
+          "title": "Changes",
+          "type": "array"
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CostEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "dependsOn": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Dependson",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "mode": {
+          "$ref": "#/$defs/ResourceMode"
+        },
+        "pluginId": {
+          "pattern": "^[a-z][a-z0-9-]{1,31}\\.[a-z0-9][a-z0-9.-]{1,63}$",
+          "title": "Pluginid",
+          "type": "string"
+        },
+        "pluginVersion": {
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+          "title": "Pluginversion",
+          "type": "string"
+        },
+        "ports": {
+          "items": {
+            "$ref": "#/$defs/PortSpec"
+          },
+          "title": "Ports",
+          "type": "array"
+        },
+        "publicAccess": {
+          "default": false,
+          "title": "Publicaccess",
+          "type": "boolean"
+        },
+        "resourceId": {
+          "title": "Resourceid",
+          "type": "string"
+        },
+        "risks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Risks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "resourceId",
+        "pluginId",
+        "pluginVersion",
+        "mode"
+      ],
+      "title": "ResourcePlan",
+      "type": "object"
+    },
+    "SecretRef": {
+      "additionalProperties": false,
+      "description": "A reference to a value in BOSS's secret vault. The only way a binding leaves a plugin.",
+      "properties": {
+        "secretRef": {
+          "pattern": "^[a-z][a-z0-9_+-]{1,31}://[A-Za-z0-9_./:@-]{1,255}$",
+          "title": "Secretref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "secretRef"
+      ],
+      "title": "SecretRef",
+      "type": "object"
+    }
+  },
+  "$id": "https://boss.dev/schemas/boss.plugin/v1/OperationResult",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "What every hook returns (spec \u00a76 \"standardized result\").",
+  "properties": {
+    "artifacts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "bindings": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SecretRef"
+      },
+      "title": "Bindings",
+      "type": "object"
+    },
+    "durationMs": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Durationms"
+    },
+    "errors": {
+      "items": {
+        "$ref": "#/$defs/OperationError"
+      },
+      "title": "Errors",
+      "type": "array"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/Evidence"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "hook": {
+      "$ref": "#/$defs/Hook"
+    },
+    "observed": {
+      "additionalProperties": true,
+      "description": "observe: normalized health/metrics",
+      "title": "Observed",
+      "type": "object"
+    },
+    "operationId": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Operationid",
+      "type": "string"
+    },
+    "plan": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourcePlan"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "pluginId": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z][a-z0-9-]{1,31}\\.[a-z0-9][a-z0-9.-]{1,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pluginid"
+    },
+    "pluginVersion": {
+      "anyOf": [
+        {
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pluginversion"
+    },
+    "resourceId": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Resourceid",
+      "type": "string"
+    },
+    "state": {
+      "additionalProperties": true,
+      "description": "Non-secret observed state BOSS keeps and hands back as ctx.state",
+      "title": "State",
+      "type": "object"
+    },
+    "status": {
+      "$ref": "#/$defs/OperationStatus"
+    }
+  },
+  "required": [
+    "operationId",
+    "resourceId",
+    "hook",
+    "status"
+  ],
+  "title": "OperationResult",
+  "type": "object"
+}
