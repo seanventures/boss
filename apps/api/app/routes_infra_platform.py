@@ -25,6 +25,8 @@ from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 
 from boss_engine.db import begin
+
+from .request_bodies import StackDeployExecuteBody  # job_id, worker_id, lease_token
 from boss_engine.identity import P, Scope, audit, permit
 
 
@@ -152,15 +154,14 @@ def build_infra_platform_router() -> APIRouter:
 
     @router.post("/v1/infra/platform/operations/execute")
     @permit(P.WORKER_LEASE)
-    def execute_infra_operation(payload: dict = Body(...)) -> Any:
+    def execute_infra_operation(payload: StackDeployExecuteBody) -> Any:
         """The worker hands its leased `infra.operation` job here; fenced by the lease."""
         from apps.api.app.identity_guard import require_worker_principal
         from boss_engine.config import get_settings
         from boss_engine.db import get_engine
         from boss_engine.platform.operations import execute_job
         require_worker_principal()
-        return execute_job(get_engine(), get_settings(), job_id=str(payload.get("job_id")),
-                           worker_id=str(payload.get("worker_id")),
-                           lease_token=str(payload.get("lease_token")))
+        return execute_job(get_engine(), get_settings(), job_id=payload.job_id,
+                           worker_id=payload.worker_id, lease_token=payload.lease_token)
 
     return router
