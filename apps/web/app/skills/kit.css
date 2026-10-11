@@ -204,8 +204,8 @@
 .kit-matrix { border-collapse: separate; border-spacing: 0; font: 0.8125rem var(--sans); }
 .kit-matrix th, .kit-matrix td { padding: 4px; text-align: center; border-bottom: 1px solid var(--border); }
 /* Compact columns so all twelve fit at 1440 (K18): 76px, the label in up to three short lines. */
-.kit-matrix thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); vertical-align: bottom; width: 76px; min-width: 76px; max-width: 76px; }
-.kit-matrix tbody th { position: sticky; left: 0; z-index: 1; background: var(--surface); text-align: left; min-width: 132px; }
+.kit-matrix thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); vertical-align: bottom; width: 4rem; min-width: 4rem; max-width: 4rem; }
+.kit-matrix tbody th { position: sticky; left: 0; z-index: 1; background: var(--surface); text-align: left; min-width: 6.94737rem; }
 .kit-col-label { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: break-word; hyphens: auto; }
 .kit-matrix tr[data-focus] th, .kit-matrix tr[data-focus] td { background: var(--accent-soft); }
 .kit-matrix-group th { color: var(--faint); font: 700 0.6875rem var(--sans); letter-spacing: 0.08em; text-transform: uppercase; text-align: left !important; padding-top: 10px; }

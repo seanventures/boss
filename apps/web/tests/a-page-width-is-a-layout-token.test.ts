@@ -115,7 +115,7 @@ describe("a page's width is a layout token", () => {
         if (!big) continue;
         const selectors = d.selector.split(",").map((s) => s.trim());
         if (selectors.every((s) => s in INTRINSIC)) continue;
-        wide.push(`${rel}:${d.line} ${d.selector} { max-width: ${d.value} } — use var(--page-max), ` +
+        wide.push(`${rel}:${d.line} ${d.selector} { max-width: ${d.value} } — use var(--page-max), --page-max-wide, ` +
           `--page-max-compact, --page-max-mid or --page-max-narrow (app/layout-scale.css), or name ` +
           `a component with its own size in INTRINSIC with the reason`);
       }
@@ -159,6 +159,22 @@ describe("a page's width is a layout token", () => {
         }
         if (/(^|[^\w.-])\d+(\.\d+)?px\b/.test(v)) {
           px.push(`${rel}:${d.line} ${d.selector} { ${d.prop}: ${d.value} } — write the track in rem`);
+        }
+      }
+    }
+    expect(px).toEqual([]);
+  });
+
+  it("no table column is px wide, so its text is not cut off as it grows", () => {
+    // The audit log's Event column was a 160px <col>: at 2560px it cut "Second factor
+    // succeeded" while the What column beside it was 900px wide.
+    const px: string[] = [];
+    for (const { rel, css } of files) {
+      for (const d of declarations(css)) {
+        if (!["width", "min-width", "max-width"].includes(d.prop)) continue;
+        const cells = d.selector.split(",").filter((s) => /(^|[\s>+~])(col|th|td)([.:[]|$)/.test(s.trim().split(/\s+/).pop() ?? ""));
+        if (cells.length && /(^|[^\w.-])\d+(\.\d+)?px\b/.test(d.value)) {
+          px.push(`${rel}:${d.line} ${d.selector} { ${d.prop}: ${d.value} } — write it in rem`);
         }
       }
     }

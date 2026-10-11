@@ -14,11 +14,14 @@
  */
 :root {
   --page-grow: clamp(0px, calc((100vw - 1440px) * 0.8), 520px);
-  --page-gutter: 28px;
+  /* The shell's side padding around every page (26px at <=1440px). */
+  --page-gutter: calc(26px + var(--page-grow) * 0.03);
   /* The shell's content column (every area sits in it). */
   --shell-max: calc(1440px + var(--page-grow));
-  /* A full page: Command Center, Infra, Research, the Factory cockpit, template pages. */
+  /* A full page: Command Center, Infra, Research. */
   --page-max: calc(1240px + var(--page-grow));
+  /* A page that was a little wider: the Factory cockpit, a template's own page (outside the shell). */
+  --page-max-wide: calc(1280px + var(--page-grow));
   /* A denser page that was a little narrower on a laptop: Factory, Govern, Agent Studio. */
   --page-max-compact: calc(1120px + var(--page-grow));
   /* A settings page or a column of decision cards: Repo and models, Approvals. */

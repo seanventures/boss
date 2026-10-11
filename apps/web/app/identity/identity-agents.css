@@ -48,11 +48,11 @@ a.idn-dg:hover { border-color: var(--border-strong); }
 .idn-select select option { background: var(--surface-2); color: var(--ink); }
 .idn-fb-more { flex-basis: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 11.57895rem)); gap: 10px; padding-top: 6px; }
 .idn-lt table { min-width: 720px; }
-.idn-lt col.idn-c-time { width: 84px; }
-.idn-lt col.idn-c-event { width: 160px; }
-.idn-lt col.idn-c-actor { width: 150px; }
-.idn-lt col.idn-c-result { width: 88px; }
-.idn-lt col.idn-c-from { width: 110px; }
+.idn-lt col.idn-c-time { width: 4.42105rem; }
+.idn-lt col.idn-c-event { width: 8.42105rem; }
+.idn-lt col.idn-c-actor { width: 7.89474rem; }
+.idn-lt col.idn-c-result { width: 4.63158rem; }
+.idn-lt col.idn-c-from { width: 5.78947rem; }
 .idn-lt tbody tr:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
 .idn-actor b { font-weight: 600; font-size: 0.65789rem; }
 

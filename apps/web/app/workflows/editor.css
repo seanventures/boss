@@ -29,7 +29,7 @@
 .wf-body > .wf-palette, .wf-drawer { align-self: start; }
 .wf-drawer {
   position: absolute; top: 0; right: 0; z-index: 20;
-  width: min(380px, 100%);
+  width: min(20rem, 100%);
   max-height: calc(100vh - 80px); overflow: auto;
   border: 1px solid var(--border); border-radius: var(--r-xl);
   background: var(--surface); box-shadow: var(--shadow);

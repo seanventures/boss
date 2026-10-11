@@ -355,7 +355,7 @@ h6 {
 
 .bx-content {
   max-width: var(--shell-max);
-  padding: 24px 26px 80px;
+  padding: 24px var(--page-gutter) 80px;
 }
 
 .frame {

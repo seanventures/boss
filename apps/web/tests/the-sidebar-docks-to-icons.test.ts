@@ -44,13 +44,14 @@ describe("the sidebar docks to icons", () => {
     // The WIDTH is a design choice that will change; that the column still exists, and is
     // narrower than the expanded one, is the contract. Pinning the pixel value made a
     // legitimate spacing fix look like a regression.
-    const docked = CSS.match(/\.bx-shell\.nav-docked \{ grid-template-columns: (\d+)px/);
-    const expanded = CSS.match(/\.bx-shell \{[^}]*grid-template-columns: (\d+)px/s);
+    // Tracks are rem (layout-scale.css: 19px = 1rem at <=1600px), so they grow with the type.
+    const docked = CSS.match(/\.bx-shell\.nav-docked \{ grid-template-columns: ([\d.]+)rem/);
+    const expanded = CSS.match(/\.bx-shell \{[^}]*grid-template-columns: ([\d.]+)rem/s);
     expect(docked).not.toBeNull();
     expect(expanded).not.toBeNull();
-    const dockedPx = Number(docked![1]);
+    const dockedPx = Number(docked![1]) * 19;
     expect(dockedPx).toBeGreaterThan(48);                 // room for an icon and its padding
-    expect(dockedPx).toBeLessThan(Number(expanded![1]));  // and still a collapse
+    expect(dockedPx).toBeLessThan(Number(expanded![1]) * 19);  // and still a collapse
   });
 
   it("keeps the icons — the labels are what go", () => {
@@ -68,7 +69,7 @@ describe("the sidebar docks to icons", () => {
 
   it("leaves the mobile drawer alone rather than having two collapsed states disagree", () => {
     const mobile = CSS.slice(CSS.lastIndexOf("@media (max-width: 900px)"));
-    expect(mobile).toContain(".bx-shell.nav-docked { grid-template-columns: 256px");
+    expect(mobile).toContain(".bx-shell.nav-docked { grid-template-columns: 13.47368rem");   // 256px
     expect(mobile).toContain(".bx-dock-toggle { display: none; }");
   });
 });

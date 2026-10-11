@@ -5,7 +5,7 @@
 
 .fx-cockpit {
   /* A stable width (walk D19): the page does not resize as rows open, fold or arrive. */
-  display: flex; flex-direction: column; gap: 12px; width: 100%; min-width: 0; max-width: var(--page-max); margin: 0 auto;
+  display: flex; flex-direction: column; gap: 12px; width: 100%; min-width: 0; max-width: var(--page-max-wide); margin: 0 auto;
   padding: 0 16px 64px; color: var(--ink);
 }
 .fx-cockpit * { box-sizing: border-box; }

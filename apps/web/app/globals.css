@@ -7453,7 +7453,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .tpl-back:hover { border-color: var(--muted); }
 .tpl-crumb { color: var(--muted); font-size: .78rem; }
 
-.tpl-page-inner { max-width: var(--page-max); margin: 0 auto; padding: 28px 28px 72px; }
+.tpl-page-inner { max-width: var(--page-max-wide); margin: 0 auto; padding: 28px 28px 72px; }
 
 /* TWO COLUMNS: the thing on the left at the size it deserves, everything needed to decide on
    the right — so the button is never below the fold on a wide screen. */

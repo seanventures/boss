@@ -132,7 +132,7 @@ describe("(a) the roster uses the width it is given", () => {
 
   it("is a responsive grid of cards no narrower than 260px, with nothing capping its width", () => {
     const grid = rules(CSS, ".ag-zone-grid").join(";");
-    expect(grid).toMatch(/grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(100%,\s*260px\),\s*1fr\)\)/);
+    expect(grid).toMatch(/grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(100%,\s*13\.68421rem\),\s*1fr\)\)/);   // 260px at the 19px root
     for (const sel of [".ag-roster", ".ag-zone", ".ag-zone-grid", ".roster", ".wf-agents"]) {
       for (const body of rules(ALL_CSS, sel)) expect(body, `${sel} caps its width`).not.toMatch(/max-width|margin:\s*0 auto/);
     }
@@ -362,7 +362,7 @@ describe("(h) the archetype tiles are pickers", () => {
     }
     await act(async () => { tiles[0].click(); });
     expect(tiles[0].getAttribute("aria-checked")).toBe("true");
-    expect(rules(CSS, ".ag-arch-grid").join(";")).toMatch(/minmax\(132px/);
+    expect(rules(CSS, ".ag-arch-grid").join(";")).toMatch(/minmax\(6\.94737rem/);   // 132px
   });
 });
 

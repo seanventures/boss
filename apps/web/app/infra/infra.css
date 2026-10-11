@@ -60,7 +60,7 @@
 
 /* NEEDS YOU, partial data, empty lines. */
 .inf-needs { display: flex; flex-direction: column; gap: 8px; }
-.inf-needs-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(15.78947rem, 1fr)); gap: 10px; }
+.inf-needs-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(15.78947rem, 1fr)); gap: 10px; }
 .inf-partial { font-size: 0.8rem; color: var(--amber); }
 .inf-empty { padding: 10px 2px; color: var(--muted); font-size: 0.84rem; }
 .inf-zone-head { margin-top: 4px; }
@@ -86,10 +86,10 @@
    (a URL, a sha) truncates with its tooltip. */
 .inf-table { table-layout: auto; position: relative; }
 .inf-table-wrap { position: relative; }
-.inf-table td { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inf-table td { max-width: 16.84211rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 639px) {
   .inf-table { display: block; max-width: 100%; overflow-x: auto; }
-  .inf-table td { max-width: 180px; }
+  .inf-table td { max-width: 9.47368rem; }
 }
 
 /* Drawer (right; full screen under 640 px). */
