@@ -46,9 +46,9 @@ _FIND_FIX = (
     '-o \\( -type f ! -perm -0660 -exec chmod ug+rw {} + \\) \\) 2>/dev/null; true'
 )
 #: As the run's uid: every file and directory it owns under "$1" readable (and dirs enterable).
-_READABLE = 'find "$1" -user "$(id -u)" ! -perm -o+r -exec chmod a+rX {} + 2>/dev/null; true'
+_READABLE = 'find "$1" -user "$(id -u)" \\( -type d ! -perm -o+rwx -exec chmod a+rwx {} + \\) -o \\( -type f ! -perm -o+rw -exec chmod a+rw {} + \\) 2>/dev/null; true'
 #: The lazy form: exactly the named paths (a file and its parent), as the run's uid.
-_CHMOD_PATHS = 'for p in "$@"; do if [ -d "$p" ]; then chmod ug+rwx "$p"; else chmod ug+rw "$p"; fi; done 2>/dev/null; true'
+_CHMOD_PATHS = 'for p in "$@"; do if [ -d "$p" ]; then chmod a+rwx "$p"; else chmod a+rw "$p"; fi; done 2>/dev/null; true'
 
 
 def _identity(root: Path) -> Any:
@@ -134,7 +134,9 @@ def normalize(root: Any, *, readable_by_boss: bool = True) -> int:
     if foreign and ident is not None:
         _as_run_uid(ident, _FIND_FIX, str(base))
     if readable_by_boss and ident is not None:
-        # EVERYTHING the run made is readable by BOSS, whatever its group: a tool that writes
+        # EVERYTHING the run made is readable AND writable by BOSS, whatever its group (an agent's
+        # atomic write lands a file with the run uid's own group, so group bits never reach BOSS;
+        # crun_8be4992e could not restore lib/visibility.mjs after its mutation probe): a tool that writes
         # 0600 / 0700 (or a file whose group is the run uid's own) left BOSS unable to read the
         # template's junit report, dist/ and node_modules/ (HelpDesk crun_8e9b3b0e, after five
         # earlier crashes of the same class). Others gain nothing: the run directory is
