@@ -717,6 +717,26 @@ def _safe_has_workflows(reader: CiReader, sha: str) -> bool:
         return True
 
 
+def _is_forbidden(error: BaseException) -> bool:
+    import httpx
+
+    return (isinstance(error, httpx.HTTPStatusError) and error.response is not None
+            and error.response.status_code in (401, 403))
+
+
+def _runs_as_checks(payload: Any) -> list[dict]:
+    """GitHub Actions workflow runs in the shape of check runs (name, status, conclusion).
+
+    A FINE-GRAINED PERSONAL ACCESS TOKEN CANNOT READ CHECK RUNS: GitHub offers the Checks
+    permission to Apps only, so /check-runs answers 403 for every such connection and a CI wait
+    could never finish (HelpDesk PR #223: "CI could not be read: 403 Forbidden"). The same token
+    can read Actions, which is where a repository's CI runs."""
+    return [{"name": r.get("name") or r.get("display_title") or "workflow",
+             "status": r.get("status"), "conclusion": r.get("conclusion"),
+             "html_url": r.get("html_url"), "source": "actions"}
+            for r in ((payload or {}).get("workflow_runs") or [])]
+
+
 class HttpCiReader:
     """Reads a repository's CI over GitHub's REST API with a token."""
 
@@ -733,8 +753,14 @@ class HttpCiReader:
         return f"{self.api_base}/repos/{self.repository}{path}"
 
     def check_runs(self, sha: str) -> list[dict]:
-        return list((self._get(self._url(f"/commits/{sha}/check-runs?per_page=100"), self.token)
-                     or {}).get("check_runs") or [])
+        try:
+            return list((self._get(self._url(f"/commits/{sha}/check-runs?per_page=100"), self.token)
+                         or {}).get("check_runs") or [])
+        except Exception as error:  # noqa: BLE001 — a 403 falls back to Actions
+            if not _is_forbidden(error):
+                raise
+            return _runs_as_checks(self._get(
+                self._url(f"/actions/runs?head_sha={sha}&per_page=100"), self.token))
 
     def statuses(self, sha: str) -> list[dict]:
         return list((self._get(self._url(f"/commits/{sha}/status"), self.token) or {})
@@ -767,8 +793,13 @@ class AdapterCiReader:
             "GET", f"/repos/{self.github.repository_full_name}{path}")
 
     def check_runs(self, sha: str) -> list[dict]:
-        return list((self._get(f"/commits/{sha}/check-runs?per_page=100") or {})
-                    .get("check_runs") or [])
+        try:
+            return list((self._get(f"/commits/{sha}/check-runs?per_page=100") or {})
+                        .get("check_runs") or [])
+        except Exception as error:  # noqa: BLE001 — a 403 falls back to Actions
+            if not _is_forbidden(error):
+                raise
+            return _runs_as_checks(self._get(f"/actions/runs?head_sha={sha}&per_page=100"))
 
     def statuses(self, sha: str) -> list[dict]:
         return list((self._get(f"/commits/{sha}/status") or {}).get("statuses") or [])
