@@ -1,0 +1,32 @@
+apiVersion: boss.plugin/v1
+kind: Plugin
+metadata:
+  id: official.opentelemetry
+  name: OpenTelemetry Collector
+  version: 0.1.0
+  owner: BOSS maintainers
+  license: Apache-2.0
+  description: >-
+    An OpenTelemetry Collector on the app's private network receiving OTLP traces, metrics and
+    logs; the app's SDK gets OTEL_EXPORTER_OTLP_ENDPOINT. Verify proves a test span arrives.
+spec:
+  supportLevel: certified
+  capabilities: [observability.telemetry, observability.tracing]
+  features: [traces, metrics, logs, otlp-http, otlp-grpc, forward]
+  engines: [otel-collector]
+  engineVersions: ["0.135.0 (contrib)"]
+  runtime: {type: python, entrypoint: "boss_engine.infra_plugins.opentelemetry:OpenTelemetryPlugin"}
+  permissions: {secrets: [write-scoped], network: [declared-services], docker: true, subprocess: true}
+  configSchema:
+    type: object
+    additionalProperties: false
+    properties:
+      exportTo: {type: string}
+      image: {type: string}
+  hooks: [validate, plan, provision, configure, verify, observe, destroy]
+  bindings: [OTEL_EXPORTER_OTLP_ENDPOINT]
+  ports: [4317, 4318]
+  limitations:
+    - "Telemetry stays in the collector (debug exporter) unless config.exportTo forwards it to an OTLP/HTTP backend."
+    - "Needs Docker Compose 2.23+ on the host (inline configs)."
+    - "No published port: only services on the app's compose network reach it."

@@ -1,0 +1,32 @@
+apiVersion: boss.plugin/v1
+kind: Plugin
+metadata:
+  id: official.valkey
+  name: Valkey (cache)
+  version: 0.1.0
+  owner: BOSS maintainers
+  license: Apache-2.0
+  description: >-
+    A Valkey cache on the app's private network, Redis protocol, password in the vault. A cache:
+    no persistence, no backups, LRU eviction. Never the only copy of anything.
+spec:
+  supportLevel: certified
+  capabilities: [cache]
+  features: [ttl, lru]
+  engines: [valkey, redis]
+  engineVersions: ["8.1.3"]
+  runtime: {type: python, entrypoint: "boss_engine.infra_plugins.valkey:ValkeyPlugin"}
+  permissions: {secrets: [read-scoped, write-scoped], network: [declared-services], docker: true, subprocess: true}
+  configSchema:
+    type: object
+    additionalProperties: false
+    properties:
+      maxMemoryMb: {type: integer, minimum: 16, maximum: 65536}
+      image: {type: string}
+  hooks: [validate, plan, provision, configure, verify, observe, destroy]
+  bindings: [REDIS_URL]
+  ports: [6379]
+  limitations:
+    - "A cache, not a durable store: no RDB, no AOF, no volume; every key is lost on restart."
+    - "backups: true is refused. Keep data you need in official.postgres."
+    - "No published port: only services on the app's compose network reach it."

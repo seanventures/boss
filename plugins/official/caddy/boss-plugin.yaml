@@ -1,0 +1,40 @@
+apiVersion: boss.plugin/v1
+kind: Plugin
+metadata:
+  id: official.caddy
+  name: Caddy (routing and TLS)
+  version: 0.1.0
+  owner: BOSS maintainers
+  license: Apache-2.0
+  description: >-
+    The app's HTTP entry point: a route to an app service, HTTPS whenever a hostname exists (ACME,
+    or Caddy's local CA for internal names and IPs). Verify sends a request through Caddy to the app.
+spec:
+  supportLevel: certified
+  capabilities: [network.ingress, network.tls]
+  features: [https, acme, internal-ca, reverse-proxy]
+  engines: [caddy]
+  engineVersions: ["2.10.2"]
+  runtime: {type: python, entrypoint: "boss_engine.infra_plugins.caddy:CaddyPlugin"}
+  permissions: {network: [declared-services], docker: true, subprocess: true}
+  configSchema:
+    type: object
+    additionalProperties: false
+    required: [upstream]
+    properties:
+      upstream: {type: string, pattern: "^[a-z0-9][a-z0-9_.-]{0,62}:[0-9]{1,5}$"}
+      hostname: {type: string}
+      tls: {type: string, enum: [auto, internal, "off"]}
+      acmeEmail: {type: string}
+      bindAddress: {type: string}
+      httpPort: {type: integer, minimum: 1, maximum: 65535}
+      httpsPort: {type: integer, minimum: 1, maximum: 65535}
+      verifyPath: {type: string, pattern: "^/[A-Za-z0-9._~/-]*$"}
+  hooks: [validate, plan, provision, verify, destroy]
+  bindings: []
+  ports: [80, 443]
+  limitations:
+    - "tls: auto needs the hostname's DNS to point at the host and ports 80/443 reachable from the internet."
+    - "One route per resource; several hostnames need several caddy resources (or one shared Caddyfile on the host)."
+    - "Binding beyond loopback is public and requires publicAccess: true (an approval)."
+    - "Needs Docker Compose 2.23+ on the host (inline configs)."

@@ -1,0 +1,30 @@
+apiVersion: boss.plugin/v1
+kind: Plugin
+metadata:
+  id: official.sqlite
+  name: SQLite (local/dev)
+  version: 0.1.0
+  owner: BOSS maintainers
+  license: Apache-2.0
+  description: >-
+    A SQLite file in the app's workdir for local and development use, WAL mode, with online-API
+    backups whose copy is integrity-checked and compared row for row.
+spec:
+  supportLevel: certified
+  capabilities: [database.relational]
+  features: [backup, restore]
+  engines: [sqlite]
+  engineVersions: ["3 (Python's bundled SQLite)"]
+  runtime: {type: python, entrypoint: "boss_engine.infra_plugins.sqlite:SqlitePlugin"}
+  permissions: {secrets: [write-scoped], filesystem: [workspace-artifacts]}
+  configSchema:
+    type: object
+    additionalProperties: false
+    properties:
+      path: {type: string, pattern: "^[A-Za-z0-9_./-]{1,200}$"}
+      restoreFrom: {type: string}
+  hooks: [validate, plan, provision, configure, verify, observe, backup, restore, destroy]
+  bindings: [DATABASE_URL]
+  limitations:
+    - "Local and development only: refused for a production environment."
+    - "One host, one writer at a time; no network access."

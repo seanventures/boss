@@ -1,0 +1,32 @@
+apiVersion: boss.plugin/v1
+kind: Plugin
+metadata:
+  id: official.pgvector
+  name: pgvector
+  version: 0.1.0
+  owner: BOSS maintainers
+  license: Apache-2.0
+  description: >-
+    The vector extension on a database official.postgres provisioned (with features: [pgvector]).
+    Verify runs real nearest-neighbour queries through an HNSW index as the app.
+spec:
+  supportLevel: certified
+  capabilities: [database.vector]
+  features: [similarity-search, hnsw]
+  engines: [postgres]
+  engineVersions: ["pgvector 0.8.1 on PostgreSQL 17"]
+  requires: [database.relational]
+  runtime: {type: python, entrypoint: "boss_engine.infra_plugins.pgvector:PgvectorPlugin"}
+  permissions: {secrets: [read-scoped], network: [declared-services], docker: true, subprocess: true}
+  configSchema:
+    type: object
+    additionalProperties: false
+    required: [database]
+    properties:
+      database: {type: string, pattern: "^[a-z][a-z0-9-]{0,47}$"}
+  hooks: [validate, plan, provision, verify, destroy]
+  bindings: []
+  limitations:
+    - "An extension, not a vector database: it shares the PostgreSQL resource's capacity, backups and network."
+    - "Needs the database provisioned with features: [pgvector] (the pgvector/pgvector image)."
+    - "Destroy is refused while any column uses the vector type."
