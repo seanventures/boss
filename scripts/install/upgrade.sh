@@ -5,7 +5,7 @@ umask 077
 
 # This script also runs piped (bash -s) against older installs, so it carries its own copy of
 # the release rules. The awk program between the markers is identical in install.sh and
-# docs/landing/install.sh; a test keeps the copies equal.
+# scripts/install/bootstrap.sh; a test keeps the copies equal.
 #
 # WHY A RECORD. The installer used to default to main and forget which ref it installed, so a
 # rerun without --ref fast-forwarded a release install to main. install.sh now writes the
