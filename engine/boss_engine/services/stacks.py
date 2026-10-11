@@ -999,10 +999,15 @@ def find_stack_root(root: Path | str, changed: Optional[list[str]] = None,
     # one app directory (or that names its app) is that app, even when it is single-service:
     # the root of a shared repository holds OTHER apps. HelpDesk (helpdesk-ai/, one npm
     # project) was refused "needs Java" because paramg/boss-sandbox's root has a pom.xml.
-    tops = {PurePosixPath(str(rel)).parts[0] for rel in (changed or [])
-            if len(PurePosixPath(str(rel)).parts) > 1}
-    rooted = any(len(PurePosixPath(str(rel)).parts) == 1 for rel in (changed or []))
-    if (aid and (base / aid).is_dir()) or (len(tops) == 1 and not rooted):
+    # The root is the app only when the build changed the root's OWN manifest. Changes in
+    # .github/ (its CI file), docs/ or one app folder never make the shared root the app:
+    # HelpDesk's .github/workflows/helpdesk-ci.yml defeated a "one top folder" rule.
+    root_manifests = {"package.json", "pom.xml", "build.gradle", "build.gradle.kts",
+                      "requirements.txt", "pyproject.toml", "setup.py", "go.mod", "Cargo.toml"}
+    root_changed = any(len(PurePosixPath(str(rel)).parts) == 1
+                       and PurePosixPath(str(rel)).name in root_manifests
+                       for rel in (changed or []))
+    if (aid and (base / aid).is_dir()) or (changed and not root_changed):
         return None
     return base if ok(base) else None
 

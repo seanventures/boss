@@ -518,4 +518,7 @@ def test_an_app_folder_build_never_falls_back_to_a_shared_repository_root(tmp_pa
     (app / "package.json").write_text(json.dumps({"name": "helpdesk", "scripts": {"start": "node s"}}))
     changed = ["helpdesk-ai/package.json", "helpdesk-ai/src/server.ts"]
     assert stacks.find_stack_root(tmp_path, changed) is None
+    # Its CI file lives at the repo's .github/: still the app, never the root.
+    assert stacks.find_stack_root(tmp_path, changed + [".github/workflows/helpdesk-ci.yml",
+                                                      "README.md"]) is None
     assert stacks.find_stack_root(tmp_path, [], app_id="helpdesk-ai") is None
