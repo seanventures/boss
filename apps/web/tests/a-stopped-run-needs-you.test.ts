@@ -89,7 +89,7 @@ describe("a run stopped at a failed step needs you", () => {
     expect(card).toContain("<FailedStepActions key={stopped.step_id} step={stopped}");
     expect(card).toContain('idPrefix="dw-run-stopped"');
     expect(card).toContain("onSkipStep(run.id, stopped.step_id, reason)");
-    expect(card).toContain("onRetryStep(run.id, stopped.step_id)");
+    expect(card).toContain("onRetryStep(run.id, stopped.step_id, note)");
   });
 });
 

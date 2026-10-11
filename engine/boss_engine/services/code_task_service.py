@@ -1447,6 +1447,57 @@ def refuse_finished_retry(prev: dict, fix_note: str = "") -> None:
     )
 
 
+#: How many lines of the previous attempt's verify output a retry is shown.
+PREVIOUS_FAILURE_LINES = 60
+
+
+def _recorded_failed_gates(connection, run_id: str) -> list[str]:
+    """The gates the quality gate recorded as failed for `run_id`; [] when none or unreadable."""
+    if connection is None or hasattr(connection, "get_run") or not hasattr(connection, "execute"):
+        return []
+    try:
+        row = connection.execute(
+            sql("SELECT gates_failed FROM quality_gates WHERE code_task_run_id = :r "
+                "ORDER BY created_at DESC LIMIT 1"), {"r": run_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — a missing gate row must never block a retry
+        return []
+    gates = (row or {}).get("gates_failed") if row else None
+    if isinstance(gates, str):
+        try:
+            gates = json.loads(gates)
+        except ValueError:
+            gates = None
+    return [str(g) for g in gates] if isinstance(gates, list) else []
+
+
+def previous_failure_block(prev: dict, gates_failed: Optional[list] = None) -> str:
+    """THE PREVIOUS ATTEMPT'S FAILURE, TOLD TO THE NEXT ONE — "" when there is nothing to tell.
+
+    A retry's builder was handed the operator's note and the reviewers' summaries, but not what
+    actually failed: which gates, and what the verify run printed. It re-ran blind to the one
+    piece of evidence the failure message pointed at. The gates come from the quality gate
+    (or whichever path recorded them, `_prior_failing_gates`); the output is the tail of
+    state.last_verify_output, redacted — credentials must not travel into a prompt.
+    """
+    from .redaction import redact_secrets
+
+    state = prev.get("state") or {}
+    fctx = prev.get("finalize_ctx") or {}
+    gates = [str(g) for g in (gates_failed or []) if str(g).strip()] \
+        or _prior_failing_gates(fctx, state)
+    tail_lines = str(state.get("last_verify_output") or "").rstrip().splitlines()
+    tail = redact_secrets("\n".join(tail_lines[-PREVIOUS_FAILURE_LINES:])).strip()
+    if not gates and not tail:
+        return ""
+    parts = ["## What failed last time (previous attempt)"]
+    if gates:
+        parts.append("Gates failed: " + ", ".join(gates))
+    if tail:
+        parts.append(f"Last {min(len(tail_lines), PREVIOUS_FAILURE_LINES)} lines of the "
+                     f"verify output:\n```\n{tail}\n```")
+    return "\n".join(parts)
+
+
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
@@ -1460,6 +1511,7 @@ def retry_code_task(
     accumulates the findings it must address."""
     with _transaction(engine) as c:
         prev = load_code_task_run(c, run_id)
+        prev_gates_failed = _recorded_failed_gates(c, run_id) if prev is not None else []
     if prev is None:
         raise ValueError(f"code task run not found: {run_id}")
     if is_simulated_run(prev):
@@ -1563,6 +1615,9 @@ def retry_code_task(
                            ("Consistency review", "consistency_summary")):
             if state.get(key):
                 findings.append(f"## {label} findings (previous attempt)\n{state[key]}")
+        failure = previous_failure_block(prev, prev_gates_failed)
+        if failure:
+            findings.append(failure)
 
     # The KEY context is that the prior attempt's code is ALREADY in the working tree
     # (the governed run clones the iteration branch) — so the model iterates on real
@@ -1596,6 +1651,12 @@ def retry_code_task(
         title = f"{base_title} · retry {attempt - 1}"
     title = str(title)[:160]
 
+    # CONTINUE FROM THE FAILED ATTEMPT'S WORKSPACE when it saved one (a held template build
+    # pushes nothing, so the branch cannot carry it): the child seeds its sandbox from it and
+    # goes straight to repair (governed_code_task_service.saved_workspace_files).
+    from .governed_code_task_service import saved_workspace_files
+
+    seed_files = len(saved_workspace_files(prev)) if prev.get("status") != "completed" else 0
     history = list(fctx_prev.get("feedback_history") or [])
     history.append({
         "attempt": attempt, "parent_run_id": run_id, "prev_status": prev.get("status"),
@@ -1632,6 +1693,7 @@ def retry_code_task(
                              if fctx_prev.get("workflow_run_id") and not workflow_version_id
                              else {}),
                           "feedback_history": history,
+                          **({"seed_workspace_from": run_id} if seed_files else {}),
                           # UNRESOLVED REVIEW COMMENTS FOLLOW THE WORK, NOT THE ATTEMPT.
                           #
                           # Comments are stored per run, and a retry mints a NEW run — so a
@@ -1710,7 +1772,12 @@ def retry_code_task(
                           "|| jsonb_build_object('allow_test_retirement', true) WHERE id=:i"),
                       {"i": new_id})
     return {"status": "queued", "run_id": new_id, "attempt": attempt,
-            "parent_run_id": run_id, "root_run_id": root}
+            "parent_run_id": run_id, "root_run_id": root,
+            "continues_from_workspace": seed_files,
+            "resume": (f"repairs the previous attempt's saved workspace ({seed_files} files): "
+                       "no re-planning, no re-written tests"
+                       if seed_files else
+                       "full pipeline: the previous attempt saved no workspace to continue from")}
 
 
 def override_code_task(engine, settings: Settings, jobs, run_id: str, *,

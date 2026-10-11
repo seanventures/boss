@@ -485,6 +485,52 @@ _TEMPLATE_GATE_SET = frozenset({"template_tests", "no_committed_secrets"})
 TEMPLATE_GATES = ("template_tests", "no_committed_secrets")
 
 
+# A FAILED ATTEMPT'S WORKSPACE IS KEPT, LOCALLY. A template build whose gates fail pushes nothing
+# (the hold above), so its sandbox — every file the test author and the implementer wrote — was
+# thrown away at teardown, and each retry re-ran write_tests and implement from nothing (HelpDesk
+# build 7: ~2 hours and ~$30 a retry, for 7 failing e2e tests). The changed files are saved on
+# the run (finalize_ctx.saved_workspace) — in BOSS's own database, never pushed — and a retry in
+# the same lineage starts its sandbox from base plus those files and goes straight to repair.
+# Dependencies, git internals and build output are not the work and are not kept.
+_WORKSPACE_SKIP_PARTS = frozenset({
+    "node_modules", ".git", "dist", "build", ".next", "coverage", "test-results",
+    "playwright-report", "__pycache__", ".vite", ".turbo", ".cache", ".pytest_cache",
+})
+
+
+def workspace_keepable(path: str) -> bool:
+    """Whether a changed path is part of the work (kept), not dependencies or build output."""
+    parts = [p for p in str(path or "").replace("\\", "/").split("/") if p]
+    return bool(parts) and not any(p in _WORKSPACE_SKIP_PARTS for p in parts)
+
+
+def saved_workspace_files(run: Optional[dict]) -> list[dict]:
+    """The files a failed attempt left to continue from: its saved workspace, else the diff a
+    gate-blocked run preserved for an override (`pending_diff`, the same tree). [] when none."""
+    fctx = (run or {}).get("finalize_ctx") or {}
+    saved = fctx.get("saved_workspace") if isinstance(fctx.get("saved_workspace"), dict) else {}
+    for files in (saved.get("files"), fctx.get("pending_diff")):
+        if isinstance(files, list) and files:
+            return [f for f in files if isinstance(f, dict) and workspace_keepable(f.get("path"))
+                    and isinstance(f.get("content"), str)]
+    return []
+
+
+def seed_workspace(root: Path, files: list[dict]) -> int:
+    """Write a saved workspace into a freshly provisioned sandbox. Paths are confined to `root`
+    (they were written by an agent); returns how many files were written."""
+    base = Path(root).resolve()
+    written = 0
+    for f in files:
+        target = (base / str(f["path"])).resolve()
+        if base != target and base not in target.parents:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _ws_write(target, f["content"])
+        written += 1
+    return written
+
+
 def template_push_hold(applies_template: bool, gates: Optional[dict]) -> Optional[str]:
     """Why a push of this build's work must not happen now, or None when it may.
 
@@ -2646,6 +2692,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     identity_run = None
     guest_vm_ids: list[str] = []          # for release-on-success / retain-on-failure
     accumulated: dict[str, str] = {}      # path -> content committed so far (the PR diff)
+    _impl_ran = [False]                   # implement started (or the tree was seeded): save on failure
     guest_base = base_branch              # advances to work_branch once commits exist
     # THE TEMPLATE HOLD (template_push_hold): every push below asks _push_held first.
     _tpl_applies = _applies_template(engine, run)
@@ -3042,6 +3089,33 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         except RunFenced as exc:
             raise CodeTaskCancelled(str(exc)) from exc
 
+    def _save_workspace(where: str) -> int:
+        """Keep this attempt's changed files on the run so a retry continues from them
+        (`saved_workspace_files`). Local only — nothing is pushed, so the template hold stands —
+        and never when the secret gate failed: a diff with a secret in it is not kept anywhere.
+        Best-effort, never fatal; returns how many files were saved."""
+        if not _impl_ran[0] or (_tpl_gates or {}).get("no_committed_secrets") is False:
+            return 0
+        try:
+            files = (list(accumulated.items()) if use_microvm
+                     else [(fc.path, fc.content) for fc in sandbox.diff()])
+            kept = [{"path": p, "content": c} for p, c in files if workspace_keepable(p)]
+            if not kept:
+                return 0
+            with _transaction(engine) as c:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx,'{}'::jsonb) "
+                    "|| jsonb_build_object('saved_workspace', CAST(:w AS JSONB)), "
+                    "updated_at=now() WHERE id=:id"),
+                    {"w": json.dumps({"files": kept, "after": where[:120],
+                                      "file_count": len(kept)}), "id": run_id})
+                emit_event(c, project_id, "code_task.workspace_saved", "boss", "code_task_run",
+                           run_id, {"after": where[:120], "files": len(kept)})
+            return len(kept)
+        except Exception:  # noqa: BLE001 — saving the work must never mask the real exit
+            _log_caught(logger)
+            return 0
+
     def _rescue_pr(reason: str) -> Optional[str]:
         """Open a [partial] PR for whatever this run built. Safe to call from ANY exit.
 
@@ -3054,6 +3128,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         Idempotent: propose_pull_request dedupes on code:task:<run_id>, so calling it here and
         again later cannot open two PRs. Returns the url or None; never raises.
         """
+        # EVERY EXIT KEEPS THE WORK LOCALLY FIRST, held or not, so a retry can continue from it.
+        _save_workspace(f"exit: {reason}")
         try:
             if _push_held("partial_pr"):
                 return None
@@ -3173,6 +3249,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     def _honour_cancel(exc):
         # Operator intent, not a failure: stop, keep the work on the branch, release budget.
         _finish_vms(success=False)
+        _save_workspace("cancelled")
         try:
             _checkpoint("cancelled")
         except Exception:  # noqa: BLE001
@@ -3257,6 +3334,29 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _pinned_manifest = verification_target.pin_verify_manifest(root)
         _gate_plan0 = verification_target.resolve_gate_plan(
             spec, title, root, app_id=_app_id, pinned=_pinned_manifest, layout=_stack_layout)
+        # CONTINUE FROM THE FAILED ATTEMPT'S WORKSPACE (saved_workspace_files). Seeded after the
+        # verify manifest is pinned, exactly as the parent's agents wrote after it. A seeded run
+        # skips the design chain, write_tests and the first implement: its first pass is the
+        # repair, fed the parent's failing gates, verify output and the operator's note.
+        _seeded = 0
+        _seed_from = str(fctx.get("seed_workspace_from") or "").strip()
+        if _seed_from:
+            with _transaction(engine) as c:
+                _seed_files = saved_workspace_files(load_code_task_run(c, _seed_from))
+            if use_microvm:
+                _seed_files = []  # each guest stage clones the branch; nothing to seed into
+            _seeded = seed_workspace(root, _seed_files) if _seed_files else 0
+            with _transaction(engine) as c:
+                emit_event(c, project_id,
+                           "code_task.workspace_seeded" if _seeded
+                           else "code_task.workspace_seed_missing", "boss", "code_task_run",
+                           run_id, {"from_run": _seed_from, "files": _seeded,
+                                    **({} if _seeded else {
+                                        "why": "no saved workspace to continue from (micro-VM "
+                                               "substrate, or the attempt saved none) — this "
+                                               "attempt runs the full pipeline"})})
+            if _seeded:
+                _impl_ran[0] = True
         # BUILD SERVICES (build_services): the run's own throwaway Postgres when the repo
         # declares `services: [postgres]` or the project's setting asks for it. Provisioned
         # before any agent, so the agents and every verify command see DATABASE_URL; a run that
@@ -3601,7 +3701,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # Spec-driven: the refined spec + plan are fed into the downstream coding steps. (The human
         # approve-plan gate is Wire-Phase 2b; for now review plan records a PLAN: OK/REVISE note.)
         design: dict = {}
-        do_design = risk_tier >= 2 and not is_web_app
+        do_design = risk_tier >= 2 and not is_web_app and not _seeded
         if not do_design:
             # Official follow-ups are risk-tier 1 and skip the design chain.
             # The frozen benchmark PRD / inherited parent plan is still the plan.
@@ -3726,6 +3826,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "write_tests" in _resume_done or fctx.get("prior_failing_gates"))
         # This run finishing write_tests is direct evidence — it does not need a lineage.
         _own_tests_done = "write_tests" in {str(s) for s in (fctx.get("completed_stages") or [])}
+        if do_separate_tests and _seeded:
+            # The seeded tree carries the QA-authored suite; it is the frozen oracle (and, being
+            # pre-existing now, the existing-tests floor keeps the implementer off it).
+            do_separate_tests = False
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.tests_resumed", "boss",
+                           "code_task_run", run_id,
+                           {"skipped_stage": "write_tests", "seeded_from": _seed_from,
+                            "existing_tests": len(preexisting_tests),
+                            "why": "continuing from the previous attempt's saved workspace"})
         if (do_separate_tests and (_own_tests_done or (root_run != run_id and preexisting_tests))
                 and (_own_tests_done or _lineage_wrote_tests)
                 and ("write_tests" in _resume_done
@@ -3925,6 +4035,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # task when a stronger model can pass the same frozen tests — reliability over cost.
         escalated_recovered = False
         for attempt in range(max_repair + 2):
+            _impl_ran[0] = True
             escalate_impl = attempt == max_repair + 1
             if escalate_impl:
                 with _transaction(engine) as c:
@@ -3977,10 +4088,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             else:
                 _ev = evidence_text
                 if _cross_run_repair and not (_ev or "").strip():
+                    # THE WHOLE ITERATION FEEDBACK, not only the note: the person's note, the
+                    # previous attempt's failing gates and verify output tail
+                    # (code_task_service.previous_failure_block) and the reviewers' findings.
                     _hist = fctx.get("feedback_history") or [{}]
-                    _ev = (_hist[-1].get("fix_note")
-                           or (instructions.split("=== ITERATION FEEDBACK", 1)[-1]
-                               if "=== ITERATION FEEDBACK" in instructions else "")
+                    _ev = ((instructions.split("=== ITERATION FEEDBACK", 1)[-1]
+                            .split("\n", 1)[-1].strip()
+                            if "=== ITERATION FEEDBACK" in instructions else "")
+                           or _hist[-1].get("fix_note")
                            or "(see the iteration feedback in the task instructions)")
                 impl_prompt = _repair_prompt(base_impl_prompt, _ev, max(1, attempt))
             if use_microvm:
@@ -5441,6 +5556,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                    "code_task_run", run_id,
                                    {"branch": work_branch,
                                     "error": f"{type(exc).__name__}: {exc}"[:200]})
+                _save_workspace("repair_handoff")
                 from .code_task_service import retry_code_task
                 nxt = retry_code_task(
                     engine, settings, jobs, run_id,

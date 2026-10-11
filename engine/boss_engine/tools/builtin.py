@@ -4652,6 +4652,9 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         _obj({"run_id": {"type": "string", "description": "the wfr_... the step belongs to"},
               "step_id": {"type": "string",
                           "description": "the step's id, e.g. 'meeting' — NOT its label"},
+              "note": {"type": "string",
+                       "description": "optional: what should change this time (max 4000 "
+                                      "chars). A retried build hands it to the builder."},
               "project_id": {"type": "string"}},
              ["run_id", "step_id"]),
         kind="write",
@@ -4698,8 +4701,10 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
             from ..services import workflows as _workflows
             try:
                 done = _workflows.retry_failed_step(
-                    c, project_id=pid, run_id=run_id, step_id=step_id, actor=actor)
-            except _workflows.WorkflowConflictError as error:
+                    c, project_id=pid, run_id=run_id, step_id=step_id, actor=actor,
+                    note=str(args.get("note") or ""))
+            except (_workflows.WorkflowConflictError,
+                    _workflows.WorkflowValidationError) as error:
                 return {"ok": False, "error": str(error)}
         return {"ok": True, "run_id": run_id, "step_id": step_id, "status": "ready",
                 "was": done["was"],

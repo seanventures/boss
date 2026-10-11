@@ -199,6 +199,8 @@ class WorkflowRetryStepBody(ProjectBody):
     model_config = ConfigDict(json_schema_extra={"required": ["project_id", "step_id"]})
 
     step_id: str | None = None
+    #: "Retry with a note": what should change this time. Handed verbatim to a retried build.
+    note: str | None = Field(default=None, max_length=4000)
 
 
 class WorkflowSkipStepBody(ProjectBody):
