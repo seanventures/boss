@@ -73,6 +73,7 @@ nav:
       - Build sandbox: SANDBOX.md
       - Architecture approval and spending: ARCHITECTURE_GOVERNANCE.md
       - Build toolchains: TOOLCHAINS.md
+      - Supported stacks: SUPPORTED_STACKS.md
       - Identity administration: IDENTITY_ADMIN.md
       - Connect models: MODEL_CONNECTIONS.md
       - Use cases: use-cases.md
