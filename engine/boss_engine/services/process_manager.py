@@ -472,14 +472,8 @@ class ProcessManagerService:
                 "apply": True,
                 "run_ids": list(observed.get("active_ids") or []),
             })
-        if not observed.get("recent_canary"):
-            planned.append({
-                "kind": "start_simulated_canary",
-                "apply": True,
-                "simulated": True,
-                "auto_build": False,
-                "title": LEGACY_CANARY_TITLE,
-            })
+        # Simulated canaries are explicit QA fixtures. Ordinary scheduler ticks must
+        # not manufacture completed delivery runs when a project has no real work.
         return planned
 
     def _proposal_move(
