@@ -281,6 +281,18 @@ def plan(c, *, org_id: str, project_id: str, template_ref: str, body: dict,
             raise TemplateError(409, "egress_not_accepted",
                                 "this template's app talks to " + ", ".join(manifest.egress)
                                 + "; accept them (accept_egress) to start", egress=list(manifest.egress))
+    # CAN BOSS BUILD IT HERE (services.stacks): the template's stack with its toolchain on, and
+    # nothing in the operator's note asking for a language BOSS cannot build. Refused before
+    # anything is written or spent, unless the person chose to start anyway.
+    from ..services import stacks
+
+    if not body.get(stacks.OVERRIDE_FIELD):
+        verdict = stacks.check_text(str(body.get("note") or ""), template_stack=stack,
+                                    where="This template build")
+        if not verdict.ok:
+            detail = stacks.StackUnsupported(verdict).detail()
+            raise TemplateError(409, "stack_unsupported", verdict.message,
+                                **{k: v for k, v in detail.items() if k not in ("error", "message")})
     needs = app_secrets.ensure_test_defaults(c, org_id=org_id, project_id=project_id,
                                              app_key=app["app_key"], manifest=manifest, actor_id=actor_id,
                                              dry_run=not write)

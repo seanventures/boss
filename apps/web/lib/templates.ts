@@ -304,3 +304,55 @@ export async function installedStacks(): Promise<Set<string> | null> {
     return null;
   }
 }
+
+/** What `GET /v1/stacks?text=` says about a brief: can BOSS build what it asks for here? */
+export type StackCheck = { ok: boolean; message: string; unsupported: string[] };
+
+export function parseStackCheck(body: unknown): StackCheck | null {
+  const c = obj(obj(body).check);
+  if (typeof c.ok !== "boolean") return null;
+  return { ok: c.ok, message: str(c.message), unsupported: strs(c.unsupported) };
+}
+
+/** Ask before Start whether the words name a stack BOSS cannot build (services.stacks), so the
+ *  person reads it while typing rather than from a refusal or a failed build. null: no answer. */
+export async function checkStack(projectId: string, text: string, stack?: string): Promise<StackCheck | null> {
+  if (!projectId || (!text.trim() && !stack)) return null;
+  try {
+    const p = new URLSearchParams({ project_id: projectId, text: text.slice(0, 8000) });
+    if (stack) p.set("stack", stack);
+    return parseStackCheck(await idGet(`/v1/stacks?${p}`));
+  } catch {
+    return null;
+  }
+}
+
+/** A stack's support level, in words (services/stacks.py SUPPORT_LEVELS). */
+export const LEVEL_WORD: Record<string, string> = {
+  certified: "certified", experimental: "experimental", best_effort: "best effort", unsupported: "not supported",
+};
+export const levelWord = (l: string): string => LEVEL_WORD[l] ?? l.replace(/_/g, " ");
+
+export type StackAdapter = { id: string; label: string; level: string; ready: boolean };
+
+/** What `GET /v1/stacks` (or `/v1/templates`' `stacks`) says BOSS builds: each language's support
+ *  level, and the adapters with theirs. Empty when the API cannot say. */
+export function parseStackSupport(body: unknown): { levels: Record<string, string>; adapters: StackAdapter[] } {
+  const caps = obj(obj(body).supported ?? obj(body).stacks);
+  const levels: Record<string, string> = {};
+  for (const l of arr(caps.languages)) { const o = obj(l); if (str(o.key)) levels[str(o.key)] = str(o.support_level); }
+  const adapters = arr(caps.adapters).map((a) => {
+    const o = obj(a);
+    return { id: str(o.id), label: str(o.label), level: str(o.support_level), ready: o.ready !== false };
+  }).filter((a) => a.id);
+  return { levels, adapters };
+}
+
+export async function stackSupport(projectId?: string) {
+  try {
+    return parseStackSupport(await idGet(projectId ? `/v1/stacks?${new URLSearchParams({ project_id: projectId })}`
+      : "/v1/templates?status=active"));
+  } catch {
+    return { levels: {}, adapters: [] };
+  }
+}

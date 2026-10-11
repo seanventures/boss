@@ -1669,6 +1669,12 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "explicitly said to start without, e.g. "
                                    "['deployment_target']. Never fill this in on your own.",
                 },
+                "allow_unsupported_stack": {
+                    "type": "boolean",
+                    "description": "Start even though the refusal said code stack_unsupported "
+                                   "(the brief asks for a language BOSS cannot build here). "
+                                   "Only when the operator said so; never on your own.",
+                },
                 "project_id": {"type": "string"},
             },
             ["directive", "workflow_key"],
@@ -1736,6 +1742,20 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             # at the send after a person approved it. It now gets the list of what is missing
             # and the fix, to tell the operator — and starts anyway only for the keys the
             # operator said to start without.
+            # CAN BOSS BUILD WHAT IT ASKS FOR (services.stacks) — the same refusal as the
+            # console's start, with the supported list and how to turn a toolchain on.
+            from ..services import stacks as _stacks
+
+            try:
+                _stacks.refuse_unsupported_start(
+                    c, version_id=str(version_id), run_input=run_input,
+                    allow=bool(args.get(_stacks.OVERRIDE_FIELD)))
+            except _stacks.StackUnsupported as refused:
+                return {"ok": False, "code": refused.code, "error": str(refused),
+                        "supported": _stacks.supported_sentence(),
+                        "next": "Tell the operator BOSS cannot build that stack and what it can "
+                                "build. Start again with allow_unsupported_stack=true only if "
+                                "they say to."}
             from ..services import workflow_readiness as _ready
 
             accepted = args.get("start_anyway")
